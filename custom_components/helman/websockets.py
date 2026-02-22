@@ -10,6 +10,7 @@ from .storage import HelmanStorage
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
     async_register_command(hass, ws_save_config)
+    async_register_command(hass, ws_get_device_tree)
 
 
 @websocket_api.websocket_command({
@@ -37,4 +38,24 @@ async def ws_save_config(
 ) -> None:
     stor: HelmanStorage = hass.data[DOMAIN]["storage"]
     await stor.async_save(msg["config"])
+    coordinator = hass.data[DOMAIN].get("coordinator")
+    if coordinator:
+        coordinator.invalidate_tree()
     connection.send_result(msg["id"], {"success": True})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_device_tree",
+})
+@websocket_api.async_response
+async def ws_get_device_tree(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    coordinator = hass.data[DOMAIN].get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+    tree = await coordinator.get_device_tree()
+    connection.send_result(msg["id"], tree)
