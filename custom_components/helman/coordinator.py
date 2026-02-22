@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from homeassistant.components.energy import data as energy_data
@@ -7,6 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
+from .history_aggregator import HelmanHistoryAggregator
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
@@ -23,7 +27,13 @@ class HelmanCoordinator:
         self._unsub_energy: Callable[[], None] | None = None
         self._sensor: HelmanPowerSummarySensor | None = None
         self._power_sensor_ids: list[str] = []
+        self._source_sensor_ids: list[str] = []
+        self._source_value_types: dict[str, str] = {}
         self._unsubscribe_power: list = []
+        self._history_cache: dict | None = None
+        self._history_expires_at: datetime | None = None
+        self._history_lock: asyncio.Lock = asyncio.Lock()
+        self._aggregator = HelmanHistoryAggregator(hass)
 
     def set_sensor(self, sensor: HelmanPowerSummarySensor) -> None:
         """Called by the sensor entity after it is added to hass."""
@@ -54,6 +64,8 @@ class HelmanCoordinator:
         # Build tree upfront to learn which power sensors to track
         tree = await self.get_device_tree()
         self._power_sensor_ids = self._collect_power_sensor_ids(tree)
+        self._source_sensor_ids = self._collect_source_sensor_ids(tree)
+        self._source_value_types = self._collect_source_value_types(tree)
         self._subscribe_to_power_sensors()
 
     @callback
@@ -64,14 +76,24 @@ class HelmanCoordinator:
     def invalidate_tree(self) -> None:
         """Invalidate the cached tree (call after config changes)."""
         self._cached_tree = None
+        self._history_cache = None
+        self._history_expires_at = None
         self._hass.async_create_task(self._async_rebuild_subscriptions())
 
     async def _async_rebuild_subscriptions(self) -> None:
         """Rebuild tree and re-subscribe to power sensors after tree invalidation."""
-        tree = await self.get_device_tree()
-        self._power_sensor_ids = self._collect_power_sensor_ids(tree)
-        self._subscribe_to_power_sensors()
-        self._push_power_snapshot()
+        try:
+            tree = await self.get_device_tree()
+            self._power_sensor_ids = self._collect_power_sensor_ids(tree)
+            self._source_sensor_ids = self._collect_source_sensor_ids(tree)
+            self._source_value_types = self._collect_source_value_types(tree)
+            self._history_cache = None
+            self._subscribe_to_power_sensors()
+            self._push_power_snapshot()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Error rebuilding Helman subscriptions"
+            )
 
     async def get_device_tree(self) -> dict:
         """Return cached or freshly built device tree."""
@@ -94,6 +116,43 @@ class HelmanCoordinator:
         traverse(tree.get("sources", []))
         traverse(tree.get("consumers", []))
         return list(ids)
+
+    def _collect_source_sensor_ids(self, tree: dict) -> list[str]:
+        """Collect power_sensor_id values for top-level source nodes only."""
+        ids: list[str] = []
+        for node in tree.get("sources", []):
+            sensor_id = node.get("powerSensorId")
+            if sensor_id:
+                ids.append(sensor_id)
+        return ids
+
+    def _collect_source_value_types(self, tree: dict) -> dict[str, str]:
+        """Return a mapping of source power_sensor_id → value_type."""
+        types: dict[str, str] = {}
+        for node in tree.get("sources", []):
+            sensor_id = node.get("powerSensorId")
+            if sensor_id:
+                types[sensor_id] = node.get("valueType", "default")
+        return types
+
+    async def get_history(self) -> dict:
+        """Return cached or freshly computed bucketed history."""
+        async with self._history_lock:
+            now = datetime.now(tz=timezone.utc)
+            if (
+                self._history_cache is None
+                or self._history_expires_at is None
+                or now >= self._history_expires_at
+            ):
+                self._history_cache = await self._aggregator.async_get_history(
+                    self._power_sensor_ids,
+                    self._source_sensor_ids,
+                    self._source_value_types,
+                    self._storage.config,
+                )
+                bucket_duration = self._storage.config.get("history_bucket_duration", 1)
+                self._history_expires_at = now + timedelta(seconds=bucket_duration * 2)
+            return self._history_cache
 
     def _subscribe_to_power_sensors(self) -> None:
         """Subscribe to state changes for all tracked power sensors."""

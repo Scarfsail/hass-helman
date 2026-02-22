@@ -11,6 +11,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
     async_register_command(hass, ws_save_config)
     async_register_command(hass, ws_get_device_tree)
+    async_register_command(hass, ws_get_history)
 
 
 @websocket_api.websocket_command({
@@ -22,7 +23,10 @@ def ws_get_config(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    stor: HelmanStorage = hass.data[DOMAIN]["storage"]
+    stor: HelmanStorage | None = hass.data.get(DOMAIN, {}).get("storage")
+    if not stor:
+        connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
+        return
     connection.send_result(msg["id"], stor.config)
 
 
@@ -59,3 +63,20 @@ async def ws_get_device_tree(
         return
     tree = await coordinator.get_device_tree()
     connection.send_result(msg["id"], tree)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_history",
+})
+@websocket_api.async_response
+async def ws_get_history(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    coordinator = hass.data[DOMAIN].get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+    history = await coordinator.get_history()
+    connection.send_result(msg["id"], history)
