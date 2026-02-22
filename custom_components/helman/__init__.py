@@ -6,6 +6,8 @@ from .coordinator import HelmanCoordinator
 from .storage import HelmanStorage
 from .websockets import async_register_websocket_commands
 
+PLATFORMS = ["sensor"]
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Helman Energy from a config entry."""
@@ -22,15 +24,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {}
 
     async_register_websocket_commands(hass)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Helman Energy config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     coordinator = hass.data[DOMAIN].get("coordinator")
     if coordinator:
         await coordinator.async_unload()
     hass.data[DOMAIN].pop(entry.entry_id, None)
     hass.data[DOMAIN].pop("storage", None)
     hass.data[DOMAIN].pop("coordinator", None)
-    return True
+    return unload_ok
