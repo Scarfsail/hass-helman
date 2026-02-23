@@ -10,6 +10,8 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 
+from .const import TOTAL_POWER_ENTITY_ID
+
 
 @dataclass
 class DeviceNodeDTO:
@@ -165,6 +167,7 @@ class HelmanTreeBuilder:
         return {
             "sources": [s.to_dict() for s in sources],
             "consumers": [c.to_dict() for c in consumers],
+            "totalPowerSensorId": TOTAL_POWER_ENTITY_ID,
         }
 
     def _make_source_node(
@@ -373,10 +376,11 @@ class HelmanTreeBuilder:
         if not node.children:
             return
         if not node.is_virtual:
+            slug = node.id.replace(".", "_")
             unmeasured = DeviceNodeDTO(
-                id="unmeasured",
+                id=f"{slug}_unmeasured",
                 display_name=unmeasured_title,
-                power_sensor_id=None,
+                power_sensor_id=f"sensor.helman_{slug}_unmeasured_power",
                 switch_entity_id=None,
                 is_source=False,
                 is_unmeasured=True,
