@@ -33,6 +33,8 @@ class HelmanCoordinator:
         self._power_sensor_ids: list[str] = []
         self._source_sensor_ids: list[str] = []
         self._source_value_types: dict[str, str] = {}
+        self._consumer_entity_ids: list[str] = []
+        self._consumer_value_types: dict[str, str] = {}
         self._unsubscribe_power: list = []
         self._history_cache: dict | None = None
         self._history_expires_at: datetime | None = None
@@ -79,6 +81,9 @@ class HelmanCoordinator:
         self._power_sensor_ids = self._collect_power_sensor_ids(tree)
         self._source_sensor_ids = self._collect_source_sensor_ids(tree)
         self._source_value_types = self._collect_source_value_types(tree)
+        self._consumer_entity_ids, self._consumer_value_types = (
+            self._collect_dual_role_consumer_info(tree, self._source_sensor_ids)
+        )
         self._subscribe_to_power_sensors()
 
     @callback
@@ -100,6 +105,9 @@ class HelmanCoordinator:
             self._power_sensor_ids = self._collect_power_sensor_ids(tree)
             self._source_sensor_ids = self._collect_source_sensor_ids(tree)
             self._source_value_types = self._collect_source_value_types(tree)
+            self._consumer_entity_ids, self._consumer_value_types = (
+                self._collect_dual_role_consumer_info(tree, self._source_sensor_ids)
+            )
             self._history_cache = None
             self._subscribe_to_power_sensors()
             self._push_power_snapshot()
@@ -148,6 +156,29 @@ class HelmanCoordinator:
                 types[sensor_id] = node.get("valueType", "default")
         return types
 
+    @staticmethod
+    def _collect_dual_role_consumer_info(
+        tree: dict, source_sensor_ids: list[str]
+    ) -> tuple[list[str], dict[str, str]]:
+        """Find consumer nodes whose entity ID is also a source entity ID.
+
+        Battery and grid nodes appear both as sources and as consumers.  The
+        history aggregator needs to compute source-ratio breakdowns for the
+        consumer side separately, using consumer-mode value_type clamping
+        (positive = charging / importing).
+
+        Returns (entity_ids, value_types_map).
+        """
+        ids: list[str] = []
+        types: dict[str, str] = {}
+        source_id_set = set(source_sensor_ids)
+        for node in tree.get("consumers", []):
+            sensor_id = node.get("powerSensorId")
+            if sensor_id and sensor_id in source_id_set:
+                ids.append(sensor_id)
+                types[sensor_id] = node.get("valueType", "positive")
+        return ids, types
+
     async def get_history(self) -> dict:
         """Return cached or freshly computed bucketed history."""
         async with self._history_lock:
@@ -161,6 +192,8 @@ class HelmanCoordinator:
                     self._power_sensor_ids,
                     self._source_sensor_ids,
                     self._source_value_types,
+                    self._consumer_entity_ids,
+                    self._consumer_value_types,
                     self._storage.config,
                 )
                 bucket_duration = self._storage.config.get("history_bucket_duration", 1)

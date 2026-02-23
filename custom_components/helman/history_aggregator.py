@@ -18,9 +18,17 @@ class HelmanHistoryAggregator:
         entity_ids: list[str],
         source_entity_ids: list[str],
         source_value_types: dict[str, str],
+        consumer_entity_ids: list[str],
+        consumer_value_types: dict[str, str],
         config: dict,
     ) -> dict:
-        """Fetch and bucket history. Returns a serializable dict."""
+        """Fetch and bucket history. Returns a serializable dict.
+
+        ``consumer_entity_ids`` lists entity IDs that are *also* source entity
+        IDs (battery / grid dual-role).  They are absent from ``source_ratios``
+        when computed via the normal non_source path, so they are processed
+        separately using their consumer-mode value_type (positive clamping).
+        """
         buckets: int = config.get("history_buckets", 60)
         bucket_duration: int = config.get("history_bucket_duration", 1)
 
@@ -28,15 +36,24 @@ class HelmanHistoryAggregator:
         window_seconds = buckets * bucket_duration
         start_time = now - timedelta(seconds=window_seconds)
 
+        # Ensure dual-role consumer entity IDs are included in the history fetch
+        all_entity_ids = list(dict.fromkeys(entity_ids + consumer_entity_ids))
+
         raw_history = await get_instance(self._hass).async_add_executor_job(
-            self._fetch_raw_history, entity_ids, start_time, now
+            self._fetch_raw_history, all_entity_ids, start_time, now
         )
 
         bucketed = self._bucket_history(
-            raw_history, entity_ids, now, buckets, bucket_duration
+            raw_history, all_entity_ids, now, buckets, bucket_duration
         )
         source_ratios = self._compute_source_ratios(
-            bucketed, entity_ids, source_entity_ids, source_value_types, buckets
+            bucketed,
+            entity_ids,
+            source_entity_ids,
+            source_value_types,
+            consumer_entity_ids,
+            consumer_value_types,
+            buckets,
         )
 
         return {
@@ -148,23 +165,31 @@ class HelmanHistoryAggregator:
         all_entity_ids: list[str],
         source_entity_ids: list[str],
         source_value_types: dict[str, str],
+        consumer_entity_ids: list[str],
+        consumer_value_types: dict[str, str],
         buckets: int,
     ) -> dict[str, dict[str, list[float]]]:
         """For each non-source entity, compute absolute power from each source
         per bucket (entity_power × source_fraction_of_total).
 
-        Source values are first normalized according to their value_type so that
-        sensors which are negative-by-convention (e.g. grid, battery) are converted
-        to positive wattages before the fraction is calculated.
+        Additionally handles dual-role entities (``consumer_entity_ids``) whose
+        entity IDs are shared with a source node.  These are excluded from the
+        normal non_source_ids loop but computed separately using their
+        consumer-mode value_type (positive clamping = charging / importing).
+
+        Source values are normalized according to their value_type so that
+        sensors which are negative-by-convention (e.g. grid, battery) are
+        converted to positive wattages before the fraction is calculated.
         """
         result: dict[str, dict[str, list[float]]] = {}
         non_source_ids = [e for e in all_entity_ids if e not in source_entity_ids]
         empty = [0.0] * buckets
 
-        for entity_id in non_source_ids:
-            entity_hist = bucketed.get(entity_id, empty)
+        def _ratios_for_hist(
+            entity_hist: list[float],
+        ) -> dict[str, list[float]]:
+            """Compute per-source power lists for a given entity power history."""
             ratios: dict[str, list[float]] = {src: [] for src in source_entity_ids}
-
             for i in range(buckets):
                 normalized: dict[str, float] = {
                     src: self._normalize_source_value(
@@ -177,7 +202,24 @@ class HelmanHistoryAggregator:
                 for src in source_entity_ids:
                     fraction = (normalized[src] / total_source) if total_source > 0 else 0.0
                     ratios[src].append(entity_hist[i] * fraction)
+            return ratios
 
-            result[entity_id] = ratios
+        # Regular consumer nodes (unique entity IDs not shared with any source)
+        for entity_id in non_source_ids:
+            result[entity_id] = _ratios_for_hist(bucketed.get(entity_id, empty))
+
+        # Dual-role consumer nodes (battery / grid): same entity ID as a source
+        # node but in charging/importing mode.  Apply consumer-mode clamping
+        # (positive) before computing the source breakdown.
+        for entity_id in consumer_entity_ids:
+            raw_hist = bucketed.get(entity_id, empty)
+            vtype = consumer_value_types.get(entity_id, "positive")
+            if vtype == "positive":
+                clamped = [max(0.0, v) for v in raw_hist]
+            elif vtype == "negative":
+                clamped = [abs(min(0.0, v)) for v in raw_hist]
+            else:
+                clamped = list(raw_hist)
+            result[entity_id] = _ratios_for_hist(clamped)
 
         return result
