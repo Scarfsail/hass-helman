@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import TOTAL_POWER_ENTITY_ID
@@ -25,9 +26,11 @@ class HelmanCoordinator:
         self._battery_time_sensor = None
         self._unmeasured_sensors: dict[str, Any] = {}
         self._total_power_sensor = None
+        self._async_add_entities: Callable | None = None
+        self._unmeasured_sensor_factory: Callable | None = None
+        self._entry: Any = None
         self._debounce_handle: asyncio.TimerHandle | None = None
-        self._sensors_ready: int = 0
-        self._sensors_total: int = 0
+        self._removing_entity_ids: set[str] = set()
         self._power_sensor_ids: list[str] = []
         self._source_sensor_ids: list[str] = []
         self._source_value_types: dict[str, str] = {}
@@ -39,24 +42,46 @@ class HelmanCoordinator:
         self._history_lock: asyncio.Lock = asyncio.Lock()
         self._aggregator = HelmanHistoryAggregator(hass)
 
+    @property
+    def config(self) -> dict:
+        return self._storage.config
+
+    @staticmethod
+    def collect_qualifying_nodes(tree: dict) -> dict[str, str | None]:
+        """Return {node_id: parent_power_sensor_id} for non-virtual consumer nodes with unmeasured children."""
+        result: dict[str, str | None] = {}
+
+        def walk(nodes: list) -> None:
+            for node in nodes:
+                children = node.get("children", [])
+                if not node.get("isVirtual") and any(c.get("isUnmeasured") for c in children):
+                    result[node["id"]] = node.get("powerSensorId")
+                walk(children)
+
+        walk(tree.get("consumers", []))
+        return result
+
     def set_sensors(self, battery_time, unmeasured_sensors: dict, total_power=None) -> None:
         """Called from async_setup_entry to register all sensor entities."""
         self._battery_time_sensor = battery_time
         self._unmeasured_sensors = unmeasured_sensors
         self._total_power_sensor = total_power
-        total = 1 + len(unmeasured_sensors)  # battery_time + N unmeasured
-        if total_power is not None:
-            total += 1
-        self._sensors_total = total
-        self._sensors_ready = 0
+        self._schedule_debounced_update()
+
+    def set_entity_factory(
+        self,
+        entry,
+        async_add_entities: Callable,
+        unmeasured_sensor_factory: Callable,
+    ) -> None:
+        """Store the async_add_entities callback and sensor factory for dynamic entity management."""
+        self._entry = entry
+        self._async_add_entities = async_add_entities
+        self._unmeasured_sensor_factory = unmeasured_sensor_factory
 
     def register_sensor_ready(self) -> None:
-        """Called by each sensor entity from async_added_to_hass."""
-        if self._sensors_total == 0:
-            return
-        self._sensors_ready += 1
-        if self._sensors_ready >= self._sensors_total:
-            self._schedule_debounced_update()
+        """Called by each sensor from async_added_to_hass to trigger initial state write."""
+        self._schedule_debounced_update()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -74,6 +99,7 @@ class HelmanCoordinator:
         # Energy prefs use an internal listener API, not the event bus.
         # Capture the returned unsubscribe callable for clean teardown.
         async def _on_energy_updated() -> None:
+            self._cached_tree = None
             await self._async_rebuild_subscriptions()
 
         manager = await energy_data.async_get_manager(self._hass)
@@ -91,6 +117,11 @@ class HelmanCoordinator:
 
     @callback
     def _on_registry_updated(self, event) -> None:
+        # Skip events triggered by our own entity removals to avoid rebuild loops.
+        entity_id = event.data.get("entity_id", "")
+        if entity_id in self._removing_entity_ids:
+            self._removing_entity_ids.discard(entity_id)
+            return
         self._cached_tree = None
         self._hass.async_create_task(self._async_rebuild_subscriptions())
 
@@ -113,11 +144,41 @@ class HelmanCoordinator:
             )
             self._history_cache = None
             self._subscribe_to_power_sensors()
+            await self._sync_unmeasured_sensors(tree)
             self._schedule_debounced_update()
         except Exception:
             logging.getLogger(__name__).exception(
                 "Error rebuilding Helman subscriptions"
             )
+
+    async def _sync_unmeasured_sensors(self, tree: dict) -> None:
+        """Add/remove HelmanUnmeasuredPowerSensor entities to match the current tree."""
+        if self._async_add_entities is None or self._unmeasured_sensor_factory is None:
+            return
+
+        qualifying = self.collect_qualifying_nodes(tree)  # {node_id: parent_sensor_id}
+        new_ids = set(qualifying.keys())
+        existing_ids = set(self._unmeasured_sensors.keys())
+
+        # Remove stale entities from HA and entity registry
+        ent_reg = er.async_get(self._hass)
+        for node_id in existing_ids - new_ids:
+            sensor = self._unmeasured_sensors.pop(node_id)
+            entity_id = sensor.entity_id
+            if entity_id:
+                # Track the removal so _on_registry_updated skips the rebuild loop
+                self._removing_entity_ids.add(entity_id)
+                ent_reg.async_remove(entity_id)
+
+        # Add new entities to HA
+        to_add = new_ids - existing_ids
+        if to_add:
+            new_sensors = {
+                node_id: self._unmeasured_sensor_factory(node_id, qualifying[node_id])
+                for node_id in to_add
+            }
+            self._unmeasured_sensors.update(new_sensors)
+            self._async_add_entities(list(new_sensors.values()))
 
     async def get_device_tree(self) -> dict:
         """Return cached or freshly built device tree."""
@@ -182,6 +243,15 @@ class HelmanCoordinator:
                 types[sensor_id] = node.get("valueType", "positive")
         return ids, types
 
+    def _collect_battery_dep_ids(self) -> list[str]:
+        """Return entity IDs that HelmanBatteryTimeSensor depends on for computation."""
+        battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
+        entities = battery_cfg.get("entities", {})
+        return [
+            v for k, v in entities.items()
+            if k in {"remaining_energy", "capacity", "min_soc", "max_soc"} and v
+        ]
+
     async def get_history(self) -> dict:
         """Return cached or freshly computed bucketed history."""
         async with self._history_lock:
@@ -209,11 +279,12 @@ class HelmanCoordinator:
         for unsub in self._unsubscribe_power:
             unsub()
         self._unsubscribe_power = []
-        if self._power_sensor_ids:
+        all_ids = list(set(self._power_sensor_ids) | set(self._collect_battery_dep_ids()))
+        if all_ids:
             self._unsubscribe_power.append(
                 async_track_state_change_event(
                     self._hass,
-                    self._power_sensor_ids,
+                    all_ids,
                     self._on_power_sensor_change,
                 )
             )
@@ -237,8 +308,6 @@ class HelmanCoordinator:
         """Compute and push all derived sensor values. Called once per debounce window."""
         self._debounce_handle = None
         if self._cached_tree is None:
-            return
-        if self._sensors_ready < self._sensors_total:
             return
 
         # Battery ETA — reads battery power directly from hass.states
@@ -374,7 +443,10 @@ class HelmanCoordinator:
         self._battery_time_sensor = None
         self._unmeasured_sensors = {}
         self._total_power_sensor = None
-        self._sensors_ready = 0
+        self._async_add_entities = None
+        self._unmeasured_sensor_factory = None
+        self._entry = None
+        self._removing_entity_ids.clear()
 
         for unsub in self._unsub_listeners:
             unsub()
