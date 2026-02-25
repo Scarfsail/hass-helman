@@ -310,8 +310,8 @@ class HelmanCoordinator:
         if self._cached_tree is None:
             return
 
-        # Battery ETA — reads battery power directly from hass.states
-        battery_power = self._read_battery_power()
+        # Battery ETA — uses average of history buckets when available, else live reading
+        battery_power = self._averaged_battery_power()
         if self._battery_time_sensor is not None:
             minutes, target_time, mode, target_soc = self._compute_battery_eta(battery_power)
             self._battery_time_sensor.update_value(minutes, target_time, mode, target_soc)
@@ -362,6 +362,24 @@ class HelmanCoordinator:
         entities = battery_cfg.get("entities", {})
         sensor = entities.get("power")
         return self._read_power(sensor, "default") if sensor else 0.0
+
+    def _averaged_battery_power(self) -> float:
+        """Return the mean of all history buckets for the battery power sensor.
+
+        Falls back to the live instantaneous reading when the history cache has
+        not been populated yet (e.g. on startup before the first async_get_history
+        call completes).
+        """
+        battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
+        sensor_id = battery_cfg.get("entities", {}).get("power")
+        if not sensor_id:
+            return 0.0
+        if self._history_cache is not None:
+            buckets: list[float] = self._history_cache.get("entity_history", {}).get(sensor_id, [])
+            if buckets:
+                return sum(buckets) / len(buckets)
+        # History not ready yet — fall back to live reading
+        return self._read_power(sensor_id, "default")
 
     def _compute_battery_eta(
         self, battery_power_w: float
