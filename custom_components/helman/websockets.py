@@ -68,8 +68,8 @@ async def ws_get_device_tree(
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_history",
 })
-@websocket_api.async_response
-async def ws_get_history(
+@callback
+def ws_get_history(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
@@ -78,5 +78,4 @@ async def ws_get_history(
     if not coordinator:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
-    history = await coordinator.get_history()
-    connection.send_result(msg["id"], history)
+    connection.send_result(msg["id"], coordinator.get_history())

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import asyncio
 import logging
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import TOTAL_POWER_ENTITY_ID
-from .history_aggregator import HelmanHistoryAggregator
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
@@ -29,18 +28,21 @@ class HelmanCoordinator:
         self._async_add_entities: Callable | None = None
         self._unmeasured_sensor_factory: Callable | None = None
         self._entry: Any = None
-        self._debounce_handle: asyncio.TimerHandle | None = None
         self._removing_entity_ids: set[str] = set()
         self._power_sensor_ids: list[str] = []
         self._source_sensor_ids: list[str] = []
         self._source_value_types: dict[str, str] = {}
         self._consumer_entity_ids: list[str] = []
         self._consumer_value_types: dict[str, str] = {}
-        self._unsubscribe_power: list = []
-        self._history_cache: dict | None = None
-        self._history_expires_at: datetime | None = None
-        self._history_lock: asyncio.Lock = asyncio.Lock()
-        self._aggregator = HelmanHistoryAggregator(hass)
+        # In-memory rolling buffers (oldest first)
+        self._power_history: dict[str, deque[float]] = {}
+        self._source_ratios: dict[str, dict[str, deque[float]]] = {}
+        # Tick lifecycle
+        self._unsub_tick: Callable[[], None] | None = None
+        # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
+        self._unmeasured_entity_id_map: dict[str, str] = {}
+        # Entity IDs whose values are computed by the tick (not read from hass.states)
+        self._virtual_sensor_ids: set[str] = set()
 
     @property
     def config(self) -> dict:
@@ -66,7 +68,6 @@ class HelmanCoordinator:
         self._battery_time_sensor = battery_time
         self._unmeasured_sensors = unmeasured_sensors
         self._total_power_sensor = total_power
-        self._schedule_debounced_update()
 
     def set_entity_factory(
         self,
@@ -80,8 +81,7 @@ class HelmanCoordinator:
         self._unmeasured_sensor_factory = unmeasured_sensor_factory
 
     def register_sensor_ready(self) -> None:
-        """Called by each sensor from async_added_to_hass to trigger initial state write."""
-        self._schedule_debounced_update()
+        """No-op: sensors receive their first value on the next tick."""
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -113,7 +113,8 @@ class HelmanCoordinator:
         self._consumer_entity_ids, self._consumer_value_types = (
             self._collect_dual_role_consumer_info(tree, self._source_sensor_ids)
         )
-        self._subscribe_to_power_sensors()
+        self._init_buffers(tree)
+        self._start_tick()
 
     @callback
     def _on_registry_updated(self, event) -> None:
@@ -128,13 +129,12 @@ class HelmanCoordinator:
     def invalidate_tree(self) -> None:
         """Invalidate the cached tree (call after config changes)."""
         self._cached_tree = None
-        self._history_cache = None
-        self._history_expires_at = None
         self._hass.async_create_task(self._async_rebuild_subscriptions())
 
     async def _async_rebuild_subscriptions(self) -> None:
-        """Rebuild tree and re-subscribe to power sensors after tree invalidation."""
+        """Rebuild tree and restart tick after tree invalidation."""
         try:
+            self._stop_tick()
             tree = await self.get_device_tree()
             self._power_sensor_ids = self._collect_power_sensor_ids(tree)
             self._source_sensor_ids = self._collect_source_sensor_ids(tree)
@@ -142,10 +142,9 @@ class HelmanCoordinator:
             self._consumer_entity_ids, self._consumer_value_types = (
                 self._collect_dual_role_consumer_info(tree, self._source_sensor_ids)
             )
-            self._history_cache = None
-            self._subscribe_to_power_sensors()
+            self._init_buffers(tree)
+            self._start_tick()
             await self._sync_unmeasured_sensors(tree)
-            self._schedule_debounced_update()
         except Exception:
             logging.getLogger(__name__).exception(
                 "Error rebuilding Helman subscriptions"
@@ -243,101 +242,186 @@ class HelmanCoordinator:
                 types[sensor_id] = node.get("valueType", "positive")
         return ids, types
 
-    def _collect_battery_dep_ids(self) -> list[str]:
-        """Return entity IDs that HelmanBatteryTimeSensor depends on for computation."""
-        battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
-        entities = battery_cfg.get("entities", {})
-        return [
-            v for k, v in entities.items()
-            if k in {"remaining_energy", "capacity", "min_soc", "max_soc"} and v
+    @staticmethod
+    def _collect_virtual_sensor_ids(tree: dict) -> set[str]:
+        """Collect powerSensorId values for unmeasured virtual nodes (computed by tick)."""
+        ids: set[str] = set()
+
+        def walk(nodes: list) -> None:
+            for node in nodes:
+                if node.get("isUnmeasured") and node.get("powerSensorId"):
+                    ids.add(node["powerSensorId"])
+                walk(node.get("children", []))
+
+        walk(tree.get("consumers", []))
+        return ids
+
+    @staticmethod
+    def _collect_unmeasured_entity_id_map(tree: dict) -> dict[str, str]:
+        """Return {parent_node_id: unmeasured_entity_id} for nodes with unmeasured children."""
+        result: dict[str, str] = {}
+
+        def walk(nodes: list) -> None:
+            for node in nodes:
+                if not node.get("isVirtual"):
+                    for child in node.get("children", []):
+                        if child.get("isUnmeasured") and child.get("powerSensorId"):
+                            result[node["id"]] = child["powerSensorId"]
+                walk(node.get("children", []))
+
+        walk(tree.get("consumers", []))
+        return result
+
+    def _init_buffers(self, tree: dict) -> None:
+        """Initialize empty rolling deques for all tracked sensors."""
+        history_buckets: int = self._storage.config.get("history_buckets", 60)
+
+        self._virtual_sensor_ids = self._collect_virtual_sensor_ids(tree)
+        self._virtual_sensor_ids.add(TOTAL_POWER_ENTITY_ID)
+
+        self._unmeasured_entity_id_map = self._collect_unmeasured_entity_id_map(tree)
+
+        # Create deques for all power sensors (real + virtual unmeasured) plus total power
+        self._power_history = {
+            eid: deque(maxlen=history_buckets) for eid in self._power_sensor_ids
+        }
+        self._power_history[TOTAL_POWER_ENTITY_ID] = deque(maxlen=history_buckets)
+
+        # Source ratios for every non-source entity and every dual-role consumer
+        consumer_ids = [
+            eid for eid in self._power_history if eid not in self._source_sensor_ids
         ]
+        self._source_ratios = {
+            eid: {src: deque(maxlen=history_buckets) for src in self._source_sensor_ids}
+            for eid in set(consumer_ids) | set(self._consumer_entity_ids)
+        }
 
-    async def get_history(self) -> dict:
-        """Return cached or freshly computed bucketed history."""
-        async with self._history_lock:
-            now = datetime.now(tz=timezone.utc)
-            if (
-                self._history_cache is None
-                or self._history_expires_at is None
-                or now >= self._history_expires_at
-            ):
-                extra_ids = [TOTAL_POWER_ENTITY_ID] if self._total_power_sensor is not None else []
-                self._history_cache = await self._aggregator.async_get_history(
-                    self._power_sensor_ids + extra_ids,
-                    self._source_sensor_ids,
-                    self._source_value_types,
-                    self._consumer_entity_ids,
-                    self._consumer_value_types,
-                    self._storage.config,
-                )
-                bucket_duration = self._storage.config.get("history_bucket_duration", 1)
-                self._history_expires_at = now + timedelta(seconds=bucket_duration * 2)
-            return self._history_cache
-
-    def _subscribe_to_power_sensors(self) -> None:
-        """Subscribe to state changes for all tracked power sensors."""
-        for unsub in self._unsubscribe_power:
-            unsub()
-        self._unsubscribe_power = []
-        all_ids = list(set(self._power_sensor_ids) | set(self._collect_battery_dep_ids()))
-        if all_ids:
-            self._unsubscribe_power.append(
-                async_track_state_change_event(
-                    self._hass,
-                    all_ids,
-                    self._on_power_sensor_change,
-                )
-            )
-
-    @callback
-    def _on_power_sensor_change(self, event) -> None:
-        """Called by HA whenever any tracked power sensor changes state."""
-        self._schedule_debounced_update()
-
-    @callback
-    def _schedule_debounced_update(self) -> None:
-        """Schedule a debounced computation, cancelling any pending one."""
-        if self._debounce_handle is not None:
-            self._debounce_handle.cancel()
-        self._debounce_handle = self._hass.loop.call_later(
-            1.0, self._debounced_power_update
+    def _start_tick(self) -> None:
+        """Start the periodic tick using HA's time-interval tracker."""
+        if self._unsub_tick is not None:
+            return
+        bucket_duration: int = self._storage.config.get("history_bucket_duration", 1)
+        self._unsub_tick = async_track_time_interval(
+            self._hass,
+            self._tick,
+            timedelta(seconds=bucket_duration),
         )
 
+    def _stop_tick(self) -> None:
+        """Stop the periodic tick."""
+        if self._unsub_tick is not None:
+            self._unsub_tick()
+            self._unsub_tick = None
+
     @callback
-    def _debounced_power_update(self) -> None:
-        """Compute and push all derived sensor values. Called once per debounce window."""
-        self._debounce_handle = None
+    def _tick(self, now: datetime) -> None:
+        """Periodic snapshot: read sensors, compute ratios, push derived sensor values."""
         if self._cached_tree is None:
             return
 
-        # Battery ETA — uses average of history buckets when available, else live reading
-        battery_power = self._averaged_battery_power()
-        if self._battery_time_sensor is not None:
-            minutes, target_time, mode, target_soc = self._compute_battery_eta(battery_power)
-            self._battery_time_sensor.update_value(minutes, target_time, mode, target_soc)
+        # Step 1: Read all real (non-virtual) power sensors from hass.states
+        for entity_id, dq in self._power_history.items():
+            if entity_id not in self._virtual_sensor_ids:
+                dq.append(self._read_power(entity_id, "default"))
 
-        # Per-node unmeasured power
+        # Step 2: Compute virtual sensor values and record into _power_history
+        # Unmeasured powers (one per qualifying parent node)
         unmeasured_map = self._compute_all_unmeasured_powers()
-        for node_id, sensor in self._unmeasured_sensors.items():
-            sensor.update_value(unmeasured_map.get(node_id, 0.0))
+        for node_id, watts in unmeasured_map.items():
+            entity_id = self._unmeasured_entity_id_map.get(node_id)
+            if entity_id and entity_id in self._power_history:
+                self._power_history[entity_id].append(watts)
+            sensor = self._unmeasured_sensors.get(node_id)
+            if sensor is not None:
+                sensor.update_value(watts)
 
         # Total power
+        total = self._compute_total_power()
+        if TOTAL_POWER_ENTITY_ID in self._power_history:
+            self._power_history[TOTAL_POWER_ENTITY_ID].append(total)
         if self._total_power_sensor is not None:
-            total_power = self._compute_total_power()
-            self._total_power_sensor.update_value(total_power)
+            self._total_power_sensor.update_value(total)
 
-    def _compute_total_power(self) -> float:
-        """Sum consumer-side top-level node powers (house + battery_charging + grid_export)."""
-        if self._cached_tree is None:
-            return 0.0
-        total = 0.0
-        for node in self._cached_tree.get("consumers", []):
-            if node.get("isVirtual"):
+        # Step 3: Compute source ratios for all consumer entities
+        for entity_id, src_deques in self._source_ratios.items():
+            hist = self._power_history.get(entity_id)
+            if not hist:
                 continue
-            total += self._read_power(
-                node.get("powerSensorId"), node.get("valueType", "default")
+            raw = hist[-1]
+            # Dual-role consumers (battery/grid as consumer) need clamping
+            if entity_id in self._consumer_entity_ids:
+                processed = self._apply_value_type(
+                    raw, self._consumer_value_types.get(entity_id, "positive")
+                )
+            else:
+                processed = raw
+            ratio = self._compute_ratio_bucket(processed)
+            for src, value in ratio.items():
+                if src in src_deques:
+                    src_deques[src].append(value)
+
+        # Step 4: Battery ETA (uses rolling average of battery power history)
+        if self._battery_time_sensor is not None:
+            battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
+            sensor_id = battery_cfg.get("entities", {}).get("power")
+            if sensor_id and self._power_history.get(sensor_id):
+                hist = self._power_history[sensor_id]
+                avg_power = sum(hist) / len(hist)
+            elif sensor_id:
+                avg_power = self._read_power(sensor_id, "default")
+            else:
+                avg_power = 0.0
+            minutes, target_time, mode, target_soc = self._compute_battery_eta(avg_power)
+            self._battery_time_sensor.update_value(minutes, target_time, mode, target_soc)
+
+    @staticmethod
+    def _normalize_source_value(raw: float, value_type: str) -> float:
+        """Convert a raw source sensor reading to an absolute positive power contribution."""
+        if value_type == "negative":
+            return abs(min(0.0, raw))
+        if value_type == "positive":
+            return max(0.0, raw)
+        # "default" — trust the raw value; guard against negatives
+        return max(0.0, raw)
+
+    @staticmethod
+    def _apply_value_type(raw: float, value_type: str) -> float:
+        """Apply value_type clamping (used for dual-role consumer side)."""
+        if value_type == "positive":
+            return max(0.0, raw)
+        if value_type == "negative":
+            return abs(min(0.0, raw))
+        return raw
+
+    def _compute_ratio_bucket(self, consumer_processed: float) -> dict[str, float]:
+        """Compute per-source attributed watts for one consumer for the current tick."""
+        normalized = {
+            src: self._normalize_source_value(
+                self._power_history[src][-1] if self._power_history.get(src) else 0.0,
+                self._source_value_types.get(src, "default"),
             )
-        return total
+            for src in self._source_sensor_ids
+            if src in self._power_history
+        }
+        total_source = sum(normalized.values())
+        return {
+            src: consumer_processed * (normalized[src] / total_source) if total_source > 0 else 0.0
+            for src in normalized
+        }
+
+    def get_history(self) -> dict:
+        """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
+        buckets: int = self._storage.config.get("history_buckets", 60)
+        bucket_duration: int = self._storage.config.get("history_bucket_duration", 1)
+        return {
+            "buckets": buckets,
+            "bucket_duration": bucket_duration,
+            "entity_history": {eid: list(dq) for eid, dq in self._power_history.items()},
+            "source_ratios": {
+                eid: {src: list(dq) for src, dq in srcs.items()}
+                for eid, srcs in self._source_ratios.items()
+            },
+        }
 
     def _read_power(self, entity_id: str | None, value_type: str) -> float:
         """Read a power sensor's current value from hass.states."""
@@ -355,31 +439,6 @@ class HelmanCoordinator:
         if value_type == "negative":
             return abs(min(0.0, raw))
         return raw
-
-    def _read_battery_power(self) -> float:
-        """Read battery power from hass.states using config."""
-        battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
-        entities = battery_cfg.get("entities", {})
-        sensor = entities.get("power")
-        return self._read_power(sensor, "default") if sensor else 0.0
-
-    def _averaged_battery_power(self) -> float:
-        """Return the mean of all history buckets for the battery power sensor.
-
-        Falls back to the live instantaneous reading when the history cache has
-        not been populated yet (e.g. on startup before the first async_get_history
-        call completes).
-        """
-        battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
-        sensor_id = battery_cfg.get("entities", {}).get("power")
-        if not sensor_id:
-            return 0.0
-        if self._history_cache is not None:
-            buckets: list[float] = self._history_cache.get("entity_history", {}).get(sensor_id, [])
-            if buckets:
-                return sum(buckets) / len(buckets)
-        # History not ready yet — fall back to live reading
-        return self._read_power(sensor_id, "default")
 
     def _compute_battery_eta(
         self, battery_power_w: float
@@ -399,17 +458,16 @@ class HelmanCoordinator:
         if capacity_pct <= 0:
             return None, "", "idle", None
 
-        power_w = battery_power_w
-        rolling_power = abs(power_w)
+        rolling_power = abs(battery_power_w)
 
-        if power_w < -1:  # discharging (source)
+        if battery_power_w < -1:  # discharging (source)
             usable = remaining_wh - (remaining_wh / (capacity_pct / 100)) * min_soc / 100
             if usable <= 0:
                 return None, "", "idle", None
             hours = usable / rolling_power
             mode = "discharging"
             target_soc = round(min_soc)
-        elif power_w > 1:  # charging (consumer)
+        elif battery_power_w > 1:  # charging (consumer)
             total_wh = remaining_wh / (capacity_pct / 100)
             to_full = total_wh * max_soc / 100 - remaining_wh
             if to_full <= 0:
@@ -423,6 +481,19 @@ class HelmanCoordinator:
         minutes = hours * 60
         target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
         return minutes, target.isoformat(), mode, target_soc
+
+    def _compute_total_power(self) -> float:
+        """Sum consumer-side top-level node powers (house + battery_charging + grid_export)."""
+        if self._cached_tree is None:
+            return 0.0
+        total = 0.0
+        for node in self._cached_tree.get("consumers", []):
+            if node.get("isVirtual"):
+                continue
+            total += self._read_power(
+                node.get("powerSensorId"), node.get("valueType", "default")
+            )
+        return total
 
     def _compute_all_unmeasured_powers(self) -> dict[str, float]:
         """Return {node_id → unmeasured_watts} for every parent that has an unmeasured node."""
@@ -450,14 +521,9 @@ class HelmanCoordinator:
             self._traverse_for_unmeasured(children, result)
 
     async def async_unload(self) -> None:
-        """Clean up event listeners."""
-        if self._debounce_handle is not None:
-            self._debounce_handle.cancel()
-            self._debounce_handle = None
+        """Clean up event listeners and stop the tick."""
+        self._stop_tick()
 
-        for unsub in self._unsubscribe_power:
-            unsub()
-        self._unsubscribe_power = []
         self._battery_time_sensor = None
         self._unmeasured_sensors = {}
         self._total_power_sensor = None
@@ -465,6 +531,8 @@ class HelmanCoordinator:
         self._unmeasured_sensor_factory = None
         self._entry = None
         self._removing_entity_ids.clear()
+        self._power_history.clear()
+        self._source_ratios.clear()
 
         for unsub in self._unsub_listeners:
             unsub()
