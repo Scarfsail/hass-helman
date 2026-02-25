@@ -262,6 +262,9 @@ class HelmanCoordinator:
         }
         self._power_history[CONSUMPTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
         self._power_history[PRODUCTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
+        # Add deques for source ratio sensors so their history is included in get_history()
+        for sensor in self._source_ratio_sensors.values():
+            self._power_history[sensor.entity_id] = deque(maxlen=history_buckets)
 
     def _start_tick(self) -> None:
         """Start the periodic tick using HA's time-interval tracker."""
@@ -330,6 +333,8 @@ class HelmanCoordinator:
             for src_eid, sensor in self._source_ratio_sensors.items():
                 ratio_pct = (normalized.get(src_eid, 0.0) / total_source * 100.0) if total_source > 0 else 0.0
                 sensor.update_value(ratio_pct)
+                if sensor.entity_id in self._power_history:
+                    self._power_history[sensor.entity_id].append(ratio_pct)
 
         # Step 4: Battery ETAs (separate sensors for charging and discharging)
         if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
