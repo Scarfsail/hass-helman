@@ -168,6 +168,17 @@ class HelmanTreeBuilder:
             "sources": [s.to_dict() for s in sources],
             "consumers": [c.to_dict() for c in consumers],
             "totalPowerSensorId": TOTAL_POWER_ENTITY_ID,
+            "uiConfig": {
+                "sources_title": self._config.get("sources_title", "Energy Sources"),
+                "consumers_title": self._config.get("consumers_title", "Energy Consumers"),
+                "groups_title": self._config.get("groups_title", "Group by:"),
+                "others_group_label": self._config.get("others_group_label", "Others"),
+                "show_empty_groups": self._config.get("show_empty_groups", False),
+                "show_others_group": self._config.get("show_others_group", True),
+                "device_label_text": self._config.get("device_label_text", {}),
+                "history_buckets": self._config.get("history_buckets", 60),
+                "history_bucket_duration": self._config.get("history_bucket_duration", 1),
+            },
         }
 
     def _make_source_node(
