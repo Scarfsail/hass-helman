@@ -10,7 +10,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 
-from .const import TOTAL_POWER_ENTITY_ID
+from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 
 
 @dataclass
@@ -174,7 +174,8 @@ class HelmanTreeBuilder:
         return {
             "sources": [s.to_dict() for s in sources],
             "consumers": [c.to_dict() for c in consumers],
-            "totalPowerSensorId": TOTAL_POWER_ENTITY_ID,
+            "consumptionTotalSensorId": CONSUMPTION_TOTAL_ENTITY_ID,
+            "productionTotalSensorId": PRODUCTION_TOTAL_ENTITY_ID,
             "uiConfig": {
                 "sources_title": self._config.get("sources_title", "Energy Sources"),
                 "consumers_title": self._config.get("consumers_title", "Energy Consumers"),

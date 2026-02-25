@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 
-from .const import TOTAL_POWER_ENTITY_ID
+from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
@@ -25,7 +25,8 @@ class HelmanCoordinator:
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
         self._unmeasured_sensors: dict[str, Any] = {}
-        self._total_power_sensor = None
+        self._consumption_total_sensor = None
+        self._production_total_sensor = None
         self._async_add_entities: Callable | None = None
         self._unmeasured_sensor_factory: Callable | None = None
         self._entry: Any = None
@@ -62,12 +63,13 @@ class HelmanCoordinator:
         walk(tree.get("consumers", []))
         return result
 
-    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None, source_ratio_sensors: dict | None = None) -> None:
+    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None, production_total=None, source_ratio_sensors: dict | None = None) -> None:
         """Called from async_setup_entry to register all sensor entities."""
         self._battery_time_to_full = battery_time_to_full
         self._battery_time_to_empty = battery_time_to_empty
         self._unmeasured_sensors = unmeasured_sensors
-        self._total_power_sensor = total_power
+        self._consumption_total_sensor = total_power
+        self._production_total_sensor = production_total
         self._source_ratio_sensors = source_ratio_sensors or {}
 
     def set_entity_factory(
@@ -249,15 +251,17 @@ class HelmanCoordinator:
         history_buckets: int = self._storage.config.get("history_buckets", 60)
 
         self._virtual_sensor_ids = self._collect_virtual_sensor_ids(tree)
-        self._virtual_sensor_ids.add(TOTAL_POWER_ENTITY_ID)
+        self._virtual_sensor_ids.add(CONSUMPTION_TOTAL_ENTITY_ID)
+        self._virtual_sensor_ids.add(PRODUCTION_TOTAL_ENTITY_ID)
 
         self._unmeasured_entity_id_map = self._collect_unmeasured_entity_id_map(tree)
 
-        # Create deques for all power sensors (real + virtual unmeasured) plus total power
+        # Create deques for all power sensors (real + virtual unmeasured) plus virtual totals
         self._power_history = {
             eid: deque(maxlen=history_buckets) for eid in self._power_sensor_ids
         }
-        self._power_history[TOTAL_POWER_ENTITY_ID] = deque(maxlen=history_buckets)
+        self._power_history[CONSUMPTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
+        self._power_history[PRODUCTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
 
     def _start_tick(self) -> None:
         """Start the periodic tick using HA's time-interval tracker."""
@@ -298,12 +302,19 @@ class HelmanCoordinator:
             if sensor is not None:
                 sensor.update_value(watts)
 
-        # Total power
-        total = self._compute_total_power()
-        if TOTAL_POWER_ENTITY_ID in self._power_history:
-            self._power_history[TOTAL_POWER_ENTITY_ID].append(total)
-        if self._total_power_sensor is not None:
-            self._total_power_sensor.update_value(total)
+        # Total power (consumption side)
+        total = self._compute_consumption_total()
+        if CONSUMPTION_TOTAL_ENTITY_ID in self._power_history:
+            self._power_history[CONSUMPTION_TOTAL_ENTITY_ID].append(total)
+        if self._consumption_total_sensor is not None:
+            self._consumption_total_sensor.update_value(total)
+
+        # Production total (source side)
+        production = self._compute_production_total()
+        if PRODUCTION_TOTAL_ENTITY_ID in self._power_history:
+            self._power_history[PRODUCTION_TOTAL_ENTITY_ID].append(production)
+        if self._production_total_sensor is not None:
+            self._production_total_sensor.update_value(production)
 
         # Step 3: Compute global source ratios and update ratio sensors
         if self._source_ratio_sensors:
@@ -431,8 +442,8 @@ class HelmanCoordinator:
         target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
         return minutes, target.isoformat(), round(min_soc)
 
-    def _compute_total_power(self) -> float:
-        """Sum consumer-side top-level node powers (house + battery_charging + grid_export)."""
+    def _compute_consumption_total(self) -> float:
+        """Sum consumer-side top-level node powers (house + battery charging + grid export)."""
         if self._cached_tree is None:
             return 0.0
         total = 0.0
@@ -442,6 +453,18 @@ class HelmanCoordinator:
             total += self._read_power(
                 node.get("powerSensorId"), node.get("valueType", "default")
             )
+        return total
+
+    def _compute_production_total(self) -> float:
+        """Sum source-side top-level node powers (solar + battery_discharging + grid_import)."""
+        if self._cached_tree is None:
+            return 0.0
+        total = 0.0
+        for node in self._cached_tree.get("sources", []):
+            if node.get("isVirtual"):
+                continue
+            raw = self._read_power(node.get("powerSensorId"), "default")
+            total += self._normalize_source_value(raw, node.get("valueType", "default"))
         return total
 
     def _compute_all_unmeasured_powers(self) -> dict[str, float]:
@@ -476,7 +499,8 @@ class HelmanCoordinator:
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
         self._unmeasured_sensors = {}
-        self._total_power_sensor = None
+        self._consumption_total_sensor = None
+        self._production_total_sensor = None
         self._source_ratio_sensors = {}
         self._async_add_entities = None
         self._unmeasured_sensor_factory = None

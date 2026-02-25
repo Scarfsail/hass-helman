@@ -35,7 +35,8 @@ async def async_setup_entry(
         node_id: HelmanUnmeasuredPowerSensor(coordinator, entry, node_id, parent_sensor_id)
         for node_id, parent_sensor_id in qualifying_nodes.items()
     }
-    total_power = HelmanTotalPowerSensor(coordinator, entry)
+    total_power = HelmanConsumptionTotalSensor(coordinator, entry)
+    production_total = HelmanProductionTotalSensor(coordinator, entry)
 
     source_ratio_sensors: dict[str, HelmanSourceRatioSensor] = {
         node["powerSensorId"]: HelmanSourceRatioSensor(coordinator, entry, node["sourceType"])
@@ -48,6 +49,7 @@ async def async_setup_entry(
         battery_time_to_empty=battery_time_to_empty,
         unmeasured_sensors=unmeasured_sensors,
         total_power=total_power,
+        production_total=production_total,
         source_ratio_sensors=source_ratio_sensors,
     )
     coordinator.set_entity_factory(
@@ -61,7 +63,7 @@ async def async_setup_entry(
     async_add_entities(
         [battery_time_to_full, battery_time_to_empty]
         + list(unmeasured_sensors.values())
-        + [total_power]
+        + [total_power, production_total]
         + list(source_ratio_sensors.values())
     )
 
@@ -174,7 +176,7 @@ class HelmanUnmeasuredPowerSensor(SensorEntity):
             self.async_write_ha_state()
 
 
-class HelmanTotalPowerSensor(SensorEntity):
+class HelmanConsumptionTotalSensor(SensorEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -182,8 +184,33 @@ class HelmanTotalPowerSensor(SensorEntity):
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         self._coordinator = coordinator
-        self._attr_unique_id = f"{entry.entry_id}_total_power"
-        self._attr_name = "Helman Total Power"
+        self._attr_unique_id = f"{entry.entry_id}_consumption_total"
+        self._attr_name = "Helman Consumption Total"
+        self._value: float | None = None
+
+    @property
+    def native_value(self) -> float | None:
+        return round(self._value) if self._value is not None else None
+
+    async def async_added_to_hass(self) -> None:
+        self._coordinator.register_sensor_ready()
+
+    def update_value(self, watts: float) -> None:
+        self._value = watts
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+
+class HelmanProductionTotalSensor(SensorEntity):
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "W"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        self._coordinator = coordinator
+        self._attr_unique_id = f"{entry.entry_id}_production_total"
+        self._attr_name = "Helman Production Total"
         self._value: float | None = None
 
     @property
