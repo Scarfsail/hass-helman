@@ -29,7 +29,8 @@ async def async_setup_entry(
         if k in {"remaining_energy", "capacity", "min_soc", "max_soc"} and v
     ]
 
-    battery_time = HelmanBatteryTimeSensor(coordinator, entry, required_battery_ids)
+    battery_time_to_full = HelmanBatteryTimeSensor(coordinator, entry, required_battery_ids, "charging")
+    battery_time_to_empty = HelmanBatteryTimeSensor(coordinator, entry, required_battery_ids, "discharging")
     unmeasured_sensors: dict[str, HelmanUnmeasuredPowerSensor] = {
         node_id: HelmanUnmeasuredPowerSensor(coordinator, entry, node_id, parent_sensor_id)
         for node_id, parent_sensor_id in qualifying_nodes.items()
@@ -37,7 +38,8 @@ async def async_setup_entry(
     total_power = HelmanTotalPowerSensor(coordinator, entry)
 
     coordinator.set_sensors(
-        battery_time=battery_time,
+        battery_time_to_full=battery_time_to_full,
+        battery_time_to_empty=battery_time_to_empty,
         unmeasured_sensors=unmeasured_sensors,
         total_power=total_power,
     )
@@ -49,28 +51,30 @@ async def async_setup_entry(
         ),
     )
 
-    async_add_entities([battery_time] + list(unmeasured_sensors.values()) + [total_power])
+    async_add_entities([battery_time_to_full, battery_time_to_empty] + list(unmeasured_sensors.values()) + [total_power])
 
 
 class HelmanBatteryTimeSensor(SensorEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _unrecorded_attributes = frozenset({"target_time", "mode", "target_soc"})
+    _unrecorded_attributes = frozenset({"target_time", "target_soc"})
 
     def __init__(
         self,
         coordinator,
         entry: ConfigEntry,
         required_entity_ids: list[str],
+        direction: str,
     ) -> None:
         self._coordinator = coordinator
         self._required_entity_ids = required_entity_ids
-        self._attr_unique_id = f"{entry.entry_id}_battery_time_to_target"
-        self._attr_name = "Helman Battery Time to Target"
+        suffix = "to_full" if direction == "charging" else "to_empty"
+        label = "Full" if direction == "charging" else "Empty"
+        self._attr_unique_id = f"{entry.entry_id}_battery_{suffix}"
+        self._attr_name = f"Helman Battery Time to {label}"
         self._minutes: float | None = None
         self._target_time_iso: str = ""
-        self._mode: str = "idle"
         self._target_soc: int | None = None
 
     @property
@@ -94,7 +98,6 @@ class HelmanBatteryTimeSensor(SensorEntity):
     def extra_state_attributes(self) -> dict:
         return {
             "target_time": self._target_time_iso,
-            "mode": self._mode,
             "target_soc": self._target_soc,
         }
 
@@ -105,12 +108,10 @@ class HelmanBatteryTimeSensor(SensorEntity):
         self,
         minutes: float | None,
         target_time: str,
-        mode: str,
         target_soc: int | None,
     ) -> None:
         self._minutes = minutes
         self._target_time_iso = target_time
-        self._mode = mode
         self._target_soc = target_soc
         if self.hass is not None:
             self.async_write_ha_state()

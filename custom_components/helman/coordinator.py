@@ -22,7 +22,8 @@ class HelmanCoordinator:
         self._cached_tree: dict | None = None
         self._unsub_listeners: list = []
         self._unsub_energy: Callable[[], None] | None = None
-        self._battery_time_sensor = None
+        self._battery_time_to_full = None
+        self._battery_time_to_empty = None
         self._unmeasured_sensors: dict[str, Any] = {}
         self._total_power_sensor = None
         self._async_add_entities: Callable | None = None
@@ -63,9 +64,10 @@ class HelmanCoordinator:
         walk(tree.get("consumers", []))
         return result
 
-    def set_sensors(self, battery_time, unmeasured_sensors: dict, total_power=None) -> None:
+    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None) -> None:
         """Called from async_setup_entry to register all sensor entities."""
-        self._battery_time_sensor = battery_time
+        self._battery_time_to_full = battery_time_to_full
+        self._battery_time_to_empty = battery_time_to_empty
         self._unmeasured_sensors = unmeasured_sensors
         self._total_power_sensor = total_power
 
@@ -360,19 +362,30 @@ class HelmanCoordinator:
                 if src in src_deques:
                     src_deques[src].append(value)
 
-        # Step 4: Battery ETA (uses rolling average of battery power history)
-        if self._battery_time_sensor is not None:
+        # Step 4: Battery ETAs (separate sensors for charging and discharging)
+        if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
             battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
             sensor_id = battery_cfg.get("entities", {}).get("power")
-            if sensor_id and self._power_history.get(sensor_id):
-                hist = self._power_history[sensor_id]
-                avg_power = sum(hist) / len(hist)
-            elif sensor_id:
-                avg_power = self._read_power(sensor_id, "default")
-            else:
-                avg_power = 0.0
-            minutes, target_time, mode, target_soc = self._compute_battery_eta(avg_power)
-            self._battery_time_sensor.update_value(minutes, target_time, mode, target_soc)
+            hist = list(self._power_history.get(sensor_id, [])) if sensor_id else []
+
+            pos_values = [v for v in hist if v > 1]
+            neg_values = [abs(v) for v in hist if v < -1]
+            charging_avg = sum(pos_values) / len(pos_values) if pos_values else 0.0
+            discharging_avg = sum(neg_values) / len(neg_values) if neg_values else 0.0
+
+            if self._battery_time_to_full is not None:
+                minutes, target_time, target_soc = (
+                    self._compute_charging_eta(charging_avg) if charging_avg > 0
+                    else (None, "", None)
+                )
+                self._battery_time_to_full.update_value(minutes, target_time, target_soc)
+
+            if self._battery_time_to_empty is not None:
+                minutes, target_time, target_soc = (
+                    self._compute_discharging_eta(discharging_avg) if discharging_avg > 0
+                    else (None, "", None)
+                )
+                self._battery_time_to_empty.update_value(minutes, target_time, target_soc)
 
     @staticmethod
     def _normalize_source_value(raw: float, value_type: str) -> float:
@@ -440,47 +453,54 @@ class HelmanCoordinator:
             return abs(min(0.0, raw))
         return raw
 
-    def _compute_battery_eta(
-        self, battery_power_w: float
-    ) -> tuple[float | None, str, str, int | None]:
-        """Compute battery time-to-target. Returns (minutes, target_time_iso, mode, target_soc)."""
+    def _read_battery_state(self) -> tuple[float, float, float, float] | None:
+        """Read live battery state entities. Returns (remaining_wh, capacity_pct, min_soc, max_soc) or None."""
         battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
         entities = battery_cfg.get("entities", {})
-
         try:
             remaining_wh = float(self._hass.states.get(entities["remaining_energy"]).state)
             capacity_pct = float(self._hass.states.get(entities["capacity"]).state)
             min_soc = float(self._hass.states.get(entities["min_soc"]).state)
             max_soc = float(self._hass.states.get(entities["max_soc"]).state)
         except (KeyError, TypeError, ValueError, AttributeError):
-            return None, "", "idle", None
-
+            return None
         if capacity_pct <= 0:
-            return None, "", "idle", None
+            return None
+        return remaining_wh, capacity_pct, min_soc, max_soc
 
-        rolling_power = abs(battery_power_w)
-
-        if battery_power_w < -1:  # discharging (source)
-            usable = remaining_wh - (remaining_wh / (capacity_pct / 100)) * min_soc / 100
-            if usable <= 0:
-                return None, "", "idle", None
-            hours = usable / rolling_power
-            mode = "discharging"
-            target_soc = round(min_soc)
-        elif battery_power_w > 1:  # charging (consumer)
-            total_wh = remaining_wh / (capacity_pct / 100)
-            to_full = total_wh * max_soc / 100 - remaining_wh
-            if to_full <= 0:
-                return None, "", "idle", None
-            hours = to_full / rolling_power
-            mode = "charging"
-            target_soc = round(max_soc)
-        else:
-            return None, "", "idle", None
-
+    def _compute_charging_eta(
+        self, charging_avg_w: float
+    ) -> tuple[float | None, str, int | None]:
+        """Compute time to reach max_soc at the given average charging rate."""
+        state = self._read_battery_state()
+        if state is None:
+            return None, "", None
+        remaining_wh, capacity_pct, _min_soc, max_soc = state
+        total_wh = remaining_wh / (capacity_pct / 100)
+        to_full = total_wh * max_soc / 100 - remaining_wh
+        if to_full <= 0:
+            return None, "", None
+        hours = to_full / charging_avg_w
         minutes = hours * 60
         target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
-        return minutes, target.isoformat(), mode, target_soc
+        return minutes, target.isoformat(), round(max_soc)
+
+    def _compute_discharging_eta(
+        self, discharging_avg_w: float
+    ) -> tuple[float | None, str, int | None]:
+        """Compute time to reach min_soc at the given average discharging rate."""
+        state = self._read_battery_state()
+        if state is None:
+            return None, "", None
+        remaining_wh, capacity_pct, min_soc, _max_soc = state
+        total_wh = remaining_wh / (capacity_pct / 100)
+        usable = remaining_wh - total_wh * min_soc / 100
+        if usable <= 0:
+            return None, "", None
+        hours = usable / discharging_avg_w
+        minutes = hours * 60
+        target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
+        return minutes, target.isoformat(), round(min_soc)
 
     def _compute_total_power(self) -> float:
         """Sum consumer-side top-level node powers (house + battery_charging + grid_export)."""
@@ -524,7 +544,8 @@ class HelmanCoordinator:
         """Clean up event listeners and stop the tick."""
         self._stop_tick()
 
-        self._battery_time_sensor = None
+        self._battery_time_to_full = None
+        self._battery_time_to_empty = None
         self._unmeasured_sensors = {}
         self._total_power_sensor = None
         self._async_add_entities = None
