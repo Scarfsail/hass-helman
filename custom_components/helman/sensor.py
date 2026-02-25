@@ -37,11 +37,18 @@ async def async_setup_entry(
     }
     total_power = HelmanTotalPowerSensor(coordinator, entry)
 
+    source_ratio_sensors: dict[str, HelmanSourceRatioSensor] = {
+        node["powerSensorId"]: HelmanSourceRatioSensor(coordinator, entry, node["sourceType"])
+        for node in tree.get("sources", [])
+        if node.get("ratioSensorId") and node.get("powerSensorId") and node.get("sourceType")
+    }
+
     coordinator.set_sensors(
         battery_time_to_full=battery_time_to_full,
         battery_time_to_empty=battery_time_to_empty,
         unmeasured_sensors=unmeasured_sensors,
         total_power=total_power,
+        source_ratio_sensors=source_ratio_sensors,
     )
     coordinator.set_entity_factory(
         entry,
@@ -51,7 +58,12 @@ async def async_setup_entry(
         ),
     )
 
-    async_add_entities([battery_time_to_full, battery_time_to_empty] + list(unmeasured_sensors.values()) + [total_power])
+    async_add_entities(
+        [battery_time_to_full, battery_time_to_empty]
+        + list(unmeasured_sensors.values())
+        + [total_power]
+        + list(source_ratio_sensors.values())
+    )
 
 
 class HelmanBatteryTimeSensor(SensorEntity):
@@ -183,5 +195,30 @@ class HelmanTotalPowerSensor(SensorEntity):
 
     def update_value(self, watts: float) -> None:
         self._value = watts
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+
+class HelmanSourceRatioSensor(SensorEntity):
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "%"
+
+    def __init__(self, coordinator, entry: ConfigEntry, source_type: str) -> None:
+        self._coordinator = coordinator
+        self._attr_unique_id = f"{entry.entry_id}_{source_type}_source_ratio"
+        self._attr_name = f"Helman {source_type.title()} Source Ratio"
+        self.entity_id = f"sensor.helman_{source_type}_source_ratio"
+        self._value: float | None = None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._value
+
+    async def async_added_to_hass(self) -> None:
+        self._coordinator.register_sensor_ready()
+
+    def update_value(self, pct: float) -> None:
+        self._value = round(pct, 1)
         if self.hass is not None:
             self.async_write_ha_state()

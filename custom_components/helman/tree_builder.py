@@ -35,6 +35,8 @@ class DeviceNodeDTO:
     hide_children_indicator: bool
     sort_children_by_power: bool
     children: list["DeviceNodeDTO"] = field(default_factory=list)
+    ratio_sensor_id: str | None = None
+    source_type: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +60,8 @@ class DeviceNodeDTO:
             "hideChildrenIndicator": self.hide_children_indicator,
             "sortChildrenByPower": self.sort_children_by_power,
             "children": [c.to_dict() for c in self.children],
+            "ratioSensorId": self.ratio_sensor_id,
+            "sourceType": self.source_type,
         }
 
 
@@ -90,6 +94,7 @@ class HelmanTreeBuilder:
             sources.append(self._make_source_node(
                 solar_config["entities"]["power"],
                 solar_config,
+                source_type="solar",
                 value_type="default",
                 color="#FDD83560",
                 icon="mdi:solar-power",
@@ -99,6 +104,7 @@ class HelmanTreeBuilder:
             sources.append(self._make_source_node(
                 battery_config["entities"]["power"],
                 battery_config,
+                source_type="battery",
                 value_type="negative",
                 color="#66BB6A60",
                 icon="mdi:battery",
@@ -108,6 +114,7 @@ class HelmanTreeBuilder:
             sources.append(self._make_source_node(
                 grid_config["entities"]["power"],
                 grid_config,
+                source_type="grid",
                 value_type="negative",
                 color="#42A5F560",
                 icon="mdi:transmission-tower-export",
@@ -185,6 +192,7 @@ class HelmanTreeBuilder:
         self,
         entity_id: str,
         config: dict,
+        source_type: str,
         value_type: Literal["default", "positive", "negative"],
         color: str,
         icon: str,
@@ -209,6 +217,8 @@ class HelmanTreeBuilder:
             hide_children=False,
             hide_children_indicator=False,
             sort_children_by_power=False,
+            ratio_sensor_id=f"sensor.helman_{source_type}_source_ratio",
+            source_type=source_type,
         )
 
     def _make_consumer_node(

@@ -33,11 +33,9 @@ class HelmanCoordinator:
         self._power_sensor_ids: list[str] = []
         self._source_sensor_ids: list[str] = []
         self._source_value_types: dict[str, str] = {}
-        self._consumer_entity_ids: list[str] = []
-        self._consumer_value_types: dict[str, str] = {}
         # In-memory rolling buffers (oldest first)
         self._power_history: dict[str, deque[float]] = {}
-        self._source_ratios: dict[str, dict[str, deque[float]]] = {}
+        self._source_ratio_sensors: dict[str, Any] = {}
         # Tick lifecycle
         self._unsub_tick: Callable[[], None] | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
@@ -64,12 +62,13 @@ class HelmanCoordinator:
         walk(tree.get("consumers", []))
         return result
 
-    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None) -> None:
+    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None, source_ratio_sensors: dict | None = None) -> None:
         """Called from async_setup_entry to register all sensor entities."""
         self._battery_time_to_full = battery_time_to_full
         self._battery_time_to_empty = battery_time_to_empty
         self._unmeasured_sensors = unmeasured_sensors
         self._total_power_sensor = total_power
+        self._source_ratio_sensors = source_ratio_sensors or {}
 
     def set_entity_factory(
         self,
@@ -112,9 +111,6 @@ class HelmanCoordinator:
         self._power_sensor_ids = self._collect_power_sensor_ids(tree)
         self._source_sensor_ids = self._collect_source_sensor_ids(tree)
         self._source_value_types = self._collect_source_value_types(tree)
-        self._consumer_entity_ids, self._consumer_value_types = (
-            self._collect_dual_role_consumer_info(tree, self._source_sensor_ids)
-        )
         self._init_buffers(tree)
         self._start_tick()
 
@@ -141,9 +137,6 @@ class HelmanCoordinator:
             self._power_sensor_ids = self._collect_power_sensor_ids(tree)
             self._source_sensor_ids = self._collect_source_sensor_ids(tree)
             self._source_value_types = self._collect_source_value_types(tree)
-            self._consumer_entity_ids, self._consumer_value_types = (
-                self._collect_dual_role_consumer_info(tree, self._source_sensor_ids)
-            )
             self._init_buffers(tree)
             self._start_tick()
             await self._sync_unmeasured_sensors(tree)
@@ -222,29 +215,6 @@ class HelmanCoordinator:
         return types
 
     @staticmethod
-    def _collect_dual_role_consumer_info(
-        tree: dict, source_sensor_ids: list[str]
-    ) -> tuple[list[str], dict[str, str]]:
-        """Find consumer nodes whose entity ID is also a source entity ID.
-
-        Battery and grid nodes appear both as sources and as consumers.  The
-        history aggregator needs to compute source-ratio breakdowns for the
-        consumer side separately, using consumer-mode value_type clamping
-        (positive = charging / importing).
-
-        Returns (entity_ids, value_types_map).
-        """
-        ids: list[str] = []
-        types: dict[str, str] = {}
-        source_id_set = set(source_sensor_ids)
-        for node in tree.get("consumers", []):
-            sensor_id = node.get("powerSensorId")
-            if sensor_id and sensor_id in source_id_set:
-                ids.append(sensor_id)
-                types[sensor_id] = node.get("valueType", "positive")
-        return ids, types
-
-    @staticmethod
     def _collect_virtual_sensor_ids(tree: dict) -> set[str]:
         """Collect powerSensorId values for unmeasured virtual nodes (computed by tick)."""
         ids: set[str] = set()
@@ -288,15 +258,6 @@ class HelmanCoordinator:
             eid: deque(maxlen=history_buckets) for eid in self._power_sensor_ids
         }
         self._power_history[TOTAL_POWER_ENTITY_ID] = deque(maxlen=history_buckets)
-
-        # Source ratios for every non-source entity and every dual-role consumer
-        consumer_ids = [
-            eid for eid in self._power_history if eid not in self._source_sensor_ids
-        ]
-        self._source_ratios = {
-            eid: {src: deque(maxlen=history_buckets) for src in self._source_sensor_ids}
-            for eid in set(consumer_ids) | set(self._consumer_entity_ids)
-        }
 
     def _start_tick(self) -> None:
         """Start the periodic tick using HA's time-interval tracker."""
@@ -344,23 +305,20 @@ class HelmanCoordinator:
         if self._total_power_sensor is not None:
             self._total_power_sensor.update_value(total)
 
-        # Step 3: Compute source ratios for all consumer entities
-        for entity_id, src_deques in self._source_ratios.items():
-            hist = self._power_history.get(entity_id)
-            if not hist:
-                continue
-            raw = hist[-1]
-            # Dual-role consumers (battery/grid as consumer) need clamping
-            if entity_id in self._consumer_entity_ids:
-                processed = self._apply_value_type(
-                    raw, self._consumer_value_types.get(entity_id, "positive")
+        # Step 3: Compute global source ratios and update ratio sensors
+        if self._source_ratio_sensors:
+            normalized = {
+                src: self._normalize_source_value(
+                    self._power_history[src][-1] if self._power_history.get(src) else 0.0,
+                    self._source_value_types.get(src, "default"),
                 )
-            else:
-                processed = raw
-            ratio = self._compute_ratio_bucket(processed)
-            for src, value in ratio.items():
-                if src in src_deques:
-                    src_deques[src].append(value)
+                for src in self._source_sensor_ids
+                if src in self._power_history
+            }
+            total_source = sum(normalized.values())
+            for src_eid, sensor in self._source_ratio_sensors.items():
+                ratio_pct = (normalized.get(src_eid, 0.0) / total_source * 100.0) if total_source > 0 else 0.0
+                sensor.update_value(ratio_pct)
 
         # Step 4: Battery ETAs (separate sensors for charging and discharging)
         if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
@@ -397,31 +355,6 @@ class HelmanCoordinator:
         # "default" — trust the raw value; guard against negatives
         return max(0.0, raw)
 
-    @staticmethod
-    def _apply_value_type(raw: float, value_type: str) -> float:
-        """Apply value_type clamping (used for dual-role consumer side)."""
-        if value_type == "positive":
-            return max(0.0, raw)
-        if value_type == "negative":
-            return abs(min(0.0, raw))
-        return raw
-
-    def _compute_ratio_bucket(self, consumer_processed: float) -> dict[str, float]:
-        """Compute per-source attributed watts for one consumer for the current tick."""
-        normalized = {
-            src: self._normalize_source_value(
-                self._power_history[src][-1] if self._power_history.get(src) else 0.0,
-                self._source_value_types.get(src, "default"),
-            )
-            for src in self._source_sensor_ids
-            if src in self._power_history
-        }
-        total_source = sum(normalized.values())
-        return {
-            src: consumer_processed * (normalized[src] / total_source) if total_source > 0 else 0.0
-            for src in normalized
-        }
-
     def get_history(self) -> dict:
         """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
         buckets: int = self._storage.config.get("history_buckets", 60)
@@ -430,10 +363,6 @@ class HelmanCoordinator:
             "buckets": buckets,
             "bucket_duration": bucket_duration,
             "entity_history": {eid: list(dq) for eid, dq in self._power_history.items()},
-            "source_ratios": {
-                eid: {src: list(dq) for src, dq in srcs.items()}
-                for eid, srcs in self._source_ratios.items()
-            },
         }
 
     def _read_power(self, entity_id: str | None, value_type: str) -> float:
@@ -548,12 +477,12 @@ class HelmanCoordinator:
         self._battery_time_to_empty = None
         self._unmeasured_sensors = {}
         self._total_power_sensor = None
+        self._source_ratio_sensors = {}
         self._async_add_entities = None
         self._unmeasured_sensor_factory = None
         self._entry = None
         self._removing_entity_ids.clear()
         self._power_history.clear()
-        self._source_ratios.clear()
 
         for unsub in self._unsub_listeners:
             unsub()
