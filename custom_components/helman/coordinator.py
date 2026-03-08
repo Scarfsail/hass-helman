@@ -11,6 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
+from .forecast_builder import HelmanForecastBuilder
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
@@ -182,6 +183,10 @@ class HelmanCoordinator:
             builder = HelmanTreeBuilder(self._hass, self._storage.config)
             self._cached_tree = await builder.build()
         return self._cached_tree
+
+    async def get_forecast(self) -> dict:
+        builder = HelmanForecastBuilder(self._hass, self._storage.config)
+        return await builder.build()
 
     def _collect_power_sensor_ids(self, tree: dict) -> list[str]:
         """Collect all unique power_sensor_id values from the tree dict."""
