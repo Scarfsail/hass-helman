@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,56 +22,36 @@ class HelmanForecastBuilder:
     def _build_solar_forecast(self) -> dict[str, Any]:
         power_devices = self._read_dict(self._config.get("power_devices"))
         solar_config = self._read_dict(power_devices.get("solar"))
-        solar_entities = self._read_dict(solar_config.get("entities"))
         solar_forecast = self._read_dict(solar_config.get("forecast"))
 
         daily_entity_ids = self._read_entity_id_list(
             solar_forecast.get("daily_energy_entity_ids")
         )[:8]
 
-        remaining_today_entity_id = self._read_entity_id(
-            solar_forecast.get("remaining_today_entity_id")
-        )
-        if remaining_today_entity_id is None:
-            remaining_today_entity_id = self._read_entity_id(
-                solar_entities.get("remaining_today_energy_forecast")
-            )
-
-        if not daily_entity_ids and remaining_today_entity_id is None:
+        if not daily_entity_ids:
             return {
                 "status": "not_configured",
                 "unit": None,
-                "remainingTodayKwh": None,
                 "points": [],
             }
 
-        points: list[dict[str, Any]] = []
         today = datetime.now(self._local_tz).date()
+        points_with_sort_keys: list[tuple[datetime, dict[str, Any]]] = []
+        entities_with_points = 0
         for index, entity_id in enumerate(daily_entity_ids):
-            value = self._read_entity_state_float(entity_id)
-            if value is None:
-                continue
+            expected_date = today + timedelta(days=index)
+            entity_points = self._extract_hourly_solar_points(entity_id, expected_date)
+            if entity_points:
+                entities_with_points += 1
+            points_with_sort_keys.extend(entity_points)
 
-            timestamp = datetime.combine(
-                today + timedelta(days=index),
-                time.min,
-                tzinfo=self._local_tz,
-            )
-            points.append(
-                {
-                    "timestamp": timestamp.isoformat(),
-                    "value": value,
-                }
-            )
+        points_with_sort_keys.sort(key=lambda item: item[0])
+        points = [point for _, point in points_with_sort_keys]
+        unit = self._read_first_unit(daily_entity_ids)
 
-        remaining_today_kwh = self._read_entity_state_float(remaining_today_entity_id)
-        unit = self._read_first_unit(
-            [*daily_entity_ids, remaining_today_entity_id]
-        )
-
-        if len(points) == 8:
+        if entities_with_points == len(daily_entity_ids):
             status = "available"
-        elif points or remaining_today_kwh is not None:
+        elif entities_with_points > 0:
             status = "partial"
         else:
             status = "unavailable"
@@ -79,9 +59,44 @@ class HelmanForecastBuilder:
         return {
             "status": status,
             "unit": unit,
-            "remainingTodayKwh": remaining_today_kwh,
             "points": points,
         }
+
+    def _extract_hourly_solar_points(
+        self, entity_id: str, expected_date: date
+    ) -> list[tuple[datetime, dict[str, Any]]]:
+        state = self._get_state(entity_id)
+        if state is None:
+            return []
+
+        wh_period = state.attributes.get("wh_period")
+        if not isinstance(wh_period, dict):
+            return []
+
+        points: list[tuple[datetime, dict[str, Any]]] = []
+        for raw_key, raw_value in wh_period.items():
+            value = self._parse_float(raw_value)
+            if value is None:
+                continue
+
+            parsed_timestamp = self._parse_attribute_timestamp(raw_key)
+            if parsed_timestamp is None:
+                continue
+
+            if parsed_timestamp.astimezone(self._local_tz).date() != expected_date:
+                continue
+
+            points.append(
+                (
+                    parsed_timestamp,
+                    {
+                        "timestamp": parsed_timestamp.isoformat(),
+                        "value": value,
+                    },
+                )
+            )
+
+        return points
 
     def _build_grid_forecast(self) -> dict[str, Any]:
         power_devices = self._read_dict(self._config.get("power_devices"))
