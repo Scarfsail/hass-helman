@@ -56,9 +56,14 @@ class HelmanForecastBuilder:
         else:
             status = "unavailable"
 
+        remaining_today_entity_id = self._read_entity_id(
+            self._read_dict(solar_config.get("entities")).get("remaining_today_energy_forecast")
+        )
+
         return {
             "status": status,
             "unit": unit,
+            "remainingTodayEnergyEntityId": remaining_today_entity_id,
             "points": points,
         }
 
