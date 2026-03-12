@@ -12,8 +12,8 @@
 |-----------|-------------|--------|
 | 1 | Shared contract and safe scaffolding | Done |
 | 2 | Persistence, scheduler, source resolution, visibility rule | Done |
-| 3 | Backend statistical model and final forecast payload | **Next** |
-| 4 | House forecast UI: total and baseline views | Pending |
+| 3 | Backend statistical model and final forecast payload | Done |
+| 4 | House forecast UI: total and baseline views | **Next** |
 | 5 | Per-consumer deferrable breakdown | Pending |
 | 6 | Docs, config examples, and cleanup | Pending |
 
@@ -99,23 +99,63 @@ Frontend:
 - `_read_deferrable_consumers` exists but is not called — Increment 3 will use it for per-consumer history queries
 - Both `helman-forecast-detail` and `helman-house-forecast-detail` independently fetch the full forecast payload — a shared forecast context/store could deduplicate this in the future
 
-## What's next: Increment 3
+## Increment 3 — Done
 
-**Goal**: Implement the actual forecast generation — hour-of-week statistical model, non-deferrable baseline, per-consumer deferrable values, and confidence bands. The `series` array will finally contain real hourly forecast records.
+### What was implemented
 
-The next session should read the **Increment 3** section of [`implementation_plan.md`](./implementation_plan.md) for full details. Summary:
+**Backend** — hour-of-week statistical model in `consumption_forecast_builder.py`:
+- `HourOfWeekProfile` class: 168-slot (7 days x 24 hours) statistical profile with recency-weighted data points (exponential decay, half-life 14 days)
+- Each slot produces weighted mean + 10th/90th weighted percentile confidence bands
+- Slots with < 2 data points fall back to same-hour-any-day aggregation
+- `_weighted_percentile` module-level function with linear interpolation and fraction clamping
+- `build()` now queries house total + each deferrable consumer from Recorder, computes non-deferrable residual (`house_total - sum(deferrables)`), feeds hour-of-week profiles, generates 168-hour forecast series
+- `_query_hourly_history()` replaces `_query_history_days()` — returns raw rows for reuse in both history-days computation and profile building
+- `_make_payload()` extended with optional `model` and `series` params (backward compatible with coordinator's direct call)
+- `_read_deferrable_consumers()` now deduplicates by entity ID
+- Negative residuals: tiny (>= -0.01 kWh) clamped to 0, materially negative dropped with debug log
+- `model` field set to `"hour_of_week_baseline"` when forecast is available
 
-### Backend
+**Frontend** — no changes (payload shape matches existing DTOs from Increment 1)
 
-- **`consumption_forecast_builder.py`**: read `training_window_days`, `min_history_days`, and configured deferrable consumers; query hourly history for house total and each deferrable consumer; compute non-deferrable as `house_total - sum(deferrable_history)`; build hour-of-week statistical profile (168 slots, local-time aligned, recency-weighted); generate `nonDeferrable` and `deferrableConsumers[]` forecasts with confidence bands; populate the `series` array with one record per forecast hour
+### Files touched
+
+Backend:
+- `consumption_forecast_builder.py` (rewritten: `HourOfWeekProfile`, full forecast model, series generation)
+
+### Design decisions
+
+- Exponential decay recency weighting with 14-day half-life — recent patterns dominate, tunable later
+- 10th/90th percentile for confidence bands — wide enough for useful range without being overwhelming
+- Same-hour-any-day fallback when a weekday+hour slot has < 2 data points (42-day window gives ~6 points per slot)
+- Always include configured deferrable consumers in series with `value: 0` if they have no history data (frontend can show them by label)
+- `_compute_history_days()` uses `min(row["start"])` instead of `rows[0]["start"]` for safety against row ordering assumptions
+- Forecast starts at the next full hour from generation time
+- No `total` or `deferrableTotal` in backend DTO — frontend derives those
+
+### Known items deferred
+
+- `partial` status when a deferrable consumer has no usable data — deferred to Increment 5
+- Both `helman-forecast-detail` and `helman-house-forecast-detail` independently fetch the full forecast payload — a shared forecast context/store could deduplicate this in the future
+
+## What's next: Increment 4
+
+**Goal**: Render the house forecast in the house detail UI — daily cards for 7 days, selected-day hourly detail, total vs non-deferrable views, confidence bands.
+
+The next session should read the **Increment 4** section of [`implementation_plan.md`](./implementation_plan.md) for full details. Summary:
 
 ### Frontend
 
-- No major changes expected — only update DTO assumptions if the exact payload shape changes
+- Create `house-forecast-detail-model.ts` (or equivalent mapper) to group hourly points into days and selected-day detail
+- Implement in `helman-house-forecast-detail.ts`: load forecast, refresh on `FORECAST_REFRESH_MS` cadence, derive `total` and `deferrableTotal` locally, render daily cards + selected-day 24-hour detail with total/nonDeferrable switch, show confidence bands
+- Update `node-detail-house-content.ts` to place forecast below house summary
+- Add localization keys in `cs.json`
 
-### Key notes for Increment 3
+### Backend
 
-- The persistence, scheduling, and caching infrastructure from Increment 2 is fully in place — Increment 3 only changes what `ConsumptionForecastBuilder.build()` returns
-- Clamp tiny negative residuals to `0` when subtracting deferrable from total; log and drop materially negative points
-- If no deferrable consumers are configured, return empty `deferrableConsumers` array in each hour record
-- Do **not** expose `total` or `deferrableTotal` in the backend DTO — frontend derives those
+- No changes expected unless the frontend reveals small DTO issues
+
+### Key notes for Increment 4
+
+- Reuse existing local-time helpers such as `local-date-time-parts-cache`
+- Keep the first UI visually simpler than the solar/grid forecast detail if needed
+- Do not refactor shared chart infrastructure unless necessary for correctness
