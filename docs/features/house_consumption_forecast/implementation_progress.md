@@ -11,8 +11,8 @@
 | Increment | Description | Status |
 |-----------|-------------|--------|
 | 1 | Shared contract and safe scaffolding | Done |
-| 2 | Persistence, scheduler, source resolution, visibility rule | **Next** |
-| 3 | Backend statistical model and final forecast payload | Pending |
+| 2 | Persistence, scheduler, source resolution, visibility rule | Done |
+| 3 | Backend statistical model and final forecast payload | **Next** |
 | 4 | House forecast UI: total and baseline views | Pending |
 | 5 | Per-consumer deferrable breakdown | Pending |
 | 6 | Docs, config examples, and cleanup | Pending |
@@ -52,35 +52,70 @@ Frontend:
 - `ForecastStatus` is a shared type (extended with `insufficient_history` for all forecast types, not just house)
 - `ForecastPayload.house_consumption` uses snake_case key to match the backend wire format (same as `solar` / `grid`)
 - Increment 1 calls `ConsumptionForecastBuilder` directly from `forecast_builder.py` (no coordinator involvement yet — that comes in Increment 2)
-- `_read_deferrable_consumers` helper exists in the builder but is not called until Increment 2+
+- `_read_deferrable_consumers` helper exists in the builder but is not called until Increment 3+
 
-### Known items deferred to Increment 2
+## Increment 2 — Done
 
-- The `insufficient_history` translation string hardcodes "14 days" — should be made dynamic using `requiredHistoryDays` from the DTO once the `insufficient_history` status is reachable
+### What was implemented
+
+**Backend** — persisted snapshot, hourly scheduler, Recorder statistics query:
+- `const.py`: added `FORECAST_SNAPSHOT_STORAGE_KEY` and `FORECAST_SNAPSHOT_STORAGE_VERSION`
+- `storage.py`: added second `Store` for forecast snapshot (`forecast_snapshot` property, `async_save_snapshot()` method), loaded alongside config in `async_load()`
+- `consumption_forecast_builder.py`: now accepts `hass`, `build()` is async, queries `statistics_during_period` with `period="hour"` and `types={"change"}` for `total_energy_entity_id`, computes `historyDaysAvailable` from oldest row, returns `not_configured` / `insufficient_history` / `available` with `generatedAt` timestamp, still returns empty `series`
+- `coordinator.py`: loads persisted snapshot on startup (`_cached_forecast`), schedules hourly refresh via `async_track_time_interval`, fires non-blocking startup refresh via `async_create_task`, `get_forecast()` merges live solar/grid + cached `house_consumption`, `invalidate_forecast()` triggers background refresh
+- `forecast_builder.py`: removed `house_consumption` from builder (coordinator now merges it from cache)
+- `websockets.py`: calls `coordinator.invalidate_forecast()` on config save
+
+**Frontend** — dynamic status messages, series guard:
+- `helman-house-forecast-detail.ts`: `insufficient_history` message now uses `requiredHistoryDays` from DTO via `%d` replacement, added `localize` guard at top of `render()`, added series-empty guard showing `no_data` message
+- `cs.json`: `insufficient_history` value changed to use `%d` placeholder
+
+### Files touched
+
+Backend:
+- `const.py` (+2 constants)
+- `storage.py` (snapshot store added)
+- `consumption_forecast_builder.py` (rewritten: async, Recorder query, status logic)
+- `coordinator.py` (forecast cache, scheduler, invalidation)
+- `forecast_builder.py` (removed `house_consumption` from builder)
+- `websockets.py` (+1 line: `invalidate_forecast()` call)
+
+Frontend:
+- `src/helman-simple/node-detail/helman-house-forecast-detail.ts`
+- `src/localize/translations/cs.json`
+
+### Design decisions
+
+- Used `"change"` type for Recorder statistics (gives per-hour kWh delta directly, no manual cumulative-to-delta conversion needed)
+- Snapshot stored in separate HA `Store` under key `helman.forecast_snapshot` (not mixed with config)
+- Coordinator owns the forecast lifecycle: load → cache → schedule → serve. `HelmanForecastBuilder` only builds solar/grid; coordinator merges cached `house_consumption`
+- Fallback stub in `get_forecast()` reads actual config defaults (not hardcoded) via `ConsumptionForecastBuilder._make_payload()`
+- `insufficient_history` message uses `%d` placeholder with `.replace()` since the localize function has no interpolation support
+- `historyDaysAvailable` computed from oldest Recorder row date vs today — does not account for gaps (known approximation, acceptable for v1)
+
+### Known items deferred to Increment 3
+
+- `series` is always empty — Increment 3 adds the hour-of-week statistical model
+- `_read_deferrable_consumers` exists but is not called — Increment 3 will use it for per-consumer history queries
 - Both `helman-forecast-detail` and `helman-house-forecast-detail` independently fetch the full forecast payload — a shared forecast context/store could deduplicate this in the future
 
-## What's next: Increment 2
+## What's next: Increment 3
 
-**Goal**: Persistence, scheduler, source resolution, and the 14-day minimum visibility rule. No forecast model yet — just data readiness.
+**Goal**: Implement the actual forecast generation — hour-of-week statistical model, non-deferrable baseline, per-consumer deferrable values, and confidence bands. The `series` array will finally contain real hourly forecast records.
 
-The next session should read the **Increment 2** section of [`implementation_plan.md`](./implementation_plan.md) for full details. Summary:
+The next session should read the **Increment 3** section of [`implementation_plan.md`](./implementation_plan.md) for full details. Summary:
 
 ### Backend
 
-- **`storage.py`**: add a persisted store for the house forecast snapshot (separate from config)
-- **`const.py`**: add storage key/version constants for the forecast snapshot
-- **`coordinator.py`**: load persisted snapshot on startup, keep in memory, schedule hourly refresh, trigger non-blocking refresh on startup, return cached snapshot from `get_forecast()` instead of recalculating live
-- **`consumption_forecast_builder.py`**: query HA Recorder/statistics for `total_energy_entity_id`, convert to local-time hourly buckets, compute `historyDaysAvailable`, return `not_configured` / `insufficient_history` / `available` based on data readiness, still return empty `series` (no prediction model yet)
+- **`consumption_forecast_builder.py`**: read `training_window_days`, `min_history_days`, and configured deferrable consumers; query hourly history for house total and each deferrable consumer; compute non-deferrable as `house_total - sum(deferrable_history)`; build hour-of-week statistical profile (168 slots, local-time aligned, recency-weighted); generate `nonDeferrable` and `deferrableConsumers[]` forecasts with confidence bands; populate the `series` array with one record per forecast hour
 
 ### Frontend
 
-- **`helman-house-forecast-detail.ts`**: show status note for `insufficient_history` / `unavailable`, keep chart hidden when no points exist
-- Make the `insufficient_history` message dynamic using `requiredHistoryDays`
+- No major changes expected — only update DTO assumptions if the exact payload shape changes
 
-### Key architectural change in Increment 2
+### Key notes for Increment 3
 
-The house forecast shifts from the live-on-every-request pattern (used by solar/grid in `forecast_builder.py`) to a **persisted cached snapshot** pattern owned by the coordinator. This means `coordinator.get_forecast()` will return a mix: live-built solar/grid + cached house_consumption.
-
-### Validation
-
-Increment 2 requires **user validation** — see the implementation plan for the full checklist. Key points: confirm persistence survives HA restart, confirm `historyDaysAvailable` looks reasonable, confirm status transitions work.
+- The persistence, scheduling, and caching infrastructure from Increment 2 is fully in place — Increment 3 only changes what `ConsumptionForecastBuilder.build()` returns
+- Clamp tiny negative residuals to `0` when subtracting deferrable from total; log and drop materially negative points
+- If no deferrable consumers are configured, return empty `deferrableConsumers` array in each hour record
+- Do **not** expose `total` or `deferrableTotal` in the backend DTO — frontend derives those

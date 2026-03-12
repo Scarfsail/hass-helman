@@ -11,9 +11,12 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
+from .consumption_forecast_builder import ConsumptionForecastBuilder
 from .forecast_builder import HelmanForecastBuilder
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HelmanCoordinator:
@@ -40,6 +43,9 @@ class HelmanCoordinator:
         self._source_ratio_sensors: dict[str, Any] = {}
         # Tick lifecycle
         self._unsub_tick: Callable[[], None] | None = None
+        # House forecast snapshot (persisted + cached)
+        self._cached_forecast: dict | None = None
+        self._unsub_forecast_refresh: Callable[[], None] | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
         # Entity IDs whose values are computed by the tick (not read from hass.states)
@@ -117,6 +123,11 @@ class HelmanCoordinator:
         self._init_buffers(tree)
         self._start_tick()
 
+        # House forecast: load persisted snapshot, schedule hourly refresh
+        self._cached_forecast = self._storage.forecast_snapshot
+        self._start_forecast_refresh()
+        self._hass.async_create_task(self._async_refresh_forecast())
+
     @callback
     def _on_registry_updated(self, event) -> None:
         # Skip events triggered by our own entity removals to avoid rebuild loops.
@@ -186,7 +197,55 @@ class HelmanCoordinator:
 
     async def get_forecast(self) -> dict:
         builder = HelmanForecastBuilder(self._hass, self._storage.config)
-        return await builder.build()
+        result = await builder.build()
+        if self._cached_forecast is not None:
+            result["house_consumption"] = self._cached_forecast
+        else:
+            forecast_cfg = (
+                self._storage.config
+                .get("power_devices", {})
+                .get("house", {})
+                .get("forecast", {})
+            )
+            result["house_consumption"] = ConsumptionForecastBuilder._make_payload(
+                status="not_configured",
+                training_window_days=forecast_cfg.get("training_window_days", 42),
+                min_history_days=forecast_cfg.get("min_history_days", 14),
+            )
+        return result
+
+    def invalidate_forecast(self) -> None:
+        """Trigger a background house forecast refresh."""
+        self._hass.async_create_task(self._async_refresh_forecast())
+
+    async def _async_refresh_forecast(self) -> None:
+        """Build a new house forecast snapshot, cache it, and persist it."""
+        try:
+            builder = ConsumptionForecastBuilder(self._hass, self._storage.config)
+            snapshot = await builder.build()
+            self._cached_forecast = snapshot
+            await self._storage.async_save_snapshot(snapshot)
+        except Exception:
+            _LOGGER.exception("Error refreshing house consumption forecast")
+
+    def _start_forecast_refresh(self) -> None:
+        """Start the hourly house forecast refresh interval."""
+        if self._unsub_forecast_refresh is not None:
+            return
+
+        @callback
+        def _on_forecast_interval(_now: datetime) -> None:
+            self._hass.async_create_task(self._async_refresh_forecast())
+
+        self._unsub_forecast_refresh = async_track_time_interval(
+            self._hass, _on_forecast_interval, timedelta(hours=1)
+        )
+
+    def _stop_forecast_refresh(self) -> None:
+        """Stop the hourly house forecast refresh interval."""
+        if self._unsub_forecast_refresh is not None:
+            self._unsub_forecast_refresh()
+            self._unsub_forecast_refresh = None
 
     def _collect_power_sensor_ids(self, tree: dict) -> list[str]:
         """Collect all unique power_sensor_id values from the tree dict."""
@@ -505,6 +564,7 @@ class HelmanCoordinator:
     async def async_unload(self) -> None:
         """Clean up event listeners and stop the tick."""
         self._stop_tick()
+        self._stop_forecast_refresh()
 
         self._battery_time_to_full = None
         self._battery_time_to_empty = None

@@ -46,6 +46,7 @@ async def ws_save_config(
     coordinator = hass.data[DOMAIN].get("coordinator")
     if coordinator:
         coordinator.invalidate_tree()
+        coordinator.invalidate_forecast()
     connection.send_result(msg["id"], {"success": True})
 
 

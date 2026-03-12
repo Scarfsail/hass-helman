@@ -6,9 +6,6 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 
-from .consumption_forecast_builder import ConsumptionForecastBuilder
-
-
 class HelmanForecastBuilder:
     def __init__(self, hass: HomeAssistant, config: dict) -> None:
         self._hass = hass
@@ -19,7 +16,6 @@ class HelmanForecastBuilder:
         return {
             "solar": self._build_solar_forecast(),
             "grid": self._build_grid_forecast(),
-            "house_consumption": ConsumptionForecastBuilder(self._config).build(),
         }
 
     def _build_solar_forecast(self) -> dict[str, Any]:
