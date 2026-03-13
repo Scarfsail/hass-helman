@@ -1,324 +1,97 @@
-# House Consumption Forecast Proposal
+# House Consumption Forecast
 
-See also: `implementation_plan.md` for the step-by-step backend/frontend rollout.
+## References
 
-## Goal
+- **Implementation plan**: [`implementation_plan.md`](./implementation_plan.md)
+- **Implementation progress**: [`implementation_progress.md`](./implementation_progress.md)
 
-Add a new capability to `hass-helman` that predicts future house consumption and exposes it to `hass-helman-card`.
+## Status
 
-The practical user-facing outcome should be:
+This feature is implemented in `hass-helman` and exposed to `hass-helman-card`.
 
-- forecast the next **7 days**
+The backend owns forecast generation, persistence, and delivery through `helman/get_forecast`. The current UI is rendered in the house detail flow of `custom:helman-simple-card`.
+
+## What the feature provides
+
+- forecast the next **7 days** (`168` hourly points)
 - predict **hourly energy consumption** in `kWh`
-- expose both **overall house consumption** and **house consumption without deferrable consumers**
-- include a **confidence band for each hour**
-- keep the frontend focused on rendering, not heavy forecasting logic
+- expose both **baseline / non-deferrable** consumption and **per-consumer deferrable** consumption
+- include a **confidence band** for each hourly value
+- let the frontend derive user-facing totals from one normalized hourly payload
 
-## Agreed decisions
+## Configuration
 
-Based on your answers, these choices now look aligned:
+House consumption forecast is configured under `power_devices.house.forecast`.
 
-| Decision                     | Agreed direction                         | Notes                                                                            |
-| ---------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------- |
-| Forecast target              | **Hourly energy consumption** (`kWh`)    | Not instantaneous power in `W`                                                   |
-| Forecast horizon             | **7 days**                               | `168` hourly points                                                              |
-| Historical source            | **Home Assistant Recorder / statistics** | Reuse the existing house energy entity if it can provide reliable hourly history |
-| Preferred source entity type | **Cumulative / `total_increasing`**      | Required source for v1 house forecast                                            |
-| Computation location         | **`hass-helman` backend**                | Extend the existing backend forecast flow                                        |
-| Model family for v1          | **Pure statistical baseline**            | No heavy ML framework in v1                                                      |
-| Weather / temperature        | **Out of scope for v1**                  | Good candidate for v2                                                            |
-| Confidence band              | **Include in v1**                        | Per-hour lower / upper estimate                                                  |
-| Deferrable handling          | **Option B**                             | Forecast baseline plus each deferrable separately, then sum                      |
-| Card presentation            | **Per-consumer breakdown**               | Show individual deferrable consumers, not only one merged line                   |
-| DTO shape                    | **One object per hour**                  | Frontend derives `total` and `deferrableTotal` from the hourly record            |
-| Forecast cadence             | **Run every hour**                       | House forecast generation is scheduled in the backend                            |
-| Forecast persistence         | **Persist latest snapshot**              | Return stored house forecast data on request and after Home Assistant restart     |
-| Visibility threshold         | **14 days minimum history**              | Hide the forecast until enough hourly history exists                             |
-
-## Important note on the history source
-
-Your answer was: use the existing house daily energy consumption if it is enough.
-
-That is a good default, but "enough" depends on what kind of entity it is.
-
-### Best case
-
-The house energy entity is a **cumulative energy sensor** or already backed by Recorder/statistics in a way that allows us to derive **hourly deltas**.
-
-That is the cleanest source for this feature.
-
-### Practical conclusion
-
-The recommendation remains:
-
-- use **Home Assistant Recorder/statistics** as the primary historical source
-- require a **statistics-friendly cumulative house energy entity**
-- do **not** fall back to the current house daily energy source for v1
-
-If that cumulative source is not configured, the house forecast should be treated as **not configured** and stay hidden.
-
-## New major architecture decision: deferrable consumers
-
-You added an important requirement:
-
-> We should include deferrable energy such as car charging, pool heating, and so on, and expose both overall predicted energy consumption and the prediction without the deferrable consumers.
-
-This changes the architecture in a useful way, because deferrable loads are not just "another part of the house". They are often controllable and should not be mixed into the base household pattern if the goal is future optimization.
-
-## Options for handling deferrable consumers
-
-### Option A - Forecast only one total house series
-
-Forecast house consumption as a single number per hour, with deferrable loads mixed in.
-
-#### Pros
-
-- simplest backend and UI
-- easiest first implementation
-
-#### Cons
-
-- not useful for scheduling or shifting flexible loads
-- hides the difference between baseline demand and movable demand
-- does not satisfy your new requirement well
-
-### Recommendation
-
-Not recommended.
-
-### Option B - Forecast base load and deferrable loads separately, then sum them (recommended)
-
-Treat the feature as a decomposition problem:
-
-- **non-deferrable / base consumption**
-- **deferrable consumption**
-- **total consumption = base + deferrable**
-
-High-level approach:
-
-1. Configure one house energy source.
-2. Configure zero or more **deferrable energy entities** such as EV charging, pool heating, water heating, and similar consumers.
-3. Build historical hourly series for:
-
-   - house total
-   - each deferrable consumer
-4. Derive historical **non-deferrable** consumption as:
-
-```text
-house_total - sum(deferrable_consumers)
+```yaml
+power_devices:
+  house:
+    entities:
+      power: sensor.house_power
+      today_energy: sensor.house_energy_today
+    forecast:
+      total_energy_entity_id: sensor.house_energy_total
+      min_history_days: 14
+      training_window_days: 42
+      deferrable_consumers:
+        - energy_entity_id: sensor.ev_charging_energy_total
+          label: EV Charging
+        - energy_entity_id: sensor.pool_heating_energy_total
+          label: Pool Heating
 ```
 
-5. Forecast:
+### Config fields
 
-    - non-deferrable consumption as one baseline series
-    - each configured deferrable consumer as its own series
-6. Represent each forecast hour as one object and let the frontend derive:
+- `power_devices.house.forecast.total_energy_entity_id` — Required. Statistics-friendly cumulative energy entity used as the total house forecast source.
+- `power_devices.house.forecast.min_history_days` — Optional. Minimum history span required from the oldest available hourly statistics row before forecast charts can be shown. Default: `14`.
+- `power_devices.house.forecast.training_window_days` — Optional. Recorder/statistics lookback window used to build the forecast. Default: `42`. Keep this greater than or equal to `min_history_days`, otherwise the backend never queries far enough back to satisfy the threshold.
+- `power_devices.house.forecast.deferrable_consumers` — Optional list of separately forecasted flexible loads.
+  - `energy_entity_id` — Required. Statistics-friendly cumulative energy entity for the consumer.
+  - `label` — Optional UI label shown in the breakdown view. If omitted, the entity ID is used.
 
-```text
-total = non_deferrable + sum(deferrable_forecasts)
-deferrable_total = sum(deferrable_forecasts)
-```
+Deferrable consumers are deduplicated by `energy_entity_id`.
 
-#### Pros
+Each configured deferrable consumer should already be included in `total_energy_entity_id` and should not overlap with other configured deferrables. The backend derives baseline consumption as `house total - sum(deferrables)`.
 
-- directly supports your "with / without deferrables" requirement
-- keeps the forecast internally consistent
-- creates a clean path to future scheduling and optimization
-- still works with a simple statistical baseline
+`house.entities.today_energy` is separate summary data for the house device. It is **not** used as a fallback source for this forecast.
 
-#### Cons
+## Data requirements
 
-- requires reliable energy entities for each deferrable consumer
-- adds configuration complexity
-- future deferrable behavior can be less stable than base load
+- `total_energy_entity_id` should be a cumulative energy sensor with usable Recorder statistics. The backend reads hourly `change` statistics in `kWh`.
+- Deferrable consumers should also use compatible cumulative energy entities if you want them included in the breakdown view.
+- There is **no fallback** to `house.entities.today_energy`.
+- The default visibility threshold is **14 days** of history span from the oldest available hourly statistics row.
+- v1 does not validate gaps or continuity inside that window; it only checks how far back the oldest available row is.
 
-### Recommendation
+## Runtime behavior
 
-This is the **best v1 architecture** if deferrable consumers are part of the requirement from the start.
+- The forecast is built in the backend using an hour-of-week statistical baseline.
+- The training window defaults to the last `42` days of hourly statistics.
+- The forecast horizon is `168` hours and generation starts at the next full hour.
+- The backend refreshes the house forecast snapshot once per hour.
+- The latest snapshot is cached in the coordinator and persisted in Home Assistant storage.
+- On startup, the persisted snapshot is loaded immediately and then refreshed in the background.
+- Saving the relevant config invalidates the cached forecast and triggers a background refresh.
+- `helman/get_forecast` returns live solar/grid data together with the cached `house_consumption` snapshot.
+- After each refresh, today's already elapsed hours may be preserved from the previous snapshot so the frontend can render a full current-day profile.
 
-### Option C - Forecast base load only, and handle deferrables only through explicit future plans
+## Forecast statuses
 
-In this model, the forecast engine predicts only the non-deferrable household baseline. Deferrable loads are not forecast from history. They are added only if the user or automation explicitly schedules them.
+The house forecast currently uses these statuses:
 
-#### Pros
+- `not_configured` — `house.forecast` is absent or `total_energy_entity_id` is missing. The section stays hidden.
+- `insufficient_history` — fewer than `requiredHistoryDays` of history span were found in the queried Recorder window. The house detail shows an informational message instead of charts.
+- `unavailable` — the backend could not build the forecast. The house detail shows an unavailable message.
+- `available` — forecast metadata and hourly series are present.
 
-- conceptually clean
-- better for controllable loads whose future use is highly plan-driven
-- very good long-term direction for optimization
+If the payload is `available` but the series is empty, the frontend shows a no-data message.
 
-#### Cons
+## Returned payload overview
 
-- does not give an "overall predicted consumption" unless planning data exists
-- requires a scheduling/planning mechanism
-- bigger feature scope than v1
-
-### Recommendation
-
-Good long-term direction, but probably **too much for v1**.
-
-Answer: Go with option B
-
-## Recommended v1 architecture
-
-### Proposed combination
-
-- **Forecast target:** hourly house energy consumption
-- **Historical source:** Home Assistant Recorder/statistics
-- **Computation location:** `hass-helman` backend
-- **Model:** hour-of-week statistical baseline
-- **Forecast horizon:** 7 days
-- **Confidence band:** yes, per hour
-- **Deferrables:** supported as configured energy entities
-
-### Recommended modeling strategy
-
-For v1, the cleanest model is:
-
-1. Forecast **non-deferrable household consumption** as the primary baseline.
-2. Forecast each configured **deferrable consumer** separately using the same simple statistical approach.
-3. Return **one object per forecast hour** containing:
-   - `timestamp`
-   - `nonDeferrable`
-   - per-consumer deferrable values
-4. Let the frontend derive aggregated views by summing:
-
-```text
-total = non_deferrable + sum(deferrable_forecasts)
-deferrable_total = sum(deferrable_forecasts)
-```
-
-This is better than exposing separate total series in the DTO, because:
-
-- it guarantees that the numbers add up
-- it preserves the useful split between baseline and flexible demand
-- it makes future schedule-aware optimization easier
-- it naturally supports a per-consumer UI breakdown
-- it keeps the backend payload compact and normalized
-
-If no deferrable consumers are configured:
-
-- the hourly object simply contains an empty deferrable list
-- `total` and `non_deferrable` are effectively the same in the frontend
-- the feature still works without special handling
-
-## Why this still fits the current Helman architecture
-
-This codebase already has several useful extension points:
-
-- `hass-helman` already exposes `helman/get_forecast`
-- forecast data is already assembled on the backend and consumed by the card
-- the integration already depends on `recorder`
-- `hass-helman-card` already has a forecast rendering pattern
-
-Because of that, a natural evolution is:
-
-- extend backend forecast payload with a new `house_consumption` section
-- keep Recorder/statistics querying in the integration
-- keep the frontend focused on rendering and comparison
-
-## Runtime model and persistence
-
-The house consumption forecast should **not** be recalculated on every websocket request.
-
-Recommended runtime model:
-
-- generate the house forecast in the backend **once per hour**
-- persist the latest `house_consumption` snapshot to Home Assistant storage after each successful run
-- load the persisted snapshot on startup so `helman/get_forecast` can return immediately after restart
-- trigger a non-blocking refresh on startup and then continue with hourly refreshes
-- trigger an immediate refresh when the relevant forecast config changes
-- return the **persisted / cached** house forecast from `helman/get_forecast`, rather than rebuilding it on demand
-
-This keeps the websocket fast, makes restarts predictable, and ensures the UI always sees one stable forecast snapshot.
-
-## Model options
-
-### Option 1 - Pure statistical baseline (recommended for v1)
-
-This remains the best first version.
-
-Example shape:
-
-- collect the last **4 to 8 weeks** of hourly house energy usage
-- build an **hour-of-week profile** (`7 * 24 = 168` slots)
-- weight recent history more strongly than older history
-- trim outliers where useful
-- build a confidence band from the spread of historical values for the matching slot
-
-This same approach can be used for:
-
-- non-deferrable household demand
-- aggregated deferrable demand
-- or each configured deferrable consumer separately
-
-#### Pros
-
-- simple, explainable, and local
-- no heavy dependencies
-- easy to debug when numbers look wrong
-- strong fit for household baseline behavior
-- good match for a Home Assistant custom integration
-
-#### Cons
-
-- weaker on unusual one-off days
-- deferrable consumers may be less predictable than base load
-- does not use external context such as weather or occupancy
-
-### Option 2 - Hybrid contextual model
-
-Start from the statistical baseline and add a few extra signals later, for example:
-
-- season / month
-- weekday / weekend / holiday
-- occupancy / home-away mode
-- battery strategy mode
-- temperature
-
-#### Pros
-
-- likely the highest value next step after v1
-- still explainable
-- can improve heating-heavy or schedule-heavy households
-
-#### Cons
-
-- more configuration
-- more validation work
-- more edge cases around missing data
-
-### Recommendation
-
-Good **v2 direction**.
-
-### Option 3 - Full ML model inside the integration
-
-Use a local ML library such as `scikit-learn` and train a richer regression model.
-
-#### Pros
-
-- highest theoretical ceiling
-- can combine many signals more flexibly
-
-#### Cons
-
-- much more complexity
-- more difficult packaging for a Home Assistant custom integration
-- harder to explain and debug
-- unclear whether it will beat a strong statistical baseline enough to justify the cost
-
-### Recommendation
-
-Do **not** start here.
-
-## High-level API direction
-
-The current backend forecast payload could grow in this direction:
+The house forecast is returned from `helman/get_forecast` under `house_consumption`.
 
 ```json
 {
-  "solar": { "...": "existing" },
-  "grid": { "...": "existing" },
   "house_consumption": {
     "status": "available",
     "generatedAt": "2026-03-12T08:05:00+01:00",
@@ -326,6 +99,8 @@ The current backend forecast payload could grow in this direction:
     "resolution": "hour",
     "horizonHours": 168,
     "trainingWindowDays": 42,
+    "historyDaysAvailable": 31,
+    "requiredHistoryDays": 14,
     "model": "hour_of_week_baseline",
     "series": [
       {
@@ -342,13 +117,6 @@ The current backend forecast payload could grow in this direction:
             "value": 0.3,
             "lower": 0.0,
             "upper": 1.0
-          },
-          {
-            "entityId": "sensor.pool_heating_energy_total",
-            "label": "Pool Heating",
-            "value": 0.1,
-            "lower": 0.0,
-            "upper": 0.4
           }
         ]
       }
@@ -357,65 +125,30 @@ The current backend forecast payload could grow in this direction:
 }
 ```
 
-This is still intentionally high level. The important part is the shape:
+Key points:
 
-- forecast metadata
-- persisted snapshot metadata such as `generatedAt`
-- one object per forecast hour
-- lower / upper confidence for the baseline and each deferrable consumer
-- per-consumer deferrable breakdown
-- entity ID used as the stable deferrable consumer identifier
-- frontend-derived totals
+- `generatedAt` identifies when the current snapshot was built.
+- `nonDeferrable` and each `deferrableConsumers[]` item include `value`, `lower`, and `upper`.
+- The backend does **not** return `total` or `deferrableTotal`. The frontend derives them from the normalized hourly payload:
 
-## High-level rollout
+```text
+total = nonDeferrable + sum(deferrableConsumers)
+deferrableTotal = sum(deferrableConsumers)
+```
 
-### Phase 1 - Strong v1
+## Frontend behavior
 
-- use Recorder/statistics as the historical source
-- build a 7-day hourly forecast
-- run the house forecast generation every hour in the backend
-- persist the latest forecast snapshot and serve it from storage / cache
-- use the pure statistical baseline
-- include a confidence band
-- support configured deferrable consumers
-- expose hourly records with non-deferrable and per-consumer deferrable values
-- derive total and deferrable-total views in the frontend
+- The current UI is rendered inside the house detail dialog of `custom:helman-simple-card`.
+- The 168-hour forecast is grouped by calendar day, so the UI usually shows today plus the next 7 dates rather than exactly 7 day cards. The expanded panel shows hourly detail with confidence-band markers.
+- The available views are:
+  - `Total` — baseline plus all deferrable consumers
+  - `Baseline` — non-deferrable only
+  - `Breakdown` — baseline row plus one row per configured deferrable consumer
+- When no deferrable consumers are configured, total and baseline effectively match, and the breakdown view degrades to a baseline-only chart.
+- `deferrable_consumers[].label` is user-visible in the breakdown summary and chart rows.
 
-### Phase 2 - Better deferrable handling
+## Known limitations
 
-- optionally forecast each deferrable consumer separately in the UI
-- allow a schedule-aware mode for planned deferrables
-- improve the confidence band using more consumer-specific heuristics
-
-### Phase 3 - Context-aware improvements
-
-- add optional temperature and calendar effects
-- re-evaluate whether a hybrid model is enough before considering ML
-
-## Recommendation to align on
-
-If we want a strong first implementation, I would align on this:
-
-> **Build a backend forecast in `hass-helman` that predicts 7 days of hourly house energy consumption from Home Assistant Recorder/statistics using a simple hour-of-week statistical baseline, runs every hour, persists the latest snapshot, and returns one object per hour with non-deferrable values and a per-consumer deferrable breakdown plus confidence bands.**
-
-That gives:
-
-- a useful result immediately
-- minimal architectural risk
-- no premature ML dependency
-- a clean path to future scheduling / optimization
-
-## Visibility rule for v1
-
-We now have a concrete rule for insufficient history:
-
-- if less than **14 days** of usable hourly history is available, **hide the forecast**
-- once at least **14 days** is available, show the forecast normally
-
-Why `14 days` is a good v1 default:
-
-- it gives at least two weekly cycles for the hour-of-week baseline
-- it is more robust than a 7-day minimum
-- it becomes available much sooner than waiting for 28 days
-
-At this point, the document is largely aligned and ready for implementation planning.
+- v1 uses a pure statistical baseline; there is no weather, occupancy, or schedule-aware model yet.
+- Deferrable consumers are forecast from history only. Explicit future schedules are out of scope.
+- Accuracy depends on Recorder data quality, stable entity configuration, and enough history span in the queried window.

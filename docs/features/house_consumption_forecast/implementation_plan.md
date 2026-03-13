@@ -21,7 +21,7 @@ The implementation should target this exact first version:
 - forecast horizon is **7 days** / `168` points
 - historical source is **Home Assistant Recorder / statistics**
 - prefer a **cumulative / `total_increasing`** house energy entity
-- show forecast only when at least **14 days** of usable hourly history exist
+- show forecast only when at least **14 days** of Recorder history span exist
 - forecast **non-deferrable baseline**
 - forecast each **deferrable consumer** separately
 - return **one record per forecast hour**
@@ -73,7 +73,7 @@ power_devices:
 - If `total_energy_entity_id` is missing, the house forecast must return `not_configured`.
 - Deferrable consumers should also use statistics-friendly energy entities when possible.
 - Use `energy_entity_id` as the unique identity for each deferrable consumer; do not require a separate user-defined key.
-- If history is insufficient, return a forecast status and **hide the UI**.
+- If history is insufficient, return a forecast status and hide the charts while still showing an explanatory status message.
 
 This is intentionally different from `house.entities.*`:
 
@@ -146,15 +146,14 @@ Extend the forecast status union with:
 
 - `insufficient_history`
 
-So the total set becomes:
+The shared forecast status union can still contain `partial`, but the shipped house forecast contract currently uses:
 
 - `not_configured`
 - `insufficient_history`
 - `unavailable`
-- `partial`
 - `available`
 
-`insufficient_history` is useful because the frontend can intentionally hide the chart while still showing a meaningful reason.
+`insufficient_history` is useful because the frontend can hide forecast charts while still showing a meaningful reason.
 
 ## Recommended runtime and persistence model
 
@@ -417,7 +416,7 @@ Implement persisted snapshot loading/saving, hourly refresh scheduling, source r
     - `status`
 - Return:
     - `not_configured` if the forecast config is absent or `total_energy_entity_id` is missing
-    - `insufficient_history` if less than `14` usable days exist
+    - `insufficient_history` if less than `14` days of history span exist in the queried window
     - `available` when enough history exists
 - Return an empty `series` array for now; this increment is about data readiness, not prediction.
 - Persist every newly generated snapshot, even if it only contains status metadata and an empty series.
@@ -459,7 +458,7 @@ User validation required
   - Confirm `series` is still empty in this increment.
   - Restart Home Assistant, paste the snippet again, and confirm `house_consumption` is still returned from persisted storage immediately after restart.
 - Frontend use-cases to test:
-  - Confirm the forecast is hidden when history is insufficient.
+  - Confirm the chart area stays hidden and the status note is shown when history is insufficient.
   - Confirm the status note is understandable.
   - If your system already has enough history, confirm the component no longer says "insufficient history".
   - Sanity-check that the chosen source entity matches your expectation.
@@ -569,7 +568,7 @@ Implement in `helman-house-forecast-detail.ts`:
 - refresh on the same `FORECAST_REFRESH_MS` cadence already used by other forecast views
 - derive `total` and `deferrableTotal` locally from each hourly record
 - render:
-  - daily cards for the next 7 days
+  - daily cards covering the calendar days spanned by the 168-hour forecast
   - selected day detail with 24 hourly slots
   - switch / tabs / segmented control for:
     - `total`
@@ -613,7 +612,7 @@ User validation required
 - Frontend use-cases to test:
   - Confirm the house detail now shows a useful forecast section.
   - Confirm the day labels and hourly alignment match your local timezone.
-  - Confirm the forecast is hidden when history is insufficient.
+  - Confirm the chart area stays hidden and the status note is shown when history is insufficient.
   - Confirm the `total` vs `non-deferrable` split is understandable.
   - Confirm the frontend-derived totals look correct.
 
@@ -650,7 +649,7 @@ Recommended UI order:
 - The per-consumer breakdown is part of the agreed v1 scope.
 - Use `entityId` as the rendering key / stable identifier in the frontend.
 - Keep labels entirely backend-driven from config, not hardcoded in the card.
-- If one deferrable consumer has no usable data, render the rest and mark the payload `partial`.
+- If one deferrable consumer has no usable data, render the rest and continue without a `partial` status in v1. A dedicated partial-state contract remains future work.
 
 ### Validation after increment
 
@@ -672,21 +671,19 @@ User validation required
 
 This is the most important product validation checkpoint before polishing.
 
-## Increment 6 - Docs, config examples, and cleanup
+## Increment 6 - Docs, config examples, and progress update
 
 ### Goal
 
-Make the feature understandable and maintainable after the implementation is finished.
+Make the shipped feature understandable and easy to operate, and close the documentation/progress loop without changing frontend/backend code in this increment.
 
 ### Backend changes
 
-- Clean up any temporary comments or debug-only status text
-- keep the builder readable and well-factored
+- None in this increment.
 
 ### Frontend changes
 
-- ensure localization keys are complete
-- clean up any temporary placeholder UI
+- None in this increment.
 
 ### Documentation changes
 
@@ -694,6 +691,7 @@ Update:
 
 - `hass-helman/docs/features/house_consumption_forecast/README.md`
 - `hass-helman/docs/features/house_consumption_forecast/implementation_plan.md` if reality drifted
+- `hass-helman/docs/features/house_consumption_forecast/implementation_progress.md`
 - `hass-helman-card/README.md`
 
 Document:
@@ -706,6 +704,9 @@ Document:
 - hourly forecast generation cadence
 - persisted snapshot behavior across requests and restarts
 - meaning of non-deferrable, per-consumer deferrables, and frontend-derived totals
+- actual house forecast statuses and how the current UI responds to them
+
+Deferred cleanup remains future work and is intentionally out of scope for this increment.
 
 ### Validation after increment
 

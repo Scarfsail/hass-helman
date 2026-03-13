@@ -15,7 +15,7 @@
 | 3 | Backend statistical model and final forecast payload | Done |
 | 4 | House forecast UI: total and baseline views | Done |
 | 5 | Per-consumer deferrable breakdown | Done |
-| 6 | Docs, config examples, and cleanup | Pending |
+| 6 | Docs, config examples, and progress update | Done |
 
 ## Increment 1 — Done
 
@@ -134,7 +134,7 @@ Backend:
 
 ### Known items deferred
 
-- `partial` status when a deferrable consumer has no usable data — deferred to Increment 5
+- `partial` status when a deferrable consumer has no usable data — left as future work beyond the shipped v1 contract
 - Both `helman-forecast-detail` and `helman-house-forecast-detail` independently fetch the full forecast payload — a shared forecast context/store could deduplicate this in the future
 
 ## Increment 4 — Done
@@ -146,7 +146,7 @@ Backend:
 
 **Frontend** — full house forecast UI in `helman-house-forecast-detail.ts`:
 - `house-forecast-detail-model.ts` (new): pure data transformation grouping hourly `HouseConsumptionForecastHourDTO[]` into `HouseForecastDay[]` with per-hour `totalKwh` (nonDeferrable + sum of deferrableConsumers) and `baselineKwh` (nonDeferrable only), plus confidence band bounds (`totalLowerKwh`/`totalUpperKwh`, `baselineLowerKwh`/`baselineUpperKwh`) per hour and daily aggregates; today is padded to 24 hours (frontend fallback when backend has no previous snapshot)
-- `helman-house-forecast-detail.ts` (rewritten): full render with day cards for 7 days, accordion-toggled hourly detail panel, pill-shaped segmented control for total/baseline view switching, confidence band markers (thin horizontal lines at lower/upper bounds), `willUpdate` memoization using `generatedAt` + `seriesLength` for stable identity (prevents user state reset on background refresh)
+- `helman-house-forecast-detail.ts` (rewritten): full render with day cards covering the calendar days spanned by the 168-hour forecast window, accordion-toggled hourly detail panel, pill-shaped segmented control for total/baseline view switching, confidence band markers (thin horizontal lines at lower/upper bounds), `willUpdate` memoization using `generatedAt` + `seriesLength` for stable identity (prevents user state reset on background refresh)
 - `node-detail-shared-styles.ts`: added CSS for `.forecast-day-consumption-value`, `.house-total`/`.house-baseline` mini-chart bar colors, `.forecast-detail-bar.house-consumption`, `.forecast-detail-band` confidence band markers, `.forecast-view-toggle` pill segmented control
 - `cs.json`: added `hourly_detail` key under `node_detail.house_forecast`
 
@@ -217,8 +217,28 @@ Frontend:
 - Both `helman-forecast-detail` and `helman-house-forecast-detail` independently fetch the full forecast payload — a shared forecast context/store could deduplicate this in the future
 - Breakdown toggle is shown even when no deferrable consumers are configured (degrades to a single baseline row)
 
-## What's next: Increment 6
+## Increment 6 — Done
 
-**Goal**: Docs, config examples, and cleanup.
+### What was implemented
 
-The next session should read the **Increment 6** section of [`implementation_plan.md`](./implementation_plan.md) for full details.
+**Docs** — aligned the user-facing documentation with the shipped feature:
+- `README.md`: rewritten from proposal framing to a current-state feature reference
+- `implementation_plan.md`: Increment 6 scope updated to reflect docs/progress closeout only
+- `hass-helman-card/README.md`: documented `power_devices.house.forecast`, data requirements, example config, and troubleshooting notes
+- `implementation_progress.md`: marked Increment 6 complete
+
+### Files touched
+
+Backend/docs:
+- `docs/features/house_consumption_forecast/README.md`
+- `docs/features/house_consumption_forecast/implementation_plan.md`
+- `docs/features/house_consumption_forecast/implementation_progress.md`
+
+Frontend/docs:
+- `hass-helman-card/README.md`
+
+### Design decisions
+
+- Increment 6 was kept docs-only by explicit scope choice; no frontend/backend code cleanup was performed here.
+- The docs now describe the implemented contract from code rather than the earlier proposal wording.
+- Deferred cleanup items from earlier increments remain future work rather than being bundled into the documentation closeout.
