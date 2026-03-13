@@ -10,6 +10,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 
+from homeassistant.util import dt as dt_util
+
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 from .consumption_forecast_builder import ConsumptionForecastBuilder
 from .forecast_builder import HelmanForecastBuilder
@@ -223,10 +225,58 @@ class HelmanCoordinator:
         try:
             builder = ConsumptionForecastBuilder(self._hass, self._storage.config)
             snapshot = await builder.build()
+            snapshot = self._merge_today_past_hours(snapshot)
             self._cached_forecast = snapshot
             await self._storage.async_save_snapshot(snapshot)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
+
+    def _merge_today_past_hours(self, new_snapshot: dict) -> dict:
+        """Preserve today's elapsed forecast hours from the previous snapshot.
+
+        The builder generates forecast starting from the next full hour.
+        This method prepends today's already-elapsed hours from the
+        previous cached snapshot so the frontend can render a full day.
+        """
+        if self._cached_forecast is None:
+            return new_snapshot
+
+        if new_snapshot.get("status") != "available":
+            return new_snapshot
+
+        prev_series = self._cached_forecast.get("series", [])
+        new_series = new_snapshot.get("series", [])
+
+        if not prev_series or not new_series:
+            return new_snapshot
+
+        try:
+            new_start = dt_util.parse_datetime(new_series[0]["timestamp"])
+        except (KeyError, TypeError):
+            return new_snapshot
+
+        if new_start is None:
+            return new_snapshot
+
+        today_date = dt_util.now().date()
+        past_hours: list[dict] = []
+
+        for entry in prev_series:
+            try:
+                ts = dt_util.parse_datetime(entry["timestamp"])
+            except (KeyError, TypeError):
+                continue
+            if ts is None:
+                continue
+            if dt_util.as_local(ts).date() == today_date and ts < new_start:
+                past_hours.append(entry)
+
+        if not past_hours:
+            return new_snapshot
+
+        merged = dict(new_snapshot)
+        merged["series"] = past_hours + list(new_series)
+        return merged
 
     def _start_forecast_refresh(self) -> None:
         """Start the hourly house forecast refresh interval."""
