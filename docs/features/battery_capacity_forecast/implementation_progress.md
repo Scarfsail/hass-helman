@@ -15,10 +15,11 @@
 - **Increment 3 is complete.**
 - **Increment 4 is complete.**
 - **Increment 5 is complete.**
+- **Increment 6 is complete.**
 - **Increment 3 is validated by the user in Home Assistant.**
 - **Increment 4 is validated by the user in Home Assistant.**
 - **Increment 5 is validated by the user in Home Assistant.**
-- The next session should start with **Increment 6** from `implementation_strategy.md`.
+- The next session should start with **manual validation of Increment 6** in Home Assistant; after the user validates it, continue with **Increment 7** from `implementation_strategy.md`.
 
 ## Rules for future sessions
 
@@ -39,7 +40,7 @@ When continuing this work in a new session:
 | 3 | Battery simulation core from now | BE | Complete | Added live battery simulation from now with a fractional first slot and honest partial solar coverage |
 | 4 | Battery forecast TTL cache and invalidation | BE | Complete | Added lazy 5-minute cache/invalidation and user validated the TTL behavior in Home Assistant |
 | 5 | Battery detail placeholder and status wiring | FE | Complete | Added a SoC-first battery summary plus a visible forecast shell with backend status wiring |
-| 6 | Daily SoC cards and summaries | FE | Planned | Add day grouping and SoC-first summaries |
+| 6 | Daily SoC cards and summaries | FE | Complete | Grouped the battery forecast by day and added expandable SoC-first daily summary cards with honest partial-day labeling |
 | 7 | Hourly detail chart, polish, and docs closeout | FE + docs | Planned | Add detailed charting and update docs |
 
 ## Increment 1 — Shared contract and safe scaffolding
@@ -169,17 +170,27 @@ When continuing this work in a new session:
 
 ## Increment 6 — Daily SoC cards and summaries
 
-- **Status**: Planned
+- **Status**: Complete
 - **Backend planned paths**:
   - none required
 - **Frontend planned paths**:
   - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/battery-capacity-forecast-detail-model.ts`
   - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/helman-battery-forecast-detail.ts`
-  - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/node-detail-shared-styles.ts`
+  - `/home/ondra/dev/hass/hass-helman-card/src/localize/translations/cs.json`
 - **Implementation notes**:
-  - _to be filled by future session_
+  - Added a dedicated frontend `battery-capacity-forecast-detail-model.ts` that groups `battery_capacity.series` into local-day buckets and derives end-of-day/last-covered SoC, min/max SoC, ending energy, and honest per-day coverage metadata without zero-padding missing future slots.
+  - Reworked `helman-battery-forecast-detail.ts` to replace the placeholder copy with selectable day cards plus a selected-day summary panel that keeps SoC as the primary metric and uses explicit "last" labeling when the final day ends before day-end coverage.
+  - Reused the existing shared forecast card and detail-panel layout so battery detail now matches the other node detail forecast sections while keeping the hourly detail panel out of scope for Increment 6 and explicitly deferred to Increment 7.
+  - Included the forecast start SoC in the day-summary min/max calculation so the first partial day does not under-report the real SoC range.
+  - Added Czech localization keys for the new battery day-summary labels while reusing the existing shared forecast card/panel classes unchanged.
 - **Validation notes**:
-  - _to be filled by future session_
+  - Baseline and post-change `npm run build-prod` succeeded in `/home/ondra/dev/hass/hass-helman-card`.
+  - Manual Home Assistant validation is still required after redeploying `/home/ondra/dev/hass/hass-helman-card/dist/helman-card-prod.js` (or your normal card build artifact path) and reloading the dashboard.
+  - Use the Increment 6 browser-console check from `implementation_strategy.md`, then confirm:
+    - daily cards appear in the battery detail and selecting a card opens/closes the summary panel cleanly
+    - the visible day summaries match the websocket payload for `endSoc`, `min/max SoC`, and ending energy
+    - the last partial day uses honest "last" labeling instead of pretending the value is the end of the day
+    - truncated forecasts do not render fake zero-filled future slots or extra future days beyond `coverageUntil`
 
 ## Increment 7 — Hourly detail chart, polish, and docs closeout
 
