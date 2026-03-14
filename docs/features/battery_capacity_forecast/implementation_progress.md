@@ -12,7 +12,9 @@
 - Planning is complete.
 - **Increment 1 is complete.**
 - **Increment 2 is complete.**
-- The next session should start with **Increment 3** from `implementation_strategy.md`, but only after the user validates Increment 2.
+- **Increment 3 is complete.**
+- **Increment 3 is validated by the user in Home Assistant.**
+- The next session should start with **Increment 4** from `implementation_strategy.md`.
 
 ## Rules for future sessions
 
@@ -30,7 +32,7 @@ When continuing this work in a new session:
 |-----------|------|-------|--------|-------|
 | 1 | Shared contract and safe scaffolding | BE + FE | Complete | Added backend placeholder payload and frontend DTO/config typing with no visible UI |
 | 2 | House current-hour support | BE + FE | Complete | Added `house_consumption.currentHour` plus cache compatibility so the current-hour entry stays trustworthy |
-| 3 | Battery simulation core from now | BE | Planned | Live calculation, no TTL cache yet |
+| 3 | Battery simulation core from now | BE | Complete | Added live battery simulation from now with a fractional first slot and honest partial solar coverage |
 | 4 | Battery forecast TTL cache and invalidation | BE | Planned | Add lazy 5-minute cache and invalidation |
 | 5 | Battery detail placeholder and status wiring | FE | Planned | Add forecast section shell to battery detail |
 | 6 | Daily SoC cards and summaries | FE | Planned | Add day grouping and SoC-first summaries |
@@ -81,7 +83,7 @@ When continuing this work in a new session:
 
 ## Increment 3 — Battery simulation core from now
 
-- **Status**: Planned
+- **Status**: Complete
 - **Backend planned paths**:
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/battery_state.py`
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/battery_capacity_forecast_builder.py`
@@ -90,9 +92,24 @@ When continuing this work in a new session:
 - **Frontend planned paths**:
   - none required
 - **Implementation notes**:
-  - _to be filled by future session_
+  - Added a dedicated backend `battery_state.py` helper that normalizes required battery entity IDs, battery forecast settings, live battery state, and remaining-energy units for the simulation path.
+  - Switched the coordinator ETA calculations to use the same shared battery-state helper so ETA sensors and the new forecast follow one consistent interpretation of battery entities and units.
+  - Replaced the placeholder `BatteryCapacityForecastBuilder` with a live request-time simulation that starts at `now`, emits a fractional first slot, and keeps the existing 168-slot horizon contract.
+  - Wired the battery builder to consume the already-built `solar` and `house_consumption` payload sections from `HelmanCoordinator.get_forecast()` so the battery forecast reuses the same request snapshot as the rest of the forecast response.
+  - Used `house_consumption.currentHour.nonDeferrable.value` for the fractional first slot and filtered later house input by timestamp so prepended past hours in `house_consumption.series` do not corrupt future battery slots.
+  - Added a backend battery forecast model ID constant and filled the live payload with current battery metadata, simulated slot details, import/export figures, and charge/discharge power-limit flags.
+  - Kept Increment 3 cache-free as planned; the battery forecast is recalculated on every request and still stops honestly with `status: "partial"` when required solar coverage ends.
 - **Validation notes**:
-  - _to be filled by future session_
+  - Baseline and post-change `python3 -m py_compile custom_components/helman/*.py` succeeded in `/home/ondra/dev/hass/hass-helman`.
+  - A local stubbed Python smoke test exercised the new builder in both `available` and `partial` scenarios because the Home Assistant Python package is not installed in this workspace.
+  - Manual Home Assistant validation succeeded after deploying `/home/ondra/dev/hass/hass-helman/custom_components/helman/`, reloading the custom component, and adding the missing battery forecast power limits with `max_charge_power_w = 10000` and `max_discharge_power_w = 10000`.
+  - Use the Increment 3 browser-console helpers and checks from `implementation_strategy.md`, then verify:
+    - `battery_capacity.startedAt` is close to the current time.
+    - `battery_capacity.series[0].durationHours` is greater than `0` and less than or equal to `1`.
+    - `battery_capacity.series` contains 168 slots when solar coverage is available for the full horizon.
+    - no simulated slot SoC drops below `minSoc` or rises above `maxSoc`.
+    - `battery_capacity.status` switches to `partial` with truncated series coverage when required solar hours are missing.
+  - The user verified the original Increment 3 request end-to-end and confirmed the runtime behavior matched expectations.
 
 ## Increment 4 — Battery forecast TTL cache and invalidation
 

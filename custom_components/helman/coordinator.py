@@ -16,11 +16,12 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
+from .battery_state import read_battery_entity_config, read_battery_live_state
 from .const import (
     CONSUMPTION_TOTAL_ENTITY_ID,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
-    HOUSE_FORECAST_MODEL_ID,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
+    HOUSE_FORECAST_MODEL_ID,
     PRODUCTION_TOTAL_ENTITY_ID,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
@@ -243,6 +244,7 @@ class HelmanCoordinator:
         total_energy_entity_id: str | None,
         training_window_days: int,
         min_history_days: int,
+        reference_time: datetime | None = None,
     ) -> bool:
         if not isinstance(self._cached_forecast, dict):
             return False
@@ -263,13 +265,17 @@ class HelmanCoordinator:
         if status == "available":
             return (
                 self._cached_forecast.get("model") == HOUSE_FORECAST_MODEL_ID
-                and self._has_current_hour_forecast(self._cached_forecast)
+                and self._has_current_hour_forecast(
+                    self._cached_forecast, reference_time=reference_time
+                )
             )
 
         return True
 
     @staticmethod
-    def _has_current_hour_forecast(snapshot: dict[str, Any]) -> bool:
+    def _has_current_hour_forecast(
+        snapshot: dict[str, Any], reference_time: datetime | None = None
+    ) -> bool:
         current_hour = snapshot.get("currentHour")
         if not isinstance(current_hour, dict):
             return False
@@ -285,12 +291,13 @@ class HelmanCoordinator:
         local_snapshot_hour = dt_util.as_local(current_hour_dt).replace(
             minute=0, second=0, microsecond=0
         )
-        local_current_hour = dt_util.now().replace(
+        local_current_hour = (reference_time or dt_util.now()).replace(
             minute=0, second=0, microsecond=0
         )
         return local_snapshot_hour == local_current_hour
 
     async def get_forecast(self) -> dict:
+        request_now = dt_util.now()
         builder = HelmanForecastBuilder(self._hass, self._storage.config)
         result = await builder.build()
         (
@@ -302,6 +309,7 @@ class HelmanCoordinator:
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
             min_history_days=min_history_days,
+            reference_time=request_now,
         ):
             result["house_consumption"] = self._cached_forecast
         else:
@@ -314,8 +322,12 @@ class HelmanCoordinator:
                 min_history_days=min_history_days,
             )
         result["battery_capacity"] = BatteryCapacityForecastBuilder(
-            self._storage.config
-        ).build()
+            self._hass, self._storage.config
+        ).build(
+            solar_forecast=result["solar"],
+            house_forecast=result["house_consumption"],
+            started_at=request_now,
+        )
         return result
 
     def invalidate_forecast(self) -> None:
@@ -615,20 +627,11 @@ class HelmanCoordinator:
             return abs(min(0.0, raw))
         return raw
 
-    def _read_battery_state(self) -> tuple[float, float, float, float] | None:
-        """Read live battery state entities. Returns (remaining_wh, capacity_pct, min_soc, max_soc) or None."""
-        battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
-        entities = battery_cfg.get("entities", {})
-        try:
-            remaining_wh = float(self._hass.states.get(entities["remaining_energy"]).state)
-            capacity_pct = float(self._hass.states.get(entities["capacity"]).state)
-            min_soc = float(self._hass.states.get(entities["min_soc"]).state)
-            max_soc = float(self._hass.states.get(entities["max_soc"]).state)
-        except (KeyError, TypeError, ValueError, AttributeError):
+    def _read_battery_state(self):
+        entity_config = read_battery_entity_config(self._storage.config)
+        if entity_config is None:
             return None
-        if capacity_pct <= 0:
-            return None
-        return remaining_wh, capacity_pct, min_soc, max_soc
+        return read_battery_live_state(self._hass, entity_config)
 
     def _compute_charging_eta(
         self, charging_avg_w: float
@@ -637,15 +640,13 @@ class HelmanCoordinator:
         state = self._read_battery_state()
         if state is None:
             return None, "", None
-        remaining_wh, capacity_pct, _min_soc, max_soc = state
-        total_wh = remaining_wh / (capacity_pct / 100)
-        to_full = total_wh * max_soc / 100 - remaining_wh
-        if to_full <= 0:
+        to_full_kwh = state.max_energy_kwh - state.current_remaining_energy_kwh
+        if to_full_kwh <= 0:
             return None, "", None
-        hours = to_full / charging_avg_w
+        hours = (to_full_kwh * 1000) / charging_avg_w
         minutes = hours * 60
         target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
-        return minutes, target.isoformat(), round(max_soc)
+        return minutes, target.isoformat(), round(state.max_soc)
 
     def _compute_discharging_eta(
         self, discharging_avg_w: float
@@ -654,15 +655,13 @@ class HelmanCoordinator:
         state = self._read_battery_state()
         if state is None:
             return None, "", None
-        remaining_wh, capacity_pct, min_soc, _max_soc = state
-        total_wh = remaining_wh / (capacity_pct / 100)
-        usable = remaining_wh - total_wh * min_soc / 100
-        if usable <= 0:
+        usable_kwh = state.current_remaining_energy_kwh - state.min_energy_kwh
+        if usable_kwh <= 0:
             return None, "", None
-        hours = usable / discharging_avg_w
+        hours = (usable_kwh * 1000) / discharging_avg_w
         minutes = hours * 60
         target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
-        return minutes, target.isoformat(), round(min_soc)
+        return minutes, target.isoformat(), round(state.min_soc)
 
     def _compute_consumption_total(self) -> float:
         """Sum consumer-side top-level node powers (house + battery charging + grid export)."""
