@@ -2,9 +2,9 @@
 
 ## Status
 
-Draft proposal updated after review.
+Implemented in code for v1 across Increments 1-7. Increment 7 is awaiting manual Home Assistant validation.
 
-This document proposes how to add a battery capacity forecast to `hass-helman` and expose it in `hass-helman-card`.
+This document describes the current implemented battery capacity forecast in `hass-helman` and `hass-helman-card`, while keeping the reviewed design rationale that shaped the implementation.
 
 ## References
 
@@ -26,9 +26,22 @@ Project battery state with **1 hour granularity** using:
 
 The result should be a backend-owned forecast that the frontend only renders.
 
+## Current implemented behavior
+
+The current implementation:
+
+- computes `battery_capacity` in the backend from live battery state, solar forecast, and the base house forecast
+- starts the simulation from **now** with a fractional first slot and the shared 168-hour horizon
+- keeps unknown future solar hours honest by returning `partial` coverage instead of inventing zero-production slots
+- caches only the backend `battery_capacity` section in memory for about **5 minutes**
+- renders SoC-first daily cards in battery detail with an expandable hourly panel for the selected day
+- shows the selected day's SoC trajectory, remaining energy, charge/discharge movement, min/max SoC guide lines, and partial-coverage note
+
+The sections below preserve the reviewed design decisions and continue to match the current v1 implementation unless noted otherwise.
+
 ## Decisions locked during review
 
-These decisions are now treated as part of the proposal:
+These decisions now define the shipped v1 behavior:
 
 - use only `house_consumption.series[].nonDeferrable.value`
 - if solar forecast becomes unknown, keep the battery forecast `partial`; do not assume `0`
@@ -66,9 +79,9 @@ These decisions are now treated as part of the proposal:
 
 ### Documentation fit
 
-The existing feature docs live under `hass-helman/docs/features/`. This proposal follows that same structure so it is easy to review alongside `house_consumption_forecast`.
+The existing feature docs live under `hass-helman/docs/features/`. This feature follows that same structure so it is easy to review alongside `house_consumption_forecast`.
 
-## Recommended architecture
+## Implemented architecture
 
 ### 1. Keep the battery forecast in the backend
 
@@ -412,6 +425,13 @@ Recommended statuses:
 - `available`
   - aligned inputs and simulated output are present
 
+### Validation details
+
+- `max_charge_power_w` and `max_discharge_power_w` must be present as **positive** numbers; missing or non-positive values keep the forecast `not_configured`
+- invalid `charge_efficiency` / `discharge_efficiency` values fall back to the default `95%` values
+- `remaining_energy` currently accepts only `Wh`, `kWh`, or `MWh`
+- live battery state is treated as `unavailable` when the current SoC is outside `(0, 100]`, when `min_soc` / `max_soc` are outside `[0, 100]`, when `min_soc > max_soc`, when current SoC is outside `[min_soc, max_soc]`, or when remaining energy / derived nominal capacity are invalid
+
 ## Caching strategy
 
 The updated recommendation is a **short-lived in-memory cache** in the coordinator.
@@ -427,22 +447,23 @@ Do **not** cache:
 - the full websocket payload
 - the battery forecast in storage
 
-### Recommended cache shape
+### Current cache shape
 
 ```python
 @dataclass
 class _BatteryForecastCacheEntry:
-    created_at: datetime
-    expires_at: datetime
+    expires_monotonic: float
     payload: dict[str, Any]
 ```
 
-Recommended read path:
+Current read path:
 
-1. if cache exists and is still valid, return it
-2. if a build task is already running, await it
-3. otherwise build a fresh payload
-4. store it with `expires_at = now + 5 minutes`
+1. if cache exists and both TTL checks still pass, return it
+2. invalidate the cache when either the monotonic expiry or the payload `generatedAt` age exceeds the TTL
+3. if a build task is already running, await it
+4. otherwise build a fresh payload
+5. cache only `available` payloads and `partial` payloads with a non-empty `series`
+6. do not cache `not_configured`, `unavailable`, or empty `partial` responses
 
 ### Why this beats persistence
 

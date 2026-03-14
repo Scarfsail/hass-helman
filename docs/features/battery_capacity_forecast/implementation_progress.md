@@ -10,16 +10,13 @@
 ## Current status
 
 - Planning is complete.
-- **Increment 1 is complete.**
-- **Increment 2 is complete.**
-- **Increment 3 is complete.**
-- **Increment 4 is complete.**
-- **Increment 5 is complete.**
-- **Increment 6 is complete.**
+- **Increments 1-7 are complete.**
 - **Increment 3 is validated by the user in Home Assistant.**
 - **Increment 4 is validated by the user in Home Assistant.**
 - **Increment 5 is validated by the user in Home Assistant.**
-- The next session should start with **manual validation of Increment 6** in Home Assistant; after the user validates it, continue with **Increment 7** from `implementation_strategy.md`.
+- **Increment 6 is validated by the user in Home Assistant.**
+- **Increment 7 completes the v1 feature in code and is awaiting manual Home Assistant validation.**
+- The next session should start with **manual validation of Increment 7** in Home Assistant; after the user validates it, the feature can be considered fully closed out.
 
 ## Rules for future sessions
 
@@ -41,7 +38,7 @@ When continuing this work in a new session:
 | 4 | Battery forecast TTL cache and invalidation | BE | Complete | Added lazy 5-minute cache/invalidation and user validated the TTL behavior in Home Assistant |
 | 5 | Battery detail placeholder and status wiring | FE | Complete | Added a SoC-first battery summary plus a visible forecast shell with backend status wiring |
 | 6 | Daily SoC cards and summaries | FE | Complete | Grouped the battery forecast by day and added expandable SoC-first daily summary cards with honest partial-day labeling |
-| 7 | Hourly detail chart, polish, and docs closeout | FE + docs | Planned | Add detailed charting and update docs |
+| 7 | Hourly detail chart, polish, and docs closeout | FE + docs | Complete | Added the hourly battery detail panel, polished shared chart styling, and updated the feature docs to the current implemented v1 state |
 
 ## Increment 1 — Shared contract and safe scaffolding
 
@@ -194,11 +191,12 @@ When continuing this work in a new session:
 
 ## Increment 7 — Hourly detail chart, polish, and docs closeout
 
-- **Status**: Planned
+- **Status**: Complete
 - **Backend planned paths**:
   - only if small payload adjustments are needed
 - **Frontend planned paths**:
   - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/battery-capacity-forecast-chart-model.ts`
+  - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/battery-capacity-forecast-detail-model.ts`
   - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/helman-battery-forecast-detail.ts`
   - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/node-detail-shared-styles.ts`
   - `/home/ondra/dev/hass/hass-helman-card/src/localize/translations/cs.json`
@@ -206,6 +204,18 @@ When continuing this work in a new session:
   - `/home/ondra/dev/hass/hass-helman/docs/features/battery_capacity_forecast/README.md`
   - `/home/ondra/dev/hass/hass-helman/docs/features/battery_capacity_forecast/implementation_progress.md`
 - **Implementation notes**:
-  - _to be filled by future session_
+  - Added a dedicated frontend `battery-capacity-forecast-chart-model.ts` that shapes one selected day into hourly chart columns with sparse time labels, SoC step positions, remaining-energy bars, charge/discharge movement bars, and min/max SoC reference offsets.
+  - Extended `battery-capacity-forecast-detail-model.ts` to keep each day's starting SoC and remaining energy so the hourly detail panel can render the first intra-day transition honestly instead of pretending the day started at the first slot endpoint.
+  - Reworked `helman-battery-forecast-detail.ts` so selecting a day now opens a real hourly detail panel with a SoC-first step chart, remaining-energy context row, charge/discharge movement row, in-panel partial-coverage note, richer slot tooltips, and smooth scrolling to the expanded panel.
+  - Added shared battery-chart styling in `node-detail-shared-styles.ts` and Czech localization keys for the hourly panel labels and slot metadata.
+  - Updated `README.md` to describe the current implemented v1 behavior instead of only the earlier proposal state.
 - **Validation notes**:
-  - _to be filled by future session_
+  - Baseline and post-change `npm run build-prod` succeeded in `/home/ondra/dev/hass/hass-helman-card`.
+  - Increment 7 did not require backend changes, so no backend validation command was needed in this session.
+  - Manual Home Assistant validation is still required after redeploying `/home/ondra/dev/hass/hass-helman-card/dist/helman-card-prod.js` (or your normal card build artifact path) and reloading the dashboard.
+  - Use the Increment 7 browser-console check from `implementation_strategy.md`, then confirm:
+    - expanding a battery day card opens an hourly detail panel below the day cards
+    - the visible SoC trajectory, remaining-energy row, and charge/discharge row match the websocket payload for the selected day
+    - the min/max SoC guide lines line up with the configured battery limits shown in the summary values
+    - partial final days show an in-panel partial note plus `coverageUntil` instead of pretending the forecast covers the full day
+    - `README.md` and this progress file now describe the completed v1 feature state
