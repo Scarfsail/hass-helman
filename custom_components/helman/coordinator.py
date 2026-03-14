@@ -12,6 +12,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from homeassistant.util import dt as dt_util
 
+from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .const import (
     CONSUMPTION_TOTAL_ENTITY_ID,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
@@ -284,6 +285,9 @@ class HelmanCoordinator:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
             )
+        result["battery_capacity"] = BatteryCapacityForecastBuilder(
+            self._storage.config
+        ).build()
         return result
 
     def invalidate_forecast(self) -> None:
