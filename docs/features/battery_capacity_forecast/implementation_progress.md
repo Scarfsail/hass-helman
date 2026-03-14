@@ -11,7 +11,8 @@
 
 - Planning is complete.
 - **Increment 1 is complete.**
-- The next session should start with **Increment 2** from `implementation_strategy.md`.
+- **Increment 2 is complete.**
+- The next session should start with **Increment 3** from `implementation_strategy.md`, but only after the user validates Increment 2.
 
 ## Rules for future sessions
 
@@ -28,7 +29,7 @@ When continuing this work in a new session:
 | Increment | Name | Repos | Status | Notes |
 |-----------|------|-------|--------|-------|
 | 1 | Shared contract and safe scaffolding | BE + FE | Complete | Added backend placeholder payload and frontend DTO/config typing with no visible UI |
-| 2 | House current-hour support | BE + FE | Planned | Add `house_consumption.currentHour` for the fractional first slot |
+| 2 | House current-hour support | BE + FE | Complete | Added `house_consumption.currentHour` plus cache compatibility so the current-hour entry stays trustworthy |
 | 3 | Battery simulation core from now | BE | Planned | Live calculation, no TTL cache yet |
 | 4 | Battery forecast TTL cache and invalidation | BE | Planned | Add lazy 5-minute cache and invalidation |
 | 5 | Battery detail placeholder and status wiring | FE | Planned | Add forecast section shell to battery detail |
@@ -59,16 +60,24 @@ When continuing this work in a new session:
 
 ## Increment 2 — House current-hour support
 
-- **Status**: Planned
+- **Status**: Complete
 - **Backend planned paths**:
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/consumption_forecast_builder.py`
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/coordinator.py`
 - **Frontend planned paths**:
   - `/home/ondra/dev/hass/hass-helman-card/src/helman-api.ts`
 - **Implementation notes**:
-  - _to be filled by future session_
+  - Added a shared backend helper inside `ConsumptionForecastBuilder` so one hourly house forecast item can be built for any local datetime using the same shape as `series[]`.
+  - Extended the available `house_consumption` payload with an optional `currentHour` entry stamped to the start of the current local hour.
+  - Kept the existing `series` generation unchanged so the current house forecast UI contract stays backward-compatible.
+  - Tightened `HelmanCoordinator` cached snapshot compatibility so an `available` snapshot is only reused when it already contains a valid `currentHour` for the current local hour.
+  - Switched the house forecast refresh schedule to top-of-hour refreshes so cached `currentHour` data does not drift into the previous hour after the clock rolls over.
+  - Extended the frontend shared `HouseConsumptionForecastDTO` typing with optional `currentHour` support and left the existing UI untouched.
 - **Validation notes**:
-  - _to be filled by future session_
+  - Frontend baseline and post-change `npm run build-prod` succeeded in `/home/ondra/dev/hass/hass-helman-card`.
+  - Backend baseline and post-change `python3 -m py_compile` succeeded for the touched files in `/home/ondra/dev/hass/hass-helman/custom_components/helman/`.
+  - Backend repo does not currently expose an existing automated test/build command in the workspace; manual Home Assistant websocket validation is still required after reloading the custom component.
+  - Use the Increment 2 browser-console check from `implementation_strategy.md` and confirm that `house_consumption.currentHour` exists, has the same shape as a normal house forecast item, and its `timestamp` belongs to the current local hour.
 
 ## Increment 3 — Battery simulation core from now
 

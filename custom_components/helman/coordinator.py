@@ -8,7 +8,10 @@ from typing import Any, Callable
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_time_change,
+    async_track_time_interval,
+)
 
 from homeassistant.util import dt as dt_util
 
@@ -258,9 +261,34 @@ class HelmanCoordinator:
             return False
 
         if status == "available":
-            return self._cached_forecast.get("model") == HOUSE_FORECAST_MODEL_ID
+            return (
+                self._cached_forecast.get("model") == HOUSE_FORECAST_MODEL_ID
+                and self._has_current_hour_forecast(self._cached_forecast)
+            )
 
         return True
+
+    @staticmethod
+    def _has_current_hour_forecast(snapshot: dict[str, Any]) -> bool:
+        current_hour = snapshot.get("currentHour")
+        if not isinstance(current_hour, dict):
+            return False
+
+        timestamp = current_hour.get("timestamp")
+        if not isinstance(timestamp, str):
+            return False
+
+        current_hour_dt = dt_util.parse_datetime(timestamp)
+        if current_hour_dt is None:
+            return False
+
+        local_snapshot_hour = dt_util.as_local(current_hour_dt).replace(
+            minute=0, second=0, microsecond=0
+        )
+        local_current_hour = dt_util.now().replace(
+            minute=0, second=0, microsecond=0
+        )
+        return local_snapshot_hour == local_current_hour
 
     async def get_forecast(self) -> dict:
         builder = HelmanForecastBuilder(self._hass, self._storage.config)
@@ -354,7 +382,7 @@ class HelmanCoordinator:
         return merged
 
     def _start_forecast_refresh(self) -> None:
-        """Start the hourly house forecast refresh interval."""
+        """Start the hourly house forecast refresh schedule."""
         if self._unsub_forecast_refresh is not None:
             return
 
@@ -362,8 +390,8 @@ class HelmanCoordinator:
         def _on_forecast_interval(_now: datetime) -> None:
             self._hass.async_create_task(self._async_refresh_forecast())
 
-        self._unsub_forecast_refresh = async_track_time_interval(
-            self._hass, _on_forecast_interval, timedelta(hours=1)
+        self._unsub_forecast_refresh = async_track_time_change(
+            self._hass, _on_forecast_interval, minute=0, second=0
         )
 
     def _stop_forecast_refresh(self) -> None:

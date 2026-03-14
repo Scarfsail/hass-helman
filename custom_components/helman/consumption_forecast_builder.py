@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -138,34 +138,30 @@ class ConsumptionForecastBuilder:
                 value = consumers_by_ts[eid].get(ts, 0.0)
                 profile.add(weekday, hour, max(0.0, value))
 
+        local_now = dt_util.now()
+        current_hour = self._build_forecast_entry(
+            local_now.replace(minute=0, second=0, microsecond=0),
+            non_deferrable_profile=non_deferrable_profile,
+            consumers_config=consumers_config,
+            consumer_profiles=consumer_profiles,
+        )
+
         # Generate forecast series starting from the next full hour
         series: list[dict[str, Any]] = []
-        forecast_start = (dt_util.now() + timedelta(hours=1)).replace(
+        forecast_start = (local_now + timedelta(hours=1)).replace(
             minute=0, second=0, microsecond=0
         )
 
         for i in range(self._HORIZON_HOURS):
             forecast_dt = forecast_start + timedelta(hours=i)
-            weekday = forecast_dt.weekday()
-            hour = forecast_dt.hour
-
-            non_deferrable_band = non_deferrable_profile.forecast(weekday, hour)
-
-            deferrable_list: list[dict[str, Any]] = []
-            for consumer in consumers_config:
-                eid = consumer["energy_entity_id"]
-                consumer_band = consumer_profiles[eid].forecast(weekday, hour)
-                deferrable_list.append({
-                    "entityId": eid,
-                    "label": consumer["label"],
-                    **consumer_band.to_dict(),
-                })
-
-            series.append({
-                "timestamp": forecast_dt.isoformat(),
-                "nonDeferrable": non_deferrable_band.to_dict(),
-                "deferrableConsumers": deferrable_list,
-            })
+            series.append(
+                self._build_forecast_entry(
+                    forecast_dt,
+                    non_deferrable_profile=non_deferrable_profile,
+                    consumers_config=consumers_config,
+                    consumer_profiles=consumer_profiles,
+                )
+            )
 
         return self._make_payload(
             status="available",
@@ -173,6 +169,7 @@ class ConsumptionForecastBuilder:
             min_history_days=min_history_days,
             history_days=history_days,
             model=HOUSE_FORECAST_MODEL_ID,
+            current_hour=current_hour,
             series=series,
         )
 
@@ -221,6 +218,34 @@ class ConsumptionForecastBuilder:
         return result
 
     @staticmethod
+    def _build_forecast_entry(
+        forecast_dt: datetime,
+        *,
+        non_deferrable_profile: HourOfWeekWinsorizedMeanProfile,
+        consumers_config: list[dict[str, Any]],
+        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile],
+    ) -> dict[str, Any]:
+        weekday = forecast_dt.weekday()
+        hour = forecast_dt.hour
+        non_deferrable_band = non_deferrable_profile.forecast(weekday, hour)
+
+        deferrable_list: list[dict[str, Any]] = []
+        for consumer in consumers_config:
+            eid = consumer["energy_entity_id"]
+            consumer_band = consumer_profiles[eid].forecast(weekday, hour)
+            deferrable_list.append({
+                "entityId": eid,
+                "label": consumer["label"],
+                **consumer_band.to_dict(),
+            })
+
+        return {
+            "timestamp": forecast_dt.isoformat(),
+            "nonDeferrable": non_deferrable_band.to_dict(),
+            "deferrableConsumers": deferrable_list,
+        }
+
+    @staticmethod
     def _make_payload(
         *,
         status: str,
@@ -228,9 +253,10 @@ class ConsumptionForecastBuilder:
         min_history_days: int,
         history_days: int = 0,
         model: str | None = None,
+        current_hour: dict[str, Any] | None = None,
         series: list | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "status": status,
             "generatedAt": dt_util.now().isoformat(),
             "unit": "kWh",
@@ -242,6 +268,9 @@ class ConsumptionForecastBuilder:
             "model": model,
             "series": series if series is not None else [],
         }
+        if current_hour is not None:
+            payload["currentHour"] = current_hour
+        return payload
 
     @staticmethod
     def _read_dict(raw_value: Any) -> dict[str, Any]:
