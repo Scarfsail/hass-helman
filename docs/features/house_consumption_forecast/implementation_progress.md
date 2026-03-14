@@ -242,3 +242,57 @@ Frontend/docs:
 - Increment 6 was kept docs-only by explicit scope choice; no frontend/backend code cleanup was performed here.
 - The docs now describe the implemented contract from code rather than the earlier proposal wording.
 - Deferred cleanup items from earlier increments remain future work rather than being bundled into the documentation closeout.
+
+## Increment 7 — Done
+
+### What was implemented
+
+**Backend** — smoother house forecast core with a cleaner internal split:
+- Added `consumption_forecast_statistics.py` with:
+  - `ForecastBand`
+  - unweighted percentile helper
+  - winsorized-mean summarizer
+- Added `consumption_forecast_profiles.py` with `HourOfWeekWinsorizedMeanProfile`
+- `ConsumptionForecastBuilder` now:
+  - uses equal weights for all samples inside the training window
+  - uses a winsorized mean for the central value
+  - keeps the returned `lower` / `upper` as raw `p10` / `p90`
+  - defaults `training_window_days` to `56`
+  - reports `model = "hour_of_week_winsorized_mean"`
+- `coordinator.py` fallback payload now reports the same forecast defaults as the builder
+
+**Docs** — updated the current-state docs to explain the new algorithm:
+- `README.md`: default window `56`, winsorized center, equal-weight behavior
+- `history_behavior_explained.md`: rewritten around the new model with updated examples
+
+### Files touched
+
+Backend:
+- `custom_components/helman/const.py`
+- `custom_components/helman/consumption_forecast_statistics.py` (new)
+- `custom_components/helman/consumption_forecast_profiles.py` (new)
+- `custom_components/helman/consumption_forecast_builder.py`
+- `custom_components/helman/coordinator.py`
+
+Docs:
+- `docs/features/house_consumption_forecast/README.md`
+- `docs/features/house_consumption_forecast/history_behavior_explained.md`
+- `docs/features/house_consumption_forecast/implementation_progress.md`
+- `docs/features/house_consumption_forecast/implementation_plan.md`
+
+### Design decisions
+
+- Equal weighting replaced recency weighting — stability was preferred over responsiveness
+- The point forecast now uses a winsorized mean:
+  - raw `p10` / `p90` define the clip bounds
+  - clipped values define the center
+- The confidence band remains raw `p10` / `p90` so unusual history still shows up in the spread
+- Same-hour-any-day fallback remains unchanged for sparse slots
+- No neighbor-hour smoothing was introduced
+- The refactor stops at small internal helpers/modules rather than introducing config-driven forecast modes
+
+### Known items deferred
+
+- Better handling of consumer-history gaps beyond the current winsorized center
+- Optional algorithm metadata in the payload if deeper debugging becomes necessary
+- Any future smoothing across adjacent hours remains out of scope for this increment

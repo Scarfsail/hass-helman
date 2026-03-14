@@ -4,6 +4,8 @@
 
 This document is the implementation handoff for a future coding session.
 
+> Note: the shipped implementation has since evolved beyond the original weighted-baseline plan. The authoritative current-state docs are `README.md` and `history_behavior_explained.md`, which now describe the equal-weight winsorized model with a `56`-day default window.
+
 The next session should implement the feature **increment by increment**, not all at once.
 
 After each increment:
@@ -58,7 +60,7 @@ power_devices:
     forecast:
       total_energy_entity_id: sensor.house_energy_total   # required source for forecast
       min_history_days: 14                      # optional, default 14
-      training_window_days: 42                 # optional, default 42
+      training_window_days: 56                 # optional, default 56
       deferrable_consumers:
         - energy_entity_id: sensor.ev_charging_energy_total
           label: EV Charging
@@ -94,10 +96,10 @@ Recommended DTO shape:
     "unit": "kWh",
     "resolution": "hour",
     "horizonHours": 168,
-    "trainingWindowDays": 42,
+    "trainingWindowDays": 56,
     "historyDaysAvailable": 34,
     "requiredHistoryDays": 14,
-    "model": "hour_of_week_baseline",
+    "model": "hour_of_week_winsorized_mean",
     "series": [
       {
         "timestamp": "2026-03-12T08:00:00+01:00",
@@ -476,7 +478,7 @@ Implement the actual forecast generation in the backend, including non-deferrabl
 In `custom_components/helman/consumption_forecast_builder.py`:
 
 - Read:
-  - `training_window_days` default `42`
+  - `training_window_days` default `56`
   - `min_history_days` default `14`
   - configured deferrable consumers
 - Query hourly history for:
@@ -494,14 +496,14 @@ house_total - sum(deferrable_consumer_history)
 - Build an **hour-of-week** statistical profile:
   - 168 slots
   - local-time aligned
-  - recency-weighted
-  - outlier trimming if helpful
+  - equal-weight
+  - winsorized mean center using raw `p10` / `p90` clip bounds
 - Generate forecasts for:
   - `nonDeferrable`
   - each configured deferrable consumer
 - Recommended confidence band strategy for v1:
-  - central value: weighted mean or weighted median
-  - lower/upper band: percentile band from the training values for the slot
+  - central value: winsorized mean
+  - lower/upper band: raw percentile band from the training values for the slot
 - Build the final DTO as one object per forecast hour:
   - `timestamp`
   - `nonDeferrable`

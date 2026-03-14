@@ -4,6 +4,7 @@
 
 - **Implementation plan**: [`implementation_plan.md`](./implementation_plan.md)
 - **Implementation progress**: [`implementation_progress.md`](./implementation_progress.md)
+- **History behavior explainer**: [`history_behavior_explained.md`](./history_behavior_explained.md)
 
 ## Status
 
@@ -32,7 +33,7 @@ power_devices:
     forecast:
       total_energy_entity_id: sensor.house_energy_total
       min_history_days: 14
-      training_window_days: 42
+      training_window_days: 56
       deferrable_consumers:
         - energy_entity_id: sensor.ev_charging_energy_total
           label: EV Charging
@@ -44,7 +45,7 @@ power_devices:
 
 - `power_devices.house.forecast.total_energy_entity_id` — Required. Statistics-friendly cumulative energy entity used as the total house forecast source.
 - `power_devices.house.forecast.min_history_days` — Optional. Minimum history span required from the oldest available hourly statistics row before forecast charts can be shown. Default: `14`.
-- `power_devices.house.forecast.training_window_days` — Optional. Recorder/statistics lookback window used to build the forecast. Default: `42`. Keep this greater than or equal to `min_history_days`, otherwise the backend never queries far enough back to satisfy the threshold.
+- `power_devices.house.forecast.training_window_days` — Optional. Recorder/statistics lookback window used to build the forecast. Default: `56`. Keep this greater than or equal to `min_history_days`, otherwise the backend never queries far enough back to satisfy the threshold.
 - `power_devices.house.forecast.deferrable_consumers` — Optional list of separately forecasted flexible loads.
   - `energy_entity_id` — Required. Statistics-friendly cumulative energy entity for the consumer.
   - `label` — Optional UI label shown in the breakdown view. If omitted, the entity ID is used.
@@ -65,8 +66,9 @@ Each configured deferrable consumer should already be included in `total_energy_
 
 ## Runtime behavior
 
-- The forecast is built in the backend using an hour-of-week statistical baseline.
-- The training window defaults to the last `42` days of hourly statistics.
+- The forecast is built in the backend using an hour-of-week statistical baseline with an equal-weight winsorized mean center.
+- The training window defaults to the last `56` days of hourly statistics.
+- For each forecasted slot, the backend computes raw `p10` / `p90`, clips historical samples to that range for the point value, and returns the raw `p10` / `p90` as the lower/upper band.
 - The forecast horizon is `168` hours and generation starts at the next full hour.
 - The backend refreshes the house forecast snapshot once per hour.
 - The latest snapshot is cached in the coordinator and persisted in Home Assistant storage.
@@ -81,7 +83,7 @@ The house forecast currently uses these statuses:
 
 - `not_configured` — `house.forecast` is absent or `total_energy_entity_id` is missing. The section stays hidden.
 - `insufficient_history` — fewer than `requiredHistoryDays` of history span were found in the queried Recorder window. The house detail shows an informational message instead of charts.
-- `unavailable` — the backend could not build the forecast. The house detail shows an unavailable message.
+- `unavailable` — the backend could not build the forecast, or a configured forecast does not have a compatible cached snapshot yet. The house detail shows an unavailable message.
 - `available` — forecast metadata and hourly series are present.
 
 If the payload is `available` but the series is empty, the frontend shows a no-data message.
@@ -98,10 +100,10 @@ The house forecast is returned from `helman/get_forecast` under `house_consumpti
     "unit": "kWh",
     "resolution": "hour",
     "horizonHours": 168,
-    "trainingWindowDays": 42,
+    "trainingWindowDays": 56,
     "historyDaysAvailable": 31,
     "requiredHistoryDays": 14,
-    "model": "hour_of_week_baseline",
+    "model": "hour_of_week_winsorized_mean",
     "series": [
       {
         "timestamp": "2026-03-12T08:00:00+01:00",
@@ -149,6 +151,6 @@ deferrableTotal = sum(deferrableConsumers)
 
 ## Known limitations
 
-- v1 uses a pure statistical baseline; there is no weather, occupancy, or schedule-aware model yet.
+- The current model uses a pure statistical baseline; there is no weather, occupancy, or schedule-aware model yet.
 - Deferrable consumers are forecast from history only. Explicit future schedules are out of scope.
 - Accuracy depends on Recorder data quality, stable entity configuration, and enough history span in the queried window.

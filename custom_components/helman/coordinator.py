@@ -12,7 +12,13 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from homeassistant.util import dt as dt_util
 
-from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
+from .const import (
+    CONSUMPTION_TOTAL_ENTITY_ID,
+    HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+    HOUSE_FORECAST_MODEL_ID,
+    HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
+    PRODUCTION_TOTAL_ENTITY_ID,
+)
 from .consumption_forecast_builder import ConsumptionForecastBuilder
 from .forecast_builder import HelmanForecastBuilder
 from .storage import HelmanStorage
@@ -127,6 +133,17 @@ class HelmanCoordinator:
 
         # House forecast: load persisted snapshot, schedule hourly refresh
         self._cached_forecast = self._storage.forecast_snapshot
+        (
+            total_energy_entity_id,
+            training_window_days,
+            min_history_days,
+        ) = self._read_house_forecast_config()
+        if not self._has_compatible_forecast_snapshot(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+        ):
+            self._cached_forecast = None
         self._start_forecast_refresh()
         self._hass.async_create_task(self._async_refresh_forecast())
 
@@ -197,27 +214,81 @@ class HelmanCoordinator:
             self._cached_tree = await builder.build()
         return self._cached_tree
 
+    def _read_house_forecast_config(self) -> tuple[str | None, int, int]:
+        power_devices = ConsumptionForecastBuilder._read_dict(
+            self._storage.config.get("power_devices")
+        )
+        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
+        forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
+        total_energy_entity_id = ConsumptionForecastBuilder._read_entity_id(
+            forecast_cfg.get("total_energy_entity_id")
+        )
+        training_window_days = ConsumptionForecastBuilder._read_positive_int(
+            forecast_cfg.get("training_window_days"),
+            HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
+        )
+        min_history_days = ConsumptionForecastBuilder._read_positive_int(
+            forecast_cfg.get("min_history_days"),
+            HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+        )
+        return total_energy_entity_id, training_window_days, min_history_days
+
+    def _has_compatible_forecast_snapshot(
+        self,
+        *,
+        total_energy_entity_id: str | None,
+        training_window_days: int,
+        min_history_days: int,
+    ) -> bool:
+        if not isinstance(self._cached_forecast, dict):
+            return False
+
+        if self._cached_forecast.get("trainingWindowDays") != training_window_days:
+            return False
+
+        if self._cached_forecast.get("requiredHistoryDays") != min_history_days:
+            return False
+
+        status = self._cached_forecast.get("status")
+        if total_energy_entity_id is None:
+            return status == "not_configured"
+
+        if status == "not_configured":
+            return False
+
+        if status == "available":
+            return self._cached_forecast.get("model") == HOUSE_FORECAST_MODEL_ID
+
+        return True
+
     async def get_forecast(self) -> dict:
         builder = HelmanForecastBuilder(self._hass, self._storage.config)
         result = await builder.build()
-        if self._cached_forecast is not None:
+        (
+            total_energy_entity_id,
+            training_window_days,
+            min_history_days,
+        ) = self._read_house_forecast_config()
+        if self._has_compatible_forecast_snapshot(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+        ):
             result["house_consumption"] = self._cached_forecast
         else:
-            forecast_cfg = (
-                self._storage.config
-                .get("power_devices", {})
-                .get("house", {})
-                .get("forecast", {})
-            )
+            self._cached_forecast = None
             result["house_consumption"] = ConsumptionForecastBuilder._make_payload(
-                status="not_configured",
-                training_window_days=forecast_cfg.get("training_window_days", 42),
-                min_history_days=forecast_cfg.get("min_history_days", 14),
+                status="not_configured"
+                if total_energy_entity_id is None
+                else "unavailable",
+                training_window_days=training_window_days,
+                min_history_days=min_history_days,
             )
         return result
 
     def invalidate_forecast(self) -> None:
         """Trigger a background house forecast refresh."""
+        self._cached_forecast = None
         self._hass.async_create_task(self._async_refresh_forecast())
 
     async def _async_refresh_forecast(self) -> None:

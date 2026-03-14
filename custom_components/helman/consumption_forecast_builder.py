@@ -9,109 +9,18 @@ from homeassistant.components.recorder.statistics import statistics_during_perio
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .const import (
+    HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+    HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
+    HOUSE_FORECAST_MODEL_ID,
+)
+from .consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
+
 _LOGGER = logging.getLogger(__name__)
-
-# Recency weighting: exponential decay half-life in days
-_WEIGHT_HALF_LIFE_DAYS = 14.0
-
-# Minimum data points in a slot before falling back to same-hour-any-day
-_MIN_SLOT_POINTS = 2
 
 # Threshold for "materially negative" residual (kWh).
 # Tiny negatives (>= threshold) are clamped to 0; values below are dropped.
 _NEGATIVE_RESIDUAL_THRESHOLD = -0.01
-
-
-def _weighted_percentile(
-    sorted_pairs: list[tuple[float, float]],
-    total_weight: float,
-    percentile: float,
-) -> float:
-    """Compute a weighted percentile from pre-sorted (value, weight) pairs."""
-    if not sorted_pairs:
-        return 0.0
-    if len(sorted_pairs) == 1:
-        return sorted_pairs[0][0]
-
-    target = percentile * total_weight
-    cumulative = 0.0
-
-    for i, (value, weight) in enumerate(sorted_pairs):
-        cumulative += weight
-        if cumulative >= target:
-            if i == 0 or weight == 0:
-                return value
-            prev_value = sorted_pairs[i - 1][0]
-            prev_cumulative = cumulative - weight
-            fraction = max(0.0, min(1.0, (target - prev_cumulative) / weight))
-            return prev_value + fraction * (value - prev_value)
-
-    return sorted_pairs[-1][0]
-
-
-class HourOfWeekProfile:
-    """168-slot statistical profile for hour-of-week forecasting.
-
-    Each slot accumulates (value, weight) pairs. The forecast for a slot
-    is the weighted mean with 10th/90th weighted percentile bands.
-    If a slot has fewer than _MIN_SLOT_POINTS data points, the forecast
-    falls back to aggregating all 7 days for that hour.
-    """
-
-    SLOTS = 168  # 7 days x 24 hours
-
-    def __init__(self) -> None:
-        self._values: list[list[float]] = [[] for _ in range(self.SLOTS)]
-        self._weights: list[list[float]] = [[] for _ in range(self.SLOTS)]
-
-    @staticmethod
-    def slot_index(weekday: int, hour: int) -> int:
-        """Convert (weekday 0=Mon, hour 0-23) to slot index 0-167."""
-        return weekday * 24 + hour
-
-    def add(self, weekday: int, hour: int, value: float, weight: float) -> None:
-        idx = self.slot_index(weekday, hour)
-        self._values[idx].append(value)
-        self._weights[idx].append(weight)
-
-    def forecast(self, weekday: int, hour: int) -> tuple[float, float, float]:
-        """Return (value, lower, upper) for the given slot."""
-        idx = self.slot_index(weekday, hour)
-        values = self._values[idx]
-        weights = self._weights[idx]
-
-        if len(values) >= _MIN_SLOT_POINTS:
-            return self._weighted_stats(values, weights)
-
-        # Fallback: same hour, any day of week
-        all_values: list[float] = []
-        all_weights: list[float] = []
-        for day in range(7):
-            fidx = self.slot_index(day, hour)
-            all_values.extend(self._values[fidx])
-            all_weights.extend(self._weights[fidx])
-
-        if not all_values:
-            return (0.0, 0.0, 0.0)
-
-        return self._weighted_stats(all_values, all_weights)
-
-    @staticmethod
-    def _weighted_stats(
-        values: list[float], weights: list[float]
-    ) -> tuple[float, float, float]:
-        """Weighted mean + weighted 10th/90th percentiles."""
-        paired = sorted(zip(values, weights), key=lambda x: x[0])
-        total_weight = sum(w for _, w in paired)
-
-        if total_weight == 0:
-            return (0.0, 0.0, 0.0)
-
-        mean = sum(v * w for v, w in paired) / total_weight
-        lower = _weighted_percentile(paired, total_weight, 0.10)
-        upper = _weighted_percentile(paired, total_weight, 0.90)
-
-        return (round(mean, 4), round(lower, 4), round(upper, 4))
 
 
 class ConsumptionForecastBuilder:
@@ -131,8 +40,14 @@ class ConsumptionForecastBuilder:
         total_energy_entity_id = self._read_entity_id(
             forecast_config.get("total_energy_entity_id")
         )
-        min_history_days = forecast_config.get("min_history_days", 14)
-        training_window_days = forecast_config.get("training_window_days", 42)
+        min_history_days = self._read_positive_int(
+            forecast_config.get("min_history_days"),
+            HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
+        )
+        training_window_days = self._read_positive_int(
+            forecast_config.get("training_window_days"),
+            HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
+        )
 
         if total_energy_entity_id is None:
             return self._make_payload(
@@ -192,16 +107,13 @@ class ConsumptionForecastBuilder:
         }
 
         # Build hour-of-week profiles
-        local_now = dt_util.now()
-        non_deferrable_profile = HourOfWeekProfile()
-        consumer_profiles: dict[str, HourOfWeekProfile] = {
-            eid: HourOfWeekProfile() for eid in consumer_rows
+        non_deferrable_profile = HourOfWeekWinsorizedMeanProfile()
+        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile] = {
+            eid: HourOfWeekWinsorizedMeanProfile() for eid in consumer_rows
         }
 
         for ts, house_value in house_by_ts.items():
             local_dt = dt_util.as_local(dt_util.utc_from_timestamp(ts))
-            age_days = (local_now - local_dt).total_seconds() / 86400.0
-            weight = 2.0 ** (-age_days / _WEIGHT_HALF_LIFE_DAYS)
             weekday = local_dt.weekday()
             hour = local_dt.hour
 
@@ -219,16 +131,16 @@ class ConsumptionForecastBuilder:
                 )
                 continue
 
-            non_deferrable_profile.add(weekday, hour, max(0.0, residual), weight)
+            non_deferrable_profile.add(weekday, hour, max(0.0, residual))
 
             # Feed each consumer profile
             for eid, profile in consumer_profiles.items():
                 value = consumers_by_ts[eid].get(ts, 0.0)
-                profile.add(weekday, hour, max(0.0, value), weight)
+                profile.add(weekday, hour, max(0.0, value))
 
         # Generate forecast series starting from the next full hour
         series: list[dict[str, Any]] = []
-        forecast_start = (local_now + timedelta(hours=1)).replace(
+        forecast_start = (dt_util.now() + timedelta(hours=1)).replace(
             minute=0, second=0, microsecond=0
         )
 
@@ -237,31 +149,21 @@ class ConsumptionForecastBuilder:
             weekday = forecast_dt.weekday()
             hour = forecast_dt.hour
 
-            nd_val, nd_lower, nd_upper = non_deferrable_profile.forecast(
-                weekday, hour
-            )
+            non_deferrable_band = non_deferrable_profile.forecast(weekday, hour)
 
             deferrable_list: list[dict[str, Any]] = []
             for consumer in consumers_config:
                 eid = consumer["energy_entity_id"]
-                c_val, c_lower, c_upper = consumer_profiles[eid].forecast(
-                    weekday, hour
-                )
+                consumer_band = consumer_profiles[eid].forecast(weekday, hour)
                 deferrable_list.append({
                     "entityId": eid,
                     "label": consumer["label"],
-                    "value": c_val,
-                    "lower": c_lower,
-                    "upper": c_upper,
+                    **consumer_band.to_dict(),
                 })
 
             series.append({
                 "timestamp": forecast_dt.isoformat(),
-                "nonDeferrable": {
-                    "value": nd_val,
-                    "lower": nd_lower,
-                    "upper": nd_upper,
-                },
+                "nonDeferrable": non_deferrable_band.to_dict(),
                 "deferrableConsumers": deferrable_list,
             })
 
@@ -270,7 +172,7 @@ class ConsumptionForecastBuilder:
             training_window_days=training_window_days,
             min_history_days=min_history_days,
             history_days=history_days,
-            model="hour_of_week_baseline",
+            model=HOUSE_FORECAST_MODEL_ID,
             series=series,
         )
 
@@ -352,6 +254,16 @@ class ConsumptionForecastBuilder:
         if isinstance(raw_value, str) and raw_value.strip():
             return raw_value.strip()
         return None
+
+    @staticmethod
+    def _read_positive_int(raw_value: Any, default: int) -> int:
+        if isinstance(raw_value, bool):
+            return default
+        if isinstance(raw_value, int) and raw_value > 0:
+            return raw_value
+        if isinstance(raw_value, float) and raw_value.is_integer() and raw_value > 0:
+            return int(raw_value)
+        return default
 
     @staticmethod
     def _read_deferrable_consumers(raw_value: Any) -> list[dict[str, Any]]:
