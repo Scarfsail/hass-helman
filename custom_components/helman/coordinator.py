@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -18,6 +21,7 @@ from homeassistant.util import dt as dt_util
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_state import read_battery_entity_config, read_battery_live_state
 from .const import (
+    BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
     CONSUMPTION_TOTAL_ENTITY_ID,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
@@ -30,6 +34,12 @@ from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _BatteryForecastCacheEntry:
+    expires_monotonic: float
+    payload: dict[str, Any]
 
 
 class HelmanCoordinator:
@@ -58,6 +68,8 @@ class HelmanCoordinator:
         self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
+        self._battery_forecast_cache: _BatteryForecastCacheEntry | None = None
+        self._battery_forecast_task: asyncio.Task[dict[str, Any]] | None = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
@@ -314,6 +326,7 @@ class HelmanCoordinator:
             result["house_consumption"] = self._cached_forecast
         else:
             self._cached_forecast = None
+            self._invalidate_battery_forecast_cache()
             result["house_consumption"] = ConsumptionForecastBuilder._make_payload(
                 status="not_configured"
                 if total_energy_entity_id is None
@@ -321,18 +334,18 @@ class HelmanCoordinator:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
             )
-        result["battery_capacity"] = BatteryCapacityForecastBuilder(
-            self._hass, self._storage.config
-        ).build(
+        result["battery_capacity"] = await self._async_get_battery_forecast(
             solar_forecast=result["solar"],
             house_forecast=result["house_consumption"],
             started_at=request_now,
+            allow_cache=result["house_consumption"] is self._cached_forecast,
         )
         return result
 
     def invalidate_forecast(self) -> None:
         """Trigger a background house forecast refresh."""
         self._cached_forecast = None
+        self._invalidate_battery_forecast_cache()
         self._hass.async_create_task(self._async_refresh_forecast())
 
     async def _async_refresh_forecast(self) -> None:
@@ -342,9 +355,160 @@ class HelmanCoordinator:
             snapshot = await builder.build()
             snapshot = self._merge_today_past_hours(snapshot)
             self._cached_forecast = snapshot
+            self._invalidate_battery_forecast_cache()
             await self._storage.async_save_snapshot(snapshot)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
+
+    async def _async_get_battery_forecast(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+        allow_cache: bool,
+    ) -> dict[str, Any]:
+        if not allow_cache:
+            return self._build_battery_forecast(
+                solar_forecast=solar_forecast,
+                house_forecast=house_forecast,
+                started_at=started_at,
+            )
+
+        while True:
+            if house_forecast is not self._cached_forecast:
+                return self._build_battery_forecast(
+                    solar_forecast=solar_forecast,
+                    house_forecast=house_forecast,
+                    started_at=started_at,
+                )
+
+            cached_payload = self._get_cached_battery_forecast()
+            if cached_payload is not None:
+                return cached_payload
+
+            if self._battery_forecast_task is None:
+                self._battery_forecast_task = self._hass.async_create_task(
+                    self._async_build_battery_forecast(
+                        solar_forecast=solar_forecast,
+                        house_forecast=house_forecast,
+                        started_at=started_at,
+                    )
+                )
+
+            task = self._battery_forecast_task
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    continue
+                raise
+
+    async def _async_build_battery_forecast(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> dict[str, Any]:
+        current_task = asyncio.current_task()
+        try:
+            payload = self._build_battery_forecast(
+                solar_forecast=solar_forecast,
+                house_forecast=house_forecast,
+                started_at=started_at,
+            )
+            if self._battery_forecast_task is current_task and self._should_cache_battery_forecast(
+                payload
+            ):
+                self._store_battery_forecast_cache(payload)
+            return payload
+        finally:
+            if self._battery_forecast_task is current_task:
+                self._battery_forecast_task = None
+
+    def _build_battery_forecast(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> dict[str, Any]:
+        return BatteryCapacityForecastBuilder(self._hass, self._storage.config).build(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+        )
+
+    def _get_cached_battery_forecast(self) -> dict[str, Any] | None:
+        cache = self._battery_forecast_cache
+        if cache is None:
+            return None
+
+        generated_at = self._read_generated_at(cache.payload)
+        age_seconds = (
+            (dt_util.now() - generated_at).total_seconds()
+            if generated_at is not None
+            else None
+        )
+
+        if time.monotonic() >= cache.expires_monotonic or (
+            age_seconds is not None
+            and age_seconds >= BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS
+        ):
+            _LOGGER.debug(
+                "Expiring battery forecast cache (generatedAt=%s, age_seconds=%s)",
+                cache.payload.get("generatedAt"),
+                round(age_seconds, 3) if age_seconds is not None else None,
+            )
+            self._battery_forecast_cache = None
+            return None
+
+        _LOGGER.debug(
+            "Battery forecast cache hit (generatedAt=%s, age_seconds=%s)",
+            cache.payload.get("generatedAt"),
+            round(age_seconds, 3) if age_seconds is not None else None,
+        )
+        return cache.payload
+
+    @staticmethod
+    def _should_cache_battery_forecast(payload: dict[str, Any]) -> bool:
+        status = payload.get("status")
+        if status == "available":
+            return True
+
+        if status != "partial":
+            return False
+
+        series = payload.get("series")
+        return isinstance(series, list) and len(series) > 0
+
+    def _store_battery_forecast_cache(self, payload: dict[str, Any]) -> None:
+        self._battery_forecast_cache = _BatteryForecastCacheEntry(
+            expires_monotonic=time.monotonic()
+            + BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
+            payload=payload,
+        )
+        _LOGGER.debug(
+            "Stored battery forecast cache (generatedAt=%s, ttl_seconds=%s)",
+            payload.get("generatedAt"),
+            BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
+        )
+
+    @staticmethod
+    def _read_generated_at(payload: dict[str, Any]) -> datetime | None:
+        generated_at = payload.get("generatedAt")
+        if not isinstance(generated_at, str):
+            return None
+        return dt_util.parse_datetime(generated_at)
+
+    def _invalidate_battery_forecast_cache(self) -> None:
+        self._battery_forecast_cache = None
+
+        task = self._battery_forecast_task
+        self._battery_forecast_task = None
+        if task is not None and not task.done():
+            task.cancel()
 
     def _merge_today_past_hours(self, new_snapshot: dict) -> dict:
         """Preserve today's elapsed forecast hours from the previous snapshot.
@@ -717,6 +881,7 @@ class HelmanCoordinator:
         """Clean up event listeners and stop the tick."""
         self._stop_tick()
         self._stop_forecast_refresh()
+        self._invalidate_battery_forecast_cache()
 
         self._battery_time_to_full = None
         self._battery_time_to_empty = None

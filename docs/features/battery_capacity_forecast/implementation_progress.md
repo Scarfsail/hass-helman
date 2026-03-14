@@ -13,8 +13,10 @@
 - **Increment 1 is complete.**
 - **Increment 2 is complete.**
 - **Increment 3 is complete.**
+- **Increment 4 is complete.**
 - **Increment 3 is validated by the user in Home Assistant.**
-- The next session should start with **Increment 4** from `implementation_strategy.md`.
+- **Increment 4 is validated by the user in Home Assistant.**
+- The next session should start with **Increment 5** from `implementation_strategy.md`.
 
 ## Rules for future sessions
 
@@ -33,7 +35,7 @@ When continuing this work in a new session:
 | 1 | Shared contract and safe scaffolding | BE + FE | Complete | Added backend placeholder payload and frontend DTO/config typing with no visible UI |
 | 2 | House current-hour support | BE + FE | Complete | Added `house_consumption.currentHour` plus cache compatibility so the current-hour entry stays trustworthy |
 | 3 | Battery simulation core from now | BE | Complete | Added live battery simulation from now with a fractional first slot and honest partial solar coverage |
-| 4 | Battery forecast TTL cache and invalidation | BE | Planned | Add lazy 5-minute cache and invalidation |
+| 4 | Battery forecast TTL cache and invalidation | BE | Complete | Added lazy 5-minute cache/invalidation and user validated the TTL behavior in Home Assistant |
 | 5 | Battery detail placeholder and status wiring | FE | Planned | Add forecast section shell to battery detail |
 | 6 | Daily SoC cards and summaries | FE | Planned | Add day grouping and SoC-first summaries |
 | 7 | Hourly detail chart, polish, and docs closeout | FE + docs | Planned | Add detailed charting and update docs |
@@ -113,16 +115,29 @@ When continuing this work in a new session:
 
 ## Increment 4 — Battery forecast TTL cache and invalidation
 
-- **Status**: Planned
+- **Status**: Complete
 - **Backend planned paths**:
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/coordinator.py`
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/const.py`
 - **Frontend planned paths**:
   - none required
 - **Implementation notes**:
-  - _to be filled by future session_
+  - Added a dedicated backend TTL constant for the battery forecast cache and kept the cache strictly in-memory inside `HelmanCoordinator`.
+  - Switched `HelmanCoordinator.get_forecast()` to reuse a cached `battery_capacity` payload for up to five minutes when the current request can safely rely on the compatible cached house forecast snapshot.
+  - Added a shared in-flight battery forecast task so overlapping websocket requests can await one battery build instead of triggering parallel recalculations.
+  - Invalidated the battery forecast cache when the house forecast is explicitly invalidated, when a fresh house forecast snapshot is accepted, and when the cached house snapshot is no longer compatible with the current local hour.
+  - Kept transient fallback states honest by caching only simulated `available` payloads and non-empty `partial` payloads; `unavailable`-style responses still rebuild immediately on the next request.
+  - Tightened the TTL implementation after runtime validation so cache expiry is checked at actual lookup time and uses a monotonic clock instead of wall-clock datetimes.
+  - Added a fallback expiry guard based on the cached payload's own `generatedAt` timestamp plus debug logging for battery cache hit/store/expire events to aid runtime verification.
 - **Validation notes**:
-  - _to be filled by future session_
+  - Baseline and post-change `python3 -m py_compile custom_components/helman/*.py` succeeded in `/home/ondra/dev/hass/hass-helman`.
+  - Backend repo still does not expose an existing automated test suite in the workspace, so manual Home Assistant websocket validation is still required after deploying the updated custom component and reloading the integration.
+  - Use the Increment 4 browser-console helpers and checks from `implementation_strategy.md`, then verify:
+    - two close-together requests inside the TTL reuse the same `battery_capacity.generatedAt`
+    - a request after TTL expiration returns a newer `battery_capacity.generatedAt`
+    - saving the current config again invalidates the battery cache so the next request returns a newer `battery_capacity.generatedAt`
+    - existing `solar`, `grid`, and `house_consumption` sections still return as expected alongside the cached battery payload
+  - The user redeployed the updated backend, restarted Home Assistant, and confirmed the final TTL behavior end-to-end: repeated requests within the TTL reuse `battery_capacity.generatedAt`, and requests after the TTL now return a newer timestamp.
 
 ## Increment 5 — Battery detail placeholder and status wiring
 
