@@ -14,9 +14,11 @@
 - **Increment 2 is complete.**
 - **Increment 3 is complete.**
 - **Increment 4 is complete.**
+- **Increment 5 is complete.**
 - **Increment 3 is validated by the user in Home Assistant.**
 - **Increment 4 is validated by the user in Home Assistant.**
-- The next session should start with **Increment 5** from `implementation_strategy.md`.
+- **Increment 5 is validated by the user in Home Assistant.**
+- The next session should start with **Increment 6** from `implementation_strategy.md`.
 
 ## Rules for future sessions
 
@@ -36,7 +38,7 @@ When continuing this work in a new session:
 | 2 | House current-hour support | BE + FE | Complete | Added `house_consumption.currentHour` plus cache compatibility so the current-hour entry stays trustworthy |
 | 3 | Battery simulation core from now | BE | Complete | Added live battery simulation from now with a fractional first slot and honest partial solar coverage |
 | 4 | Battery forecast TTL cache and invalidation | BE | Complete | Added lazy 5-minute cache/invalidation and user validated the TTL behavior in Home Assistant |
-| 5 | Battery detail placeholder and status wiring | FE | Planned | Add forecast section shell to battery detail |
+| 5 | Battery detail placeholder and status wiring | FE | Complete | Added a SoC-first battery summary plus a visible forecast shell with backend status wiring |
 | 6 | Daily SoC cards and summaries | FE | Planned | Add day grouping and SoC-first summaries |
 | 7 | Hourly detail chart, polish, and docs closeout | FE + docs | Planned | Add detailed charting and update docs |
 
@@ -141,7 +143,7 @@ When continuing this work in a new session:
 
 ## Increment 5 — Battery detail placeholder and status wiring
 
-- **Status**: Planned
+- **Status**: Complete
 - **Backend planned paths**:
   - none required
 - **Frontend planned paths**:
@@ -149,9 +151,21 @@ When continuing this work in a new session:
   - `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/node-detail-battery-content.ts`
   - `/home/ondra/dev/hass/hass-helman-card/src/localize/translations/cs.json`
 - **Implementation notes**:
-  - _to be filled by future session_
+  - Added a dedicated frontend `helman-battery-forecast-detail` component that loads the existing `battery_capacity` payload through the shared forecast websocket helper and refreshes on the shared 5-minute cadence.
+  - Wired the new forecast section into `node-detail-battery-content.ts` so battery detail now matches the existing "detail shell + forecast child component" composition used by the other node detail dialogs.
+  - Reworked the battery summary to make SoC the primary battery metric and keep remaining energy as a secondary detail row while preserving the existing battery producer/consumer device cards and more-info links.
+  - Added Czech battery forecast localization for section labels, localized status names, placeholder copy, and human-readable partial-coverage messaging.
 - **Validation notes**:
-  - _to be filled by future session_
+  - Baseline and post-change `npm run build-prod` succeeded in `/home/ondra/dev/hass/hass-helman-card`.
+  - Manual Home Assistant validation is still required after redeploying `/home/ondra/dev/hass/hass-helman-card/dist/helman-card-prod.js` (or your normal card build artifact path) and reloading the dashboard.
+  - Use the Increment 5 browser-console check from `implementation_strategy.md`, then confirm:
+    - the battery detail dialog opens without frontend errors
+    - SoC is shown before remaining energy and is visually more prominent
+    - the new battery forecast section is visible and its localized status text matches the current backend `battery_capacity.status`
+    - partial payloads show a partial note and coverage timestamp when the backend provides `coverageUntil`
+    - daily cards and hourly charts are still absent in this increment
+  - The user visually validated Increment 5 in Home Assistant and confirmed the new battery detail layout matched expectations for this increment.
+  - The screenshot still showed raw `node_detail.battery_forecast.*` keys, but the committed source JSON and built `dist/helman-card-prod.js` both contain the Czech translations; if those raw keys still appear after deployment, hard-refresh the browser/Home Assistant frontend to flush the cached card bundle.
 
 ## Increment 6 — Daily SoC cards and summaries
 
