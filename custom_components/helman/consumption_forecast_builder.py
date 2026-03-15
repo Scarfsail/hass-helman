@@ -266,6 +266,7 @@ class ConsumptionForecastBuilder:
             "historyDaysAvailable": history_days,
             "requiredHistoryDays": min_history_days,
             "model": model,
+            "actualHistory": [],
             "series": series if series is not None else [],
         }
         if current_hour is not None:

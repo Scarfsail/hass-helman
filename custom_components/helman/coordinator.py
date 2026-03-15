@@ -29,6 +29,7 @@ from .const import (
     PRODUCTION_TOTAL_ENTITY_ID,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
+from .forecast_actual_history_builder import ForecastActualHistoryBuilder
 from .forecast_builder import HelmanForecastBuilder
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
@@ -261,6 +262,9 @@ class HelmanCoordinator:
         if not isinstance(self._cached_forecast, dict):
             return False
 
+        if not isinstance(self._cached_forecast.get("actualHistory"), list):
+            return False
+
         if self._cached_forecast.get("trainingWindowDays") != training_window_days:
             return False
 
@@ -340,7 +344,11 @@ class HelmanCoordinator:
             started_at=request_now,
             allow_cache=result["house_consumption"] is self._cached_forecast,
         )
-        return result
+        actual_history = await ForecastActualHistoryBuilder(
+            self._hass,
+            self._storage.config,
+        ).build(request_now)
+        return self._attach_actual_history(result, actual_history)
 
     def invalidate_forecast(self) -> None:
         """Trigger a background house forecast refresh."""
@@ -353,7 +361,6 @@ class HelmanCoordinator:
         try:
             builder = ConsumptionForecastBuilder(self._hass, self._storage.config)
             snapshot = await builder.build()
-            snapshot = self._merge_today_past_hours(snapshot)
             self._cached_forecast = snapshot
             self._invalidate_battery_forecast_cache()
             await self._storage.async_save_snapshot(snapshot)
@@ -510,52 +517,22 @@ class HelmanCoordinator:
         if task is not None and not task.done():
             task.cancel()
 
-    def _merge_today_past_hours(self, new_snapshot: dict) -> dict:
-        """Preserve today's elapsed forecast hours from the previous snapshot.
-
-        The builder generates forecast starting from the next full hour.
-        This method prepends today's already-elapsed hours from the
-        previous cached snapshot so the frontend can render a full day.
-        """
-        if self._cached_forecast is None:
-            return new_snapshot
-
-        if new_snapshot.get("status") != "available":
-            return new_snapshot
-
-        prev_series = self._cached_forecast.get("series", [])
-        new_series = new_snapshot.get("series", [])
-
-        if not prev_series or not new_series:
-            return new_snapshot
-
-        try:
-            new_start = dt_util.parse_datetime(new_series[0]["timestamp"])
-        except (KeyError, TypeError):
-            return new_snapshot
-
-        if new_start is None:
-            return new_snapshot
-
-        today_date = dt_util.now().date()
-        past_hours: list[dict] = []
-
-        for entry in prev_series:
-            try:
-                ts = dt_util.parse_datetime(entry["timestamp"])
-            except (KeyError, TypeError):
+    @staticmethod
+    def _attach_actual_history(
+        payload: dict[str, Any],
+        actual_history: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        result = dict(payload)
+        for section_key, history in actual_history.items():
+            section = result.get(section_key)
+            if not isinstance(section, dict):
                 continue
-            if ts is None:
-                continue
-            if dt_util.as_local(ts).date() == today_date and ts < new_start:
-                past_hours.append(entry)
 
-        if not past_hours:
-            return new_snapshot
+            next_section = dict(section)
+            next_section["actualHistory"] = history
+            result[section_key] = next_section
 
-        merged = dict(new_snapshot)
-        merged["series"] = past_hours + list(new_series)
-        return merged
+        return result
 
     def _start_forecast_refresh(self) -> None:
         """Start the hourly house forecast refresh schedule."""

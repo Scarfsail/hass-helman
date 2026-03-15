@@ -31,6 +31,7 @@ class HelmanForecastBuilder:
             return {
                 "status": "not_configured",
                 "unit": None,
+                "actualHistory": [],
                 "points": [],
             }
 
@@ -63,6 +64,7 @@ class HelmanForecastBuilder:
             "status": status,
             "unit": unit,
             "remainingTodayEnergyEntityId": remaining_today_entity_id,
+            "actualHistory": [],
             "points": points,
         }
 

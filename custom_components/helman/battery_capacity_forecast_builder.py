@@ -408,6 +408,7 @@ class BatteryCapacityForecastBuilder:
             "maxDischargePowerW": settings.max_discharge_power_w,
             "partialReason": partial_reason,
             "coverageUntil": coverage_until,
+            "actualHistory": [],
             "series": series if series is not None else [],
         }
 
