@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -16,20 +16,17 @@ def get_local_current_hour_start(reference_time: datetime) -> datetime:
 
 def get_today_completed_local_hours(reference_time: datetime) -> list[datetime]:
     current_hour_start = get_local_current_hour_start(reference_time)
-    local_midnight = current_hour_start.replace(hour=0)
-    hours: list[datetime] = []
-    cursor = local_midnight
-    while cursor < current_hour_start:
-        hours.append(cursor)
-        cursor += timedelta(hours=1)
-    return hours
+    local_day_start = _get_local_day_start(reference_time)
+    return _build_local_hour_starts_until(
+        local_day_start,
+        current_hour_start,
+    )
 
 
 def get_today_completed_local_hour_boundaries(reference_time: datetime) -> list[datetime]:
+    current_hour_start = get_local_current_hour_start(reference_time)
     completed_hours = get_today_completed_local_hours(reference_time)
-    if not completed_hours:
-        return [get_local_current_hour_start(reference_time)]
-    return [*completed_hours, completed_hours[-1] + timedelta(hours=1)]
+    return [*completed_hours, current_hour_start]
 
 
 async def query_hourly_energy_changes(
@@ -53,9 +50,9 @@ async def query_hourly_energy_changes(
         {"energy": "kWh"},
         {"change"},
     )
-    return _rows_to_local_hour_map(
+    return _rows_to_utc_hour_map(
         rows.get(entity_id, []),
-        valid_hours=set(completed_hours),
+        valid_hours={dt_util.as_utc(hour_start) for hour_start in completed_hours},
     )
 
 
@@ -64,14 +61,15 @@ async def query_hour_boundary_state_values(
     entity_id: str,
     reference_time: datetime,
 ) -> dict[datetime, float]:
-    boundaries = get_today_completed_local_hour_boundaries(reference_time)
-    if not boundaries:
+    local_boundaries = get_today_completed_local_hour_boundaries(reference_time)
+    if not local_boundaries:
         return {}
 
+    boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
     history = await get_instance(hass).async_add_executor_job(
         lambda: state_changes_during_period(
             hass,
-            dt_util.as_utc(boundaries[0]),
+            boundaries[0],
             None,
             entity_id,
             True,
@@ -84,7 +82,7 @@ async def query_hour_boundary_state_values(
     return _sample_state_values_at_boundaries(states, boundaries)
 
 
-def _rows_to_local_hour_map(
+def _rows_to_utc_hour_map(
     rows: list[dict[str, Any]],
     *,
     valid_hours: set[datetime],
@@ -96,11 +94,11 @@ def _rows_to_local_hour_map(
         if not isinstance(ts, (int, float)) or value is None:
             continue
 
-        local_hour = dt_util.as_local(dt_util.utc_from_timestamp(ts)).replace(
+        utc_hour = dt_util.utc_from_timestamp(ts).replace(
             minute=0, second=0, microsecond=0
         )
-        if local_hour in valid_hours:
-            values_by_hour[local_hour] = value
+        if utc_hour in valid_hours:
+            values_by_hour[utc_hour] = value
 
     return values_by_hour
 
@@ -117,7 +115,6 @@ def _sample_state_values_at_boundaries(
     latest_value: float | None = None
 
     for boundary in boundaries:
-        boundary_utc = dt_util.as_utc(boundary)
         while state_index < len(states):
             state = states[state_index]
             last_updated = getattr(state, "last_updated", None)
@@ -126,7 +123,7 @@ def _sample_state_values_at_boundaries(
                 continue
 
             state_updated_utc = dt_util.as_utc(last_updated)
-            if state_updated_utc > boundary_utc:
+            if state_updated_utc > boundary:
                 break
 
             parsed_value = _read_float(getattr(state, "state", None))
@@ -138,6 +135,36 @@ def _sample_state_values_at_boundaries(
             samples[boundary] = latest_value
 
     return samples
+
+
+def _get_local_day_start(reference_time: datetime) -> datetime:
+    local_reference = dt_util.as_local(reference_time)
+    tzinfo = local_reference.tzinfo
+    if tzinfo is None:
+        return local_reference.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    return datetime.combine(
+        local_reference.date(),
+        time.min,
+        tzinfo=tzinfo,
+    )
+
+
+def _build_local_hour_starts_until(
+    local_start: datetime,
+    local_end: datetime,
+) -> list[datetime]:
+    if local_end <= local_start:
+        return []
+
+    hours: list[datetime] = []
+    cursor_utc = dt_util.as_utc(local_start)
+    end_utc = dt_util.as_utc(local_end)
+    while cursor_utc < end_utc:
+        hours.append(dt_util.as_local(cursor_utc))
+        cursor_utc += timedelta(hours=1)
+
+    return hours
 
 
 def _read_float(raw_value: Any) -> float | None:

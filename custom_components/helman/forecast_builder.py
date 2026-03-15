@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
+
+from .recorder_hourly_series import query_hourly_energy_changes
+
+_LOGGER = logging.getLogger(__name__)
+
 
 class HelmanForecastBuilder:
     def __init__(self, hass: HomeAssistant, config: dict) -> None:
@@ -12,13 +19,14 @@ class HelmanForecastBuilder:
         self._config = config
         self._local_tz = ZoneInfo(str(hass.config.time_zone))
 
-    async def build(self) -> dict[str, Any]:
+    async def build(self, reference_time: datetime | None = None) -> dict[str, Any]:
+        effective_reference_time = reference_time or datetime.now(self._local_tz)
         return {
-            "solar": self._build_solar_forecast(),
+            "solar": await self._build_solar_forecast(effective_reference_time),
             "grid": self._build_grid_forecast(),
         }
 
-    def _build_solar_forecast(self) -> dict[str, Any]:
+    async def _build_solar_forecast(self, reference_time: datetime) -> dict[str, Any]:
         power_devices = self._read_dict(self._config.get("power_devices"))
         solar_config = self._read_dict(power_devices.get("solar"))
         solar_forecast = self._read_dict(solar_config.get("forecast"))
@@ -35,7 +43,7 @@ class HelmanForecastBuilder:
                 "points": [],
             }
 
-        today = datetime.now(self._local_tz).date()
+        today = reference_time.astimezone(self._local_tz).date()
         points_with_sort_keys: list[tuple[datetime, dict[str, Any]]] = []
         entities_with_points = 0
         for index, entity_id in enumerate(daily_entity_ids):
@@ -59,14 +67,44 @@ class HelmanForecastBuilder:
         remaining_today_entity_id = self._read_entity_id(
             self._read_dict(solar_config.get("entities")).get("remaining_today_energy_forecast")
         )
+        actual_history = await self._build_solar_actual_history(reference_time)
 
         return {
             "status": status,
             "unit": unit,
             "remainingTodayEnergyEntityId": remaining_today_entity_id,
-            "actualHistory": [],
+            "actualHistory": actual_history,
             "points": points,
         }
+
+    async def _build_solar_actual_history(
+        self,
+        reference_time: datetime,
+    ) -> list[dict[str, Any]]:
+        entity_id = self._read_solar_actual_energy_entity_id()
+        if entity_id is None:
+            return []
+
+        try:
+            values_by_hour = await query_hourly_energy_changes(
+                self._hass,
+                entity_id,
+                reference_time,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to build solar actual history for %s",
+                entity_id,
+            )
+            return []
+
+        return [
+            {
+                "timestamp": dt_util.as_local(hour_start).isoformat(),
+                "value": round(value_kwh * 1000, 4),
+            }
+            for hour_start, value_kwh in sorted(values_by_hour.items())
+        ]
 
     def _extract_hourly_solar_points(
         self, entity_id: str, expected_date: date
@@ -227,6 +265,17 @@ class HelmanForecastBuilder:
             if unit is not None:
                 return unit
         return None
+
+    def _read_solar_actual_energy_entity_id(self) -> str | None:
+        power_devices = self._read_dict(self._config.get("power_devices"))
+        solar_config = self._read_dict(power_devices.get("solar"))
+        forecast_config = self._read_dict(solar_config.get("forecast"))
+        entities = self._read_dict(solar_config.get("entities"))
+
+        return (
+            self._read_entity_id(forecast_config.get("total_energy_entity_id"))
+            or self._read_entity_id(entities.get("today_energy"))
+        )
 
     @staticmethod
     def _read_unit_from_state(state) -> str | None:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -15,12 +18,21 @@ from .const import (
     HOUSE_FORECAST_MODEL_ID,
 )
 from .consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
+from .recorder_hourly_series import get_today_completed_local_hours
 
 _LOGGER = logging.getLogger(__name__)
 
 # Threshold for "materially negative" residual (kWh).
 # Tiny negatives (>= threshold) are clamped to 0; values below are dropped.
 _NEGATIVE_RESIDUAL_THRESHOLD = -0.01
+
+
+@dataclass(frozen=True)
+class _ConsumerHistoryData:
+    entity_id: str
+    label: str
+    values_by_ts: dict[int, float]
+    query_succeeded: bool
 
 
 class ConsumptionForecastBuilder:
@@ -32,7 +44,7 @@ class ConsumptionForecastBuilder:
         self._hass = hass
         self._config = config
 
-    async def build(self) -> dict[str, Any]:
+    async def build(self, reference_time: datetime | None = None) -> dict[str, Any]:
         power_devices = self._read_dict(self._config.get("power_devices"))
         house_config = self._read_dict(power_devices.get("house"))
         forecast_config = self._read_dict(house_config.get("forecast"))
@@ -48,12 +60,22 @@ class ConsumptionForecastBuilder:
             forecast_config.get("training_window_days"),
             HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
         )
+        consumers_config = self._read_deferrable_consumers(
+            forecast_config.get("deferrable_consumers")
+        )
+        config_fingerprint = self._build_config_fingerprint(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            consumers_config=consumers_config,
+        )
 
         if total_energy_entity_id is None:
             return self._make_payload(
                 status="not_configured",
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
+                config_fingerprint=config_fingerprint,
             )
 
         # Query house total hourly history
@@ -70,6 +92,7 @@ class ConsumptionForecastBuilder:
                 status="unavailable",
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
+                config_fingerprint=config_fingerprint,
             )
 
         history_days = self._compute_history_days(house_rows)
@@ -80,65 +103,24 @@ class ConsumptionForecastBuilder:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 history_days=history_days,
+                config_fingerprint=config_fingerprint,
             )
 
-        # Read deferrable consumers and query their histories
-        consumers_config = self._read_deferrable_consumers(
-            forecast_config.get("deferrable_consumers")
+        consumer_histories = await self._query_consumer_histories(
+            consumers_config,
+            training_window_days,
         )
-        consumer_rows: dict[str, list[dict]] = {}
-        for consumer in consumers_config:
-            eid = consumer["energy_entity_id"]
-            try:
-                consumer_rows[eid] = await self._query_hourly_history(
-                    eid, training_window_days
-                )
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to query history for deferrable consumer %s, using empty",
-                    eid,
-                )
-                consumer_rows[eid] = []
 
-        # Build time-indexed lookups: {unix_ts: kWh_change}
         house_by_ts = self._rows_to_dict(house_rows)
-        consumers_by_ts: dict[str, dict[int, float]] = {
-            eid: self._rows_to_dict(rows) for eid, rows in consumer_rows.items()
-        }
+        (
+            non_deferrable_profile,
+            consumer_profiles,
+        ) = self._build_profiles(
+            house_by_ts,
+            consumer_histories,
+        )
 
-        # Build hour-of-week profiles
-        non_deferrable_profile = HourOfWeekWinsorizedMeanProfile()
-        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile] = {
-            eid: HourOfWeekWinsorizedMeanProfile() for eid in consumer_rows
-        }
-
-        for ts, house_value in house_by_ts.items():
-            local_dt = dt_util.as_local(dt_util.utc_from_timestamp(ts))
-            weekday = local_dt.weekday()
-            hour = local_dt.hour
-
-            # Compute non-deferrable residual
-            deferrable_sum = sum(
-                consumers_by_ts[eid].get(ts, 0.0) for eid in consumers_by_ts
-            )
-            residual = house_value - deferrable_sum
-
-            if residual < _NEGATIVE_RESIDUAL_THRESHOLD:
-                _LOGGER.debug(
-                    "Dropping materially negative residual %.4f kWh at %s",
-                    residual,
-                    local_dt.isoformat(),
-                )
-                continue
-
-            non_deferrable_profile.add(weekday, hour, max(0.0, residual))
-
-            # Feed each consumer profile
-            for eid, profile in consumer_profiles.items():
-                value = consumers_by_ts[eid].get(ts, 0.0)
-                profile.add(weekday, hour, max(0.0, value))
-
-        local_now = dt_util.now()
+        local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
         current_hour = self._build_forecast_entry(
             local_now.replace(minute=0, second=0, microsecond=0),
             non_deferrable_profile=non_deferrable_profile,
@@ -163,15 +145,156 @@ class ConsumptionForecastBuilder:
                 )
             )
 
+        actual_history = self._build_actual_history(
+            house_by_ts=house_by_ts,
+            consumers=consumer_histories,
+            completed_hours=get_today_completed_local_hours(local_now),
+        )
+
         return self._make_payload(
             status="available",
             training_window_days=training_window_days,
             min_history_days=min_history_days,
             history_days=history_days,
             model=HOUSE_FORECAST_MODEL_ID,
+            config_fingerprint=config_fingerprint,
+            actual_history=actual_history,
             current_hour=current_hour,
             series=series,
         )
+
+    async def _query_consumer_histories(
+        self,
+        consumers_config: list[dict[str, Any]],
+        training_window_days: int,
+    ) -> list[_ConsumerHistoryData]:
+        consumer_histories: list[_ConsumerHistoryData] = []
+        for consumer in consumers_config:
+            entity_id = consumer["energy_entity_id"]
+            try:
+                rows = await self._query_hourly_history(entity_id, training_window_days)
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to query history for deferrable consumer %s, using empty",
+                    entity_id,
+                )
+                consumer_histories.append(
+                    _ConsumerHistoryData(
+                        entity_id=entity_id,
+                        label=consumer["label"],
+                        values_by_ts={},
+                        query_succeeded=False,
+                    )
+                )
+                continue
+
+            consumer_histories.append(
+                _ConsumerHistoryData(
+                    entity_id=entity_id,
+                    label=consumer["label"],
+                    values_by_ts=self._rows_to_dict(rows),
+                    query_succeeded=True,
+                )
+            )
+
+        return consumer_histories
+
+    def _build_profiles(
+        self,
+        house_by_ts: dict[int, float],
+        consumers: list[_ConsumerHistoryData],
+    ) -> tuple[
+        HourOfWeekWinsorizedMeanProfile,
+        dict[str, HourOfWeekWinsorizedMeanProfile],
+    ]:
+        non_deferrable_profile = HourOfWeekWinsorizedMeanProfile()
+        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile] = {
+            consumer.entity_id: HourOfWeekWinsorizedMeanProfile()
+            for consumer in consumers
+        }
+
+        for ts, house_value in house_by_ts.items():
+            local_dt = dt_util.as_local(dt_util.utc_from_timestamp(ts))
+            weekday = local_dt.weekday()
+            hour = local_dt.hour
+            deferrable_sum = sum(
+                consumer.values_by_ts.get(ts, 0.0) for consumer in consumers
+            )
+            residual = house_value - deferrable_sum
+
+            if residual < _NEGATIVE_RESIDUAL_THRESHOLD:
+                _LOGGER.debug(
+                    "Dropping materially negative residual %.4f kWh at %s",
+                    residual,
+                    local_dt.isoformat(),
+                )
+                continue
+
+            non_deferrable_profile.add(weekday, hour, max(0.0, residual))
+            for consumer in consumers:
+                consumer_profiles[consumer.entity_id].add(
+                    weekday,
+                    hour,
+                    max(0.0, consumer.values_by_ts.get(ts, 0.0)),
+                )
+
+        return non_deferrable_profile, consumer_profiles
+
+    def _build_actual_history(
+        self,
+        *,
+        house_by_ts: dict[int, float],
+        consumers: list[_ConsumerHistoryData],
+        completed_hours: list[datetime],
+    ) -> list[dict[str, Any]]:
+        actual_history: list[dict[str, Any]] = []
+        for hour_start in completed_hours:
+            timestamp_key = int(dt_util.as_utc(hour_start).timestamp())
+            house_total = house_by_ts.get(timestamp_key)
+            if house_total is None:
+                continue
+
+            deferrable_consumers: list[dict[str, Any]] = []
+            deferrable_sum = 0.0
+            skip_hour = False
+            for consumer in consumers:
+                if not consumer.query_succeeded:
+                    skip_hour = True
+                    break
+
+                value = consumer.values_by_ts.get(timestamp_key)
+                if value is None:
+                    skip_hour = True
+                    break
+
+                normalized_value = max(0.0, value)
+                deferrable_sum += normalized_value
+                deferrable_consumers.append(
+                    {
+                        "entityId": consumer.entity_id,
+                        "label": consumer.label,
+                        "value": round(normalized_value, 4),
+                    }
+                )
+
+            if skip_hour:
+                continue
+
+            non_deferrable = house_total - deferrable_sum
+            if non_deferrable < _NEGATIVE_RESIDUAL_THRESHOLD:
+                continue
+
+            actual_history.append(
+                {
+                    "timestamp": hour_start.isoformat(),
+                    "nonDeferrable": {
+                        "value": round(max(0.0, non_deferrable), 4),
+                    },
+                    "deferrableConsumers": deferrable_consumers,
+                }
+            )
+
+        return actual_history
 
     async def _query_hourly_history(
         self, entity_id: str, training_window_days: int
@@ -253,6 +376,8 @@ class ConsumptionForecastBuilder:
         min_history_days: int,
         history_days: int = 0,
         model: str | None = None,
+        config_fingerprint: str | None = None,
+        actual_history: list[dict[str, Any]] | None = None,
         current_hour: dict[str, Any] | None = None,
         series: list | None = None,
     ) -> dict[str, Any]:
@@ -266,7 +391,8 @@ class ConsumptionForecastBuilder:
             "historyDaysAvailable": history_days,
             "requiredHistoryDays": min_history_days,
             "model": model,
-            "actualHistory": [],
+            "configFingerprint": config_fingerprint,
+            "actualHistory": actual_history if actual_history is not None else [],
             "series": series if series is not None else [],
         }
         if current_hour is not None:
@@ -316,3 +442,34 @@ class ConsumptionForecastBuilder:
                 "label": item.get("label", eid),
             })
         return result
+
+    @staticmethod
+    def _build_config_fingerprint(
+        *,
+        total_energy_entity_id: str | None,
+        training_window_days: int,
+        min_history_days: int,
+        consumers_config: list[dict[str, Any]],
+    ) -> str:
+        fingerprint_payload = {
+            "total_energy_entity_id": total_energy_entity_id,
+            "training_window_days": training_window_days,
+            "min_history_days": min_history_days,
+            "model": HOUSE_FORECAST_MODEL_ID,
+            "deferrable_consumers": sorted(
+                [
+                    {
+                        "energy_entity_id": consumer["energy_entity_id"],
+                        "label": consumer["label"],
+                    }
+                    for consumer in consumers_config
+                ],
+                key=lambda consumer: consumer["energy_entity_id"],
+            ),
+        }
+        serialized = json.dumps(
+            fingerprint_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

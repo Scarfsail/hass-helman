@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections import deque
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -21,7 +18,6 @@ from homeassistant.util import dt as dt_util
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_state import read_battery_entity_config, read_battery_live_state
 from .const import (
-    BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
     CONSUMPTION_TOTAL_ENTITY_ID,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
@@ -29,18 +25,11 @@ from .const import (
     PRODUCTION_TOTAL_ENTITY_ID,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
-from .forecast_actual_history_builder import ForecastActualHistoryBuilder
 from .forecast_builder import HelmanForecastBuilder
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class _BatteryForecastCacheEntry:
-    expires_monotonic: float
-    payload: dict[str, Any]
 
 
 class HelmanCoordinator:
@@ -69,8 +58,6 @@ class HelmanCoordinator:
         self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
-        self._battery_forecast_cache: _BatteryForecastCacheEntry | None = None
-        self._battery_forecast_task: asyncio.Task[dict[str, Any]] | None = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
@@ -155,11 +142,13 @@ class HelmanCoordinator:
             total_energy_entity_id,
             training_window_days,
             min_history_days,
+            config_fingerprint,
         ) = self._read_house_forecast_config()
         if not self._has_compatible_forecast_snapshot(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
             min_history_days=min_history_days,
+            config_fingerprint=config_fingerprint,
         ):
             self._cached_forecast = None
         self._start_forecast_refresh()
@@ -232,7 +221,7 @@ class HelmanCoordinator:
             self._cached_tree = await builder.build()
         return self._cached_tree
 
-    def _read_house_forecast_config(self) -> tuple[str | None, int, int]:
+    def _read_house_forecast_config(self) -> tuple[str | None, int, int, str]:
         power_devices = ConsumptionForecastBuilder._read_dict(
             self._storage.config.get("power_devices")
         )
@@ -249,15 +238,29 @@ class HelmanCoordinator:
             forecast_cfg.get("min_history_days"),
             HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         )
-        return total_energy_entity_id, training_window_days, min_history_days
+        consumers_config = ConsumptionForecastBuilder._read_deferrable_consumers(
+            forecast_cfg.get("deferrable_consumers")
+        )
+        config_fingerprint = ConsumptionForecastBuilder._build_config_fingerprint(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            consumers_config=consumers_config,
+        )
+        return (
+            total_energy_entity_id,
+            training_window_days,
+            min_history_days,
+            config_fingerprint,
+        )
 
-    def _has_compatible_forecast_snapshot(
+    def _has_matching_forecast_snapshot(
         self,
         *,
         total_energy_entity_id: str | None,
         training_window_days: int,
         min_history_days: int,
-        reference_time: datetime | None = None,
+        config_fingerprint: str,
     ) -> bool:
         if not isinstance(self._cached_forecast, dict):
             return False
@@ -271,6 +274,9 @@ class HelmanCoordinator:
         if self._cached_forecast.get("requiredHistoryDays") != min_history_days:
             return False
 
+        if self._cached_forecast.get("configFingerprint") != config_fingerprint:
+            return False
+
         status = self._cached_forecast.get("status")
         if total_energy_entity_id is None:
             return status == "not_configured"
@@ -279,14 +285,34 @@ class HelmanCoordinator:
             return False
 
         if status == "available":
-            return (
-                self._cached_forecast.get("model") == HOUSE_FORECAST_MODEL_ID
-                and self._has_current_hour_forecast(
-                    self._cached_forecast, reference_time=reference_time
-                )
-            )
+            return self._cached_forecast.get("model") == HOUSE_FORECAST_MODEL_ID
 
         return True
+
+    def _has_compatible_forecast_snapshot(
+        self,
+        *,
+        total_energy_entity_id: str | None,
+        training_window_days: int,
+        min_history_days: int,
+        config_fingerprint: str,
+        reference_time: datetime | None = None,
+    ) -> bool:
+        if not self._has_matching_forecast_snapshot(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            config_fingerprint=config_fingerprint,
+        ):
+            return False
+
+        if self._cached_forecast is None or self._cached_forecast.get("status") != "available":
+            return True
+
+        return self._has_current_hour_forecast(
+            self._cached_forecast,
+            reference_time=reference_time,
+        )
 
     @staticmethod
     def _has_current_hour_forecast(
@@ -315,40 +341,50 @@ class HelmanCoordinator:
     async def get_forecast(self) -> dict:
         request_now = dt_util.now()
         builder = HelmanForecastBuilder(self._hass, self._storage.config)
-        result = await builder.build()
+        result = await builder.build(reference_time=request_now)
         (
             total_energy_entity_id,
             training_window_days,
             min_history_days,
+            config_fingerprint,
         ) = self._read_house_forecast_config()
         if self._has_compatible_forecast_snapshot(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
             min_history_days=min_history_days,
+            config_fingerprint=config_fingerprint,
             reference_time=request_now,
         ):
             result["house_consumption"] = self._cached_forecast
         else:
-            self._cached_forecast = None
-            self._invalidate_battery_forecast_cache()
-            result["house_consumption"] = ConsumptionForecastBuilder._make_payload(
-                status="not_configured"
-                if total_energy_entity_id is None
-                else "unavailable",
+            if total_energy_entity_id is not None:
+                await self._async_refresh_forecast(reference_time=request_now)
+
+            if self._has_compatible_forecast_snapshot(
+                total_energy_entity_id=total_energy_entity_id,
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
-            )
+                config_fingerprint=config_fingerprint,
+                reference_time=request_now,
+            ):
+                result["house_consumption"] = self._cached_forecast
+            else:
+                self._cached_forecast = None
+                self._invalidate_battery_forecast_cache()
+                result["house_consumption"] = ConsumptionForecastBuilder._make_payload(
+                    status="not_configured"
+                    if total_energy_entity_id is None
+                    else "unavailable",
+                    training_window_days=training_window_days,
+                    min_history_days=min_history_days,
+                    config_fingerprint=config_fingerprint,
+                )
         result["battery_capacity"] = await self._async_get_battery_forecast(
             solar_forecast=result["solar"],
             house_forecast=result["house_consumption"],
             started_at=request_now,
-            allow_cache=result["house_consumption"] is self._cached_forecast,
         )
-        actual_history = await ForecastActualHistoryBuilder(
-            self._hass,
-            self._storage.config,
-        ).build(request_now)
-        return self._attach_actual_history(result, actual_history)
+        return result
 
     def invalidate_forecast(self) -> None:
         """Trigger a background house forecast refresh."""
@@ -356,11 +392,13 @@ class HelmanCoordinator:
         self._invalidate_battery_forecast_cache()
         self._hass.async_create_task(self._async_refresh_forecast())
 
-    async def _async_refresh_forecast(self) -> None:
+    async def _async_refresh_forecast(
+        self, reference_time: datetime | None = None
+    ) -> None:
         """Build a new house forecast snapshot, cache it, and persist it."""
         try:
             builder = ConsumptionForecastBuilder(self._hass, self._storage.config)
-            snapshot = await builder.build()
+            snapshot = await builder.build(reference_time=reference_time)
             self._cached_forecast = snapshot
             self._invalidate_battery_forecast_cache()
             await self._storage.async_save_snapshot(snapshot)
@@ -373,166 +411,31 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
-        allow_cache: bool,
     ) -> dict[str, Any]:
-        if not allow_cache:
-            return self._build_battery_forecast(
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-            )
-
-        while True:
-            if house_forecast is not self._cached_forecast:
-                return self._build_battery_forecast(
-                    solar_forecast=solar_forecast,
-                    house_forecast=house_forecast,
-                    started_at=started_at,
-                )
-
-            cached_payload = self._get_cached_battery_forecast()
-            if cached_payload is not None:
-                return cached_payload
-
-            if self._battery_forecast_task is None:
-                self._battery_forecast_task = self._hass.async_create_task(
-                    self._async_build_battery_forecast(
-                        solar_forecast=solar_forecast,
-                        house_forecast=house_forecast,
-                        started_at=started_at,
-                    )
-                )
-
-            task = self._battery_forecast_task
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                if task.cancelled():
-                    continue
-                raise
-
-    async def _async_build_battery_forecast(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-    ) -> dict[str, Any]:
-        current_task = asyncio.current_task()
-        try:
-            payload = self._build_battery_forecast(
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-            )
-            if self._battery_forecast_task is current_task and self._should_cache_battery_forecast(
-                payload
-            ):
-                self._store_battery_forecast_cache(payload)
-            return payload
-        finally:
-            if self._battery_forecast_task is current_task:
-                self._battery_forecast_task = None
-
-    def _build_battery_forecast(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-    ) -> dict[str, Any]:
-        return BatteryCapacityForecastBuilder(self._hass, self._storage.config).build(
+        return await self._build_battery_forecast(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
         )
 
-    def _get_cached_battery_forecast(self) -> dict[str, Any] | None:
-        cache = self._battery_forecast_cache
-        if cache is None:
-            return None
-
-        generated_at = self._read_generated_at(cache.payload)
-        age_seconds = (
-            (dt_util.now() - generated_at).total_seconds()
-            if generated_at is not None
-            else None
+    async def _build_battery_forecast(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> dict[str, Any]:
+        return await BatteryCapacityForecastBuilder(
+            self._hass,
+            self._storage.config,
+        ).build(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
         )
-
-        if time.monotonic() >= cache.expires_monotonic or (
-            age_seconds is not None
-            and age_seconds >= BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS
-        ):
-            _LOGGER.debug(
-                "Expiring battery forecast cache (generatedAt=%s, age_seconds=%s)",
-                cache.payload.get("generatedAt"),
-                round(age_seconds, 3) if age_seconds is not None else None,
-            )
-            self._battery_forecast_cache = None
-            return None
-
-        _LOGGER.debug(
-            "Battery forecast cache hit (generatedAt=%s, age_seconds=%s)",
-            cache.payload.get("generatedAt"),
-            round(age_seconds, 3) if age_seconds is not None else None,
-        )
-        return cache.payload
-
-    @staticmethod
-    def _should_cache_battery_forecast(payload: dict[str, Any]) -> bool:
-        status = payload.get("status")
-        if status == "available":
-            return True
-
-        if status != "partial":
-            return False
-
-        series = payload.get("series")
-        return isinstance(series, list) and len(series) > 0
-
-    def _store_battery_forecast_cache(self, payload: dict[str, Any]) -> None:
-        self._battery_forecast_cache = _BatteryForecastCacheEntry(
-            expires_monotonic=time.monotonic()
-            + BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
-            payload=payload,
-        )
-        _LOGGER.debug(
-            "Stored battery forecast cache (generatedAt=%s, ttl_seconds=%s)",
-            payload.get("generatedAt"),
-            BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
-        )
-
-    @staticmethod
-    def _read_generated_at(payload: dict[str, Any]) -> datetime | None:
-        generated_at = payload.get("generatedAt")
-        if not isinstance(generated_at, str):
-            return None
-        return dt_util.parse_datetime(generated_at)
 
     def _invalidate_battery_forecast_cache(self) -> None:
-        self._battery_forecast_cache = None
-
-        task = self._battery_forecast_task
-        self._battery_forecast_task = None
-        if task is not None and not task.done():
-            task.cancel()
-
-    @staticmethod
-    def _attach_actual_history(
-        payload: dict[str, Any],
-        actual_history: dict[str, list[dict[str, Any]]],
-    ) -> dict[str, Any]:
-        result = dict(payload)
-        for section_key, history in actual_history.items():
-            section = result.get(section_key)
-            if not isinstance(section, dict):
-                continue
-
-            next_section = dict(section)
-            next_section["actualHistory"] = history
-            result[section_key] = next_section
-
-        return result
+        return
 
     def _start_forecast_refresh(self) -> None:
         """Start the hourly house forecast refresh schedule."""

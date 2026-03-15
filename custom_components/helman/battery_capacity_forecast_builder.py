@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .battery_actual_history_builder import build_battery_actual_history
 from .battery_state import (
+    BatteryEntityConfig,
     BatteryForecastSettings,
     BatteryLiveState,
     read_battery_entity_config,
@@ -19,6 +22,7 @@ from .const import (
 )
 
 _EPSILON = 1e-9
+_LOGGER = logging.getLogger(__name__)
 
 
 class BatteryCapacityForecastBuilder:
@@ -26,7 +30,7 @@ class BatteryCapacityForecastBuilder:
         self._hass = hass
         self._config = config
 
-    def build(
+    async def build(
         self,
         *,
         solar_forecast: dict[str, Any],
@@ -81,6 +85,10 @@ class BatteryCapacityForecastBuilder:
                 model=model,
             )
 
+        actual_history = await self._build_actual_history(
+            entity_config,
+            started_at,
+        )
         started_at_local = dt_util.as_local(started_at)
         current_hour_start = started_at_local.replace(
             minute=0, second=0, microsecond=0
@@ -160,6 +168,7 @@ class BatteryCapacityForecastBuilder:
                 started_at=started_at_local,
                 partial_reason=partial_reason,
                 coverage_until=coverage_until,
+                actual_history=actual_history,
                 series=series,
             )
 
@@ -170,8 +179,27 @@ class BatteryCapacityForecastBuilder:
             model=model,
             started_at=started_at_local,
             coverage_until=coverage_until,
+            actual_history=actual_history,
             series=series,
         )
+
+    async def _build_actual_history(
+        self,
+        entity_config: BatteryEntityConfig,
+        reference_time: datetime,
+    ) -> list[dict[str, Any]]:
+        try:
+            return await build_battery_actual_history(
+                self._hass,
+                entity_config.capacity_entity_id,
+                reference_time,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to build battery actual history for %s",
+                entity_config.capacity_entity_id,
+            )
+            return []
 
     def _simulate_slot(
         self,
@@ -373,6 +401,7 @@ class BatteryCapacityForecastBuilder:
         started_at: datetime | None = None,
         partial_reason: str | None = None,
         coverage_until: str | None = None,
+        actual_history: list[dict[str, Any]] | None = None,
         series: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return {
@@ -408,7 +437,7 @@ class BatteryCapacityForecastBuilder:
             "maxDischargePowerW": settings.max_discharge_power_w,
             "partialReason": partial_reason,
             "coverageUntil": coverage_until,
-            "actualHistory": [],
+            "actualHistory": actual_history if actual_history is not None else [],
             "series": series if series is not None else [],
         }
 
