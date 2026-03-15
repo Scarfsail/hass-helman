@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import state_changes_during_period
-from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+
+from .energy_units import normalize_energy_to_kwh
+
+_TRANSIENT_REBOUND_WINDOW = timedelta(minutes=30)
+_ENERGY_TOLERANCE_KWH = 1e-6
+
+
+@dataclass(frozen=True)
+class _EnergyObservation:
+    updated_at: datetime
+    value_kwh: float
 
 
 def get_local_current_hour_start(reference_time: datetime) -> datetime:
@@ -34,25 +45,58 @@ async def query_hourly_energy_changes(
     entity_id: str,
     reference_time: datetime,
 ) -> dict[datetime, float]:
-    completed_hours = get_today_completed_local_hours(reference_time)
-    if not completed_hours:
+    return await query_cumulative_hourly_energy_changes(
+        hass,
+        entity_id,
+        local_start=_get_local_day_start(reference_time),
+        local_end=get_local_current_hour_start(reference_time),
+    )
+
+
+async def query_cumulative_hourly_energy_changes(
+    hass: HomeAssistant,
+    entity_id: str,
+    *,
+    local_start: datetime,
+    local_end: datetime,
+) -> dict[datetime, float]:
+    local_hour_starts = _build_local_hour_starts_until(local_start, local_end)
+    if not local_hour_starts:
         return {}
 
-    start_time = dt_util.as_utc(completed_hours[0])
-    end_time = dt_util.as_utc(completed_hours[-1] + timedelta(hours=1))
-    rows = await get_instance(hass).async_add_executor_job(
-        statistics_during_period,
-        hass,
-        start_time,
-        end_time,
-        {entity_id},
-        "hour",
-        {"energy": "kWh"},
-        {"change"},
+    local_boundaries = [*local_hour_starts, local_end]
+    utc_boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
+    default_unit = None
+    current_state = hass.states.get(entity_id)
+    if current_state is not None:
+        default_unit = current_state.attributes.get("unit_of_measurement")
+
+    history = await get_instance(hass).async_add_executor_job(
+        lambda: state_changes_during_period(
+            hass,
+            utc_boundaries[0],
+            utc_boundaries[-1],
+            entity_id,
+            False,
+            False,
+            None,
+            True,
+        )
     )
-    return _rows_to_utc_hour_map(
-        rows.get(entity_id, []),
-        valid_hours={dt_util.as_utc(hour_start) for hour_start in completed_hours},
+    states = history.get(entity_id) or history.get(entity_id.lower()) or []
+    observations = _build_unwrapped_energy_observations(
+        _parse_energy_observations(
+            states,
+            default_unit=default_unit,
+        )
+    )
+    boundary_samples = _sample_energy_observations_at_boundaries(
+        observations,
+        utc_boundaries,
+    )
+    return _build_hourly_energy_changes_from_boundaries(
+        utc_boundaries,
+        boundary_samples,
     )
 
 
@@ -82,23 +126,23 @@ async def query_hour_boundary_state_values(
     return _sample_state_values_at_boundaries(states, boundaries)
 
 
-def _rows_to_utc_hour_map(
-    rows: list[dict[str, Any]],
-    *,
-    valid_hours: set[datetime],
+def _build_hourly_energy_changes_from_boundaries(
+    boundaries: list[datetime],
+    samples: dict[datetime, float],
 ) -> dict[datetime, float]:
     values_by_hour: dict[datetime, float] = {}
-    for row in rows:
-        ts = row.get("start")
-        value = _read_float(row.get("change"))
-        if not isinstance(ts, (int, float)) or value is None:
+    for index, hour_start in enumerate(boundaries[:-1]):
+        hour_end = boundaries[index + 1]
+        start_value = samples.get(hour_start)
+        end_value = samples.get(hour_end)
+        if start_value is None or end_value is None:
             continue
 
-        utc_hour = dt_util.utc_from_timestamp(ts).replace(
-            minute=0, second=0, microsecond=0
-        )
-        if utc_hour in valid_hours:
-            values_by_hour[utc_hour] = value
+        delta = end_value - start_value
+        if delta < 0:
+            continue
+
+        values_by_hour[hour_start] = delta
 
     return values_by_hour
 
@@ -130,6 +174,32 @@ def _sample_state_values_at_boundaries(
             if parsed_value is not None:
                 latest_value = parsed_value
             state_index += 1
+
+        if latest_value is not None:
+            samples[boundary] = latest_value
+
+    return samples
+
+
+def _sample_energy_observations_at_boundaries(
+    observations: list[_EnergyObservation],
+    boundaries: list[datetime],
+) -> dict[datetime, float]:
+    if not observations or not boundaries:
+        return {}
+
+    samples: dict[datetime, float] = {}
+    observation_index = 0
+    latest_value: float | None = None
+
+    for boundary in boundaries:
+        while observation_index < len(observations):
+            observation = observations[observation_index]
+            if observation.updated_at > boundary:
+                break
+
+            latest_value = observation.value_kwh
+            observation_index += 1
 
         if latest_value is not None:
             samples[boundary] = latest_value
@@ -184,3 +254,127 @@ def _read_float(raw_value: Any) -> float | None:
             return None
 
     return None
+
+
+def _read_energy_state_kwh(state: Any, *, default_unit: Any) -> float | None:
+    parsed_value = _read_float(getattr(state, "state", None))
+    if parsed_value is None:
+        return None
+
+    attributes = getattr(state, "attributes", None)
+    raw_unit = default_unit
+    if isinstance(attributes, dict):
+        raw_unit = attributes.get("unit_of_measurement", default_unit)
+
+    return normalize_energy_to_kwh(
+        parsed_value,
+        raw_unit,
+        default_unit=default_unit,
+    )
+
+
+def _parse_energy_observations(
+    states: list[Any],
+    *,
+    default_unit: Any,
+) -> list[_EnergyObservation]:
+    observations: list[_EnergyObservation] = []
+    for state in states:
+        last_updated = getattr(state, "last_updated", None)
+        if last_updated is None:
+            continue
+
+        parsed_value = _read_energy_state_kwh(
+            state,
+            default_unit=default_unit,
+        )
+        if parsed_value is None:
+            continue
+
+        observations.append(
+            _EnergyObservation(
+                updated_at=dt_util.as_utc(last_updated),
+                value_kwh=parsed_value,
+            )
+        )
+
+    return observations
+
+
+def _build_unwrapped_energy_observations(
+    observations: list[_EnergyObservation],
+) -> list[_EnergyObservation]:
+    if not observations:
+        return []
+
+    unwrapped: list[_EnergyObservation] = []
+    offset_kwh = 0.0
+    segment_value_kwh: float | None = None
+    index = 0
+
+    while index < len(observations):
+        observation = observations[index]
+        if segment_value_kwh is None:
+            segment_value_kwh = max(observation.value_kwh, 0.0)
+            unwrapped.append(
+                _EnergyObservation(
+                    updated_at=observation.updated_at,
+                    value_kwh=offset_kwh + segment_value_kwh,
+                )
+            )
+            index += 1
+            continue
+
+        if observation.value_kwh >= segment_value_kwh - _ENERGY_TOLERANCE_KWH:
+            segment_value_kwh = max(segment_value_kwh, observation.value_kwh)
+            unwrapped.append(
+                _EnergyObservation(
+                    updated_at=observation.updated_at,
+                    value_kwh=offset_kwh + segment_value_kwh,
+                )
+            )
+            index += 1
+            continue
+
+        if _is_transient_drop(
+            observations,
+            drop_index=index,
+            pre_drop_value_kwh=segment_value_kwh,
+        ):
+            index += 1
+            continue
+
+        if index == len(observations) - 1:
+            index += 1
+            continue
+
+        offset_kwh += segment_value_kwh
+        segment_value_kwh = max(observation.value_kwh, 0.0)
+        unwrapped.append(
+            _EnergyObservation(
+                updated_at=observation.updated_at,
+                value_kwh=offset_kwh + segment_value_kwh,
+            )
+        )
+        index += 1
+
+    return unwrapped
+
+
+def _is_transient_drop(
+    observations: list[_EnergyObservation],
+    *,
+    drop_index: int,
+    pre_drop_value_kwh: float,
+) -> bool:
+    drop_observation = observations[drop_index]
+    rebound_deadline = drop_observation.updated_at + _TRANSIENT_REBOUND_WINDOW
+
+    for candidate in observations[drop_index + 1 :]:
+        if candidate.updated_at > rebound_deadline:
+            break
+
+        if candidate.value_kwh >= pre_drop_value_kwh - _ENERGY_TOLERANCE_KWH:
+            return True
+
+    return False

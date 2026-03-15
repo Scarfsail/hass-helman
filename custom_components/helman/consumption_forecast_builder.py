@@ -4,11 +4,9 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
-from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -18,7 +16,10 @@ from .const import (
     HOUSE_FORECAST_MODEL_ID,
 )
 from .consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
-from .recorder_hourly_series import get_today_completed_local_hours
+from .recorder_hourly_series import (
+    get_today_completed_local_hours,
+    query_cumulative_hourly_energy_changes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class ConsumptionForecastBuilder:
             min_history_days=min_history_days,
             consumers_config=consumers_config,
         )
+        local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
 
         if total_energy_entity_id is None:
             return self._make_payload(
@@ -81,7 +83,9 @@ class ConsumptionForecastBuilder:
         # Query house total hourly history
         try:
             house_rows = await self._query_hourly_history(
-                total_energy_entity_id, training_window_days
+                total_energy_entity_id,
+                training_window_days,
+                reference_time=local_now,
             )
         except Exception:
             _LOGGER.exception(
@@ -95,7 +99,10 @@ class ConsumptionForecastBuilder:
                 config_fingerprint=config_fingerprint,
             )
 
-        history_days = self._compute_history_days(house_rows)
+        history_days = self._compute_history_days(
+            house_rows,
+            today_local=local_now.date(),
+        )
 
         if history_days < min_history_days:
             return self._make_payload(
@@ -109,6 +116,7 @@ class ConsumptionForecastBuilder:
         consumer_histories = await self._query_consumer_histories(
             consumers_config,
             training_window_days,
+            reference_time=local_now,
         )
 
         house_by_ts = self._rows_to_dict(house_rows)
@@ -120,7 +128,6 @@ class ConsumptionForecastBuilder:
             consumer_histories,
         )
 
-        local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
         current_hour = self._build_forecast_entry(
             local_now.replace(minute=0, second=0, microsecond=0),
             non_deferrable_profile=non_deferrable_profile,
@@ -167,12 +174,18 @@ class ConsumptionForecastBuilder:
         self,
         consumers_config: list[dict[str, Any]],
         training_window_days: int,
+        *,
+        reference_time: datetime,
     ) -> list[_ConsumerHistoryData]:
         consumer_histories: list[_ConsumerHistoryData] = []
         for consumer in consumers_config:
             entity_id = consumer["energy_entity_id"]
             try:
-                rows = await self._query_hourly_history(entity_id, training_window_days)
+                rows = await self._query_hourly_history(
+                    entity_id,
+                    training_window_days,
+                    reference_time=reference_time,
+                )
             except Exception:
                 _LOGGER.warning(
                     "Failed to query history for deferrable consumer %s, using empty",
@@ -297,36 +310,44 @@ class ConsumptionForecastBuilder:
         return actual_history
 
     async def _query_hourly_history(
-        self, entity_id: str, training_window_days: int
+        self,
+        entity_id: str,
+        training_window_days: int,
+        *,
+        reference_time: datetime,
     ) -> list[dict]:
-        """Query Recorder hourly statistics and return raw rows."""
-        local_now = dt_util.now()
-        local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_time = dt_util.as_utc(
-            local_midnight - timedelta(days=training_window_days)
+        """Query Recorder-backed hourly cumulative deltas and return raw rows."""
+        local_current_hour = reference_time.replace(
+            minute=0,
+            second=0,
+            microsecond=0,
         )
-
-        stat = await get_instance(self._hass).async_add_executor_job(
-            statistics_during_period,
+        local_midnight = local_current_hour.replace(hour=0)
+        values_by_hour = await query_cumulative_hourly_energy_changes(
             self._hass,
-            start_time,
-            None,
-            {entity_id},
-            "hour",
-            {"energy": "kWh"},
-            {"change"},
+            entity_id,
+            local_start=local_midnight - timedelta(days=training_window_days),
+            local_end=local_current_hour,
         )
-
-        return stat.get(entity_id, [])
+        return [
+            {
+                "start": hour_start.timestamp(),
+                "change": change,
+            }
+            for hour_start, change in sorted(values_by_hour.items())
+        ]
 
     @staticmethod
-    def _compute_history_days(rows: list[dict]) -> int:
+    def _compute_history_days(
+        rows: list[dict],
+        *,
+        today_local: date,
+    ) -> int:
         """Compute number of days of history from Recorder rows."""
         if not rows:
             return 0
         oldest_ts = min(row["start"] for row in rows)
         oldest_local = dt_util.as_local(dt_util.utc_from_timestamp(oldest_ts))
-        today_local = dt_util.now().date()
         return (today_local - oldest_local.date()).days
 
     @staticmethod

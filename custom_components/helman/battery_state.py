@@ -9,6 +9,7 @@ from .const import (
     BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY,
     BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY,
 )
+from .energy_units import normalize_energy_to_kwh
 
 
 @dataclass(frozen=True)
@@ -115,11 +116,12 @@ def read_battery_live_state(
     ):
         return None
 
-    remaining_energy_kwh = _normalize_energy_to_kwh(
+    remaining_energy_kwh = normalize_energy_to_kwh(
         remaining_energy,
         remaining_energy_state.attributes.get("unit_of_measurement")
         if remaining_energy_state is not None
         else None,
+        default_unit=None,
     )
     if remaining_energy_kwh is None or remaining_energy_kwh < 0:
         return None
@@ -149,21 +151,6 @@ def read_battery_live_state(
         min_energy_kwh=min_energy_kwh,
         max_energy_kwh=max_energy_kwh,
     )
-
-
-def _normalize_energy_to_kwh(raw_value: float, raw_unit: Any) -> float | None:
-    normalized_unit = "wh"
-    if isinstance(raw_unit, str) and raw_unit.strip():
-        normalized_unit = raw_unit.strip().lower().replace(" ", "")
-
-    if normalized_unit == "wh":
-        return raw_value / 1000
-    if normalized_unit == "kwh":
-        return raw_value
-    if normalized_unit == "mwh":
-        return raw_value * 1000
-
-    return None
 
 
 def _read_state_float(state) -> float | None:
