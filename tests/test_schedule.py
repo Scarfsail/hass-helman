@@ -77,9 +77,11 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleSlot,
     ScheduleSlotsError,
     apply_slot_patches,
+    find_active_slot,
     iter_horizon_slot_ids,
     materialize_schedule_slots,
     prune_expired_slots,
+    read_schedule_control_config,
     schedule_document_from_dict,
     schedule_document_to_dict,
     validate_slot_patch_request,
@@ -112,6 +114,28 @@ class ScheduleHelperTests(unittest.TestCase):
         self.assertEqual(slots[0].action.kind, SCHEDULE_ACTION_NORMAL)
         self.assertEqual(slots[1].action.kind, SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
         self.assertEqual(slots[1].action.target_soc, 80)
+
+    def test_find_active_slot_returns_explicit_current_slot(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        active_slot = find_active_slot(
+            stored_slots={
+                slot_ids[0]: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+            },
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertIsNotNone(active_slot)
+        assert active_slot is not None
+        self.assertEqual(active_slot.id, slot_ids[0])
+        self.assertEqual(active_slot.action.kind, SCHEDULE_ACTION_STOP_CHARGING)
+
+    def test_find_active_slot_returns_none_for_implicit_normal(self) -> None:
+        self.assertIsNone(
+            find_active_slot(
+                stored_slots={},
+                reference_time=REFERENCE_TIME,
+            )
+        )
 
     def test_apply_slot_patches_removes_explicit_normal(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
@@ -256,6 +280,47 @@ class ScheduleHelperTests(unittest.TestCase):
                     },
                 }
             )
+
+    def test_schedule_document_from_dict_rejects_non_boolean_execution_enabled(
+        self,
+    ) -> None:
+        with self.assertRaises(ScheduleSlotsError):
+            schedule_document_from_dict(
+                {
+                    "executionEnabled": "true",
+                    "slots": {},
+                }
+            )
+
+    def test_read_schedule_control_config_allows_slice2_only_action_options(
+        self,
+    ) -> None:
+        control_config = read_schedule_control_config(
+            {
+                "scheduler": {
+                    "control": {
+                        "mode_entity_id": "input_select.rezim_fv",
+                        "action_option_map": {
+                            "normal": "Standardní",
+                            "stop_charging": "Zákaz nabíjení",
+                            "stop_discharging": "Zákaz vybíjení",
+                        },
+                    }
+                }
+            }
+        )
+
+        self.assertIsNotNone(control_config)
+        assert control_config is not None
+        self.assertEqual(control_config.mode_entity_id, "input_select.rezim_fv")
+        self.assertEqual(control_config.normal_option, "Standardní")
+        self.assertEqual(control_config.stop_charging_option, "Zákaz nabíjení")
+        self.assertEqual(
+            control_config.stop_discharging_option,
+            "Zákaz vybíjení",
+        )
+        self.assertIsNone(control_config.charge_to_target_soc_option)
+        self.assertIsNone(control_config.discharge_to_target_soc_option)
 
 
 if __name__ == "__main__":

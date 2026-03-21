@@ -29,6 +29,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_save_config)
     async_register_command(hass, ws_get_schedule)
     async_register_command(hass, ws_set_schedule)
+    async_register_command(hass, ws_set_schedule_execution)
     async_register_command(hass, ws_get_device_tree)
     async_register_command(hass, ws_get_forecast)
     async_register_command(hass, ws_get_history)
@@ -60,12 +61,16 @@ async def ws_save_config(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    stor: HelmanStorage = hass.data[DOMAIN]["storage"]
+    domain_data = hass.data.get(DOMAIN, {})
+    stor: HelmanStorage | None = domain_data.get("storage")
+    if not stor:
+        connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
+        return
+
     await stor.async_save(msg["config"])
-    coordinator = hass.data[DOMAIN].get("coordinator")
+    coordinator = domain_data.get("coordinator")
     if coordinator:
-        coordinator.invalidate_tree()
-        coordinator.invalidate_forecast()
+        await coordinator.async_handle_config_saved()
     connection.send_result(msg["id"], {"success": True})
 
 
@@ -116,6 +121,30 @@ async def ws_set_schedule(
         return
 
     connection.send_result(msg["id"], {"success": True})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/set_schedule_execution",
+    vol.Required("enabled"): bool,
+})
+@websocket_api.async_response
+async def ws_set_schedule_execution(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    coordinator = hass.data[DOMAIN].get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    try:
+        enabled = await coordinator.set_schedule_execution(enabled=msg["enabled"])
+    except ScheduleError as err:
+        connection.send_error(msg["id"], err.code, str(err))
+        return
+
+    connection.send_result(msg["id"], {"success": True, "executionEnabled": enabled})
 
 
 @websocket_api.websocket_command({

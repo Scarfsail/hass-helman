@@ -35,6 +35,7 @@ from .forecast_builder import HelmanForecastBuilder
 from .scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
+    ScheduleError,
     ScheduleResponseDict,
     ScheduleSlot,
     apply_slot_patches,
@@ -45,6 +46,10 @@ from .scheduling.schedule import (
     schedule_document_to_dict,
     slot_to_dict,
     validate_slot_patch_request,
+)
+from .scheduling.schedule_executor import (
+    ScheduleExecutor,
+    ScheduleExecutorDependencies,
 )
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
@@ -80,6 +85,16 @@ class HelmanCoordinator:
         self._cached_forecast: dict | None = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
+        self._schedule_execution_lock = asyncio.Lock()
+        self._schedule_executor = ScheduleExecutor(
+            hass,
+            ScheduleExecutorDependencies(
+                schedule_lock=self._schedule_lock,
+                load_schedule_document=self._load_schedule_document,
+                save_schedule_document=self._save_schedule_document,
+                read_schedule_control_config=self._read_schedule_control_config,
+            ),
+        )
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
         # Entity IDs whose values are computed by the tick (not read from hass.states)
@@ -173,6 +188,12 @@ class HelmanCoordinator:
         ):
             self._cached_forecast = None
         self._start_forecast_refresh()
+
+        if self._load_schedule_document().execution_enabled:
+            await self._async_reconcile_schedule_execution_if_enabled(
+                reason="startup",
+                reference_time=dt_util.now(),
+            )
         self._hass.async_create_task(self._async_refresh_forecast())
 
     @callback
@@ -416,6 +437,24 @@ class HelmanCoordinator:
     async def _save_schedule_document(self, doc: ScheduleDocument) -> None:
         await self._storage.async_save_schedule_document(schedule_document_to_dict(doc))
 
+    async def _load_pruned_schedule_document_locked(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> ScheduleDocument:
+        schedule_document = self._load_schedule_document()
+        pruned_slots = prune_expired_slots(
+            stored_slots=schedule_document.slots,
+            reference_time=reference_time,
+        )
+        pruned_document = ScheduleDocument(
+            execution_enabled=schedule_document.execution_enabled,
+            slots=pruned_slots,
+        )
+        if pruned_document != schedule_document:
+            await self._save_schedule_document(pruned_document)
+        return pruned_document
+
     def _build_schedule_response(
         self,
         *,
@@ -463,6 +502,7 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
     ) -> None:
         request_now = reference_time or dt_util.now()
+        document_changed = False
         async with self._schedule_lock:
             schedule_document = self._load_schedule_document()
             pruned_slots = prune_expired_slots(
@@ -483,6 +523,123 @@ class HelmanCoordinator:
             )
             if updated_document != schedule_document:
                 await self._save_schedule_document(updated_document)
+                document_changed = True
+
+        if document_changed:
+            await self._async_reconcile_schedule_execution_if_enabled(
+                reason="schedule_updated",
+                reference_time=request_now,
+            )
+
+    async def set_schedule_execution(
+        self,
+        *,
+        enabled: bool,
+        reference_time: datetime | None = None,
+    ) -> bool:
+        request_now = reference_time or dt_util.now()
+
+        async with self._schedule_execution_lock:
+            async with self._schedule_lock:
+                current_document = await self._load_pruned_schedule_document_locked(
+                    reference_time=request_now
+                )
+                was_enabled = current_document.execution_enabled
+
+                if enabled and not was_enabled:
+                    await self._save_schedule_document(
+                        ScheduleDocument(
+                            execution_enabled=True,
+                            slots=current_document.slots,
+                        )
+                    )
+
+            if enabled:
+                await self._schedule_executor.async_start()
+                try:
+                    await self._schedule_executor.async_reconcile(
+                        reason="enable_request",
+                        reference_time=request_now,
+                    )
+                except ScheduleError:
+                    if not was_enabled:
+                        async with self._schedule_lock:
+                            latest_document = self._load_schedule_document()
+                            if latest_document.execution_enabled:
+                                await self._save_schedule_document(
+                                    ScheduleDocument(
+                                        execution_enabled=False,
+                                        slots=latest_document.slots,
+                                    )
+                                )
+                        await self._schedule_executor.async_stop()
+                    raise
+                return True
+
+            if not was_enabled:
+                await self._schedule_executor.async_stop()
+                return False
+
+            await self._schedule_executor.async_stop()
+            try:
+                await self._schedule_executor.async_restore_normal(
+                    reason="disable_request"
+                )
+            except ScheduleError:
+                await self._schedule_executor.async_start()
+                await self._schedule_executor.async_reconcile_safely(
+                    reason="disable_restore_failed",
+                    reference_time=request_now,
+                )
+                raise
+
+            async with self._schedule_lock:
+                latest_document = await self._load_pruned_schedule_document_locked(
+                    reference_time=request_now
+                )
+                if latest_document.execution_enabled:
+                    await self._save_schedule_document(
+                        ScheduleDocument(
+                            execution_enabled=False,
+                            slots=latest_document.slots,
+                        )
+                    )
+
+            return False
+
+    async def _async_reconcile_schedule_execution_if_enabled(
+        self,
+        *,
+        reason: str,
+        reference_time: datetime | None = None,
+    ) -> None:
+        request_now = reference_time or dt_util.now()
+        async with self._schedule_execution_lock:
+            async with self._schedule_lock:
+                execution_enabled = (
+                    await self._load_pruned_schedule_document_locked(
+                        reference_time=request_now
+                    )
+                ).execution_enabled
+
+            if not execution_enabled:
+                await self._schedule_executor.async_stop()
+                return
+
+            await self._schedule_executor.async_start()
+            await self._schedule_executor.async_reconcile_safely(
+                reason=reason,
+                reference_time=request_now,
+            )
+
+    async def async_handle_config_saved(self) -> None:
+        self.invalidate_tree()
+        self.invalidate_forecast()
+        self._schedule_executor.reset_runtime()
+        await self._async_reconcile_schedule_execution_if_enabled(
+            reason="config_saved",
+            reference_time=dt_util.now(),
+        )
 
     def invalidate_forecast(self) -> None:
         """Trigger a background house forecast refresh."""
@@ -863,6 +1020,7 @@ class HelmanCoordinator:
 
     async def async_unload(self) -> None:
         """Clean up event listeners and stop the tick."""
+        await self._schedule_executor.async_unload()
         self._stop_tick()
         self._stop_forecast_refresh()
         self._invalidate_battery_forecast_cache()

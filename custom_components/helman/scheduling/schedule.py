@@ -71,10 +71,10 @@ class ScheduleDocument:
 class ScheduleControlConfig:
     mode_entity_id: str
     normal_option: str
-    charge_to_target_soc_option: str
-    discharge_to_target_soc_option: str
     stop_charging_option: str
     stop_discharging_option: str
+    charge_to_target_soc_option: str | None = None
+    discharge_to_target_soc_option: str | None = None
 
 
 class ScheduleError(Exception):
@@ -96,6 +96,11 @@ class ScheduleActionError(ScheduleError):
 class ScheduleNotConfiguredError(ScheduleError):
     def __init__(self, message: str) -> None:
         super().__init__("not_configured", message)
+
+
+class ScheduleExecutionUnavailableError(ScheduleError):
+    def __init__(self, message: str) -> None:
+        super().__init__("execution_unavailable", message)
 
 
 NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
@@ -201,9 +206,8 @@ def schedule_document_to_dict(doc: ScheduleDocument) -> dict[str, Any]:
 def read_schedule_control_config(
     config: Mapping[str, Any],
 ) -> ScheduleControlConfig | None:
-    power_devices = _read_mapping(config.get("power_devices"))
-    battery_config = _read_mapping(power_devices.get("battery"))
-    control_config = _read_mapping(battery_config.get("control"))
+    scheduler_config = _read_mapping(config.get("scheduler"))
+    control_config = _read_mapping(scheduler_config.get("control"))
     action_option_map = _read_mapping(control_config.get("action_option_map"))
 
     mode_entity_id = _read_non_empty_string(control_config.get("mode_entity_id"))
@@ -226,8 +230,6 @@ def read_schedule_control_config(
     if (
         mode_entity_id is None
         or normal_option is None
-        or charge_to_target_soc_option is None
-        or discharge_to_target_soc_option is None
         or stop_charging_option is None
         or stop_discharging_option is None
     ):
@@ -236,10 +238,10 @@ def read_schedule_control_config(
     return ScheduleControlConfig(
         mode_entity_id=mode_entity_id,
         normal_option=normal_option,
-        charge_to_target_soc_option=charge_to_target_soc_option,
-        discharge_to_target_soc_option=discharge_to_target_soc_option,
         stop_charging_option=stop_charging_option,
         stop_discharging_option=stop_discharging_option,
+        charge_to_target_soc_option=charge_to_target_soc_option,
+        discharge_to_target_soc_option=discharge_to_target_soc_option,
     )
 
 
@@ -294,6 +296,18 @@ def materialize_schedule_slots(
         )
         for slot_id in iter_horizon_slot_ids(reference_time)
     ]
+
+
+def find_active_slot(
+    *,
+    stored_slots: Mapping[str, ScheduleAction],
+    reference_time: datetime,
+) -> ScheduleSlot | None:
+    slot_id = format_slot_id(build_horizon_start(reference_time))
+    action = stored_slots.get(slot_id)
+    if action is None:
+        return None
+    return ScheduleSlot(id=slot_id, action=action)
 
 
 def apply_slot_patches(
