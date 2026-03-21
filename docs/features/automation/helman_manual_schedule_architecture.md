@@ -3,6 +3,7 @@
 ## References
 
 - Exact DTOs and websocket schemas: [`helman_manual_schedule_dto_spec.md`](./helman_manual_schedule_dto_spec.md)
+- Live smoke scenarios and expected outcomes: [`helman_manual_schedule_live_smoke.md`](./helman_manual_schedule_live_smoke.md)
 
 ## Goal
 
@@ -96,7 +97,7 @@ Why this is the simplest first implementation:
 - a single selected slot is naturally just one stored record
 - partial overwrites become trivial
 - setting a slot back to `normal` is just deleting that explicit slot from storage
-- target-SoC early completion can suppress the remainder of a contiguous identical run without rewriting larger structures
+- target-SoC evaluation affects only the current slot; later slots keep their own independent semantics
 
 If the frontend wants to display blocks instead of individual slots, it can group adjacent slots that have the same action and `targetSoc`.
 
@@ -165,7 +166,8 @@ This module should own runtime execution:
 - reconcile the current time against the saved schedule
 - apply the desired `input_select` option
 - monitor target-SoC actions
-- complete actions early when the target is reached
+- switch the executed action for the current slot when the target is reached
+- expose response-only runtime metadata for the current slot
 - react to execution toggle changes
 
 ### 4. Extend `coordinator.py`
@@ -241,19 +243,21 @@ The slot grid itself should be the backend contract. If the frontend wants group
 
 ### `charge_to_target_soc`
 
-- set the configured mode entity to the mapped charge option
-- while the action is active, monitor current battery SoC
-- if current SoC reaches or exceeds `targetSoc`, mark the logical action as completed early
-- once completed early, clear the current slot and any immediately following adjacent slots with the same action and `targetSoc`
-- after completion, fall back to `normal` unless another different active slot takes over
+- keep the requested stored action as `charge_to_target_soc`
+- while the current slot is active, monitor current battery SoC
+- if current SoC is below `targetSoc`, execute the configured charge option for that slot
+- if current SoC reaches or exceeds `targetSoc`, execute `stop_discharging` for that slot instead
+- do not rewrite persisted schedule slots when the target is reached
+- later slots are evaluated independently; an empty later slot still falls back to `normal`
 
 ### `discharge_to_target_soc`
 
-- set the configured mode entity to the mapped discharge option
-- while the action is active, monitor current battery SoC
-- if current SoC reaches or drops below `targetSoc`, mark the logical action as completed early
-- once completed early, clear the current slot and any immediately following adjacent slots with the same action and `targetSoc`
-- after completion, fall back to `normal` unless another different active slot takes over
+- keep the requested stored action as `discharge_to_target_soc`
+- while the current slot is active, monitor current battery SoC
+- if current SoC is above `targetSoc`, execute the configured discharge option for that slot
+- if current SoC reaches or drops below `targetSoc`, execute `stop_charging` for that slot instead
+- do not rewrite persisted schedule slots when the target is reached
+- later slots are evaluated independently; an empty later slot still falls back to `normal`
 
 ### `stop_charging`
 
@@ -313,21 +317,24 @@ On each pass:
 4. if there is no active action:
    - ensure the effective mode is `normal`
 5. if there is an active action:
-   - resolve the mapped HA option
-   - apply it only when it differs from the currently desired Helman-managed state
-   - for target-SoC actions, read the current battery live state and complete early when the target is reached
+    - resolve the mapped HA option
+    - apply it only when it differs from the currently desired Helman-managed state
+    - for target-SoC actions, read the current battery live state and dynamically choose either the requested target action or the paired `stop_*` action for the current slot
+    - publish response-only runtime metadata for the current slot so the API can expose the requested action separately from the last actual executor outcome
 
-### Target-SoC completion
+### Target-SoC runtime evaluation
 
-For v1, completion should be simple:
+For v1, target evaluation should be simple:
 
-- `charge_to_target_soc`: complete when `current_soc >= targetSoc`
-- `discharge_to_target_soc`: complete when `current_soc <= targetSoc`
+- `charge_to_target_soc`: if `current_soc >= targetSoc`, execute `stop_discharging` for the current slot
+- `discharge_to_target_soc`: if `current_soc <= targetSoc`, execute `stop_charging` for the current slot
 
-Once completed:
+Important:
 
-- clear the current slot and any immediately following adjacent slots with the same action and `targetSoc`
-- fall back to `normal` unless another active action applies
+- do not mutate the stored schedule when the target is reached
+- each slot is evaluated independently; there is no cross-slot hold state
+- if the next slot is empty, the effective action returns to `normal`
+- `get_schedule` should expose runtime metadata only for the currently running slot, including machine-readable status, executed action, reason, and optional error code
 
 ## Execution toggle semantics
 

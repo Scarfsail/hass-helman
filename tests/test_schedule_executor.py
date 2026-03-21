@@ -81,8 +81,10 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from custom_components.helman.battery_state import BatteryLiveState  # noqa: E402
 from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
 )
@@ -91,6 +93,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleControlConfig,
     ScheduleDocument,
     ScheduleExecutionUnavailableError,
+    ScheduleNotConfiguredError,
 )
 from custom_components.helman.scheduling.schedule_executor import (  # noqa: E402
     ScheduleExecutor,
@@ -163,12 +166,35 @@ def _build_control_config(entity_id: str) -> ScheduleControlConfig:
     )
 
 
+def _build_battery_state(*, current_soc: float) -> BatteryLiveState:
+    return BatteryLiveState(
+        current_remaining_energy_kwh=5.0,
+        current_soc=current_soc,
+        min_soc=10.0,
+        max_soc=100.0,
+        nominal_capacity_kwh=10.0,
+        min_energy_kwh=1.0,
+        max_energy_kwh=10.0,
+    )
+
+
+def _build_mode_options() -> list[str]:
+    return [
+        "Normal",
+        "Charge To Target",
+        "Discharge To Target",
+        "Stop Charging",
+        "Stop Discharging",
+    ]
+
+
 def _build_executor(
     *,
     entity_id: str,
     state: FakeState | None,
     document: ScheduleDocument,
     control_config: ScheduleControlConfig | None = None,
+    battery_state: BatteryLiveState | None = None,
 ) -> tuple[ScheduleExecutor, FakeHass, FakeScheduleStore]:
     states = {} if state is None else {entity_id: state}
     hass = FakeHass(states)
@@ -181,6 +207,7 @@ def _build_executor(
             save_schedule_document=store.save,
             read_schedule_control_config=lambda: control_config
             or _build_control_config(entity_id),
+            read_battery_state=lambda: battery_state,
         ),
     )
     return executor, hass, store
@@ -271,6 +298,22 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             "Normal",
         )
         self.assertEqual(executor.runtime.last_applied_action.kind, "normal")
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_id,
+            CURRENT_SLOT_ID,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
+            "normal",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "applied",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.reason,
+            "scheduled",
+        )
 
     async def test_reconcile_skips_idempotent_write(self) -> None:
         executor, hass, _store = _build_executor(
@@ -292,12 +335,191 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hass.services.calls, [])
         self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
-    async def test_reconcile_falls_back_to_normal_for_target_action(self) -> None:
+    async def test_reconcile_executes_charge_target_option_when_target_not_reached(
+        self,
+    ) -> None:
         executor, hass, _store = _build_executor(
             entity_id="input_select.mode",
             state=FakeState(
-                "Stop Charging",
-                options=["Normal", "Stop Charging", "Stop Discharging"],
+                "Normal",
+                options=_build_mode_options(),
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
+                },
+            ),
+            battery_state=_build_battery_state(current_soc=72),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        self.assertEqual(
+            hass.services.calls[0][2]["option"],
+            "Charge To Target",
+        )
+        self.assertEqual(
+            executor.runtime.last_applied_action,
+            ScheduleAction(
+                kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                target_soc=80,
+            ),
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.reason,
+            "scheduled",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "applied",
+        )
+
+    async def test_reconcile_executes_stop_discharging_when_charge_target_reached(
+        self,
+    ) -> None:
+        executor, hass, store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Charge To Target",
+                options=_build_mode_options(),
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
+                },
+            ),
+            battery_state=_build_battery_state(current_soc=80),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        self.assertEqual(
+            hass.services.calls[0][2]["option"],
+            "Stop Discharging",
+        )
+        self.assertEqual(executor.runtime.last_active_slot_id, CURRENT_SLOT_ID)
+        self.assertEqual(
+            executor.runtime.last_applied_action.kind,
+            SCHEDULE_ACTION_STOP_DISCHARGING,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
+            SCHEDULE_ACTION_STOP_DISCHARGING,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.reason,
+            "target_soc_reached",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "applied",
+        )
+        self.assertEqual(store.saved_documents, [])
+
+    async def test_reconcile_executes_discharge_target_option_when_target_not_reached(
+        self,
+    ) -> None:
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=_build_mode_options(),
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+                        target_soc=30,
+                    )
+                },
+            ),
+            battery_state=_build_battery_state(current_soc=40),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        self.assertEqual(
+            hass.services.calls[0][2]["option"],
+            "Discharge To Target",
+        )
+        self.assertEqual(
+            executor.runtime.last_applied_action,
+            ScheduleAction(
+                kind=SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+                target_soc=30,
+            ),
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.reason,
+            "scheduled",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "applied",
+        )
+
+    async def test_reconcile_executes_stop_charging_when_discharge_target_reached(
+        self,
+    ) -> None:
+        executor, hass, store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Discharge To Target",
+                options=_build_mode_options(),
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+                        target_soc=30,
+                    )
+                },
+            ),
+            battery_state=_build_battery_state(current_soc=30),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        self.assertEqual(
+            hass.services.calls[0][2]["option"],
+            "Stop Charging",
+        )
+        self.assertEqual(
+            executor.runtime.last_applied_action.kind,
+            SCHEDULE_ACTION_STOP_CHARGING,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
+            SCHEDULE_ACTION_STOP_CHARGING,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.reason,
+            "target_soc_reached",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "applied",
+        )
+        self.assertEqual(store.saved_documents, [])
+
+    async def test_reconcile_raises_when_active_target_battery_state_is_unavailable(
+        self,
+    ) -> None:
+        executor, _hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=_build_mode_options(),
             ),
             document=ScheduleDocument(
                 execution_enabled=True,
@@ -310,14 +532,100 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+        with self.assertRaises(ScheduleExecutionUnavailableError):
+            await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_id,
+            CURRENT_SLOT_ID,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "error",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.error_code,
+            "execution_unavailable",
+        )
+
+    async def test_reconcile_raises_when_target_option_is_missing_and_target_not_reached(
+        self,
+    ) -> None:
+        executor, _hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=_build_mode_options(),
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
+                },
+            ),
+            control_config=ScheduleControlConfig(
+                mode_entity_id="input_select.mode",
+                normal_option="Normal",
+                charge_to_target_soc_option=None,
+                discharge_to_target_soc_option="Discharge To Target",
+                stop_charging_option="Stop Charging",
+                stop_discharging_option="Stop Discharging",
+            ),
+            battery_state=_build_battery_state(current_soc=70),
+        )
+
+        with self.assertRaises(ScheduleNotConfiguredError):
+            await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "error",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.error_code,
+            "not_configured",
+        )
+
+    async def test_reconcile_allows_missing_target_option_when_charge_target_reached(
+        self,
+    ) -> None:
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Charge To Target",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
+                },
+            ),
+            control_config=ScheduleControlConfig(
+                mode_entity_id="input_select.mode",
+                normal_option="Normal",
+                charge_to_target_soc_option=None,
+                discharge_to_target_soc_option="Discharge To Target",
+                stop_charging_option="Stop Charging",
+                stop_discharging_option="Stop Discharging",
+            ),
+            battery_state=_build_battery_state(current_soc=80),
+        )
+
         await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
 
         self.assertEqual(
             hass.services.calls[0][2]["option"],
-            "Normal",
+            "Stop Discharging",
         )
-        self.assertEqual(executor.runtime.last_active_slot_id, CURRENT_SLOT_ID)
-        self.assertEqual(executor.runtime.last_applied_action.kind, "normal")
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "applied",
+        )
 
     async def test_reconcile_raises_when_mode_entity_is_missing(self) -> None:
         executor, _hass, _store = _build_executor(
@@ -328,6 +636,54 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ScheduleExecutionUnavailableError):
             await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "error",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.error_code,
+            "execution_unavailable",
+        )
+
+    async def test_reconcile_records_error_status_when_mode_write_fails(self) -> None:
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            ),
+        )
+        hass.services.error = RuntimeError("boom")
+
+        with self.assertRaises(ScheduleExecutionUnavailableError):
+            await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_id,
+            CURRENT_SLOT_ID,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "error",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
+            SCHEDULE_ACTION_STOP_CHARGING,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.reason,
+            "scheduled",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.error_code,
+            "execution_unavailable",
+        )
 
     async def test_safe_reconcile_swallow_errors_for_background_paths(self) -> None:
         hass = FakeHass(
@@ -346,6 +702,7 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 load_schedule_document=store.load,
                 save_schedule_document=store.save,
                 read_schedule_control_config=lambda: None,
+                read_battery_state=lambda: None,
             ),
         )
 
@@ -356,6 +713,18 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(hass.services.calls, [])
         self.assertIsNotNone(executor.runtime.last_error)
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_id,
+            CURRENT_SLOT_ID,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "error",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.error_code,
+            "not_configured",
+        )
 
 
 if __name__ == "__main__":

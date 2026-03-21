@@ -39,6 +39,8 @@ from .scheduling.schedule import (
     ScheduleResponseDict,
     ScheduleSlot,
     apply_slot_patches,
+    build_horizon_start,
+    format_slot_id,
     materialize_schedule_slots,
     prune_expired_slots,
     read_schedule_control_config,
@@ -47,6 +49,7 @@ from .scheduling.schedule import (
     slot_to_dict,
     validate_slot_patch_request,
 )
+from .scheduling.runtime_status import ScheduleExecutionStatus
 from .scheduling.schedule_executor import (
     ScheduleExecutor,
     ScheduleExecutorDependencies,
@@ -93,6 +96,7 @@ class HelmanCoordinator:
                 load_schedule_document=self._load_schedule_document,
                 save_schedule_document=self._save_schedule_document,
                 read_schedule_control_config=self._read_schedule_control_config,
+                read_battery_state=self._read_battery_state,
             ),
         )
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
@@ -460,11 +464,25 @@ class HelmanCoordinator:
         *,
         schedule_document: ScheduleDocument,
         reference_time: datetime,
+        execution_status: ScheduleExecutionStatus | None = None,
     ) -> ScheduleResponseDict:
+        runtime_slot_id = (
+            execution_status.active_slot_id
+            if execution_status is not None
+            and execution_status.active_slot_runtime is not None
+            else None
+        )
         return {
             "executionEnabled": schedule_document.execution_enabled,
             "slots": [
-                slot_to_dict(slot)
+                slot_to_dict(
+                    slot,
+                    runtime=(
+                        execution_status.active_slot_runtime
+                        if slot.id == runtime_slot_id
+                        else None
+                    ),
+                )
                 for slot in materialize_schedule_slots(
                     stored_slots=schedule_document.slots,
                     reference_time=reference_time,
@@ -490,9 +508,16 @@ class HelmanCoordinator:
             )
             if pruned_document != schedule_document:
                 await self._save_schedule_document(pruned_document)
+            execution_status = None
+            if pruned_document.execution_enabled:
+                current_slot_id = format_slot_id(build_horizon_start(request_now))
+                latest_execution_status = self._schedule_executor.get_execution_status()
+                if latest_execution_status.active_slot_id == current_slot_id:
+                    execution_status = latest_execution_status
             return self._build_schedule_response(
                 schedule_document=pruned_document,
                 reference_time=request_now,
+                execution_status=execution_status,
             )
 
     async def set_schedule(

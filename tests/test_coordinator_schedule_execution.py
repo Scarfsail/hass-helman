@@ -167,8 +167,13 @@ from custom_components.helman.const import SCHEDULE_ACTION_STOP_CHARGING  # noqa
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
+    ScheduleDocument,
     ScheduleExecutionUnavailableError,
     ScheduleSlot,
+)
+from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
+    ActiveSlotRuntimeStatus,
+    ScheduleExecutionStatus,
 )
 
 
@@ -206,6 +211,8 @@ class FakeExecutor:
         self.restore_calls: list[str] = []
         self.reconcile_error: Exception | None = None
         self.restore_error: Exception | None = None
+        self.execution_status = ScheduleExecutionStatus()
+        self.get_status_calls = 0
 
     async def async_start(self) -> None:
         self.events.append("start")
@@ -244,6 +251,11 @@ class FakeExecutor:
         self.restore_calls.append(reason)
         if self.restore_error is not None:
             raise self.restore_error
+
+    def get_execution_status(self) -> ScheduleExecutionStatus:
+        self.events.append("get_execution_status")
+        self.get_status_calls += 1
+        return self.execution_status
 
     def reset_runtime(self) -> None:
         self.events.append("reset_runtime")
@@ -409,6 +421,129 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             executor.events,
             ["start", "safe_reconcile:schedule_updated"],
+        )
+
+    async def test_get_schedule_attaches_runtime_only_to_current_slot(self) -> None:
+        coordinator, _storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": True,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": "charge_to_target_soc", "targetSoc": 80},
+                },
+            }
+        )
+        executor.execution_status = ScheduleExecutionStatus(
+            active_slot_id=CURRENT_SLOT_ID,
+            active_slot_runtime=ActiveSlotRuntimeStatus(
+                status="applied",
+                executed_action=ScheduleAction(kind="stop_discharging"),
+                reason="target_soc_reached",
+            ),
+        )
+
+        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+
+        current_slot = next(
+            slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
+        )
+        next_slot = next(
+            slot
+            for slot in schedule["slots"]
+            if slot["id"] == "2026-03-20T21:15:00+01:00"
+        )
+
+        self.assertEqual(current_slot["action"]["kind"], "charge_to_target_soc")
+        self.assertEqual(current_slot["action"]["targetSoc"], 80)
+        self.assertEqual(
+            current_slot["runtime"],
+            {
+                "status": "applied",
+                "executedAction": {"kind": "stop_discharging"},
+                "reason": "target_soc_reached",
+            },
+        )
+        self.assertNotIn("runtime", next_slot)
+        self.assertEqual(executor.get_status_calls, 1)
+
+    async def test_get_schedule_attaches_runtime_to_implicit_current_normal_slot(
+        self,
+    ) -> None:
+        coordinator, _storage, executor = self._build_coordinator(
+            schedule_document={"executionEnabled": True, "slots": {}}
+        )
+        executor.execution_status = ScheduleExecutionStatus(
+            active_slot_id=CURRENT_SLOT_ID,
+            active_slot_runtime=ActiveSlotRuntimeStatus(
+                status="applied",
+                executed_action=ScheduleAction(kind="normal"),
+                reason="scheduled",
+            ),
+        )
+
+        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+
+        current_slot = next(
+            slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
+        )
+        self.assertEqual(current_slot["action"]["kind"], "normal")
+        self.assertEqual(
+            current_slot["runtime"],
+            {
+                "status": "applied",
+                "executedAction": {"kind": "normal"},
+                "reason": "scheduled",
+            },
+        )
+
+    async def test_get_schedule_omits_runtime_when_execution_disabled(self) -> None:
+        coordinator, _storage, executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+        executor.execution_status = ScheduleExecutionStatus(
+            active_slot_id=CURRENT_SLOT_ID,
+            active_slot_runtime=ActiveSlotRuntimeStatus(
+                status="applied",
+                executed_action=ScheduleAction(kind="normal"),
+                reason="scheduled",
+            ),
+        )
+
+        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+
+        current_slot = next(
+            slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
+        )
+        self.assertNotIn("runtime", current_slot)
+        self.assertEqual(executor.get_status_calls, 0)
+
+    async def test_get_schedule_returns_error_runtime_for_current_slot(self) -> None:
+        coordinator, _storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": True,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": "charge_to_target_soc", "targetSoc": 80},
+                },
+            }
+        )
+        executor.execution_status = ScheduleExecutionStatus(
+            active_slot_id=CURRENT_SLOT_ID,
+            active_slot_runtime=ActiveSlotRuntimeStatus(
+                status="error",
+                error_code="execution_unavailable",
+            ),
+        )
+
+        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+
+        current_slot = next(
+            slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
+        )
+        self.assertEqual(
+            current_slot["runtime"],
+            {
+                "status": "error",
+                "errorCode": "execution_unavailable",
+            },
         )
 
     async def test_config_save_reconciles_when_execution_enabled(self) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 
@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from ..battery_state import BatteryLiveState
 from ..const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -27,9 +28,14 @@ from .schedule import (
     ScheduleError,
     ScheduleExecutionUnavailableError,
     ScheduleNotConfiguredError,
-    ScheduleSlot,
+    build_horizon_start,
     find_active_slot,
+    format_slot_id,
     prune_expired_slots,
+)
+from .runtime_status import (
+    ActiveSlotRuntimeStatus,
+    ScheduleExecutionStatus,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,6 +48,7 @@ class ScheduleExecutorDependencies:
     load_schedule_document: Callable[[], ScheduleDocument]
     save_schedule_document: Callable[[ScheduleDocument], Awaitable[None]]
     read_schedule_control_config: Callable[[], ScheduleControlConfig | None]
+    read_battery_state: Callable[[], BatteryLiveState | None]
 
 
 @dataclass
@@ -51,7 +58,9 @@ class ScheduleExecutionRuntime:
     last_applied_action: ScheduleAction | None = None
     last_active_slot_id: str | None = None
     last_error: str | None = None
-    last_warning_key: str | None = None
+    execution_status: ScheduleExecutionStatus = field(
+        default_factory=ScheduleExecutionStatus
+    )
 
 
 @dataclass(frozen=True)
@@ -161,6 +170,9 @@ class ScheduleExecutor:
     def runtime(self) -> ScheduleExecutionRuntime:
         return self._runtime
 
+    def get_execution_status(self) -> ScheduleExecutionStatus:
+        return self._runtime.execution_status
+
     def reset_runtime(self) -> None:
         self._runtime = ScheduleExecutionRuntime()
 
@@ -223,28 +235,38 @@ class ScheduleExecutor:
                 self.reset_runtime()
                 return
 
-            control_config = self._dependencies.read_schedule_control_config()
-            if control_config is None:
-                raise ScheduleNotConfiguredError(
-                    "Schedule control config is required to execute the schedule"
-                )
+            execution_status: ScheduleExecutionStatus | None = None
+            try:
+                control_config = self._dependencies.read_schedule_control_config()
+                if control_config is None:
+                    raise ScheduleNotConfiguredError(
+                        "Schedule control config is required to execute the schedule"
+                    )
 
-            controller, state = self.validate_control_entity(
-                control_config=control_config
-            )
-            active_slot_id, action = self._coerce_slice2_runtime_action(
-                find_active_slot(
-                    stored_slots=schedule_document.slots,
+                controller, state = self.validate_control_entity(
+                    control_config=control_config
+                )
+                execution_status = self.describe_execution_status(
+                    schedule_document=schedule_document,
                     reference_time=request_now,
                 )
-            )
-            await self._async_apply_action_locked(
-                controller=controller,
-                state=state,
-                control_config=control_config,
-                action=action,
-                active_slot_id=active_slot_id,
-            )
+                await self._async_apply_action_locked(
+                    controller=controller,
+                    state=state,
+                    control_config=control_config,
+                    action=execution_status.active_slot_runtime.executed_action,
+                    active_slot_id=execution_status.active_slot_id,
+                )
+            except ScheduleError as err:
+                self._runtime.execution_status = self._build_error_execution_status(
+                    schedule_document=schedule_document,
+                    reference_time=request_now,
+                    error=err,
+                    execution_status=execution_status,
+                )
+                raise
+
+            self._runtime.execution_status = execution_status
 
     async def async_reconcile_safely(
         self,
@@ -308,6 +330,35 @@ class ScheduleExecutor:
         controller.validate_option(state, control_config.stop_discharging_option)
         return controller, state
 
+    def describe_execution_status(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        reference_time: datetime,
+    ) -> ScheduleExecutionStatus:
+        if not schedule_document.execution_enabled:
+            return ScheduleExecutionStatus()
+
+        current_slot_id = format_slot_id(build_horizon_start(reference_time))
+        active_slot = find_active_slot(
+            stored_slots=schedule_document.slots,
+            reference_time=reference_time,
+        )
+        if active_slot is None:
+            return ScheduleExecutionStatus(
+                active_slot_id=current_slot_id,
+                active_slot_runtime=ActiveSlotRuntimeStatus(
+                    status="applied",
+                    executed_action=NORMAL_SCHEDULE_ACTION,
+                    reason="scheduled",
+                ),
+            )
+
+        return ScheduleExecutionStatus(
+            active_slot_id=current_slot_id,
+            active_slot_runtime=self._describe_active_slot_runtime(slot=active_slot),
+        )
+
     async def _load_pruned_schedule_document_locked(
         self,
         *,
@@ -326,31 +377,88 @@ class ScheduleExecutor:
             await self._dependencies.save_schedule_document(pruned_document)
         return pruned_document
 
-    def _coerce_slice2_runtime_action(
+    def _describe_active_slot_runtime(
         self,
-        slot: ScheduleSlot | None,
-    ) -> tuple[str | None, ScheduleAction]:
-        if slot is None:
-            self._runtime.last_warning_key = None
-            return None, NORMAL_SCHEDULE_ACTION
-
-        if slot.action.kind in {
-            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-        }:
-            warning_key = f"{slot.id}:{slot.action.kind}:{slot.action.target_soc}"
-            if self._runtime.last_warning_key != warning_key:
-                _LOGGER.warning(
-                    "Schedule slot '%s' uses unsupported slice-2 action '%s'; "
-                    "applying normal until target-action execution is implemented",
-                    slot.id,
-                    slot.action.kind,
+        *,
+        slot,
+    ) -> ActiveSlotRuntimeStatus:
+        if slot.action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC:
+            battery_state = self._dependencies.read_battery_state()
+            if battery_state is None:
+                raise ScheduleExecutionUnavailableError(
+                    "Battery live state is required to execute target schedule actions"
                 )
-                self._runtime.last_warning_key = warning_key
-            return slot.id, NORMAL_SCHEDULE_ACTION
+            if battery_state.current_soc >= slot.action.target_soc:
+                return ActiveSlotRuntimeStatus(
+                    status="applied",
+                    executed_action=ScheduleAction(
+                        kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                    ),
+                    reason="target_soc_reached",
+                )
+            return ActiveSlotRuntimeStatus(
+                status="applied",
+                executed_action=slot.action,
+                reason="scheduled",
+            )
 
-        self._runtime.last_warning_key = None
-        return slot.id, slot.action
+        if slot.action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC:
+            battery_state = self._dependencies.read_battery_state()
+            if battery_state is None:
+                raise ScheduleExecutionUnavailableError(
+                    "Battery live state is required to execute target schedule actions"
+                )
+            if battery_state.current_soc <= slot.action.target_soc:
+                return ActiveSlotRuntimeStatus(
+                    status="applied",
+                    executed_action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
+                    reason="target_soc_reached",
+                )
+            return ActiveSlotRuntimeStatus(
+                status="applied",
+                executed_action=slot.action,
+                reason="scheduled",
+            )
+
+        return ActiveSlotRuntimeStatus(
+            status="applied",
+            executed_action=slot.action,
+            reason="scheduled",
+        )
+
+    def _build_error_execution_status(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        reference_time: datetime,
+        error: ScheduleError,
+        execution_status: ScheduleExecutionStatus | None,
+    ) -> ScheduleExecutionStatus:
+        if not schedule_document.execution_enabled:
+            return ScheduleExecutionStatus()
+
+        if (
+            execution_status is not None
+            and execution_status.active_slot_id is not None
+            and execution_status.active_slot_runtime is not None
+        ):
+            return ScheduleExecutionStatus(
+                active_slot_id=execution_status.active_slot_id,
+                active_slot_runtime=ActiveSlotRuntimeStatus(
+                    status="error",
+                    executed_action=execution_status.active_slot_runtime.executed_action,
+                    reason=execution_status.active_slot_runtime.reason,
+                    error_code=error.code,
+                ),
+            )
+
+        return ScheduleExecutionStatus(
+            active_slot_id=format_slot_id(build_horizon_start(reference_time)),
+            active_slot_runtime=ActiveSlotRuntimeStatus(
+                status="error",
+                error_code=error.code,
+            ),
+        )
 
     @staticmethod
     def _resolve_option_for_action(
@@ -358,6 +466,18 @@ class ScheduleExecutor:
         control_config: ScheduleControlConfig,
         action: ScheduleAction,
     ) -> str:
+        if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC:
+            if control_config.charge_to_target_soc_option is None:
+                raise ScheduleNotConfiguredError(
+                    "Schedule control config is missing the charge_to_target_soc action option"
+                )
+            return control_config.charge_to_target_soc_option
+        if action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC:
+            if control_config.discharge_to_target_soc_option is None:
+                raise ScheduleNotConfiguredError(
+                    "Schedule control config is missing the discharge_to_target_soc action option"
+                )
+            return control_config.discharge_to_target_soc_option
         if action.kind == SCHEDULE_ACTION_STOP_CHARGING:
             return control_config.stop_charging_option
         if action.kind == SCHEDULE_ACTION_STOP_DISCHARGING:

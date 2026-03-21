@@ -68,6 +68,7 @@ from custom_components.helman.const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
 )
 from custom_components.helman.scheduling.schedule import (
     ScheduleAction,
@@ -84,7 +85,11 @@ from custom_components.helman.scheduling.schedule import (
     read_schedule_control_config,
     schedule_document_from_dict,
     schedule_document_to_dict,
+    slot_to_dict,
     validate_slot_patch_request,
+)
+from custom_components.helman.scheduling.runtime_status import (
+    ActiveSlotRuntimeStatus,
 )
 
 
@@ -264,6 +269,38 @@ class ScheduleHelperTests(unittest.TestCase):
                         "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                         "targetSoc": 80,
                     }
+                },
+            },
+        )
+
+    def test_slot_to_dict_includes_runtime_metadata_when_provided(self) -> None:
+        slot_dict = slot_to_dict(
+            ScheduleSlot(
+                id="2026-03-20T21:00:00+01:00",
+                action=ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                    target_soc=80,
+                ),
+            ),
+            runtime=ActiveSlotRuntimeStatus(
+                status="applied",
+                executed_action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING),
+                reason="target_soc_reached",
+            ),
+        )
+
+        self.assertEqual(
+            slot_dict,
+            {
+                "id": "2026-03-20T21:00:00+01:00",
+                "action": {
+                    "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                    "targetSoc": 80,
+                },
+                "runtime": {
+                    "status": "applied",
+                    "executedAction": {"kind": SCHEDULE_ACTION_STOP_DISCHARGING},
+                    "reason": "target_soc_reached",
                 },
             },
         )

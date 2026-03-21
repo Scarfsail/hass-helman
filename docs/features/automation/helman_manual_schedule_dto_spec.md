@@ -4,6 +4,8 @@
 
 This document turns the manual schedule architecture into a code-ready backend contract.
 
+For live validation steps and expected runtime outcomes on a running Home Assistant instance, see [`helman_manual_schedule_live_smoke.md`](./helman_manual_schedule_live_smoke.md).
+
 It focuses on:
 
 - exact websocket payload shapes
@@ -164,19 +166,31 @@ Important:
 
 ### In-memory runtime state
 
-This is not part of the websocket API in v1.
+Persisted schedule data stays unchanged. Runtime evaluation lives in a separate ephemeral model and is attached only to the currently running slot in `helman/get_schedule`.
 
 ```python
-@dataclass
-class ScheduleExecutionRuntime:
+ScheduleExecutionReason = Literal["scheduled", "target_soc_reached"]
+ScheduleRuntimeState = Literal["applied", "error"]
+
+@dataclass(frozen=True)
+class ActiveSlotRuntimeStatus:
+    status: ScheduleRuntimeState
+    executed_action: ScheduleAction | None = None
+    reason: ScheduleExecutionReason | None = None
+    error_code: str | None = None
+
+@dataclass(frozen=True)
+class ScheduleExecutionStatus:
     active_slot_id: str | None = None
-    active_action: ScheduleAction | None = None
-    last_transition_at: datetime | None = None
-    last_error: str | None = None
-    last_completion_reason: str | None = None
+    active_slot_runtime: ActiveSlotRuntimeStatus | None = None
 ```
 
-This is just for executor bookkeeping.
+This runtime state is:
+
+- not part of persisted storage
+- computed from the current slot and live SoC
+- updated from the executor's last real outcome for the running slot
+- used to expose response-only runtime metadata for the running slot
 
 ## JSON/storage shape
 
@@ -282,6 +296,12 @@ Request:
 Response DTO:
 
 ```python
+class ActiveSlotRuntimeDict(TypedDict):
+    status: Literal["applied", "error"]
+    executedAction: NotRequired[ScheduleActionDict]
+    reason: NotRequired[Literal["scheduled", "target_soc_reached"]]
+    errorCode: NotRequired[str]
+
 class ScheduleResponse(TypedDict):
     executionEnabled: bool
     slots: list[ScheduleSlotDict]
@@ -291,19 +311,26 @@ Example response:
 
 ```json
 {
-  "executionEnabled": false,
+  "executionEnabled": true,
   "slots": [
     {
       "id": "2026-03-20T21:00:00+01:00",
       "action": {
-        "kind": "normal"
+        "kind": "charge_to_target_soc",
+        "targetSoc": 80
+      },
+      "runtime": {
+        "status": "applied",
+        "executedAction": {
+          "kind": "stop_discharging"
+        },
+        "reason": "target_soc_reached"
       }
     },
     {
       "id": "2026-03-20T21:15:00+01:00",
       "action": {
-        "kind": "charge_to_target_soc",
-        "targetSoc": 80
+        "kind": "normal"
       }
     }
   ]
@@ -314,6 +341,9 @@ Rules:
 
 - always return all upcoming slots for the next `48` hours
 - fill missing stored slots as `normal`
+- attach `runtime` only to the currently running slot when execution is enabled
+- keep `action` as the requested schedule action even when `runtime.executedAction` differs
+- when runtime execution fails, return `runtime.status = "error"` and a machine-readable `runtime.errorCode`
 - never return labels
 - never return grouped ranges
 
@@ -436,6 +466,7 @@ class ScheduleActionDict(TypedDict):
 class ScheduleSlotDict(TypedDict):
     id: str
     action: ScheduleActionDict
+    runtime: NotRequired[ActiveSlotRuntimeDict]
 
 class ScheduleResponseDict(TypedDict):
     executionEnabled: bool
@@ -520,18 +551,7 @@ def prune_expired_slots(
     reference_time: datetime,
 ) -> dict[str, ScheduleAction]:
     ...
-
-def clear_contiguous_matching_slots(
-    *,
-    stored_slots: Mapping[str, ScheduleAction],
-    start_slot_id: str,
-    action: ScheduleAction,
-    reference_time: datetime,
-) -> dict[str, ScheduleAction]:
-    ...
 ```
-
-`clear_contiguous_matching_slots()` is specifically for target-SoC early completion.
 
 ## Coordinator method signatures
 
@@ -632,6 +652,16 @@ class ScheduleExecutor:
 Recommended private helpers:
 
 ```python
+def get_execution_status(self) -> ScheduleExecutionStatus: ...
+
+def describe_execution_status(
+    self,
+    *,
+    schedule_document: ScheduleDocument,
+    reference_time: datetime,
+) -> ScheduleExecutionStatus:
+    ...
+
 async def _async_apply_action(
     self,
     *,
@@ -648,21 +678,11 @@ def _read_active_slot(
 ) -> ScheduleSlot | None:
     ...
 
-def _is_target_reached(
+def _describe_active_slot_runtime(
     self,
     *,
-    action: ScheduleAction,
-    battery_state: BatteryLiveState,
-) -> bool:
-    ...
-
-async def _async_complete_target_action(
-    self,
-    *,
-    active_slot: ScheduleSlot,
-    action: ScheduleAction,
-    reference_time: datetime,
-) -> None:
+    slot: ScheduleSlot,
+) -> ActiveSlotRuntimeStatus:
     ...
 ```
 

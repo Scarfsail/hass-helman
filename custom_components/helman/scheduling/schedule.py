@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from homeassistant.util import dt as dt_util
 
@@ -18,6 +18,9 @@ from ..const import (
     SCHEDULE_HORIZON_HOURS,
     SCHEDULE_SLOT_MINUTES,
 )
+
+if TYPE_CHECKING:
+    from .runtime_status import ActiveSlotRuntimeDict, ActiveSlotRuntimeStatus
 
 ScheduleActionKind = Literal[
     "normal",
@@ -42,6 +45,7 @@ class ScheduleActionDict(TypedDict):
 class ScheduleSlotDict(TypedDict):
     id: str
     action: ScheduleActionDict
+    runtime: NotRequired["ActiveSlotRuntimeDict"]
 
 
 class ScheduleResponseDict(TypedDict):
@@ -144,8 +148,17 @@ def slot_from_dict(data: Mapping[str, Any]) -> ScheduleSlot:
     )
 
 
-def slot_to_dict(slot: ScheduleSlot) -> ScheduleSlotDict:
-    return {"id": slot.id, "action": action_to_dict(slot.action)}
+def slot_to_dict(
+    slot: ScheduleSlot,
+    *,
+    runtime: "ActiveSlotRuntimeStatus | None" = None,
+) -> ScheduleSlotDict:
+    payload: ScheduleSlotDict = {"id": slot.id, "action": action_to_dict(slot.action)}
+    if runtime is not None:
+        from .runtime_status import active_slot_runtime_to_dict
+
+        payload["runtime"] = active_slot_runtime_to_dict(runtime)
+    return payload
 
 
 def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocument:
@@ -338,27 +351,6 @@ def prune_expired_slots(
         if parse_slot_id(slot_id) + SCHEDULE_SLOT_DURATION > reference_local
     }
     return dict(sorted(pruned_slots.items()))
-
-
-def clear_contiguous_matching_slots(
-    *,
-    stored_slots: Mapping[str, ScheduleAction],
-    start_slot_id: str,
-    action: ScheduleAction,
-    reference_time: datetime,
-) -> dict[str, ScheduleAction]:
-    updated_slots = dict(stored_slots)
-    current_slot = parse_slot_id(start_slot_id)
-    horizon_end = build_horizon_end(reference_time)
-
-    while current_slot < horizon_end:
-        current_slot_id = format_slot_id(current_slot)
-        if updated_slots.get(current_slot_id) != action:
-            break
-        updated_slots.pop(current_slot_id, None)
-        current_slot += SCHEDULE_SLOT_DURATION
-
-    return dict(sorted(updated_slots.items()))
 
 
 def validate_slot_patch(
