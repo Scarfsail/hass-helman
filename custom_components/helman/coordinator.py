@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
@@ -16,7 +17,12 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
-from .battery_state import read_battery_entity_config, read_battery_live_state
+from .battery_state import (
+    read_battery_entity_config,
+    read_battery_live_state,
+    read_battery_soc_bounds,
+    read_battery_soc_bounds_config,
+)
 from .const import (
     CONSUMPTION_TOTAL_ENTITY_ID,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
@@ -26,6 +32,20 @@ from .const import (
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
 from .forecast_builder import HelmanForecastBuilder
+from .scheduling.schedule import (
+    ScheduleControlConfig,
+    ScheduleDocument,
+    ScheduleResponseDict,
+    ScheduleSlot,
+    apply_slot_patches,
+    materialize_schedule_slots,
+    prune_expired_slots,
+    read_schedule_control_config,
+    schedule_document_from_dict,
+    schedule_document_to_dict,
+    slot_to_dict,
+    validate_slot_patch_request,
+)
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
@@ -59,6 +79,7 @@ class HelmanCoordinator:
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
+        self._schedule_lock = asyncio.Lock()
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
         # Entity IDs whose values are computed by the tick (not read from hass.states)
@@ -386,6 +407,83 @@ class HelmanCoordinator:
         )
         return result
 
+    def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
+        return read_schedule_control_config(self._storage.config)
+
+    def _load_schedule_document(self) -> ScheduleDocument:
+        return schedule_document_from_dict(self._storage.schedule_document)
+
+    async def _save_schedule_document(self, doc: ScheduleDocument) -> None:
+        await self._storage.async_save_schedule_document(schedule_document_to_dict(doc))
+
+    def _build_schedule_response(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        reference_time: datetime,
+    ) -> ScheduleResponseDict:
+        return {
+            "executionEnabled": schedule_document.execution_enabled,
+            "slots": [
+                slot_to_dict(slot)
+                for slot in materialize_schedule_slots(
+                    stored_slots=schedule_document.slots,
+                    reference_time=reference_time,
+                )
+            ],
+        }
+
+    async def get_schedule(
+        self,
+        *,
+        reference_time: datetime | None = None,
+    ) -> ScheduleResponseDict:
+        request_now = reference_time or dt_util.now()
+        async with self._schedule_lock:
+            schedule_document = self._load_schedule_document()
+            pruned_slots = prune_expired_slots(
+                stored_slots=schedule_document.slots,
+                reference_time=request_now,
+            )
+            pruned_document = ScheduleDocument(
+                execution_enabled=schedule_document.execution_enabled,
+                slots=pruned_slots,
+            )
+            if pruned_document != schedule_document:
+                await self._save_schedule_document(pruned_document)
+            return self._build_schedule_response(
+                schedule_document=pruned_document,
+                reference_time=request_now,
+            )
+
+    async def set_schedule(
+        self,
+        *,
+        slots: Sequence[ScheduleSlot],
+        reference_time: datetime | None = None,
+    ) -> None:
+        request_now = reference_time or dt_util.now()
+        async with self._schedule_lock:
+            schedule_document = self._load_schedule_document()
+            pruned_slots = prune_expired_slots(
+                stored_slots=schedule_document.slots,
+                reference_time=request_now,
+            )
+            validate_slot_patch_request(
+                slots=slots,
+                reference_time=request_now,
+                battery_soc_bounds=self._read_battery_soc_bounds(),
+            )
+            updated_document = ScheduleDocument(
+                execution_enabled=schedule_document.execution_enabled,
+                slots=apply_slot_patches(
+                    stored_slots=pruned_slots,
+                    slot_patches=slots,
+                ),
+            )
+            if updated_document != schedule_document:
+                await self._save_schedule_document(updated_document)
+
     def invalidate_forecast(self) -> None:
         """Trigger a background house forecast refresh."""
         self._cached_forecast = None
@@ -676,6 +774,12 @@ class HelmanCoordinator:
         if entity_config is None:
             return None
         return read_battery_live_state(self._hass, entity_config)
+
+    def _read_battery_soc_bounds(self):
+        bounds_config = read_battery_soc_bounds_config(self._storage.config)
+        if bounds_config is None:
+            return None
+        return read_battery_soc_bounds(self._hass, bounds_config)
 
     def _compute_charging_eta(
         self, charging_avg_w: float

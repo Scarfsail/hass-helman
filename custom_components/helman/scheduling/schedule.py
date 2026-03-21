@@ -1,0 +1,475 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any, Literal, NotRequired, TypedDict
+
+from homeassistant.util import dt as dt_util
+
+from ..battery_state import BatterySocBounds
+from ..const import (
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_KINDS,
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_HORIZON_HOURS,
+    SCHEDULE_SLOT_MINUTES,
+)
+
+ScheduleActionKind = Literal[
+    "normal",
+    "charge_to_target_soc",
+    "discharge_to_target_soc",
+    "stop_charging",
+    "stop_discharging",
+]
+
+TARGET_ACTION_KINDS = {
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+}
+SCHEDULE_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
+
+
+class ScheduleActionDict(TypedDict):
+    kind: ScheduleActionKind
+    targetSoc: NotRequired[int]
+
+
+class ScheduleSlotDict(TypedDict):
+    id: str
+    action: ScheduleActionDict
+
+
+class ScheduleResponseDict(TypedDict):
+    executionEnabled: bool
+    slots: list[ScheduleSlotDict]
+
+
+@dataclass(frozen=True)
+class ScheduleAction:
+    kind: ScheduleActionKind
+    target_soc: int | None = None
+
+
+@dataclass(frozen=True)
+class ScheduleSlot:
+    id: str
+    action: ScheduleAction
+
+
+@dataclass
+class ScheduleDocument:
+    execution_enabled: bool = False
+    slots: dict[str, ScheduleAction] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ScheduleControlConfig:
+    mode_entity_id: str
+    normal_option: str
+    charge_to_target_soc_option: str
+    discharge_to_target_soc_option: str
+    stop_charging_option: str
+    stop_discharging_option: str
+
+
+class ScheduleError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class ScheduleSlotsError(ScheduleError):
+    def __init__(self, message: str) -> None:
+        super().__init__("invalid_slots", message)
+
+
+class ScheduleActionError(ScheduleError):
+    def __init__(self, message: str) -> None:
+        super().__init__("invalid_action", message)
+
+
+class ScheduleNotConfiguredError(ScheduleError):
+    def __init__(self, message: str) -> None:
+        super().__init__("not_configured", message)
+
+
+NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
+
+
+def action_from_dict(data: Mapping[str, Any]) -> ScheduleAction:
+    kind = _read_non_empty_string(data.get("kind"))
+    if kind not in SCHEDULE_ACTION_KINDS:
+        raise ScheduleActionError("Unknown schedule action kind")
+
+    has_target_soc, target_soc = _read_target_soc(data)
+    action = ScheduleAction(kind=kind, target_soc=target_soc)
+    _validate_action(
+        action=action,
+        has_target_soc=has_target_soc,
+        battery_soc_bounds=None,
+        require_target_soc_bounds=False,
+    )
+    return action
+
+
+def action_to_dict(action: ScheduleAction) -> ScheduleActionDict:
+    payload: ScheduleActionDict = {"kind": action.kind}
+    if action.target_soc is not None:
+        payload["targetSoc"] = action.target_soc
+    return payload
+
+
+def slot_from_dict(data: Mapping[str, Any]) -> ScheduleSlot:
+    slot_id = _read_non_empty_string(data.get("id"))
+    if slot_id is None:
+        raise ScheduleSlotsError("Schedule slot id must be a non-empty string")
+
+    raw_action = data.get("action")
+    if not isinstance(raw_action, Mapping):
+        raise ScheduleActionError("Schedule slot action must be an object")
+
+    return ScheduleSlot(
+        id=format_slot_id(parse_slot_id(slot_id)),
+        action=action_from_dict(raw_action),
+    )
+
+
+def slot_to_dict(slot: ScheduleSlot) -> ScheduleSlotDict:
+    return {"id": slot.id, "action": action_to_dict(slot.action)}
+
+
+def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocument:
+    if data is None:
+        return ScheduleDocument()
+    if not isinstance(data, Mapping):
+        raise ScheduleSlotsError("Persisted schedule document must be an object")
+
+    execution_enabled = data.get("executionEnabled", False)
+    if not isinstance(execution_enabled, bool):
+        raise ScheduleSlotsError("Persisted schedule executionEnabled must be boolean")
+
+    raw_slots = data.get("slots", {})
+    if not isinstance(raw_slots, Mapping):
+        raise ScheduleSlotsError("Persisted schedule slots must be an object")
+
+    slots: dict[str, ScheduleAction] = {}
+    for raw_slot_id, raw_action in raw_slots.items():
+        slot_id = _read_non_empty_string(raw_slot_id)
+        if slot_id is None:
+            raise ScheduleSlotsError(
+                "Persisted schedule slot ids must be non-empty strings"
+            )
+        if not isinstance(raw_action, Mapping):
+            raise ScheduleActionError("Persisted schedule action must be an object")
+
+        slot_start = parse_slot_id(slot_id)
+        if not _is_slot_aligned(slot_start):
+            raise ScheduleSlotsError(
+                "Persisted schedule slot ids must align to "
+                f"{SCHEDULE_SLOT_MINUTES}-minute boundaries"
+            )
+
+        canonical_slot_id = format_slot_id(slot_start)
+        if canonical_slot_id in slots:
+            raise ScheduleSlotsError("Persisted schedule contains duplicate slot ids")
+
+        action = action_from_dict(raw_action)
+        if action.kind == SCHEDULE_ACTION_NORMAL:
+            continue
+
+        slots[canonical_slot_id] = action
+
+    return ScheduleDocument(execution_enabled=execution_enabled, slots=slots)
+
+
+def schedule_document_to_dict(doc: ScheduleDocument) -> dict[str, Any]:
+    return {
+        "executionEnabled": doc.execution_enabled,
+        "slots": {
+            slot_id: action_to_dict(action)
+            for slot_id, action in sorted(doc.slots.items())
+            if action.kind != SCHEDULE_ACTION_NORMAL
+        },
+    }
+
+
+def read_schedule_control_config(
+    config: Mapping[str, Any],
+) -> ScheduleControlConfig | None:
+    power_devices = _read_mapping(config.get("power_devices"))
+    battery_config = _read_mapping(power_devices.get("battery"))
+    control_config = _read_mapping(battery_config.get("control"))
+    action_option_map = _read_mapping(control_config.get("action_option_map"))
+
+    mode_entity_id = _read_non_empty_string(control_config.get("mode_entity_id"))
+    normal_option = _read_non_empty_string(
+        action_option_map.get(SCHEDULE_ACTION_NORMAL)
+    )
+    charge_to_target_soc_option = _read_non_empty_string(
+        action_option_map.get(SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
+    )
+    discharge_to_target_soc_option = _read_non_empty_string(
+        action_option_map.get(SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC)
+    )
+    stop_charging_option = _read_non_empty_string(
+        action_option_map.get(SCHEDULE_ACTION_STOP_CHARGING)
+    )
+    stop_discharging_option = _read_non_empty_string(
+        action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)
+    )
+
+    if (
+        mode_entity_id is None
+        or normal_option is None
+        or charge_to_target_soc_option is None
+        or discharge_to_target_soc_option is None
+        or stop_charging_option is None
+        or stop_discharging_option is None
+    ):
+        return None
+
+    return ScheduleControlConfig(
+        mode_entity_id=mode_entity_id,
+        normal_option=normal_option,
+        charge_to_target_soc_option=charge_to_target_soc_option,
+        discharge_to_target_soc_option=discharge_to_target_soc_option,
+        stop_charging_option=stop_charging_option,
+        stop_discharging_option=stop_discharging_option,
+    )
+
+
+def build_horizon_start(reference_time: datetime) -> datetime:
+    local_reference = dt_util.as_local(reference_time)
+    return local_reference.replace(
+        minute=(local_reference.minute // SCHEDULE_SLOT_MINUTES)
+        * SCHEDULE_SLOT_MINUTES,
+        second=0,
+        microsecond=0,
+    )
+
+
+def build_horizon_end(reference_time: datetime) -> datetime:
+    return build_horizon_start(reference_time) + timedelta(hours=SCHEDULE_HORIZON_HOURS)
+
+
+def parse_slot_id(slot_id: str) -> datetime:
+    parsed = dt_util.parse_datetime(slot_id)
+    if parsed is None or parsed.tzinfo is None:
+        raise ScheduleSlotsError(
+            "Schedule slot ids must be timezone-aware ISO timestamps"
+        )
+    return dt_util.as_local(parsed)
+
+
+def format_slot_id(slot_start: datetime) -> str:
+    return dt_util.as_local(slot_start).isoformat(timespec="seconds")
+
+
+def iter_horizon_slot_ids(reference_time: datetime) -> list[str]:
+    slot_ids: list[str] = []
+    current_slot = build_horizon_start(reference_time)
+    horizon_end = build_horizon_end(reference_time)
+
+    while current_slot < horizon_end:
+        slot_ids.append(format_slot_id(current_slot))
+        current_slot += SCHEDULE_SLOT_DURATION
+
+    return slot_ids
+
+
+def materialize_schedule_slots(
+    *,
+    stored_slots: Mapping[str, ScheduleAction],
+    reference_time: datetime,
+) -> list[ScheduleSlot]:
+    return [
+        ScheduleSlot(
+            id=slot_id,
+            action=stored_slots.get(slot_id, NORMAL_SCHEDULE_ACTION),
+        )
+        for slot_id in iter_horizon_slot_ids(reference_time)
+    ]
+
+
+def apply_slot_patches(
+    *,
+    stored_slots: Mapping[str, ScheduleAction],
+    slot_patches: Sequence[ScheduleSlot],
+) -> dict[str, ScheduleAction]:
+    updated_slots = dict(stored_slots)
+
+    for slot_patch in slot_patches:
+        if slot_patch.action.kind == SCHEDULE_ACTION_NORMAL:
+            updated_slots.pop(slot_patch.id, None)
+        else:
+            updated_slots[slot_patch.id] = slot_patch.action
+
+    return dict(sorted(updated_slots.items()))
+
+
+def prune_expired_slots(
+    *,
+    stored_slots: Mapping[str, ScheduleAction],
+    reference_time: datetime,
+) -> dict[str, ScheduleAction]:
+    reference_local = dt_util.as_local(reference_time)
+    pruned_slots = {
+        slot_id: action
+        for slot_id, action in stored_slots.items()
+        if parse_slot_id(slot_id) + SCHEDULE_SLOT_DURATION > reference_local
+    }
+    return dict(sorted(pruned_slots.items()))
+
+
+def clear_contiguous_matching_slots(
+    *,
+    stored_slots: Mapping[str, ScheduleAction],
+    start_slot_id: str,
+    action: ScheduleAction,
+    reference_time: datetime,
+) -> dict[str, ScheduleAction]:
+    updated_slots = dict(stored_slots)
+    current_slot = parse_slot_id(start_slot_id)
+    horizon_end = build_horizon_end(reference_time)
+
+    while current_slot < horizon_end:
+        current_slot_id = format_slot_id(current_slot)
+        if updated_slots.get(current_slot_id) != action:
+            break
+        updated_slots.pop(current_slot_id, None)
+        current_slot += SCHEDULE_SLOT_DURATION
+
+    return dict(sorted(updated_slots.items()))
+
+
+def validate_slot_patch(
+    *,
+    slot_id: str,
+    action: ScheduleAction,
+    reference_time: datetime,
+    battery_soc_bounds: BatterySocBounds | None,
+) -> None:
+    slot_start = parse_slot_id(slot_id)
+    if not _is_slot_aligned(slot_start):
+        raise ScheduleSlotsError(
+            f"Schedule slot '{slot_id}' must align to {SCHEDULE_SLOT_MINUTES}-minute boundaries"
+        )
+    if not _is_slot_in_horizon(slot_start, reference_time):
+        raise ScheduleSlotsError(
+            f"Schedule slot '{slot_id}' must be within the rolling {SCHEDULE_HORIZON_HOURS}-hour horizon"
+        )
+    _validate_action(
+        action=action,
+        has_target_soc=action.target_soc is not None,
+        battery_soc_bounds=battery_soc_bounds,
+        require_target_soc_bounds=True,
+    )
+
+
+def validate_slot_patch_request(
+    *,
+    slots: Sequence[ScheduleSlot],
+    reference_time: datetime,
+    battery_soc_bounds: BatterySocBounds | None,
+) -> None:
+    if not slots:
+        raise ScheduleSlotsError("At least one schedule slot must be provided")
+
+    seen_slot_ids: set[str] = set()
+    for slot in slots:
+        if slot.id in seen_slot_ids:
+            raise ScheduleSlotsError(
+                f"Schedule slot '{slot.id}' appears more than once in the same request"
+            )
+        seen_slot_ids.add(slot.id)
+        validate_slot_patch(
+            slot_id=slot.id,
+            action=slot.action,
+            reference_time=reference_time,
+            battery_soc_bounds=battery_soc_bounds,
+        )
+
+
+def _read_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _read_non_empty_string(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _read_target_soc(data: Mapping[str, Any]) -> tuple[bool, int | None]:
+    if "targetSoc" in data:
+        raw_target_soc = data["targetSoc"]
+    elif "target_soc" in data:
+        raw_target_soc = data["target_soc"]
+    else:
+        return False, None
+
+    if isinstance(raw_target_soc, bool) or not isinstance(raw_target_soc, int):
+        raise ScheduleActionError("targetSoc must be an integer")
+
+    return True, raw_target_soc
+
+
+def _is_slot_aligned(slot_start: datetime) -> bool:
+    return (
+        slot_start.minute % SCHEDULE_SLOT_MINUTES == 0
+        and slot_start.second == 0
+        and slot_start.microsecond == 0
+    )
+
+
+def _is_slot_in_horizon(slot_start: datetime, reference_time: datetime) -> bool:
+    horizon_start = build_horizon_start(reference_time)
+    horizon_end = build_horizon_end(reference_time)
+    return horizon_start <= slot_start < horizon_end
+
+
+def _validate_action(
+    *,
+    action: ScheduleAction,
+    has_target_soc: bool,
+    battery_soc_bounds: BatterySocBounds | None,
+    require_target_soc_bounds: bool,
+) -> None:
+    if action.kind not in SCHEDULE_ACTION_KINDS:
+        raise ScheduleActionError("Unknown schedule action kind")
+
+    if action.kind in TARGET_ACTION_KINDS:
+        if not has_target_soc or action.target_soc is None:
+            raise ScheduleActionError(f"Action '{action.kind}' requires targetSoc")
+        if not 0 <= action.target_soc <= 100:
+            raise ScheduleActionError("targetSoc must be between 0 and 100")
+        if (
+            require_target_soc_bounds
+            and battery_soc_bounds is None
+        ):
+            raise ScheduleNotConfiguredError(
+                "Battery min/max SoC bounds are required for target schedule actions"
+            )
+        if battery_soc_bounds is None:
+            return
+        if (
+            action.target_soc < battery_soc_bounds.min_soc
+            or action.target_soc > battery_soc_bounds.max_soc
+        ):
+            raise ScheduleActionError(
+                "targetSoc must be between "
+                f"{battery_soc_bounds.min_soc:g} and {battery_soc_bounds.max_soc:g}"
+            )
+        return
+
+    if has_target_soc or action.target_soc is not None:
+        raise ScheduleActionError(f"Action '{action.kind}' does not allow targetSoc")

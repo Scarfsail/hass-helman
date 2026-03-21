@@ -21,6 +21,12 @@ class BatteryEntityConfig:
 
 
 @dataclass(frozen=True)
+class BatterySocBoundsConfig:
+    min_soc_entity_id: str
+    max_soc_entity_id: str
+
+
+@dataclass(frozen=True)
 class BatteryForecastSettings:
     charge_efficiency: float
     discharge_efficiency: float
@@ -53,20 +59,43 @@ def read_battery_entity_config(config: dict[str, Any]) -> BatteryEntityConfig | 
 
     remaining_energy_entity_id = _read_entity_id(entities.get("remaining_energy"))
     capacity_entity_id = _read_entity_id(entities.get("capacity"))
-    min_soc_entity_id = _read_entity_id(entities.get("min_soc"))
-    max_soc_entity_id = _read_entity_id(entities.get("max_soc"))
+    soc_bounds_config = read_battery_soc_bounds_config(config)
 
     if (
         remaining_energy_entity_id is None
         or capacity_entity_id is None
-        or min_soc_entity_id is None
-        or max_soc_entity_id is None
+        or soc_bounds_config is None
     ):
         return None
 
     return BatteryEntityConfig(
         remaining_energy_entity_id=remaining_energy_entity_id,
         capacity_entity_id=capacity_entity_id,
+        min_soc_entity_id=soc_bounds_config.min_soc_entity_id,
+        max_soc_entity_id=soc_bounds_config.max_soc_entity_id,
+    )
+
+
+@dataclass(frozen=True)
+class BatterySocBounds:
+    min_soc: float
+    max_soc: float
+
+
+def read_battery_soc_bounds_config(
+    config: dict[str, Any],
+) -> BatterySocBoundsConfig | None:
+    power_devices = _read_dict(config.get("power_devices"))
+    battery_config = _read_dict(power_devices.get("battery"))
+    entities = _read_dict(battery_config.get("entities"))
+
+    min_soc_entity_id = _read_entity_id(entities.get("min_soc"))
+    max_soc_entity_id = _read_entity_id(entities.get("max_soc"))
+
+    if min_soc_entity_id is None or max_soc_entity_id is None:
+        return None
+
+    return BatterySocBoundsConfig(
         min_soc_entity_id=min_soc_entity_id,
         max_soc_entity_id=max_soc_entity_id,
     )
@@ -100,20 +129,18 @@ def read_battery_live_state(
 ) -> BatteryLiveState | None:
     remaining_energy_state = hass.states.get(entity_config.remaining_energy_entity_id)
     capacity_state = hass.states.get(entity_config.capacity_entity_id)
-    min_soc_state = hass.states.get(entity_config.min_soc_entity_id)
-    max_soc_state = hass.states.get(entity_config.max_soc_entity_id)
 
     remaining_energy = _read_state_float(remaining_energy_state)
     current_soc = _read_state_float(capacity_state)
-    min_soc = _read_state_float(min_soc_state)
-    max_soc = _read_state_float(max_soc_state)
+    soc_bounds = read_battery_soc_bounds(
+        hass,
+        BatterySocBoundsConfig(
+            min_soc_entity_id=entity_config.min_soc_entity_id,
+            max_soc_entity_id=entity_config.max_soc_entity_id,
+        ),
+    )
 
-    if (
-        remaining_energy is None
-        or current_soc is None
-        or min_soc is None
-        or max_soc is None
-    ):
+    if remaining_energy is None or current_soc is None or soc_bounds is None:
         return None
 
     remaining_energy_kwh = normalize_energy_to_kwh(
@@ -128,29 +155,43 @@ def read_battery_live_state(
 
     if current_soc <= 0 or current_soc > 100:
         return None
-    if min_soc < 0 or min_soc > 100 or max_soc < 0 or max_soc > 100:
-        return None
-    if min_soc > max_soc:
-        return None
-    if current_soc < min_soc or current_soc > max_soc:
+    if current_soc < soc_bounds.min_soc or current_soc > soc_bounds.max_soc:
         return None
 
     nominal_capacity_kwh = remaining_energy_kwh / (current_soc / 100)
     if nominal_capacity_kwh <= 0:
         return None
 
-    min_energy_kwh = nominal_capacity_kwh * (min_soc / 100)
-    max_energy_kwh = nominal_capacity_kwh * (max_soc / 100)
+    min_energy_kwh = nominal_capacity_kwh * (soc_bounds.min_soc / 100)
+    max_energy_kwh = nominal_capacity_kwh * (soc_bounds.max_soc / 100)
 
     return BatteryLiveState(
         current_remaining_energy_kwh=remaining_energy_kwh,
         current_soc=current_soc,
-        min_soc=min_soc,
-        max_soc=max_soc,
+        min_soc=soc_bounds.min_soc,
+        max_soc=soc_bounds.max_soc,
         nominal_capacity_kwh=nominal_capacity_kwh,
         min_energy_kwh=min_energy_kwh,
         max_energy_kwh=max_energy_kwh,
     )
+
+
+def read_battery_soc_bounds(
+    hass: HomeAssistant, config: BatterySocBoundsConfig
+) -> BatterySocBounds | None:
+    min_soc_state = hass.states.get(config.min_soc_entity_id)
+    max_soc_state = hass.states.get(config.max_soc_entity_id)
+
+    min_soc = _read_state_float(min_soc_state)
+    max_soc = _read_state_float(max_soc_state)
+    if min_soc is None or max_soc is None:
+        return None
+    if min_soc < 0 or min_soc > 100 or max_soc < 0 or max_soc > 100:
+        return None
+    if min_soc > max_soc:
+        return None
+
+    return BatterySocBounds(min_soc=min_soc, max_soc=max_soc)
 
 
 def _read_state_float(state) -> float | None:

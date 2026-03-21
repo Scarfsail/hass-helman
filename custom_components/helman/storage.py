@@ -5,6 +5,8 @@ from homeassistant.core import HomeAssistant
 from .const import (
     FORECAST_SNAPSHOT_STORAGE_KEY,
     FORECAST_SNAPSHOT_STORAGE_VERSION,
+    SCHEDULE_STORAGE_KEY,
+    SCHEDULE_STORAGE_VERSION,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
@@ -29,11 +31,16 @@ class HelmanStorage:
             hass, FORECAST_SNAPSHOT_STORAGE_VERSION, FORECAST_SNAPSHOT_STORAGE_KEY
         )
         self._snapshot: dict[str, Any] | None = None
+        self._schedule_store = storage.Store(
+            hass, SCHEDULE_STORAGE_VERSION, SCHEDULE_STORAGE_KEY
+        )
+        self._schedule_document: dict[str, Any] | None = None
 
     async def async_load(self) -> None:
         stored = await self._store.async_load()
         self._config = {**DEFAULT_CONFIG, **(stored or {})}
         self._snapshot = await self._snapshot_store.async_load()
+        self._schedule_document = await self._schedule_store.async_load()
 
     @property
     def config(self) -> dict[str, Any]:
@@ -43,6 +50,10 @@ class HelmanStorage:
     def forecast_snapshot(self) -> dict[str, Any] | None:
         return self._snapshot
 
+    @property
+    def schedule_document(self) -> dict[str, Any] | None:
+        return self._schedule_document
+
     async def async_save(self, new_config: dict[str, Any]) -> None:
         self._config = new_config
         await self._store.async_save(new_config)
@@ -50,3 +61,9 @@ class HelmanStorage:
     async def async_save_snapshot(self, snapshot: dict[str, Any]) -> None:
         self._snapshot = snapshot
         await self._snapshot_store.async_save(snapshot)
+
+    async def async_save_schedule_document(
+        self, schedule_document: dict[str, Any]
+    ) -> None:
+        self._schedule_document = schedule_document
+        await self._schedule_store.async_save(schedule_document)
