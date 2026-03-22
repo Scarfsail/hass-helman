@@ -250,6 +250,7 @@ class ScheduleHelperTests(unittest.TestCase):
         doc = schedule_document_from_dict(
             {
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     slot_ids[0]: {
                         "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,

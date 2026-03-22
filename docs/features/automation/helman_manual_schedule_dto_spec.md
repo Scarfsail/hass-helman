@@ -59,7 +59,7 @@ The minimal plan response is:
 These should live in `custom_components/helman/const.py`.
 
 ```python
-SCHEDULE_SLOT_MINUTES = 15
+SCHEDULE_SLOT_MINUTES = 30
 SCHEDULE_HORIZON_HOURS = 48
 
 SCHEDULE_ACTION_NORMAL = "normal"
@@ -203,7 +203,7 @@ Suggested persisted shape:
 ```json
 {
   "executionEnabled": false,
-  "slotMinutes": 15,
+  "slotMinutes": 30,
   "slots": {
     "2026-03-20T21:00:00+01:00": {
       "kind": "charge_to_target_soc",

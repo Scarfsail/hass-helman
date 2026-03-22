@@ -266,15 +266,27 @@ class FakeExecutor:
 
 
 class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
-    def _build_coordinator(self, *, schedule_document: dict) -> tuple[HelmanCoordinator, FakeStorage, FakeExecutor]:
-        storage = FakeStorage(schedule_document=schedule_document)
+    def _build_coordinator(
+        self,
+        *,
+        schedule_document: dict,
+        inject_slot_minutes: bool = True,
+    ) -> tuple[HelmanCoordinator, FakeStorage, FakeExecutor]:
+        persisted_schedule_document = dict(schedule_document)
+        if inject_slot_minutes and "slotMinutes" not in persisted_schedule_document:
+            persisted_schedule_document["slotMinutes"] = SCHEDULE_SLOT_MINUTES
+
+        storage = FakeStorage(schedule_document=persisted_schedule_document)
         coordinator = HelmanCoordinator(FakeHass(), storage)
         executor = FakeExecutor()
         coordinator._schedule_executor = executor
         return coordinator, storage, executor
 
-    async def test_normalize_schedule_document_backfills_slot_minutes(self) -> None:
+    async def test_normalize_schedule_document_resets_legacy_schedule_without_slot_minutes(
+        self,
+    ) -> None:
         coordinator, storage, _ = self._build_coordinator(
+            inject_slot_minutes=False,
             schedule_document={
                 "executionEnabled": False,
                 "slots": {
@@ -290,9 +302,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
-                "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
-                },
+                "slots": {},
             },
         )
 

@@ -124,7 +124,7 @@ Suggested new persisted object:
 ```json
 {
   "executionEnabled": false,
-  "slotMinutes": 15,
+  "slotMinutes": 30,
   "slots": {
     "2026-03-20T21:00:00+01:00": {
       "kind": "charge_to_target_soc",
