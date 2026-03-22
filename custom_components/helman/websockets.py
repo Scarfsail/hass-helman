@@ -3,7 +3,18 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.components.websocket_api import async_register_command
-from .const import DOMAIN, SCHEDULE_ACTION_KINDS
+from .const import (
+    DEFAULT_FORECAST_DAYS,
+    DEFAULT_FORECAST_GRANULARITY_MINUTES,
+    DOMAIN,
+    FORECAST_GRANULARITY_OPTIONS,
+    MAX_FORECAST_DAYS,
+    SCHEDULE_ACTION_KINDS,
+)
+from .forecast_request import (
+    ForecastRequestNotSupportedError,
+    ensure_supported_forecast_request,
+)
 from .scheduling.schedule import ScheduleError, slot_from_dict
 from .storage import HelmanStorage
 
@@ -22,6 +33,40 @@ SCHEDULE_SLOT_SCHEMA = vol.Schema(
     },
     extra=vol.PREVENT_EXTRA,
 )
+GET_FORECAST_REQUEST_FIELDS = {
+    vol.Required("type"): "helman/get_forecast",
+    vol.Optional("granularity", default=DEFAULT_FORECAST_GRANULARITY_MINUTES): (
+        lambda value: _validate_forecast_granularity(value)
+    ),
+    vol.Optional("forecast_days", default=DEFAULT_FORECAST_DAYS): (
+        lambda value: _validate_forecast_days(value)
+    ),
+}
+GET_FORECAST_REQUEST_SCHEMA = vol.Schema(
+    GET_FORECAST_REQUEST_FIELDS,
+    extra=vol.PREVENT_EXTRA,
+)
+
+
+def _validate_forecast_granularity(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise vol.Invalid("granularity must be an integer")
+    if value not in FORECAST_GRANULARITY_OPTIONS:
+        raise vol.Invalid(
+            "granularity must be one of "
+            + ", ".join(str(option) for option in FORECAST_GRANULARITY_OPTIONS)
+        )
+    return value
+
+
+def _validate_forecast_days(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise vol.Invalid("forecast_days must be an integer")
+    if value < 1 or value > MAX_FORECAST_DAYS:
+        raise vol.Invalid(
+            f"forecast_days must be between 1 and {MAX_FORECAST_DAYS}"
+        )
+    return value
 
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
@@ -180,9 +225,7 @@ def ws_get_history(
     connection.send_result(msg["id"], coordinator.get_history())
 
 
-@websocket_api.websocket_command({
-    vol.Required("type"): "helman/get_forecast",
-})
+@websocket_api.websocket_command(GET_FORECAST_REQUEST_FIELDS)
 @websocket_api.async_response
 async def ws_get_forecast(
     hass: HomeAssistant,
@@ -194,5 +237,16 @@ async def ws_get_forecast(
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
 
-    forecast = await coordinator.get_forecast()
+    try:
+        ensure_supported_forecast_request(
+            granularity=msg["granularity"],
+            forecast_days=msg["forecast_days"],
+        )
+        forecast = await coordinator.get_forecast(
+            granularity=msg["granularity"],
+            forecast_days=msg["forecast_days"],
+        )
+    except ForecastRequestNotSupportedError as err:
+        connection.send_error(msg["id"], "not_supported", str(err))
+        return
     connection.send_result(msg["id"], forecast)

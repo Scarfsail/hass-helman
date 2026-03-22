@@ -25,6 +25,8 @@ from .battery_state import (
 )
 from .const import (
     CONSUMPTION_TOTAL_ENTITY_ID,
+    DEFAULT_FORECAST_DAYS,
+    DEFAULT_FORECAST_GRANULARITY_MINUTES,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
@@ -32,6 +34,7 @@ from .const import (
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
 from .forecast_builder import HelmanForecastBuilder
+from .forecast_request import ensure_supported_forecast_request
 from .scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
@@ -385,7 +388,22 @@ class HelmanCoordinator:
         )
         return local_snapshot_hour == local_current_hour
 
-    async def get_forecast(self) -> dict:
+    async def get_forecast(
+        self,
+        *,
+        granularity: int = DEFAULT_FORECAST_GRANULARITY_MINUTES,
+        forecast_days: int = DEFAULT_FORECAST_DAYS,
+    ) -> dict:
+        """Return the current forecast response.
+
+        Increment 1 only extends the request contract. The builders remain
+        hourly until later increments wire in canonical slot generation and
+        coordinator aggregation.
+        """
+        ensure_supported_forecast_request(
+            granularity=granularity,
+            forecast_days=forecast_days,
+        )
         request_now = dt_util.now()
         builder = HelmanForecastBuilder(self._hass, self._storage.config)
         result = await builder.build(reference_time=request_now)
