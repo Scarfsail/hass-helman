@@ -417,9 +417,12 @@ class BatteryCapacityForecastBuilder:
 
         Wall-clock arithmetic (datetime + timedelta) can produce non-existent
         times during spring-forward gaps (e.g. 02:00 when clocks jump to 03:00).
-        astimezone forces a UTC round-trip that resolves these to valid times.
+        A UTC round-trip resolves these to valid local times.
+
+        Note: value.astimezone(value.tzinfo) would be a no-op because
+        astimezone short-circuits when target tzinfo is the same object.
         """
-        return value.astimezone(value.tzinfo)
+        return dt_util.as_local(dt_util.as_utc(value))
 
     @staticmethod
     def _slot_end(slot_start: datetime, duration_hours: float) -> datetime:

@@ -148,9 +148,11 @@ class ConsumptionForecastBuilder:
         )
 
         for i in range(self._HORIZON_HOURS):
-            # astimezone normalizes DST gap times (e.g. spring-forward 02:00→03:00)
-            forecast_dt = (forecast_start + timedelta(hours=i)).astimezone(
-                forecast_start.tzinfo
+            # UTC round-trip normalizes DST gap times (e.g. spring-forward
+            # 02:00→03:00).  Plain astimezone(same_tz) is a no-op due to
+            # identity short-circuit, so we go through UTC explicitly.
+            forecast_dt = dt_util.as_local(
+                dt_util.as_utc(forecast_start + timedelta(hours=i))
             )
             series.append(
                 self._build_forecast_entry(
