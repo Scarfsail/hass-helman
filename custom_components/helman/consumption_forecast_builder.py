@@ -141,18 +141,19 @@ class ConsumptionForecastBuilder:
             consumer_profiles=consumer_profiles,
         )
 
-        # Generate forecast series starting from the next full hour
+        # Generate forecast series starting from the next full hour.
+        # Use UTC arithmetic to avoid DST gap times — wall-clock timedelta
+        # addition can land on non-existent local times (e.g. 02:00 during
+        # spring-forward), producing duplicate entries.
         series: list[dict[str, Any]] = []
         forecast_start = (local_now + timedelta(hours=1)).replace(
             minute=0, second=0, microsecond=0
         )
+        forecast_start_utc = dt_util.as_utc(forecast_start)
 
         for i in range(self._HORIZON_HOURS):
-            # UTC round-trip normalizes DST gap times (e.g. spring-forward
-            # 02:00→03:00).  Plain astimezone(same_tz) is a no-op due to
-            # identity short-circuit, so we go through UTC explicitly.
             forecast_dt = dt_util.as_local(
-                dt_util.as_utc(forecast_start + timedelta(hours=i))
+                forecast_start_utc + timedelta(hours=i)
             )
             series.append(
                 self._build_forecast_entry(

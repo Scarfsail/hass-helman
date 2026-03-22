@@ -103,8 +103,11 @@ class BatteryCapacityForecastBuilder:
         current_hour_start = started_at_local.replace(
             minute=0, second=0, microsecond=0
         )
-        next_hour_start = current_hour_start + timedelta(hours=1)
-        next_hour_start = self._normalize_local(next_hour_start)
+        # Use UTC arithmetic to avoid DST gap times.  Wall-clock
+        # timedelta addition can land on non-existent local times
+        # (e.g. 02:00 during spring-forward) that break dict lookups.
+        next_hour_utc = dt_util.as_utc(current_hour_start) + timedelta(hours=1)
+        next_hour_start = dt_util.as_local(next_hour_utc)
         first_duration_hours = (
             next_hour_start - started_at_local
         ).total_seconds() / 3600
@@ -140,8 +143,8 @@ class BatteryCapacityForecastBuilder:
                 hour_start = current_hour_start
                 baseline_house_kwh = current_hour_house_value * slot_duration_hours
             else:
-                hour_start = self._normalize_local(
-                    next_hour_start + timedelta(hours=slot_index - 1)
+                hour_start = dt_util.as_local(
+                    next_hour_utc + timedelta(hours=slot_index - 1)
                 )
                 slot_start = hour_start
                 slot_duration_hours = 1.0
@@ -410,19 +413,6 @@ class BatteryCapacityForecastBuilder:
     @staticmethod
     def _hour_start(value: datetime) -> datetime:
         return dt_util.as_local(value).replace(minute=0, second=0, microsecond=0)
-
-    @staticmethod
-    def _normalize_local(value: datetime) -> datetime:
-        """Normalize a local datetime to resolve DST gap times.
-
-        Wall-clock arithmetic (datetime + timedelta) can produce non-existent
-        times during spring-forward gaps (e.g. 02:00 when clocks jump to 03:00).
-        A UTC round-trip resolves these to valid local times.
-
-        Note: value.astimezone(value.tzinfo) would be a no-op because
-        astimezone short-circuits when target tzinfo is the same object.
-        """
-        return dt_util.as_local(dt_util.as_utc(value))
 
     @staticmethod
     def _slot_end(slot_start: datetime, duration_hours: float) -> datetime:
