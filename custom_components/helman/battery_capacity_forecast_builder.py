@@ -362,7 +362,8 @@ class BatteryCapacityForecastBuilder:
             if timestamp is None or value is None:
                 continue
 
-            by_hour[self._hour_start(timestamp)] = value
+            hour_key = self._hour_start(timestamp)
+            by_hour[hour_key] = by_hour.get(hour_key, 0.0) + value
 
         return by_hour
 
