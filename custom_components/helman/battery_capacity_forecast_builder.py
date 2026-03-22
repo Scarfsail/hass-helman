@@ -54,6 +54,7 @@ class BatteryCapacityForecastBuilder:
 
         live_state = read_battery_live_state(self._hass, entity_config)
         if live_state is None:
+            _LOGGER.warning("Battery forecast unavailable: live_state is None")
             return self._make_payload(
                 status="unavailable",
                 settings=settings,
@@ -69,6 +70,7 @@ class BatteryCapacityForecastBuilder:
                 model=model,
             )
         if house_status != "available":
+            _LOGGER.warning("Battery forecast unavailable: house_status=%s", house_status)
             return self._make_payload(
                 status="unavailable",
                 settings=settings,
@@ -78,6 +80,7 @@ class BatteryCapacityForecastBuilder:
 
         solar_status = solar_forecast.get("status")
         if solar_status in {"not_configured", "unavailable"}:
+            _LOGGER.warning("Battery forecast unavailable: solar_status=%s", solar_status)
             return self._make_payload(
                 status="unavailable",
                 settings=settings,
@@ -102,6 +105,11 @@ class BatteryCapacityForecastBuilder:
             house_forecast, current_hour_start
         )
         if current_hour_house_value is None:
+            _LOGGER.warning(
+                "Battery forecast unavailable: current_hour_house_value is None "
+                "(current_hour_start=%s)",
+                current_hour_start.isoformat(),
+            )
             return self._make_payload(
                 status="unavailable",
                 settings=settings,
@@ -129,6 +137,15 @@ class BatteryCapacityForecastBuilder:
                 slot_duration_hours = 1.0
                 hourly_house_value = house_series_by_hour.get(hour_start)
                 if hourly_house_value is None:
+                    _LOGGER.warning(
+                        "Battery forecast unavailable: house series missing "
+                        "slot_index=%d hour_start=%s (map has %d keys, first=%s, last=%s)",
+                        slot_index,
+                        hour_start.isoformat(),
+                        len(house_series_by_hour),
+                        min(house_series_by_hour).isoformat() if house_series_by_hour else "N/A",
+                        max(house_series_by_hour).isoformat() if house_series_by_hour else "N/A",
+                    )
                     return self._make_payload(
                         status="unavailable",
                         settings=settings,
