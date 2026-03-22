@@ -14,7 +14,7 @@ The scope is intentionally narrow:
 - manual schedule only
 - no automatic planning yet
 - rolling next `48` hours
-- `15` minute resolution
+- slot resolution defined by `SCHEDULE_SLOT_MINUTES` in `custom_components/helman/const.py`
 - one-off schedule only
 - backend automatically executes scheduled actions
 - execution can be globally enabled or disabled from the frontend
@@ -88,8 +88,8 @@ That gives us clean naming now without boxing us in later.
 
 After comparing a few architecture variants, the most practical v1 choice is:
 
-- **source of truth** = sparse 15-minute slots keyed by slot start time
-- **frontend view** = full 15-minute slot grid for the next `48` hours
+- **source of truth** = sparse slots keyed by slot start time
+- **frontend view** = full slot grid for the next `48` hours
 
 Why this is the simplest first implementation:
 
@@ -100,6 +100,8 @@ Why this is the simplest first implementation:
 - target-SoC evaluation affects only the current slot; later slots keep their own independent semantics
 
 If the frontend wants to display blocks instead of individual slots, it can group adjacent slots that have the same action and `targetSoc`.
+
+The slot length comes from `SCHEDULE_SLOT_MINUTES` in `custom_components/helman/const.py`. The current implementation requires that value to divide `60` evenly.
 
 ## Proposed backend modules
 
@@ -122,12 +124,13 @@ Suggested new persisted object:
 ```json
 {
   "executionEnabled": false,
+  "slotMinutes": 15,
   "slots": {
     "2026-03-20T21:00:00+01:00": {
       "kind": "charge_to_target_soc",
       "targetSoc": 80
     },
-    "2026-03-20T21:15:00+01:00": {
+    "2026-03-20T22:00:00+01:00": {
       "kind": "charge_to_target_soc",
       "targetSoc": 80
     }
@@ -137,6 +140,7 @@ Suggested new persisted object:
 
 Notes:
 
+- `slotMinutes` mirrors `SCHEDULE_SLOT_MINUTES` so the backend can treat a later slot-duration change as a fresh setup
 - `normal` does not need to be stored explicitly
 - missing slot in storage means implicit `normal`
 - executor runtime state can stay in memory in v1
@@ -153,7 +157,7 @@ This module should own:
 
 Suggested responsibilities:
 
-- generate the rolling quarter-hour slot grid
+- generate the rolling slot grid from `SCHEDULE_SLOT_MINUTES`
 - convert selected slot IDs to canonical slot timestamps
 - apply one write request to one or more slots
 - materialize the full upcoming slot array with implicit `normal`
@@ -272,7 +276,7 @@ The slot grid itself should be the backend contract. If the frontend wants group
 When automation slots are written, the backend should validate:
 
 - all slot IDs are inside the current rolling `48h` horizon
-- all slot IDs are aligned to `15` minute boundaries
+- all slot IDs are aligned to the configured `SCHEDULE_SLOT_MINUTES` boundary
 - slot IDs are unique within the request
 - `targetSoc` is required for:
   - `charge_to_target_soc`
@@ -382,7 +386,7 @@ Response:
       }
     },
     {
-      "id": "2026-03-20T21:15:00+01:00",
+      "id": "2026-03-20T22:00:00+01:00",
       "action": {
         "kind": "normal"
       }
@@ -421,7 +425,7 @@ Request:
       }
     },
     {
-      "id": "2026-03-20T21:15:00+01:00",
+      "id": "2026-03-20T22:00:00+01:00",
       "action": {
         "kind": "charge_to_target_soc",
         "targetSoc": 80

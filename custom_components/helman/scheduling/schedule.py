@@ -34,6 +34,10 @@ TARGET_ACTION_KINDS = {
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
 }
+
+if SCHEDULE_SLOT_MINUTES <= 0 or 60 % SCHEDULE_SLOT_MINUTES != 0:
+    raise ValueError("SCHEDULE_SLOT_MINUTES must be a positive divisor of 60")
+
 SCHEDULE_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 
 
@@ -90,6 +94,10 @@ class ScheduleError(Exception):
 class ScheduleSlotsError(ScheduleError):
     def __init__(self, message: str) -> None:
         super().__init__("invalid_slots", message)
+
+
+class ScheduleStorageCompatibilityError(ScheduleSlotsError):
+    """Persisted schedule data does not match the active slot configuration."""
 
 
 class ScheduleActionError(ScheduleError):
@@ -167,6 +175,21 @@ def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocum
     if not isinstance(data, Mapping):
         raise ScheduleSlotsError("Persisted schedule document must be an object")
 
+    raw_slot_minutes = data.get("slotMinutes")
+    if raw_slot_minutes is None:
+        # Older schedule documents were always written with a 15-minute grid.
+        persisted_slot_minutes = 15
+    else:
+        if isinstance(raw_slot_minutes, bool) or not isinstance(raw_slot_minutes, int):
+            raise ScheduleSlotsError("Persisted schedule slotMinutes must be an integer")
+        persisted_slot_minutes = raw_slot_minutes
+
+    if persisted_slot_minutes != SCHEDULE_SLOT_MINUTES:
+        raise ScheduleStorageCompatibilityError(
+            "Persisted schedule slotMinutes does not match the configured "
+            f"{SCHEDULE_SLOT_MINUTES}-minute slot duration"
+        )
+
     execution_enabled = data.get("executionEnabled", False)
     if not isinstance(execution_enabled, bool):
         raise ScheduleSlotsError("Persisted schedule executionEnabled must be boolean")
@@ -187,7 +210,7 @@ def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocum
 
         slot_start = parse_slot_id(slot_id)
         if not _is_slot_aligned(slot_start):
-            raise ScheduleSlotsError(
+            raise ScheduleStorageCompatibilityError(
                 "Persisted schedule slot ids must align to "
                 f"{SCHEDULE_SLOT_MINUTES}-minute boundaries"
             )
@@ -208,6 +231,7 @@ def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocum
 def schedule_document_to_dict(doc: ScheduleDocument) -> dict[str, Any]:
     return {
         "executionEnabled": doc.execution_enabled,
+        "slotMinutes": SCHEDULE_SLOT_MINUTES,
         "slots": {
             slot_id: action_to_dict(action)
             for slot_id, action in sorted(doc.slots.items())

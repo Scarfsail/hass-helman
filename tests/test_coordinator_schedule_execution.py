@@ -163,7 +163,10 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman.const import SCHEDULE_ACTION_STOP_CHARGING  # noqa: E402
+from custom_components.helman.const import (  # noqa: E402
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_SLOT_MINUTES,
+)
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
@@ -270,6 +273,77 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator._schedule_executor = executor
         return coordinator, storage, executor
 
+    async def test_normalize_schedule_document_backfills_slot_minutes(self) -> None:
+        coordinator, storage, _ = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                },
+            }
+        )
+
+        await coordinator._async_normalize_schedule_document()
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                },
+            },
+        )
+
+    async def test_normalize_schedule_document_resets_incompatible_slot_minutes(
+        self,
+    ) -> None:
+        coordinator, storage, _ = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES * 2,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                },
+            }
+        )
+
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            await coordinator._async_normalize_schedule_document()
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+        )
+
+    async def test_normalize_schedule_document_resets_invalid_persisted_schedule(
+        self,
+    ) -> None:
+        coordinator, storage, _ = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": "bad",
+                "slots": {},
+            }
+        )
+
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            await coordinator._async_normalize_schedule_document()
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+        )
+
     async def test_enable_persists_flag_and_reconciles(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
             schedule_document={
@@ -290,6 +364,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             storage.schedule_document,
             {
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
                 },
@@ -318,6 +393,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             storage.schedule_document,
             {
                 "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
                 },
@@ -332,6 +408,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator, storage, executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
                 },
@@ -348,6 +425,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             storage.schedule_document,
             {
                 "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
                 },
@@ -362,6 +440,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator, storage, executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
                 },
@@ -379,6 +458,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             storage.schedule_document,
             {
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
                 },
@@ -413,6 +493,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             storage.schedule_document,
             {
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
                 },
@@ -446,11 +527,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         current_slot = next(
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
-        next_slot = next(
-            slot
-            for slot in schedule["slots"]
-            if slot["id"] == "2026-03-20T21:15:00+01:00"
-        )
+        next_slot = schedule["slots"][1]
 
         self.assertEqual(current_slot["action"]["kind"], "charge_to_target_soc")
         self.assertEqual(current_slot["action"]["targetSoc"], 80)
@@ -462,6 +539,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "reason": "target_soc_reached",
             },
         )
+        self.assertNotEqual(next_slot["id"], CURRENT_SLOT_ID)
         self.assertNotIn("runtime", next_slot)
         self.assertEqual(executor.get_status_calls, 1)
 

@@ -44,7 +44,7 @@ The minimal plan response is:
       }
     },
     {
-      "id": "2026-03-20T21:15:00+01:00",
+      "id": "2026-03-20T22:00:00+01:00",
       "action": {
         "kind": "charge_to_target_soc",
         "targetSoc": 80
@@ -77,20 +77,22 @@ SCHEDULE_ACTION_KINDS = {
 }
 ```
 
+`SCHEDULE_SLOT_MINUTES` is the only slot-duration setting. The current implementation requires it to divide `60` evenly.
+
 ## Slot ID contract
 
 Slot IDs should follow these rules:
 
 - ISO 8601 timestamp string with timezone offset
 - identifies the **slot start**
-- aligned to a `15` minute boundary
+- aligned to the configured `SCHEDULE_SLOT_MINUTES` boundary
 - local-time aware, not naive
-- slot end is derived as `slot_start + 15 minutes`
+- slot end is derived as `slot_start + SCHEDULE_SLOT_MINUTES`
 
 Example:
 
 ```text
-2026-03-20T21:15:00+01:00
+2026-03-20T21:00:00+01:00
 ```
 
 ## Internal Python DTOs
@@ -201,21 +203,24 @@ Suggested persisted shape:
 ```json
 {
   "executionEnabled": false,
+  "slotMinutes": 15,
   "slots": {
     "2026-03-20T21:00:00+01:00": {
       "kind": "charge_to_target_soc",
       "targetSoc": 80
     },
-    "2026-03-20T21:15:00+01:00": {
+    "2026-03-20T22:00:00+01:00": {
       "kind": "charge_to_target_soc",
       "targetSoc": 80
     },
-    "2026-03-20T21:30:00+01:00": {
+    "2026-03-20T23:00:00+01:00": {
       "kind": "stop_charging"
     }
   }
 }
 ```
+
+`slotMinutes` mirrors `SCHEDULE_SLOT_MINUTES` in storage so the backend can reset persisted schedule data when the configured slot duration changes.
 
 ## Mapping rules between Python and JSON
 
@@ -328,7 +333,7 @@ Example response:
       }
     },
     {
-      "id": "2026-03-20T21:15:00+01:00",
+      "id": "2026-03-20T22:00:00+01:00",
       "action": {
         "kind": "normal"
       }
@@ -385,14 +390,14 @@ Example request:
       }
     },
     {
-      "id": "2026-03-20T21:15:00+01:00",
+      "id": "2026-03-20T22:00:00+01:00",
       "action": {
         "kind": "charge_to_target_soc",
         "targetSoc": 80
       }
     },
     {
-      "id": "2026-03-20T21:30:00+01:00",
+      "id": "2026-03-20T23:00:00+01:00",
       "action": {
         "kind": "normal"
       }
@@ -493,7 +498,7 @@ def validate_slot_patch(
 Checks:
 
 - slot ID parses to timezone-aware datetime
-- slot ID is aligned to `15` minute boundary
+- slot ID is aligned to the configured `SCHEDULE_SLOT_MINUTES` boundary
 - slot is within rolling `48` hour horizon
 - action kind is known
 - `target_soc` is present only when required
@@ -708,7 +713,7 @@ Use for:
 - duplicate slot IDs
 - malformed slot ID
 - slot outside horizon
-- slot not aligned to 15 minutes
+- slot not aligned to the configured slot duration
 
 ### `invalid_action`
 

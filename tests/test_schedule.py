@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -69,6 +69,8 @@ from custom_components.helman.const import (
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_HORIZON_HOURS,
+    SCHEDULE_SLOT_MINUTES,
 )
 from custom_components.helman.scheduling.schedule import (
     ScheduleAction,
@@ -76,8 +78,10 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleDocument,
     ScheduleNotConfiguredError,
     ScheduleSlot,
+    ScheduleStorageCompatibilityError,
     ScheduleSlotsError,
     apply_slot_patches,
+    build_horizon_start,
     find_active_slot,
     iter_horizon_slot_ids,
     materialize_schedule_slots,
@@ -99,10 +103,16 @@ REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 class ScheduleHelperTests(unittest.TestCase):
     def test_iter_horizon_slot_ids_returns_full_48_hour_grid(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        expected_slot_count = (SCHEDULE_HORIZON_HOURS * 60) // SCHEDULE_SLOT_MINUTES
+        expected_last_slot = (
+            build_horizon_start(REFERENCE_TIME)
+            + timedelta(hours=SCHEDULE_HORIZON_HOURS)
+            - timedelta(minutes=SCHEDULE_SLOT_MINUTES)
+        )
 
-        self.assertEqual(len(slot_ids), 192)
+        self.assertEqual(len(slot_ids), expected_slot_count)
         self.assertEqual(slot_ids[0], "2026-03-20T21:00:00+01:00")
-        self.assertEqual(slot_ids[-1], "2026-03-22T20:45:00+01:00")
+        self.assertEqual(slot_ids[-1], expected_last_slot.isoformat(timespec="seconds"))
 
     def test_materialize_schedule_slots_fills_missing_slots_as_normal(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
@@ -174,7 +184,8 @@ class ScheduleHelperTests(unittest.TestCase):
                     target_soc=80,
                 ),
             },
-            reference_time=datetime.fromisoformat("2026-03-20T21:16:00+01:00"),
+            reference_time=datetime.fromisoformat(slot_ids[0])
+            + timedelta(minutes=SCHEDULE_SLOT_MINUTES + 1),
         )
 
         self.assertNotIn(slot_ids[0], pruned)
@@ -235,15 +246,16 @@ class ScheduleHelperTests(unittest.TestCase):
             )
 
     def test_schedule_document_round_trip_strips_implicit_normal(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         doc = schedule_document_from_dict(
             {
                 "executionEnabled": True,
                 "slots": {
-                    "2026-03-20T21:15:00+01:00": {
+                    slot_ids[0]: {
                         "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                         "targetSoc": 80,
                     },
-                    "2026-03-20T21:30:00+01:00": {"kind": SCHEDULE_ACTION_NORMAL},
+                    slot_ids[1]: {"kind": SCHEDULE_ACTION_NORMAL},
                 },
             }
         )
@@ -253,7 +265,7 @@ class ScheduleHelperTests(unittest.TestCase):
             ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    "2026-03-20T21:15:00+01:00": ScheduleAction(
+                    slot_ids[0]: ScheduleAction(
                         kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                         target_soc=80,
                     )
@@ -264,14 +276,25 @@ class ScheduleHelperTests(unittest.TestCase):
             schedule_document_to_dict(doc),
             {
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    "2026-03-20T21:15:00+01:00": {
+                    slot_ids[0]: {
                         "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                         "targetSoc": 80,
                     }
                 },
             },
         )
+
+    def test_schedule_document_from_dict_rejects_mismatched_slot_minutes(self) -> None:
+        with self.assertRaises(ScheduleStorageCompatibilityError):
+            schedule_document_from_dict(
+                {
+                    "executionEnabled": False,
+                    "slotMinutes": SCHEDULE_SLOT_MINUTES * 2,
+                    "slots": {},
+                }
+            )
 
     def test_slot_to_dict_includes_runtime_metadata_when_provided(self) -> None:
         slot_dict = slot_to_dict(
@@ -306,7 +329,7 @@ class ScheduleHelperTests(unittest.TestCase):
         )
 
     def test_schedule_document_from_dict_rejects_misaligned_slot_ids(self) -> None:
-        with self.assertRaises(ScheduleSlotsError):
+        with self.assertRaises(ScheduleStorageCompatibilityError):
             schedule_document_from_dict(
                 {
                     "executionEnabled": False,

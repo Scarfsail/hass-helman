@@ -193,6 +193,7 @@ class HelmanCoordinator:
             self._cached_forecast = None
         self._start_forecast_refresh()
 
+        await self._async_normalize_schedule_document()
         if self._load_schedule_document().execution_enabled:
             await self._async_reconcile_schedule_execution_if_enabled(
                 reason="startup",
@@ -434,6 +435,25 @@ class HelmanCoordinator:
 
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
         return read_schedule_control_config(self._storage.config)
+
+    async def _async_normalize_schedule_document(self) -> None:
+        raw_document = self._storage.schedule_document
+        if raw_document is None:
+            return
+
+        try:
+            schedule_document = schedule_document_from_dict(raw_document)
+        except ScheduleError as err:
+            _LOGGER.warning(
+                "Resetting persisted schedule data because it is invalid or "
+                "does not match the configured slot duration: %s",
+                err,
+            )
+            await self._save_schedule_document(ScheduleDocument())
+            return
+
+        if schedule_document_to_dict(schedule_document) != raw_document:
+            await self._save_schedule_document(schedule_document)
 
     def _load_schedule_document(self) -> ScheduleDocument:
         return schedule_document_from_dict(self._storage.schedule_document)

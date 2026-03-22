@@ -15,7 +15,7 @@ It is ready to be consumed by a frontend or other internal clients that need to:
 Implemented today:
 
 - rolling `48` hour horizon
-- `15` minute slot resolution
+- slot resolution controlled by `SCHEDULE_SLOT_MINUTES` in `custom_components/helman/const.py`
 - sparse persisted storage with materialized `normal` slots in responses
 - websocket API:
   - `helman/get_schedule`
@@ -24,6 +24,7 @@ Implemented today:
 - live execution of the current slot through the configured mode entity
 - target-SoC actions resolved against live battery state
 - active-slot runtime metadata in `helman/get_schedule`
+- persisted schedule documents are treated as a fresh setup if their saved slot duration no longer matches the configured slot duration
 - unit coverage and live smoke validation against a running Home Assistant instance
 
 Not implemented yet:
@@ -33,13 +34,26 @@ Not implemented yet:
 - persisted runtime history
 - frontend-specific grouping, labels, or block abstractions
 
+## Slot duration configuration
+
+The only slot-duration setting is `SCHEDULE_SLOT_MINUTES` in `custom_components/helman/const.py`.
+
+Technical constraint:
+
+- `SCHEDULE_SLOT_MINUTES` must be a positive divisor of `60`
+
+Persistence behavior:
+
+- persisted schedule documents store the slot duration that was active when they were written
+- if the configured slot duration changes later, persisted schedule data is reset on startup and treated as a fresh setup
+
 ## Consumer-facing model
 
 The schedule is intentionally slot-native.
 
 - horizon: next `48` hours
-- slot size: `15` minutes
-- response grid size: `192` slots
+- slot size: configured by `SCHEDULE_SLOT_MINUTES` in `custom_components/helman/const.py`
+- response grid size: derived from the `48` hour horizon and the configured slot size
 - slot id: timezone-aware ISO 8601 timestamp representing the slot start
 - missing persisted slot = implicit `normal`
 
@@ -158,7 +172,7 @@ Response shape:
       }
     },
     {
-      "id": "2026-03-20T21:15:00+01:00",
+      "id": "2026-03-20T22:00:00+01:00",
       "action": {
         "kind": "normal"
       }
@@ -260,7 +274,7 @@ Slot rules:
 - at least one slot must be provided
 - slot ids must be unique within a request
 - slot ids must be timezone-aware ISO timestamps
-- slot ids must align to `15` minute boundaries
+- slot ids must align to the configured `SCHEDULE_SLOT_MINUTES` boundary
 - slot ids must fall inside the rolling `48` hour horizon
 
 Action rules:
