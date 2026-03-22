@@ -63,6 +63,9 @@ class BatteryCapacityForecastBuilder:
 
         house_status = house_forecast.get("status")
         if house_status == "insufficient_history":
+            _LOGGER.warning(
+                "Battery forecast insufficient_history: house forecast has insufficient history"
+            )
             return self._make_payload(
                 status="insufficient_history",
                 settings=settings,
@@ -70,7 +73,9 @@ class BatteryCapacityForecastBuilder:
                 model=model,
             )
         if house_status != "available":
-            _LOGGER.warning("Battery forecast unavailable: house_status=%s", house_status)
+            _LOGGER.warning(
+                "Battery forecast unavailable: house_status=%s", house_status
+            )
             return self._make_payload(
                 status="unavailable",
                 settings=settings,
@@ -80,7 +85,9 @@ class BatteryCapacityForecastBuilder:
 
         solar_status = solar_forecast.get("status")
         if solar_status in {"not_configured", "unavailable"}:
-            _LOGGER.warning("Battery forecast unavailable: solar_status=%s", solar_status)
+            _LOGGER.warning(
+                "Battery forecast unavailable: solar_status=%s", solar_status
+            )
             return self._make_payload(
                 status="unavailable",
                 settings=settings,
@@ -97,6 +104,7 @@ class BatteryCapacityForecastBuilder:
             minute=0, second=0, microsecond=0
         )
         next_hour_start = current_hour_start + timedelta(hours=1)
+        next_hour_start = self._normalize_local(next_hour_start)
         first_duration_hours = (
             next_hour_start - started_at_local
         ).total_seconds() / 3600
@@ -132,7 +140,9 @@ class BatteryCapacityForecastBuilder:
                 hour_start = current_hour_start
                 baseline_house_kwh = current_hour_house_value * slot_duration_hours
             else:
-                hour_start = next_hour_start + timedelta(hours=slot_index - 1)
+                hour_start = self._normalize_local(
+                    next_hour_start + timedelta(hours=slot_index - 1)
+                )
                 slot_start = hour_start
                 slot_duration_hours = 1.0
                 hourly_house_value = house_series_by_hour.get(hour_start)
@@ -400,6 +410,16 @@ class BatteryCapacityForecastBuilder:
     @staticmethod
     def _hour_start(value: datetime) -> datetime:
         return dt_util.as_local(value).replace(minute=0, second=0, microsecond=0)
+
+    @staticmethod
+    def _normalize_local(value: datetime) -> datetime:
+        """Normalize a local datetime to resolve DST gap times.
+
+        Wall-clock arithmetic (datetime + timedelta) can produce non-existent
+        times during spring-forward gaps (e.g. 02:00 when clocks jump to 03:00).
+        astimezone forces a UTC round-trip that resolves these to valid times.
+        """
+        return value.astimezone(value.tzinfo)
 
     @staticmethod
     def _slot_end(slot_start: datetime, duration_hours: float) -> datetime:

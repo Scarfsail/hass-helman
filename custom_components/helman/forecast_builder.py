@@ -61,8 +61,18 @@ class HelmanForecastBuilder:
             status = "available"
         elif entities_with_points > 0:
             status = "partial"
+            _LOGGER.warning(
+                "Solar forecast partial: %d/%d daily energy entities have points",
+                entities_with_points,
+                len(daily_entity_ids),
+            )
         else:
             status = "unavailable"
+            _LOGGER.warning(
+                "Solar forecast unavailable: none of %d daily energy entities "
+                "have forecast points",
+                len(daily_entity_ids),
+            )
 
         remaining_today_entity_id = self._read_entity_id(
             self._read_dict(solar_config.get("entities")).get("remaining_today_energy_forecast")
@@ -194,8 +204,18 @@ class HelmanForecastBuilder:
             status = "available"
         elif current_sell_price is not None or points:
             status = "partial"
+            _LOGGER.warning(
+                "Grid forecast partial: current_sell_price=%s, points_count=%d",
+                current_sell_price,
+                len(points),
+            )
         else:
             status = "unavailable"
+            _LOGGER.warning(
+                "Grid forecast unavailable: no sell price and no forecast points "
+                "for %s",
+                sell_price_entity_id,
+            )
 
         return {
             "status": status,

@@ -105,6 +105,12 @@ class ConsumptionForecastBuilder:
         )
 
         if history_days < min_history_days:
+            _LOGGER.warning(
+                "House consumption forecast insufficient_history: "
+                "%d days available, %d required",
+                history_days,
+                min_history_days,
+            )
             return self._make_payload(
                 status="insufficient_history",
                 training_window_days=training_window_days,
@@ -142,7 +148,10 @@ class ConsumptionForecastBuilder:
         )
 
         for i in range(self._HORIZON_HOURS):
-            forecast_dt = forecast_start + timedelta(hours=i)
+            # astimezone normalizes DST gap times (e.g. spring-forward 02:00→03:00)
+            forecast_dt = (forecast_start + timedelta(hours=i)).astimezone(
+                forecast_start.tzinfo
+            )
             series.append(
                 self._build_forecast_entry(
                     forecast_dt,
