@@ -345,7 +345,9 @@ class BatteryCapacityForecastBuilder:
     def _read_current_hour_house_value(
         self, house_forecast: dict[str, Any], current_hour_start: datetime
     ) -> float | None:
-        current_hour = house_forecast.get("currentHour")
+        current_hour = house_forecast.get("currentSlot")
+        if not isinstance(current_hour, dict):
+            current_hour = house_forecast.get("currentHour")
         if not isinstance(current_hour, dict):
             return None
 

@@ -210,7 +210,7 @@ Generalize the shared time-boundary helpers so future and actual-history paths c
 - No default hourly contract regressions are introduced.
 - Done: backend unit tests passed, local websocket validation confirmed the default and explicit hourly requests match materially, the live hourly payload remained stable, visible actual-history timestamps were ordered and unique, and future-shaped `15`-minute requests still return `not_supported` until later increments implement them.
 
-## Increment 3 — Canonical 15-minute house forecast
+## Increment 3 — Canonical 15-minute house forecast (done)
 
 ### Goal
 
@@ -261,6 +261,7 @@ Move house forecast generation to canonical 15-minute slots while keeping the cu
 - House forecast is canonical at 15 minutes.
 - Stored snapshot compatibility is handled explicitly.
 - The hourly frontend path remains available through aggregated `60`-minute responses.
+- Done: backend unit tests passed, local websocket validation confirmed the default hourly response still worked, `granularity=60` with `forecast_days=1` returned `resolution: "hour"` with `currentSlot` and `24` series entries, `granularity=15` with `forecast_days=1` returned `resolution: "quarter_hour"` with `currentSlot` and `96` series entries, and aligned quarter-hour house values summed to the corresponding hourly bucket.
 
 ## Increment 4 — Canonical 15-minute battery forecast
 

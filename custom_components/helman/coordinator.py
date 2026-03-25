@@ -27,14 +27,19 @@ from .const import (
     CONSUMPTION_TOTAL_ENTITY_ID,
     DEFAULT_FORECAST_DAYS,
     DEFAULT_FORECAST_GRANULARITY_MINUTES,
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
+    MAX_FORECAST_DAYS,
     PRODUCTION_TOTAL_ENTITY_ID,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
+from .forecast_aggregation import get_forecast_resolution
 from .forecast_builder import HelmanForecastBuilder
 from .forecast_request import ensure_supported_forecast_request
+from .house_forecast_response import build_house_forecast_response
+from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
@@ -327,6 +332,15 @@ class HelmanCoordinator:
         if self._cached_forecast.get("configFingerprint") != config_fingerprint:
             return False
 
+        if (
+            self._cached_forecast.get("sourceGranularityMinutes")
+            != FORECAST_CANONICAL_GRANULARITY_MINUTES
+        ):
+            return False
+
+        if self._cached_forecast.get("forecastDaysAvailable") != MAX_FORECAST_DAYS:
+            return False
+
         status = self._cached_forecast.get("status")
         if total_energy_entity_id is None:
             return status == "not_configured"
@@ -359,34 +373,36 @@ class HelmanCoordinator:
         if self._cached_forecast is None or self._cached_forecast.get("status") != "available":
             return True
 
-        return self._has_current_hour_forecast(
+        return self._has_current_slot_forecast(
             self._cached_forecast,
             reference_time=reference_time,
         )
 
     @staticmethod
-    def _has_current_hour_forecast(
+    def _has_current_slot_forecast(
         snapshot: dict[str, Any], reference_time: datetime | None = None
     ) -> bool:
-        current_hour = snapshot.get("currentHour")
-        if not isinstance(current_hour, dict):
+        current_slot = snapshot.get("currentSlot")
+        if not isinstance(current_slot, dict):
             return False
 
-        timestamp = current_hour.get("timestamp")
+        timestamp = current_slot.get("timestamp")
         if not isinstance(timestamp, str):
             return False
 
-        current_hour_dt = dt_util.parse_datetime(timestamp)
-        if current_hour_dt is None:
+        current_slot_dt = dt_util.parse_datetime(timestamp)
+        if current_slot_dt is None:
             return False
 
-        local_snapshot_hour = dt_util.as_local(current_hour_dt).replace(
-            minute=0, second=0, microsecond=0
+        local_snapshot_slot = get_local_current_slot_start(
+            current_slot_dt,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
         )
-        local_current_hour = (reference_time or dt_util.now()).replace(
-            minute=0, second=0, microsecond=0
+        local_current_slot = get_local_current_slot_start(
+            reference_time or dt_util.now(),
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
         )
-        return local_snapshot_hour == local_current_hour
+        return local_snapshot_slot == local_current_slot
 
     async def get_forecast(
         self,
@@ -420,7 +436,7 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
             reference_time=request_now,
         ):
-            result["house_consumption"] = self._cached_forecast
+            canonical_house_forecast = self._cached_forecast
         else:
             if total_energy_entity_id is not None:
                 await self._async_refresh_forecast(reference_time=request_now)
@@ -432,21 +448,38 @@ class HelmanCoordinator:
                 config_fingerprint=config_fingerprint,
                 reference_time=request_now,
             ):
-                result["house_consumption"] = self._cached_forecast
+                canonical_house_forecast = self._cached_forecast
             else:
                 self._cached_forecast = None
                 self._invalidate_battery_forecast_cache()
-                result["house_consumption"] = ConsumptionForecastBuilder._make_payload(
+                canonical_house_forecast = ConsumptionForecastBuilder._make_payload(
                     status="not_configured"
                     if total_energy_entity_id is None
                     else "unavailable",
                     training_window_days=training_window_days,
                     min_history_days=min_history_days,
                     config_fingerprint=config_fingerprint,
+                    resolution=get_forecast_resolution(
+                        FORECAST_CANONICAL_GRANULARITY_MINUTES
+                    ),
+                    horizon_hours=MAX_FORECAST_DAYS * 24,
+                    source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+                    forecast_days_available=MAX_FORECAST_DAYS,
+                    alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
                 )
+        result["house_consumption"] = build_house_forecast_response(
+            canonical_house_forecast,
+            granularity=granularity,
+            forecast_days=forecast_days,
+        )
+        battery_house_forecast = build_house_forecast_response(
+            canonical_house_forecast,
+            granularity=DEFAULT_FORECAST_GRANULARITY_MINUTES,
+            forecast_days=DEFAULT_FORECAST_DAYS,
+        )
         result["battery_capacity"] = await self._async_get_battery_forecast(
             solar_forecast=result["solar"],
-            house_forecast=result["house_consumption"],
+            house_forecast=battery_house_forecast,
             started_at=request_now,
         )
         return result
@@ -716,7 +749,11 @@ class HelmanCoordinator:
         """Build a new house forecast snapshot, cache it, and persist it."""
         try:
             builder = ConsumptionForecastBuilder(self._hass, self._storage.config)
-            snapshot = await builder.build(reference_time=reference_time)
+            snapshot = await builder.build(
+                reference_time=reference_time,
+                forecast_days=MAX_FORECAST_DAYS,
+                padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
+            )
             self._cached_forecast = snapshot
             self._invalidate_battery_forecast_cache()
             await self._storage.async_save_snapshot(snapshot)
@@ -756,7 +793,7 @@ class HelmanCoordinator:
         return
 
     def _start_forecast_refresh(self) -> None:
-        """Start the hourly house forecast refresh schedule."""
+        """Start the slot-aligned house forecast refresh schedule."""
         if self._unsub_forecast_refresh is not None:
             return
 
@@ -765,7 +802,10 @@ class HelmanCoordinator:
             self._hass.async_create_task(self._async_refresh_forecast())
 
         self._unsub_forecast_refresh = async_track_time_change(
-            self._hass, _on_forecast_interval, minute=0, second=0
+            self._hass,
+            _on_forecast_interval,
+            minute=[0, 15, 30, 45],
+            second=0,
         )
 
     def _stop_forecast_refresh(self) -> None:

@@ -20,6 +20,11 @@ _BATTERY_OR_FIELDS = (
     "limitedByDischargePower",
 )
 _HOUSE_BAND_FIELDS = ("value", "lower", "upper")
+_RESOLUTION_BY_GRANULARITY = {
+    15: "quarter_hour",
+    30: "half_hour",
+    60: "hour",
+}
 
 
 def get_aggregation_group_size(
@@ -36,6 +41,15 @@ def get_aggregation_group_size(
             "Target granularity must be a whole multiple of source granularity"
         )
     return target_granularity_minutes // source_granularity_minutes
+
+
+def get_forecast_resolution(granularity_minutes: int) -> str:
+    resolution = _RESOLUTION_BY_GRANULARITY.get(granularity_minutes)
+    if resolution is None:
+        raise ValueError(
+            f"Unsupported forecast granularity for resolution mapping: {granularity_minutes}"
+        )
+    return resolution
 
 
 def aggregate_summed_points(

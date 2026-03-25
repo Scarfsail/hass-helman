@@ -350,7 +350,7 @@ class ForecastRequestContractTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_non_default_request_is_rejected_until_later_increment(self):
+    async def test_non_default_request_is_forwarded_once_increment_supports_it(self):
         coordinator = FakeCoordinator()
         connection = FakeConnection()
         msg = {
@@ -366,19 +366,12 @@ class ForecastRequestContractTests(unittest.IsolatedAsyncioTestCase):
 
         await ws_get_forecast(FakeHass(coordinator), connection, msg)
 
-        self.assertEqual(coordinator.calls, [])
         self.assertEqual(
-            connection.errors,
-            [
-                (
-                    1,
-                    "not_supported",
-                    "Only granularity=60 and forecast_days=7 are supported until "
-                    "later 15-minute forecast increments land",
-                )
-            ],
+            coordinator.calls,
+            [{"granularity": 15, "forecast_days": 1}],
         )
-        self.assertEqual(connection.results, [])
+        self.assertEqual(connection.results, [(1, {"ok": True})])
+        self.assertEqual(connection.errors, [])
 
     def test_invalid_granularity_is_rejected(self):
         with self.assertRaises(vol.Invalid):

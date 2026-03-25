@@ -11,14 +11,21 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    FORECAST_GRANULARITY_OPTIONS,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
+    MAX_FORECAST_DAYS,
 )
 from .consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
+from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import (
+    get_local_current_slot_start,
     get_today_completed_local_hours,
+    get_today_completed_local_slots,
     query_cumulative_hourly_energy_changes,
+    query_slot_energy_changes,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,16 +43,35 @@ class _ConsumerHistoryData:
     query_succeeded: bool
 
 
+@dataclass(frozen=True)
+class _ConsumerSlotHistoryData:
+    entity_id: str
+    label: str
+    values_by_slot: dict[datetime, float]
+    query_succeeded: bool
+
+
 class ConsumptionForecastBuilder:
     """Builds the house_consumption forecast payload."""
 
-    _HORIZON_HOURS = 168
+    _CANONICAL_GRANULARITY_MINUTES = FORECAST_CANONICAL_GRANULARITY_MINUTES
+    _SLOTS_PER_HOUR = 60 // _CANONICAL_GRANULARITY_MINUTES
+    _SLOTS_PER_DAY = 24 * _SLOTS_PER_HOUR
+    _MAX_ALIGNMENT_PADDING_SLOTS = (
+        max(FORECAST_GRANULARITY_OPTIONS) // _CANONICAL_GRANULARITY_MINUTES
+    ) - 1
 
     def __init__(self, hass: HomeAssistant, config: dict) -> None:
         self._hass = hass
         self._config = config
 
-    async def build(self, reference_time: datetime | None = None) -> dict[str, Any]:
+    async def build(
+        self,
+        reference_time: datetime | None = None,
+        *,
+        forecast_days: int = MAX_FORECAST_DAYS,
+        padding_slots: int = 0,
+    ) -> dict[str, Any]:
         power_devices = self._read_dict(self._config.get("power_devices"))
         house_config = self._read_dict(power_devices.get("house"))
         forecast_config = self._read_dict(house_config.get("forecast"))
@@ -71,6 +97,11 @@ class ConsumptionForecastBuilder:
             consumers_config=consumers_config,
         )
         local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
+        canonical_resolution = get_forecast_resolution(
+            self._CANONICAL_GRANULARITY_MINUTES
+        )
+        horizon_hours = forecast_days * 24
+        alignment_padding_slots = max(0, padding_slots)
 
         if total_energy_entity_id is None:
             return self._make_payload(
@@ -78,6 +109,11 @@ class ConsumptionForecastBuilder:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
+                resolution=canonical_resolution,
+                horizon_hours=horizon_hours,
+                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                forecast_days_available=forecast_days,
+                alignment_padding_slots=alignment_padding_slots,
             )
 
         # Query house total hourly history
@@ -97,6 +133,11 @@ class ConsumptionForecastBuilder:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
+                resolution=canonical_resolution,
+                horizon_hours=horizon_hours,
+                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                forecast_days_available=forecast_days,
+                alignment_padding_slots=alignment_padding_slots,
             )
 
         history_days = self._compute_history_days(
@@ -117,6 +158,11 @@ class ConsumptionForecastBuilder:
                 min_history_days=min_history_days,
                 history_days=history_days,
                 config_fingerprint=config_fingerprint,
+                resolution=canonical_resolution,
+                horizon_hours=horizon_hours,
+                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                forecast_days_available=forecast_days,
+                alignment_padding_slots=alignment_padding_slots,
             )
 
         consumer_histories = await self._query_consumer_histories(
@@ -134,40 +180,31 @@ class ConsumptionForecastBuilder:
             consumer_histories,
         )
 
-        current_hour = self._build_forecast_entry(
-            local_now.replace(minute=0, second=0, microsecond=0),
+        current_slot_start = get_local_current_slot_start(
+            local_now,
+            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+        )
+        current_slot = self._build_forecast_entry(
+            current_slot_start,
             non_deferrable_profile=non_deferrable_profile,
             consumers_config=consumers_config,
             consumer_profiles=consumer_profiles,
+            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
         )
 
-        # Generate forecast series starting from the next full hour.
-        # Use UTC arithmetic to avoid DST gap times — wall-clock timedelta
-        # addition can land on non-existent local times (e.g. 02:00 during
-        # spring-forward), producing duplicate entries.
-        series: list[dict[str, Any]] = []
-        forecast_start = (local_now + timedelta(hours=1)).replace(
-            minute=0, second=0, microsecond=0
+        series = self._build_series(
+            current_slot_start=current_slot_start,
+            non_deferrable_profile=non_deferrable_profile,
+            consumers_config=consumers_config,
+            consumer_profiles=consumer_profiles,
+            forecast_days=forecast_days,
+            padding_slots=alignment_padding_slots,
         )
-        forecast_start_utc = dt_util.as_utc(forecast_start)
 
-        for i in range(self._HORIZON_HOURS):
-            forecast_dt = dt_util.as_local(
-                forecast_start_utc + timedelta(hours=i)
-            )
-            series.append(
-                self._build_forecast_entry(
-                    forecast_dt,
-                    non_deferrable_profile=non_deferrable_profile,
-                    consumers_config=consumers_config,
-                    consumer_profiles=consumer_profiles,
-                )
-            )
-
-        actual_history = self._build_actual_history(
-            house_by_ts=house_by_ts,
-            consumers=consumer_histories,
-            completed_hours=get_today_completed_local_hours(local_now),
+        actual_history = await self._build_actual_history(
+            total_energy_entity_id=total_energy_entity_id,
+            consumers_config=consumers_config,
+            reference_time=local_now,
         )
 
         return self._make_payload(
@@ -178,8 +215,13 @@ class ConsumptionForecastBuilder:
             model=HOUSE_FORECAST_MODEL_ID,
             config_fingerprint=config_fingerprint,
             actual_history=actual_history,
-            current_hour=current_hour,
+            current_slot=current_slot,
             series=series,
+            resolution=canonical_resolution,
+            horizon_hours=horizon_hours,
+            source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            forecast_days_available=forecast_days,
+            alignment_padding_slots=alignment_padding_slots,
         )
 
     async def _query_consumer_histories(
@@ -265,17 +307,49 @@ class ConsumptionForecastBuilder:
 
         return non_deferrable_profile, consumer_profiles
 
-    def _build_actual_history(
+    async def _build_actual_history(
         self,
         *,
-        house_by_ts: dict[int, float],
-        consumers: list[_ConsumerHistoryData],
-        completed_hours: list[datetime],
+        total_energy_entity_id: str,
+        consumers_config: list[dict[str, Any]],
+        reference_time: datetime,
+    ) -> list[dict[str, Any]]:
+        try:
+            house_by_slot = await self._query_slot_history(
+                total_energy_entity_id,
+                reference_time=reference_time,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to query Recorder slot history for %s",
+                total_energy_entity_id,
+            )
+            return []
+
+        consumers = await self._query_consumer_slot_histories(
+            consumers_config,
+            reference_time=reference_time,
+        )
+        return self._build_slot_actual_history(
+            house_by_slot=house_by_slot,
+            consumers=consumers,
+            completed_slots=get_today_completed_local_slots(
+                reference_time,
+                interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            ),
+        )
+
+    def _build_slot_actual_history(
+        self,
+        *,
+        house_by_slot: dict[datetime, float],
+        consumers: list[_ConsumerSlotHistoryData],
+        completed_slots: list[datetime],
     ) -> list[dict[str, Any]]:
         actual_history: list[dict[str, Any]] = []
-        for hour_start in completed_hours:
-            timestamp_key = int(dt_util.as_utc(hour_start).timestamp())
-            house_total = house_by_ts.get(timestamp_key)
+        for slot_start in completed_slots:
+            timestamp_key = dt_util.as_utc(slot_start)
+            house_total = house_by_slot.get(timestamp_key)
             if house_total is None:
                 continue
 
@@ -287,7 +361,7 @@ class ConsumptionForecastBuilder:
                     skip_hour = True
                     break
 
-                value = consumer.values_by_ts.get(timestamp_key)
+                value = consumer.values_by_slot.get(timestamp_key)
                 if value is None:
                     skip_hour = True
                     break
@@ -311,7 +385,7 @@ class ConsumptionForecastBuilder:
 
             actual_history.append(
                 {
-                    "timestamp": hour_start.isoformat(),
+                    "timestamp": slot_start.isoformat(),
                     "nonDeferrable": {
                         "value": round(max(0.0, non_deferrable), 4),
                     },
@@ -320,6 +394,59 @@ class ConsumptionForecastBuilder:
             )
 
         return actual_history
+
+    async def _query_slot_history(
+        self,
+        entity_id: str,
+        *,
+        reference_time: datetime,
+    ) -> dict[datetime, float]:
+        return await query_slot_energy_changes(
+            self._hass,
+            entity_id,
+            reference_time,
+            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+        )
+
+    async def _query_consumer_slot_histories(
+        self,
+        consumers_config: list[dict[str, Any]],
+        *,
+        reference_time: datetime,
+    ) -> list[_ConsumerSlotHistoryData]:
+        consumer_histories: list[_ConsumerSlotHistoryData] = []
+        for consumer in consumers_config:
+            entity_id = consumer["energy_entity_id"]
+            try:
+                values_by_slot = await self._query_slot_history(
+                    entity_id,
+                    reference_time=reference_time,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to query slot history for deferrable consumer %s, using empty",
+                    entity_id,
+                )
+                consumer_histories.append(
+                    _ConsumerSlotHistoryData(
+                        entity_id=entity_id,
+                        label=consumer["label"],
+                        values_by_slot={},
+                        query_succeeded=False,
+                    )
+                )
+                continue
+
+            consumer_histories.append(
+                _ConsumerSlotHistoryData(
+                    entity_id=entity_id,
+                    label=consumer["label"],
+                    values_by_slot=values_by_slot,
+                    query_succeeded=True,
+                )
+            )
+
+        return consumer_histories
 
     async def _query_hourly_history(
         self,
@@ -380,26 +507,63 @@ class ConsumptionForecastBuilder:
         non_deferrable_profile: HourOfWeekWinsorizedMeanProfile,
         consumers_config: list[dict[str, Any]],
         consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile],
+        interval_minutes: int = 60,
     ) -> dict[str, Any]:
         weekday = forecast_dt.weekday()
         hour = forecast_dt.hour
-        non_deferrable_band = non_deferrable_profile.forecast(weekday, hour)
+        scale = interval_minutes / 60
+        non_deferrable_band = ConsumptionForecastBuilder._scale_band(
+            non_deferrable_profile.forecast(weekday, hour).to_dict(),
+            scale=scale,
+        )
 
         deferrable_list: list[dict[str, Any]] = []
         for consumer in consumers_config:
             eid = consumer["energy_entity_id"]
-            consumer_band = consumer_profiles[eid].forecast(weekday, hour)
+            consumer_band = ConsumptionForecastBuilder._scale_band(
+                consumer_profiles[eid].forecast(weekday, hour).to_dict(),
+                scale=scale,
+            )
             deferrable_list.append({
                 "entityId": eid,
                 "label": consumer["label"],
-                **consumer_band.to_dict(),
+                **consumer_band,
             })
 
         return {
             "timestamp": forecast_dt.isoformat(),
-            "nonDeferrable": non_deferrable_band.to_dict(),
+            "nonDeferrable": non_deferrable_band,
             "deferrableConsumers": deferrable_list,
         }
+
+    def _build_series(
+        self,
+        *,
+        current_slot_start: datetime,
+        non_deferrable_profile: HourOfWeekWinsorizedMeanProfile,
+        consumers_config: list[dict[str, Any]],
+        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile],
+        forecast_days: int,
+        padding_slots: int,
+    ) -> list[dict[str, Any]]:
+        series: list[dict[str, Any]] = []
+        slot_duration = timedelta(minutes=self._CANONICAL_GRANULARITY_MINUTES)
+        forecast_start_utc = dt_util.as_utc(current_slot_start) + slot_duration
+        total_slots = (forecast_days * self._SLOTS_PER_DAY) + max(0, padding_slots)
+        for index in range(total_slots):
+            forecast_dt = dt_util.as_local(
+                forecast_start_utc + (slot_duration * index)
+            )
+            series.append(
+                self._build_forecast_entry(
+                    forecast_dt,
+                    non_deferrable_profile=non_deferrable_profile,
+                    consumers_config=consumers_config,
+                    consumer_profiles=consumer_profiles,
+                    interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                )
+            )
+        return series
 
     @staticmethod
     def _make_payload(
@@ -407,19 +571,24 @@ class ConsumptionForecastBuilder:
         status: str,
         training_window_days: int,
         min_history_days: int,
+        resolution: str,
+        horizon_hours: int,
+        source_granularity_minutes: int,
+        forecast_days_available: int,
+        alignment_padding_slots: int = 0,
         history_days: int = 0,
         model: str | None = None,
         config_fingerprint: str | None = None,
         actual_history: list[dict[str, Any]] | None = None,
-        current_hour: dict[str, Any] | None = None,
+        current_slot: dict[str, Any] | None = None,
         series: list | None = None,
     ) -> dict[str, Any]:
         payload = {
             "status": status,
             "generatedAt": dt_util.now().isoformat(),
             "unit": "kWh",
-            "resolution": "hour",
-            "horizonHours": 168,
+            "resolution": resolution,
+            "horizonHours": horizon_hours,
             "trainingWindowDays": training_window_days,
             "historyDaysAvailable": history_days,
             "requiredHistoryDays": min_history_days,
@@ -427,10 +596,25 @@ class ConsumptionForecastBuilder:
             "configFingerprint": config_fingerprint,
             "actualHistory": actual_history if actual_history is not None else [],
             "series": series if series is not None else [],
+            "sourceGranularityMinutes": source_granularity_minutes,
+            "forecastDaysAvailable": forecast_days_available,
+            "alignmentPaddingSlots": alignment_padding_slots,
         }
-        if current_hour is not None:
-            payload["currentHour"] = current_hour
+        if current_slot is not None:
+            payload["currentSlot"] = current_slot
         return payload
+
+    @staticmethod
+    def _scale_band(
+        band: dict[str, Any],
+        *,
+        scale: float,
+    ) -> dict[str, Any]:
+        return {
+            key: round(float(value) * scale, 4)
+            for key, value in band.items()
+            if isinstance(value, (int, float))
+        }
 
     @staticmethod
     def _read_dict(raw_value: Any) -> dict[str, Any]:
