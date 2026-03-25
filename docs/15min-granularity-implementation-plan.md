@@ -111,7 +111,7 @@ Notes:
 | 1 | Request contract and baseline protection (done) | websocket + coordinator + tests | Yes |
 | 2 | Slot-aware recorder helpers (done) | recorder + actual history helpers + tests | Yes |
 | 3 | Canonical 15-minute house forecast | house builder + snapshot compatibility + tests | Yes |
-| 4 | Canonical 15-minute battery forecast | battery builder + solar semantics + tests | Yes |
+| 4 | Canonical 15-minute battery forecast (done) | battery builder + solar semantics + tests | Yes |
 | 5 | Aggregation, cache, and rollout closeout | coordinator + cache + docs + tests | Yes |
 
 ## Increment 1 — Request contract and baseline protection (done)
@@ -263,7 +263,7 @@ Move house forecast generation to canonical 15-minute slots while keeping the cu
 - The hourly frontend path remains available through aggregated `60`-minute responses.
 - Done: backend unit tests passed, local websocket validation confirmed the default hourly response still worked, `granularity=60` with `forecast_days=1` returned `resolution: "hour"` with `currentSlot` and `24` series entries, `granularity=15` with `forecast_days=1` returned `resolution: "quarter_hour"` with `currentSlot` and `96` series entries, and aligned quarter-hour house values summed to the corresponding hourly bucket.
 
-## Increment 4 — Canonical 15-minute battery forecast
+## Increment 4 — Canonical 15-minute battery forecast (done)
 
 ### Goal
 
@@ -313,6 +313,7 @@ Move the battery simulation to 15-minute slots and remove the current solar-ener
 - Battery forecast is canonical at 15 minutes.
 - The known solar-scaling bug is removed.
 - Default hourly consumers still get coherent data through aggregation.
+- Done: backend unit tests passed, local websocket validation after restart confirmed `granularity=15` returned `battery_capacity.resolution: "quarter_hour"` with `96` series entries and a fractional first slot `<= 0.25` hours, `granularity=60` returned `resolution: "hour"` with `24` series entries whose first bucket matched the grouped quarter-hour battery entries, and the live Home Assistant instance's hourly solar `wh_period` inputs were normalized into canonical quarter-hour battery slots without truncating the forecast after the first entry.
 
 ## Increment 5 — Aggregation, cache, and rollout closeout
 

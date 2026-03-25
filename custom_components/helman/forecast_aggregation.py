@@ -121,6 +121,25 @@ def aggregate_battery_series(
     return aggregated
 
 
+def aggregate_battery_history_entries(
+    entries: Sequence[dict[str, Any]],
+    *,
+    group_size: int,
+) -> list[dict[str, Any]]:
+    aggregated: list[dict[str, Any]] = []
+    for chunk in _chunk_entries(entries, group_size):
+        _require_all_fields(chunk, "startSocPct")
+        _require_all_fields(chunk, "socPct")
+        aggregated.append(
+            {
+                "timestamp": _require_timestamp(chunk[0]),
+                "startSocPct": chunk[0]["startSocPct"],
+                "socPct": chunk[-1]["socPct"],
+            }
+        )
+    return aggregated
+
+
 def _aggregate_points(
     points: Sequence[dict[str, Any]],
     *,

@@ -19,9 +19,17 @@ from .battery_state import (
 from .const import (
     BATTERY_CAPACITY_FORECAST_HORIZON_HOURS,
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
+from .forecast_aggregation import get_forecast_resolution
+from .recorder_hourly_series import get_local_current_slot_start
 
 _EPSILON = 1e-9
+_CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
+_CANONICAL_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
+_CANONICAL_SLOT_COUNT = (
+    BATTERY_CAPACITY_FORECAST_HORIZON_HOURS * 60
+) // FORECAST_CANONICAL_GRANULARITY_MINUTES
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -100,26 +108,23 @@ class BatteryCapacityForecastBuilder:
             started_at,
         )
         started_at_local = dt_util.as_local(started_at)
-        current_hour_start = started_at_local.replace(
-            minute=0, second=0, microsecond=0
+        current_slot_start = get_local_current_slot_start(
+            started_at_local,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
         )
-        # Use UTC arithmetic to avoid DST gap times.  Wall-clock
-        # timedelta addition can land on non-existent local times
-        # (e.g. 02:00 during spring-forward) that break dict lookups.
-        next_hour_utc = dt_util.as_utc(current_hour_start) + timedelta(hours=1)
-        next_hour_start = dt_util.as_local(next_hour_utc)
+        next_slot_start = self._advance_slots(current_slot_start, slot_count=1)
         first_duration_hours = (
-            next_hour_start - started_at_local
+            next_slot_start - started_at_local
         ).total_seconds() / 3600
 
-        current_hour_house_value = self._read_current_hour_house_value(
-            house_forecast, current_hour_start
+        current_slot_house_value = self._read_current_slot_house_value(
+            house_forecast, current_slot_start
         )
-        if current_hour_house_value is None:
+        if current_slot_house_value is None:
             _LOGGER.warning(
-                "Battery forecast unavailable: current_hour_house_value is None "
-                "(current_hour_start=%s)",
-                current_hour_start.isoformat(),
+                "Battery forecast unavailable: current_slot_house_value is None "
+                "(current_slot_start=%s)",
+                current_slot_start.isoformat(),
             )
             return self._make_payload(
                 status="unavailable",
@@ -128,36 +133,41 @@ class BatteryCapacityForecastBuilder:
                 model=model,
             )
 
-        house_series_by_hour = self._build_house_series_map(house_forecast)
-        solar_by_hour = self._build_solar_hour_map(solar_forecast)
+        house_series_by_slot = self._build_house_series_map(house_forecast)
+        solar_by_slot = self._build_solar_slot_map(solar_forecast)
 
         series: list[dict[str, Any]] = []
         coverage_until: str | None = None
         partial_reason: str | None = None
         remaining_energy_kwh = live_state.current_remaining_energy_kwh
+        next_slot_start_utc = dt_util.as_utc(next_slot_start)
 
-        for slot_index in range(BATTERY_CAPACITY_FORECAST_HORIZON_HOURS):
+        for slot_index in range(_CANONICAL_SLOT_COUNT):
             if slot_index == 0:
                 slot_start = started_at_local
                 slot_duration_hours = first_duration_hours
-                hour_start = current_hour_start
-                baseline_house_kwh = current_hour_house_value * slot_duration_hours
-            else:
-                hour_start = dt_util.as_local(
-                    next_hour_utc + timedelta(hours=slot_index - 1)
+                slot_key = current_slot_start
+                baseline_house_kwh = (
+                    current_slot_house_value
+                    * self._get_slot_fraction(slot_duration_hours)
                 )
-                slot_start = hour_start
-                slot_duration_hours = 1.0
-                hourly_house_value = house_series_by_hour.get(hour_start)
-                if hourly_house_value is None:
+            else:
+                slot_key = dt_util.as_local(
+                    next_slot_start_utc
+                    + (_CANONICAL_SLOT_DURATION * (slot_index - 1))
+                )
+                slot_start = slot_key
+                slot_duration_hours = _CANONICAL_SLOT_HOURS
+                house_slot_value = house_series_by_slot.get(slot_key)
+                if house_slot_value is None:
                     _LOGGER.warning(
                         "Battery forecast unavailable: house series missing "
-                        "slot_index=%d hour_start=%s (map has %d keys, first=%s, last=%s)",
+                        "slot_index=%d slot_start=%s (map has %d keys, first=%s, last=%s)",
                         slot_index,
-                        hour_start.isoformat(),
-                        len(house_series_by_hour),
-                        min(house_series_by_hour).isoformat() if house_series_by_hour else "N/A",
-                        max(house_series_by_hour).isoformat() if house_series_by_hour else "N/A",
+                        slot_key.isoformat(),
+                        len(house_series_by_slot),
+                        min(house_series_by_slot).isoformat() if house_series_by_slot else "N/A",
+                        max(house_series_by_slot).isoformat() if house_series_by_slot else "N/A",
                     )
                     return self._make_payload(
                         status="unavailable",
@@ -165,9 +175,9 @@ class BatteryCapacityForecastBuilder:
                         live_state=live_state,
                         model=model,
                     )
-                baseline_house_kwh = hourly_house_value
+                baseline_house_kwh = house_slot_value
 
-            solar_wh = solar_by_hour.get(hour_start)
+            solar_wh = solar_by_slot.get(slot_key)
             if solar_wh is None:
                 partial_reason = (
                     "missing_current_hour_solar"
@@ -176,7 +186,9 @@ class BatteryCapacityForecastBuilder:
                 )
                 break
 
-            solar_kwh = (solar_wh / 1000) * slot_duration_hours
+            solar_kwh = solar_wh / 1000
+            if slot_index == 0:
+                solar_kwh *= self._get_slot_fraction(slot_duration_hours)
             slot, remaining_energy_kwh = self._simulate_slot(
                 slot_start=slot_start,
                 duration_hours=slot_duration_hours,
@@ -223,6 +235,7 @@ class BatteryCapacityForecastBuilder:
                 self._hass,
                 entity_config.capacity_entity_id,
                 reference_time,
+                interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             )
         except Exception:
             _LOGGER.exception(
@@ -342,30 +355,30 @@ class BatteryCapacityForecastBuilder:
             remaining_energy_kwh,
         )
 
-    def _read_current_hour_house_value(
-        self, house_forecast: dict[str, Any], current_hour_start: datetime
+    def _read_current_slot_house_value(
+        self, house_forecast: dict[str, Any], current_slot_start: datetime
     ) -> float | None:
-        current_hour = house_forecast.get("currentSlot")
-        if not isinstance(current_hour, dict):
-            current_hour = house_forecast.get("currentHour")
-        if not isinstance(current_hour, dict):
+        current_slot = house_forecast.get("currentSlot")
+        if not isinstance(current_slot, dict):
+            current_slot = house_forecast.get("currentHour")
+        if not isinstance(current_slot, dict):
             return None
 
-        timestamp = self._parse_timestamp(current_hour.get("timestamp"))
+        timestamp = self._parse_timestamp(current_slot.get("timestamp"))
         if timestamp is None:
             return None
 
-        if self._hour_start(timestamp) != current_hour_start:
+        if dt_util.as_local(timestamp) != current_slot_start:
             return None
 
-        return self._read_house_entry_value(current_hour)
+        return self._read_house_entry_value(current_slot)
 
     def _build_house_series_map(self, house_forecast: dict[str, Any]) -> dict[datetime, float]:
         series = house_forecast.get("series")
         if not isinstance(series, list):
             return {}
 
-        by_hour: dict[datetime, float] = {}
+        by_slot: dict[datetime, float] = {}
         for entry in series:
             if not isinstance(entry, dict):
                 continue
@@ -375,16 +388,16 @@ class BatteryCapacityForecastBuilder:
             if timestamp is None or value is None:
                 continue
 
-            by_hour[self._hour_start(timestamp)] = value
+            by_slot[dt_util.as_local(timestamp)] = value
 
-        return by_hour
+        return by_slot
 
-    def _build_solar_hour_map(self, solar_forecast: dict[str, Any]) -> dict[datetime, float]:
+    def _build_solar_slot_map(self, solar_forecast: dict[str, Any]) -> dict[datetime, float]:
         points = solar_forecast.get("points")
         if not isinstance(points, list):
             return {}
 
-        by_hour: dict[datetime, float] = {}
+        parsed_points: list[tuple[datetime, float]] = []
         for point in points:
             if not isinstance(point, dict):
                 continue
@@ -394,10 +407,26 @@ class BatteryCapacityForecastBuilder:
             if timestamp is None or value is None:
                 continue
 
-            hour_key = self._hour_start(timestamp)
-            by_hour[hour_key] = by_hour.get(hour_key, 0.0) + value
+            parsed_points.append((dt_util.as_local(timestamp), value))
 
-        return by_hour
+        if not parsed_points:
+            return {}
+
+        split_factor = self._get_solar_point_split_factor(parsed_points)
+        slot_value_divisor = split_factor if split_factor > 0 else 1
+        by_slot: dict[datetime, float] = {}
+        for slot_start, value in parsed_points:
+            slot_value = value / slot_value_divisor
+            for split_index in range(slot_value_divisor):
+                expanded_slot_start = self._advance_slots(
+                    slot_start,
+                    slot_count=split_index,
+                )
+                by_slot[expanded_slot_start] = (
+                    by_slot.get(expanded_slot_start, 0.0) + slot_value
+                )
+
+        return by_slot
 
     @staticmethod
     def _read_house_entry_value(entry: dict[str, Any]) -> float | None:
@@ -413,8 +442,10 @@ class BatteryCapacityForecastBuilder:
         return dt_util.parse_datetime(raw_value)
 
     @staticmethod
-    def _hour_start(value: datetime) -> datetime:
-        return dt_util.as_local(value).replace(minute=0, second=0, microsecond=0)
+    def _advance_slots(value: datetime, *, slot_count: int) -> datetime:
+        return dt_util.as_local(
+            dt_util.as_utc(value) + (_CANONICAL_SLOT_DURATION * slot_count)
+        )
 
     @staticmethod
     def _slot_end(slot_start: datetime, duration_hours: float) -> datetime:
@@ -423,6 +454,37 @@ class BatteryCapacityForecastBuilder:
     @staticmethod
     def _round_energy(value: float) -> float:
         return round(value, 4)
+
+    @staticmethod
+    def _get_slot_fraction(duration_hours: float) -> float:
+        return duration_hours / _CANONICAL_SLOT_HOURS
+
+    @staticmethod
+    def _get_solar_point_split_factor(
+        parsed_points: list[tuple[datetime, float]],
+    ) -> int:
+        if len(parsed_points) < 2:
+            return 1
+
+        candidate_intervals: list[int] = []
+        for index in range(1, len(parsed_points)):
+            delta_seconds = (
+                dt_util.as_utc(parsed_points[index][0])
+                - dt_util.as_utc(parsed_points[index - 1][0])
+            ).total_seconds()
+            if delta_seconds <= 0:
+                continue
+            candidate_intervals.append(int(round(delta_seconds / 60)))
+
+        if not candidate_intervals:
+            return 1
+
+        interval_minutes = min(candidate_intervals)
+        if interval_minutes < FORECAST_CANONICAL_GRANULARITY_MINUTES:
+            return 1
+        if interval_minutes % FORECAST_CANONICAL_GRANULARITY_MINUTES != 0:
+            return 1
+        return interval_minutes // FORECAST_CANONICAL_GRANULARITY_MINUTES
 
     @staticmethod
     def _make_payload(
@@ -442,8 +504,11 @@ class BatteryCapacityForecastBuilder:
             "generatedAt": dt_util.now().isoformat(),
             "startedAt": started_at.isoformat() if started_at is not None else None,
             "unit": "kWh",
-            "resolution": "hour",
+            "resolution": get_forecast_resolution(
+                FORECAST_CANONICAL_GRANULARITY_MINUTES
+            ),
             "horizonHours": BATTERY_CAPACITY_FORECAST_HORIZON_HOURS,
+            "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
             "model": model,
             "nominalCapacityKwh": (
                 BatteryCapacityForecastBuilder._round_energy(

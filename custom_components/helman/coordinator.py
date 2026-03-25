@@ -17,6 +17,7 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
+from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
     read_battery_entity_config,
     read_battery_live_state,
@@ -472,15 +473,15 @@ class HelmanCoordinator:
             granularity=granularity,
             forecast_days=forecast_days,
         )
-        battery_house_forecast = build_house_forecast_response(
-            canonical_house_forecast,
-            granularity=DEFAULT_FORECAST_GRANULARITY_MINUTES,
-            forecast_days=DEFAULT_FORECAST_DAYS,
-        )
-        result["battery_capacity"] = await self._async_get_battery_forecast(
+        canonical_battery_forecast = await self._async_get_battery_forecast(
             solar_forecast=result["solar"],
-            house_forecast=battery_house_forecast,
+            house_forecast=canonical_house_forecast,
             started_at=request_now,
+        )
+        result["battery_capacity"] = build_battery_forecast_response(
+            canonical_battery_forecast,
+            granularity=granularity,
+            forecast_days=forecast_days,
         )
         return result
 

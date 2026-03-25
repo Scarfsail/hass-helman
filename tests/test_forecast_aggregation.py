@@ -27,6 +27,7 @@ _install_import_stubs()
 
 from custom_components.helman.forecast_aggregation import (
     aggregate_averaged_points,
+    aggregate_battery_history_entries,
     aggregate_battery_series,
     aggregate_house_entries,
     aggregate_summed_points,
@@ -237,6 +238,31 @@ class ForecastAggregationTests(unittest.TestCase):
         self.assertFalse(aggregated[0]["hitMaxSoc"])
         self.assertTrue(aggregated[0]["limitedByChargePower"])
         self.assertTrue(aggregated[0]["limitedByDischargePower"])
+
+    def test_aggregate_battery_history_entries_keeps_first_start_and_last_soc(self):
+        entries = [
+            {
+                "timestamp": "2026-03-20T10:00:00+01:00",
+                "startSocPct": 40.0,
+                "socPct": 41.25,
+            },
+            {
+                "timestamp": "2026-03-20T10:15:00+01:00",
+                "startSocPct": 41.25,
+                "socPct": 42.5,
+            },
+        ]
+
+        self.assertEqual(
+            aggregate_battery_history_entries(entries, group_size=2),
+            [
+                {
+                    "timestamp": "2026-03-20T10:00:00+01:00",
+                    "startSocPct": 40.0,
+                    "socPct": 42.5,
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":
