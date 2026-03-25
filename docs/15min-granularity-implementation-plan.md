@@ -112,7 +112,7 @@ Notes:
 | 2 | Slot-aware recorder helpers (done) | recorder + actual history helpers + tests | Yes |
 | 3 | Canonical 15-minute house forecast | house builder + snapshot compatibility + tests | Yes |
 | 4 | Canonical 15-minute battery forecast (done) | battery builder + solar semantics + tests | Yes |
-| 5 | Aggregation, cache, and rollout closeout | coordinator + cache + docs + tests | Yes |
+| 5 | Aggregation, cache, and rollout closeout (done) | coordinator + cache + docs + tests | Yes |
 
 ## Increment 1 — Request contract and baseline protection (done)
 
@@ -315,7 +315,7 @@ Move the battery simulation to 15-minute slots and remove the current solar-ener
 - Default hourly consumers still get coherent data through aggregation.
 - Done: backend unit tests passed, local websocket validation after restart confirmed `granularity=15` returned `battery_capacity.resolution: "quarter_hour"` with `96` series entries and a fractional first slot `<= 0.25` hours, `granularity=60` returned `resolution: "hour"` with `24` series entries whose first bucket matched the grouped quarter-hour battery entries, and the live Home Assistant instance's hourly solar `wh_period` inputs were normalized into canonical quarter-hour battery slots without truncating the forecast after the first entry.
 
-## Increment 5 — Aggregation, cache, and rollout closeout
+## Increment 5 — Aggregation, cache, and rollout closeout (done)
 
 ### Goal
 
@@ -370,6 +370,7 @@ Finish the end-to-end contract: aggregate all forecast sections correctly, wire 
 - The backend serves correct `15`, `30`, and `60` minute payloads from one canonical 15-minute model.
 - Cache behavior is real, test-covered, and predictable.
 - The repo docs match the implemented contract.
+- Done: backend unit tests passed, the local Home Assistant websocket validation after restart confirmed the default and explicit hourly requests returned hourly payloads, `granularity=15`, `30`, and `60` returned the expected `resolution` and `horizonHours` values across house, battery, solar, and grid, aligned quarter-hour house values summed to the corresponding hourly bucket, quarter-hour grid prices averaged into the half-hour bucket, grouped battery buckets kept the last sub-slot SoC, and a repeated hourly request reused the cached battery result with matching `generatedAt` and `startedAt`.
 
 ## Frontend follow-up (keep 60-minute intervals for now)
 

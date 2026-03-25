@@ -221,6 +221,48 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         query_mock.assert_not_awaited()
         self.assertEqual(actual_history, [])
 
+    async def test_build_solar_forecast_uses_canonical_actual_history_interval(self) -> None:
+        _, builder = self._make_builder()
+        builder._config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": ["sensor.solar_forecast_day_0"],
+                    },
+                    "entities": {
+                        "remaining_today_energy_forecast": "sensor.remaining_today_energy",
+                    },
+                }
+            }
+        }
+        actual_history_mock = AsyncMock(return_value=[{"timestamp": "history"}])
+
+        with (
+            patch.object(
+                builder,
+                "_extract_hourly_solar_points",
+                return_value=[
+                    (
+                        datetime.fromisoformat("2026-03-20T22:00:00+01:00"),
+                        {
+                            "timestamp": "2026-03-20T22:00:00+01:00",
+                            "value": 250.0,
+                        },
+                    )
+                ],
+            ),
+            patch.object(builder, "_read_first_unit", return_value="Wh"),
+            patch.object(builder, "_build_solar_actual_history", actual_history_mock),
+        ):
+            payload = await builder._build_solar_forecast(REFERENCE_TIME)
+
+        self.assertEqual(payload["status"], "available")
+        self.assertEqual(payload["actualHistory"], [{"timestamp": "history"}])
+        actual_history_mock.assert_awaited_once_with(
+            REFERENCE_TIME,
+            interval_minutes=15,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

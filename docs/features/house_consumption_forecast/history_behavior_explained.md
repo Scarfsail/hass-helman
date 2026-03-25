@@ -22,6 +22,8 @@ The current implementation lives in:
 - A one-off peak or gap still affects the band, but affects the center less than a plain mean would.
 - A different weekday usually does **not** matter, unless the target slot is sparse and falls back to the same hour across weekdays.
 - A different hour does **not** affect the target hour.
+- The training model described here is still hourly, but the public forecast contract is now slot-based: the backend stores canonical 15-minute snapshots and aggregates them to `15` / `30` / `60` minute responses on demand.
+- That means `currentSlot`, `actualHistory`, and response `resolution` are delivery-layer concepts layered on top of the hourly training model explained below.
 
 ## Model summary
 

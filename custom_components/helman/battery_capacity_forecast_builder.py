@@ -17,9 +17,9 @@ from .battery_state import (
     read_battery_live_state,
 )
 from .const import (
-    BATTERY_CAPACITY_FORECAST_HORIZON_HOURS,
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    MAX_FORECAST_DAYS,
 )
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import get_local_current_slot_start
@@ -27,9 +27,6 @@ from .recorder_hourly_series import get_local_current_slot_start
 _EPSILON = 1e-9
 _CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
 _CANONICAL_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
-_CANONICAL_SLOT_COUNT = (
-    BATTERY_CAPACITY_FORECAST_HORIZON_HOURS * 60
-) // FORECAST_CANONICAL_GRANULARITY_MINUTES
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -44,7 +41,12 @@ class BatteryCapacityForecastBuilder:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
+        forecast_days: int = MAX_FORECAST_DAYS,
     ) -> dict[str, Any]:
+        horizon_hours = forecast_days * 24
+        canonical_slot_count = (
+            horizon_hours * 60
+        ) // FORECAST_CANONICAL_GRANULARITY_MINUTES
         settings = read_battery_forecast_settings(self._config)
         entity_config = read_battery_entity_config(self._config)
         model = (
@@ -58,6 +60,7 @@ class BatteryCapacityForecastBuilder:
                 status="not_configured",
                 settings=settings,
                 model=model,
+                horizon_hours=horizon_hours,
             )
 
         live_state = read_battery_live_state(self._hass, entity_config)
@@ -67,6 +70,7 @@ class BatteryCapacityForecastBuilder:
                 status="unavailable",
                 settings=settings,
                 model=model,
+                horizon_hours=horizon_hours,
             )
 
         house_status = house_forecast.get("status")
@@ -79,6 +83,7 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
+                horizon_hours=horizon_hours,
             )
         if house_status != "available":
             _LOGGER.warning(
@@ -89,6 +94,7 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
+                horizon_hours=horizon_hours,
             )
 
         solar_status = solar_forecast.get("status")
@@ -101,6 +107,7 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
+                horizon_hours=horizon_hours,
             )
 
         actual_history = await self._build_actual_history(
@@ -131,6 +138,7 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
+                horizon_hours=horizon_hours,
             )
 
         house_series_by_slot = self._build_house_series_map(house_forecast)
@@ -142,7 +150,7 @@ class BatteryCapacityForecastBuilder:
         remaining_energy_kwh = live_state.current_remaining_energy_kwh
         next_slot_start_utc = dt_util.as_utc(next_slot_start)
 
-        for slot_index in range(_CANONICAL_SLOT_COUNT):
+        for slot_index in range(canonical_slot_count):
             if slot_index == 0:
                 slot_start = started_at_local
                 slot_duration_hours = first_duration_hours
@@ -174,6 +182,7 @@ class BatteryCapacityForecastBuilder:
                         settings=settings,
                         live_state=live_state,
                         model=model,
+                        horizon_hours=horizon_hours,
                     )
                 baseline_house_kwh = house_slot_value
 
@@ -207,6 +216,7 @@ class BatteryCapacityForecastBuilder:
                 settings=settings,
                 live_state=live_state,
                 model=model,
+                horizon_hours=horizon_hours,
                 started_at=started_at_local,
                 partial_reason=partial_reason,
                 coverage_until=coverage_until,
@@ -219,6 +229,7 @@ class BatteryCapacityForecastBuilder:
             settings=settings,
             live_state=live_state,
             model=model,
+            horizon_hours=horizon_hours,
             started_at=started_at_local,
             coverage_until=coverage_until,
             actual_history=actual_history,
@@ -491,6 +502,7 @@ class BatteryCapacityForecastBuilder:
         *,
         status: str,
         settings: BatteryForecastSettings,
+        horizon_hours: int,
         live_state: BatteryLiveState | None = None,
         model: str | None = None,
         started_at: datetime | None = None,
@@ -507,7 +519,7 @@ class BatteryCapacityForecastBuilder:
             "resolution": get_forecast_resolution(
                 FORECAST_CANONICAL_GRANULARITY_MINUTES
             ),
-            "horizonHours": BATTERY_CAPACITY_FORECAST_HORIZON_HOURS,
+            "horizonHours": horizon_hours,
             "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
             "model": model,
             "nominalCapacityKwh": (

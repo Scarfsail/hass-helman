@@ -5,9 +5,11 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
-REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
+REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 
 
 def _install_import_stubs() -> None:
@@ -102,7 +104,6 @@ def _install_import_stubs() -> None:
     schedule_mod.schedule_document_from_dict = lambda raw_document: raw_document
     schedule_mod.schedule_document_to_dict = lambda doc: {}
     schedule_mod.slot_to_dict = lambda slot, runtime=None: {}
-    schedule_mod.slot_from_dict = lambda raw_slot: raw_slot
     schedule_mod.validate_slot_patch_request = (
         lambda slots, reference_time, battery_soc_bounds: None
     )
@@ -202,135 +203,133 @@ def _install_import_stubs() -> None:
     dt_mod.parse_datetime = datetime.fromisoformat
     dt_mod.now = lambda: REFERENCE_TIME
     dt_mod.as_local = lambda value: value
+    dt_mod.as_utc = lambda value: value
     util_pkg.dt = dt_mod
 
 
 _install_import_stubs()
 
-from custom_components.helman.const import (  # noqa: E402
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    HOUSE_FORECAST_MODEL_ID,
-    MAX_FORECAST_DAYS,
-)
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 
 
-def _cleanup_stubbed_modules() -> None:
-    for module_name in (
-        "custom_components.helman.coordinator",
-        "custom_components.helman.battery_capacity_forecast_builder",
-        "custom_components.helman.consumption_forecast_builder",
-        "custom_components.helman.forecast_builder",
-        "custom_components.helman.tree_builder",
-        "custom_components.helman.battery_state",
-        "custom_components.helman.recorder_hourly_series",
-        "custom_components.helman.scheduling.schedule",
-        "custom_components.helman.scheduling.runtime_status",
-        "custom_components.helman.scheduling.schedule_executor",
-        "custom_components.helman.storage",
-    ):
-        sys.modules.pop(module_name, None)
-
-
-_cleanup_stubbed_modules()
-
-
-class CoordinatorHouseForecastTests(unittest.TestCase):
-    def test_has_matching_forecast_snapshot_rejects_legacy_hourly_shape(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
-        coordinator._cached_forecast = {
-            "status": "available",
-            "actualHistory": [],
-            "trainingWindowDays": 56,
-            "requiredHistoryDays": 14,
-            "configFingerprint": "abc123",
-            "model": HOUSE_FORECAST_MODEL_ID,
-            "resolution": "hour",
-            "currentHour": {
+def _make_solar_forecast() -> dict:
+    return {
+        "status": "available",
+        "points": [
+            {
                 "timestamp": "2026-03-20T21:00:00+01:00",
+                "value": 100.0,
             },
-        }
-
-        self.assertFalse(
-            coordinator._has_matching_forecast_snapshot(
-                total_energy_entity_id="sensor.house_total",
-                training_window_days=56,
-                min_history_days=14,
-                config_fingerprint="abc123",
-            )
-        )
-
-    def test_has_matching_forecast_snapshot_accepts_canonical_slot_shape(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
-        coordinator._cached_forecast = {
-            "status": "available",
-            "actualHistory": [],
-            "trainingWindowDays": 56,
-            "requiredHistoryDays": 14,
-            "configFingerprint": "abc123",
-            "model": HOUSE_FORECAST_MODEL_ID,
-            "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
-            "forecastDaysAvailable": MAX_FORECAST_DAYS,
-            "alignmentPaddingSlots": 3,
-            "currentSlot": {
+            {
                 "timestamp": "2026-03-20T21:15:00+01:00",
+                "value": 125.0,
             },
-        }
+        ],
+    }
 
-        self.assertTrue(
-            coordinator._has_matching_forecast_snapshot(
-                total_energy_entity_id="sensor.house_total",
-                training_window_days=56,
-                min_history_days=14,
-                config_fingerprint="abc123",
-            )
-        )
 
-    def test_has_matching_forecast_snapshot_rejects_missing_alignment_padding(self) -> None:
+def _make_house_forecast(*, generated_at: str = "2026-03-20T21:05:00+01:00") -> dict:
+    return {
+        "status": "available",
+        "generatedAt": generated_at,
+    }
+
+
+def _make_battery_forecast(*, started_at: str = "2026-03-20T21:07:00+01:00") -> dict:
+    return {
+        "status": "available",
+        "startedAt": started_at,
+        "currentSoc": 50.0,
+        "currentRemainingEnergyKwh": 5.0,
+        "series": [],
+        "actualHistory": [],
+    }
+
+
+class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
+    def _make_coordinator(self) -> HelmanCoordinator:
         coordinator = object.__new__(HelmanCoordinator)
-        coordinator._cached_forecast = {
-            "status": "available",
-            "actualHistory": [],
-            "trainingWindowDays": 56,
-            "requiredHistoryDays": 14,
-            "configFingerprint": "abc123",
-            "model": HOUSE_FORECAST_MODEL_ID,
-            "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
-            "forecastDaysAvailable": MAX_FORECAST_DAYS,
-            "alignmentPaddingSlots": 0,
-            "currentSlot": {
-                "timestamp": "2026-03-20T21:15:00+01:00",
-            },
-        }
+        coordinator._hass = object()
+        coordinator._storage = SimpleNamespace(config={})
+        coordinator._cached_battery_forecast = None
+        coordinator._cached_battery_forecast_expires_at = None
+        coordinator._cached_battery_forecast_house_generated_at = None
+        coordinator._cached_battery_forecast_solar_signature = None
+        return coordinator
 
-        self.assertFalse(
-            coordinator._has_matching_forecast_snapshot(
-                total_energy_entity_id="sensor.house_total",
-                training_window_days=56,
-                min_history_days=14,
-                config_fingerprint="abc123",
-            )
+    async def test_async_get_battery_forecast_reuses_cache_within_ttl(self) -> None:
+        coordinator = self._make_coordinator()
+        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast = build_mock
+
+        first = await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=REFERENCE_TIME,
+        )
+        second = await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-    def test_has_current_slot_forecast_uses_quarter_hour_freshness(self) -> None:
-        snapshot = {
-            "currentSlot": {
-                "timestamp": "2026-03-20T21:00:00+01:00",
-            }
-        }
+        self.assertEqual(first, second)
+        build_mock.assert_awaited_once()
 
-        self.assertTrue(
-            HelmanCoordinator._has_current_slot_forecast(
-                snapshot,
-                reference_time=datetime.fromisoformat("2026-03-20T21:14:00+01:00"),
-            )
+    async def test_async_get_battery_forecast_rebuilds_after_ttl_expiry(self) -> None:
+        coordinator = self._make_coordinator()
+        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast = build_mock
+
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=REFERENCE_TIME,
         )
-        self.assertFalse(
-            HelmanCoordinator._has_current_slot_forecast(
-                snapshot,
-                reference_time=datetime.fromisoformat("2026-03-20T21:16:00+01:00"),
-            )
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=datetime.fromisoformat("2026-03-20T21:13:00+01:00"),
         )
+
+        self.assertEqual(build_mock.await_count, 2)
+
+    async def test_async_get_battery_forecast_rebuilds_when_house_snapshot_changes(self) -> None:
+        coordinator = self._make_coordinator()
+        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast = build_mock
+
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(generated_at="2026-03-20T21:05:00+01:00"),
+            started_at=REFERENCE_TIME,
+        )
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(generated_at="2026-03-20T21:10:00+01:00"),
+            started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+        )
+
+        self.assertEqual(build_mock.await_count, 2)
+
+    async def test_invalidate_battery_forecast_cache_forces_rebuild(self) -> None:
+        coordinator = self._make_coordinator()
+        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast = build_mock
+
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=REFERENCE_TIME,
+        )
+        coordinator._invalidate_battery_forecast_cache()
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+        )
+
+        self.assertEqual(build_mock.await_count, 2)
 
 
 if __name__ == "__main__":

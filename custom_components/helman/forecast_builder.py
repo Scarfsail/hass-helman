@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from .recorder_hourly_series import query_slot_energy_changes
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,7 +78,10 @@ class HelmanForecastBuilder:
         remaining_today_entity_id = self._read_entity_id(
             self._read_dict(solar_config.get("entities")).get("remaining_today_energy_forecast")
         )
-        actual_history = await self._build_solar_actual_history(reference_time)
+        actual_history = await self._build_solar_actual_history(
+            reference_time,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        )
 
         return {
             "status": status,

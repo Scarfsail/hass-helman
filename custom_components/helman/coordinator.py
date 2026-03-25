@@ -25,6 +25,7 @@ from .battery_state import (
     read_battery_soc_bounds_config,
 )
 from .const import (
+    BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
     CONSUMPTION_TOTAL_ENTITY_ID,
     DEFAULT_FORECAST_DAYS,
     DEFAULT_FORECAST_GRANULARITY_MINUTES,
@@ -40,6 +41,10 @@ from .forecast_aggregation import get_forecast_resolution
 from .forecast_builder import HelmanForecastBuilder
 from .forecast_request import ensure_supported_forecast_request
 from .house_forecast_response import build_house_forecast_response
+from .point_forecast_response import (
+    build_grid_forecast_response,
+    build_solar_forecast_response,
+)
 from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import (
     ScheduleControlConfig,
@@ -67,6 +72,8 @@ from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
+_BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
+_BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 
 
 class HelmanCoordinator:
@@ -95,6 +102,10 @@ class HelmanCoordinator:
         self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
+        self._cached_battery_forecast: dict | None = None
+        self._cached_battery_forecast_expires_at: datetime | None = None
+        self._cached_battery_forecast_house_generated_at: str | None = None
+        self._cached_battery_forecast_solar_signature: tuple[Any, ...] | None = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
         self._schedule_execution_lock = asyncio.Lock()
@@ -342,6 +353,12 @@ class HelmanCoordinator:
         if self._cached_forecast.get("forecastDaysAvailable") != MAX_FORECAST_DAYS:
             return False
 
+        if (
+            self._cached_forecast.get("alignmentPaddingSlots")
+            != ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS
+        ):
+            return False
+
         status = self._cached_forecast.get("status")
         if total_energy_entity_id is None:
             return status == "not_configured"
@@ -423,7 +440,24 @@ class HelmanCoordinator:
         )
         request_now = dt_util.now()
         builder = HelmanForecastBuilder(self._hass, self._storage.config)
-        result = await builder.build(reference_time=request_now)
+        raw_result = await builder.build(reference_time=request_now)
+        canonical_solar_forecast = build_solar_forecast_response(
+            raw_result["solar"],
+            granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+            forecast_days=MAX_FORECAST_DAYS,
+        )
+        result = {
+            "solar": build_solar_forecast_response(
+                raw_result["solar"],
+                granularity=granularity,
+                forecast_days=forecast_days,
+            ),
+            "grid": build_grid_forecast_response(
+                raw_result["grid"],
+                granularity=granularity,
+                forecast_days=forecast_days,
+            ),
+        }
         (
             total_energy_entity_id,
             training_window_days,
@@ -474,7 +508,7 @@ class HelmanCoordinator:
             forecast_days=forecast_days,
         )
         canonical_battery_forecast = await self._async_get_battery_forecast(
-            solar_forecast=result["solar"],
+            solar_forecast=canonical_solar_forecast,
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
@@ -768,11 +802,26 @@ class HelmanCoordinator:
         house_forecast: dict[str, Any],
         started_at: datetime,
     ) -> dict[str, Any]:
-        return await self._build_battery_forecast(
+        if self._has_valid_battery_forecast_cache(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+        ):
+            return self._cached_battery_forecast
+
+        forecast = await self._build_battery_forecast(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+            forecast_days=MAX_FORECAST_DAYS,
+        )
+        self._store_battery_forecast_cache(
+            forecast=forecast,
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
         )
+        return forecast
 
     async def _build_battery_forecast(
         self,
@@ -780,6 +829,7 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
+        forecast_days: int,
     ) -> dict[str, Any]:
         return await BatteryCapacityForecastBuilder(
             self._hass,
@@ -788,10 +838,139 @@ class HelmanCoordinator:
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
+            forecast_days=forecast_days,
         )
 
     def _invalidate_battery_forecast_cache(self) -> None:
-        return
+        self._cached_battery_forecast = None
+        self._cached_battery_forecast_expires_at = None
+        self._cached_battery_forecast_house_generated_at = None
+        self._cached_battery_forecast_solar_signature = None
+
+    def _has_valid_battery_forecast_cache(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> bool:
+        if (
+            self._cached_battery_forecast is None
+            or self._cached_battery_forecast_expires_at is None
+        ):
+            return False
+
+        if (
+            dt_util.as_utc(started_at)
+            >= dt_util.as_utc(self._cached_battery_forecast_expires_at)
+        ):
+            return False
+
+        cached_started_at = dt_util.parse_datetime(
+            self._cached_battery_forecast.get("startedAt")
+        )
+        if cached_started_at is None:
+            return False
+
+        if get_local_current_slot_start(
+            cached_started_at,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        ) != get_local_current_slot_start(
+            started_at,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        ):
+            return False
+
+        if (
+            self._cached_battery_forecast_house_generated_at
+            != house_forecast.get("generatedAt")
+        ):
+            return False
+
+        if (
+            self._cached_battery_forecast_solar_signature
+            != self._build_battery_forecast_solar_signature(solar_forecast)
+        ):
+            return False
+
+        return self._has_compatible_battery_forecast_live_state()
+
+    def _store_battery_forecast_cache(
+        self,
+        *,
+        forecast: dict[str, Any],
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> None:
+        self._cached_battery_forecast = forecast
+        self._cached_battery_forecast_expires_at = dt_util.as_local(
+            dt_util.as_utc(started_at)
+            + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
+        )
+        self._cached_battery_forecast_house_generated_at = house_forecast.get(
+            "generatedAt"
+        )
+        self._cached_battery_forecast_solar_signature = (
+            self._build_battery_forecast_solar_signature(solar_forecast)
+        )
+
+    def _has_compatible_battery_forecast_live_state(self) -> bool:
+        battery_entity_config = read_battery_entity_config(self._storage.config)
+        if battery_entity_config is None:
+            return True
+
+        live_state = read_battery_live_state(self._hass, battery_entity_config)
+        if live_state is None:
+            return True
+
+        if self._cached_battery_forecast is None:
+            return False
+
+        current_soc = self._cached_battery_forecast.get("currentSoc")
+        current_remaining_energy_kwh = self._cached_battery_forecast.get(
+            "currentRemainingEnergyKwh"
+        )
+        if not isinstance(current_soc, (int, float)) or not isinstance(
+            current_remaining_energy_kwh, (int, float)
+        ):
+            return False
+
+        return (
+            abs(float(current_soc) - live_state.current_soc)
+            <= _BATTERY_FORECAST_CACHE_SOC_TOLERANCE
+            and abs(
+                float(current_remaining_energy_kwh)
+                - live_state.current_remaining_energy_kwh
+            )
+            <= _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH
+        )
+
+    @staticmethod
+    def _build_battery_forecast_solar_signature(
+        solar_forecast: dict[str, Any],
+    ) -> tuple[Any, ...]:
+        points = solar_forecast.get("points")
+        if not isinstance(points, list):
+            points = []
+
+        normalized_points: list[tuple[str, float]] = []
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+
+            timestamp = point.get("timestamp")
+            value = point.get("value")
+            if not isinstance(timestamp, str):
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            normalized_points.append((timestamp, round(float(value), 4)))
+
+        return (
+            solar_forecast.get("status"),
+            tuple(normalized_points),
+        )
 
     def _start_forecast_refresh(self) -> None:
         """Start the slot-aligned house forecast refresh schedule."""
