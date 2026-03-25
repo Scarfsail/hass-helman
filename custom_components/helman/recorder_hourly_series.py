@@ -21,23 +21,95 @@ class _EnergyObservation:
     value_kwh: float
 
 
-def get_local_current_hour_start(reference_time: datetime) -> datetime:
-    return dt_util.as_local(reference_time).replace(minute=0, second=0, microsecond=0)
-
-
-def get_today_completed_local_hours(reference_time: datetime) -> list[datetime]:
-    current_hour_start = get_local_current_hour_start(reference_time)
+def get_local_current_slot_start(
+    reference_time: datetime,
+    *,
+    interval_minutes: int,
+) -> datetime:
+    validated_interval_minutes = _validate_interval_minutes(interval_minutes)
     local_day_start = _get_local_day_start(reference_time)
-    return _build_local_hour_starts_until(
+    local_reference = dt_util.as_local(reference_time)
+    slot_duration_seconds = validated_interval_minutes * 60
+    # Floor from local midnight in UTC so DST gaps/repeated hours normalize to
+    # real local slot boundaries instead of synthetic wall-clock timestamps.
+    elapsed_seconds = max(
+        0.0,
+        (
+            dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
+        ).total_seconds(),
+    )
+    slot_index = int(elapsed_seconds // slot_duration_seconds)
+    slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
+        seconds=slot_index * slot_duration_seconds
+    )
+    return dt_util.as_local(slot_start_utc)
+
+
+def get_local_current_hour_start(reference_time: datetime) -> datetime:
+    return get_local_current_slot_start(reference_time, interval_minutes=60)
+
+
+def get_today_completed_local_slots(
+    reference_time: datetime,
+    *,
+    interval_minutes: int,
+) -> list[datetime]:
+    current_slot_start = get_local_current_slot_start(
+        reference_time,
+        interval_minutes=interval_minutes,
+    )
+    local_day_start = _get_local_day_start(reference_time)
+    return _build_local_slot_starts_until(
         local_day_start,
-        current_hour_start,
+        current_slot_start,
+        interval_minutes=interval_minutes,
     )
 
 
+def get_today_completed_local_hours(reference_time: datetime) -> list[datetime]:
+    return get_today_completed_local_slots(reference_time, interval_minutes=60)
+
+
+def get_today_completed_local_slot_boundaries(
+    reference_time: datetime,
+    *,
+    interval_minutes: int,
+) -> list[datetime]:
+    current_slot_start = get_local_current_slot_start(
+        reference_time,
+        interval_minutes=interval_minutes,
+    )
+    completed_slots = get_today_completed_local_slots(
+        reference_time,
+        interval_minutes=interval_minutes,
+    )
+    return [*completed_slots, current_slot_start]
+
+
 def get_today_completed_local_hour_boundaries(reference_time: datetime) -> list[datetime]:
-    current_hour_start = get_local_current_hour_start(reference_time)
-    completed_hours = get_today_completed_local_hours(reference_time)
-    return [*completed_hours, current_hour_start]
+    return get_today_completed_local_slot_boundaries(
+        reference_time,
+        interval_minutes=60,
+    )
+
+
+async def query_slot_energy_changes(
+    hass: HomeAssistant,
+    entity_id: str,
+    reference_time: datetime,
+    *,
+    interval_minutes: int,
+) -> dict[datetime, float]:
+    return await query_cumulative_slot_energy_changes(
+        hass,
+        entity_id,
+        local_start=_get_local_day_start(reference_time),
+        local_end=get_local_current_slot_start(
+            reference_time,
+            interval_minutes=interval_minutes,
+        ),
+        interval_minutes=interval_minutes,
+    )
 
 
 async def query_hourly_energy_changes(
@@ -45,26 +117,31 @@ async def query_hourly_energy_changes(
     entity_id: str,
     reference_time: datetime,
 ) -> dict[datetime, float]:
-    return await query_cumulative_hourly_energy_changes(
+    return await query_slot_energy_changes(
         hass,
         entity_id,
-        local_start=_get_local_day_start(reference_time),
-        local_end=get_local_current_hour_start(reference_time),
+        reference_time,
+        interval_minutes=60,
     )
 
 
-async def query_cumulative_hourly_energy_changes(
+async def query_cumulative_slot_energy_changes(
     hass: HomeAssistant,
     entity_id: str,
     *,
     local_start: datetime,
     local_end: datetime,
+    interval_minutes: int,
 ) -> dict[datetime, float]:
-    local_hour_starts = _build_local_hour_starts_until(local_start, local_end)
-    if not local_hour_starts:
+    local_slot_starts = _build_local_slot_starts_until(
+        local_start,
+        local_end,
+        interval_minutes=interval_minutes,
+    )
+    if not local_slot_starts:
         return {}
 
-    local_boundaries = [*local_hour_starts, local_end]
+    local_boundaries = [*local_slot_starts, local_end]
     utc_boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
     default_unit = None
     current_state = hass.states.get(entity_id)
@@ -94,18 +171,39 @@ async def query_cumulative_hourly_energy_changes(
         observations,
         utc_boundaries,
     )
-    return _build_hourly_energy_changes_from_boundaries(
+    return _build_slot_energy_changes_from_boundaries(
         utc_boundaries,
         boundary_samples,
     )
 
 
-async def query_hour_boundary_state_values(
+async def query_cumulative_hourly_energy_changes(
+    hass: HomeAssistant,
+    entity_id: str,
+    *,
+    local_start: datetime,
+    local_end: datetime,
+) -> dict[datetime, float]:
+    return await query_cumulative_slot_energy_changes(
+        hass,
+        entity_id,
+        local_start=local_start,
+        local_end=local_end,
+        interval_minutes=60,
+    )
+
+
+async def query_slot_boundary_state_values(
     hass: HomeAssistant,
     entity_id: str,
     reference_time: datetime,
+    *,
+    interval_minutes: int,
 ) -> dict[datetime, float]:
-    local_boundaries = get_today_completed_local_hour_boundaries(reference_time)
+    local_boundaries = get_today_completed_local_slot_boundaries(
+        reference_time,
+        interval_minutes=interval_minutes,
+    )
     if not local_boundaries:
         return {}
 
@@ -126,15 +224,28 @@ async def query_hour_boundary_state_values(
     return _sample_state_values_at_boundaries(states, boundaries)
 
 
-def _build_hourly_energy_changes_from_boundaries(
+async def query_hour_boundary_state_values(
+    hass: HomeAssistant,
+    entity_id: str,
+    reference_time: datetime,
+) -> dict[datetime, float]:
+    return await query_slot_boundary_state_values(
+        hass,
+        entity_id,
+        reference_time,
+        interval_minutes=60,
+    )
+
+
+def _build_slot_energy_changes_from_boundaries(
     boundaries: list[datetime],
     samples: dict[datetime, float],
 ) -> dict[datetime, float]:
-    values_by_hour: dict[datetime, float] = {}
-    for index, hour_start in enumerate(boundaries[:-1]):
-        hour_end = boundaries[index + 1]
-        start_value = samples.get(hour_start)
-        end_value = samples.get(hour_end)
+    values_by_slot: dict[datetime, float] = {}
+    for index, slot_start in enumerate(boundaries[:-1]):
+        slot_end = boundaries[index + 1]
+        start_value = samples.get(slot_start)
+        end_value = samples.get(slot_end)
         if start_value is None or end_value is None:
             continue
 
@@ -142,9 +253,16 @@ def _build_hourly_energy_changes_from_boundaries(
         if delta < 0:
             continue
 
-        values_by_hour[hour_start] = delta
+        values_by_slot[slot_start] = delta
 
-    return values_by_hour
+    return values_by_slot
+
+
+def _build_hourly_energy_changes_from_boundaries(
+    boundaries: list[datetime],
+    samples: dict[datetime, float],
+) -> dict[datetime, float]:
+    return _build_slot_energy_changes_from_boundaries(boundaries, samples)
 
 
 def _sample_state_values_at_boundaries(
@@ -220,21 +338,45 @@ def _get_local_day_start(reference_time: datetime) -> datetime:
     )
 
 
+def _build_local_slot_starts_until(
+    local_start: datetime,
+    local_end: datetime,
+    *,
+    interval_minutes: int,
+) -> list[datetime]:
+    validated_interval_minutes = _validate_interval_minutes(interval_minutes)
+    if local_end <= local_start:
+        return []
+
+    slots: list[datetime] = []
+    cursor_utc = dt_util.as_utc(local_start)
+    end_utc = dt_util.as_utc(local_end)
+    while cursor_utc < end_utc:
+        slots.append(dt_util.as_local(cursor_utc))
+        cursor_utc += timedelta(minutes=validated_interval_minutes)
+
+    return slots
+
+
 def _build_local_hour_starts_until(
     local_start: datetime,
     local_end: datetime,
 ) -> list[datetime]:
-    if local_end <= local_start:
-        return []
+    return _build_local_slot_starts_until(
+        local_start,
+        local_end,
+        interval_minutes=60,
+    )
 
-    hours: list[datetime] = []
-    cursor_utc = dt_util.as_utc(local_start)
-    end_utc = dt_util.as_utc(local_end)
-    while cursor_utc < end_utc:
-        hours.append(dt_util.as_local(cursor_utc))
-        cursor_utc += timedelta(hours=1)
 
-    return hours
+def _validate_interval_minutes(interval_minutes: int) -> int:
+    if (
+        isinstance(interval_minutes, bool)
+        or not isinstance(interval_minutes, int)
+        or interval_minutes <= 0
+    ):
+        raise ValueError("interval_minutes must be a positive integer")
+    return interval_minutes
 
 
 def _read_float(raw_value: Any) -> float | None:

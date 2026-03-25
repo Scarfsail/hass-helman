@@ -109,7 +109,7 @@ Notes:
 | Increment | Name | Main area | User validation required |
 |---|---|---|---|
 | 1 | Request contract and baseline protection (done) | websocket + coordinator + tests | Yes |
-| 2 | Slot-aware recorder helpers | recorder + actual history helpers + tests | Yes |
+| 2 | Slot-aware recorder helpers (done) | recorder + actual history helpers + tests | Yes |
 | 3 | Canonical 15-minute house forecast | house builder + snapshot compatibility + tests | Yes |
 | 4 | Canonical 15-minute battery forecast | battery builder + solar semantics + tests | Yes |
 | 5 | Aggregation, cache, and rollout closeout | coordinator + cache + docs + tests | Yes |
@@ -167,7 +167,7 @@ Introduce the request contract safely while protecting existing hourly behavior.
 - Aggregation rules have dedicated unit coverage before canonical 15-minute builders are wired in.
 - Done: backend unit tests passed, local websocket validation confirmed the default and explicit hourly requests match, and future-shaped non-default requests are rejected with `not_supported` until later increments implement them.
 
-## Increment 2 — Slot-aware recorder helpers
+## Increment 2 — Slot-aware recorder helpers (done)
 
 ### Goal
 
@@ -208,6 +208,7 @@ Generalize the shared time-boundary helpers so future and actual-history paths c
 - Shared recorder helpers can generate slot boundaries safely.
 - DST coverage exists for 15-minute stepping.
 - No default hourly contract regressions are introduced.
+- Done: backend unit tests passed, local websocket validation confirmed the default and explicit hourly requests match materially, the live hourly payload remained stable, visible actual-history timestamps were ordered and unique, and future-shaped `15`-minute requests still return `not_supported` until later increments implement them.
 
 ## Increment 3 — Canonical 15-minute house forecast
 

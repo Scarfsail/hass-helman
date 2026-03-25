@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .recorder_hourly_series import query_hourly_energy_changes
+from .recorder_hourly_series import query_slot_energy_changes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,16 +90,19 @@ class HelmanForecastBuilder:
     async def _build_solar_actual_history(
         self,
         reference_time: datetime,
+        *,
+        interval_minutes: int = 60,
     ) -> list[dict[str, Any]]:
         entity_id = self._read_solar_actual_energy_entity_id()
         if entity_id is None:
             return []
 
         try:
-            values_by_hour = await query_hourly_energy_changes(
+            values_by_slot = await query_slot_energy_changes(
                 self._hass,
                 entity_id,
                 reference_time,
+                interval_minutes=interval_minutes,
             )
         except Exception:
             _LOGGER.exception(
@@ -110,10 +113,10 @@ class HelmanForecastBuilder:
 
         return [
             {
-                "timestamp": dt_util.as_local(hour_start).isoformat(),
+                "timestamp": dt_util.as_local(slot_start).isoformat(),
                 "value": round(value_kwh * 1000, 4),
             }
-            for hour_start, value_kwh in sorted(values_by_hour.items())
+            for slot_start, value_kwh in sorted(values_by_slot.items())
         ]
 
     def _extract_hourly_solar_points(

@@ -7,8 +7,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .recorder_hourly_series import (
-    get_today_completed_local_hours,
-    query_hour_boundary_state_values,
+    get_today_completed_local_slots,
+    query_slot_boundary_state_values,
 )
 
 
@@ -16,17 +16,24 @@ async def build_battery_actual_history(
     hass: HomeAssistant,
     capacity_entity_id: str,
     reference_time: datetime,
+    *,
+    interval_minutes: int = 60,
 ) -> list[dict[str, Any]]:
-    boundary_samples = await query_hour_boundary_state_values(
+    boundary_samples = await query_slot_boundary_state_values(
         hass,
         capacity_entity_id,
         reference_time,
+        interval_minutes=interval_minutes,
     )
 
     actual_history: list[dict[str, Any]] = []
-    for hour_start in get_today_completed_local_hours(reference_time):
-        start_boundary_utc = dt_util.as_utc(hour_start)
-        end_boundary_utc = start_boundary_utc + timedelta(hours=1)
+    slot_duration = timedelta(minutes=interval_minutes)
+    for slot_start in get_today_completed_local_slots(
+        reference_time,
+        interval_minutes=interval_minutes,
+    ):
+        start_boundary_utc = dt_util.as_utc(slot_start)
+        end_boundary_utc = start_boundary_utc + slot_duration
         start_soc = boundary_samples.get(start_boundary_utc)
         end_soc = boundary_samples.get(end_boundary_utc)
         if not _is_valid_soc(start_soc) or not _is_valid_soc(end_soc):
@@ -34,7 +41,7 @@ async def build_battery_actual_history(
 
         actual_history.append(
             {
-                "timestamp": hour_start.isoformat(),
+                "timestamp": slot_start.isoformat(),
                 "startSocPct": round(start_soc, 2),
                 "socPct": round(end_soc, 2),
             }
