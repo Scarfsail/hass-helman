@@ -113,6 +113,7 @@ Notes:
 | 3 | Canonical 15-minute house forecast | house builder + snapshot compatibility + tests | Yes |
 | 4 | Canonical 15-minute battery forecast (done) | battery builder + solar semantics + tests | Yes |
 | 5 | Aggregation, cache, and rollout closeout (done) | coordinator + cache + docs + tests | Yes |
+| 6 | Frontend follow-up (done) | hass-helman-card compatibility patch | Yes |
 
 ## Increment 1 — Request contract and baseline protection (done)
 
@@ -372,7 +373,7 @@ Finish the end-to-end contract: aggregate all forecast sections correctly, wire 
 - The repo docs match the implemented contract.
 - Done: backend unit tests passed, the local Home Assistant websocket validation after restart confirmed the default and explicit hourly requests returned hourly payloads, `granularity=15`, `30`, and `60` returned the expected `resolution` and `horizonHours` values across house, battery, solar, and grid, aligned quarter-hour house values summed to the corresponding hourly bucket, quarter-hour grid prices averaged into the half-hour bucket, grouped battery buckets kept the last sub-slot SoC, and a repeated hourly request reused the cached battery result with matching `generatedAt` and `startedAt`.
 
-## Frontend follow-up (keep 60-minute intervals for now)
+## Increment 6 — Frontend follow-up (done; keep 60-minute intervals for now)
 
 This is a compatibility patch for `hass-helman-card`, not a quarter-hour UI rollout.
 
@@ -431,3 +432,5 @@ npm run build-prod
 ```
 
 Then verify in Home Assistant that the existing forecast detail still renders correctly while the card explicitly requests `granularity: 60`.
+
+Done: `npm run build-prod` passed in `/home/ondra/dev/hass/hass-helman-card`, the frontend request is now explicitly `{ granularity: 60, forecast_days: 7 }`, the house forecast DTO/model wiring reads `currentSlot`, and the existing hourly grouping / axis / refresh behavior was intentionally left unchanged.
