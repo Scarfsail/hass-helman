@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,9 @@ from .const import (
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     MAX_FORECAST_DAYS,
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
 )
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import get_local_current_slot_start
@@ -31,6 +35,15 @@ _LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
+
+
+@dataclass(frozen=True)
+class _BatteryForecastSlotInput:
+    slot_start: datetime
+    slot_key: datetime
+    duration_hours: float
+    solar_kwh: float
+    baseline_house_kwh: float
 
 
 class BatteryCapacityForecastBuilder:
@@ -148,10 +161,92 @@ class BatteryCapacityForecastBuilder:
         house_series_by_slot = self._build_house_series_map(house_forecast)
         solar_by_slot = self._build_solar_slot_map(solar_forecast)
 
-        series: list[dict[str, Any]] = []
+        slot_inputs_result = self._build_slot_inputs(
+            canonical_slot_count=canonical_slot_count,
+            started_at_local=started_at_local,
+            current_slot_start=current_slot_start,
+            next_slot_start=next_slot_start,
+            first_duration_hours=first_duration_hours,
+            current_slot_house_value=current_slot_house_value,
+            house_series_by_slot=house_series_by_slot,
+            solar_by_slot=solar_by_slot,
+        )
+        if slot_inputs_result is None:
+            return self._make_payload(
+                status="unavailable",
+                settings=settings,
+                live_state=live_state,
+                model=model,
+                horizon_hours=horizon_hours,
+            )
+
+        slot_inputs, coverage_until, partial_reason = slot_inputs_result
+        baseline_series = self._simulate_series(
+            slot_inputs=slot_inputs,
+            live_state=live_state,
+            settings=settings,
+        )
+        schedule_adjusted: bool | None = None
+        schedule_adjustment_coverage_until: str | None = None
+        series = baseline_series
+        if schedule_overlay is not None:
+            (
+                series,
+                schedule_adjusted,
+                schedule_adjustment_coverage_until,
+            ) = self._build_schedule_adjusted_series(
+                slot_inputs=slot_inputs,
+                baseline_series=baseline_series,
+                schedule_overlay=schedule_overlay,
+                live_state=live_state,
+                settings=settings,
+            )
+
+        if partial_reason is not None:
+            return self._make_payload(
+                status="partial",
+                settings=settings,
+                live_state=live_state,
+                model=model,
+                horizon_hours=horizon_hours,
+                started_at=started_at_local,
+                partial_reason=partial_reason,
+                coverage_until=coverage_until,
+                actual_history=actual_history,
+                series=series,
+                schedule_adjusted=schedule_adjusted,
+                schedule_adjustment_coverage_until=schedule_adjustment_coverage_until,
+            )
+
+        return self._make_payload(
+            status="available",
+            settings=settings,
+            live_state=live_state,
+            model=model,
+            horizon_hours=horizon_hours,
+            started_at=started_at_local,
+            coverage_until=coverage_until,
+            actual_history=actual_history,
+            series=series,
+            schedule_adjusted=schedule_adjusted,
+            schedule_adjustment_coverage_until=schedule_adjustment_coverage_until,
+        )
+
+    def _build_slot_inputs(
+        self,
+        *,
+        canonical_slot_count: int,
+        started_at_local: datetime,
+        current_slot_start: datetime,
+        next_slot_start: datetime,
+        first_duration_hours: float,
+        current_slot_house_value: float,
+        house_series_by_slot: dict[datetime, float],
+        solar_by_slot: dict[datetime, float],
+    ) -> tuple[list[_BatteryForecastSlotInput], str | None, str | None] | None:
+        slot_inputs: list[_BatteryForecastSlotInput] = []
         coverage_until: str | None = None
         partial_reason: str | None = None
-        remaining_energy_kwh = live_state.current_remaining_energy_kwh
         next_slot_start_utc = dt_util.as_utc(next_slot_start)
 
         for slot_index in range(canonical_slot_count):
@@ -181,13 +276,7 @@ class BatteryCapacityForecastBuilder:
                         min(house_series_by_slot).isoformat() if house_series_by_slot else "N/A",
                         max(house_series_by_slot).isoformat() if house_series_by_slot else "N/A",
                     )
-                    return self._make_payload(
-                        status="unavailable",
-                        settings=settings,
-                        live_state=live_state,
-                        model=model,
-                        horizon_hours=horizon_hours,
-                    )
+                    return None
                 baseline_house_kwh = house_slot_value
 
             solar_wh = solar_by_slot.get(slot_key)
@@ -202,43 +291,128 @@ class BatteryCapacityForecastBuilder:
             solar_kwh = solar_wh / 1000
             if slot_index == 0:
                 solar_kwh *= self._get_slot_fraction(slot_duration_hours)
+
+            slot_inputs.append(
+                _BatteryForecastSlotInput(
+                    slot_start=slot_start,
+                    slot_key=slot_key,
+                    duration_hours=slot_duration_hours,
+                    solar_kwh=solar_kwh,
+                    baseline_house_kwh=baseline_house_kwh,
+                )
+            )
+            coverage_until = self._slot_end(slot_start, slot_duration_hours).isoformat()
+
+        return slot_inputs, coverage_until, partial_reason
+
+    def _simulate_series(
+        self,
+        *,
+        slot_inputs: list[_BatteryForecastSlotInput],
+        live_state: BatteryLiveState,
+        settings: BatteryForecastSettings,
+    ) -> list[dict[str, Any]]:
+        series: list[dict[str, Any]] = []
+        remaining_energy_kwh = live_state.current_remaining_energy_kwh
+
+        for slot_input in slot_inputs:
             slot, remaining_energy_kwh = self._simulate_slot(
-                slot_start=slot_start,
-                duration_hours=slot_duration_hours,
-                solar_kwh=solar_kwh,
-                baseline_house_kwh=baseline_house_kwh,
+                slot_start=slot_input.slot_start,
+                duration_hours=slot_input.duration_hours,
+                solar_kwh=slot_input.solar_kwh,
+                baseline_house_kwh=slot_input.baseline_house_kwh,
                 remaining_energy_kwh=remaining_energy_kwh,
                 live_state=live_state,
                 settings=settings,
             )
             series.append(slot)
-            coverage_until = self._slot_end(slot_start, slot_duration_hours).isoformat()
 
-        if partial_reason is not None:
-            return self._make_payload(
-                status="partial",
-                settings=settings,
+        return series
+
+    def _build_schedule_adjusted_series(
+        self,
+        *,
+        slot_inputs: list[_BatteryForecastSlotInput],
+        baseline_series: list[dict[str, Any]],
+        schedule_overlay: ScheduleForecastOverlay,
+        live_state: BatteryLiveState,
+        settings: BatteryForecastSettings,
+    ) -> tuple[list[dict[str, Any]], bool, str | None]:
+        adjusted_series: list[dict[str, Any]] = []
+        remaining_energy_kwh = live_state.current_remaining_energy_kwh
+        has_non_normal_adjustment = False
+        schedule_adjustment_coverage_until: str | None = None
+        overlay_horizon_end_utc = dt_util.as_utc(schedule_overlay.horizon_end)
+
+        for index, slot_input in enumerate(slot_inputs):
+            action_kind = SCHEDULE_ACTION_NORMAL
+            if dt_util.as_utc(slot_input.slot_key) < overlay_horizon_end_utc:
+                action = schedule_overlay.lookup_action(slot_input.slot_key)
+                if self._is_supported_schedule_action(action.kind):
+                    action_kind = action.kind
+                else:
+                    if not has_non_normal_adjustment:
+                        return baseline_series, False, None
+                    adjusted_series.extend(
+                        self._build_baseline_fallback_tail(baseline_series[index:])
+                    )
+                    return (
+                        self._attach_baseline_comparison(
+                            adjusted_series,
+                            baseline_series,
+                        ),
+                        True,
+                        schedule_adjustment_coverage_until,
+                    )
+
+            slot, remaining_energy_kwh = self._simulate_slot(
+                slot_start=slot_input.slot_start,
+                duration_hours=slot_input.duration_hours,
+                solar_kwh=slot_input.solar_kwh,
+                baseline_house_kwh=slot_input.baseline_house_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
                 live_state=live_state,
-                model=model,
-                horizon_hours=horizon_hours,
-                started_at=started_at_local,
-                partial_reason=partial_reason,
-                coverage_until=coverage_until,
-                actual_history=actual_history,
-                series=series,
+                settings=settings,
+                action_kind=action_kind,
             )
+            if action_kind != SCHEDULE_ACTION_NORMAL:
+                has_non_normal_adjustment = True
+            if has_non_normal_adjustment:
+                schedule_adjustment_coverage_until = self._slot_end(
+                    slot_input.slot_start,
+                    slot_input.duration_hours,
+                ).isoformat()
+            adjusted_series.append(slot)
 
-        return self._make_payload(
-            status="available",
-            settings=settings,
-            live_state=live_state,
-            model=model,
-            horizon_hours=horizon_hours,
-            started_at=started_at_local,
-            coverage_until=coverage_until,
-            actual_history=actual_history,
-            series=series,
+        if not has_non_normal_adjustment:
+            return baseline_series, False, None
+
+        return (
+            self._attach_baseline_comparison(adjusted_series, baseline_series),
+            True,
+            schedule_adjustment_coverage_until,
         )
+
+    def _build_baseline_fallback_tail(
+        self,
+        baseline_series: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return [dict(baseline_slot) for baseline_slot in baseline_series]
+
+    def _attach_baseline_comparison(
+        self,
+        series: list[dict[str, Any]],
+        baseline_series: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        adjusted_with_baseline: list[dict[str, Any]] = []
+        for slot, baseline_slot in zip(series, baseline_series, strict=False):
+            item = dict(slot)
+            item["baselineSocPct"] = baseline_slot["socPct"]
+            item["baselineRemainingEnergyKwh"] = baseline_slot[
+                "remainingEnergyKwh"
+            ]
+            adjusted_with_baseline.append(item)
+        return adjusted_with_baseline
 
     async def _build_actual_history(
         self,
@@ -269,6 +443,7 @@ class BatteryCapacityForecastBuilder:
         remaining_energy_kwh: float,
         live_state: BatteryLiveState,
         settings: BatteryForecastSettings,
+        action_kind: str = SCHEDULE_ACTION_NORMAL,
     ) -> tuple[dict[str, Any], float]:
         energy_before_kwh = remaining_energy_kwh
         net_kwh = solar_kwh - baseline_house_kwh
@@ -280,66 +455,72 @@ class BatteryCapacityForecastBuilder:
         limited_by_discharge_power = False
 
         if net_kwh > _EPSILON:
-            max_charge_input_kwh = (
-                settings.max_charge_power_w / 1000
-            ) * duration_hours
-            headroom_kwh = max(0.0, live_state.max_energy_kwh - energy_before_kwh)
-            input_needed_for_headroom_kwh = (
-                headroom_kwh / settings.charge_efficiency
-                if headroom_kwh > _EPSILON
-                else 0.0
-            )
-            desired_charge_input_kwh = min(net_kwh, input_needed_for_headroom_kwh)
-            actual_charge_input_kwh = min(
-                desired_charge_input_kwh,
-                max_charge_input_kwh,
-            )
-            charged_kwh = min(
-                actual_charge_input_kwh * settings.charge_efficiency,
-                headroom_kwh,
-            )
-            exported_to_grid_kwh = max(0.0, net_kwh - actual_charge_input_kwh)
-            limited_by_charge_power = (
-                desired_charge_input_kwh - max_charge_input_kwh
-            ) > _EPSILON
-            remaining_energy_kwh = min(
-                live_state.max_energy_kwh,
-                energy_before_kwh + charged_kwh,
-            )
+            if action_kind == SCHEDULE_ACTION_STOP_CHARGING:
+                exported_to_grid_kwh = net_kwh
+            else:
+                max_charge_input_kwh = (
+                    settings.max_charge_power_w / 1000
+                ) * duration_hours
+                headroom_kwh = max(0.0, live_state.max_energy_kwh - energy_before_kwh)
+                input_needed_for_headroom_kwh = (
+                    headroom_kwh / settings.charge_efficiency
+                    if headroom_kwh > _EPSILON
+                    else 0.0
+                )
+                desired_charge_input_kwh = min(net_kwh, input_needed_for_headroom_kwh)
+                actual_charge_input_kwh = min(
+                    desired_charge_input_kwh,
+                    max_charge_input_kwh,
+                )
+                charged_kwh = min(
+                    actual_charge_input_kwh * settings.charge_efficiency,
+                    headroom_kwh,
+                )
+                exported_to_grid_kwh = max(0.0, net_kwh - actual_charge_input_kwh)
+                limited_by_charge_power = (
+                    desired_charge_input_kwh - max_charge_input_kwh
+                ) > _EPSILON
+                remaining_energy_kwh = min(
+                    live_state.max_energy_kwh,
+                    energy_before_kwh + charged_kwh,
+                )
         elif net_kwh < -_EPSILON:
             deficit_kwh = -net_kwh
-            max_discharge_output_kwh = (
-                settings.max_discharge_power_w / 1000
-            ) * duration_hours
-            usable_battery_kwh = max(
-                0.0, energy_before_kwh - live_state.min_energy_kwh
-            )
-            max_output_from_energy_kwh = (
-                usable_battery_kwh * settings.discharge_efficiency
-            )
-            desired_discharge_output_kwh = min(
-                deficit_kwh,
-                max_output_from_energy_kwh,
-            )
-            actual_discharge_output_kwh = min(
-                desired_discharge_output_kwh,
-                max_discharge_output_kwh,
-            )
-            discharged_kwh = (
-                actual_discharge_output_kwh / settings.discharge_efficiency
-                if actual_discharge_output_kwh > _EPSILON
-                else 0.0
-            )
-            imported_from_grid_kwh = max(
-                0.0, deficit_kwh - actual_discharge_output_kwh
-            )
-            limited_by_discharge_power = (
-                desired_discharge_output_kwh - max_discharge_output_kwh
-            ) > _EPSILON
-            remaining_energy_kwh = max(
-                live_state.min_energy_kwh,
-                energy_before_kwh - discharged_kwh,
-            )
+            if action_kind == SCHEDULE_ACTION_STOP_DISCHARGING:
+                imported_from_grid_kwh = deficit_kwh
+            else:
+                max_discharge_output_kwh = (
+                    settings.max_discharge_power_w / 1000
+                ) * duration_hours
+                usable_battery_kwh = max(
+                    0.0, energy_before_kwh - live_state.min_energy_kwh
+                )
+                max_output_from_energy_kwh = (
+                    usable_battery_kwh * settings.discharge_efficiency
+                )
+                desired_discharge_output_kwh = min(
+                    deficit_kwh,
+                    max_output_from_energy_kwh,
+                )
+                actual_discharge_output_kwh = min(
+                    desired_discharge_output_kwh,
+                    max_discharge_output_kwh,
+                )
+                discharged_kwh = (
+                    actual_discharge_output_kwh / settings.discharge_efficiency
+                    if actual_discharge_output_kwh > _EPSILON
+                    else 0.0
+                )
+                imported_from_grid_kwh = max(
+                    0.0, deficit_kwh - actual_discharge_output_kwh
+                )
+                limited_by_discharge_power = (
+                    desired_discharge_output_kwh - max_discharge_output_kwh
+                ) > _EPSILON
+                remaining_energy_kwh = max(
+                    live_state.min_energy_kwh,
+                    energy_before_kwh - discharged_kwh,
+                )
 
         soc_pct = (remaining_energy_kwh / live_state.nominal_capacity_kwh) * 100
         hit_min_soc = (
@@ -514,8 +695,10 @@ class BatteryCapacityForecastBuilder:
         coverage_until: str | None = None,
         actual_history: list[dict[str, Any]] | None = None,
         series: list[dict[str, Any]] | None = None,
+        schedule_adjusted: bool | None = None,
+        schedule_adjustment_coverage_until: str | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "status": status,
             "generatedAt": dt_util.now().isoformat(),
             "startedAt": started_at.isoformat() if started_at is not None else None,
@@ -553,6 +736,20 @@ class BatteryCapacityForecastBuilder:
             "coverageUntil": coverage_until,
             "actualHistory": actual_history if actual_history is not None else [],
             "series": series if series is not None else [],
+        }
+        if schedule_adjusted is not None:
+            payload["scheduleAdjusted"] = schedule_adjusted
+            payload["scheduleAdjustmentCoverageUntil"] = (
+                schedule_adjustment_coverage_until
+            )
+        return payload
+
+    @staticmethod
+    def _is_supported_schedule_action(action_kind: str) -> bool:
+        return action_kind in {
+            SCHEDULE_ACTION_NORMAL,
+            SCHEDULE_ACTION_STOP_CHARGING,
+            SCHEDULE_ACTION_STOP_DISCHARGING,
         }
 
     @staticmethod

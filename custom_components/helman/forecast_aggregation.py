@@ -12,7 +12,12 @@ _BATTERY_SUM_FIELDS = (
     "importedFromGridKwh",
     "exportedToGridKwh",
 )
-_BATTERY_LAST_FIELDS = ("remainingEnergyKwh", "socPct")
+_BATTERY_LAST_FIELDS = (
+    "remainingEnergyKwh",
+    "socPct",
+    "baselineRemainingEnergyKwh",
+    "baselineSocPct",
+)
 _BATTERY_OR_FIELDS = (
     "hitMinSoc",
     "hitMaxSoc",

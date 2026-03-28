@@ -18,8 +18,8 @@
 - Granularity compatibility is a required outcome: a future `SCHEDULE_SLOT_MINUTES` change from `30` to `15` must not require follow-up battery-forecast-specific code changes.
 - **Increment 1 is complete.**
 - **Increment 2 is complete.**
-- **Increments 3-5 are still pending.**
-- The next session should start with **Increment 3 - Public response contract and stop-action simulation**.
+- **Increments 4-5 are still pending.**
+- The next session should start with **Increment 4 - Target actions and mid-slot crossing**.
 
 ## Rules for future sessions
 
@@ -43,7 +43,7 @@ When continuing this work in a new session:
 |-----------|------|-------|--------|-------|
 | 1 | Shared schedule overlay contract | BE | Complete | Added shared action resolution + canonical schedule overlay; automated and live regression validation passed |
 | 2 | Coordinator plumbing and cache signatures | BE | Complete | Schedule state now participates in battery-cache dependencies and live regression confirms forecast remains baseline-equivalent externally |
-| 3 | Public response contract and stop-action simulation | BE | Pending | Expose schedule-adjusted output for `normal` and `stop_*` behaviors with baseline comparison fields |
+| 3 | Public response contract and stop-action simulation | BE | Complete | `helman/get_forecast` now exposes stop-action schedule-adjusted battery output plus baseline comparison fields; automated and live validation passed |
 | 4 | Target actions and mid-slot crossing | BE | Pending | Add `charge_to_target_soc` and `discharge_to_target_soc`, including paired `stop_*` transitions |
 | 5 | Horizon fallback, cache polish, and docs closeout | BE + docs | Pending | Finish horizon-boundary correctness, final cache polish, docs, and closeout smoke validation |
 
@@ -103,24 +103,37 @@ When continuing this work in a new session:
 
 ## Increment 3 - Public response contract and stop-action simulation
 
-- **Status**: Pending
-- **Planned paths**:
-  - `/home/ondra/dev/hass/hass-helman/custom_components/helman/coordinator.py`
+- **Status**: Complete
+- **Implemented paths**:
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/battery_capacity_forecast_builder.py`
-  - `/home/ondra/dev/hass/hass-helman/custom_components/helman/battery_forecast_response.py`
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/forecast_aggregation.py`
+  - `/home/ondra/dev/hass/hass-helman/tests/test_battery_capacity_forecast_builder.py`
   - `/home/ondra/dev/hass/hass-helman/tests/test_battery_forecast_response.py`
   - `/home/ondra/dev/hass/hass-helman/tests/test_forecast_aggregation.py`
-  - `/home/ondra/dev/hass/hass-helman/tests/test_forecast_request_contract.py`
-- **Planned implementation notes**:
-  - Keep the baseline path immutable internally and expose an adjusted path only when execution is enabled.
-  - Implement schedule-aware behavior first for `normal`, `stop_charging`, and `stop_discharging`.
-  - Expose schedule-adjusted battery values as primary output only when schedule execution is enabled.
-  - Add `scheduleAdjusted`, `scheduleAdjustmentCoverageUntil`, `baselineSocPct`, and `baselineRemainingEnergyKwh`.
-  - Preserve the request shape and the non-battery forecast sections.
-- **Planned validation notes**:
-  - Run targeted response/aggregation/forecast-contract tests plus the full backend unit suite.
-  - After restart confirmation, use websocket validation with current-slot `stop_charging` and `stop_discharging` scenarios to compare `helman/get_schedule` runtime data with `helman/get_forecast` battery behavior.
+- **Actual implementation notes**:
+  - Refactored the battery builder to materialize canonical slot inputs once, keep the passive baseline simulation immutable, and derive a second action-aware path only when a schedule overlay is present.
+  - Implemented schedule-aware battery behavior for `stop_charging` and `stop_discharging` while keeping `normal` baseline-equivalent; `scheduleAdjusted` now flips only once a non-normal stop action actually changes the simulated path.
+  - Added top-level `scheduleAdjusted` / `scheduleAdjustmentCoverageUntil` metadata plus per-slot `baselineSocPct` / `baselineRemainingEnergyKwh` when adjusted output is active.
+  - Unsupported target actions are still deferred to Increment 4; once one appears after an earlier supported adjustment, the builder now falls back to the immutable baseline tail instead of continuing to emit misleading adjusted values.
+  - Extended battery aggregation so baseline comparison fields survive `15 -> 30 -> 60`, and backfilled comparison fields across the whole emitted adjusted series so hourly aggregation cannot fail when a stop action begins mid-bucket.
+  - `battery_forecast_response.py` and the `helman/get_forecast` request contract remained behaviorally unchanged beyond passing through the new battery metadata when present.
+- **Actual validation notes**:
+  - `python3 -m py_compile custom_components/helman/battery_capacity_forecast_builder.py custom_components/helman/forecast_aggregation.py tests/test_battery_capacity_forecast_builder.py tests/test_battery_forecast_response.py tests/test_forecast_aggregation.py` ✅
+  - `python3 -m unittest -v tests.test_battery_capacity_forecast_builder tests.test_battery_forecast_response tests.test_forecast_aggregation tests.test_forecast_request_contract` ✅
+  - `python3 -m unittest discover -s tests -v` ✅
+  - New builder/response coverage now includes:
+    - `stop_charging` adjusted output with baseline comparison fields
+    - `stop_discharging` adjusted output with baseline comparison fields
+    - all-normal overlays staying baseline-equivalent (`scheduleAdjusted = false`)
+    - unsupported future target actions falling back cleanly to baseline output
+    - mid-hour stop activation with baseline-field backfill so hourly aggregation stays valid
+  - Restart-gated local HA websocket validation passed after Home Assistant restart confirmation:
+    - baseline `helman/get_schedule` returned `executionEnabled = false` with the current slot still at `normal`
+    - baseline `helman/get_forecast` returned the battery section with no exposed `scheduleAdjusted` contract yet (`status = "partial"` in the observed runtime state)
+    - after mutating only the current slot to `stop_charging` and enabling execution, `helman/get_schedule` reported `runtime.executedAction = "stop_charging"` and `helman/get_forecast` returned `battery_capacity.scheduleAdjusted = true` with baseline comparison fields present
+    - in the observed live conditions, the first `stop_charging` battery point matched the baseline comparison exactly, which is consistent with there being no active charging to suppress in that slot
+    - after mutating only the current slot to `stop_discharging` and enabling execution, `helman/get_schedule` reported `runtime.executedAction = "stop_discharging"` and the first battery point returned higher `remainingEnergyKwh` / `socPct` than the baseline comparison fields
+    - cleanup restored the current slot to `normal`, disabled execution again, and `helman/get_forecast` returned to the baseline battery contract afterward
 
 ## Increment 4 - Target actions and mid-slot crossing
 

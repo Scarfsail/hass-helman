@@ -104,8 +104,10 @@ def _make_series_entry(
     remaining_energy_kwh: float,
     soc_pct: float,
     hit_min_soc: bool = False,
+    baseline_remaining_energy_kwh: float | None = None,
+    baseline_soc_pct: float | None = None,
 ) -> dict:
-    return {
+    entry = {
         "timestamp": timestamp,
         "durationHours": duration_hours,
         "solarKwh": round(duration_hours, 4),
@@ -122,6 +124,11 @@ def _make_series_entry(
         "limitedByChargePower": False,
         "limitedByDischargePower": False,
     }
+    if baseline_remaining_energy_kwh is not None:
+        entry["baselineRemainingEnergyKwh"] = baseline_remaining_energy_kwh
+    if baseline_soc_pct is not None:
+        entry["baselineSocPct"] = baseline_soc_pct
+    return entry
 
 
 def _make_snapshot() -> dict:
@@ -205,6 +212,72 @@ def _make_snapshot() -> dict:
     }
 
 
+def _make_adjusted_snapshot() -> dict:
+    snapshot = _make_snapshot()
+    snapshot["scheduleAdjusted"] = True
+    snapshot["scheduleAdjustmentCoverageUntil"] = "2026-03-20T23:00:00+01:00"
+    snapshot["series"] = [
+        _make_series_entry(
+            "2026-03-20T21:20:00+01:00",
+            duration_hours=10 / 60,
+            remaining_energy_kwh=5.1,
+            soc_pct=51.0,
+            baseline_remaining_energy_kwh=4.9,
+            baseline_soc_pct=49.0,
+        ),
+        _make_series_entry(
+            "2026-03-20T21:30:00+01:00",
+            duration_hours=0.25,
+            remaining_energy_kwh=5.2,
+            soc_pct=52.0,
+            baseline_remaining_energy_kwh=5.0,
+            baseline_soc_pct=50.0,
+        ),
+        _make_series_entry(
+            "2026-03-20T21:45:00+01:00",
+            duration_hours=0.25,
+            remaining_energy_kwh=5.3,
+            soc_pct=53.0,
+            hit_min_soc=True,
+            baseline_remaining_energy_kwh=5.1,
+            baseline_soc_pct=51.0,
+        ),
+        _make_series_entry(
+            "2026-03-20T22:00:00+01:00",
+            duration_hours=0.25,
+            remaining_energy_kwh=5.4,
+            soc_pct=54.0,
+            baseline_remaining_energy_kwh=5.2,
+            baseline_soc_pct=52.0,
+        ),
+        _make_series_entry(
+            "2026-03-20T22:15:00+01:00",
+            duration_hours=0.25,
+            remaining_energy_kwh=5.5,
+            soc_pct=55.0,
+            baseline_remaining_energy_kwh=5.3,
+            baseline_soc_pct=53.0,
+        ),
+        _make_series_entry(
+            "2026-03-20T22:30:00+01:00",
+            duration_hours=0.25,
+            remaining_energy_kwh=5.6,
+            soc_pct=56.0,
+            baseline_remaining_energy_kwh=5.4,
+            baseline_soc_pct=54.0,
+        ),
+        _make_series_entry(
+            "2026-03-20T22:45:00+01:00",
+            duration_hours=0.25,
+            remaining_energy_kwh=5.7,
+            soc_pct=57.0,
+            baseline_remaining_energy_kwh=5.5,
+            baseline_soc_pct=55.0,
+        ),
+    ]
+    return snapshot
+
+
 class BatteryForecastResponseTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -280,6 +353,23 @@ class BatteryForecastResponseTests(unittest.TestCase):
         )
 
         self.assertEqual(len(response["series"]), 1)
+
+    def test_hourly_response_preserves_schedule_metadata_and_baseline_fields(self) -> None:
+        response = battery_forecast_response.build_battery_forecast_response(
+            _make_adjusted_snapshot(),
+            granularity=60,
+            forecast_days=1,
+        )
+
+        self.assertTrue(response["scheduleAdjusted"])
+        self.assertEqual(
+            response["scheduleAdjustmentCoverageUntil"],
+            "2026-03-20T23:00:00+01:00",
+        )
+        self.assertEqual(response["series"][0]["baselineRemainingEnergyKwh"], 5.1)
+        self.assertEqual(response["series"][0]["baselineSocPct"], 51.0)
+        self.assertEqual(response["series"][1]["baselineRemainingEnergyKwh"], 5.5)
+        self.assertEqual(response["series"][1]["baselineSocPct"], 55.0)
 
 
 if __name__ == "__main__":
