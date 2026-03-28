@@ -5,6 +5,7 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +77,7 @@ def _install_import_stubs() -> None:
         if homeassistant_pkg is None:
             homeassistant_pkg = types.ModuleType("homeassistant")
             sys.modules["homeassistant"] = homeassistant_pkg
+        homeassistant_pkg.__path__ = []
 
         core_mod = sys.modules.get("homeassistant.core")
         if core_mod is None:
@@ -88,11 +90,26 @@ def _install_import_stubs() -> None:
         if components_pkg is None:
             components_pkg = types.ModuleType("homeassistant.components")
             sys.modules["homeassistant.components"] = components_pkg
+        components_pkg.__path__ = []
+
+        recorder_mod = sys.modules.get("homeassistant.components.recorder")
+        if recorder_mod is None:
+            recorder_mod = types.ModuleType("homeassistant.components.recorder")
+            sys.modules["homeassistant.components.recorder"] = recorder_mod
+        recorder_mod.get_instance = lambda hass: None
+        recorder_mod.__path__ = []
+
+        history_mod = sys.modules.get("homeassistant.components.recorder.history")
+        if history_mod is None:
+            history_mod = types.ModuleType("homeassistant.components.recorder.history")
+            sys.modules["homeassistant.components.recorder.history"] = history_mod
+        history_mod.state_changes_during_period = lambda *args, **kwargs: {}
 
         energy_pkg = sys.modules.get("homeassistant.components.energy")
         if energy_pkg is None:
             energy_pkg = types.ModuleType("homeassistant.components.energy")
             sys.modules["homeassistant.components.energy"] = energy_pkg
+        energy_pkg.__path__ = []
 
         energy_data_mod = sys.modules.get("homeassistant.components.energy.data")
         if energy_data_mod is None:
@@ -110,6 +127,7 @@ def _install_import_stubs() -> None:
         if helpers_pkg is None:
             helpers_pkg = types.ModuleType("homeassistant.helpers")
             sys.modules["homeassistant.helpers"] = helpers_pkg
+        helpers_pkg.__path__ = []
 
         event_mod = sys.modules.get("homeassistant.helpers.event")
         if event_mod is None:
@@ -150,6 +168,7 @@ def _install_import_stubs() -> None:
         if util_pkg is None:
             util_pkg = types.ModuleType("homeassistant.util")
             sys.modules["homeassistant.util"] = util_pkg
+        util_pkg.__path__ = []
 
         dt_mod = sys.modules.get("homeassistant.util.dt")
         if dt_mod is None:
@@ -178,6 +197,36 @@ from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
     ActiveSlotRuntimeStatus,
     ScheduleExecutionStatus,
 )
+
+
+def _cleanup_stubbed_modules() -> None:
+    for module_name in (
+        "custom_components",
+        "custom_components.helman",
+        "custom_components.helman.scheduling",
+        "custom_components.helman.coordinator",
+        "custom_components.helman.battery_capacity_forecast_builder",
+        "custom_components.helman.consumption_forecast_builder",
+        "custom_components.helman.forecast_builder",
+        "custom_components.helman.tree_builder",
+        "homeassistant",
+        "homeassistant.core",
+        "homeassistant.components",
+        "homeassistant.components.recorder",
+        "homeassistant.components.recorder.history",
+        "homeassistant.components.energy",
+        "homeassistant.components.energy.data",
+        "homeassistant.helpers",
+        "homeassistant.helpers.event",
+        "homeassistant.helpers.storage",
+        "homeassistant.helpers.entity_registry",
+        "homeassistant.util",
+        "homeassistant.util.dt",
+    ):
+        sys.modules.pop(module_name, None)
+
+
+_cleanup_stubbed_modules()
 
 
 class FakeHass:
@@ -382,6 +431,25 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(executor.events[:2], ["start", "reconcile:enable_request"])
 
+    async def test_enable_invalidates_battery_forecast_cache(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                },
+            }
+        )
+        invalidate_cache = Mock()
+        coordinator._invalidate_battery_forecast_cache = invalidate_cache
+
+        await coordinator.set_schedule_execution(
+            enabled=True,
+            reference_time=REFERENCE_TIME,
+        )
+
+        invalidate_cache.assert_called_once_with()
+
     async def test_enable_failure_rolls_back_flag(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
             schedule_document={
@@ -445,6 +513,25 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             executor.events,
             ["stop", "restore:disable_request"],
         )
+
+    async def test_disable_invalidates_battery_forecast_cache(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": True,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                },
+            }
+        )
+        invalidate_cache = Mock()
+        coordinator._invalidate_battery_forecast_cache = invalidate_cache
+
+        await coordinator.set_schedule_execution(
+            enabled=False,
+            reference_time=REFERENCE_TIME,
+        )
+
+        invalidate_cache.assert_called_once_with()
 
     async def test_disable_failure_keeps_enabled_true(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
@@ -513,6 +600,25 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             executor.events,
             ["start", "safe_reconcile:schedule_updated"],
         )
+
+    async def test_set_schedule_invalidates_battery_forecast_cache(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": True, "slots": {}}
+        )
+        invalidate_cache = Mock()
+        coordinator._invalidate_battery_forecast_cache = invalidate_cache
+
+        await coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+        )
+
+        invalidate_cache.assert_called_once_with()
 
     async def test_get_schedule_attaches_runtime_only_to_current_slot(self) -> None:
         coordinator, _storage, executor = self._build_coordinator(

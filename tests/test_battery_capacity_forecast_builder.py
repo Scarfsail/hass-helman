@@ -150,32 +150,17 @@ from custom_components.helman import battery_capacity_forecast_builder, recorder
 
 
 class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._builder_dt_patcher = patch.object(
-            battery_capacity_forecast_builder,
-            "dt_util",
-            _FakeDtUtil,
-        )
-        cls._recorder_dt_patcher = patch.object(
-            recorder_hourly_series,
-            "dt_util",
-            _FakeDtUtil,
-        )
-        cls._builder_dt_patcher.start()
-        cls._recorder_dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._builder_dt_patcher.stop()
-        cls._recorder_dt_patcher.stop()
-
     def _make_builder(self):
+        recorder_module = importlib.reload(
+            importlib.import_module("custom_components.helman.recorder_hourly_series")
+        )
         module = importlib.reload(
             importlib.import_module(
                 "custom_components.helman.battery_capacity_forecast_builder"
             )
         )
+        module.dt_util = _FakeDtUtil
+        recorder_module.dt_util = _FakeDtUtil
         hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
         return module, module.BatteryCapacityForecastBuilder(hass, {})
 

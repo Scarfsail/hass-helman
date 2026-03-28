@@ -17,8 +17,9 @@
 - The work is split into **5 increments**.
 - Granularity compatibility is a required outcome: a future `SCHEDULE_SLOT_MINUTES` change from `30` to `15` must not require follow-up battery-forecast-specific code changes.
 - **Increment 1 is complete.**
-- **Increments 2-5 are still pending.**
-- The next session should start with **Increment 2 - Coordinator plumbing and cache signatures**.
+- **Increment 2 is complete.**
+- **Increments 3-5 are still pending.**
+- The next session should start with **Increment 3 - Public response contract and stop-action simulation**.
 
 ## Rules for future sessions
 
@@ -41,7 +42,7 @@ When continuing this work in a new session:
 | Increment | Name | Repos | Status | Notes |
 |-----------|------|-------|--------|-------|
 | 1 | Shared schedule overlay contract | BE | Complete | Added shared action resolution + canonical schedule overlay; automated and live regression validation passed |
-| 2 | Coordinator plumbing and cache signatures | BE | Pending | Make schedule state part of forecast dependencies and cache invalidation before visible behavior changes |
+| 2 | Coordinator plumbing and cache signatures | BE | Complete | Schedule state now participates in battery-cache dependencies and live regression confirms forecast remains baseline-equivalent externally |
 | 3 | Public response contract and stop-action simulation | BE | Pending | Expose schedule-adjusted output for `normal` and `stop_*` behaviors with baseline comparison fields |
 | 4 | Target actions and mid-slot crossing | BE | Pending | Add `charge_to_target_soc` and `discharge_to_target_soc`, including paired `stop_*` transitions |
 | 5 | Horizon fallback, cache polish, and docs closeout | BE + docs | Pending | Finish horizon-boundary correctness, final cache polish, docs, and closeout smoke validation |
@@ -76,21 +77,29 @@ When continuing this work in a new session:
 
 ## Increment 2 - Coordinator plumbing and cache signatures
 
-- **Status**: Pending
-- **Planned paths**:
+- **Status**: Complete
+- **Implemented paths**:
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/coordinator.py`
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/battery_capacity_forecast_builder.py`
-  - `/home/ondra/dev/hass/hass-helman/custom_components/helman/scheduling/forecast_overlay.py`
   - `/home/ondra/dev/hass/hass-helman/tests/test_coordinator_battery_forecast_cache.py`
   - `/home/ondra/dev/hass/hass-helman/tests/test_coordinator_schedule_execution.py`
-- **Planned implementation notes**:
-  - Load and prune the schedule during forecast assembly and pass optional overlay only when execution is enabled.
-  - Extend the battery-cache signature with execution state and pruned schedule content.
-  - Invalidate the battery cache on schedule mutation, execution toggling, and relevant config saves.
-  - Let the builder accept overlay input while keeping public forecast behavior baseline-equivalent in this increment.
-- **Planned validation notes**:
-  - Run targeted coordinator cache/schedule tests plus the full backend unit suite.
-  - After restart confirmation, use websocket validation as a regression check and confirm schedule mutation/execution toggling do not break the forecast path.
+  - `/home/ondra/dev/hass/hass-helman/tests/test_battery_capacity_forecast_builder.py`
+- **Actual implementation notes**:
+  - `helman/get_forecast` now loads the pruned schedule document during battery forecast assembly and treats schedule execution state plus explicit pruned slot content as first-class battery-cache dependencies.
+  - The coordinator only builds/passes a schedule overlay on cache misses when schedule execution is enabled, preserving the accepted overlay seam without changing the public battery response yet.
+  - The battery builder now accepts optional overlay input, but Increment 2 intentionally keeps the simulation baseline-equivalent and does not expose new response fields.
+  - Battery forecast cache invalidation now happens on manual schedule mutations and execution toggles in addition to the existing forecast/config invalidation paths.
+  - Test-only import scaffolding in the coordinator/builder suites was tightened so the full backend suite can run reliably in one Python process.
+- **Actual validation notes**:
+  - `python3 -m py_compile custom_components/helman/coordinator.py custom_components/helman/battery_capacity_forecast_builder.py tests/test_coordinator_battery_forecast_cache.py tests/test_coordinator_schedule_execution.py tests/test_battery_capacity_forecast_builder.py` ✅
+  - `python3 -m unittest -v tests.test_coordinator_battery_forecast_cache tests.test_coordinator_schedule_execution tests.test_battery_capacity_forecast_builder` ✅
+  - `python3 -m unittest discover -s tests -v` ✅
+  - Restart-gated local HA websocket regression validation passed after Home Assistant restart confirmation:
+    - baseline `helman/get_schedule` returned `executionEnabled = false` with the current slot still at `normal`
+    - baseline `helman/get_forecast` returned the existing battery payload shape (`status = "partial"`, `resolution = "hour"`) with no premature `scheduleAdjusted`, `baselineSocPct`, or `baselineRemainingEnergyKwh` fields
+    - after mutating only the current slot to `stop_charging` and enabling execution, `helman/get_schedule` reported runtime metadata for the active slot and `helman/get_forecast` still returned the baseline-equivalent battery contract
+    - forecast rebuild evidence was visible through fresh `startedAt` / `generatedAt` values after the schedule mutation, showing the schedule-aware cache dependency was active
+    - cleanup restored the current slot to `normal`, disabled execution again, and `helman/get_schedule` returned no runtime metadata afterward
 
 ## Increment 3 - Public response contract and stop-action simulation
 

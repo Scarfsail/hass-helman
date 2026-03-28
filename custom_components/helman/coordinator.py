@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
@@ -75,6 +75,9 @@ _LOGGER = logging.getLogger(__name__)
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 
+if TYPE_CHECKING:
+    from .scheduling.forecast_overlay import ScheduleForecastOverlay
+
 
 class HelmanCoordinator:
     def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
@@ -106,6 +109,10 @@ class HelmanCoordinator:
         self._cached_battery_forecast_expires_at: datetime | None = None
         self._cached_battery_forecast_house_generated_at: str | None = None
         self._cached_battery_forecast_solar_signature: tuple[Any, ...] | None = None
+        self._cached_battery_forecast_schedule_execution_enabled: bool | None = None
+        self._cached_battery_forecast_schedule_signature: (
+            tuple[tuple[str, str, int | None], ...] | None
+        ) = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
         self._schedule_execution_lock = asyncio.Lock()
@@ -430,9 +437,8 @@ class HelmanCoordinator:
     ) -> dict:
         """Return the current forecast response.
 
-        Increment 1 only extends the request contract. The builders remain
-        hourly until later increments wire in canonical slot generation and
-        coordinator aggregation.
+        Increment 2 makes schedule state part of battery forecast dependencies
+        while keeping the external battery response unchanged.
         """
         ensure_supported_forecast_request(
             granularity=granularity,
@@ -657,6 +663,7 @@ class HelmanCoordinator:
                 document_changed = True
 
         if document_changed:
+            self._invalidate_battery_forecast_cache()
             await self._async_reconcile_schedule_execution_if_enabled(
                 reason="schedule_updated",
                 reference_time=request_now,
@@ -684,6 +691,7 @@ class HelmanCoordinator:
                             slots=current_document.slots,
                         )
                     )
+                    self._invalidate_battery_forecast_cache()
 
             if enabled:
                 await self._schedule_executor.async_start()
@@ -703,6 +711,7 @@ class HelmanCoordinator:
                                         slots=latest_document.slots,
                                     )
                                 )
+                                self._invalidate_battery_forecast_cache()
                         await self._schedule_executor.async_stop()
                     raise
                 return True
@@ -735,6 +744,7 @@ class HelmanCoordinator:
                             slots=latest_document.slots,
                         )
                     )
+                    self._invalidate_battery_forecast_cache()
 
             return False
 
@@ -802,24 +812,43 @@ class HelmanCoordinator:
         house_forecast: dict[str, Any],
         started_at: datetime,
     ) -> dict[str, Any]:
+        async with self._schedule_lock:
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=started_at
+            )
+        schedule_execution_enabled = schedule_document.execution_enabled
+        schedule_signature = self._build_battery_forecast_schedule_signature(
+            schedule_document
+        )
         if self._has_valid_battery_forecast_cache(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
+            schedule_execution_enabled=schedule_execution_enabled,
+            schedule_signature=schedule_signature,
         ):
             return self._cached_battery_forecast
 
+        schedule_overlay = None
+        if schedule_execution_enabled:
+            schedule_overlay = self._build_battery_forecast_schedule_overlay(
+                schedule_document=schedule_document,
+                reference_time=started_at,
+            )
         forecast = await self._build_battery_forecast(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
             forecast_days=MAX_FORECAST_DAYS,
+            schedule_overlay=schedule_overlay,
         )
         self._store_battery_forecast_cache(
             forecast=forecast,
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
+            schedule_execution_enabled=schedule_execution_enabled,
+            schedule_signature=schedule_signature,
         )
         return forecast
 
@@ -830,6 +859,7 @@ class HelmanCoordinator:
         house_forecast: dict[str, Any],
         started_at: datetime,
         forecast_days: int,
+        schedule_overlay: ScheduleForecastOverlay | None = None,
     ) -> dict[str, Any]:
         return await BatteryCapacityForecastBuilder(
             self._hass,
@@ -839,6 +869,36 @@ class HelmanCoordinator:
             house_forecast=house_forecast,
             started_at=started_at,
             forecast_days=forecast_days,
+            schedule_overlay=schedule_overlay,
+        )
+
+    @staticmethod
+    def _build_battery_forecast_schedule_signature(
+        schedule_document: ScheduleDocument,
+    ) -> tuple[tuple[str, str, int | None], ...]:
+        return tuple(
+            (
+                slot_id,
+                action.kind,
+                action.target_soc,
+            )
+            for slot_id, action in sorted(schedule_document.slots.items())
+        )
+
+    @staticmethod
+    def _build_battery_forecast_schedule_overlay(
+        *,
+        schedule_document: ScheduleDocument,
+        reference_time: datetime,
+    ) -> ScheduleForecastOverlay | None:
+        if not schedule_document.execution_enabled:
+            return None
+
+        from .scheduling.forecast_overlay import build_schedule_forecast_overlay
+
+        return build_schedule_forecast_overlay(
+            schedule_document=schedule_document,
+            reference_time=reference_time,
         )
 
     def _invalidate_battery_forecast_cache(self) -> None:
@@ -846,6 +906,8 @@ class HelmanCoordinator:
         self._cached_battery_forecast_expires_at = None
         self._cached_battery_forecast_house_generated_at = None
         self._cached_battery_forecast_solar_signature = None
+        self._cached_battery_forecast_schedule_execution_enabled = None
+        self._cached_battery_forecast_schedule_signature = None
 
     def _has_valid_battery_forecast_cache(
         self,
@@ -853,6 +915,8 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
+        schedule_execution_enabled: bool,
+        schedule_signature: tuple[tuple[str, str, int | None], ...],
     ) -> bool:
         if (
             self._cached_battery_forecast is None
@@ -893,6 +957,15 @@ class HelmanCoordinator:
         ):
             return False
 
+        if (
+            self._cached_battery_forecast_schedule_execution_enabled
+            != schedule_execution_enabled
+        ):
+            return False
+
+        if self._cached_battery_forecast_schedule_signature != schedule_signature:
+            return False
+
         return self._has_compatible_battery_forecast_live_state()
 
     def _store_battery_forecast_cache(
@@ -902,6 +975,8 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
+        schedule_execution_enabled: bool,
+        schedule_signature: tuple[tuple[str, str, int | None], ...],
     ) -> None:
         self._cached_battery_forecast = forecast
         self._cached_battery_forecast_expires_at = dt_util.as_local(
@@ -914,6 +989,10 @@ class HelmanCoordinator:
         self._cached_battery_forecast_solar_signature = (
             self._build_battery_forecast_solar_signature(solar_forecast)
         )
+        self._cached_battery_forecast_schedule_execution_enabled = (
+            schedule_execution_enabled
+        )
+        self._cached_battery_forecast_schedule_signature = schedule_signature
 
     def _has_compatible_battery_forecast_live_state(self) -> bool:
         battery_entity_config = read_battery_entity_config(self._storage.config)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -29,6 +29,9 @@ _CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINU
 _CANONICAL_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
 _LOGGER = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from .scheduling.forecast_overlay import ScheduleForecastOverlay
+
 
 class BatteryCapacityForecastBuilder:
     def __init__(self, hass: HomeAssistant, config: dict[str, Any]) -> None:
@@ -42,6 +45,7 @@ class BatteryCapacityForecastBuilder:
         house_forecast: dict[str, Any],
         started_at: datetime,
         forecast_days: int = MAX_FORECAST_DAYS,
+        schedule_overlay: ScheduleForecastOverlay | None = None,
     ) -> dict[str, Any]:
         horizon_hours = forecast_days * 24
         canonical_slot_count = (

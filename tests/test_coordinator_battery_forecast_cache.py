@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
@@ -85,11 +86,20 @@ def _install_import_stubs() -> None:
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
     schedule_mod.ScheduleControlConfig = type("ScheduleControlConfig", (), {})
-    schedule_mod.ScheduleDocument = type(
-        "ScheduleDocument",
-        (),
-        {"__init__": lambda self, execution_enabled=False, slots=None: None},
-    )
+
+    class ScheduleDocument:
+        def __init__(self, execution_enabled=False, slots=None) -> None:
+            self.execution_enabled = execution_enabled
+            self.slots = {} if slots is None else dict(slots)
+
+        def __eq__(self, other) -> bool:
+            return (
+                isinstance(other, ScheduleDocument)
+                and self.execution_enabled == other.execution_enabled
+                and self.slots == other.slots
+            )
+
+    schedule_mod.ScheduleDocument = ScheduleDocument
     schedule_mod.ScheduleError = type("ScheduleError", (Exception,), {})
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
@@ -101,8 +111,13 @@ def _install_import_stubs() -> None:
         lambda stored_slots, reference_time: stored_slots
     )
     schedule_mod.read_schedule_control_config = lambda config: None
-    schedule_mod.schedule_document_from_dict = lambda raw_document: raw_document
-    schedule_mod.schedule_document_to_dict = lambda doc: {}
+    schedule_mod.schedule_document_from_dict = (
+        lambda raw_document: raw_document if raw_document is not None else ScheduleDocument()
+    )
+    schedule_mod.schedule_document_to_dict = lambda doc: {
+        "executionEnabled": doc.execution_enabled,
+        "slots": dict(doc.slots),
+    }
     schedule_mod.slot_to_dict = lambda slot, runtime=None: {}
     schedule_mod.validate_slot_patch_request = (
         lambda slots, reference_time, battery_soc_bounds: None
@@ -210,6 +225,40 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
+from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
+
+
+def _cleanup_stubbed_modules() -> None:
+    for module_name in (
+        "custom_components",
+        "custom_components.helman",
+        "custom_components.helman.scheduling",
+        "custom_components.helman.coordinator",
+        "custom_components.helman.battery_capacity_forecast_builder",
+        "custom_components.helman.consumption_forecast_builder",
+        "custom_components.helman.forecast_builder",
+        "custom_components.helman.tree_builder",
+        "custom_components.helman.battery_state",
+        "custom_components.helman.recorder_hourly_series",
+        "custom_components.helman.scheduling.schedule",
+        "custom_components.helman.scheduling.runtime_status",
+        "custom_components.helman.scheduling.schedule_executor",
+        "custom_components.helman.storage",
+        "homeassistant",
+        "homeassistant.core",
+        "homeassistant.components",
+        "homeassistant.components.energy",
+        "homeassistant.components.energy.data",
+        "homeassistant.helpers",
+        "homeassistant.helpers.event",
+        "homeassistant.helpers.entity_registry",
+        "homeassistant.util",
+        "homeassistant.util.dt",
+    ):
+        sys.modules.pop(module_name, None)
+
+
+_cleanup_stubbed_modules()
 
 
 def _make_solar_forecast() -> dict:
@@ -246,15 +295,38 @@ def _make_battery_forecast(*, started_at: str = "2026-03-20T21:07:00+01:00") -> 
     }
 
 
+def _make_schedule_action(kind: str, target_soc: int | None = None) -> SimpleNamespace:
+    return SimpleNamespace(kind=kind, target_soc=target_soc)
+
+
+def _make_schedule_document(
+    *,
+    execution_enabled: bool = False,
+    slots: dict[str, SimpleNamespace] | None = None,
+) -> ScheduleDocument:
+    return ScheduleDocument(
+        execution_enabled=execution_enabled,
+        slots={} if slots is None else dict(slots),
+    )
+
+
 class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
     def _make_coordinator(self) -> HelmanCoordinator:
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._hass = object()
-        coordinator._storage = SimpleNamespace(config={})
+        coordinator._storage = SimpleNamespace(
+            config={},
+            schedule_document=_make_schedule_document(),
+            async_save_schedule_document=AsyncMock(),
+        )
         coordinator._cached_battery_forecast = None
         coordinator._cached_battery_forecast_expires_at = None
         coordinator._cached_battery_forecast_house_generated_at = None
         coordinator._cached_battery_forecast_solar_signature = None
+        coordinator._cached_battery_forecast_schedule_execution_enabled = None
+        coordinator._cached_battery_forecast_schedule_signature = None
+        coordinator._schedule_lock = asyncio.Lock()
+        coordinator._build_battery_forecast_schedule_overlay = Mock(return_value=None)
         return coordinator
 
     async def test_async_get_battery_forecast_reuses_cache_within_ttl(self) -> None:
@@ -323,6 +395,8 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=REFERENCE_TIME,
         )
         coordinator._invalidate_battery_forecast_cache()
+        self.assertIsNone(coordinator._cached_battery_forecast_schedule_execution_enabled)
+        self.assertIsNone(coordinator._cached_battery_forecast_schedule_signature)
         await coordinator._async_get_battery_forecast(
             solar_forecast=_make_solar_forecast(),
             house_forecast=_make_house_forecast(),
@@ -330,6 +404,124 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(build_mock.await_count, 2)
+
+    async def test_async_get_battery_forecast_rebuilds_when_schedule_slots_change(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast = build_mock
+        coordinator._storage.schedule_document = _make_schedule_document(
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
+            }
+        )
+
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=REFERENCE_TIME,
+        )
+        coordinator._storage.schedule_document = _make_schedule_document(
+            slots={
+                "2026-03-20T21:30:00+01:00": _make_schedule_action("stop_charging"),
+            }
+        )
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+        )
+
+        self.assertEqual(build_mock.await_count, 2)
+
+    async def test_async_get_battery_forecast_rebuilds_when_schedule_execution_changes(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        overlay = object()
+        first_schedule_document = _make_schedule_document(
+            execution_enabled=False,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
+            },
+        )
+        second_schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
+            },
+        )
+        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_schedule_overlay = Mock(
+            side_effect=lambda *, schedule_document, reference_time: (
+                overlay if schedule_document.execution_enabled else None
+            )
+        )
+        coordinator._storage.schedule_document = first_schedule_document
+
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=REFERENCE_TIME,
+        )
+        coordinator._storage.schedule_document = second_schedule_document
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+        )
+
+        self.assertEqual(build_mock.await_count, 2)
+        self.assertIsNone(build_mock.await_args_list[0].kwargs["schedule_overlay"])
+        self.assertIs(build_mock.await_args_list[1].kwargs["schedule_overlay"], overlay)
+        coordinator._build_battery_forecast_schedule_overlay.assert_called_once_with(
+            schedule_document=second_schedule_document,
+            reference_time=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+        )
+
+    async def test_async_get_battery_forecast_reuses_cache_with_matching_schedule_state(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        overlay = object()
+        first_schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
+            },
+        )
+        second_schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
+            },
+        )
+        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_schedule_overlay = Mock(
+            return_value=overlay
+        )
+        coordinator._storage.schedule_document = first_schedule_document
+
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=REFERENCE_TIME,
+        )
+        coordinator._storage.schedule_document = second_schedule_document
+        await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+        )
+
+        self.assertEqual(build_mock.await_count, 1)
+        coordinator._build_battery_forecast_schedule_overlay.assert_called_once_with(
+            schedule_document=first_schedule_document,
+            reference_time=REFERENCE_TIME,
+        )
 
 
 if __name__ == "__main__":
