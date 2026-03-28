@@ -20,6 +20,7 @@ from ..const import (
     SCHEDULE_ACTION_STOP_DISCHARGING,
     SCHEDULE_EXECUTOR_INTERVAL_SECONDS,
 )
+from .action_resolution import resolve_executed_schedule_action
 from .schedule import (
     NORMAL_SCHEDULE_ACTION,
     ScheduleAction,
@@ -382,48 +383,20 @@ class ScheduleExecutor:
         *,
         slot,
     ) -> ActiveSlotRuntimeStatus:
-        if slot.action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC:
+        battery_state = None
+        if slot.action.kind in {
+            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+        }:
             battery_state = self._dependencies.read_battery_state()
-            if battery_state is None:
-                raise ScheduleExecutionUnavailableError(
-                    "Battery live state is required to execute target schedule actions"
-                )
-            if battery_state.current_soc >= slot.action.target_soc:
-                return ActiveSlotRuntimeStatus(
-                    status="applied",
-                    executed_action=ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_DISCHARGING
-                    ),
-                    reason="target_soc_reached",
-                )
-            return ActiveSlotRuntimeStatus(
-                status="applied",
-                executed_action=slot.action,
-                reason="scheduled",
-            )
-
-        if slot.action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC:
-            battery_state = self._dependencies.read_battery_state()
-            if battery_state is None:
-                raise ScheduleExecutionUnavailableError(
-                    "Battery live state is required to execute target schedule actions"
-                )
-            if battery_state.current_soc <= slot.action.target_soc:
-                return ActiveSlotRuntimeStatus(
-                    status="applied",
-                    executed_action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
-                    reason="target_soc_reached",
-                )
-            return ActiveSlotRuntimeStatus(
-                status="applied",
-                executed_action=slot.action,
-                reason="scheduled",
-            )
-
+        resolution = resolve_executed_schedule_action(
+            action=slot.action,
+            current_soc=None if battery_state is None else battery_state.current_soc,
+        )
         return ActiveSlotRuntimeStatus(
             status="applied",
-            executed_action=slot.action,
-            reason="scheduled",
+            executed_action=resolution.executed_action,
+            reason=resolution.reason,
         )
 
     def _build_error_execution_status(
