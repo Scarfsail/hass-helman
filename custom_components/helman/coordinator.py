@@ -35,6 +35,8 @@ from .const import (
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
     PRODUCTION_TOTAL_ENTITY_ID,
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
 from .forecast_aggregation import get_forecast_resolution
@@ -64,6 +66,7 @@ from .scheduling.schedule import (
     validate_slot_patch_request,
 )
 from .scheduling.runtime_status import ScheduleExecutionStatus
+from .scheduling.action_resolution import resolve_executed_schedule_action
 from .scheduling.schedule_executor import (
     ScheduleExecutor,
     ScheduleExecutorDependencies,
@@ -112,6 +115,9 @@ class HelmanCoordinator:
         self._cached_battery_forecast_schedule_execution_enabled: bool | None = None
         self._cached_battery_forecast_schedule_signature: (
             tuple[tuple[str, str, int | None], ...] | None
+        ) = None
+        self._cached_battery_forecast_schedule_effective_signature: (
+            tuple[str, str, int | None, str, str] | None
         ) = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
@@ -816,9 +822,20 @@ class HelmanCoordinator:
             schedule_document = await self._load_pruned_schedule_document_locked(
                 reference_time=started_at
             )
-        schedule_execution_enabled = schedule_document.execution_enabled
-        schedule_signature = self._build_battery_forecast_schedule_signature(
-            schedule_document
+        forecast_schedule_document = self._build_battery_forecast_schedule_document(
+            schedule_document=schedule_document
+        )
+        schedule_execution_enabled = forecast_schedule_document.execution_enabled
+        schedule_signature = (
+            self._build_battery_forecast_schedule_signature(forecast_schedule_document)
+            if schedule_execution_enabled
+            else ()
+        )
+        schedule_effective_signature = (
+            self._build_battery_forecast_schedule_effective_signature(
+                schedule_document=forecast_schedule_document,
+                reference_time=started_at,
+            )
         )
         if self._has_valid_battery_forecast_cache(
             solar_forecast=solar_forecast,
@@ -826,13 +843,14 @@ class HelmanCoordinator:
             started_at=started_at,
             schedule_execution_enabled=schedule_execution_enabled,
             schedule_signature=schedule_signature,
+            schedule_effective_signature=schedule_effective_signature,
         ):
             return self._cached_battery_forecast
 
         schedule_overlay = None
         if schedule_execution_enabled:
             schedule_overlay = self._build_battery_forecast_schedule_overlay(
-                schedule_document=schedule_document,
+                schedule_document=forecast_schedule_document,
                 reference_time=started_at,
             )
         forecast = await self._build_battery_forecast(
@@ -849,6 +867,7 @@ class HelmanCoordinator:
             started_at=started_at,
             schedule_execution_enabled=schedule_execution_enabled,
             schedule_signature=schedule_signature,
+            schedule_effective_signature=schedule_effective_signature,
         )
         return forecast
 
@@ -885,6 +904,84 @@ class HelmanCoordinator:
             for slot_id, action in sorted(schedule_document.slots.items())
         )
 
+    def _build_battery_forecast_schedule_document(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+    ) -> ScheduleDocument:
+        if not schedule_document.execution_enabled:
+            return schedule_document
+
+        control_config = self._read_schedule_control_config()
+        if control_config is None:
+            return ScheduleDocument()
+
+        forecast_slots = {
+            slot_id: action
+            for slot_id, action in schedule_document.slots.items()
+            if not (
+                action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
+                and control_config.charge_to_target_soc_option is None
+            )
+            and not (
+                action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
+                and control_config.discharge_to_target_soc_option is None
+            )
+        }
+        return ScheduleDocument(
+            execution_enabled=schedule_document.execution_enabled,
+            slots=forecast_slots,
+        )
+
+    def _build_battery_forecast_schedule_effective_signature(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        reference_time: datetime,
+    ) -> tuple[str, str, int | None, str, str] | None:
+        if not schedule_document.execution_enabled:
+            return None
+
+        active_slot_id = format_slot_id(build_horizon_start(reference_time))
+        active_action = schedule_document.slots.get(active_slot_id)
+        if active_action is None or active_action.kind not in {
+            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+        }:
+            return None
+
+        battery_entity_config = read_battery_entity_config(self._storage.config)
+        if battery_entity_config is None:
+            return (
+                active_slot_id,
+                active_action.kind,
+                active_action.target_soc,
+                "not_configured",
+                "not_configured",
+            )
+
+        live_state = read_battery_live_state(self._hass, battery_entity_config)
+        if live_state is None:
+            return (
+                active_slot_id,
+                active_action.kind,
+                active_action.target_soc,
+                "unavailable",
+                "execution_unavailable",
+            )
+
+        resolution = resolve_executed_schedule_action(
+            action=active_action,
+            current_soc=live_state.current_soc,
+        )
+        return (
+            active_slot_id,
+            active_action.kind,
+            active_action.target_soc,
+            resolution.executed_action.kind,
+            resolution.reason,
+        )
+
     @staticmethod
     def _build_battery_forecast_schedule_overlay(
         *,
@@ -908,6 +1005,7 @@ class HelmanCoordinator:
         self._cached_battery_forecast_solar_signature = None
         self._cached_battery_forecast_schedule_execution_enabled = None
         self._cached_battery_forecast_schedule_signature = None
+        self._cached_battery_forecast_schedule_effective_signature = None
 
     def _has_valid_battery_forecast_cache(
         self,
@@ -917,6 +1015,7 @@ class HelmanCoordinator:
         started_at: datetime,
         schedule_execution_enabled: bool,
         schedule_signature: tuple[tuple[str, str, int | None], ...],
+        schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
     ) -> bool:
         if (
             self._cached_battery_forecast is None
@@ -966,6 +1065,15 @@ class HelmanCoordinator:
         if self._cached_battery_forecast_schedule_signature != schedule_signature:
             return False
 
+        if schedule_effective_signature is not None:
+            return False
+
+        if (
+            self._cached_battery_forecast_schedule_effective_signature
+            != schedule_effective_signature
+        ):
+            return False
+
         return self._has_compatible_battery_forecast_live_state()
 
     def _store_battery_forecast_cache(
@@ -977,6 +1085,7 @@ class HelmanCoordinator:
         started_at: datetime,
         schedule_execution_enabled: bool,
         schedule_signature: tuple[tuple[str, str, int | None], ...],
+        schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
     ) -> None:
         self._cached_battery_forecast = forecast
         self._cached_battery_forecast_expires_at = dt_util.as_local(
@@ -993,6 +1102,9 @@ class HelmanCoordinator:
             schedule_execution_enabled
         )
         self._cached_battery_forecast_schedule_signature = schedule_signature
+        self._cached_battery_forecast_schedule_effective_signature = (
+            schedule_effective_signature
+        )
 
     def _has_compatible_battery_forecast_live_state(self) -> bool:
         battery_entity_config = read_battery_entity_config(self._storage.config)

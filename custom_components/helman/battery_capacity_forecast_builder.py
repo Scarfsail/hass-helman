@@ -21,12 +21,16 @@ from .const import (
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     MAX_FORECAST_DAYS,
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
 )
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import get_local_current_slot_start
+from .scheduling.action_resolution import resolve_executed_schedule_action
+from .scheduling.schedule import NORMAL_SCHEDULE_ACTION, ScheduleAction
 
 _EPSILON = 1e-9
 _CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
@@ -44,6 +48,13 @@ class _BatteryForecastSlotInput:
     duration_hours: float
     solar_kwh: float
     baseline_house_kwh: float
+
+
+@dataclass(frozen=True)
+class _ScheduleActionSimulationResult:
+    slot: dict[str, Any]
+    remaining_energy_kwh: float
+    effective_action_kind: str
 
 
 class BatteryCapacityForecastBuilder:
@@ -345,12 +356,10 @@ class BatteryCapacityForecastBuilder:
         overlay_horizon_end_utc = dt_util.as_utc(schedule_overlay.horizon_end)
 
         for index, slot_input in enumerate(slot_inputs):
-            action_kind = SCHEDULE_ACTION_NORMAL
+            action = NORMAL_SCHEDULE_ACTION
             if dt_util.as_utc(slot_input.slot_key) < overlay_horizon_end_utc:
                 action = schedule_overlay.lookup_action(slot_input.slot_key)
-                if self._is_supported_schedule_action(action.kind):
-                    action_kind = action.kind
-                else:
+                if not self._is_supported_schedule_action(action.kind):
                     if not has_non_normal_adjustment:
                         return baseline_series, False, None
                     adjusted_series.extend(
@@ -365,7 +374,7 @@ class BatteryCapacityForecastBuilder:
                         schedule_adjustment_coverage_until,
                     )
 
-            slot, remaining_energy_kwh = self._simulate_slot(
+            result = self._simulate_schedule_action_slot(
                 slot_start=slot_input.slot_start,
                 duration_hours=slot_input.duration_hours,
                 solar_kwh=slot_input.solar_kwh,
@@ -373,16 +382,17 @@ class BatteryCapacityForecastBuilder:
                 remaining_energy_kwh=remaining_energy_kwh,
                 live_state=live_state,
                 settings=settings,
-                action_kind=action_kind,
+                action=action,
             )
-            if action_kind != SCHEDULE_ACTION_NORMAL:
+            remaining_energy_kwh = result.remaining_energy_kwh
+            if result.effective_action_kind != SCHEDULE_ACTION_NORMAL:
                 has_non_normal_adjustment = True
             if has_non_normal_adjustment:
                 schedule_adjustment_coverage_until = self._slot_end(
                     slot_input.slot_start,
                     slot_input.duration_hours,
                 ).isoformat()
-            adjusted_series.append(slot)
+            adjusted_series.append(result.slot)
 
         if not has_non_normal_adjustment:
             return baseline_series, False, None
@@ -391,6 +401,67 @@ class BatteryCapacityForecastBuilder:
             self._attach_baseline_comparison(adjusted_series, baseline_series),
             True,
             schedule_adjustment_coverage_until,
+        )
+
+    def _simulate_schedule_action_slot(
+        self,
+        *,
+        slot_start: datetime,
+        duration_hours: float,
+        solar_kwh: float,
+        baseline_house_kwh: float,
+        remaining_energy_kwh: float,
+        live_state: BatteryLiveState,
+        settings: BatteryForecastSettings,
+        action: ScheduleAction,
+    ) -> _ScheduleActionSimulationResult:
+        current_soc = self._calculate_soc_pct(
+            remaining_energy_kwh,
+            live_state.nominal_capacity_kwh,
+        )
+        effective_action = resolve_executed_schedule_action(
+            action=action,
+            current_soc=current_soc,
+        ).executed_action
+
+        if effective_action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC:
+            slot, remaining_energy_kwh = self._simulate_charge_to_target_slot(
+                slot_start=slot_start,
+                duration_hours=duration_hours,
+                solar_kwh=solar_kwh,
+                baseline_house_kwh=baseline_house_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
+                live_state=live_state,
+                settings=settings,
+                target_soc=self._require_target_soc(effective_action),
+            )
+        elif effective_action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC:
+            slot, remaining_energy_kwh = self._simulate_discharge_to_target_slot(
+                slot_start=slot_start,
+                duration_hours=duration_hours,
+                solar_kwh=solar_kwh,
+                baseline_house_kwh=baseline_house_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
+                live_state=live_state,
+                settings=settings,
+                target_soc=self._require_target_soc(effective_action),
+            )
+        else:
+            slot, remaining_energy_kwh = self._simulate_slot(
+                slot_start=slot_start,
+                duration_hours=duration_hours,
+                solar_kwh=solar_kwh,
+                baseline_house_kwh=baseline_house_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
+                live_state=live_state,
+                settings=settings,
+                action_kind=effective_action.kind,
+            )
+
+        return _ScheduleActionSimulationResult(
+            slot=slot,
+            remaining_energy_kwh=remaining_energy_kwh,
+            effective_action_kind=effective_action.kind,
         )
 
     def _build_baseline_fallback_tail(
@@ -531,25 +602,421 @@ class BatteryCapacityForecastBuilder:
         ) <= _EPSILON
 
         return (
-            {
-                "timestamp": slot_start.isoformat(),
-                "durationHours": round(duration_hours, 4),
-                "solarKwh": self._round_energy(solar_kwh),
-                "baselineHouseKwh": self._round_energy(baseline_house_kwh),
-                "netKwh": self._round_energy(net_kwh),
-                "chargedKwh": self._round_energy(charged_kwh),
-                "dischargedKwh": self._round_energy(discharged_kwh),
-                "remainingEnergyKwh": self._round_energy(remaining_energy_kwh),
-                "socPct": round(soc_pct, 2),
-                "importedFromGridKwh": self._round_energy(imported_from_grid_kwh),
-                "exportedToGridKwh": self._round_energy(exported_to_grid_kwh),
-                "hitMinSoc": hit_min_soc,
-                "hitMaxSoc": hit_max_soc,
-                "limitedByChargePower": limited_by_charge_power,
-                "limitedByDischargePower": limited_by_discharge_power,
-            },
+            self._make_simulated_slot_payload(
+                slot_start=slot_start,
+                duration_hours=duration_hours,
+                solar_kwh=solar_kwh,
+                baseline_house_kwh=baseline_house_kwh,
+                charged_kwh=charged_kwh,
+                discharged_kwh=discharged_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
+                imported_from_grid_kwh=imported_from_grid_kwh,
+                exported_to_grid_kwh=exported_to_grid_kwh,
+                hit_min_soc=hit_min_soc,
+                hit_max_soc=hit_max_soc,
+                limited_by_charge_power=limited_by_charge_power,
+                limited_by_discharge_power=limited_by_discharge_power,
+                soc_pct=soc_pct,
+            ),
             remaining_energy_kwh,
         )
+
+    def _simulate_charge_to_target_slot(
+        self,
+        *,
+        slot_start: datetime,
+        duration_hours: float,
+        solar_kwh: float,
+        baseline_house_kwh: float,
+        remaining_energy_kwh: float,
+        live_state: BatteryLiveState,
+        settings: BatteryForecastSettings,
+        target_soc: int,
+    ) -> tuple[dict[str, Any], float]:
+        target_energy_kwh = self._target_energy_kwh(
+            target_soc=target_soc,
+            live_state=live_state,
+        )
+        input_needed_for_target_kwh = (
+            max(0.0, target_energy_kwh - remaining_energy_kwh)
+            / settings.charge_efficiency
+        )
+        max_charge_power_kw = settings.max_charge_power_w / 1000
+        max_charge_input_kwh = max_charge_power_kw * duration_hours
+
+        if (
+            max_charge_power_kw > _EPSILON
+            and input_needed_for_target_kwh > _EPSILON
+            and input_needed_for_target_kwh < (max_charge_input_kwh - _EPSILON)
+        ):
+            forced_duration_hours = input_needed_for_target_kwh / max_charge_power_kw
+            forced_solar_kwh = self._split_slot_value(
+                total_value=solar_kwh,
+                total_duration_hours=duration_hours,
+                partial_duration_hours=forced_duration_hours,
+            )
+            forced_house_kwh = self._split_slot_value(
+                total_value=baseline_house_kwh,
+                total_duration_hours=duration_hours,
+                partial_duration_hours=forced_duration_hours,
+            )
+            forced_slot, remaining_after_forced = self._simulate_forced_charge_phase(
+                slot_start=slot_start,
+                duration_hours=forced_duration_hours,
+                solar_kwh=forced_solar_kwh,
+                baseline_house_kwh=forced_house_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
+                target_energy_kwh=target_energy_kwh,
+                live_state=live_state,
+                settings=settings,
+            )
+            stop_slot, remaining_after_stop = self._simulate_slot(
+                slot_start=self._slot_end(slot_start, forced_duration_hours),
+                duration_hours=duration_hours - forced_duration_hours,
+                solar_kwh=solar_kwh - forced_solar_kwh,
+                baseline_house_kwh=baseline_house_kwh - forced_house_kwh,
+                remaining_energy_kwh=remaining_after_forced,
+                live_state=live_state,
+                settings=settings,
+                action_kind=SCHEDULE_ACTION_STOP_DISCHARGING,
+            )
+            return (
+                self._merge_phase_slots(
+                    slot_start=slot_start,
+                    duration_hours=duration_hours,
+                    solar_kwh=solar_kwh,
+                    baseline_house_kwh=baseline_house_kwh,
+                    remaining_energy_kwh=remaining_after_stop,
+                    live_state=live_state,
+                    phase_slots=(forced_slot, stop_slot),
+                ),
+                remaining_after_stop,
+            )
+
+        return self._simulate_forced_charge_phase(
+            slot_start=slot_start,
+            duration_hours=duration_hours,
+            solar_kwh=solar_kwh,
+            baseline_house_kwh=baseline_house_kwh,
+            remaining_energy_kwh=remaining_energy_kwh,
+            target_energy_kwh=target_energy_kwh,
+            live_state=live_state,
+            settings=settings,
+        )
+
+    def _simulate_discharge_to_target_slot(
+        self,
+        *,
+        slot_start: datetime,
+        duration_hours: float,
+        solar_kwh: float,
+        baseline_house_kwh: float,
+        remaining_energy_kwh: float,
+        live_state: BatteryLiveState,
+        settings: BatteryForecastSettings,
+        target_soc: int,
+    ) -> tuple[dict[str, Any], float]:
+        target_energy_kwh = self._target_energy_kwh(
+            target_soc=target_soc,
+            live_state=live_state,
+        )
+        output_needed_for_target_kwh = max(
+            0.0,
+            remaining_energy_kwh - target_energy_kwh,
+        ) * settings.discharge_efficiency
+        max_discharge_power_kw = settings.max_discharge_power_w / 1000
+        max_discharge_output_kwh = max_discharge_power_kw * duration_hours
+
+        if (
+            max_discharge_power_kw > _EPSILON
+            and output_needed_for_target_kwh > _EPSILON
+            and output_needed_for_target_kwh < (max_discharge_output_kwh - _EPSILON)
+        ):
+            forced_duration_hours = output_needed_for_target_kwh / max_discharge_power_kw
+            forced_solar_kwh = self._split_slot_value(
+                total_value=solar_kwh,
+                total_duration_hours=duration_hours,
+                partial_duration_hours=forced_duration_hours,
+            )
+            forced_house_kwh = self._split_slot_value(
+                total_value=baseline_house_kwh,
+                total_duration_hours=duration_hours,
+                partial_duration_hours=forced_duration_hours,
+            )
+            forced_slot, remaining_after_forced = (
+                self._simulate_forced_discharge_phase(
+                    slot_start=slot_start,
+                    duration_hours=forced_duration_hours,
+                    solar_kwh=forced_solar_kwh,
+                    baseline_house_kwh=forced_house_kwh,
+                    remaining_energy_kwh=remaining_energy_kwh,
+                    target_energy_kwh=target_energy_kwh,
+                    live_state=live_state,
+                    settings=settings,
+                )
+            )
+            stop_slot, remaining_after_stop = self._simulate_slot(
+                slot_start=self._slot_end(slot_start, forced_duration_hours),
+                duration_hours=duration_hours - forced_duration_hours,
+                solar_kwh=solar_kwh - forced_solar_kwh,
+                baseline_house_kwh=baseline_house_kwh - forced_house_kwh,
+                remaining_energy_kwh=remaining_after_forced,
+                live_state=live_state,
+                settings=settings,
+                action_kind=SCHEDULE_ACTION_STOP_CHARGING,
+            )
+            return (
+                self._merge_phase_slots(
+                    slot_start=slot_start,
+                    duration_hours=duration_hours,
+                    solar_kwh=solar_kwh,
+                    baseline_house_kwh=baseline_house_kwh,
+                    remaining_energy_kwh=remaining_after_stop,
+                    live_state=live_state,
+                    phase_slots=(forced_slot, stop_slot),
+                ),
+                remaining_after_stop,
+            )
+
+        return self._simulate_forced_discharge_phase(
+            slot_start=slot_start,
+            duration_hours=duration_hours,
+            solar_kwh=solar_kwh,
+            baseline_house_kwh=baseline_house_kwh,
+            remaining_energy_kwh=remaining_energy_kwh,
+            target_energy_kwh=target_energy_kwh,
+            live_state=live_state,
+            settings=settings,
+        )
+
+    def _simulate_forced_charge_phase(
+        self,
+        *,
+        slot_start: datetime,
+        duration_hours: float,
+        solar_kwh: float,
+        baseline_house_kwh: float,
+        remaining_energy_kwh: float,
+        target_energy_kwh: float,
+        live_state: BatteryLiveState,
+        settings: BatteryForecastSettings,
+    ) -> tuple[dict[str, Any], float]:
+        energy_before_kwh = remaining_energy_kwh
+        headroom_to_target_kwh = max(0.0, target_energy_kwh - energy_before_kwh)
+        input_needed_for_target_kwh = (
+            headroom_to_target_kwh / settings.charge_efficiency
+            if headroom_to_target_kwh > _EPSILON
+            else 0.0
+        )
+        max_charge_input_kwh = (settings.max_charge_power_w / 1000) * duration_hours
+        actual_charge_input_kwh = min(
+            input_needed_for_target_kwh,
+            max_charge_input_kwh,
+        )
+        charged_kwh = min(
+            headroom_to_target_kwh,
+            actual_charge_input_kwh * settings.charge_efficiency,
+        )
+        net_kwh = solar_kwh - baseline_house_kwh
+        solar_surplus_kwh = max(0.0, net_kwh)
+        grid_for_house_kwh = max(0.0, -net_kwh)
+        solar_to_battery_input_kwh = min(solar_surplus_kwh, actual_charge_input_kwh)
+        grid_to_battery_input_kwh = max(
+            0.0,
+            actual_charge_input_kwh - solar_to_battery_input_kwh,
+        )
+        imported_from_grid_kwh = grid_for_house_kwh + grid_to_battery_input_kwh
+        exported_to_grid_kwh = max(
+            0.0,
+            solar_surplus_kwh - solar_to_battery_input_kwh,
+        )
+        remaining_energy_kwh = min(
+            live_state.max_energy_kwh,
+            energy_before_kwh + charged_kwh,
+        )
+
+        return (
+            self._make_simulated_slot_payload(
+                slot_start=slot_start,
+                duration_hours=duration_hours,
+                solar_kwh=solar_kwh,
+                baseline_house_kwh=baseline_house_kwh,
+                charged_kwh=charged_kwh,
+                discharged_kwh=0.0,
+                remaining_energy_kwh=remaining_energy_kwh,
+                imported_from_grid_kwh=imported_from_grid_kwh,
+                exported_to_grid_kwh=exported_to_grid_kwh,
+                hit_min_soc=(
+                    remaining_energy_kwh - live_state.min_energy_kwh
+                ) <= _EPSILON,
+                hit_max_soc=(
+                    live_state.max_energy_kwh - remaining_energy_kwh
+                ) <= _EPSILON,
+                limited_by_charge_power=(
+                    input_needed_for_target_kwh - max_charge_input_kwh
+                ) > _EPSILON,
+                limited_by_discharge_power=False,
+                soc_pct=self._calculate_soc_pct(
+                    remaining_energy_kwh,
+                    live_state.nominal_capacity_kwh,
+                ),
+            ),
+            remaining_energy_kwh,
+        )
+
+    def _simulate_forced_discharge_phase(
+        self,
+        *,
+        slot_start: datetime,
+        duration_hours: float,
+        solar_kwh: float,
+        baseline_house_kwh: float,
+        remaining_energy_kwh: float,
+        target_energy_kwh: float,
+        live_state: BatteryLiveState,
+        settings: BatteryForecastSettings,
+    ) -> tuple[dict[str, Any], float]:
+        energy_before_kwh = remaining_energy_kwh
+        energy_above_target_kwh = max(0.0, energy_before_kwh - target_energy_kwh)
+        output_available_to_target_kwh = (
+            energy_above_target_kwh * settings.discharge_efficiency
+        )
+        max_discharge_output_kwh = (
+            settings.max_discharge_power_w / 1000
+        ) * duration_hours
+        actual_discharge_output_kwh = min(
+            output_available_to_target_kwh,
+            max_discharge_output_kwh,
+        )
+        discharged_kwh = (
+            actual_discharge_output_kwh / settings.discharge_efficiency
+            if actual_discharge_output_kwh > _EPSILON
+            else 0.0
+        )
+        net_kwh = solar_kwh - baseline_house_kwh
+        deficit_after_solar_kwh = max(0.0, -net_kwh)
+        solar_surplus_kwh = max(0.0, net_kwh)
+        imported_from_grid_kwh = max(
+            0.0,
+            deficit_after_solar_kwh - actual_discharge_output_kwh,
+        )
+        exported_to_grid_kwh = solar_surplus_kwh + max(
+            0.0,
+            actual_discharge_output_kwh - deficit_after_solar_kwh,
+        )
+        remaining_energy_kwh = max(
+            live_state.min_energy_kwh,
+            energy_before_kwh - discharged_kwh,
+        )
+
+        return (
+            self._make_simulated_slot_payload(
+                slot_start=slot_start,
+                duration_hours=duration_hours,
+                solar_kwh=solar_kwh,
+                baseline_house_kwh=baseline_house_kwh,
+                charged_kwh=0.0,
+                discharged_kwh=discharged_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
+                imported_from_grid_kwh=imported_from_grid_kwh,
+                exported_to_grid_kwh=exported_to_grid_kwh,
+                hit_min_soc=(
+                    remaining_energy_kwh - live_state.min_energy_kwh
+                ) <= _EPSILON,
+                hit_max_soc=(
+                    live_state.max_energy_kwh - remaining_energy_kwh
+                ) <= _EPSILON,
+                limited_by_charge_power=False,
+                limited_by_discharge_power=(
+                    output_available_to_target_kwh - max_discharge_output_kwh
+                ) > _EPSILON,
+                soc_pct=self._calculate_soc_pct(
+                    remaining_energy_kwh,
+                    live_state.nominal_capacity_kwh,
+                ),
+            ),
+            remaining_energy_kwh,
+        )
+
+    def _merge_phase_slots(
+        self,
+        *,
+        slot_start: datetime,
+        duration_hours: float,
+        solar_kwh: float,
+        baseline_house_kwh: float,
+        remaining_energy_kwh: float,
+        live_state: BatteryLiveState,
+        phase_slots: tuple[dict[str, Any], dict[str, Any]],
+    ) -> dict[str, Any]:
+        charged_kwh = sum(slot["chargedKwh"] for slot in phase_slots)
+        discharged_kwh = sum(slot["dischargedKwh"] for slot in phase_slots)
+        imported_from_grid_kwh = sum(
+            slot["importedFromGridKwh"] for slot in phase_slots
+        )
+        exported_to_grid_kwh = sum(slot["exportedToGridKwh"] for slot in phase_slots)
+
+        return self._make_simulated_slot_payload(
+            slot_start=slot_start,
+            duration_hours=duration_hours,
+            solar_kwh=solar_kwh,
+            baseline_house_kwh=baseline_house_kwh,
+            charged_kwh=charged_kwh,
+            discharged_kwh=discharged_kwh,
+            remaining_energy_kwh=remaining_energy_kwh,
+            imported_from_grid_kwh=imported_from_grid_kwh,
+            exported_to_grid_kwh=exported_to_grid_kwh,
+            hit_min_soc=(remaining_energy_kwh - live_state.min_energy_kwh) <= _EPSILON,
+            hit_max_soc=(
+                live_state.max_energy_kwh - remaining_energy_kwh
+            ) <= _EPSILON,
+            limited_by_charge_power=any(
+                slot["limitedByChargePower"] for slot in phase_slots
+            ),
+            limited_by_discharge_power=any(
+                slot["limitedByDischargePower"] for slot in phase_slots
+            ),
+            soc_pct=self._calculate_soc_pct(
+                remaining_energy_kwh,
+                live_state.nominal_capacity_kwh,
+            ),
+        )
+
+    def _make_simulated_slot_payload(
+        self,
+        *,
+        slot_start: datetime,
+        duration_hours: float,
+        solar_kwh: float,
+        baseline_house_kwh: float,
+        charged_kwh: float,
+        discharged_kwh: float,
+        remaining_energy_kwh: float,
+        imported_from_grid_kwh: float,
+        exported_to_grid_kwh: float,
+        hit_min_soc: bool,
+        hit_max_soc: bool,
+        limited_by_charge_power: bool,
+        limited_by_discharge_power: bool,
+        soc_pct: float,
+    ) -> dict[str, Any]:
+        return {
+            "timestamp": slot_start.isoformat(),
+            "durationHours": round(duration_hours, 4),
+            "solarKwh": self._round_energy(solar_kwh),
+            "baselineHouseKwh": self._round_energy(baseline_house_kwh),
+            "netKwh": self._round_energy(solar_kwh - baseline_house_kwh),
+            "chargedKwh": self._round_energy(charged_kwh),
+            "dischargedKwh": self._round_energy(discharged_kwh),
+            "remainingEnergyKwh": self._round_energy(remaining_energy_kwh),
+            "socPct": round(soc_pct, 2),
+            "importedFromGridKwh": self._round_energy(imported_from_grid_kwh),
+            "exportedToGridKwh": self._round_energy(exported_to_grid_kwh),
+            "hitMinSoc": hit_min_soc,
+            "hitMaxSoc": hit_max_soc,
+            "limitedByChargePower": limited_by_charge_power,
+            "limitedByDischargePower": limited_by_discharge_power,
+        }
 
     def _read_current_slot_house_value(
         self, house_forecast: dict[str, Any], current_slot_start: datetime
@@ -652,8 +1119,42 @@ class BatteryCapacityForecastBuilder:
         return round(value, 4)
 
     @staticmethod
+    def _calculate_soc_pct(
+        remaining_energy_kwh: float,
+        nominal_capacity_kwh: float,
+    ) -> float:
+        return (remaining_energy_kwh / nominal_capacity_kwh) * 100
+
+    @staticmethod
     def _get_slot_fraction(duration_hours: float) -> float:
         return duration_hours / _CANONICAL_SLOT_HOURS
+
+    @staticmethod
+    def _split_slot_value(
+        *,
+        total_value: float,
+        total_duration_hours: float,
+        partial_duration_hours: float,
+    ) -> float:
+        if total_duration_hours <= _EPSILON:
+            return 0.0
+        partial_fraction = min(
+            1.0,
+            max(0.0, partial_duration_hours / total_duration_hours),
+        )
+        return total_value * partial_fraction
+
+    @staticmethod
+    def _target_energy_kwh(
+        *,
+        target_soc: int,
+        live_state: BatteryLiveState,
+    ) -> float:
+        target_energy_kwh = (live_state.nominal_capacity_kwh * target_soc) / 100
+        return min(
+            live_state.max_energy_kwh,
+            max(live_state.min_energy_kwh, target_energy_kwh),
+        )
 
     @staticmethod
     def _get_solar_point_split_factor(
@@ -748,9 +1249,17 @@ class BatteryCapacityForecastBuilder:
     def _is_supported_schedule_action(action_kind: str) -> bool:
         return action_kind in {
             SCHEDULE_ACTION_NORMAL,
+            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
             SCHEDULE_ACTION_STOP_CHARGING,
             SCHEDULE_ACTION_STOP_DISCHARGING,
         }
+
+    @staticmethod
+    def _require_target_soc(action: ScheduleAction) -> int:
+        if action.target_soc is None:
+            raise ValueError(f"Action '{action.kind}' requires target_soc")
+        return action.target_soc
 
     @staticmethod
     def _read_float(raw_value: Any) -> float | None:

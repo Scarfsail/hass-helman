@@ -18,8 +18,10 @@
 - Granularity compatibility is a required outcome: a future `SCHEDULE_SLOT_MINUTES` change from `30` to `15` must not require follow-up battery-forecast-specific code changes.
 - **Increment 1 is complete.**
 - **Increment 2 is complete.**
-- **Increments 4-5 are still pending.**
-- The next session should start with **Increment 4 - Target actions and mid-slot crossing**.
+- **Increment 3 is complete.**
+- **Increment 4 is complete:** backend implementation, targeted validation, review-driven coordinator fixes, and restart-gated websocket validation all passed.
+- **Increment 5 is still pending.**
+- The next session should resume with **Increment 5**.
 
 ## Rules for future sessions
 
@@ -44,7 +46,7 @@ When continuing this work in a new session:
 | 1 | Shared schedule overlay contract | BE | Complete | Added shared action resolution + canonical schedule overlay; automated and live regression validation passed |
 | 2 | Coordinator plumbing and cache signatures | BE | Complete | Schedule state now participates in battery-cache dependencies and live regression confirms forecast remains baseline-equivalent externally |
 | 3 | Public response contract and stop-action simulation | BE | Complete | `helman/get_forecast` now exposes stop-action schedule-adjusted battery output plus baseline comparison fields; automated and live validation passed |
-| 4 | Target actions and mid-slot crossing | BE | Pending | Add `charge_to_target_soc` and `discharge_to_target_soc`, including paired `stop_*` transitions |
+| 4 | Target actions and mid-slot crossing | BE | Complete | Target actions now simulate with scheduler-aligned semantics, executable-action gating, safe cache behavior, and live websocket validation passed |
 | 5 | Horizon fallback, cache polish, and docs closeout | BE + docs | Pending | Finish horizon-boundary correctness, final cache polish, docs, and closeout smoke validation |
 
 ## Increment 1 - Shared schedule overlay contract
@@ -137,21 +139,30 @@ When continuing this work in a new session:
 
 ## Increment 4 - Target actions and mid-slot crossing
 
-- **Status**: Pending
-- **Planned paths**:
-  - `/home/ondra/dev/hass/hass-helman/custom_components/helman/scheduling/forecast_overlay.py`
+- **Status**: Complete
+- **Implemented paths**:
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/coordinator.py`
   - `/home/ondra/dev/hass/hass-helman/custom_components/helman/battery_capacity_forecast_builder.py`
   - `/home/ondra/dev/hass/hass-helman/tests/test_battery_capacity_forecast_builder.py`
   - `/home/ondra/dev/hass/hass-helman/tests/test_coordinator_battery_forecast_cache.py`
-- **Planned implementation notes**:
-  - Implement `charge_to_target_soc` and `discharge_to_target_soc`.
-  - Handle target reached at slot start, target reached mid-slot, and fractional first-slot target crossing.
-  - Reuse the shared target-semantics helper so executor and forecast stay aligned.
-  - Tighten compatibility around active target transitions so the cache does not survive an effective-action change incorrectly.
-- **Planned validation notes**:
-  - Run targeted battery-builder and cache tests plus the full backend unit suite.
-  - After restart confirmation, use websocket validation with current-slot `charge_to_target_soc` and `discharge_to_target_soc` scenarios and confirm runtime metadata matches the adjusted battery behavior.
+- **Actual implementation notes**:
+  - The battery builder now resolves target actions at slot start via the shared scheduler resolver using **simulated** SoC, so forecast behavior matches executor semantics when a target is already reached.
+  - Added explicit target-action simulation for `charge_to_target_soc` and `discharge_to_target_soc`, including forced charge/discharge energy flows, paired `stop_*` remainder handling, and proportional mid-slot splits for both full canonical slots and the fractional first forecast slot.
+  - Target actions no longer trigger the previous baseline fallback path; instead, the adjusted series continues through supported target-action slots while still falling back cleanly for genuinely unknown action kinds.
+  - The coordinator now normalizes the forecast-facing schedule document to **executable** actions only: if schedule control config is unavailable the battery forecast stays baseline-equivalent, and target-action slots are filtered out when the matching target control option is not configured so `helman/get_forecast` cannot claim behavior that `helman/get_schedule` / execution cannot actually apply.
+  - Active executable target slots now bypass battery-forecast cache reuse, which avoids stale first-slot results when the current slot can still cross its target mid-slot even if the slot-start executed action has not changed yet.
+  - Disabled schedules still reuse the battery cache because the raw schedule signature is empty whenever execution is off.
+  - `forecast_overlay.py` and the public `helman/get_forecast` request contract did not need changes for this increment.
+- **Actual validation notes**:
+  - `python3 -m py_compile custom_components/helman/battery_capacity_forecast_builder.py custom_components/helman/coordinator.py tests/test_battery_capacity_forecast_builder.py tests/test_coordinator_battery_forecast_cache.py` ✅
+  - `python3 -m unittest -v tests.test_battery_capacity_forecast_builder` ✅
+  - `python3 -m unittest -v tests.test_coordinator_battery_forecast_cache` ✅
+  - `python3 -m unittest discover -s tests -v` ⚠️ still fails in the existing suite because stub-based test modules contaminate later imports when discovery runs them in one Python process (observed `battery_state` and `runtime_status` import errors in builder / schedule-related modules, plus `_FailedTest` discovery fallout). The same isolation issue was also observable earlier in this session when combining targeted suites, so it is not specific to the Increment 4 code changes.
+  - Restart-gated local HA websocket validation passed after Home Assistant restart confirmation:
+    - baseline `helman/get_schedule` / `helman/get_forecast` were reset to `executionEnabled = false`, current slot `normal`, and no `scheduleAdjusted = true`; the live current SoC was `21%`, which gave runtime-safe targets of `61%` for charging and `15%` for discharging.
+    - after mutating only the current slot to `charge_to_target_soc(61)` and enabling execution, `helman/get_schedule` reported `runtime.executedAction.kind = charge_to_target_soc` with reason `scheduled`, and `helman/get_forecast` returned `scheduleAdjusted = true` with the first battery point charging to `remainingEnergyKwh = 5.0932` from a `baselineRemainingEnergyKwh = 3.7162` and `importedFromGridKwh = 1.4495`.
+    - after mutating only the current slot to `discharge_to_target_soc(15)` and enabling execution, `helman/get_schedule` reported `runtime.executedAction.kind = discharge_to_target_soc` with reason `scheduled`, and `helman/get_forecast` returned `scheduleAdjusted = true` with the first battery point discharging to `remainingEnergyKwh = 2.5914` from a `baselineRemainingEnergyKwh = 3.7159` and `exportedToGridKwh = 1.0773`.
+    - cleanup restored the current slot to `normal`, disabled execution again, and `helman/get_forecast` returned to the baseline battery contract afterward.
 
 ## Increment 5 - Horizon fallback, cache polish, and docs closeout
 
