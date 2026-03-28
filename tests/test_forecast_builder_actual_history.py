@@ -4,7 +4,7 @@ import importlib
 import sys
 import types
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -91,21 +91,24 @@ class _FakeDtUtil:
 
 
 class _FakeStateMachine:
+    def __init__(self, states: dict[str, object] | None = None) -> None:
+        self._states = states or {}
+
     def get(self, entity_id: str):
-        return None
+        return self._states.get(entity_id)
 
 
 _install_import_stubs()
 
 
 class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
-    def _make_builder(self):
+    def _make_builder(self, *, states: dict[str, object] | None = None):
         forecast_builder_module = importlib.reload(
             importlib.import_module("custom_components.helman.forecast_builder")
         )
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
-            states=_FakeStateMachine(),
+            states=_FakeStateMachine(states),
         )
         return (
             forecast_builder_module,
@@ -262,6 +265,53 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             REFERENCE_TIME,
             interval_minutes=15,
         )
+
+    async def test_extract_hourly_solar_points_reanchors_post_dst_stale_offset_day(self) -> None:
+        entity_id = "sensor.energy_production_d2"
+        wh_period = {
+            f"2026-03-30T{hour:02d}:00:00+01:00": float(hour)
+            for hour in range(24)
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(attributes={"wh_period": wh_period}),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+            points = builder._extract_hourly_solar_points(entity_id, date(2026, 3, 30))
+
+        self.assertEqual(len(points), 24)
+        self.assertEqual(points[0][0].isoformat(), "2026-03-30T00:00:00+02:00")
+        self.assertEqual(points[0][1]["timestamp"], "2026-03-30T00:00:00+02:00")
+        self.assertEqual(points[0][1]["value"], 0.0)
+        self.assertEqual(points[1][0].isoformat(), "2026-03-30T01:00:00+02:00")
+        self.assertEqual(points[-1][0].isoformat(), "2026-03-30T23:00:00+02:00")
+        self.assertEqual(points[-1][1]["value"], 23.0)
+
+    async def test_extract_hourly_solar_points_keeps_dst_gap_day_on_local_hour_axis(self) -> None:
+        entity_id = "sensor.energy_production_tomorrow"
+        wh_period = {
+            f"2026-03-29T{hour:02d}:00:00+01:00": float(hour)
+            for hour in range(24)
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(attributes={"wh_period": wh_period}),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+            points = builder._extract_hourly_solar_points(entity_id, date(2026, 3, 29))
+
+        self.assertEqual(len(points), 23)
+        self.assertEqual(points[0][0].isoformat(), "2026-03-29T00:00:00+01:00")
+        self.assertEqual(points[1][0].isoformat(), "2026-03-29T01:00:00+01:00")
+        self.assertEqual(points[2][0].isoformat(), "2026-03-29T03:00:00+02:00")
+        self.assertTrue(all("T02:" not in point["timestamp"] for _, point in points))
+        self.assertEqual(points[2][1]["value"], 2.0)
+        self.assertEqual(points[-1][0].isoformat(), "2026-03-29T23:00:00+02:00")
+        self.assertEqual(points[-1][1]["value"], 22.0)
 
 
 if __name__ == "__main__":

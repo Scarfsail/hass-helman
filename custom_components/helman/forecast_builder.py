@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -134,7 +134,7 @@ class HelmanForecastBuilder:
         if not isinstance(wh_period, dict):
             return []
 
-        points: list[tuple[datetime, dict[str, Any]]] = []
+        parsed_points: list[tuple[datetime, float]] = []
         for raw_key, raw_value in wh_period.items():
             value = self._parse_float(raw_value)
             if value is None:
@@ -144,20 +144,46 @@ class HelmanForecastBuilder:
             if parsed_timestamp is None:
                 continue
 
-            if parsed_timestamp.astimezone(self._local_tz).date() != expected_date:
-                continue
+            parsed_points.append((parsed_timestamp, value))
 
+        if not parsed_points:
+            return []
+
+        parsed_points.sort(key=lambda item: dt_util.as_utc(item[0]))
+        expected_slots = self._build_local_hour_slots_for_date(expected_date)
+        if not expected_slots:
+            return []
+
+        points: list[tuple[datetime, dict[str, Any]]] = []
+        for slot_start, (_, value) in zip(expected_slots, parsed_points):
             points.append(
                 (
-                    parsed_timestamp,
+                    slot_start,
                     {
-                        "timestamp": parsed_timestamp.isoformat(),
+                        "timestamp": slot_start.isoformat(),
                         "value": value,
                     },
                 )
             )
 
         return points
+
+    def _build_local_hour_slots_for_date(self, expected_date: date) -> list[datetime]:
+        local_start = datetime.combine(expected_date, time.min, tzinfo=self._local_tz)
+        local_end = datetime.combine(
+            expected_date + timedelta(days=1),
+            time.min,
+            tzinfo=self._local_tz,
+        )
+
+        slots: list[datetime] = []
+        cursor_utc = dt_util.as_utc(local_start)
+        end_utc = dt_util.as_utc(local_end)
+        while cursor_utc < end_utc:
+            slots.append(dt_util.as_local(cursor_utc))
+            cursor_utc += timedelta(hours=1)
+
+        return slots
 
     def _build_grid_forecast(self) -> dict[str, Any]:
         power_devices = self._read_dict(self._config.get("power_devices"))
