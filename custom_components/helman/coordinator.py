@@ -1029,9 +1029,11 @@ class HelmanCoordinator:
         ):
             return False
 
-        cached_started_at = dt_util.parse_datetime(
-            self._cached_battery_forecast.get("startedAt")
-        )
+        cached_started_at_raw = self._cached_battery_forecast.get("startedAt")
+        if not isinstance(cached_started_at_raw, str):
+            return False
+
+        cached_started_at = dt_util.parse_datetime(cached_started_at_raw)
         if cached_started_at is None:
             return False
 

@@ -371,6 +371,24 @@ class BatteryForecastResponseTests(unittest.TestCase):
         self.assertEqual(response["series"][1]["baselineRemainingEnergyKwh"], 5.5)
         self.assertEqual(response["series"][1]["baselineSocPct"], 55.0)
 
+    def test_hourly_response_keeps_schedule_adjustment_coverage_distinct_from_coverage_until(
+        self,
+    ) -> None:
+        snapshot = _make_adjusted_snapshot()
+        snapshot["coverageUntil"] = "2026-03-21T00:00:00+01:00"
+
+        response = battery_forecast_response.build_battery_forecast_response(
+            snapshot,
+            granularity=60,
+            forecast_days=1,
+        )
+
+        self.assertEqual(response["coverageUntil"], "2026-03-21T00:00:00+01:00")
+        self.assertEqual(
+            response["scheduleAdjustmentCoverageUntil"],
+            "2026-03-20T23:00:00+01:00",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

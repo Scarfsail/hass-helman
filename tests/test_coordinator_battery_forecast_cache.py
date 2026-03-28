@@ -467,6 +467,36 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(build_mock.await_count, 2)
 
+    async def test_async_get_battery_forecast_rebuilds_when_cached_started_at_is_missing(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        expected_forecast = _make_battery_forecast()
+        build_mock = AsyncMock(return_value=expected_forecast)
+        coordinator._build_battery_forecast = build_mock
+        coordinator._cached_battery_forecast = _make_battery_forecast(started_at=None)
+        coordinator._cached_battery_forecast_expires_at = datetime.fromisoformat(
+            "2026-03-20T21:12:00+01:00"
+        )
+        coordinator._cached_battery_forecast_house_generated_at = _make_house_forecast()[
+            "generatedAt"
+        ]
+        coordinator._cached_battery_forecast_solar_signature = (
+            coordinator._build_battery_forecast_solar_signature(_make_solar_forecast())
+        )
+        coordinator._cached_battery_forecast_schedule_execution_enabled = False
+        coordinator._cached_battery_forecast_schedule_signature = ()
+        coordinator._cached_battery_forecast_schedule_effective_signature = None
+
+        forecast = await coordinator._async_get_battery_forecast(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            started_at=REFERENCE_TIME,
+        )
+
+        self.assertEqual(forecast, expected_forecast)
+        build_mock.assert_awaited_once()
+
     async def test_async_get_battery_forecast_rebuilds_when_house_snapshot_changes(self) -> None:
         coordinator = self._make_coordinator()
         build_mock = AsyncMock(return_value=_make_battery_forecast())

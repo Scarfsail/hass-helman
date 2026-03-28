@@ -9,15 +9,17 @@ Use it after backend changes that affect:
 - `helman/get_schedule`
 - `helman/set_schedule`
 - `helman/set_schedule_execution`
+- `helman/get_forecast`
 - executor action resolution
 - active-slot runtime metadata
+- schedule-aware battery forecast output
 
 ## Preconditions
 
 Before mutating the live instance:
 
 - restart Home Assistant with the local integration changes loaded
-- verify `helman/get_config` and `helman/get_schedule` succeed
+- verify `helman/get_config`, `helman/get_schedule`, and `helman/get_forecast` succeed
 - prefer starting from:
   - `executionEnabled = false`
   - current slot action `normal`
@@ -92,7 +94,32 @@ Example for `charge_to_target_soc(90)`:
 
 Call `helman/get_schedule` again and inspect `slots[0]`. The requested action should stay unchanged, while `runtime` describes what the executor actually applied for the active slot.
 
-### 6. Revert
+### 6. Read the schedule-aware forecast
+
+Use the hourly compatibility path first:
+
+```json
+{
+  "type": "helman/get_forecast",
+  "granularity": 60,
+  "forecast_days": 3
+}
+```
+
+Compare `battery_capacity` against the active runtime data from `helman/get_schedule`:
+
+- when execution is disabled and the current slot is `normal`, do **not** expect `scheduleAdjusted = true`
+- when `slots[0].runtime.executedAction.kind` is non-`normal`, expect `battery_capacity.scheduleAdjusted = true`
+- when `scheduleAdjusted = true`, expect `scheduleAdjustmentCoverageUntil` to be present and no later than the overall `coverageUntil`
+- compare the first returned battery bucket with the baseline fields using `slots[0].runtime.executedAction.kind` as the source of truth:
+  - `stop_charging` / `stop_discharging` should suppress the blocked direction relative to baseline
+  - `charge_to_target_soc` should raise the first bucket above baseline
+  - `discharge_to_target_soc` should lower the first bucket below baseline
+- for Increment 5 closeout, inspect points after `scheduleAdjustmentCoverageUntil` and confirm the forecast has returned to `normal` progression from the adjusted battery state rather than continuing to apply non-`normal` schedule actions
+
+If you need finer detail for the first bucket, repeat the same request with `granularity = 15`.
+
+### 7. Revert
 
 Reset the current slot:
 
@@ -351,9 +378,10 @@ For each scenario:
 2. Apply the scenario to that slot with `helman/set_schedule`.
 3. Enable execution with `helman/set_schedule_execution`.
 4. Re-read `helman/get_schedule` and verify requested action plus `runtime`.
-5. Read the mode entity and power sensors immediately.
-6. Wait about `10` seconds and read the sensors again.
-7. Revert the slot to `normal`.
-8. Disable execution.
-9. Re-read `helman/get_schedule` and confirm the API baseline is restored.
-10. Wait again if needed and verify the physical flows have also returned to a normal-looking baseline.
+5. Call `helman/get_forecast` and compare `battery_capacity` against the runtime-effective action.
+6. Read the mode entity and power sensors immediately.
+7. Wait about `10` seconds and read the sensors again.
+8. Revert the slot to `normal`.
+9. Disable execution.
+10. Re-read `helman/get_schedule` and `helman/get_forecast` and confirm the API baseline is restored.
+11. Wait again if needed and verify the physical flows have also returned to a normal-looking baseline.

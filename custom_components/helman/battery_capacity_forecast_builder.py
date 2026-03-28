@@ -362,16 +362,11 @@ class BatteryCapacityForecastBuilder:
                 if not self._is_supported_schedule_action(action.kind):
                     if not has_non_normal_adjustment:
                         return baseline_series, False, None
-                    adjusted_series.extend(
-                        self._build_baseline_fallback_tail(baseline_series[index:])
-                    )
-                    return (
-                        self._attach_baseline_comparison(
-                            adjusted_series,
-                            baseline_series,
-                        ),
-                        True,
-                        schedule_adjustment_coverage_until,
+                    return self._build_schedule_baseline_tail_fallback(
+                        adjusted_series=adjusted_series,
+                        baseline_series=baseline_series,
+                        fallback_start_index=index,
+                        schedule_adjustment_coverage_until=schedule_adjustment_coverage_until,
                     )
 
             result = self._simulate_schedule_action_slot(
@@ -387,7 +382,6 @@ class BatteryCapacityForecastBuilder:
             remaining_energy_kwh = result.remaining_energy_kwh
             if result.effective_action_kind != SCHEDULE_ACTION_NORMAL:
                 has_non_normal_adjustment = True
-            if has_non_normal_adjustment:
                 schedule_adjustment_coverage_until = self._slot_end(
                     slot_input.slot_start,
                     slot_input.duration_hours,
@@ -397,6 +391,23 @@ class BatteryCapacityForecastBuilder:
         if not has_non_normal_adjustment:
             return baseline_series, False, None
 
+        return (
+            self._attach_baseline_comparison(adjusted_series, baseline_series),
+            True,
+            schedule_adjustment_coverage_until,
+        )
+
+    def _build_schedule_baseline_tail_fallback(
+        self,
+        *,
+        adjusted_series: list[dict[str, Any]],
+        baseline_series: list[dict[str, Any]],
+        fallback_start_index: int,
+        schedule_adjustment_coverage_until: str | None,
+    ) -> tuple[list[dict[str, Any]], bool, str | None]:
+        adjusted_series.extend(
+            self._build_baseline_fallback_tail(baseline_series[fallback_start_index:])
+        )
         return (
             self._attach_baseline_comparison(adjusted_series, baseline_series),
             True,
