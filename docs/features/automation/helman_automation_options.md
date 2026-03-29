@@ -21,7 +21,7 @@ The main gaps are:
 - no accepted-vs-proposed action model
 - no override model
 - no execution engine
-- no import-price path in the current grid forecast
+- only a fixed config-driven import-price path exists in the current grid forecast; there is no richer tariff source model yet
 - no control contract yet for deferrable consumers or EV charging
 
 That suggests the next feature should be framed as a **planning and execution layer on top of the existing forecast layer**.

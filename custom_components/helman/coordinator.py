@@ -47,11 +47,9 @@ from .forecast_builder import HelmanForecastBuilder
 from .forecast_request import ensure_supported_forecast_request
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
+from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_forecast_response import build_house_forecast_response
-from .point_forecast_response import (
-    build_grid_forecast_response,
-    build_solar_forecast_response,
-)
+from .point_forecast_response import build_solar_forecast_response
 from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import (
     ScheduleControlConfig,
@@ -102,6 +100,15 @@ def _merge_grid_forecast_responses(
     )
     merged_response["exportPricePoints"] = deepcopy(
         grid_price_response.get("exportPricePoints", [])
+    )
+    merged_response["importPriceUnit"] = deepcopy(
+        grid_price_response.get("importPriceUnit")
+    )
+    merged_response["currentImportPrice"] = deepcopy(
+        grid_price_response.get("currentImportPrice")
+    )
+    merged_response["importPricePoints"] = deepcopy(
+        grid_price_response.get("importPricePoints", [])
     )
     return merged_response
 
@@ -545,7 +552,7 @@ class HelmanCoordinator:
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
-        grid_price_response = build_grid_forecast_response(
+        grid_price_response = build_grid_price_forecast_response(
             raw_result["grid"],
             granularity=granularity,
             forecast_days=forecast_days,

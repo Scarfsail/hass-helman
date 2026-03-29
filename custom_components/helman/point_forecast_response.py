@@ -30,11 +30,14 @@ def build_solar_forecast_response(
     )
 
 
-def build_grid_forecast_response(
+def build_price_channel_response(
     snapshot: dict[str, Any],
     *,
     granularity: int,
     forecast_days: int,
+    unit_field: str,
+    current_price_field: str,
+    points_field: str,
 ) -> dict[str, Any]:
     response = _build_point_forecast_response(
         snapshot,
@@ -43,10 +46,11 @@ def build_grid_forecast_response(
         aggregation_mode="average",
         include_actual_history=False,
     )
-    response["exportPriceUnit"] = response.pop("unit", None)
-    response["currentExportPrice"] = response.pop("currentSellPrice", None)
-    response["exportPricePoints"] = response.pop("points", [])
-    return response
+    return {
+        unit_field: response.get("unit"),
+        current_price_field: response.get("currentPrice"),
+        points_field: response.get("points", []),
+    }
 
 
 def _build_point_forecast_response(

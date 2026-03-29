@@ -74,6 +74,14 @@ def _install_import_stubs() -> None:
     grid_response_mod.build_grid_flow_forecast_response = lambda *args, **kwargs: {}
     sys.modules[grid_response_mod.__name__] = grid_response_mod
 
+    grid_price_response_mod = types.ModuleType(
+        "custom_components.helman.grid_price_forecast_response"
+    )
+    grid_price_response_mod.build_grid_price_forecast_response = (
+        lambda *args, **kwargs: {}
+    )
+    sys.modules[grid_price_response_mod.__name__] = grid_price_response_mod
+
     tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")
     tree_builder_mod.HelmanTreeBuilder = type("HelmanTreeBuilder", (), {})
     sys.modules[tree_builder_mod.__name__] = tree_builder_mod
@@ -266,7 +274,10 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             build=AsyncMock(
                 return_value={
                     "solar": {"status": "available"},
-                    "grid": {"status": "available", "currentSellPrice": 2.5},
+                    "grid": {
+                        "export": {"status": "available", "currentPrice": 2.5},
+                        "import": {"status": "available", "currentPrice": 7.0},
+                    },
                 }
             )
         )
@@ -281,15 +292,20 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             "series": [],
         }
         grid_price_response = {
-            "status": "available",
-            "resolution": "hour",
-            "horizonHours": 24,
             "exportPriceUnit": "CZK/kWh",
             "currentExportPrice": 2.5,
             "exportPricePoints": [
                 {
                     "timestamp": "2026-03-20T21:00:00+01:00",
                     "value": 100.0,
+                }
+            ],
+            "importPriceUnit": "CZK/kWh",
+            "currentImportPrice": 7.0,
+            "importPricePoints": [
+                {
+                    "timestamp": "2026-03-20T21:00:00+01:00",
+                    "value": 200.0,
                 }
             ],
         }
@@ -307,7 +323,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 coordinator_module,
-                "build_grid_forecast_response",
+                "build_grid_price_forecast_response",
                 return_value=grid_price_response,
             ) as build_grid_price_response,
             patch.object(
@@ -334,7 +350,10 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             result = await coordinator.get_forecast(granularity=60, forecast_days=1)
 
         build_grid_price_response.assert_called_once_with(
-            {"status": "available", "currentSellPrice": 2.5},
+            {
+                "export": {"status": "available", "currentPrice": 2.5},
+                "import": {"status": "available", "currentPrice": 7.0},
+            },
             granularity=60,
             forecast_days=1,
         )
@@ -360,8 +379,13 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             result["grid"]["exportPricePoints"],
             grid_price_response["exportPricePoints"],
         )
-        self.assertNotIn("currentSellPrice", result["grid"])
-        self.assertNotIn("points", result["grid"])
+        self.assertEqual(result["grid"]["currentImportPrice"], 7.0)
+        self.assertEqual(result["grid"]["importPriceUnit"], "CZK/kWh")
+        self.assertEqual(
+            result["grid"]["importPricePoints"],
+            grid_price_response["importPricePoints"],
+        )
+        self.assertNotIn("currentPrice", result["grid"])
 
 
 if __name__ == "__main__":

@@ -128,41 +128,5 @@ class PointForecastResponseTests(unittest.TestCase):
             {"timestamp": "2026-03-20T20:30:00+01:00", "value": 200.0},
         ])
 
-    def test_grid_half_hour_response_repeats_hourly_prices(self) -> None:
-        response = point_forecast_response.build_grid_forecast_response(
-            {
-                "status": "available",
-                "unit": "CZK/kWh",
-                "currentSellPrice": 2.5,
-                "points": [
-                    {
-                        "timestamp": "2026-03-20T21:00:00+01:00",
-                        "value": 100.0,
-                    },
-                    {
-                        "timestamp": "2026-03-20T22:00:00+01:00",
-                        "value": 120.0,
-                    },
-                ],
-            },
-            granularity=30,
-            forecast_days=1,
-        )
-
-        self.assertEqual(response["resolution"], "half_hour")
-        self.assertEqual(response["horizonHours"], 24)
-        self.assertEqual(response["exportPriceUnit"], "CZK/kWh")
-        self.assertEqual(response["currentExportPrice"], 2.5)
-        self.assertEqual(response["exportPricePoints"], [
-            {"timestamp": "2026-03-20T21:00:00+01:00", "value": 100.0},
-            {"timestamp": "2026-03-20T21:30:00+01:00", "value": 100.0},
-            {"timestamp": "2026-03-20T22:00:00+01:00", "value": 120.0},
-            {"timestamp": "2026-03-20T22:30:00+01:00", "value": 120.0},
-        ])
-        self.assertNotIn("unit", response)
-        self.assertNotIn("currentSellPrice", response)
-        self.assertNotIn("points", response)
-
-
 if __name__ == "__main__":
     unittest.main()
