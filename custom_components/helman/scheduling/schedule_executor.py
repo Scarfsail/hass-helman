@@ -285,10 +285,13 @@ class ScheduleExecutor:
             if self._runtime.last_error == error_key:
                 return
 
+            context = self._build_failure_log_context()
             _LOGGER.warning(
-                "Schedule execution reconcile failed during %s: %s",
+                "Schedule execution reconcile failed during %s%s: %s (%s)",
                 reason,
+                f" [{context}]" if context else "",
                 err,
+                err.code,
             )
             self._runtime.last_error = error_key
 
@@ -484,3 +487,23 @@ class ScheduleExecutor:
         self._runtime.last_applied_action = action
         self._runtime.last_active_slot_id = active_slot_id
         self._runtime.last_error = None
+
+    def _build_failure_log_context(self) -> str:
+        parts: list[str] = []
+        execution_status = self._runtime.execution_status
+        if execution_status.active_slot_id is not None:
+            parts.append(f"active_slot_id={execution_status.active_slot_id}")
+
+        runtime = execution_status.active_slot_runtime
+        if runtime is not None and runtime.executed_action is not None:
+            parts.append(
+                f"executed_action={self._format_action(runtime.executed_action)}"
+            )
+
+        return ", ".join(parts)
+
+    @staticmethod
+    def _format_action(action: ScheduleAction) -> str:
+        if action.target_soc is None:
+            return action.kind
+        return f"{action.kind}({action.target_soc})"

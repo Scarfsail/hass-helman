@@ -229,8 +229,23 @@ def _cleanup_stubbed_modules() -> None:
 _cleanup_stubbed_modules()
 
 
+class FakeState:
+    def __init__(self, state: str, *, attributes: dict | None = None) -> None:
+        self.state = state
+        self.attributes = attributes or {}
+
+
+class FakeStates:
+    def __init__(self, states: dict[str, FakeState]) -> None:
+        self._states = states
+
+    def get(self, entity_id: str) -> FakeState | None:
+        return self._states.get(entity_id)
+
+
 class FakeHass:
-    pass
+    def __init__(self, states: dict[str, FakeState] | None = None) -> None:
+        self.states = FakeStates(states or {})
 
 
 class FakeStorage:
@@ -461,11 +476,14 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.reconcile_error = ScheduleExecutionUnavailableError("boom")
 
-        with self.assertRaises(ScheduleExecutionUnavailableError):
-            await coordinator.set_schedule_execution(
-                enabled=True,
-                reference_time=REFERENCE_TIME,
-            )
+        with self.assertLogs(
+            "custom_components.helman.coordinator", level="WARNING"
+        ) as captured:
+            with self.assertRaises(ScheduleExecutionUnavailableError):
+                await coordinator.set_schedule_execution(
+                    enabled=True,
+                    reference_time=REFERENCE_TIME,
+                )
 
         self.assertEqual(
             storage.schedule_document,
@@ -481,6 +499,47 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             executor.events,
             ["start", "reconcile:enable_request", "stop"],
         )
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn("Failed to enable schedule execution", captured.output[0])
+        self.assertIn("execution_unavailable", captured.output[0])
+
+    async def test_enable_failure_while_already_enabled_logs_without_rollback(self) -> None:
+        coordinator, storage, executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": True,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                },
+            }
+        )
+        executor.reconcile_error = ScheduleExecutionUnavailableError("boom")
+
+        with self.assertLogs(
+            "custom_components.helman.coordinator", level="WARNING"
+        ) as captured:
+            with self.assertRaises(ScheduleExecutionUnavailableError):
+                await coordinator.set_schedule_execution(
+                    enabled=True,
+                    reference_time=REFERENCE_TIME,
+                )
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                },
+            },
+        )
+        self.assertEqual(executor.events, ["start", "reconcile:enable_request"])
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn(
+            "Failed to reconcile already-enabled schedule execution",
+            captured.output[0],
+        )
+        self.assertIn("execution_unavailable", captured.output[0])
 
     async def test_disable_restores_normal_before_persisting_false(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
@@ -545,11 +604,14 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.restore_error = ScheduleExecutionUnavailableError("boom")
 
-        with self.assertRaises(ScheduleExecutionUnavailableError):
-            await coordinator.set_schedule_execution(
-                enabled=False,
-                reference_time=REFERENCE_TIME,
-            )
+        with self.assertLogs(
+            "custom_components.helman.coordinator", level="WARNING"
+        ) as captured:
+            with self.assertRaises(ScheduleExecutionUnavailableError):
+                await coordinator.set_schedule_execution(
+                    enabled=False,
+                    reference_time=REFERENCE_TIME,
+                )
 
         self.assertEqual(
             storage.schedule_document,
@@ -569,6 +631,74 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "start",
                 "safe_reconcile:disable_restore_failed",
             ],
+        )
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn(
+            "Failed to disable schedule execution while restoring normal mode",
+            captured.output[0],
+        )
+        self.assertIn("execution_unavailable", captured.output[0])
+
+    async def test_schedule_executor_battery_state_logs_detailed_issue_once(self) -> None:
+        storage = FakeStorage(
+            schedule_document={"executionEnabled": False, "slots": {}},
+            config={
+                "power_devices": {
+                    "battery": {
+                        "entities": {
+                            "remaining_energy": "sensor.battery_remaining_energy",
+                            "capacity": "sensor.battery_soc",
+                            "min_soc": "sensor.battery_min_soc",
+                            "max_soc": "sensor.battery_max_soc",
+                        }
+                    }
+                }
+            },
+        )
+        coordinator = HelmanCoordinator(
+            FakeHass(
+                {
+                    "sensor.battery_remaining_energy": FakeState(
+                        "5.0",
+                        attributes={"unit_of_measurement": "kWh"},
+                    ),
+                    "sensor.battery_soc": FakeState("55"),
+                    "sensor.battery_min_soc": FakeState("unknown"),
+                    "sensor.battery_max_soc": FakeState("100"),
+                }
+            ),
+            storage,
+        )
+
+        with self.assertLogs(
+            "custom_components.helman.coordinator", level="WARNING"
+        ) as captured:
+            self.assertIsNone(coordinator._read_schedule_executor_battery_state())
+            self.assertIsNone(coordinator._read_schedule_executor_battery_state())
+
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn("sensor.battery_min_soc", captured.output[0])
+        self.assertIn("'unknown'", captured.output[0])
+        self.assertIn("Schedule execution battery state unavailable", captured.output[0])
+
+    async def test_schedule_executor_control_config_logs_missing_fields_once(self) -> None:
+        storage = FakeStorage(
+            schedule_document={"executionEnabled": False, "slots": {}},
+            config={},
+        )
+        coordinator = HelmanCoordinator(FakeHass(), storage)
+
+        with self.assertLogs(
+            "custom_components.helman.coordinator", level="WARNING"
+        ) as captured:
+            self.assertIsNone(coordinator._read_schedule_executor_control_config())
+            self.assertIsNone(coordinator._read_schedule_executor_control_config())
+
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn("scheduler.control.mode_entity_id", captured.output[0])
+        self.assertIn(
+            "scheduler.control.action_option_map.normal",
+            captured.output[0],
         )
 
     async def test_set_schedule_reconciles_safely_when_execution_enabled(self) -> None:

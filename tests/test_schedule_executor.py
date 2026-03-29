@@ -706,13 +706,21 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        await executor.async_reconcile_safely(
-            reason="test",
-            reference_time=REFERENCE_TIME,
-        )
+        with self.assertLogs(
+            "custom_components.helman.scheduling.schedule_executor",
+            level="WARNING",
+        ) as captured:
+            await executor.async_reconcile_safely(
+                reason="test",
+                reference_time=REFERENCE_TIME,
+            )
 
         self.assertEqual(hass.services.calls, [])
         self.assertIsNotNone(executor.runtime.last_error)
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn("during test", captured.output[0])
+        self.assertIn("active_slot_id=", captured.output[0])
+        self.assertIn("not_configured", captured.output[0])
         self.assertEqual(
             executor.runtime.execution_status.active_slot_id,
             CURRENT_SLOT_ID,

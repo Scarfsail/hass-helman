@@ -282,6 +282,33 @@ def read_schedule_control_config(
     )
 
 
+def describe_schedule_control_config_issue(
+    config: Mapping[str, Any],
+) -> str | None:
+    scheduler_config = _read_mapping(config.get("scheduler"))
+    control_config = _read_mapping(scheduler_config.get("control"))
+    action_option_map = _read_mapping(control_config.get("action_option_map"))
+
+    missing_fields: list[str] = []
+    if _read_non_empty_string(control_config.get("mode_entity_id")) is None:
+        missing_fields.append("scheduler.control.mode_entity_id")
+    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_NORMAL)) is None:
+        missing_fields.append("scheduler.control.action_option_map.normal")
+    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_CHARGING)) is None:
+        missing_fields.append("scheduler.control.action_option_map.stop_charging")
+    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)) is None:
+        missing_fields.append(
+            "scheduler.control.action_option_map.stop_discharging"
+        )
+
+    if not missing_fields:
+        return None
+
+    return "missing required scheduler control config values: " + ", ".join(
+        missing_fields
+    )
+
+
 def build_horizon_start(reference_time: datetime) -> datetime:
     local_reference = dt_util.as_local(reference_time)
     return local_reference.replace(

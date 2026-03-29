@@ -19,6 +19,8 @@ from homeassistant.util import dt as dt_util
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
+    describe_battery_entity_config_issue,
+    describe_battery_live_state_issue,
     read_battery_entity_config,
     read_battery_live_state,
     read_battery_soc_bounds,
@@ -56,6 +58,7 @@ from .scheduling.schedule import (
     ScheduleSlot,
     apply_slot_patches,
     build_horizon_start,
+    describe_schedule_control_config_issue,
     format_slot_id,
     materialize_schedule_slots,
     prune_expired_slots,
@@ -128,10 +131,12 @@ class HelmanCoordinator:
                 schedule_lock=self._schedule_lock,
                 load_schedule_document=self._load_schedule_document,
                 save_schedule_document=self._save_schedule_document,
-                read_schedule_control_config=self._read_schedule_control_config,
-                read_battery_state=self._read_battery_state,
+                read_schedule_control_config=self._read_schedule_executor_control_config,
+                read_battery_state=self._read_schedule_executor_battery_state,
             ),
         )
+        self._last_schedule_control_config_issue: str | None = None
+        self._last_schedule_battery_state_issue: str | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
         # Entity IDs whose values are computed by the tick (not read from hass.states)
@@ -534,6 +539,20 @@ class HelmanCoordinator:
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
         return read_schedule_control_config(self._storage.config)
 
+    def _read_schedule_executor_control_config(self) -> ScheduleControlConfig | None:
+        control_config = self._read_schedule_control_config()
+        if control_config is not None:
+            self._last_schedule_control_config_issue = None
+            return control_config
+
+        issue = describe_schedule_control_config_issue(self._storage.config)
+        if issue is None:
+            issue = "required scheduler control config values are unavailable"
+        if self._last_schedule_control_config_issue != issue:
+            _LOGGER.warning("Schedule execution control config unavailable: %s", issue)
+            self._last_schedule_control_config_issue = issue
+        return None
+
     async def _async_normalize_schedule_document(self) -> None:
         raw_document = self._storage.schedule_document
         if raw_document is None:
@@ -706,7 +725,19 @@ class HelmanCoordinator:
                         reason="enable_request",
                         reference_time=request_now,
                     )
-                except ScheduleError:
+                except ScheduleError as err:
+                    if not was_enabled:
+                        _LOGGER.warning(
+                            "Failed to enable schedule execution: %s (%s); rolling back persisted execution flag",
+                            err,
+                            err.code,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "Failed to reconcile already-enabled schedule execution: %s (%s)",
+                            err,
+                            err.code,
+                        )
                     if not was_enabled:
                         async with self._schedule_lock:
                             latest_document = self._load_schedule_document()
@@ -731,7 +762,12 @@ class HelmanCoordinator:
                 await self._schedule_executor.async_restore_normal(
                     reason="disable_request"
                 )
-            except ScheduleError:
+            except ScheduleError as err:
+                _LOGGER.warning(
+                    "Failed to disable schedule execution while restoring normal mode: %s (%s); keeping execution enabled",
+                    err,
+                    err.code,
+                )
                 await self._schedule_executor.async_start()
                 await self._schedule_executor.async_reconcile_safely(
                     reason="disable_restore_failed",
@@ -1407,6 +1443,36 @@ class HelmanCoordinator:
         if entity_config is None:
             return None
         return read_battery_live_state(self._hass, entity_config)
+
+    def _read_schedule_executor_battery_state(self):
+        entity_config = read_battery_entity_config(self._storage.config)
+        if entity_config is None:
+            issue = describe_battery_entity_config_issue(self._storage.config)
+            if issue is None:
+                issue = "required battery entity config values are unavailable"
+            if self._last_schedule_battery_state_issue != issue:
+                _LOGGER.warning(
+                    "Schedule execution battery state unavailable: %s",
+                    issue,
+                )
+                self._last_schedule_battery_state_issue = issue
+            return None
+
+        battery_state = read_battery_live_state(self._hass, entity_config)
+        if battery_state is not None:
+            self._last_schedule_battery_state_issue = None
+            return battery_state
+
+        issue = describe_battery_live_state_issue(self._hass, entity_config)
+        if issue is None:
+            issue = "battery live state is unavailable"
+        if self._last_schedule_battery_state_issue != issue:
+            _LOGGER.warning(
+                "Schedule execution battery state unavailable: %s",
+                issue,
+            )
+            self._last_schedule_battery_state_issue = issue
+        return None
 
     def _read_battery_soc_bounds(self):
         bounds_config = read_battery_soc_bounds_config(self._storage.config)
