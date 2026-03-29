@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import asyncio
 import logging
 from collections import deque
@@ -47,7 +48,10 @@ from .forecast_request import ensure_supported_forecast_request
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .house_forecast_response import build_house_forecast_response
-from .point_forecast_response import build_solar_forecast_response
+from .point_forecast_response import (
+    build_grid_forecast_response,
+    build_solar_forecast_response,
+)
 from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import (
     ScheduleControlConfig,
@@ -82,6 +86,24 @@ _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 
 if TYPE_CHECKING:
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
+
+
+def _merge_grid_forecast_responses(
+    *,
+    grid_flow_response: dict[str, Any],
+    grid_price_response: dict[str, Any],
+) -> dict[str, Any]:
+    merged_response = deepcopy(grid_flow_response)
+    merged_response["exportPriceUnit"] = deepcopy(
+        grid_price_response.get("exportPriceUnit")
+    )
+    merged_response["currentExportPrice"] = deepcopy(
+        grid_price_response.get("currentExportPrice")
+    )
+    merged_response["exportPricePoints"] = deepcopy(
+        grid_price_response.get("exportPricePoints", [])
+    )
+    return merged_response
 
 
 class HelmanCoordinator:
@@ -523,13 +545,21 @@ class HelmanCoordinator:
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
+        grid_price_response = build_grid_forecast_response(
+            raw_result["grid"],
+            granularity=granularity,
+            forecast_days=forecast_days,
+        )
         canonical_grid_flow_forecast = build_grid_flow_forecast_snapshot(
             canonical_battery_forecast
         )
-        result["grid"] = build_grid_flow_forecast_response(
-            canonical_grid_flow_forecast,
-            granularity=granularity,
-            forecast_days=forecast_days,
+        result["grid"] = _merge_grid_forecast_responses(
+            grid_flow_response=build_grid_flow_forecast_response(
+                canonical_grid_flow_forecast,
+                granularity=granularity,
+                forecast_days=forecast_days,
+            ),
+            grid_price_response=grid_price_response,
         )
         result["battery_capacity"] = build_battery_forecast_response(
             canonical_battery_forecast,

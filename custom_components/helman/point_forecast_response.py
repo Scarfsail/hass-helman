@@ -36,13 +36,17 @@ def build_grid_forecast_response(
     granularity: int,
     forecast_days: int,
 ) -> dict[str, Any]:
-    return _build_point_forecast_response(
+    response = _build_point_forecast_response(
         snapshot,
         granularity=granularity,
         forecast_days=forecast_days,
         aggregation_mode="average",
         include_actual_history=False,
     )
+    response["exportPriceUnit"] = response.pop("unit", None)
+    response["currentExportPrice"] = response.pop("currentSellPrice", None)
+    response["exportPricePoints"] = response.pop("points", [])
+    return response
 
 
 def _build_point_forecast_response(

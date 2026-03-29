@@ -275,7 +275,24 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         house_response = {"kind": "house"}
         battery_response = {"kind": "battery"}
         canonical_grid_response = {"canonical": "grid"}
-        grid_response = {"kind": "grid-flow", "series": []}
+        grid_flow_response = {
+            "kind": "grid-flow",
+            "unit": "kWh",
+            "series": [],
+        }
+        grid_price_response = {
+            "status": "available",
+            "resolution": "hour",
+            "horizonHours": 24,
+            "exportPriceUnit": "CZK/kWh",
+            "currentExportPrice": 2.5,
+            "exportPricePoints": [
+                {
+                    "timestamp": "2026-03-20T21:00:00+01:00",
+                    "value": 100.0,
+                }
+            ],
+        }
 
         with (
             patch.object(
@@ -288,6 +305,11 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
                 "build_solar_forecast_response",
                 side_effect=[canonical_solar, solar_response],
             ),
+            patch.object(
+                coordinator_module,
+                "build_grid_forecast_response",
+                return_value=grid_price_response,
+            ) as build_grid_price_response,
             patch.object(
                 coordinator_module,
                 "build_house_forecast_response",
@@ -306,11 +328,16 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 coordinator_module,
                 "build_grid_flow_forecast_response",
-                return_value=grid_response,
+                return_value=grid_flow_response,
             ) as build_grid_response,
         ):
             result = await coordinator.get_forecast(granularity=60, forecast_days=1)
 
+        build_grid_price_response.assert_called_once_with(
+            {"status": "available", "currentSellPrice": 2.5},
+            granularity=60,
+            forecast_days=1,
+        )
         build_grid_snapshot.assert_called_once_with(canonical_battery_forecast)
         build_grid_response.assert_called_once_with(
             canonical_grid_response,
@@ -325,8 +352,16 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["solar"], solar_response)
         self.assertEqual(result["house_consumption"], house_response)
         self.assertEqual(result["battery_capacity"], battery_response)
-        self.assertEqual(result["grid"], grid_response)
+        self.assertEqual(result["grid"]["kind"], "grid-flow")
+        self.assertEqual(result["grid"]["unit"], "kWh")
+        self.assertEqual(result["grid"]["currentExportPrice"], 2.5)
+        self.assertEqual(result["grid"]["exportPriceUnit"], "CZK/kWh")
+        self.assertEqual(
+            result["grid"]["exportPricePoints"],
+            grid_price_response["exportPricePoints"],
+        )
         self.assertNotIn("currentSellPrice", result["grid"])
+        self.assertNotIn("points", result["grid"])
 
 
 if __name__ == "__main__":

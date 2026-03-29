@@ -151,13 +151,17 @@ class PointForecastResponseTests(unittest.TestCase):
 
         self.assertEqual(response["resolution"], "half_hour")
         self.assertEqual(response["horizonHours"], 24)
-        self.assertEqual(response["currentSellPrice"], 2.5)
-        self.assertEqual(response["points"], [
+        self.assertEqual(response["exportPriceUnit"], "CZK/kWh")
+        self.assertEqual(response["currentExportPrice"], 2.5)
+        self.assertEqual(response["exportPricePoints"], [
             {"timestamp": "2026-03-20T21:00:00+01:00", "value": 100.0},
             {"timestamp": "2026-03-20T21:30:00+01:00", "value": 100.0},
             {"timestamp": "2026-03-20T22:00:00+01:00", "value": 120.0},
             {"timestamp": "2026-03-20T22:30:00+01:00", "value": 120.0},
         ])
+        self.assertNotIn("unit", response)
+        self.assertNotIn("currentSellPrice", response)
+        self.assertNotIn("points", response)
 
 
 if __name__ == "__main__":
