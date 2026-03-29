@@ -371,6 +371,25 @@ class BatteryForecastResponseTests(unittest.TestCase):
         self.assertEqual(response["series"][1]["baselineRemainingEnergyKwh"], 5.5)
         self.assertEqual(response["series"][1]["baselineSocPct"], 55.0)
 
+    def test_response_does_not_expose_internal_baseline_series(self) -> None:
+        snapshot = _make_adjusted_snapshot()
+        snapshot["baselineSeries"] = [
+            {
+                "timestamp": "2026-03-20T21:20:00+01:00",
+                "durationHours": 10 / 60,
+                "importedFromGridKwh": 0.1,
+                "exportedToGridKwh": 0.0,
+            }
+        ]
+
+        response = battery_forecast_response.build_battery_forecast_response(
+            snapshot,
+            granularity=15,
+            forecast_days=1,
+        )
+
+        self.assertNotIn("baselineSeries", response)
+
     def test_hourly_response_keeps_schedule_adjustment_coverage_distinct_from_coverage_until(
         self,
     ) -> None:

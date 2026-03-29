@@ -29,6 +29,7 @@ from custom_components.helman.forecast_aggregation import (
     aggregate_averaged_points,
     aggregate_battery_history_entries,
     aggregate_battery_series,
+    aggregate_grid_flow_series,
     aggregate_house_entries,
     aggregate_summed_points,
     get_aggregation_group_size,
@@ -266,6 +267,40 @@ class ForecastAggregationTests(unittest.TestCase):
                     "timestamp": "2026-03-20T10:00:00+01:00",
                     "startSocPct": 40.0,
                     "socPct": 42.5,
+                }
+            ],
+        )
+
+    def test_aggregate_grid_flow_series_sums_flow_fields(self):
+        entries = [
+            {
+                "timestamp": "2026-03-20T10:00:00+01:00",
+                "durationHours": 0.25,
+                "importedFromGridKwh": 0.2,
+                "exportedToGridKwh": 0.0,
+                "baselineImportedFromGridKwh": 0.3,
+                "baselineExportedToGridKwh": 0.1,
+            },
+            {
+                "timestamp": "2026-03-20T10:15:00+01:00",
+                "durationHours": 0.25,
+                "importedFromGridKwh": 0.4,
+                "exportedToGridKwh": 0.1,
+                "baselineImportedFromGridKwh": 0.5,
+                "baselineExportedToGridKwh": 0.0,
+            },
+        ]
+
+        self.assertEqual(
+            aggregate_grid_flow_series(entries, group_size=2),
+            [
+                {
+                    "timestamp": "2026-03-20T10:00:00+01:00",
+                    "durationHours": 0.5,
+                    "importedFromGridKwh": 0.6,
+                    "exportedToGridKwh": 0.1,
+                    "baselineImportedFromGridKwh": 0.8,
+                    "baselineExportedToGridKwh": 0.1,
                 }
             ],
         )

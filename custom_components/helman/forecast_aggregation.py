@@ -24,6 +24,13 @@ _BATTERY_OR_FIELDS = (
     "limitedByChargePower",
     "limitedByDischargePower",
 )
+_GRID_FLOW_SUM_FIELDS = (
+    "durationHours",
+    "importedFromGridKwh",
+    "exportedToGridKwh",
+    "baselineImportedFromGridKwh",
+    "baselineExportedToGridKwh",
+)
 _HOUSE_BAND_FIELDS = ("value", "lower", "upper")
 _RESOLUTION_BY_GRANULARITY = {
     15: "quarter_hour",
@@ -142,6 +149,24 @@ def aggregate_battery_history_entries(
                 "socPct": chunk[-1]["socPct"],
             }
         )
+    return aggregated
+
+
+def aggregate_grid_flow_series(
+    entries: Sequence[dict[str, Any]],
+    *,
+    group_size: int,
+) -> list[dict[str, Any]]:
+    aggregated: list[dict[str, Any]] = []
+    for chunk in _chunk_entries(entries, group_size):
+        item = {"timestamp": _require_timestamp(chunk[0])}
+        for field in _GRID_FLOW_SUM_FIELDS:
+            if any(field in entry for entry in chunk):
+                _require_all_fields(chunk, field)
+                item[field] = _round(
+                    sum(_require_number(entry.get(field), field) for entry in chunk)
+                )
+        aggregated.append(item)
     return aggregated
 
 

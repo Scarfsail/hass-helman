@@ -259,6 +259,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(payload["series"][1]["baselineHouseKwh"], 0.4, places=4)
         self.assertAlmostEqual(payload["series"][0]["solarKwh"], 250.0 / 1000 * (8 / 15), places=4)
         self.assertAlmostEqual(payload["series"][1]["solarKwh"], 0.3, places=4)
+        self.assertNotIn("baselineSeries", payload)
         actual_history_mock.assert_awaited_once_with(
             builder._hass,
             "sensor.capacity",
@@ -603,6 +604,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(payload["scheduleAdjusted"])
         self.assertIsNone(payload["scheduleAdjustmentCoverageUntil"])
+        self.assertIn("baselineSeries", payload)
+        self.assertEqual(
+            payload["baselineSeries"][0]["remainingEnergyKwh"],
+            payload["series"][0]["remainingEnergyKwh"],
+        )
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 5.2)
         self.assertNotIn("baselineRemainingEnergyKwh", payload["series"][0])
         self.assertNotIn("baselineSocPct", payload["series"][0])
@@ -1310,6 +1316,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(payload["scheduleAdjusted"])
         self.assertIsNone(payload["scheduleAdjustmentCoverageUntil"])
+        self.assertIn("baselineSeries", payload)
+        self.assertEqual(
+            payload["baselineSeries"][0]["remainingEnergyKwh"],
+            payload["series"][0]["remainingEnergyKwh"],
+        )
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 5.2)
         self.assertNotIn("baselineRemainingEnergyKwh", payload["series"][0])
         self.assertNotIn("baselineSocPct", payload["series"][0])

@@ -225,6 +225,7 @@ class BatteryCapacityForecastBuilder:
                 coverage_until=coverage_until,
                 actual_history=actual_history,
                 series=series,
+                baseline_series=baseline_series if schedule_overlay is not None else None,
                 schedule_adjusted=schedule_adjusted,
                 schedule_adjustment_coverage_until=schedule_adjustment_coverage_until,
             )
@@ -239,6 +240,7 @@ class BatteryCapacityForecastBuilder:
             coverage_until=coverage_until,
             actual_history=actual_history,
             series=series,
+            baseline_series=baseline_series if schedule_overlay is not None else None,
             schedule_adjusted=schedule_adjusted,
             schedule_adjustment_coverage_until=schedule_adjustment_coverage_until,
         )
@@ -1207,6 +1209,7 @@ class BatteryCapacityForecastBuilder:
         coverage_until: str | None = None,
         actual_history: list[dict[str, Any]] | None = None,
         series: list[dict[str, Any]] | None = None,
+        baseline_series: list[dict[str, Any]] | None = None,
         schedule_adjusted: bool | None = None,
         schedule_adjustment_coverage_until: str | None = None,
     ) -> dict[str, Any]:
@@ -1249,6 +1252,8 @@ class BatteryCapacityForecastBuilder:
             "actualHistory": actual_history if actual_history is not None else [],
             "series": series if series is not None else [],
         }
+        if baseline_series is not None:
+            payload["baselineSeries"] = baseline_series
         if schedule_adjusted is not None:
             payload["scheduleAdjusted"] = schedule_adjusted
             payload["scheduleAdjustmentCoverageUntil"] = (
