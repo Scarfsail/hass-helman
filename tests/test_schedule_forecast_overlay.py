@@ -96,6 +96,7 @@ def _expected_canonical_slot_count() -> int:
 
 @contextlib.contextmanager
 def _reloaded_schedule_modules(*, schedule_slot_minutes: int):
+    _install_import_stubs()
     const_module = importlib.import_module("custom_components.helman.const")
     original_slot_minutes = const_module.SCHEDULE_SLOT_MINUTES
     original_schedule_module = sys.modules.get(

@@ -34,10 +34,7 @@ from .schedule import (
     format_slot_id,
     prune_expired_slots,
 )
-from .runtime_status import (
-    ActiveSlotRuntimeStatus,
-    ScheduleExecutionStatus,
-)
+from .runtime_status import ActiveSlotRuntimeStatus, ScheduleExecutionStatus
 
 _LOGGER = logging.getLogger(__name__)
 _UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}
@@ -351,16 +348,21 @@ class ScheduleExecutor:
         if active_slot is None:
             return ScheduleExecutionStatus(
                 active_slot_id=current_slot_id,
-                active_slot_runtime=ActiveSlotRuntimeStatus(
-                    status="applied",
+                active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+                    action_kind="apply",
+                    outcome="success",
                     executed_action=NORMAL_SCHEDULE_ACTION,
                     reason="scheduled",
+                    reconciled_at=self._format_reconciled_at(reference_time),
                 ),
             )
 
         return ScheduleExecutionStatus(
             active_slot_id=current_slot_id,
-            active_slot_runtime=self._describe_active_slot_runtime(slot=active_slot),
+            active_slot_runtime=self._describe_active_slot_runtime(
+                slot=active_slot,
+                reference_time=reference_time,
+            ),
         )
 
     async def _load_pruned_schedule_document_locked(
@@ -385,6 +387,7 @@ class ScheduleExecutor:
         self,
         *,
         slot,
+        reference_time: datetime,
     ) -> ActiveSlotRuntimeStatus:
         battery_state = None
         if slot.action.kind in {
@@ -396,10 +399,12 @@ class ScheduleExecutor:
             action=slot.action,
             current_soc=None if battery_state is None else battery_state.current_soc,
         )
-        return ActiveSlotRuntimeStatus(
-            status="applied",
+        return ActiveSlotRuntimeStatus.from_inverter(
+            action_kind="apply",
+            outcome="success",
             executed_action=resolution.executed_action,
             reason=resolution.reason,
+            reconciled_at=self._format_reconciled_at(reference_time),
         )
 
     def _build_error_execution_status(
@@ -420,19 +425,27 @@ class ScheduleExecutor:
         ):
             return ScheduleExecutionStatus(
                 active_slot_id=execution_status.active_slot_id,
-                active_slot_runtime=ActiveSlotRuntimeStatus(
-                    status="error",
+                active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+                    action_kind=(
+                        execution_status.active_slot_runtime.inverter.action_kind
+                        if execution_status.active_slot_runtime.inverter is not None
+                        else "apply"
+                    ),
+                    outcome="failed",
                     executed_action=execution_status.active_slot_runtime.executed_action,
                     reason=execution_status.active_slot_runtime.reason,
                     error_code=error.code,
+                    reconciled_at=self._format_reconciled_at(reference_time),
                 ),
             )
 
         return ScheduleExecutionStatus(
             active_slot_id=format_slot_id(build_horizon_start(reference_time)),
-            active_slot_runtime=ActiveSlotRuntimeStatus(
-                status="error",
+            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+                action_kind="apply",
+                outcome="failed",
                 error_code=error.code,
+                reconciled_at=self._format_reconciled_at(reference_time),
             ),
         )
 
@@ -507,3 +520,7 @@ class ScheduleExecutor:
         if action.target_soc is None:
             return action.kind
         return f"{action.kind}({action.target_soc})"
+
+    @staticmethod
+    def _format_reconciled_at(reference_time: datetime) -> str:
+        return dt_util.as_local(reference_time).isoformat(timespec="seconds")

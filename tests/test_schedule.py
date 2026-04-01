@@ -92,12 +92,19 @@ from custom_components.helman.scheduling.schedule import (
     slot_to_dict,
     validate_slot_patch_request,
 )
-from custom_components.helman.scheduling.runtime_status import (
-    ActiveSlotRuntimeStatus,
-)
 
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
+
+
+def _domains_payload(kind: str, target_soc: int | None = None) -> dict:
+    inverter = {"kind": kind}
+    if target_soc is not None:
+        inverter["targetSoc"] = target_soc
+    return {
+        "inverter": inverter,
+        "appliances": {},
+    }
 
 
 class ScheduleHelperTests(unittest.TestCase):
@@ -252,11 +259,11 @@ class ScheduleHelperTests(unittest.TestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    slot_ids[0]: {
-                        "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        "targetSoc": 80,
-                    },
-                    slot_ids[1]: {"kind": SCHEDULE_ACTION_NORMAL},
+                    slot_ids[0]: _domains_payload(
+                        SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        80,
+                    ),
+                    slot_ids[1]: _domains_payload(SCHEDULE_ACTION_NORMAL),
                 },
             }
         )
@@ -279,10 +286,10 @@ class ScheduleHelperTests(unittest.TestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    slot_ids[0]: {
-                        "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        "targetSoc": 80,
-                    }
+                    slot_ids[0]: _domains_payload(
+                        SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        80,
+                    )
                 },
             },
         )
@@ -297,7 +304,7 @@ class ScheduleHelperTests(unittest.TestCase):
                 }
             )
 
-    def test_slot_to_dict_includes_runtime_metadata_when_provided(self) -> None:
+    def test_slot_to_dict_serializes_domains_shape(self) -> None:
         slot_dict = slot_to_dict(
             ScheduleSlot(
                 id="2026-03-20T21:00:00+01:00",
@@ -306,26 +313,16 @@ class ScheduleHelperTests(unittest.TestCase):
                     target_soc=80,
                 ),
             ),
-            runtime=ActiveSlotRuntimeStatus(
-                status="applied",
-                executed_action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING),
-                reason="target_soc_reached",
-            ),
         )
 
         self.assertEqual(
             slot_dict,
             {
                 "id": "2026-03-20T21:00:00+01:00",
-                "action": {
-                    "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                    "targetSoc": 80,
-                },
-                "runtime": {
-                    "status": "applied",
-                    "executedAction": {"kind": SCHEDULE_ACTION_STOP_DISCHARGING},
-                    "reason": "target_soc_reached",
-                },
+                "domains": _domains_payload(
+                    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                    80,
+                ),
             },
         )
 

@@ -75,14 +75,16 @@ Extend as needed:
 
 Modify:
 
-- `/home/ondra/dev/hass/hass-medilog-card/vite.config.ts`
+- `/home/ondra/dev/hass/hass-helman-card/src/helman-api.ts`
+- `/home/ondra/dev/hass/hass-helman-card/src/helman-scheduling/schedule-owner.ts`
+- `/home/ondra/dev/hass/hass-helman-card/src/helman-scheduling/model/schedule-normalizer.ts`
+- `/home/ondra/dev/hass/hass-helman-card/src/helman-scheduling/schedule-types.ts`
 
 Create:
 
-- `/home/ondra/dev/hass/hass-medilog-card/src/helman-card.ts`
-- `/home/ondra/dev/hass/hass-medilog-card/src/helman/models.ts`
-- `/home/ondra/dev/hass/hass-medilog-card/src/helman/client.ts`
-- `/home/ondra/dev/hass/hass-medilog-card/src/helman/store.ts`
+- `/home/ondra/dev/hass/hass-helman-card/src/helman/models.ts`
+- `/home/ondra/dev/hass/hass-helman-card/src/helman/client.ts`
+- `/home/ondra/dev/hass/hass-helman-card/src/helman/store.ts`
 
 ## Implementation plan
 
@@ -139,7 +141,7 @@ Targeted modules:
 
 ### FE build validation
 
-- `cd /home/ondra/dev/hass/hass-medilog-card && npm run build-dev`
+- `cd /home/ondra/dev/hass/hass-helman-card && npm run build-dev`
 
 ## Websocket validation
 

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from homeassistant.util import dt as dt_util
 
-from ..battery_state import BatterySocBounds
 from ..const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -20,7 +19,8 @@ from ..const import (
 )
 
 if TYPE_CHECKING:
-    from .runtime_status import ActiveSlotRuntimeDict, ActiveSlotRuntimeStatus
+    from ..battery_state import BatterySocBounds
+    from .runtime_status import ScheduleRuntimeDict
 
 ScheduleActionKind = Literal[
     "normal",
@@ -34,6 +34,8 @@ TARGET_ACTION_KINDS = {
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
 }
+SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
+SCHEDULE_SLOT_KEYS = {"id", "domains"}
 
 if SCHEDULE_SLOT_MINUTES <= 0 or 60 % SCHEDULE_SLOT_MINUTES != 0:
     raise ValueError("SCHEDULE_SLOT_MINUTES must be a positive divisor of 60")
@@ -46,15 +48,20 @@ class ScheduleActionDict(TypedDict):
     targetSoc: NotRequired[int]
 
 
+class ScheduleDomainsDict(TypedDict):
+    inverter: ScheduleActionDict
+    appliances: dict[str, Any]
+
+
 class ScheduleSlotDict(TypedDict):
     id: str
-    action: ScheduleActionDict
-    runtime: NotRequired["ActiveSlotRuntimeDict"]
+    domains: ScheduleDomainsDict
 
 
 class ScheduleResponseDict(TypedDict):
     executionEnabled: bool
     slots: list[ScheduleSlotDict]
+    runtime: NotRequired["ScheduleRuntimeDict"]
 
 
 @dataclass(frozen=True)
@@ -63,16 +70,61 @@ class ScheduleAction:
     target_soc: int | None = None
 
 
+NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
+
+
 @dataclass(frozen=True)
+class ScheduleDomains:
+    inverter: ScheduleAction = field(default_factory=lambda: NORMAL_SCHEDULE_ACTION)
+    appliances: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, init=False)
 class ScheduleSlot:
     id: str
-    action: ScheduleAction
+    domains: ScheduleDomains
+
+    def __init__(
+        self,
+        id: str,
+        *,
+        action: ScheduleAction | Mapping[str, Any] | None = None,
+        domains: ScheduleDomains | Mapping[str, Any] | None = None,
+    ) -> None:
+        if action is not None and domains is not None:
+            raise ValueError("ScheduleSlot accepts either action or domains, not both")
+
+        object.__setattr__(self, "id", id)
+        object.__setattr__(
+            self,
+            "domains",
+            _coerce_schedule_domains(action if domains is None else domains),
+        )
+
+    @property
+    def action(self) -> ScheduleAction:
+        return self.domains.inverter
 
 
-@dataclass
+@dataclass(init=False)
 class ScheduleDocument:
     execution_enabled: bool = False
-    slots: dict[str, ScheduleAction] = field(default_factory=dict)
+    slots: dict[str, ScheduleDomains] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        execution_enabled: bool = False,
+        slots: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.execution_enabled = execution_enabled
+        self.slots = (
+            {}
+            if slots is None
+            else {
+                slot_id: _coerce_schedule_domains(domains)
+                for slot_id, domains in dict(slots).items()
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -115,9 +167,6 @@ class ScheduleExecutionUnavailableError(ScheduleError):
         super().__init__("execution_unavailable", message)
 
 
-NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
-
-
 def action_from_dict(data: Mapping[str, Any]) -> ScheduleAction:
     kind = _read_non_empty_string(data.get("kind"))
     if kind not in SCHEDULE_ACTION_KINDS:
@@ -141,32 +190,75 @@ def action_to_dict(action: ScheduleAction) -> ScheduleActionDict:
     return payload
 
 
+def domains_from_dict(data: Any, *, context: str) -> ScheduleDomains:
+    if not isinstance(data, Mapping):
+        raise ScheduleActionError(f"{context} domains must be an object")
+
+    unsupported_keys = sorted(
+        str(key) for key in data.keys() if key not in SCHEDULE_DOMAIN_KEYS
+    )
+    if unsupported_keys:
+        raise ScheduleActionError(
+            f"{context} domains contain unsupported keys: {', '.join(unsupported_keys)}"
+        )
+
+    raw_inverter = data.get("inverter")
+    if not isinstance(raw_inverter, Mapping):
+        raise ScheduleActionError(f"{context} domains.inverter must be an object")
+
+    raw_appliances = data.get("appliances", {})
+    if not isinstance(raw_appliances, Mapping):
+        raise ScheduleActionError(f"{context} domains.appliances must be an object")
+    if raw_appliances:
+        raise ScheduleActionError(
+            "Story 01 supports inverter scheduling only; 'domains.appliances' must be empty"
+        )
+
+    return ScheduleDomains(
+        inverter=action_from_dict(raw_inverter),
+        appliances={},
+    )
+
+
+def domains_to_dict(domains: ScheduleDomains) -> ScheduleDomainsDict:
+    return {
+        "inverter": action_to_dict(domains.inverter),
+        "appliances": dict(domains.appliances),
+    }
+
+
 def slot_from_dict(data: Mapping[str, Any]) -> ScheduleSlot:
+    if not isinstance(data, Mapping):
+        raise ScheduleSlotsError("Schedule slot must be an object")
+
     slot_id = _read_non_empty_string(data.get("id"))
     if slot_id is None:
         raise ScheduleSlotsError("Schedule slot id must be a non-empty string")
 
-    raw_action = data.get("action")
-    if not isinstance(raw_action, Mapping):
-        raise ScheduleActionError("Schedule slot action must be an object")
+    if "action" in data:
+        raise ScheduleActionError(
+            "Legacy schedule payload uses top-level 'action'; use "
+            "'domains.inverter' and 'domains.appliances' instead"
+        )
+    if "runtime" in data:
+        raise ScheduleActionError("Schedule slot runtime is read-only and cannot be set")
+
+    unsupported_keys = sorted(str(key) for key in data.keys() if key not in SCHEDULE_SLOT_KEYS)
+    if unsupported_keys:
+        raise ScheduleSlotsError(
+            f"Schedule slot contains unsupported fields: {', '.join(unsupported_keys)}"
+        )
 
     return ScheduleSlot(
         id=format_slot_id(parse_slot_id(slot_id)),
-        action=action_from_dict(raw_action),
+        domains=domains_from_dict(data.get("domains"), context="Schedule slot"),
     )
 
 
 def slot_to_dict(
     slot: ScheduleSlot,
-    *,
-    runtime: "ActiveSlotRuntimeStatus | None" = None,
 ) -> ScheduleSlotDict:
-    payload: ScheduleSlotDict = {"id": slot.id, "action": action_to_dict(slot.action)}
-    if runtime is not None:
-        from .runtime_status import active_slot_runtime_to_dict
-
-        payload["runtime"] = active_slot_runtime_to_dict(runtime)
-    return payload
+    return {"id": slot.id, "domains": domains_to_dict(slot.domains)}
 
 
 def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocument:
@@ -198,15 +290,19 @@ def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocum
     if not isinstance(raw_slots, Mapping):
         raise ScheduleSlotsError("Persisted schedule slots must be an object")
 
-    slots: dict[str, ScheduleAction] = {}
-    for raw_slot_id, raw_action in raw_slots.items():
+    slots: dict[str, ScheduleDomains] = {}
+    for raw_slot_id, raw_domains in raw_slots.items():
         slot_id = _read_non_empty_string(raw_slot_id)
         if slot_id is None:
             raise ScheduleSlotsError(
                 "Persisted schedule slot ids must be non-empty strings"
             )
-        if not isinstance(raw_action, Mapping):
-            raise ScheduleActionError("Persisted schedule action must be an object")
+        if not isinstance(raw_domains, Mapping):
+            raise ScheduleActionError("Persisted schedule slot domains must be an object")
+        if any(key in raw_domains for key in ("kind", "targetSoc", "target_soc")):
+            raise ScheduleStorageCompatibilityError(
+                "Persisted schedule uses legacy flat action shape and must be reset"
+            )
 
         slot_start = parse_slot_id(slot_id)
         if not _is_slot_aligned(slot_start):
@@ -219,11 +315,11 @@ def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocum
         if canonical_slot_id in slots:
             raise ScheduleSlotsError("Persisted schedule contains duplicate slot ids")
 
-        action = action_from_dict(raw_action)
-        if action.kind == SCHEDULE_ACTION_NORMAL:
+        domains = domains_from_dict(raw_domains, context="Persisted schedule slot")
+        if is_default_domains(domains):
             continue
 
-        slots[canonical_slot_id] = action
+        slots[canonical_slot_id] = domains
 
     return ScheduleDocument(execution_enabled=execution_enabled, slots=slots)
 
@@ -233,9 +329,9 @@ def schedule_document_to_dict(doc: ScheduleDocument) -> dict[str, Any]:
         "executionEnabled": doc.execution_enabled,
         "slotMinutes": SCHEDULE_SLOT_MINUTES,
         "slots": {
-            slot_id: action_to_dict(action)
-            for slot_id, action in sorted(doc.slots.items())
-            if action.kind != SCHEDULE_ACTION_NORMAL
+            slot_id: domains_to_dict(domains)
+            for slot_id, domains in sorted(doc.slots.items())
+            if not is_default_domains(domains)
         },
     }
 
@@ -350,13 +446,13 @@ def iter_horizon_slot_ids(reference_time: datetime) -> list[str]:
 
 def materialize_schedule_slots(
     *,
-    stored_slots: Mapping[str, ScheduleAction],
+    stored_slots: Mapping[str, ScheduleDomains],
     reference_time: datetime,
 ) -> list[ScheduleSlot]:
     return [
         ScheduleSlot(
             id=slot_id,
-            action=stored_slots.get(slot_id, NORMAL_SCHEDULE_ACTION),
+            domains=stored_slots.get(slot_id, ScheduleDomains()),
         )
         for slot_id in iter_horizon_slot_ids(reference_time)
     ]
@@ -364,41 +460,41 @@ def materialize_schedule_slots(
 
 def find_active_slot(
     *,
-    stored_slots: Mapping[str, ScheduleAction],
+    stored_slots: Mapping[str, ScheduleDomains],
     reference_time: datetime,
 ) -> ScheduleSlot | None:
     slot_id = format_slot_id(build_horizon_start(reference_time))
-    action = stored_slots.get(slot_id)
-    if action is None:
+    domains = stored_slots.get(slot_id)
+    if domains is None:
         return None
-    return ScheduleSlot(id=slot_id, action=action)
+    return ScheduleSlot(id=slot_id, domains=domains)
 
 
 def apply_slot_patches(
     *,
-    stored_slots: Mapping[str, ScheduleAction],
+    stored_slots: Mapping[str, ScheduleDomains],
     slot_patches: Sequence[ScheduleSlot],
-) -> dict[str, ScheduleAction]:
+) -> dict[str, ScheduleDomains]:
     updated_slots = dict(stored_slots)
 
     for slot_patch in slot_patches:
-        if slot_patch.action.kind == SCHEDULE_ACTION_NORMAL:
+        if is_default_domains(slot_patch.domains):
             updated_slots.pop(slot_patch.id, None)
         else:
-            updated_slots[slot_patch.id] = slot_patch.action
+            updated_slots[slot_patch.id] = slot_patch.domains
 
     return dict(sorted(updated_slots.items()))
 
 
 def prune_expired_slots(
     *,
-    stored_slots: Mapping[str, ScheduleAction],
+    stored_slots: Mapping[str, ScheduleDomains],
     reference_time: datetime,
-) -> dict[str, ScheduleAction]:
+) -> dict[str, ScheduleDomains]:
     reference_local = dt_util.as_local(reference_time)
     pruned_slots = {
-        slot_id: action
-        for slot_id, action in stored_slots.items()
+        slot_id: domains
+        for slot_id, domains in stored_slots.items()
         if parse_slot_id(slot_id) + SCHEDULE_SLOT_DURATION > reference_local
     }
     return dict(sorted(pruned_slots.items()))
@@ -407,7 +503,7 @@ def prune_expired_slots(
 def validate_slot_patch(
     *,
     slot_id: str,
-    action: ScheduleAction,
+    domains: ScheduleDomains,
     reference_time: datetime,
     battery_soc_bounds: BatterySocBounds | None,
 ) -> None:
@@ -420,9 +516,8 @@ def validate_slot_patch(
         raise ScheduleSlotsError(
             f"Schedule slot '{slot_id}' must be within the rolling {SCHEDULE_HORIZON_HOURS}-hour horizon"
         )
-    _validate_action(
-        action=action,
-        has_target_soc=action.target_soc is not None,
+    validate_schedule_domains(
+        domains=domains,
         battery_soc_bounds=battery_soc_bounds,
         require_target_soc_bounds=True,
     )
@@ -446,10 +541,106 @@ def validate_slot_patch_request(
         seen_slot_ids.add(slot.id)
         validate_slot_patch(
             slot_id=slot.id,
-            action=slot.action,
+            domains=slot.domains,
             reference_time=reference_time,
             battery_soc_bounds=battery_soc_bounds,
         )
+
+
+def is_default_domains(domains: ScheduleDomains) -> bool:
+    return domains.inverter == NORMAL_SCHEDULE_ACTION and not domains.appliances
+
+
+def validate_schedule_domains(
+    *,
+    domains: ScheduleDomains,
+    battery_soc_bounds: BatterySocBounds | None,
+    require_target_soc_bounds: bool,
+) -> None:
+    if domains.appliances:
+        raise ScheduleActionError(
+            "Story 01 supports inverter scheduling only; 'domains.appliances' must be empty"
+        )
+
+    _validate_action(
+        action=domains.inverter,
+        has_target_soc=domains.inverter.target_soc is not None,
+        battery_soc_bounds=battery_soc_bounds,
+        require_target_soc_bounds=require_target_soc_bounds,
+    )
+
+
+def _coerce_schedule_domains(value: Any) -> ScheduleDomains:
+    if value is None:
+        return ScheduleDomains()
+
+    if isinstance(value, ScheduleDomains):
+        return ScheduleDomains(
+            inverter=_coerce_schedule_action(value.inverter),
+            appliances=_coerce_appliances_mapping(value.appliances),
+        )
+
+    if isinstance(value, Mapping):
+        if "inverter" in value or "appliances" in value:
+            raw_inverter = value.get("inverter", NORMAL_SCHEDULE_ACTION)
+            return ScheduleDomains(
+                inverter=_coerce_schedule_action(raw_inverter),
+                appliances=_coerce_appliances_mapping(value.get("appliances", {})),
+            )
+        return ScheduleDomains(
+            inverter=_coerce_schedule_action(value),
+            appliances={},
+        )
+
+    if hasattr(value, "inverter") or hasattr(value, "appliances"):
+        raw_inverter = getattr(value, "inverter", NORMAL_SCHEDULE_ACTION)
+        raw_appliances = getattr(value, "appliances", {})
+        return ScheduleDomains(
+            inverter=_coerce_schedule_action(raw_inverter),
+            appliances=_coerce_appliances_mapping(raw_appliances),
+        )
+
+    return ScheduleDomains(
+        inverter=_coerce_schedule_action(value),
+        appliances={},
+    )
+
+
+def _coerce_schedule_action(value: Any) -> ScheduleAction:
+    if value is None:
+        return NORMAL_SCHEDULE_ACTION
+
+    if isinstance(value, ScheduleAction):
+        return value
+
+    if isinstance(value, Mapping):
+        return action_from_dict(value)
+
+    kind = _read_non_empty_string(getattr(value, "kind", None))
+    if kind not in SCHEDULE_ACTION_KINDS:
+        raise ScheduleActionError("Unknown schedule action kind")
+
+    raw_target_soc = getattr(value, "target_soc", getattr(value, "targetSoc", None))
+    has_target_soc = raw_target_soc is not None
+    if has_target_soc and (
+        isinstance(raw_target_soc, bool) or not isinstance(raw_target_soc, int)
+    ):
+        raise ScheduleActionError("targetSoc must be an integer")
+
+    action = ScheduleAction(kind=kind, target_soc=raw_target_soc)
+    _validate_action(
+        action=action,
+        has_target_soc=has_target_soc,
+        battery_soc_bounds=None,
+        require_target_soc_bounds=False,
+    )
+    return action
+
+
+def _coerce_appliances_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items()}
 
 
 def _read_mapping(value: Any) -> Mapping[str, Any]:
@@ -509,10 +700,7 @@ def _validate_action(
             raise ScheduleActionError(f"Action '{action.kind}' requires targetSoc")
         if not 0 <= action.target_soc <= 100:
             raise ScheduleActionError("targetSoc must be between 0 and 100")
-        if (
-            require_target_soc_bounds
-            and battery_soc_bounds is None
-        ):
+        if require_target_soc_bounds and battery_soc_bounds is None:
             raise ScheduleNotConfiguredError(
                 "Battery min/max SoC bounds are required for target schedule actions"
             )

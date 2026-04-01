@@ -68,6 +68,10 @@ def _install_import_stubs() -> None:
     sys.modules[tree_builder_mod.__name__] = tree_builder_mod
 
     battery_state_mod = types.ModuleType("custom_components.helman.battery_state")
+    battery_state_mod.describe_battery_entity_config_issue = lambda config: None
+    battery_state_mod.describe_battery_live_state_issue = (
+        lambda hass, config=None: None
+    )
     battery_state_mod.read_battery_entity_config = lambda config: None
     battery_state_mod.read_battery_live_state = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds = lambda hass, config=None: None
@@ -109,6 +113,7 @@ def _install_import_stubs() -> None:
         second=0,
         microsecond=0,
     )
+    schedule_mod.describe_schedule_control_config_issue = lambda config: None
     schedule_mod.format_slot_id = lambda slot: slot.isoformat(timespec="seconds")
     schedule_mod.materialize_schedule_slots = lambda stored_slots, reference_time: []
     schedule_mod.prune_expired_slots = (
@@ -136,6 +141,7 @@ def _install_import_stubs() -> None:
         (),
         {"active_slot_id": None, "active_slot_runtime": None},
     )
+    runtime_status_mod.schedule_execution_status_to_dict = lambda execution_status: None
     sys.modules[runtime_status_mod.__name__] = runtime_status_mod
 
     action_resolution_mod = types.ModuleType(
@@ -351,7 +357,10 @@ def _make_battery_forecast(
 
 
 def _make_schedule_action(kind: str, target_soc: int | None = None) -> SimpleNamespace:
-    return SimpleNamespace(kind=kind, target_soc=target_soc)
+    return SimpleNamespace(
+        inverter=SimpleNamespace(kind=kind, target_soc=target_soc),
+        appliances={},
+    )
 
 
 def _make_schedule_document(

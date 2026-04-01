@@ -16,9 +16,9 @@ Each implementation story is intended to be completed in a **fresh Copilot sessi
 ## Repositories
 
 - Backend: current repository, `hass-helman`
-- Frontend: `/home/ondra/dev/hass/hass-medilog-card`
+- Frontend: `/home/ondra/dev/hass/hass-helman-card`
 
-The frontend repository currently has no Helman-specific client or UI. Story 1 should establish that foundation instead of assuming it already exists.
+The frontend repository already contains the Helman card and scheduling UI. Story 01 should add the minimum Helman-specific websocket client/model compatibility layer needed for the breaking DTO change instead of treating the FE as a greenfield scaffold.
 
 The frontend already has Home Assistant websocket support available through `hass.callWS`. Helman FE stories should build thin typed wrappers around `hass.callWS`, not introduce a raw websocket transport.
 
@@ -164,7 +164,7 @@ If a validation flow changes appliance config via `helman/save_config`, that sav
 
 ### 3. Frontend build validation
 
-When FE files under `/home/ondra/dev/hass/hass-medilog-card` change:
+When FE files under `/home/ondra/dev/hass/hass-helman-card` change:
 
 - run the FE build already present in that repo
 - prefer `npm run build-dev`

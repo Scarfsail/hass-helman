@@ -17,6 +17,12 @@ from homeassistant.helpers.event import (
 
 from homeassistant.util import dt as dt_util
 
+from .appliances import (
+    ApplianceMetadataResponseDict,
+    ApplianceProjectionsResponseDict,
+    build_empty_appliance_projections_response,
+    build_empty_appliances_response,
+)
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
@@ -69,7 +75,10 @@ from .scheduling.schedule import (
     slot_to_dict,
     validate_slot_patch_request,
 )
-from .scheduling.runtime_status import ScheduleExecutionStatus
+from .scheduling.runtime_status import (
+    ScheduleExecutionStatus,
+    schedule_execution_status_to_dict,
+)
 from .scheduling.action_resolution import resolve_executed_schedule_action
 from .scheduling.schedule_executor import (
     ScheduleExecutor,
@@ -642,29 +651,24 @@ class HelmanCoordinator:
         reference_time: datetime,
         execution_status: ScheduleExecutionStatus | None = None,
     ) -> ScheduleResponseDict:
-        runtime_slot_id = (
-            execution_status.active_slot_id
-            if execution_status is not None
-            and execution_status.active_slot_runtime is not None
-            else None
-        )
-        return {
+        response: ScheduleResponseDict = {
             "executionEnabled": schedule_document.execution_enabled,
             "slots": [
-                slot_to_dict(
-                    slot,
-                    runtime=(
-                        execution_status.active_slot_runtime
-                        if slot.id == runtime_slot_id
-                        else None
-                    ),
-                )
+                slot_to_dict(slot)
                 for slot in materialize_schedule_slots(
                     stored_slots=schedule_document.slots,
                     reference_time=reference_time,
                 )
             ],
         }
+        runtime = (
+            None
+            if execution_status is None
+            else schedule_execution_status_to_dict(execution_status)
+        )
+        if runtime is not None:
+            response["runtime"] = runtime
+        return response
 
     async def get_schedule(
         self,
@@ -695,6 +699,14 @@ class HelmanCoordinator:
                 reference_time=request_now,
                 execution_status=execution_status,
             )
+
+    async def get_appliances(self) -> ApplianceMetadataResponseDict:
+        return build_empty_appliances_response()
+
+    async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
+        return build_empty_appliance_projections_response(
+            generated_at=dt_util.now().isoformat()
+        )
 
     async def set_schedule(
         self,
@@ -973,10 +985,10 @@ class HelmanCoordinator:
         return tuple(
             (
                 slot_id,
-                action.kind,
-                action.target_soc,
+                domains.inverter.kind,
+                domains.inverter.target_soc,
             )
-            for slot_id, action in sorted(schedule_document.slots.items())
+            for slot_id, domains in sorted(schedule_document.slots.items())
         )
 
     def _build_battery_forecast_schedule_document(
@@ -992,14 +1004,14 @@ class HelmanCoordinator:
             return ScheduleDocument()
 
         forecast_slots = {
-            slot_id: action
-            for slot_id, action in schedule_document.slots.items()
+            slot_id: domains
+            for slot_id, domains in schedule_document.slots.items()
             if not (
-                action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
+                domains.inverter.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
                 and control_config.charge_to_target_soc_option is None
             )
             and not (
-                action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
+                domains.inverter.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
                 and control_config.discharge_to_target_soc_option is None
             )
         }
@@ -1018,7 +1030,8 @@ class HelmanCoordinator:
             return None
 
         active_slot_id = format_slot_id(build_horizon_start(reference_time))
-        active_action = schedule_document.slots.get(active_slot_id)
+        active_domains = schedule_document.slots.get(active_slot_id)
+        active_action = None if active_domains is None else active_domains.inverter
         if active_action is None or active_action.kind not in {
             SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
             SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,

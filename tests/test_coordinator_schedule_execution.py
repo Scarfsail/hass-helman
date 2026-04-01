@@ -199,6 +199,16 @@ from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
 )
 
 
+def _domains_payload(kind: str, target_soc: int | None = None) -> dict:
+    inverter = {"kind": kind}
+    if target_soc is not None:
+        inverter["targetSoc"] = target_soc
+    return {
+        "inverter": inverter,
+        "appliances": {},
+    }
+
+
 def _cleanup_stubbed_modules() -> None:
     for module_name in (
         "custom_components",
@@ -354,7 +364,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": False,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -378,7 +388,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES * 2,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -423,7 +433,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": False,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -440,7 +450,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             },
         )
@@ -451,7 +461,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": False,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -470,7 +480,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": False,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -491,7 +501,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             },
         )
@@ -508,7 +518,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": True,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -529,7 +539,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             },
         )
@@ -547,7 +557,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -564,7 +574,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             },
         )
@@ -578,7 +588,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": True,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -598,7 +608,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             }
         )
@@ -619,7 +629,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             },
         )
@@ -722,7 +732,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             },
         )
@@ -755,16 +765,18 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": True,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": "charge_to_target_soc", "targetSoc": 80},
+                    CURRENT_SLOT_ID: _domains_payload("charge_to_target_soc", 80),
                 },
             }
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus(
-                status="applied",
+            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+                action_kind="apply",
+                outcome="success",
                 executed_action=ScheduleAction(kind="stop_discharging"),
                 reason="target_soc_reached",
+                reconciled_at=CURRENT_SLOT_ID,
             ),
         )
 
@@ -775,14 +787,20 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         next_slot = schedule["slots"][1]
 
-        self.assertEqual(current_slot["action"]["kind"], "charge_to_target_soc")
-        self.assertEqual(current_slot["action"]["targetSoc"], 80)
+        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "charge_to_target_soc")
+        self.assertEqual(current_slot["domains"]["inverter"]["targetSoc"], 80)
         self.assertEqual(
-            current_slot["runtime"],
+            schedule["runtime"],
             {
-                "status": "applied",
-                "executedAction": {"kind": "stop_discharging"},
-                "reason": "target_soc_reached",
+                "activeSlotId": CURRENT_SLOT_ID,
+                "reconciledAt": CURRENT_SLOT_ID,
+                "inverter": {
+                    "actionKind": "apply",
+                    "outcome": "success",
+                    "executedAction": {"kind": "stop_discharging"},
+                    "reason": "target_soc_reached",
+                },
+                "appliances": {},
             },
         )
         self.assertNotEqual(next_slot["id"], CURRENT_SLOT_ID)
@@ -797,10 +815,12 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus(
-                status="applied",
+            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+                action_kind="apply",
+                outcome="success",
                 executed_action=ScheduleAction(kind="normal"),
                 reason="scheduled",
+                reconciled_at=CURRENT_SLOT_ID,
             ),
         )
 
@@ -809,13 +829,19 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         current_slot = next(
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
-        self.assertEqual(current_slot["action"]["kind"], "normal")
+        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "normal")
         self.assertEqual(
-            current_slot["runtime"],
+            schedule["runtime"],
             {
-                "status": "applied",
-                "executedAction": {"kind": "normal"},
-                "reason": "scheduled",
+                "activeSlotId": CURRENT_SLOT_ID,
+                "reconciledAt": CURRENT_SLOT_ID,
+                "inverter": {
+                    "actionKind": "apply",
+                    "outcome": "success",
+                    "executedAction": {"kind": "normal"},
+                    "reason": "scheduled",
+                },
+                "appliances": {},
             },
         )
 
@@ -825,10 +851,12 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus(
-                status="applied",
+            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+                action_kind="apply",
+                outcome="success",
                 executed_action=ScheduleAction(kind="normal"),
                 reason="scheduled",
+                reconciled_at=CURRENT_SLOT_ID,
             ),
         )
 
@@ -838,6 +866,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
         self.assertNotIn("runtime", current_slot)
+        self.assertNotIn("runtime", schedule)
         self.assertEqual(executor.get_status_calls, 0)
 
     async def test_get_schedule_returns_error_runtime_for_current_slot(self) -> None:
@@ -845,15 +874,17 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={
                 "executionEnabled": True,
                 "slots": {
-                    CURRENT_SLOT_ID: {"kind": "charge_to_target_soc", "targetSoc": 80},
+                    CURRENT_SLOT_ID: _domains_payload("charge_to_target_soc", 80),
                 },
             }
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus(
-                status="error",
+            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+                action_kind="apply",
+                outcome="failed",
                 error_code="execution_unavailable",
+                reconciled_at=CURRENT_SLOT_ID,
             ),
         )
 
@@ -862,11 +893,18 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         current_slot = next(
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
+        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "charge_to_target_soc")
         self.assertEqual(
-            current_slot["runtime"],
+            schedule["runtime"],
             {
-                "status": "error",
-                "errorCode": "execution_unavailable",
+                "activeSlotId": CURRENT_SLOT_ID,
+                "reconciledAt": CURRENT_SLOT_ID,
+                "inverter": {
+                    "actionKind": "apply",
+                    "outcome": "failed",
+                    "errorCode": "execution_unavailable",
+                },
+                "appliances": {},
             },
         )
 

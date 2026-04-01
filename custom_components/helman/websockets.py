@@ -26,11 +26,12 @@ SCHEDULE_ACTION_SCHEMA = vol.Schema(
     },
     extra=vol.PREVENT_EXTRA,
 )
-SCHEDULE_SLOT_SCHEMA = vol.Schema(
-    {
-        vol.Required("id"): str,
-        vol.Required("action"): SCHEDULE_ACTION_SCHEMA,
-    },
+SET_SCHEDULE_REQUEST_FIELDS = {
+    vol.Required("type"): "helman/set_schedule",
+    vol.Required("slots"): [dict],
+}
+SET_SCHEDULE_REQUEST_SCHEMA = vol.Schema(
+    SET_SCHEDULE_REQUEST_FIELDS,
     extra=vol.PREVENT_EXTRA,
 )
 GET_FORECAST_REQUEST_FIELDS = {
@@ -75,6 +76,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_schedule)
     async_register_command(hass, ws_set_schedule)
     async_register_command(hass, ws_set_schedule_execution)
+    async_register_command(hass, ws_get_appliances)
+    async_register_command(hass, ws_get_appliance_projections)
     async_register_command(hass, ws_get_device_tree)
     async_register_command(hass, ws_get_forecast)
     async_register_command(hass, ws_get_history)
@@ -128,7 +131,7 @@ async def ws_get_schedule(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data[DOMAIN].get("coordinator")
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     if not coordinator:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
@@ -142,17 +145,14 @@ async def ws_get_schedule(
     connection.send_result(msg["id"], schedule)
 
 
-@websocket_api.websocket_command({
-    vol.Required("type"): "helman/set_schedule",
-    vol.Required("slots"): [SCHEDULE_SLOT_SCHEMA],
-})
+@websocket_api.websocket_command(SET_SCHEDULE_REQUEST_FIELDS)
 @websocket_api.async_response
 async def ws_set_schedule(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data[DOMAIN].get("coordinator")
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     if not coordinator:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
@@ -169,6 +169,40 @@ async def ws_set_schedule(
 
 
 @websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_appliances",
+})
+@websocket_api.async_response
+async def ws_get_appliances(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    connection.send_result(msg["id"], await coordinator.get_appliances())
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_appliance_projections",
+})
+@websocket_api.async_response
+async def ws_get_appliance_projections(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    connection.send_result(msg["id"], await coordinator.get_appliance_projections())
+
+
+@websocket_api.websocket_command({
     vol.Required("type"): "helman/set_schedule_execution",
     vol.Required("enabled"): bool,
 })
@@ -178,7 +212,7 @@ async def ws_set_schedule_execution(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data[DOMAIN].get("coordinator")
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     if not coordinator:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
@@ -201,7 +235,7 @@ async def ws_get_device_tree(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data[DOMAIN].get("coordinator")
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     if not coordinator:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
@@ -218,7 +252,7 @@ def ws_get_history(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data[DOMAIN].get("coordinator")
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     if not coordinator:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
@@ -232,7 +266,7 @@ async def ws_get_forecast(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data[DOMAIN].get("coordinator")
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     if not coordinator:
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return

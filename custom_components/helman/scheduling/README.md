@@ -1,14 +1,14 @@
 # Helman Scheduling
 
-This package currently implements the **manual schedule backend** for Helman.
+This package implements the manual schedule backend and the Story 01 appliance-ready websocket contract.
 
-It is ready to be consumed by a frontend or other internal clients that need to:
+It is ready to be consumed by frontend or internal clients that need to:
 
 - read the rolling schedule grid
-- patch one or more slots
+- patch one or more authored slots
 - enable or disable execution
-- show what is **scheduled** for the current slot
-- show what is **actually being executed** right now
+- inspect the current execution runtime read model
+- read stable empty appliance metadata/projection endpoints ahead of later appliance stories
 
 ## Current status
 
@@ -21,14 +21,20 @@ Implemented today:
   - `helman/get_schedule`
   - `helman/set_schedule`
   - `helman/set_schedule_execution`
-- live execution of the current slot through the configured mode entity
+  - `helman/get_appliances`
+  - `helman/get_appliance_projections`
+- live execution of the current inverter slot through the configured mode entity
 - target-SoC actions resolved against live battery state
-- active-slot runtime metadata in `helman/get_schedule`
+- top-level runtime metadata in `helman/get_schedule`
+- appliance-ready authored slot shape via `domains.inverter` and `domains.appliances`
+- stable empty appliance metadata/projection payloads for Story 01
 - persisted schedule documents are treated as a fresh setup if their saved slot duration no longer matches the configured slot duration
-- unit coverage and live smoke validation against a running Home Assistant instance
 
 Not implemented yet:
 
+- non-empty `domains.appliances` authoring
+- appliance execution/runtime population
+- appliance projection math
 - automatic planning / schedule generation
 - websocket subscriptions or push updates for schedule changes
 - persisted runtime history
@@ -47,26 +53,44 @@ Persistence behavior:
 - persisted schedule documents store the slot duration that was active when they were written
 - if the configured slot duration changes later, persisted schedule data is reset on startup and treated as a fresh setup
 
-## Consumer-facing model
+## Authored schedule model
 
 The schedule is intentionally slot-native.
 
 - horizon: next `48` hours
-- slot size: configured by `SCHEDULE_SLOT_MINUTES` in `custom_components/helman/const.py`
-- response grid size: derived from the `48` hour horizon and the configured slot size
+- slot size: configured by `SCHEDULE_SLOT_MINUTES`
 - slot id: timezone-aware ISO 8601 timestamp representing the slot start
 - missing persisted slot = implicit `normal`
 
-Important frontend rule:
+Each authored slot uses the composite `domains` shape:
 
-- `action` is the **requested scheduled action**
-- `runtime` is the **actual executor outcome for the current slot only**
+```json
+{
+  "id": "2026-03-20T21:00:00+01:00",
+  "domains": {
+    "inverter": {
+      "kind": "charge_to_target_soc",
+      "targetSoc": 70
+    },
+    "appliances": {}
+  }
+}
+```
 
-The backend never mutates the saved schedule just because a target has already been reached. For example, a slot can remain scheduled as `charge_to_target_soc(70)` while runtime says the executor actually applied `stop_discharging`.
+Story 01 keeps `domains.appliances` present but empty:
 
-## Supported action kinds
+- `domains.appliances` must be an object
+- non-empty `domains.appliances` is rejected
+- later appliance stories will populate that branch without another DTO break
 
-The current action vocabulary is:
+Legacy compatibility note:
+
+- old top-level `action` payloads are rejected with a migration-oriented `invalid_action` error
+- slot `runtime` is read-only and is also rejected from `helman/set_schedule`
+
+## Supported inverter action kinds
+
+The current inverter action vocabulary is:
 
 - `normal`
 - `charge_to_target_soc`
@@ -84,62 +108,58 @@ The current action vocabulary is:
 | `stop_charging` | not allowed | Applies the configured stop-charging mode |
 | `stop_discharging` | not allowed | Applies the configured stop-discharging mode |
 
-Target actions are evaluated **independently per active slot**. There is no carry-over hold state across future slots.
+Target actions are evaluated independently per active slot. There is no carry-over hold state across future slots.
 
-## Runtime metadata
+## Runtime read model
 
-`runtime` may appear only on the **current slot** in `helman/get_schedule`.
-
-It is present only when:
+Runtime is no longer attached to slots in the authored response. `helman/get_schedule` may expose a separate top-level read-only `runtime` branch when:
 
 - schedule execution is enabled, and
-- the executor has an execution status for the same current slot id
+- the executor has runtime state for the same current slot id
 
-It is omitted:
-
-- from all non-current slots
-- from all slots when execution is disabled
-
-### Runtime payload
+Runtime shape:
 
 ```json
 {
-  "status": "applied",
-  "executedAction": {
-    "kind": "stop_discharging"
+  "activeSlotId": "2026-03-20T21:00:00+01:00",
+  "reconciledAt": "2026-03-20T21:07:00+01:00",
+  "inverter": {
+    "actionKind": "apply",
+    "outcome": "success",
+    "executedAction": {
+      "kind": "stop_discharging"
+    },
+    "reason": "target_soc_reached"
   },
-  "reason": "target_soc_reached"
+  "appliances": {}
 }
 ```
 
 Current runtime fields:
 
-- `status`
-  - `applied`
-  - `error`
-- `executedAction`
-  - optional
-  - same action shape as normal schedule actions
-- `reason`
-  - optional
-  - `scheduled`
-  - `target_soc_reached`
-- `errorCode`
-  - optional
-  - machine-readable schedule error code
+- `activeSlotId`
+- `reconciledAt`
+- `inverter`
+  - `actionKind`: `apply | slot_stop | noop`
+  - `outcome`: `success | failed | skipped`
+  - `executedAction`
+  - `reason`
+  - `errorCode`
+  - `message`
+- `appliances`
+  - keyed by `applianceId`
+  - always `{}` in Story 01
 
-### Important UI interpretation
+Important consumer rules:
 
-Use both `action` and `runtime` together:
-
-- `action` tells the user what the slot is configured to do
-- `runtime.executedAction` tells the user what the executor actually applied right now
-
-That distinction matters most for target actions.
+- authored slot data lives only in `slots[*].domains`
+- runtime is an ephemeral execution read model, not persisted schedule data
+- consumers should match runtime to a slot via `runtime.activeSlotId`
+- `helman/set_schedule` never accepts runtime input
 
 ## Websocket API
 
-The current public schedule commands live in `custom_components/helman/websockets.py`.
+The public scheduling commands live in `custom_components/helman/websockets.py`.
 
 ### `helman/get_schedule`
 
@@ -159,25 +179,37 @@ Response shape:
   "slots": [
     {
       "id": "2026-03-20T21:00:00+01:00",
-      "action": {
-        "kind": "charge_to_target_soc",
-        "targetSoc": 70
-      },
-      "runtime": {
-        "status": "applied",
-        "executedAction": {
-          "kind": "stop_discharging"
+      "domains": {
+        "inverter": {
+          "kind": "charge_to_target_soc",
+          "targetSoc": 70
         },
-        "reason": "target_soc_reached"
+        "appliances": {}
       }
     },
     {
-      "id": "2026-03-20T22:00:00+01:00",
-      "action": {
-        "kind": "normal"
+      "id": "2026-03-20T21:30:00+01:00",
+      "domains": {
+        "inverter": {
+          "kind": "normal"
+        },
+        "appliances": {}
       }
     }
-  ]
+  ],
+  "runtime": {
+    "activeSlotId": "2026-03-20T21:00:00+01:00",
+    "reconciledAt": "2026-03-20T21:07:00+01:00",
+    "inverter": {
+      "actionKind": "apply",
+      "outcome": "success",
+      "executedAction": {
+        "kind": "stop_discharging"
+      },
+      "reason": "target_soc_reached"
+    },
+    "appliances": {}
+  }
 }
 ```
 
@@ -185,7 +217,8 @@ Behavior:
 
 - always returns the full rolling `48` hour grid
 - materializes missing stored slots as `normal`
-- attaches `runtime` only to the current slot when applicable
+- returns authored slot state in `slots[*].domains`
+- adds top-level `runtime` only when current execution runtime exists
 - uses the executor's last real execution status instead of recomputing optimistically on read
 
 ### `helman/set_schedule`
@@ -198,9 +231,12 @@ Request:
   "slots": [
     {
       "id": "2026-03-20T21:00:00+01:00",
-      "action": {
-        "kind": "charge_to_target_soc",
-        "targetSoc": 80
+      "domains": {
+        "inverter": {
+          "kind": "charge_to_target_soc",
+          "targetSoc": 80
+        },
+        "appliances": {}
       }
     }
   ]
@@ -218,7 +254,7 @@ Success response:
 Behavior:
 
 - patches one or more slots in a single request
-- setting a slot to `normal` removes that slot from persisted storage
+- setting a slot to inverter `normal` removes that slot from persisted storage
 - leaves all other slots unchanged
 - when execution is enabled and the schedule document changes, triggers a safe reconcile in the background
 
@@ -247,23 +283,42 @@ Success response:
 }
 ```
 
-Behavior when enabling:
+### `helman/get_appliances`
 
-- persists `executionEnabled = true`
-- starts the executor
-- immediately reconciles the current slot
-- if the initial reconcile fails, the backend rolls the flag back to `false` and returns an error
+Request:
 
-Behavior when disabling:
+```json
+{
+  "type": "helman/get_appliances"
+}
+```
 
-- stops the executor
-- attempts to restore `normal` mode immediately
-- only then persists `executionEnabled = false`
-- if restoring normal mode fails, the backend keeps execution enabled and returns an error
+Response:
 
-Frontend note:
+```json
+{
+  "appliances": []
+}
+```
 
-- after toggling execution, call `helman/get_schedule` again if the screen shows current-slot runtime state
+### `helman/get_appliance_projections`
+
+Request:
+
+```json
+{
+  "type": "helman/get_appliance_projections"
+}
+```
+
+Response:
+
+```json
+{
+  "generatedAt": "2026-03-20T21:07:00+01:00",
+  "appliances": {}
+}
+```
 
 ## Validation rules for `set_schedule`
 
@@ -276,8 +331,15 @@ Slot rules:
 - slot ids must be timezone-aware ISO timestamps
 - slot ids must align to the configured `SCHEDULE_SLOT_MINUTES` boundary
 - slot ids must fall inside the rolling `48` hour horizon
+- only `id` and `domains` are accepted on authored slot payloads
 
-Action rules:
+Domain rules:
+
+- `domains.inverter` must be an object with a supported inverter action
+- `domains.appliances` must be an object
+- Story 01 requires `domains.appliances` to stay empty
+
+Inverter action rules:
 
 - `charge_to_target_soc` and `discharge_to_target_soc` require `targetSoc`
 - `normal`, `stop_charging`, and `stop_discharging` do not allow `targetSoc`
@@ -287,75 +349,27 @@ Action rules:
 
 ## Error model
 
-Schedule websocket handlers return Home Assistant websocket errors using `ScheduleError.code`.
+Scheduling websocket handlers return Home Assistant websocket errors using `ScheduleError.code`.
 
 Current error codes:
 
 | Error code | Meaning |
 | --- | --- |
-| `invalid_slots` | malformed slot ids, duplicate ids, empty request, out-of-horizon slot, or misaligned slot |
-| `invalid_action` | unknown action kind, missing or disallowed `targetSoc`, or invalid target value |
+| `invalid_slots` | malformed slot ids, duplicate ids, empty request, out-of-horizon slot, or unsupported authored slot fields |
+| `invalid_action` | unknown action kind, invalid `domains` shape, missing or disallowed `targetSoc`, legacy top-level `action`, non-empty Story 01 `domains.appliances`, or incoming slot `runtime` |
 | `not_configured` | missing required schedule config or missing battery bounds for target writes |
 | `execution_unavailable` | live execution cannot proceed because required runtime state or control entity access is unavailable |
 
-### Websocket error vs runtime error
-
-These are different surfaces:
-
-- websocket command error:
-  - the command itself failed
-  - for example, invalid input or failure while enabling execution
-- `runtime.status = "error"`:
-  - `helman/get_schedule` still succeeds
-  - the current slot reports that the executor's last attempt failed
-
-Example runtime error payload:
-
-```json
-{
-  "status": "error",
-  "errorCode": "execution_unavailable"
-}
-```
-
-Sometimes runtime error status may also include `executedAction` and `reason` if the executor had already resolved the intended action before the failure happened.
-
-## Config dependency
-
-Execution depends on top-level `scheduler.control` in the Helman config.
-
-That config maps abstract schedule action kinds to the actual Home Assistant option strings on the configured mode entity.
-
-Important consumer rule:
-
-- treat action kinds such as `stop_charging` or `charge_to_target_soc` as the API contract
-- do not build UI logic around the localized mode option strings
+Runtime errors stay in the top-level `runtime` branch; they do not turn `helman/get_schedule` itself into a websocket error.
 
 ## Recommended frontend flow
 
 For a schedule editor or current-status view:
 
 1. Call `helman/get_schedule` on screen load.
-2. Render the returned `slots` array directly as the source of truth for the editable grid.
-3. When the user edits slots, call `helman/set_schedule` with only the changed slots.
-4. If the user toggles execution, call `helman/set_schedule_execution`.
-5. After successful writes or toggles, call `helman/get_schedule` again.
-6. If the screen shows current runtime state, re-read the schedule periodically or at slot boundaries, because there is currently no subscription API.
-
-## Current non-goals
-
-This package does **not** yet implement:
-
-- automated schedule planning from prices, forecasts, or constraints
-- deferrable load planning
-- EV planning
-- execution history or audit trail
-- schedule subscriptions
-
-Those belong to future automation/planning increments.
-
-## References
-
-- backend architecture: [`../../../docs/features/automation/helman_manual_schedule_architecture.md`](../../../docs/features/automation/helman_manual_schedule_architecture.md)
-- DTO and websocket contract: [`../../../docs/features/automation/helman_manual_schedule_dto_spec.md`](../../../docs/features/automation/helman_manual_schedule_dto_spec.md)
-- live smoke scenarios: [`../../../docs/features/automation/helman_manual_schedule_live_smoke.md`](../../../docs/features/automation/helman_manual_schedule_live_smoke.md)
+2. Render the returned `slots` array as the source of truth for authored schedule state.
+3. If the UI wants slot-local current execution state, adapt the top-level `runtime` branch onto the slot with id `runtime.activeSlotId`.
+4. When the user edits slots, call `helman/set_schedule` with only the changed authored slots.
+5. If the user toggles execution, call `helman/set_schedule_execution`.
+6. After successful writes or toggles, call `helman/get_schedule` again.
+7. If the screen shows current runtime state, re-read the schedule periodically or at slot boundaries because there is currently no subscription API.
