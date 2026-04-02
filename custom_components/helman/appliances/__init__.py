@@ -30,6 +30,8 @@ __all__ = [
     "build_appliance_projection_plan",
     "build_projection_input_bundle",
     "build_appliance_projections_response",
+    "aggregate_appliance_demand_by_slot",
+    "build_adjusted_house_forecast",
     "normalize_appliance_schedule_actions",
     "read_ev_charger_appliance",
     "read_appliance_schedule_actions",
@@ -74,6 +76,14 @@ _EXPORTS = {
     "build_appliance_projections_response": (
         ".projection_response",
         "build_appliance_projections_response",
+    ),
+    "aggregate_appliance_demand_by_slot": (
+        ".forecast_integration",
+        "aggregate_appliance_demand_by_slot",
+    ),
+    "build_adjusted_house_forecast": (
+        ".forecast_integration",
+        "build_adjusted_house_forecast",
     ),
     "normalize_appliance_schedule_actions": (
         ".schedule",

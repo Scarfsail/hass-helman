@@ -108,22 +108,16 @@ def build_appliance_projection_plan(
     demand_points: list[ApplianceDemandPoint] = []
 
     for appliance in registry.appliances:
-        series = _build_ev_charger_projection_series(
+        result = _build_ev_charger_projection_series(
             appliance=appliance,
             schedule_document=schedule_document,
             inputs=inputs,
         )
+        series = result.series
         if not series.points:
             continue
         appliances_by_id[appliance.id] = series
-        demand_points.extend(
-            ApplianceDemandPoint(
-                appliance_id=appliance.id,
-                slot_id=point.slot_id,
-                energy_kwh=point.energy_kwh,
-            )
-            for point in series.points
-        )
+        demand_points.extend(result.demand_points)
 
     return ApplianceProjectionPlan(
         generated_at=generated_at,
@@ -134,9 +128,16 @@ def build_appliance_projection_plan(
 
 @dataclass(frozen=True)
 class _ProjectionSlotSlice:
+    slot_start: datetime
     duration_hours: float
     solar_kwh: float
     baseline_house_kwh: float
+
+
+@dataclass(frozen=True)
+class _ApplianceProjectionBuildResult:
+    series: ApplianceProjectionSeries
+    demand_points: tuple[ApplianceDemandPoint, ...]
 
 
 def _build_ev_charger_projection_series(
@@ -144,8 +145,9 @@ def _build_ev_charger_projection_series(
     appliance: EvChargerApplianceRuntime,
     schedule_document: ScheduleDocument,
     inputs: ProjectionInputBundle,
-) -> ApplianceProjectionSeries:
+) -> _ApplianceProjectionBuildResult:
     points: list[ApplianceProjectionPlanPoint] = []
+    demand_points: list[ApplianceDemandPoint] = []
 
     for slot_id, domains in sorted(schedule_document.slots.items()):
         action = domains.appliances.get(appliance.id)
@@ -167,12 +169,16 @@ def _build_ev_charger_projection_series(
         if slot_slices is None or not slot_slices:
             continue
 
-        energy_kwh = _calculate_slot_energy(
-            appliance=appliance,
-            vehicle=vehicle,
-            action=action,
-            slot_slices=slot_slices,
+        slice_energy_kwhs = tuple(
+            _calculate_slot_slice_energy(
+                appliance=appliance,
+                vehicle=vehicle,
+                action=action,
+                slot_slice=slot_slice,
+            )
+            for slot_slice in slot_slices
         )
+        energy_kwh = sum(slice_energy_kwhs)
         if energy_kwh <= 0:
             continue
 
@@ -184,10 +190,26 @@ def _build_ev_charger_projection_series(
                 vehicle_id=vehicle.id,
             )
         )
+        demand_points.extend(
+            ApplianceDemandPoint(
+                appliance_id=appliance.id,
+                slot_id=format_slot_id(slot_slice.slot_start),
+                energy_kwh=round(slice_energy_kwh, 4),
+            )
+            for slot_slice, slice_energy_kwh in zip(
+                slot_slices,
+                slice_energy_kwhs,
+                strict=True,
+            )
+            if slice_energy_kwh > 0
+        )
 
-    return ApplianceProjectionSeries(
-        appliance_id=appliance.id,
-        points=tuple(points),
+    return _ApplianceProjectionBuildResult(
+        series=ApplianceProjectionSeries(
+            appliance_id=appliance.id,
+            points=tuple(points),
+        ),
+        demand_points=tuple(demand_points),
     )
 
 
@@ -227,6 +249,7 @@ def _build_schedule_slot_slices(
         scale = duration_hours / _CANONICAL_SLOT_HOURS
         slices.append(
             _ProjectionSlotSlice(
+                slot_start=cursor,
                 duration_hours=duration_hours,
                 solar_kwh=(solar_wh / 1000) * scale,
                 baseline_house_kwh=baseline_house_kwh * scale,
@@ -237,42 +260,35 @@ def _build_schedule_slot_slices(
     return slices
 
 
-def _calculate_slot_energy(
+def _calculate_slot_slice_energy(
     *,
     appliance: EvChargerApplianceRuntime,
     vehicle: EvVehicleRuntime,
     action: dict[str, Any],
-    slot_slices: list[_ProjectionSlotSlice],
+    slot_slice: _ProjectionSlotSlice,
 ) -> float:
     effective_max_power_kw = min(
         appliance.max_charging_power_kw,
         vehicle.max_charging_power_kw,
     )
     mode = action["useMode"]
-    total_energy_kwh = 0.0
+    if mode == "Fast":
+        return effective_max_power_kw * slot_slice.duration_hours
 
-    for slot_slice in slot_slices:
-        if mode == "Fast":
-            slice_energy_kwh = effective_max_power_kw * slot_slice.duration_hours
-        else:
-            eco_gear = action.get("ecoGear")
-            if not isinstance(eco_gear, str):
-                continue
-            eco_min_power_kw = appliance.eco_gear_min_power_kw_by_id.get(eco_gear)
-            if eco_min_power_kw is None:
-                continue
+    eco_gear = action.get("ecoGear")
+    if not isinstance(eco_gear, str):
+        return 0.0
+    eco_min_power_kw = appliance.eco_gear_min_power_kw_by_id.get(eco_gear)
+    if eco_min_power_kw is None:
+        return 0.0
 
-            slice_energy_kwh = min(
-                effective_max_power_kw * slot_slice.duration_hours,
-                max(
-                    slot_slice.solar_kwh - slot_slice.baseline_house_kwh,
-                    eco_min_power_kw * slot_slice.duration_hours,
-                ),
-            )
-
-        total_energy_kwh += slice_energy_kwh
-
-    return total_energy_kwh
+    return min(
+        effective_max_power_kw * slot_slice.duration_hours,
+        max(
+            slot_slice.solar_kwh - slot_slice.baseline_house_kwh,
+            eco_min_power_kw * slot_slice.duration_hours,
+        ),
+    )
 
 
 def _read_current_slot_house_value(
