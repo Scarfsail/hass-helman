@@ -76,6 +76,7 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleAction,
     ScheduleActionError,
     ScheduleDocument,
+    ScheduleDomains,
     ScheduleNotConfiguredError,
     ScheduleSlot,
     ScheduleStorageCompatibilityError,
@@ -89,6 +90,7 @@ from custom_components.helman.scheduling.schedule import (
     read_schedule_control_config,
     schedule_document_from_dict,
     schedule_document_to_dict,
+    is_default_domains,
     slot_to_dict,
     validate_slot_patch_request,
 )
@@ -292,6 +294,56 @@ class ScheduleHelperTests(unittest.TestCase):
                     )
                 },
             },
+        )
+
+    def test_schedule_document_round_trip_preserves_non_empty_appliance_domains(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        doc = schedule_document_from_dict(
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[0]: {
+                        "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
+                        "appliances": {
+                            "garage-ev": {
+                                "charge": False,
+                            }
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            schedule_document_to_dict(doc),
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[0]: {
+                        "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
+                        "appliances": {
+                            "garage-ev": {
+                                "charge": False,
+                            }
+                        },
+                    }
+                },
+            },
+        )
+
+    def test_is_default_domains_requires_empty_appliances(self) -> None:
+        self.assertFalse(
+            is_default_domains(
+                ScheduleDomains(
+                    appliances={
+                        "garage-ev": {
+                            "charge": False,
+                        }
+                    }
+                )
+            )
         )
 
     def test_schedule_document_from_dict_rejects_mismatched_slot_minutes(self) -> None:

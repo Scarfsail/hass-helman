@@ -171,6 +171,7 @@ Appliance-specific projection policy still lives in the appliance-kind handler e
 - In v1, `vehicleId` is part of the scheduled EV slot action context: it selects which configured vehicle metadata and charging limits apply to that slot's validation, execution context, and projection math.
 - Vehicle arrays may stay ordered for presentation, but identity does not depend on array order.
 - **Config changes require a Home Assistant restart and integration reload.** Stored config and active runtime config are therefore separate lifecycle stages.
+- If active config later removes an appliance or vehicle referenced by persisted schedule data, load normalization should drop only that invalid appliance action and keep the rest of the slot/document when possible.
 
 ## Proposed slot shape
 
@@ -210,8 +211,10 @@ Replace the current single-action slot model with:
 - Omitted appliance IDs mean there is no explicit appliance action for that appliance in the slot.
 - EV slot actions stay minimal and should not repeat appliance kind or appliance name.
 - `charge = false` means the appliance should not charge in that slot; `useMode` and `ecoGear` should then be omitted.
+- `charge = false` may omit `vehicleId`.
 - In v1, `charge = false` is the authored no-charge state. It is not modeled as scheduling `useMode = Stop`, and runtime `slot_stop` is a separate transition behavior.
 - `charge = true` with `useMode = Fast` does not require `ecoGear`.
+- `charge = true` with `useMode = Fast` may include `ecoGear` on input, but canonical schedule persistence/readback ignores it.
 - `charge = true` with `useMode = ECO` requires `ecoGear`.
 
 ## Proposed config direction

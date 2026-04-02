@@ -190,6 +190,7 @@ from custom_components.helman.appliances import build_appliances_runtime_registr
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
+    ScheduleActionError,
     ScheduleDocument,
     ScheduleExecutionUnavailableError,
     ScheduleSlot,
@@ -207,6 +208,46 @@ def _domains_payload(kind: str, target_soc: int | None = None) -> dict:
     return {
         "inverter": inverter,
         "appliances": {},
+    }
+
+
+def _valid_appliances_config() -> dict:
+    return {
+        "appliances": [
+            {
+                "kind": "ev_charger",
+                "id": "garage-ev",
+                "name": "Garage EV",
+                "metadata": {"max_charging_power_kw": 11.0},
+                "control": {
+                    "charge_entity_id": "switch.ev_nabijeni",
+                    "use_mode_entity_id": "select.solax_ev_charger_charger_use_mode",
+                    "eco_gear_entity_id": "select.solax_ev_charger_eco_gear",
+                },
+                "vehicles": [
+                    {
+                        "id": "kona",
+                        "name": "Kona",
+                        "telemetry": {
+                            "soc_entity_id": "sensor.kona_ev_battery_level",
+                        },
+                        "metadata": {
+                            "battery_capacity_kwh": 64.0,
+                            "max_charging_power_kw": 11.0,
+                        },
+                    }
+                ],
+                "projection": {
+                    "modes": {
+                        "Fast": {"behavior": "fixed_power"},
+                        "ECO": {
+                            "behavior": "surplus_aware",
+                            "eco_gear_min_power_kw": {"6A": 1.4},
+                        },
+                    }
+                },
+            }
+        ]
     }
 
 
@@ -419,6 +460,41 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
             await coordinator._async_normalize_schedule_document()
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+        )
+
+    async def test_normalize_schedule_document_prunes_stale_appliance_action(self) -> None:
+        coordinator, storage, _ = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "normal"},
+                        "appliances": {
+                            "missing-ev": {
+                                "charge": True,
+                                "vehicleId": "ghost",
+                                "useMode": "Fast",
+                            }
+                        },
+                    }
+                },
+            }
+        )
+
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            _valid_appliances_config()
+        )
+
+        await coordinator._async_normalize_schedule_document()
 
         self.assertEqual(
             storage.schedule_document,
@@ -760,6 +836,122 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         invalidate_cache.assert_called_once_with()
+
+    async def test_set_schedule_normalizes_appliance_actions_using_active_registry(
+        self,
+    ) -> None:
+        coordinator, storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            _valid_appliances_config()
+        )
+
+        await coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    domains={
+                        "inverter": {"kind": "normal"},
+                        "appliances": {
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "Fast",
+                                "ecoGear": "6A",
+                            }
+                        },
+                    },
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "normal"},
+                        "appliances": {
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "Fast",
+                            }
+                        },
+                    }
+                },
+            },
+        )
+
+    async def test_set_schedule_rejects_unknown_vehicle_in_active_registry(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            _valid_appliances_config()
+        )
+
+        with self.assertRaises(ScheduleActionError):
+            await coordinator.set_schedule(
+                slots=[
+                    ScheduleSlot(
+                        id=CURRENT_SLOT_ID,
+                        domains={
+                            "inverter": {"kind": "normal"},
+                            "appliances": {
+                                "garage-ev": {
+                                    "charge": True,
+                                    "vehicleId": "ghost",
+                                    "useMode": "Fast",
+                                }
+                            },
+                        },
+                    )
+                ],
+                reference_time=REFERENCE_TIME,
+            )
+
+    async def test_get_schedule_prunes_stale_appliance_action_on_read(self) -> None:
+        coordinator, storage, _executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "normal"},
+                        "appliances": {
+                            "missing-ev": {
+                                "charge": True,
+                                "vehicleId": "ghost",
+                                "useMode": "Fast",
+                            }
+                        },
+                    }
+                },
+            }
+        )
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            _valid_appliances_config()
+        )
+
+        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+        current_slot = next(
+            slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
+        )
+
+        self.assertEqual(current_slot["domains"]["appliances"], {})
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+        )
 
     async def test_get_schedule_attaches_runtime_only_to_current_slot(self) -> None:
         coordinator, _storage, executor = self._build_coordinator(

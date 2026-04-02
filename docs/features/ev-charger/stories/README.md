@@ -42,7 +42,7 @@ If implementation proves that a prior assumption should change, update the relev
 
 - [x] [Story 01 - Break the DTO contract and scaffold the FE client](./story-01-dto-foundation.md)
 - [x] [Story 02 - Read appliance config and expose metadata (backend)](./story-02-config-and-metadata.md)
-- [ ] [Story 03 - Author appliance actions in backend schedule](./story-03-schedule-authoring.md)
+- [x] [Story 03 - Author appliance actions in backend schedule](./story-03-schedule-authoring.md)
 - [ ] [Story 04 - Execute EV schedule actions in backend](./story-04-ev-execution.md)
 - [ ] [Story 05 - Expose EV projections in backend API](./story-05-ev-projections.md)
 - [ ] [Story 06 - Reflect appliance demand in backend forecasts](./story-06-forecast-integration.md)

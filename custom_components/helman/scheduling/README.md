@@ -1,6 +1,6 @@
 # Helman Scheduling
 
-This package implements the manual schedule backend and the Story 01 appliance-ready websocket contract.
+This package implements the manual schedule backend and the first EV appliance authoring contract.
 
 It is ready to be consumed by frontend or internal clients that need to:
 
@@ -27,12 +27,13 @@ Implemented today:
 - target-SoC actions resolved against live battery state
 - top-level runtime metadata in `helman/get_schedule`
 - appliance-ready authored slot shape via `domains.inverter` and `domains.appliances`
+- EV appliance action authoring and sparse persistence under `domains.appliances[applianceId]`
 - stable empty appliance metadata/projection payloads for Story 01
 - persisted schedule documents are treated as a fresh setup if their saved slot duration no longer matches the configured slot duration
+- persisted appliance actions referencing removed appliances or vehicles are pruned on load
 
 Not implemented yet:
 
-- non-empty `domains.appliances` authoring
 - appliance execution/runtime population
 - appliance projection math
 - automatic planning / schedule generation
@@ -77,11 +78,39 @@ Each authored slot uses the composite `domains` shape:
 }
 ```
 
-Story 01 keeps `domains.appliances` present but empty:
+`domains.appliances` is a sparse object keyed by `applianceId`.
 
-- `domains.appliances` must be an object
-- non-empty `domains.appliances` is rejected
-- later appliance stories will populate that branch without another DTO break
+Example EV payload:
+
+```json
+{
+  "id": "2026-03-20T21:00:00+01:00",
+  "domains": {
+    "inverter": {
+      "kind": "normal"
+    },
+    "appliances": {
+      "garage-ev": {
+        "charge": true,
+        "vehicleId": "kona",
+        "useMode": "ECO",
+        "ecoGear": "6A"
+      }
+    }
+  }
+}
+```
+
+Rules:
+
+- omitted appliance IDs mean there is no explicit appliance action for that slot
+- `charge = false` is an explicit authored action and may omit `vehicleId`
+- `charge = false` requires `useMode` and `ecoGear` to be omitted
+- `charge = true` requires `vehicleId`
+- `useMode = ECO` requires `ecoGear`
+- `useMode = Fast` accepts `ecoGear` on input but drops it from the canonical persisted/readback form
+- appliance and vehicle references are validated against the active runtime appliance registry
+- persisted stale appliance or vehicle references are dropped per appliance action during load normalization
 
 Legacy compatibility note:
 
@@ -337,7 +366,8 @@ Domain rules:
 
 - `domains.inverter` must be an object with a supported inverter action
 - `domains.appliances` must be an object
-- Story 01 requires `domains.appliances` to stay empty
+- `domains.appliances` is keyed by `applianceId`
+- every appliance action value must be an object
 
 Inverter action rules:
 
@@ -346,6 +376,17 @@ Inverter action rules:
 - `targetSoc` must be an integer
 - `targetSoc` must be between `0` and `100`
 - when writing target actions, the target must also fit inside the configured battery min/max SoC bounds
+
+EV appliance action rules:
+
+- `charge` is required and must be boolean
+- `charge = false` allows `vehicleId` but does not require it
+- `charge = false` rejects `useMode` and `ecoGear`
+- `charge = true` requires `vehicleId` and `useMode`
+- `useMode` must be one of the configured appliance use modes
+- `useMode = ECO` requires a configured `ecoGear`
+- `useMode = Fast` ignores `ecoGear` during canonicalization
+- unknown `applianceId`, `vehicleId`, or `ecoGear` values are rejected for incoming writes
 
 ## Error model
 
@@ -356,7 +397,7 @@ Current error codes:
 | Error code | Meaning |
 | --- | --- |
 | `invalid_slots` | malformed slot ids, duplicate ids, empty request, out-of-horizon slot, or unsupported authored slot fields |
-| `invalid_action` | unknown action kind, invalid `domains` shape, missing or disallowed `targetSoc`, legacy top-level `action`, non-empty Story 01 `domains.appliances`, or incoming slot `runtime` |
+| `invalid_action` | unknown action kind, invalid `domains` shape, invalid EV appliance payload, missing or disallowed `targetSoc`, legacy top-level `action`, or incoming slot `runtime` |
 | `not_configured` | missing required schedule config or missing battery bounds for target writes |
 | `execution_unavailable` | live execution cannot proceed because required runtime state or control entity access is unavailable |
 

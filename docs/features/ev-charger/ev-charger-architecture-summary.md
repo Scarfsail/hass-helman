@@ -6,6 +6,7 @@
 
 - `appliances` is an umbrella schedule domain beside `inverter`.
 - Runtime, schedule, and projection appliance collections are keyed by `applianceId`; EV actions additionally carry `vehicleId`.
+- Authored `charge = false` may omit `vehicleId`; authored `Fast` may accept `ecoGear` on input but canonical schedule readback omits it.
 - The shared cross-layer demand model is `applianceId + slotId + energyKwh`.
 
 ## 1. Config and runtime lifecycle
@@ -108,6 +109,8 @@ flowchart TD
 ## Locked invariants
 
 - `charge = false` is authored schedule intent; `slot_stop` is runtime-only transition behavior.
+- `charge = false` may omit `vehicleId`; when present, `vehicleId` must still be valid for that appliance.
+- `Fast` canonical schedule persistence/readback omits `ecoGear`.
 - `slot_stop` turns off charging only; it keeps `useMode` and `ecoGear` unchanged.
 - `slotId` is the canonical time key and `energyKwh` is the canonical shared energy field.
 - The projection -> forecast pipeline is one-way and generic across appliance kinds.

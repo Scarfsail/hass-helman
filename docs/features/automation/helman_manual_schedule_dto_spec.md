@@ -31,7 +31,7 @@ The v1 websocket commands are:
 - `helman/set_schedule`
 - `helman/set_schedule_execution`
 
-The minimal plan response is:
+The current authored schedule response is:
 
 ```json
 {
@@ -39,15 +39,27 @@ The minimal plan response is:
   "slots": [
     {
       "id": "2026-03-20T21:00:00+01:00",
-      "action": {
-        "kind": "normal"
+      "domains": {
+        "inverter": {
+          "kind": "normal"
+        },
+        "appliances": {
+          "garage-ev": {
+            "charge": true,
+            "vehicleId": "kona",
+            "useMode": "Fast"
+          }
+        }
       }
     },
     {
       "id": "2026-03-20T22:00:00+01:00",
-      "action": {
-        "kind": "charge_to_target_soc",
-        "targetSoc": 80
+      "domains": {
+        "inverter": {
+          "kind": "charge_to_target_soc",
+          "targetSoc": 80
+        },
+        "appliances": {}
       }
     }
   ]
@@ -140,9 +152,14 @@ Validation rules:
 
 ```python
 @dataclass(frozen=True)
+class ScheduleDomains:
+    inverter: ScheduleAction
+    appliances: dict[str, dict[str, Any]]
+
+@dataclass(frozen=True)
 class ScheduleSlot:
     id: str
-    action: ScheduleAction
+    domains: ScheduleDomains
 ```
 
 This same shape should be used for:
@@ -158,7 +175,7 @@ from dataclasses import dataclass, field
 @dataclass
 class ScheduleDocument:
     execution_enabled: bool = False
-    slots: dict[str, ScheduleAction] = field(default_factory=dict)
+    slots: dict[str, ScheduleDomains] = field(default_factory=dict)
 ```
 
 Important:
@@ -206,15 +223,24 @@ Suggested persisted shape:
   "slotMinutes": 30,
   "slots": {
     "2026-03-20T21:00:00+01:00": {
-      "kind": "charge_to_target_soc",
-      "targetSoc": 80
+      "inverter": {
+        "kind": "normal"
+      },
+      "appliances": {
+        "garage-ev": {
+          "charge": true,
+          "vehicleId": "kona",
+          "useMode": "ECO",
+          "ecoGear": "6A"
+        }
+      }
     },
     "2026-03-20T22:00:00+01:00": {
-      "kind": "charge_to_target_soc",
-      "targetSoc": 80
-    },
-    "2026-03-20T23:00:00+01:00": {
-      "kind": "stop_charging"
+      "inverter": {
+        "kind": "charge_to_target_soc",
+        "targetSoc": 80
+      },
+      "appliances": {}
     }
   }
 }
@@ -228,6 +254,8 @@ Use:
 
 - `target_soc` in Python
 - `targetSoc` in JSON
+- `vehicle_id` / `use_mode` / `eco_gear` in Python-facing helpers when needed
+- `vehicleId` / `useMode` / `ecoGear` in JSON
 
 Helper signatures:
 
@@ -263,7 +291,7 @@ SCHEDULE_ACTION_SCHEMA = vol.Schema(
 SCHEDULE_SLOT_SCHEMA = vol.Schema(
     {
         vol.Required("id"): str,
-        vol.Required("action"): SCHEDULE_ACTION_SCHEMA,
+        vol.Required("domains"): dict,
     },
     extra=vol.PREVENT_EXTRA,
 )
@@ -320,25 +348,33 @@ Example response:
   "slots": [
     {
       "id": "2026-03-20T21:00:00+01:00",
-      "action": {
-        "kind": "charge_to_target_soc",
-        "targetSoc": 80
-      },
-      "runtime": {
-        "status": "applied",
-        "executedAction": {
-          "kind": "stop_discharging"
+      "domains": {
+        "inverter": {
+          "kind": "charge_to_target_soc",
+          "targetSoc": 80
         },
-        "reason": "target_soc_reached"
-      }
-    },
-    {
-      "id": "2026-03-20T22:00:00+01:00",
-      "action": {
-        "kind": "normal"
-      }
+        "appliances": {
+          "garage-ev": {
+            "charge": true,
+            "vehicleId": "kona",
+            "useMode": "Fast"
+          }
+        }
+      },
     }
-  ]
+  ],
+  "runtime": {
+    "activeSlotId": "2026-03-20T21:00:00+01:00",
+    "appliances": {},
+    "inverter": {
+      "actionKind": "apply",
+      "outcome": "success",
+      "executedAction": {
+        "kind": "stop_discharging"
+      },
+      "reason": "target_soc_reached"
+    }
+  }
 }
 ```
 
@@ -346,9 +382,10 @@ Rules:
 
 - always return all upcoming slots for the next `48` hours
 - fill missing stored slots as `normal`
-- attach `runtime` only to the currently running slot when execution is enabled
-- keep `action` as the requested schedule action even when `runtime.executedAction` differs
-- when runtime execution fails, return `runtime.status = "error"` and a machine-readable `runtime.errorCode`
+- attach `runtime` as a top-level read-only branch when execution is enabled
+- keep `slots[*].domains` as the authored schedule state even when runtime differs
+- omitted appliance IDs mean there is no explicit appliance action for that slot
+- when runtime execution fails, return a machine-readable top-level runtime error state
 - never return labels
 - never return grouped ranges
 
@@ -384,22 +421,41 @@ Example request:
   "slots": [
     {
       "id": "2026-03-20T21:00:00+01:00",
-      "action": {
-        "kind": "charge_to_target_soc",
-        "targetSoc": 80
+      "domains": {
+        "inverter": {
+          "kind": "charge_to_target_soc",
+          "targetSoc": 80
+        },
+        "appliances": {}
       }
     },
     {
       "id": "2026-03-20T22:00:00+01:00",
-      "action": {
-        "kind": "charge_to_target_soc",
-        "targetSoc": 80
+      "domains": {
+        "inverter": {
+          "kind": "normal"
+        },
+        "appliances": {
+          "garage-ev": {
+            "charge": true,
+            "vehicleId": "kona",
+            "useMode": "ECO",
+            "ecoGear": "6A"
+          }
+        }
       }
     },
     {
       "id": "2026-03-20T23:00:00+01:00",
-      "action": {
-        "kind": "normal"
+      "domains": {
+        "inverter": {
+          "kind": "normal"
+        },
+        "appliances": {
+          "garage-ev": {
+            "charge": false
+          }
+        }
       }
     }
   ]
@@ -417,10 +473,17 @@ Response:
 Write semantics:
 
 - each provided slot is independent
-- if action kind is `normal`, remove that slot from persisted storage
-- otherwise overwrite that slot with the provided action
+- if inverter is `normal` and `domains.appliances` is empty, remove that slot from persisted storage
+- otherwise overwrite that slot with the provided canonical `domains` payload
 - no contiguity requirement
 - duplicate slot IDs in one request are rejected
+- `domains.appliances` is keyed by `applianceId`
+- `charge = false` may omit `vehicleId`
+- `charge = true` requires `vehicleId`
+- `useMode = ECO` requires `ecoGear`
+- `useMode = Fast` accepts `ecoGear` on input but ignores it in canonical persistence/readback
+- appliance and vehicle references are validated against the active runtime appliance registry
+- persisted stale appliance or vehicle references are dropped per appliance action during load normalization
 
 ### `helman/set_schedule_execution`
 

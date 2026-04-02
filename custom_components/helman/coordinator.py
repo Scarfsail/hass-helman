@@ -71,6 +71,8 @@ from .scheduling.schedule import (
     format_slot_id,
     materialize_schedule_slots,
     prune_expired_slots,
+    normalize_schedule_document_for_registry,
+    normalize_slot_patch_request,
     read_schedule_control_config,
     schedule_document_from_dict,
     schedule_document_to_dict,
@@ -617,6 +619,10 @@ class HelmanCoordinator:
 
         try:
             schedule_document = schedule_document_from_dict(raw_document)
+            schedule_document = normalize_schedule_document_for_registry(
+                schedule_document,
+                appliances_registry=self._appliances_registry,
+            )
         except ScheduleError as err:
             _LOGGER.warning(
                 "Resetting persisted schedule data because it is invalid or "
@@ -640,7 +646,11 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
     ) -> ScheduleDocument:
-        schedule_document = self._load_schedule_document()
+        loaded_document = self._load_schedule_document()
+        schedule_document = normalize_schedule_document_for_registry(
+            loaded_document,
+            appliances_registry=self._appliances_registry,
+        )
         pruned_slots = prune_expired_slots(
             stored_slots=schedule_document.slots,
             reference_time=reference_time,
@@ -649,7 +659,7 @@ class HelmanCoordinator:
             execution_enabled=schedule_document.execution_enabled,
             slots=pruned_slots,
         )
-        if pruned_document != schedule_document:
+        if pruned_document != loaded_document:
             await self._save_schedule_document(pruned_document)
         return pruned_document
 
@@ -686,25 +696,17 @@ class HelmanCoordinator:
     ) -> ScheduleResponseDict:
         request_now = reference_time or dt_util.now()
         async with self._schedule_lock:
-            schedule_document = self._load_schedule_document()
-            pruned_slots = prune_expired_slots(
-                stored_slots=schedule_document.slots,
-                reference_time=request_now,
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=request_now
             )
-            pruned_document = ScheduleDocument(
-                execution_enabled=schedule_document.execution_enabled,
-                slots=pruned_slots,
-            )
-            if pruned_document != schedule_document:
-                await self._save_schedule_document(pruned_document)
             execution_status = None
-            if pruned_document.execution_enabled:
+            if schedule_document.execution_enabled:
                 current_slot_id = format_slot_id(build_horizon_start(request_now))
                 latest_execution_status = self._schedule_executor.get_execution_status()
                 if latest_execution_status.active_slot_id == current_slot_id:
                     execution_status = latest_execution_status
             return self._build_schedule_response(
-                schedule_document=pruned_document,
+                schedule_document=schedule_document,
                 reference_time=request_now,
                 execution_status=execution_status,
             )
@@ -726,21 +728,20 @@ class HelmanCoordinator:
         request_now = reference_time or dt_util.now()
         document_changed = False
         async with self._schedule_lock:
-            schedule_document = self._load_schedule_document()
-            pruned_slots = prune_expired_slots(
-                stored_slots=schedule_document.slots,
-                reference_time=request_now,
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=request_now
             )
-            validate_slot_patch_request(
+            normalized_slots = normalize_slot_patch_request(
                 slots=slots,
                 reference_time=request_now,
                 battery_soc_bounds=self._read_battery_soc_bounds(),
+                appliances_registry=self._appliances_registry,
             )
             updated_document = ScheduleDocument(
                 execution_enabled=schedule_document.execution_enabled,
                 slots=apply_slot_patches(
-                    stored_slots=pruned_slots,
-                    slot_patches=slots,
+                    stored_slots=schedule_document.slots,
+                    slot_patches=normalized_slots,
                 ),
             )
             if updated_document != schedule_document:

@@ -52,13 +52,13 @@ Modify:
 ## Implementation plan
 
 1. Build an EV projection builder that consumes:
-   - configured appliance metadata
-   - selected vehicle metadata
-   - authored schedule slots
-   - `vehicleId` from the scheduled EV slot action so the builder uses the selected vehicle's metadata/capabilities for validation and effective max charging power
-   - current SoC
-   - `ecoGear -> min power` config map
-   - solar forecast and the **original** house consumption forecast before appliance demand is folded back in (needed for ECO surplus calculation)
+    - configured appliance metadata
+    - selected vehicle metadata
+    - authored schedule slots
+    - `vehicleId` from the scheduled EV slot action when `charge = true`, so the builder uses the selected vehicle's metadata/capabilities for validation and effective max charging power
+    - current SoC
+    - `ecoGear -> min power` config map
+    - solar forecast and the **original** house consumption forecast before appliance demand is folded back in (needed for ECO surplus calculation)
 
 2. Keep projection ownership inside the EV appliance handler. It owns the EV-specific charging/projection policy and produces the shared internal demand series described in the shared guide, even though the calculation consumes contextual system inputs such as solar forecast, house consumption baseline, and inverter/battery constraints:
    - `applianceId`
@@ -72,21 +72,25 @@ Modify:
 5. Implement `ECO` projection following the simplified algorithm from the refined spec:
    - Compute `ev_charging_power = min(effective_max_power, max(solar_kwh - baseline_house_kwh, eco_gear_min_power_kwh))`
    - Convert to `energyKwh` for the slot duration.
-   - The projection computes only EV demand per slot. It does **not** reason about where shortfall energy comes from (battery discharge vs grid import) — that is a downstream concern handled by the forecast recalculation in Story 06.
-   - **Edge case**: when `effective_max_power < (solar_kwh - baseline_house_kwh)`, the EV charges at `effective_max_power` and remaining surplus is available for battery charging.
+    - The projection computes only EV demand per slot. It does **not** reason about where shortfall energy comes from (battery discharge vs grid import) — that is a downstream concern handled by the forecast recalculation in Story 06.
+    - **Edge case**: when `effective_max_power < (solar_kwh - baseline_house_kwh)`, the EV charges at `effective_max_power` and remaining surplus is available for battery charging.
 
-6. Build the EV-specific projection DTO from that internal demand series plus EV-specific SoC data and explicit `vehicleId`.
+6. Respect Story 03 schedule canonicalization:
+   - `charge = false` projects no charging and does not require `vehicleId`
+   - `useMode = Fast` must not depend on `ecoGear`, because canonical schedule persistence/readback drops it
 
-7. Keep the response contract minimal:
+7. Build the EV-specific projection DTO from that internal demand series plus EV-specific SoC data and explicit `vehicleId`.
+
+8. Keep the response contract minimal:
    - appliance projections are keyed by `applianceId`
    - omit appliances with no projection data
    - keep point series sparse when there is no projected state change
    - expose explicit vehicle IDs inside EV-specific projection entries
    - expose `energyKwh` alongside EV-specific fields needed by Story 06
 
-8. **SoC unavailability**: if vehicle SoC telemetry is `unavailable` or `unknown`, the SoC projection for that vehicle is unknown/omitted. Vehicle SoC is optional and used only for FE display — no backend logic depends on it. The `energyKwh` demand series is still produced regardless of SoC availability.
+9. **SoC unavailability**: if vehicle SoC telemetry is `unavailable` or `unknown`, the SoC projection for that vehicle is unknown/omitted. Vehicle SoC is optional and used only for FE display — no backend logic depends on it. The `energyKwh` demand series is still produced regardless of SoC availability.
 
-9. **Caching in Story 05**: keep projection cache behavior aligned with the final shared pipeline, but do not pull the full shared coordinator/cache orchestration from Story 06 into this story prematurely. In Story 05, cache invalidation should cover the projection's real upstream dependencies (forecast inputs, authored appliance schedule changes, and active config lifecycle) while still preserving the locked stage order. Live vehicle SoC changes do **not** invalidate the cache in v1.
+10. **Caching in Story 05**: keep projection cache behavior aligned with the final shared pipeline, but do not pull the full shared coordinator/cache orchestration from Story 06 into this story prematurely. In Story 05, cache invalidation should cover the projection's real upstream dependencies (forecast inputs, authored appliance schedule changes, and active config lifecycle) while still preserving the locked stage order. Live vehicle SoC changes do **not** invalidate the cache in v1.
 
 10. Do not build frontend projection UI in this story.
 
@@ -120,7 +124,8 @@ The response should stay appliance-specific, but each projected point may includ
 ## Acceptance criteria
 
 - `helman/get_appliance_projections` returns sparse projection data keyed by `applianceId`.
-- `Fast` projection uses `min(appliance max, vehicle max)` as effective power.
+- `Fast` projection uses `min(appliance max, vehicle max)` as effective power and does not depend on `ecoGear`.
+- `charge = false` projects no charging even when `vehicleId` is omitted.
 - `ECO` projection uses the formula `min(effective_max_power, max(solar - baseline_house, eco_gear_min_power))` and produces only EV demand — it does not reason about shortfall sourcing.
 - `ECO` projection uses the original house-consumption baseline as its input and does not read a baseline already adjusted by projected appliance demand.
 - When `effective_max_power < (solar - baseline_house)`, the EV charges at `effective_max_power` (remaining surplus is left for downstream battery/grid forecast).

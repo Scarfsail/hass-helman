@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from homeassistant.util import dt as dt_util
 
+from ..appliances.schedule import (
+    ApplianceScheduleActionsDict,
+    normalize_appliance_schedule_actions,
+    read_appliance_schedule_actions,
+)
+from ..appliances.state import AppliancesRuntimeRegistry
 from ..const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -50,7 +56,7 @@ class ScheduleActionDict(TypedDict):
 
 class ScheduleDomainsDict(TypedDict):
     inverter: ScheduleActionDict
-    appliances: dict[str, Any]
+    appliances: ApplianceScheduleActionsDict
 
 
 class ScheduleSlotDict(TypedDict):
@@ -76,7 +82,7 @@ NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
 @dataclass(frozen=True)
 class ScheduleDomains:
     inverter: ScheduleAction = field(default_factory=lambda: NORMAL_SCHEDULE_ACTION)
-    appliances: dict[str, Any] = field(default_factory=dict)
+    appliances: ApplianceScheduleActionsDict = field(default_factory=dict)
 
 
 @dataclass(frozen=True, init=False)
@@ -209,21 +215,28 @@ def domains_from_dict(data: Any, *, context: str) -> ScheduleDomains:
     raw_appliances = data.get("appliances", {})
     if not isinstance(raw_appliances, Mapping):
         raise ScheduleActionError(f"{context} domains.appliances must be an object")
-    if raw_appliances:
-        raise ScheduleActionError(
-            "Story 01 supports inverter scheduling only; 'domains.appliances' must be empty"
+
+    try:
+        appliances = read_appliance_schedule_actions(
+            raw_appliances,
+            context=f"{context} domains.appliances",
         )
+    except ValueError as err:
+        raise ScheduleActionError(str(err)) from err
 
     return ScheduleDomains(
         inverter=action_from_dict(raw_inverter),
-        appliances={},
+        appliances=appliances,
     )
 
 
 def domains_to_dict(domains: ScheduleDomains) -> ScheduleDomainsDict:
     return {
         "inverter": action_to_dict(domains.inverter),
-        "appliances": dict(domains.appliances),
+        "appliances": {
+            appliance_id: dict(action)
+            for appliance_id, action in domains.appliances.items()
+        },
     }
 
 
@@ -523,28 +536,80 @@ def validate_slot_patch(
     )
 
 
+def normalize_slot_patch(
+    *,
+    slot_id: str,
+    domains: ScheduleDomains,
+    reference_time: datetime,
+    battery_soc_bounds: BatterySocBounds | None,
+    appliances_registry: AppliancesRuntimeRegistry | None,
+) -> ScheduleSlot:
+    slot_start = parse_slot_id(slot_id)
+    if not _is_slot_aligned(slot_start):
+        raise ScheduleSlotsError(
+            f"Schedule slot '{slot_id}' must align to {SCHEDULE_SLOT_MINUTES}-minute boundaries"
+        )
+    if not _is_slot_in_horizon(slot_start, reference_time):
+        raise ScheduleSlotsError(
+            f"Schedule slot '{slot_id}' must be within the rolling {SCHEDULE_HORIZON_HOURS}-hour horizon"
+        )
+    return ScheduleSlot(
+        id=slot_id,
+        domains=normalize_schedule_domains(
+            domains=domains,
+            battery_soc_bounds=battery_soc_bounds,
+            require_target_soc_bounds=True,
+            appliances_registry=appliances_registry,
+            context="Schedule slot",
+            appliance_mode="strict",
+        ),
+    )
+
+
 def validate_slot_patch_request(
     *,
     slots: Sequence[ScheduleSlot],
     reference_time: datetime,
     battery_soc_bounds: BatterySocBounds | None,
+    appliances_registry: AppliancesRuntimeRegistry | None = None,
 ) -> None:
+    normalize_slot_patch_request(
+        slots=slots,
+        reference_time=reference_time,
+        battery_soc_bounds=battery_soc_bounds,
+        appliances_registry=appliances_registry,
+    )
+
+
+def normalize_slot_patch_request(
+    *,
+    slots: Sequence[ScheduleSlot],
+    reference_time: datetime,
+    battery_soc_bounds: BatterySocBounds | None,
+    appliances_registry: AppliancesRuntimeRegistry | None,
+) -> list[ScheduleSlot]:
     if not slots:
         raise ScheduleSlotsError("At least one schedule slot must be provided")
 
     seen_slot_ids: set[str] = set()
+    normalized_slots: list[ScheduleSlot] = []
     for slot in slots:
         if slot.id in seen_slot_ids:
             raise ScheduleSlotsError(
                 f"Schedule slot '{slot.id}' appears more than once in the same request"
             )
         seen_slot_ids.add(slot.id)
-        validate_slot_patch(
-            slot_id=slot.id,
-            domains=slot.domains,
-            reference_time=reference_time,
-            battery_soc_bounds=battery_soc_bounds,
+        normalized_slots.append(
+            normalize_slot_patch(
+                slot_id=slot.id,
+                domains=slot.domains,
+                reference_time=reference_time,
+                battery_soc_bounds=battery_soc_bounds,
+                appliances_registry=appliances_registry,
+            )
         )
+
+    return normalized_slots
 
 
 def is_default_domains(domains: ScheduleDomains) -> bool:
@@ -556,17 +621,77 @@ def validate_schedule_domains(
     domains: ScheduleDomains,
     battery_soc_bounds: BatterySocBounds | None,
     require_target_soc_bounds: bool,
+    appliances_registry: AppliancesRuntimeRegistry | None = None,
 ) -> None:
-    if domains.appliances:
-        raise ScheduleActionError(
-            "Story 01 supports inverter scheduling only; 'domains.appliances' must be empty"
-        )
+    normalize_schedule_domains(
+        domains=domains,
+        battery_soc_bounds=battery_soc_bounds,
+        require_target_soc_bounds=require_target_soc_bounds,
+        appliances_registry=appliances_registry,
+        context="Schedule slot",
+        appliance_mode="strict",
+    )
+
+
+def normalize_schedule_domains(
+    *,
+    domains: ScheduleDomains,
+    battery_soc_bounds: BatterySocBounds | None,
+    require_target_soc_bounds: bool,
+    appliances_registry: AppliancesRuntimeRegistry | None,
+    context: str,
+    appliance_mode: Literal["strict", "load_prune"],
+) -> ScheduleDomains:
+    registry = (
+        AppliancesRuntimeRegistry() if appliances_registry is None else appliances_registry
+    )
 
     _validate_action(
         action=domains.inverter,
         has_target_soc=domains.inverter.target_soc is not None,
         battery_soc_bounds=battery_soc_bounds,
         require_target_soc_bounds=require_target_soc_bounds,
+    )
+
+    try:
+        appliances = normalize_appliance_schedule_actions(
+            domains.appliances,
+            registry=registry,
+            context=f"{context} domains.appliances",
+            mode=appliance_mode,
+        )
+    except ValueError as err:
+        raise ScheduleActionError(str(err)) from err
+
+    return ScheduleDomains(
+        inverter=domains.inverter,
+        appliances=appliances,
+    )
+
+
+def normalize_schedule_document_for_registry(
+    doc: ScheduleDocument,
+    *,
+    appliances_registry: AppliancesRuntimeRegistry,
+) -> ScheduleDocument:
+    normalized_slots: dict[str, ScheduleDomains] = {}
+
+    for slot_id, domains in doc.slots.items():
+        normalized_domains = normalize_schedule_domains(
+            domains=domains,
+            battery_soc_bounds=None,
+            require_target_soc_bounds=False,
+            appliances_registry=appliances_registry,
+            context="Persisted schedule slot",
+            appliance_mode="load_prune",
+        )
+        if is_default_domains(normalized_domains):
+            continue
+        normalized_slots[slot_id] = normalized_domains
+
+    return ScheduleDocument(
+        execution_enabled=doc.execution_enabled,
+        slots=normalized_slots,
     )
 
 
@@ -638,9 +763,15 @@ def _coerce_schedule_action(value: Any) -> ScheduleAction:
 
 
 def _coerce_appliances_mapping(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
+    if value is None:
         return {}
-    return {str(key): item for key, item in value.items()}
+    try:
+        return read_appliance_schedule_actions(
+            value,
+            context="Schedule appliances mapping",
+        )
+    except ValueError as err:
+        raise ScheduleActionError(str(err)) from err
 
 
 def _read_mapping(value: Any) -> Mapping[str, Any]:

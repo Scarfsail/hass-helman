@@ -36,6 +36,8 @@ These decisions are already agreed and should not be renegotiated inside impleme
 - Every EV vehicle has an explicit `id` within its appliance.
 - `domains.appliances`, projection payloads, and appliance runtime-status payloads are keyed by `applianceId`.
 - V1 supports only `Fast` and `ECO` scheduling/projection modes.
+- authored EV `charge = false` may omit `vehicleId`; if `vehicleId` is present, it must still reference a configured vehicle for that appliance.
+- authored `Fast` actions may include `ecoGear` on input, but canonical schedule persistence/readback drops it.
 - `ECO` uses an explicit `ecoGear -> min power` config map; do not derive this from charger phases or voltage assumptions in backend logic.
 - `helman/get_appliance_projections` remains appliance-specific, but it should expose `energyKwh` alongside EV SoC so FE and later forecast integration can explain the same simulated charging behavior without re-deriving energy demand from SoC deltas.
 - Appliance-specific projection and aggregate system forecast integration are separate stories: `helman/get_appliance_projections` stays appliance-specific, while `helman/get_forecast` later reflects aggregate battery/grid impact.
@@ -49,6 +51,7 @@ These decisions are already agreed and should not be renegotiated inside impleme
 - **Executor decomposition**: `ScheduleExecutor` → `InverterExecutor` + `AppliancesExecutor` → `EvChargerExecutor`. Each branch has independent runtime status. The top-level orchestrator acquires the schedule lock once per reconcile; sub-executors run within that single lock acquisition.
 - **`slot_stop` transition behavior**: when a slot with EV charging ends and the next slot has no EV action for that same appliance, only the charge switch is turned off; `use_mode` and `eco_gear` are kept as-is. When no EV action exists in a slot, the system does nothing for that appliance.
 - **Config changes require HA restart and integration reload.** No runtime config migration.
+- **Persisted schedule normalization**: if active config later removes an appliance or vehicle referenced by persisted schedule data, load normalization should drop only that invalid appliance action and keep the rest of the slot/document when possible.
 - **Projection caching** shares the same cache lifecycle as the battery forecast.
 
 ## Shared architecture rules

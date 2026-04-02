@@ -22,3 +22,6 @@ class AppliancesRuntimeRegistry:
     @property
     def appliances_by_id(self) -> dict[str, "EvChargerApplianceRuntime"]:
         return {appliance.id: appliance for appliance in self.appliances}
+
+    def get_appliance(self, appliance_id: str) -> "EvChargerApplianceRuntime | None":
+        return self.appliances_by_id.get(appliance_id)

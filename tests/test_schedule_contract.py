@@ -258,11 +258,13 @@ from custom_components.helman.websockets import (  # noqa: E402
     ws_get_appliances,
     ws_set_schedule,
 )
+from custom_components.helman.scheduling.schedule import ScheduleActionError  # noqa: E402
 
 
 class FakeCoordinator:
     def __init__(self) -> None:
         self.schedule_calls = []
+        self.schedule_error = None
         self.appliances_response = {"appliances": []}
         self.projections_response = {
             "generatedAt": CURRENT_SLOT_ID,
@@ -270,6 +272,8 @@ class FakeCoordinator:
         }
 
     async def set_schedule(self, *, slots) -> None:
+        if self.schedule_error is not None:
+            raise self.schedule_error
         self.schedule_calls.append(list(slots))
 
     async def get_appliances(self) -> dict:
@@ -402,6 +406,82 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
             "Legacy schedule payload uses top-level 'action'",
             connection.errors[0][2],
         )
+
+    async def test_set_schedule_forwards_non_empty_appliance_domains(self) -> None:
+        coordinator = FakeCoordinator()
+        connection = FakeConnection()
+        msg = {
+            "id": 1,
+            **SET_SCHEDULE_REQUEST_SCHEMA(
+                {
+                    "type": "helman/set_schedule",
+                    "slots": [
+                        {
+                            "id": CURRENT_SLOT_ID,
+                            "domains": {
+                                "inverter": {"kind": "normal"},
+                                "appliances": {
+                                    "garage-ev": {
+                                        "charge": True,
+                                        "vehicleId": "kona",
+                                        "useMode": "Fast",
+                                        "ecoGear": "6A",
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                }
+            ),
+        }
+
+        await ws_set_schedule(FakeHass(coordinator), connection, msg)
+
+        slot = coordinator.schedule_calls[0][0]
+        self.assertEqual(
+            slot.domains.appliances,
+            {
+                "garage-ev": {
+                    "charge": True,
+                    "vehicleId": "kona",
+                    "useMode": "Fast",
+                    "ecoGear": "6A",
+                }
+            },
+        )
+        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.errors, [])
+
+    async def test_set_schedule_surfaces_coordinator_validation_error(self) -> None:
+        coordinator = FakeCoordinator()
+        coordinator.schedule_error = ScheduleActionError("bad appliance action")
+        connection = FakeConnection()
+        msg = {
+            "id": 1,
+            **SET_SCHEDULE_REQUEST_SCHEMA(
+                {
+                    "type": "helman/set_schedule",
+                    "slots": [
+                        {
+                            "id": CURRENT_SLOT_ID,
+                            "domains": {
+                                "inverter": {"kind": "normal"},
+                                "appliances": {
+                                    "garage-ev": {
+                                        "charge": True,
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                }
+            ),
+        }
+
+        await ws_set_schedule(FakeHass(coordinator), connection, msg)
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(connection.errors, [(1, "invalid_action", "bad appliance action")])
 
     async def test_get_appliances_returns_stable_empty_payload(self) -> None:
         coordinator = FakeCoordinator()

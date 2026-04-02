@@ -56,11 +56,14 @@ Modify:
    - `charge`, `useMode`, `ecoGear`
 
 3. Enforce the agreed EV action rules through the EV appliance-kind handler / validator:
-   - `charge = false` means `useMode` and `ecoGear` must be omitted
-   - `charge = true` + `useMode = Fast` does not require `ecoGear`
-   - `charge = true` + `useMode = ECO` requires `ecoGear`
-   - the referenced `applianceId` must exist
-   - any EV-specific `vehicleId` must be valid for that appliance
+    - `charge = false` means `useMode` and `ecoGear` must be omitted
+    - `charge = false` may omit `vehicleId`
+    - `charge = true` + `useMode = Fast` does not require `ecoGear`
+    - `charge = true` + `useMode = Fast` accepts `ecoGear` on input but ignores it in canonical persistence/readback
+    - `charge = true` + `useMode = ECO` requires `ecoGear`
+    - the referenced `applianceId` must exist
+    - any EV-specific `vehicleId` must be valid for that appliance
+    - persisted stale appliance or vehicle references should be pruned per invalid appliance action during load normalization rather than resetting the whole slot or document
 
 4. Keep persisted storage sparse where possible and preserve the keyed-by-`applianceId` shape in responses.
 
@@ -73,6 +76,9 @@ Modify:
 - Appliance actions round-trip through `helman/set_schedule` and `helman/get_schedule`.
 - Omitted appliance IDs in `domains.appliances` mean there is no explicit appliance action for that slot.
 - Invalid EV action combinations or unknown `vehicleId` values are rejected by backend validation.
+- `charge = false` may omit `vehicleId`.
+- `useMode = Fast` drops any provided `ecoGear` from canonical persistence/readback.
+- Persisted stale appliance or vehicle references are removed surgically per appliance action on load.
 
 ## Automated validation
 

@@ -59,10 +59,11 @@ Modify:
    - `ScheduleExecutor` becomes the top-level orchestrator that triggers both branches and also reconciles when the current active-slot action changes
 
 2. Add deterministic service application for EV actions in `EvChargerExecutor`:
-   - when a slot becomes active and contains an EV action for that appliance, apply that slot action at the beginning of the slot / reconcile for the new active slot
-   - write `charge` switch
-   - set `useMode`
-   - set `ecoGear` when relevant
+    - when a slot becomes active and contains an EV action for that appliance, apply that slot action at the beginning of the slot / reconcile for the new active slot
+    - write `charge` switch
+    - set `useMode` only when the authored action requires it
+    - set `ecoGear` only when relevant
+    - an authored `charge = false` action should turn off the charge switch without requiring `vehicleId` and without writing `useMode` or `ecoGear`
 
 3. **`slot_stop` transition behavior**:
    - When a slot with an active EV charging action transitions to a next slot without EV action for that same appliance: **stop charging only** (turn off the charge switch). Keep `use_mode` and `eco_gear` where they are.
@@ -87,6 +88,7 @@ Modify:
 - `ScheduleExecutor` is decomposed into `InverterExecutor` + `AppliancesExecutor` → `EvChargerExecutor`.
 - Enabling schedule execution applies the active EV slot to the real HA charger entities.
 - When a slot becomes active and contains an EV action, that action is applied at the beginning of the slot.
+- An authored `charge = false` EV action turns off the charge switch without requiring `vehicleId` and without touching `use_mode` / `eco_gear`.
 - Changing the current active-slot EV action triggers a fresh reconcile without waiting for the next normal scheduler tick.
 - When a slot with EV charging transitions to a next slot without EV action for that appliance: only the charge switch is turned off; `use_mode` and `eco_gear` are kept as-is.
 - When no EV action exists in the current slot at execution start: the EV charger is not touched.

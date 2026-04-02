@@ -49,6 +49,10 @@ class EvChargerApplianceRuntime:
     def eco_gears(self) -> tuple[str, ...]:
         return tuple(gear_name for gear_name, _ in self.eco_gear_min_power_kw)
 
+    @property
+    def vehicles_by_id(self) -> dict[str, EvVehicleRuntime]:
+        return {vehicle.id: vehicle for vehicle in self.vehicles}
+
 
 class EntityReferenceDict(TypedDict):
     entityId: str
