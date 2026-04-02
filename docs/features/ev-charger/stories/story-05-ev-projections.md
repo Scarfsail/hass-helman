@@ -103,17 +103,13 @@ The response should stay appliance-specific, but each projected point may includ
   "generatedAt": "...",
   "appliances": {
     "garage-ev": {
-      "vehicles": [
+      "series": [
         {
-          "id": "kona",
-          "series": [
-            {
-              "slotId": "...",
-              "socPct": 58,
-              "energyKwh": 1.75,
-              "mode": "Fast"
-            }
-          ]
+          "slotId": "...",
+          "energyKwh": 1.75,
+          "mode": "Fast",
+          "vehicleId": "kona",
+          "vehicleSoc": 58
         }
       ]
     }

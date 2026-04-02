@@ -76,13 +76,14 @@ flowchart LR
     Soc["Current SoC (optional)"] --> Handler
 
     Handler --> Demand["Shared demand series<br/>applianceId + slotId + energyKwh"]
-    Handler --> EVView["EV projection series<br/>vehicleId + socPct? + energyKwh"]
+    Handler --> EVView["EV projection series<br/>vehicleId + vehicleSoc? + energyKwh"]
     EVView --> ProjectionApi["get_appliance_projections"]
 ```
 
 - `Fast`: `min(appliance max, vehicle max)`
 - `ECO`: `min(effective_max_power, max(solar - baseline_house, eco_gear_min_power))`
 - Missing SoC telemetry omits SoC projection, but still keeps `energyKwh`
+- The current projection contract is appliance-shaped: `appliances[applianceId].series[]`
 
 ## 4. Forecast integration pipeline
 
@@ -103,7 +104,7 @@ flowchart TD
 
 - Appliance demand is treated as additional house consumption.
 - Forecast integration consumes only generic `energyKwh`; EV policy stays inside the EV handler.
-- `get_appliance_projections` and `get_forecast` share the same one-pass computation and cache lifecycle.
+- Story 05 keeps projection computation/cache aligned with forecast inputs; Story 06 consolidates the final one-pass shared computation for `get_appliance_projections` and `get_forecast`.
 - Live vehicle SoC changes do not invalidate the v1 projection/forecast cache.
 
 ## Locked invariants

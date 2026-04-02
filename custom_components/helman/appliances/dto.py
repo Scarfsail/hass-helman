@@ -6,16 +6,12 @@ from .ev_charger import (
     EvChargerApplianceResponseDict,
     build_ev_charger_metadata_dict,
 )
+from .projection_response import ApplianceProjectionsResponseDict
 from .state import AppliancesRuntimeRegistry
 
 
 class ApplianceMetadataResponseDict(TypedDict):
     appliances: list[EvChargerApplianceResponseDict]
-
-
-class ApplianceProjectionsResponseDict(TypedDict):
-    generatedAt: str
-    appliances: dict[str, dict]
 
 
 def build_appliances_response(

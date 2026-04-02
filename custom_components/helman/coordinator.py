@@ -18,11 +18,15 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .appliances import (
+    ApplianceProjectionPlan,
     ApplianceMetadataResponseDict,
     ApplianceProjectionsResponseDict,
     AppliancesRuntimeRegistry,
+    build_appliance_projection_plan,
+    build_appliance_projections_response,
     build_appliances_response,
     build_appliances_runtime_registry,
+    build_projection_input_bundle,
     build_empty_appliance_projections_response,
 )
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
@@ -164,6 +168,15 @@ class HelmanCoordinator:
         self._cached_battery_forecast_schedule_effective_signature: (
             tuple[str, str, int | None, str, str] | None
         ) = None
+        self._cached_appliance_projection_plan: ApplianceProjectionPlan | None = None
+        self._cached_appliance_projection_expires_at: datetime | None = None
+        self._cached_appliance_projection_started_at: datetime | None = None
+        self._cached_appliance_projection_house_generated_at: str | None = None
+        self._cached_appliance_projection_solar_signature: tuple[Any, ...] | None = None
+        self._cached_appliance_projection_schedule_signature: tuple[
+            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
+            ...,
+        ] | None = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
         self._schedule_execution_lock = asyncio.Lock()
@@ -596,6 +609,56 @@ class HelmanCoordinator:
         )
         return result
 
+    async def _async_get_canonical_house_forecast(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> dict[str, Any] | None:
+        (
+            total_energy_entity_id,
+            training_window_days,
+            min_history_days,
+            config_fingerprint,
+        ) = self._read_house_forecast_config()
+        if self._has_compatible_forecast_snapshot(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            config_fingerprint=config_fingerprint,
+            reference_time=reference_time,
+        ):
+            return self._cached_forecast
+
+        if total_energy_entity_id is not None:
+            await self._async_refresh_forecast(reference_time=reference_time)
+
+        if self._has_compatible_forecast_snapshot(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            config_fingerprint=config_fingerprint,
+            reference_time=reference_time,
+        ):
+            return self._cached_forecast
+
+        self._cached_forecast = None
+        self._invalidate_battery_forecast_cache()
+        return ConsumptionForecastBuilder._make_payload(
+            status="not_configured"
+            if total_energy_entity_id is None
+            else "unavailable",
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            config_fingerprint=config_fingerprint,
+            resolution=get_forecast_resolution(
+                FORECAST_CANONICAL_GRANULARITY_MINUTES
+            ),
+            horizon_hours=MAX_FORECAST_DAYS * 24,
+            source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+            forecast_days_available=MAX_FORECAST_DAYS,
+            alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
+        )
+
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
         return read_schedule_control_config(self._active_config)
 
@@ -716,8 +779,35 @@ class HelmanCoordinator:
         return build_appliances_response(self._appliances_registry)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
-        return build_empty_appliance_projections_response(
-            generated_at=dt_util.now().isoformat()
+        request_now = dt_util.now()
+        raw_result = await HelmanForecastBuilder(
+            self._hass,
+            self._active_config,
+        ).build(reference_time=request_now)
+        canonical_solar_forecast = build_solar_forecast_response(
+            raw_result["solar"],
+            granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+            forecast_days=MAX_FORECAST_DAYS,
+        )
+        canonical_house_forecast = await self._async_get_canonical_house_forecast(
+            reference_time=request_now
+        )
+        if canonical_house_forecast is None:
+            return build_empty_appliance_projections_response(
+                generated_at=request_now.isoformat()
+            )
+
+        plan = await self._async_get_appliance_projection_plan(
+            solar_forecast=canonical_solar_forecast,
+            house_forecast=canonical_house_forecast,
+            started_at=request_now,
+        )
+        if not plan.appliances_by_id:
+            return build_empty_appliance_projections_response(generated_at=plan.generated_at)
+        return build_appliance_projections_response(
+            plan=plan,
+            registry=self._appliances_registry,
+            hass=self._hass,
         )
 
     async def set_schedule(
@@ -970,6 +1060,57 @@ class HelmanCoordinator:
         )
         return forecast
 
+    async def _async_get_appliance_projection_plan(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> ApplianceProjectionPlan:
+        async with self._schedule_lock:
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=started_at
+            )
+
+        schedule_signature = self._build_appliance_projection_schedule_signature(
+            schedule_document
+        )
+        if self._has_valid_appliance_projection_cache(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+            schedule_signature=schedule_signature,
+        ):
+            return self._cached_appliance_projection_plan
+
+        generated_at = started_at.isoformat()
+        input_bundle = build_projection_input_bundle(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            reference_time=started_at,
+        )
+        if input_bundle is None:
+            plan = ApplianceProjectionPlan(
+                generated_at=generated_at,
+                appliances_by_id={},
+                demand_points=(),
+            )
+        else:
+            plan = build_appliance_projection_plan(
+                generated_at=generated_at,
+                registry=self._appliances_registry,
+                schedule_document=schedule_document,
+                inputs=input_bundle,
+            )
+        self._store_appliance_projection_cache(
+            plan=plan,
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+            schedule_signature=schedule_signature,
+        )
+        return plan
+
     async def _build_battery_forecast(
         self,
         *,
@@ -1106,6 +1247,15 @@ class HelmanCoordinator:
         self._cached_battery_forecast_schedule_execution_enabled = None
         self._cached_battery_forecast_schedule_signature = None
         self._cached_battery_forecast_schedule_effective_signature = None
+        self._invalidate_appliance_projection_cache()
+
+    def _invalidate_appliance_projection_cache(self) -> None:
+        self._cached_appliance_projection_plan = None
+        self._cached_appliance_projection_expires_at = None
+        self._cached_appliance_projection_started_at = None
+        self._cached_appliance_projection_house_generated_at = None
+        self._cached_appliance_projection_solar_signature = None
+        self._cached_appliance_projection_schedule_signature = None
 
     def _has_valid_battery_forecast_cache(
         self,
@@ -1206,6 +1356,90 @@ class HelmanCoordinator:
         self._cached_battery_forecast_schedule_signature = schedule_signature
         self._cached_battery_forecast_schedule_effective_signature = (
             schedule_effective_signature
+        )
+
+    def _has_valid_appliance_projection_cache(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+        schedule_signature: tuple[
+            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
+            ...,
+        ],
+    ) -> bool:
+        if (
+            self._cached_appliance_projection_plan is None
+            or self._cached_appliance_projection_expires_at is None
+            or self._cached_appliance_projection_started_at is None
+        ):
+            return False
+        if dt_util.as_utc(started_at) >= dt_util.as_utc(
+            self._cached_appliance_projection_expires_at
+        ):
+            return False
+        if dt_util.as_utc(started_at) != dt_util.as_utc(
+            self._cached_appliance_projection_started_at
+        ):
+            return False
+        if (
+            self._cached_appliance_projection_house_generated_at
+            != house_forecast.get("generatedAt")
+        ):
+            return False
+        if (
+            self._cached_appliance_projection_solar_signature
+            != self._build_battery_forecast_solar_signature(solar_forecast)
+        ):
+            return False
+        return self._cached_appliance_projection_schedule_signature == schedule_signature
+
+    def _store_appliance_projection_cache(
+        self,
+        *,
+        plan: ApplianceProjectionPlan,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+        schedule_signature: tuple[
+            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
+            ...,
+        ],
+    ) -> None:
+        self._cached_appliance_projection_plan = plan
+        self._cached_appliance_projection_expires_at = dt_util.as_local(
+            dt_util.as_utc(started_at)
+            + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
+        )
+        self._cached_appliance_projection_started_at = started_at
+        self._cached_appliance_projection_house_generated_at = house_forecast.get(
+            "generatedAt"
+        )
+        self._cached_appliance_projection_solar_signature = (
+            self._build_battery_forecast_solar_signature(solar_forecast)
+        )
+        self._cached_appliance_projection_schedule_signature = schedule_signature
+
+    @staticmethod
+    def _build_appliance_projection_schedule_signature(
+        schedule_document: ScheduleDocument,
+    ) -> tuple[
+        tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
+        ...,
+    ]:
+        return tuple(
+            (
+                slot_id,
+                tuple(
+                    (
+                        appliance_id,
+                        tuple(sorted(action.items())),
+                    )
+                    for appliance_id, action in sorted(domains.appliances.items())
+                ),
+            )
+            for slot_id, domains in sorted(schedule_document.slots.items())
         )
 
     def _has_compatible_battery_forecast_live_state(self) -> bool:

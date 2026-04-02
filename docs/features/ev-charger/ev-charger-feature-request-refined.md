@@ -358,10 +358,13 @@ Example direction:
   "generatedAt": "...",
   "appliances": {
     "garage-ev": {
-      "vehicles": [
+      "series": [
         {
-          "id": "kona",
-          "series": [ "... projected SoC and energy points ..." ]
+          "slotId": "...",
+          "energyKwh": 1.75,
+          "mode": "Fast",
+          "vehicleId": "kona",
+          "vehicleSoc": 58
         }
       ]
     }
@@ -369,7 +372,7 @@ Example direction:
 }
 ```
 
-This surface should stay minimalistic. It should key appliance projections by `applianceId`, omit appliances without projection data, and only include projected points when scheduled charging actually produces a future EV state change. When points are present, they may carry both EV SoC progression and `energyKwh`.
+This surface should stay minimalistic. It should key appliance projections by `applianceId`, omit appliances without projection data, and only include projected points when scheduled charging actually produces a future EV state change. When points are present, they carry the slot-level EV projection fields directly in `series[]`, including `vehicleId`, optional `vehicleSoc`, and `energyKwh`.
 
 ### Why this placement was chosen
 
@@ -432,7 +435,7 @@ The projection/forecast dependency chain is ordered, strictly one-directional, a
 
 **Critical loop prevention**: every recalculation of projection needs a fresh, unmodified forecast — never an already-adjusted one. The pipeline is strictly one-directional: steps 1 → 2 → 3 → 4. Appliance projections must not consume a house-consumption baseline that already includes projected appliance demand, otherwise they would see reduced remaining solar because of their own previously-added load and produce the wrong result. Downstream adjusted battery/grid forecast outputs must never be fed back into appliance projection inputs.
 
-Both `helman/get_appliance_projections` and `helman/get_forecast` should share the same internal computation so this pipeline runs exactly once. The coordinator should orchestrate the full pipeline and serve both endpoints from the same computed result.
+Story 06 should consolidate this into a shared coordinator computation so the pipeline runs exactly once. Story 05 already needs to preserve the same upstream dependency order, but it does not have to land the final one-pass shared orchestration yet.
 
 The battery/grid forecast layer is therefore strictly downstream. It consumes appliance demand but does not influence how that demand is first projected. EV is the first appliance-kind producer in v1, but the aggregation step is intentionally generic so future appliance kinds can join the same flow.
 

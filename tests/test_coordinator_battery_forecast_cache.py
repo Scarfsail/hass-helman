@@ -4,7 +4,7 @@ import asyncio
 import sys
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -107,6 +107,7 @@ def _install_import_stubs() -> None:
     schedule_mod.ScheduleError = type("ScheduleError", (Exception,), {})
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
+    schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
     schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
     schedule_mod.build_horizon_start = lambda reference_time: reference_time.replace(
         minute=(reference_time.minute // 30) * 30,
@@ -115,7 +116,14 @@ def _install_import_stubs() -> None:
     )
     schedule_mod.describe_schedule_control_config_issue = lambda config: None
     schedule_mod.format_slot_id = lambda slot: slot.isoformat(timespec="seconds")
+    schedule_mod.parse_slot_id = datetime.fromisoformat
     schedule_mod.materialize_schedule_slots = lambda stored_slots, reference_time: []
+    schedule_mod.normalize_schedule_document_for_registry = (
+        lambda document, appliances_registry=None: document
+    )
+    schedule_mod.normalize_slot_patch_request = (
+        lambda slot_patches, appliances_registry=None: slot_patches
+    )
     schedule_mod.prune_expired_slots = (
         lambda stored_slots, reference_time: stored_slots
     )
@@ -394,6 +402,8 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             schedule_document=_make_schedule_document(),
             async_save_schedule_document=AsyncMock(),
         )
+        coordinator._active_config = {}
+        coordinator._appliances_registry = coordinator_module.AppliancesRuntimeRegistry()
         coordinator._cached_battery_forecast = None
         coordinator._cached_battery_forecast_expires_at = None
         coordinator._cached_battery_forecast_house_generated_at = None
@@ -401,6 +411,12 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._cached_battery_forecast_schedule_execution_enabled = None
         coordinator._cached_battery_forecast_schedule_signature = None
         coordinator._cached_battery_forecast_schedule_effective_signature = None
+        coordinator._cached_appliance_projection_plan = None
+        coordinator._cached_appliance_projection_expires_at = None
+        coordinator._cached_appliance_projection_started_at = None
+        coordinator._cached_appliance_projection_house_generated_at = None
+        coordinator._cached_appliance_projection_solar_signature = None
+        coordinator._cached_appliance_projection_schedule_signature = None
         coordinator._schedule_lock = asyncio.Lock()
         coordinator._build_battery_forecast_schedule_overlay = Mock(return_value=None)
         return coordinator
@@ -545,6 +561,100 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(build_mock.await_count, 2)
+
+    async def test_invalidate_battery_forecast_cache_also_clears_projection_cache(self) -> None:
+        coordinator = self._make_coordinator()
+        coordinator._cached_appliance_projection_plan = object()
+        coordinator._cached_appliance_projection_expires_at = REFERENCE_TIME
+        coordinator._cached_appliance_projection_started_at = REFERENCE_TIME
+        coordinator._cached_appliance_projection_house_generated_at = "2026-03-20T21:05:00+01:00"
+        coordinator._cached_appliance_projection_solar_signature = ("available", ())
+        coordinator._cached_appliance_projection_schedule_signature = ()
+
+        coordinator._invalidate_battery_forecast_cache()
+
+        self.assertIsNone(coordinator._cached_appliance_projection_plan)
+        self.assertIsNone(coordinator._cached_appliance_projection_expires_at)
+        self.assertIsNone(coordinator._cached_appliance_projection_started_at)
+        self.assertIsNone(coordinator._cached_appliance_projection_house_generated_at)
+        self.assertIsNone(coordinator._cached_appliance_projection_solar_signature)
+        self.assertIsNone(coordinator._cached_appliance_projection_schedule_signature)
+
+    async def test_async_get_appliance_projection_plan_reuses_cache_for_same_started_at(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        input_bundle = object()
+        plan = object()
+
+        with (
+            patch.object(
+                coordinator_module,
+                "build_projection_input_bundle",
+                return_value=input_bundle,
+            ) as build_input_bundle,
+            patch.object(
+                coordinator_module,
+                "build_appliance_projection_plan",
+                return_value=plan,
+            ) as build_plan,
+        ):
+            first = await coordinator._async_get_appliance_projection_plan(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=REFERENCE_TIME,
+            )
+            second = await coordinator._async_get_appliance_projection_plan(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=REFERENCE_TIME,
+            )
+
+        self.assertIs(first, plan)
+        self.assertIs(second, plan)
+        build_input_bundle.assert_called_once()
+        build_plan.assert_called_once_with(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=coordinator._appliances_registry,
+            schedule_document=_make_schedule_document(),
+            inputs=input_bundle,
+        )
+
+    async def test_async_get_appliance_projection_plan_rebuilds_when_started_at_changes(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        input_bundle = object()
+        first_plan = object()
+        second_plan = object()
+
+        with (
+            patch.object(
+                coordinator_module,
+                "build_projection_input_bundle",
+                return_value=input_bundle,
+            ) as build_input_bundle,
+            patch.object(
+                coordinator_module,
+                "build_appliance_projection_plan",
+                side_effect=[first_plan, second_plan],
+            ) as build_plan,
+        ):
+            first = await coordinator._async_get_appliance_projection_plan(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=REFERENCE_TIME,
+            )
+            second = await coordinator._async_get_appliance_projection_plan(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=datetime.fromisoformat("2026-03-20T21:08:00+01:00"),
+            )
+
+        self.assertIs(first, first_plan)
+        self.assertIs(second, second_plan)
+        self.assertEqual(build_input_bundle.call_count, 2)
+        self.assertEqual(build_plan.call_count, 2)
 
     async def test_async_get_battery_forecast_rebuilds_when_schedule_slots_change(
         self,

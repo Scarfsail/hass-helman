@@ -268,7 +268,19 @@ class FakeCoordinator:
         self.appliances_response = {"appliances": []}
         self.projections_response = {
             "generatedAt": CURRENT_SLOT_ID,
-            "appliances": {},
+            "appliances": {
+                "garage-ev": {
+                    "series": [
+                        {
+                            "slotId": CURRENT_SLOT_ID,
+                            "energyKwh": 1.75,
+                            "mode": "Fast",
+                            "vehicleId": "kona",
+                            "vehicleSoc": 58,
+                        }
+                    ]
+                }
+            },
         }
 
     async def set_schedule(self, *, slots) -> None:
@@ -496,7 +508,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results, [(1, {"appliances": []})])
         self.assertEqual(connection.errors, [])
 
-    async def test_get_appliance_projections_returns_stable_empty_payload(
+    async def test_get_appliance_projections_returns_appliance_series_payload(
         self,
     ) -> None:
         coordinator = FakeCoordinator()
@@ -515,7 +527,19 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     1,
                     {
                         "generatedAt": CURRENT_SLOT_ID,
-                        "appliances": {},
+                        "appliances": {
+                            "garage-ev": {
+                                "series": [
+                                    {
+                                        "slotId": CURRENT_SLOT_ID,
+                                        "energyKwh": 1.75,
+                                        "mode": "Fast",
+                                        "vehicleId": "kona",
+                                        "vehicleSoc": 58,
+                                    }
+                                ]
+                            }
+                        },
                     },
                 )
             ],

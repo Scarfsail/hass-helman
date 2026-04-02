@@ -53,6 +53,13 @@ class EvChargerApplianceRuntime:
     def vehicles_by_id(self) -> dict[str, EvVehicleRuntime]:
         return {vehicle.id: vehicle for vehicle in self.vehicles}
 
+    @property
+    def eco_gear_min_power_kw_by_id(self) -> dict[str, float]:
+        return dict(self.eco_gear_min_power_kw)
+
+    def get_vehicle(self, vehicle_id: str) -> EvVehicleRuntime | None:
+        return self.vehicles_by_id.get(vehicle_id)
+
 
 class EntityReferenceDict(TypedDict):
     entityId: str
