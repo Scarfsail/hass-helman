@@ -186,6 +186,7 @@ from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_SLOT_MINUTES,
 )
+from custom_components.helman.appliances import build_appliances_runtime_registry  # noqa: E402
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
@@ -923,6 +924,77 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             executor.events,
             ["reset_runtime", "start", "safe_reconcile:config_saved"],
         )
+
+    async def test_saved_appliance_config_does_not_change_active_registry_until_reload(
+        self,
+    ) -> None:
+        initial_config = {
+            "appliances": [
+                {
+                    "kind": "ev_charger",
+                    "id": "garage-ev",
+                    "name": "Garage EV",
+                    "metadata": {"max_charging_power_kw": 11.0},
+                    "control": {
+                        "charge_entity_id": "switch.ev_nabijeni",
+                        "use_mode_entity_id": "select.solax_ev_charger_charger_use_mode",
+                        "eco_gear_entity_id": "select.solax_ev_charger_eco_gear",
+                    },
+                    "vehicles": [
+                        {
+                            "id": "kona",
+                            "name": "Kona",
+                            "telemetry": {
+                                "soc_entity_id": "sensor.kona_ev_battery_level",
+                            },
+                            "metadata": {
+                                "battery_capacity_kwh": 64.0,
+                                "max_charging_power_kw": 11.0,
+                            },
+                        }
+                    ],
+                    "projection": {
+                        "modes": {
+                            "Fast": {"behavior": "fixed_power"},
+                            "ECO": {
+                                "behavior": "surplus_aware",
+                                "eco_gear_min_power_kw": {"6A": 1.4},
+                            },
+                        }
+                    },
+                }
+            ]
+        }
+        updated_config = {
+            "appliances": [
+                {
+                    **initial_config["appliances"][0],
+                    "name": "Updated EV",
+                }
+            ]
+        }
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+            config=initial_config,
+        )
+        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            coordinator.config
+        )
+
+        storage.config = updated_config
+        coordinator.invalidate_tree = lambda: None
+        coordinator.invalidate_forecast = lambda: None
+
+        await coordinator.async_handle_config_saved()
+
+        response = await coordinator.get_appliances()
+        self.assertEqual(response["appliances"][0]["name"], "Garage EV")
+        self.assertEqual(coordinator.config["appliances"][0]["name"], "Garage EV")
 
 
 if __name__ == "__main__":

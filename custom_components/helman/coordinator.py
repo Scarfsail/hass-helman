@@ -20,8 +20,10 @@ from homeassistant.util import dt as dt_util
 from .appliances import (
     ApplianceMetadataResponseDict,
     ApplianceProjectionsResponseDict,
+    AppliancesRuntimeRegistry,
+    build_appliances_response,
+    build_appliances_runtime_registry,
     build_empty_appliance_projections_response,
-    build_empty_appliances_response,
 )
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
@@ -138,6 +140,7 @@ class HelmanCoordinator:
         self._unmeasured_sensor_factory: Callable | None = None
         self._entry: Any = None
         self._removing_entity_ids: set[str] = set()
+        self._active_config: dict[str, Any] = deepcopy(storage.config)
         self._power_sensor_ids: list[str] = []
         self._source_sensor_ids: list[str] = []
         self._source_value_types: dict[str, str] = {}
@@ -172,6 +175,7 @@ class HelmanCoordinator:
                 read_battery_state=self._read_schedule_executor_battery_state,
             ),
         )
+        self._appliances_registry = AppliancesRuntimeRegistry()
         self._last_schedule_control_config_issue: str | None = None
         self._last_schedule_battery_state_issue: str | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
@@ -181,7 +185,7 @@ class HelmanCoordinator:
 
     @property
     def config(self) -> dict:
-        return self._storage.config
+        return self._active_config
 
     @staticmethod
     def collect_qualifying_nodes(tree: dict) -> dict[str, str | None]:
@@ -223,6 +227,11 @@ class HelmanCoordinator:
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
+        self._active_config = deepcopy(self._storage.config)
+        self._appliances_registry = build_appliances_runtime_registry(
+            self._active_config,
+            logger=_LOGGER,
+        )
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "entity_registry_updated", self._on_registry_updated
@@ -339,13 +348,13 @@ class HelmanCoordinator:
     async def get_device_tree(self) -> dict:
         """Return cached or freshly built device tree."""
         if self._cached_tree is None:
-            builder = HelmanTreeBuilder(self._hass, self._storage.config)
+            builder = HelmanTreeBuilder(self._hass, self._active_config)
             self._cached_tree = await builder.build()
         return self._cached_tree
 
     def _read_house_forecast_config(self) -> tuple[str | None, int, int, str]:
         power_devices = ConsumptionForecastBuilder._read_dict(
-            self._storage.config.get("power_devices")
+            self._active_config.get("power_devices")
         )
         house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
         forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
@@ -493,7 +502,7 @@ class HelmanCoordinator:
             forecast_days=forecast_days,
         )
         request_now = dt_util.now()
-        builder = HelmanForecastBuilder(self._hass, self._storage.config)
+        builder = HelmanForecastBuilder(self._hass, self._active_config)
         raw_result = await builder.build(reference_time=request_now)
         canonical_solar_forecast = build_solar_forecast_response(
             raw_result["solar"],
@@ -585,7 +594,7 @@ class HelmanCoordinator:
         return result
 
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
-        return read_schedule_control_config(self._storage.config)
+        return read_schedule_control_config(self._active_config)
 
     def _read_schedule_executor_control_config(self) -> ScheduleControlConfig | None:
         control_config = self._read_schedule_control_config()
@@ -593,7 +602,7 @@ class HelmanCoordinator:
             self._last_schedule_control_config_issue = None
             return control_config
 
-        issue = describe_schedule_control_config_issue(self._storage.config)
+        issue = describe_schedule_control_config_issue(self._active_config)
         if issue is None:
             issue = "required scheduler control config values are unavailable"
         if self._last_schedule_control_config_issue != issue:
@@ -701,7 +710,7 @@ class HelmanCoordinator:
             )
 
     async def get_appliances(self) -> ApplianceMetadataResponseDict:
-        return build_empty_appliances_response()
+        return build_appliances_response(self._appliances_registry)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
         return build_empty_appliance_projections_response(
@@ -886,7 +895,7 @@ class HelmanCoordinator:
     ) -> None:
         """Build a new house forecast snapshot, cache it, and persist it."""
         try:
-            builder = ConsumptionForecastBuilder(self._hass, self._storage.config)
+            builder = ConsumptionForecastBuilder(self._hass, self._active_config)
             snapshot = await builder.build(
                 reference_time=reference_time,
                 forecast_days=MAX_FORECAST_DAYS,
@@ -969,7 +978,7 @@ class HelmanCoordinator:
     ) -> dict[str, Any]:
         return await BatteryCapacityForecastBuilder(
             self._hass,
-            self._storage.config,
+            self._active_config,
         ).build(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
@@ -1038,7 +1047,7 @@ class HelmanCoordinator:
         }:
             return None
 
-        battery_entity_config = read_battery_entity_config(self._storage.config)
+        battery_entity_config = read_battery_entity_config(self._active_config)
         if battery_entity_config is None:
             return (
                 active_slot_id,
@@ -1197,7 +1206,7 @@ class HelmanCoordinator:
         )
 
     def _has_compatible_battery_forecast_live_state(self) -> bool:
-        battery_entity_config = read_battery_entity_config(self._storage.config)
+        battery_entity_config = read_battery_entity_config(self._active_config)
         if battery_entity_config is None:
             return True
 
@@ -1340,7 +1349,7 @@ class HelmanCoordinator:
 
     def _init_buffers(self, tree: dict) -> None:
         """Initialize empty rolling deques for all tracked sensors."""
-        history_buckets: int = self._storage.config.get("history_buckets", 60)
+        history_buckets: int = self._active_config.get("history_buckets", 60)
 
         self._virtual_sensor_ids = self._collect_virtual_sensor_ids(tree)
         self._virtual_sensor_ids.add(CONSUMPTION_TOTAL_ENTITY_ID)
@@ -1362,7 +1371,7 @@ class HelmanCoordinator:
         """Start the periodic tick using HA's time-interval tracker."""
         if self._unsub_tick is not None:
             return
-        bucket_duration: int = self._storage.config.get("history_bucket_duration", 1)
+        bucket_duration: int = self._active_config.get("history_bucket_duration", 1)
         self._unsub_tick = async_track_time_interval(
             self._hass,
             self._tick,
@@ -1430,7 +1439,7 @@ class HelmanCoordinator:
 
         # Step 4: Battery ETAs (separate sensors for charging and discharging)
         if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
-            battery_cfg = self._storage.config.get("power_devices", {}).get("battery", {})
+            battery_cfg = self._active_config.get("power_devices", {}).get("battery", {})
             sensor_id = battery_cfg.get("entities", {}).get("power")
             hist = list(self._power_history.get(sensor_id, [])) if sensor_id else []
 
@@ -1465,8 +1474,8 @@ class HelmanCoordinator:
 
     def get_history(self) -> dict:
         """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
-        buckets: int = self._storage.config.get("history_buckets", 60)
-        bucket_duration: int = self._storage.config.get("history_bucket_duration", 1)
+        buckets: int = self._active_config.get("history_buckets", 60)
+        bucket_duration: int = self._active_config.get("history_bucket_duration", 1)
         return {
             "buckets": buckets,
             "bucket_duration": bucket_duration,
@@ -1491,15 +1500,15 @@ class HelmanCoordinator:
         return raw
 
     def _read_battery_state(self):
-        entity_config = read_battery_entity_config(self._storage.config)
+        entity_config = read_battery_entity_config(self._active_config)
         if entity_config is None:
             return None
         return read_battery_live_state(self._hass, entity_config)
 
     def _read_schedule_executor_battery_state(self):
-        entity_config = read_battery_entity_config(self._storage.config)
+        entity_config = read_battery_entity_config(self._active_config)
         if entity_config is None:
-            issue = describe_battery_entity_config_issue(self._storage.config)
+            issue = describe_battery_entity_config_issue(self._active_config)
             if issue is None:
                 issue = "required battery entity config values are unavailable"
             if self._last_schedule_battery_state_issue != issue:
@@ -1527,7 +1536,7 @@ class HelmanCoordinator:
         return None
 
     def _read_battery_soc_bounds(self):
-        bounds_config = read_battery_soc_bounds_config(self._storage.config)
+        bounds_config = read_battery_soc_bounds_config(self._active_config)
         if bounds_config is None:
             return None
         return read_battery_soc_bounds(self._hass, bounds_config)
