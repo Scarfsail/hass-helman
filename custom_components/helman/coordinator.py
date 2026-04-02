@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import asyncio
 import logging
+from dataclasses import dataclass
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Sequence
@@ -22,6 +23,7 @@ from .appliances import (
     ApplianceMetadataResponseDict,
     ApplianceProjectionsResponseDict,
     AppliancesRuntimeRegistry,
+    build_adjusted_house_forecast,
     build_appliance_projection_plan,
     build_appliance_projections_response,
     build_appliances_response,
@@ -130,6 +132,15 @@ def _merge_grid_forecast_responses(
     return merged_response
 
 
+@dataclass(frozen=True)
+class _ApplianceForecastPipelineSnapshot:
+    started_at: datetime
+    original_house_forecast: dict[str, Any]
+    adjusted_house_forecast: dict[str, Any]
+    projection_plan: ApplianceProjectionPlan
+    battery_forecast: dict[str, Any]
+
+
 class HelmanCoordinator:
     def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
         self._hass = hass
@@ -167,6 +178,9 @@ class HelmanCoordinator:
         ) = None
         self._cached_battery_forecast_schedule_effective_signature: (
             tuple[str, str, int | None, str, str] | None
+        ) = None
+        self._cached_appliance_forecast_pipeline: (
+            _ApplianceForecastPipelineSnapshot | None
         ) = None
         self._cached_appliance_projection_plan: ApplianceProjectionPlan | None = None
         self._cached_appliance_projection_expires_at: datetime | None = None
@@ -576,16 +590,17 @@ class HelmanCoordinator:
                     forecast_days_available=MAX_FORECAST_DAYS,
                     alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
                 )
-        result["house_consumption"] = build_house_forecast_response(
-            canonical_house_forecast,
-            granularity=granularity,
-            forecast_days=forecast_days,
-        )
-        canonical_battery_forecast = await self._async_get_battery_forecast(
+        pipeline = await self._async_get_appliance_forecast_pipeline(
             solar_forecast=canonical_solar_forecast,
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
+        result["house_consumption"] = build_house_forecast_response(
+            pipeline.adjusted_house_forecast,
+            granularity=granularity,
+            forecast_days=forecast_days,
+        )
+        canonical_battery_forecast = pipeline.battery_forecast
         grid_price_response = build_grid_price_forecast_response(
             raw_result["grid"],
             granularity=granularity,
@@ -1007,6 +1022,20 @@ class HelmanCoordinator:
         house_forecast: dict[str, Any],
         started_at: datetime,
     ) -> dict[str, Any]:
+        pipeline = await self._async_get_appliance_forecast_pipeline(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+        )
+        return pipeline.battery_forecast
+
+    async def _async_get_appliance_forecast_pipeline(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+    ) -> _ApplianceForecastPipelineSnapshot:
         async with self._schedule_lock:
             schedule_document = await self._load_pruned_schedule_document_locked(
                 reference_time=started_at
@@ -1020,6 +1049,14 @@ class HelmanCoordinator:
             if schedule_execution_enabled
             else ()
         )
+        projection_schedule_document = (
+            schedule_document if schedule_execution_enabled else ScheduleDocument()
+        )
+        appliance_schedule_signature = (
+            self._build_appliance_projection_schedule_signature(
+                projection_schedule_document
+            )
+        )
         schedule_effective_signature = (
             self._build_battery_forecast_schedule_effective_signature(
                 schedule_document=forecast_schedule_document,
@@ -1032,9 +1069,12 @@ class HelmanCoordinator:
             started_at=started_at,
             schedule_execution_enabled=schedule_execution_enabled,
             schedule_signature=schedule_signature,
+            appliance_schedule_signature=appliance_schedule_signature,
             schedule_effective_signature=schedule_effective_signature,
         ):
-            return self._cached_battery_forecast
+            if self._cached_appliance_forecast_pipeline is None:
+                raise RuntimeError("Forecast pipeline cache is missing shared snapshot")
+            return self._cached_appliance_forecast_pipeline
 
         schedule_overlay = None
         if schedule_execution_enabled:
@@ -1042,23 +1082,54 @@ class HelmanCoordinator:
                 schedule_document=forecast_schedule_document,
                 reference_time=started_at,
             )
-        forecast = await self._build_battery_forecast(
+        generated_at = started_at.isoformat()
+        input_bundle = build_projection_input_bundle(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
+            reference_time=started_at,
+        )
+        if input_bundle is None:
+            projection_plan = ApplianceProjectionPlan(
+                generated_at=generated_at,
+                appliances_by_id={},
+                demand_points=(),
+            )
+        else:
+            projection_plan = build_appliance_projection_plan(
+                generated_at=generated_at,
+                registry=self._appliances_registry,
+                schedule_document=projection_schedule_document,
+                inputs=input_bundle,
+            )
+        adjusted_house_forecast = build_adjusted_house_forecast(
+            house_forecast=house_forecast,
+            demand_points=projection_plan.demand_points,
+        )
+        forecast = await self._build_battery_forecast(
+            solar_forecast=solar_forecast,
+            house_forecast=adjusted_house_forecast,
             started_at=started_at,
             forecast_days=MAX_FORECAST_DAYS,
             schedule_overlay=schedule_overlay,
         )
+        pipeline = _ApplianceForecastPipelineSnapshot(
+            started_at=started_at,
+            original_house_forecast=deepcopy(house_forecast),
+            adjusted_house_forecast=adjusted_house_forecast,
+            projection_plan=projection_plan,
+            battery_forecast=forecast,
+        )
         self._store_battery_forecast_cache(
-            forecast=forecast,
+            pipeline=pipeline,
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
             schedule_execution_enabled=schedule_execution_enabled,
             schedule_signature=schedule_signature,
+            appliance_schedule_signature=appliance_schedule_signature,
             schedule_effective_signature=schedule_effective_signature,
         )
-        return forecast
+        return pipeline
 
     async def _async_get_appliance_projection_plan(
         self,
@@ -1067,49 +1138,12 @@ class HelmanCoordinator:
         house_forecast: dict[str, Any],
         started_at: datetime,
     ) -> ApplianceProjectionPlan:
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=started_at
-            )
-
-        schedule_signature = self._build_appliance_projection_schedule_signature(
-            schedule_document
-        )
-        if self._has_valid_appliance_projection_cache(
+        pipeline = await self._async_get_appliance_forecast_pipeline(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
-            schedule_signature=schedule_signature,
-        ):
-            return self._cached_appliance_projection_plan
-
-        generated_at = started_at.isoformat()
-        input_bundle = build_projection_input_bundle(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            reference_time=started_at,
         )
-        if input_bundle is None:
-            plan = ApplianceProjectionPlan(
-                generated_at=generated_at,
-                appliances_by_id={},
-                demand_points=(),
-            )
-        else:
-            plan = build_appliance_projection_plan(
-                generated_at=generated_at,
-                registry=self._appliances_registry,
-                schedule_document=schedule_document,
-                inputs=input_bundle,
-            )
-        self._store_appliance_projection_cache(
-            plan=plan,
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-            schedule_signature=schedule_signature,
-        )
-        return plan
+        return pipeline.projection_plan
 
     async def _build_battery_forecast(
         self,
@@ -1240,6 +1274,7 @@ class HelmanCoordinator:
         )
 
     def _invalidate_battery_forecast_cache(self) -> None:
+        self._cached_appliance_forecast_pipeline = None
         self._cached_battery_forecast = None
         self._cached_battery_forecast_expires_at = None
         self._cached_battery_forecast_house_generated_at = None
@@ -1265,6 +1300,10 @@ class HelmanCoordinator:
         started_at: datetime,
         schedule_execution_enabled: bool,
         schedule_signature: tuple[tuple[str, str, int | None], ...],
+        appliance_schedule_signature: tuple[
+            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
+            ...,
+        ],
         schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
     ) -> bool:
         if (
@@ -1317,7 +1356,10 @@ class HelmanCoordinator:
         if self._cached_battery_forecast_schedule_signature != schedule_signature:
             return False
 
-        if schedule_effective_signature is not None:
+        if (
+            self._cached_appliance_projection_schedule_signature
+            != appliance_schedule_signature
+        ):
             return False
 
         if (
@@ -1331,15 +1373,20 @@ class HelmanCoordinator:
     def _store_battery_forecast_cache(
         self,
         *,
-        forecast: dict[str, Any],
+        pipeline: _ApplianceForecastPipelineSnapshot,
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
         schedule_execution_enabled: bool,
         schedule_signature: tuple[tuple[str, str, int | None], ...],
+        appliance_schedule_signature: tuple[
+            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
+            ...,
+        ],
         schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
     ) -> None:
-        self._cached_battery_forecast = forecast
+        self._cached_appliance_forecast_pipeline = pipeline
+        self._cached_battery_forecast = pipeline.battery_forecast
         self._cached_battery_forecast_expires_at = dt_util.as_local(
             dt_util.as_utc(started_at)
             + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
@@ -1357,6 +1404,16 @@ class HelmanCoordinator:
         self._cached_battery_forecast_schedule_effective_signature = (
             schedule_effective_signature
         )
+        self._cached_appliance_projection_plan = pipeline.projection_plan
+        self._cached_appliance_projection_expires_at = self._cached_battery_forecast_expires_at
+        self._cached_appliance_projection_started_at = started_at
+        self._cached_appliance_projection_house_generated_at = house_forecast.get(
+            "generatedAt"
+        )
+        self._cached_appliance_projection_solar_signature = (
+            self._build_battery_forecast_solar_signature(solar_forecast)
+        )
+        self._cached_appliance_projection_schedule_signature = appliance_schedule_signature
 
     def _has_valid_appliance_projection_cache(
         self,

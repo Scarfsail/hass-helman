@@ -364,6 +364,14 @@ def _make_battery_forecast(
     }
 
 
+def _make_projection_plan() -> SimpleNamespace:
+    return SimpleNamespace(
+        generated_at=REFERENCE_TIME.isoformat(),
+        appliances_by_id={},
+        demand_points=(),
+    )
+
+
 def _make_schedule_action(kind: str, target_soc: int | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         inverter=SimpleNamespace(kind=kind, target_soc=target_soc),
@@ -584,14 +592,15 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        input_bundle = object()
-        plan = object()
+        plan = _make_projection_plan()
+        battery_forecast = _make_battery_forecast()
+        coordinator._build_battery_forecast = AsyncMock(return_value=battery_forecast)
 
         with (
             patch.object(
                 coordinator_module,
                 "build_projection_input_bundle",
-                return_value=input_bundle,
+                return_value=object(),
             ) as build_input_bundle,
             patch.object(
                 coordinator_module,
@@ -617,27 +626,27 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             generated_at=REFERENCE_TIME.isoformat(),
             registry=coordinator._appliances_registry,
             schedule_document=_make_schedule_document(),
-            inputs=input_bundle,
+            inputs=build_input_bundle.return_value,
         )
+        coordinator._build_battery_forecast.assert_awaited_once()
 
-    async def test_async_get_appliance_projection_plan_rebuilds_when_started_at_changes(
+    async def test_async_get_appliance_projection_plan_reuses_shared_pipeline_within_slot(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        input_bundle = object()
-        first_plan = object()
-        second_plan = object()
+        first_plan = _make_projection_plan()
+        coordinator._build_battery_forecast = AsyncMock(return_value=_make_battery_forecast())
 
         with (
             patch.object(
                 coordinator_module,
                 "build_projection_input_bundle",
-                return_value=input_bundle,
+                return_value=object(),
             ) as build_input_bundle,
             patch.object(
                 coordinator_module,
                 "build_appliance_projection_plan",
-                side_effect=[first_plan, second_plan],
+                return_value=first_plan,
             ) as build_plan,
         ):
             first = await coordinator._async_get_appliance_projection_plan(
@@ -652,9 +661,10 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIs(first, first_plan)
-        self.assertIs(second, second_plan)
-        self.assertEqual(build_input_bundle.call_count, 2)
-        self.assertEqual(build_plan.call_count, 2)
+        self.assertIs(second, first_plan)
+        self.assertEqual(build_input_bundle.call_count, 1)
+        self.assertEqual(build_plan.call_count, 1)
+        coordinator._build_battery_forecast.assert_awaited_once()
 
     async def test_async_get_battery_forecast_rebuilds_when_schedule_slots_change(
         self,
@@ -903,8 +913,8 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 _make_battery_forecast(
                     started_at="2026-03-20T21:11:00+01:00",
-                    current_soc=49.8,
-                    current_remaining_energy_kwh=5.05,
+                    current_soc=50.6,
+                    current_remaining_energy_kwh=5.2,
                 ),
             ]
         )
@@ -942,8 +952,8 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                         current_remaining_energy_kwh=5.0,
                     ),
                     SimpleNamespace(
-                        current_soc=49.8,
-                        current_remaining_energy_kwh=5.05,
+                        current_soc=50.6,
+                        current_remaining_energy_kwh=5.2,
                     ),
                 ],
             ),
@@ -960,6 +970,74 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(build_mock.await_count, 2)
+
+    async def test_async_get_battery_forecast_reuses_cache_when_active_target_signature_matches(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        forecast = _make_battery_forecast(
+            current_soc=49.4,
+            current_remaining_energy_kwh=5.0,
+        )
+        build_mock = AsyncMock(return_value=forecast)
+        overlay = object()
+        schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action(
+                    "charge_to_target_soc",
+                    50,
+                ),
+            },
+        )
+        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_schedule_overlay = Mock(
+            return_value=overlay
+        )
+        coordinator._read_schedule_control_config = Mock(
+            return_value=_make_control_config()
+        )
+        coordinator._storage.schedule_document = schedule_document
+
+        with (
+            patch.object(
+                coordinator_module,
+                "read_battery_entity_config",
+                return_value=object(),
+            ),
+            patch.object(
+                coordinator_module,
+                "read_battery_live_state",
+                side_effect=[
+                    SimpleNamespace(
+                        current_soc=49.4,
+                        current_remaining_energy_kwh=5.0,
+                    ),
+                    SimpleNamespace(
+                        current_soc=49.4,
+                        current_remaining_energy_kwh=5.0,
+                    ),
+                    SimpleNamespace(
+                        current_soc=49.4,
+                        current_remaining_energy_kwh=5.0,
+                    ),
+                ],
+            ),
+        ):
+            first = await coordinator._async_get_battery_forecast(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=REFERENCE_TIME,
+            )
+            second = await coordinator._async_get_battery_forecast(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+            )
+
+        self.assertIs(first, forecast)
+        self.assertIs(second, forecast)
+        self.assertEqual(build_mock.await_count, 1)
 
 
 if __name__ == "__main__":

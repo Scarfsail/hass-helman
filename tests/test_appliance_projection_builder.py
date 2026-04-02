@@ -205,9 +205,11 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             inputs=inputs,
         )
 
-        self.assertEqual(len(plan.demand_points), 1)
+        self.assertEqual(len(plan.demand_points), 2)
         self.assertEqual(plan.demand_points[0].slot_id, "2026-03-20T21:00:00+01:00")
-        self.assertEqual(plan.demand_points[0].energy_kwh, 2.8367)
+        self.assertEqual(plan.demand_points[0].energy_kwh, 0.9867)
+        self.assertEqual(plan.demand_points[1].slot_id, "2026-03-20T21:15:00+01:00")
+        self.assertEqual(plan.demand_points[1].energy_kwh, 1.85)
 
     def test_eco_projection_uses_original_house_baseline(self) -> None:
         registry = build_appliances_runtime_registry(_valid_config())
@@ -237,7 +239,13 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             inputs=inputs,
         )
 
-        self.assertEqual(plan.demand_points[0].energy_kwh, 4.1)
+        self.assertEqual(
+            [(point.slot_id, point.energy_kwh) for point in plan.demand_points],
+            [
+                ("2026-03-20T21:30:00+01:00", 2.1),
+                ("2026-03-20T21:45:00+01:00", 2.0),
+            ],
+        )
 
     def test_charge_false_produces_no_projection(self) -> None:
         registry = build_appliances_runtime_registry(_valid_config())

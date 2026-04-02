@@ -172,6 +172,7 @@ from custom_components.helman import (  # noqa: E402
 
 class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
     def _make_builder(self):
+        _install_import_stubs()
         recorder_module = importlib.reload(
             importlib.import_module("custom_components.helman.recorder_hourly_series")
         )

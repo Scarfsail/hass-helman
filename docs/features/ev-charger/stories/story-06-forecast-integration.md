@@ -67,7 +67,7 @@ Modify:
    - aggregate all appliance `energyKwh` by `slotId` and add the total to the original `baseline_house_kwh`
    - rerun the downstream battery/grid forecast builders from that adjusted house-consumption baseline
 
-5. **Add appliance `energyKwh` demand to the house consumption baseline** (`baseline_house_kwh`) only in the dedicated aggregation step above. This is the agreed integration model for the current forecast engine: appliance demand is additional house load from the battery/grid forecast perspective, so the existing simulation path is reused instead of introducing a second demand model.
+5. **Add appliance `energyKwh` demand to the house consumption baseline** (`baseline_house_kwh`) only in the dedicated aggregation step above. This is the agreed integration model for the current forecast engine: appliance demand is additional house load from the battery/grid forecast perspective, so the existing simulation path is reused instead of introducing a second demand model. The public `house_consumption` response is the appliance-adjusted read model.
 
 6. **Do not pass appliance actions into the forecast layer.** The downstream battery/grid simulation should continue to consume the existing inverter schedule overlay/constraints exactly as it does today. Appliance influence enters the forecast only through the aggregated generic `energyKwh` demand added to `baseline_house_kwh`.
 
@@ -90,9 +90,10 @@ Modify:
     - imported-from-grid
     - exported-to-grid
 
-11. **Caching and shared orchestration**: Story 06 is where the final one-pass shared pipeline is consolidated. The aggregate battery/grid forecast cache is downstream of the appliance projection stage. Shared cache lifecycle is fine, but invalidation and recomputation must preserve the ordered flow above. Downstream adjusted battery/grid outputs must never be reused as inputs to appliance projection. `get_appliance_projections` and `get_forecast` should share the same internal computation in the coordinator so the pipeline runs exactly once. Live vehicle SoC changes do **not** invalidate this cache in v1.
+11. **Caching and shared orchestration**: Story 06 is where the final one-pass shared pipeline is consolidated. The aggregate battery/grid forecast cache is downstream of the appliance projection stage. Shared cache lifecycle is fine, but invalidation and recomputation must preserve the ordered flow above. Downstream adjusted battery/grid outputs must never be reused as inputs to appliance projection. `get_appliance_projections` and `get_forecast` should share the same internal computation in the coordinator so the pipeline runs exactly once. Live vehicle SoC changes do **not** invalidate this cache in v1. During active target-SOC slots, cache reuse is still allowed when the effective schedule signature and compatible live battery state still match.
+12. When schedule execution is disabled, authored appliance schedule actions are ignored by both `helman/get_appliance_projections` and `helman/get_forecast` in v1.
 
-12. Do not build frontend forecast-impact UI in this story.
+13. Do not build frontend forecast-impact UI in this story.
 
 ## Acceptance criteria
 
@@ -100,6 +101,8 @@ Modify:
 - Appliance `energyKwh` demand is reflected by adding it to `baseline_house_kwh` as the current forecast-engine integration path, keeping one shared demand model.
 - The aggregate forecast follows the locked order: original baseline forecast inputs -> appliance projections/demand -> aggregate appliance demand into house consumption -> downstream battery/grid recalculation.
 - Appliance projections are calculated from the original house-consumption baseline, not from a house-consumption baseline already adjusted by projected appliance demand.
+- `helman/get_forecast.house_consumption` is the appliance-adjusted house forecast read model.
+- When `house_consumption.nonDeferrable` exposes `lower` / `upper`, those bands shift together with `value` after appliance demand is applied so the adjusted response remains internally consistent.
 - The forecast layer consumes generic appliance `energyKwh` demand only; it does **not** read appliance actions or require appliance schedule data in `ScheduleForecastOverlay`.
 - Battery charging from solar is reduced in slots where EV charging is active (naturally, since EV demand consumes surplus). When `effective_max_ev_power < surplus`, remaining solar is available for battery charging.
 - The aggregate forecast respects solar availability, battery availability, and inverter schedule constraints.
@@ -108,6 +111,7 @@ Modify:
 - Story 06 uses the same `energyKwh` semantics already exposed by Story 05 rather than inventing a second demand model or taking ownership of EV-specific charging policy.
 - Cache invalidation/recomputation preserves the same upstream-to-downstream dependency chain.
 - `get_appliance_projections` and `get_forecast` share the same internal computation — the pipeline runs exactly once per cache cycle.
+- When schedule execution is disabled, authored appliance schedule actions do not affect projections or aggregate forecast outputs in v1.
 
 ## Automated validation
 

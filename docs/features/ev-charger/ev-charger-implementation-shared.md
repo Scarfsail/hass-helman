@@ -45,6 +45,7 @@ These decisions are already agreed and should not be renegotiated inside impleme
 - Projection ownership stays appliance-specific: appliance-kind handlers own their charging/projection policy and produce the shared `energyKwh` demand model. Solar/house forecast inputs and inverter constraints are contextual inputs to that logic, not a transfer of ownership to the forecast layer.
 - **ECO algorithm**: `min(effective_max_power, max(solar - baseline_house, eco_gear_min_power))`. The projection computes only EV demand per slot; it does not reason about where shortfall energy comes from. Shortfall sourcing (battery discharge vs grid import) is a downstream concern handled by the forecast recalculation after EV demand is added to the house consumption baseline.
 - **Forecast integration**: appliance energy demand is reflected by adding `energyKwh` to the house consumption baseline (`baseline_house_kwh`). In the current forecast engine, this reuses the existing `_simulate_slot()` flow rather than introducing a second demand model.
+- **Adjusted forecast read model**: `helman/get_forecast.house_consumption` returns the appliance-adjusted house forecast. When `nonDeferrable` includes forecast bands, `lower` and `upper` shift by the same appliance demand as `value` so the adjusted response stays internally consistent.
 - **Locked forecast pipeline**: (1) build the original forecast without appliance demand, (2) calculate all appliance projections from that unmodified forecast, (3) aggregate all appliance `energyKwh` into house load, (4) recalculate downstream battery/grid forecasts. Every recalculation of projection needs a fresh, unmodified forecast — never feed adjusted outputs back into appliance projection. Story 05 keeps projections aligned with these upstream dependencies, and Story 06 consolidates the final one-pass shared coordinator computation for `get_appliance_projections` and `get_forecast`.
 - **Effective max charging power** is always `min(appliance max_charging_power_kw, vehicle max_charging_power_kw)`.
 - **Edge case — EV cannot absorb all surplus**: when `effective_max_power < (solar - baseline_house)`, the EV charges at `effective_max_power` and remaining surplus is available for battery charging. This is handled naturally by the forecast recalculation since only actual EV demand is added to the house baseline.
@@ -54,6 +55,7 @@ These decisions are already agreed and should not be renegotiated inside impleme
 - **Config changes require HA restart and integration reload.** No runtime config migration.
 - **Persisted schedule normalization**: if active config later removes an appliance or vehicle referenced by persisted schedule data, load normalization should drop only that invalid appliance action and keep the rest of the slot/document when possible.
 - **Projection caching** follows the same dependency-driven lifecycle as the battery forecast. Cache validity must cover forecast inputs, authored schedule changes, active config lifecycle, and current-slot/reference-time progress. Live vehicle SoC stays out of the cache key in v1.
+- **Execution-disabled forecast semantics**: when schedule execution is disabled, authored appliance schedule actions are ignored by both `helman/get_appliance_projections` and the aggregate `helman/get_forecast` read path in v1.
 
 ## Shared architecture rules
 
@@ -97,6 +99,8 @@ Story 06 consolidates this into a shared coordinator computation so the pipeline
 The aggregation step is generic across appliance kinds. EV is only the first appliance-kind producer in v1; future appliance kinds should plug into the same shared `energyKwh` aggregation flow without changing the pipeline order.
 
 Caching must respect the same dependency chain. If original forecast inputs or any appliance-demand producer changes, invalidate the adjusted house baseline and downstream battery/grid outputs together and recompute the pipeline in the locked order above. Shared cache lifecycle must not mean that downstream aggregate outputs become inputs to appliance projection.
+
+The shared computation produces an appliance-adjusted house forecast plus downstream battery/grid outputs. In the public forecast responses, `house_consumption` is the adjusted read model, while battery/grid `baselineSeries` stays appliance-adjusted but pre-overlay so schedule effects and appliance-demand effects remain distinguishable.
 
 Live vehicle SoC changes are intentionally **not** part of the cache key in v1. SoC remains optional display-oriented data for FE; cache invalidation is driven by forecast inputs, authored schedule changes, and config lifecycle rather than by every incoming vehicle telemetry update.
 

@@ -45,7 +45,7 @@ If implementation proves that a prior assumption should change, update the relev
 - [x] [Story 03 - Author appliance actions in backend schedule](./story-03-schedule-authoring.md)
 - [x] [Story 04 - Execute EV schedule actions in backend](./story-04-ev-execution.md)
 - [x] [Story 05 - Expose EV projections in backend API](./story-05-ev-projections.md)
-- [ ] [Story 06 - Reflect appliance demand in backend forecasts](./story-06-forecast-integration.md)
+- [x] [Story 06 - Reflect appliance demand in backend forecasts](./story-06-forecast-integration.md)
 
 There are currently no FE-only follow-up story documents in scope. The only FE work in the current plan is Story 01, and it is limited to catching up with the backend breaking websocket contract.
 
