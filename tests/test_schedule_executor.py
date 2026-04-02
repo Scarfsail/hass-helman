@@ -82,6 +82,7 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.battery_state import BatteryLiveState  # noqa: E402
+from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -204,12 +205,13 @@ def _build_executor(
         ScheduleExecutorDependencies(
             schedule_lock=asyncio.Lock(),
             load_schedule_document=store.load,
-            save_schedule_document=store.save,
-            read_schedule_control_config=lambda: control_config
-            or _build_control_config(entity_id),
-            read_battery_state=lambda: battery_state,
-        ),
-    )
+                save_schedule_document=store.save,
+                read_schedule_control_config=lambda: control_config
+                or _build_control_config(entity_id),
+                read_battery_state=lambda: battery_state,
+                read_appliances_registry=lambda: AppliancesRuntimeRegistry(),
+            ),
+        )
     return executor, hass, store
 
 
@@ -703,6 +705,7 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 save_schedule_document=store.save,
                 read_schedule_control_config=lambda: None,
                 read_battery_state=lambda: None,
+                read_appliances_registry=lambda: AppliancesRuntimeRegistry(),
             ),
         )
 

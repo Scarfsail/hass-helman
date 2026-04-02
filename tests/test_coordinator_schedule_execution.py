@@ -255,6 +255,7 @@ def _cleanup_stubbed_modules() -> None:
     for module_name in (
         "custom_components",
         "custom_components.helman",
+        "custom_components.helman.appliances",
         "custom_components.helman.scheduling",
         "custom_components.helman.coordinator",
         "custom_components.helman.battery_capacity_forecast_builder",
@@ -379,6 +380,9 @@ class FakeExecutor:
     def reset_runtime(self) -> None:
         self.events.append("reset_runtime")
         self.reset_runtime_calls += 1
+
+    def clear_appliance_memories(self) -> None:
+        self.events.append("clear_appliance_memories")
 
 
 class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -657,7 +661,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             executor.events,
-            ["stop", "restore:disable_request"],
+            ["restore:disable_request", "stop"],
         )
 
     async def test_disable_invalidates_battery_forecast_cache(self) -> None:
@@ -713,8 +717,8 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             executor.events,
             [
-                "stop",
                 "restore:disable_request",
+                "clear_appliance_memories",
                 "start",
                 "safe_reconcile:disable_restore_failed",
             ],

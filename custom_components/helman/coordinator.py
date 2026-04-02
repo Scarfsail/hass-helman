@@ -175,6 +175,7 @@ class HelmanCoordinator:
                 save_schedule_document=self._save_schedule_document,
                 read_schedule_control_config=self._read_schedule_executor_control_config,
                 read_battery_state=self._read_schedule_executor_battery_state,
+                read_appliances_registry=lambda: self._appliances_registry,
             ),
         )
         self._appliances_registry = AppliancesRuntimeRegistry()
@@ -818,7 +819,6 @@ class HelmanCoordinator:
                 await self._schedule_executor.async_stop()
                 return False
 
-            await self._schedule_executor.async_stop()
             try:
                 await self._schedule_executor.async_restore_normal(
                     reason="disable_request"
@@ -829,12 +829,14 @@ class HelmanCoordinator:
                     err,
                     err.code,
                 )
+                self._schedule_executor.clear_appliance_memories()
                 await self._schedule_executor.async_start()
                 await self._schedule_executor.async_reconcile_safely(
                     reason="disable_restore_failed",
                     reference_time=request_now,
                 )
                 raise
+            await self._schedule_executor.async_stop()
 
             async with self._schedule_lock:
                 latest_document = await self._load_pruned_schedule_document_locked(

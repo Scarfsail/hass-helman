@@ -96,6 +96,8 @@ class ActiveSlotRuntimeStatus:
     def status(self) -> ScheduleRuntimeState:
         if self.inverter is not None and self.inverter.outcome == "failed":
             return "error"
+        if any(runtime.outcome == "failed" for runtime in self.appliances.values()):
+            return "error"
         return "applied"
 
     @property

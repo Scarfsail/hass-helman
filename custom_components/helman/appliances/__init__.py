@@ -19,6 +19,12 @@ from .schedule import (
     normalize_appliance_schedule_actions,
     read_appliance_schedule_actions,
 )
+from .execution import (
+    ApplianceExecutionMemory,
+    AppliancesExecutionResult,
+    AppliancesExecutor,
+    EvChargerExecutor,
+)
 from .state import (
     AppliancesRuntimeRegistry,
 )
@@ -27,8 +33,12 @@ __all__ = [
     "AppliancesRuntimeRegistry",
     "ApplianceMetadataResponseDict",
     "ApplianceProjectionsResponseDict",
+    "ApplianceExecutionMemory",
+    "AppliancesExecutionResult",
+    "AppliancesExecutor",
     "ApplianceScheduleActionDict",
     "ApplianceScheduleActionsDict",
+    "EvChargerExecutor",
     "EvChargerApplianceResponseDict",
     "EvChargerApplianceRuntime",
     "EvChargerConfigError",

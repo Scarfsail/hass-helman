@@ -111,6 +111,6 @@ flowchart TD
 - `charge = false` is authored schedule intent; `slot_stop` is runtime-only transition behavior.
 - `charge = false` may omit `vehicleId`; when present, `vehicleId` must still be valid for that appliance.
 - `Fast` canonical schedule persistence/readback omits `ecoGear`.
-- `slot_stop` turns off charging only; it keeps `useMode` and `ecoGear` unchanged.
+- `slot_stop` turns off charging only; Helman writes only the charge switch and does not write `useMode` or `ecoGear`.
 - `slotId` is the canonical time key and `energyKwh` is the canonical shared energy field.
 - The projection -> forecast pipeline is one-way and generic across appliance kinds.

@@ -66,7 +66,7 @@ Modify:
     - an authored `charge = false` action should turn off the charge switch without requiring `vehicleId` and without writing `useMode` or `ecoGear`
 
 3. **`slot_stop` transition behavior**:
-   - When a slot with an active EV charging action transitions to a next slot without EV action for that same appliance: **stop charging only** (turn off the charge switch). Keep `use_mode` and `eco_gear` where they are.
+   - When a slot with an active EV charging action transitions to a next slot without EV action for that same appliance: **stop charging only** (turn off the charge switch). Helman must not write `use_mode` or `eco_gear`; if the charger later reflects a different mode as its own side effect, that is acceptable.
    - When execution starts and no EV action exists in the current slot: **do nothing** for the EV charger.
    - When the next slot still contains an EV action for that appliance, treat it as the next normal apply/reconcile rather than `slot_stop`.
 
@@ -90,7 +90,7 @@ Modify:
 - When a slot becomes active and contains an EV action, that action is applied at the beginning of the slot.
 - An authored `charge = false` EV action turns off the charge switch without requiring `vehicleId` and without touching `use_mode` / `eco_gear`.
 - Changing the current active-slot EV action triggers a fresh reconcile without waiting for the next normal scheduler tick.
-- When a slot with EV charging transitions to a next slot without EV action for that appliance: only the charge switch is turned off; `use_mode` and `eco_gear` are kept as-is.
+- When a slot with EV charging transitions to a next slot without EV action for that appliance: only the charge switch is written off; Helman does not write `use_mode` / `eco_gear`, and charger-driven mode drift after stop is acceptable.
 - When no EV action exists in the current slot at execution start: the EV charger is not touched.
 - Manual charger changes made mid-slot are left alone until the next slot transition or an active-slot schedule change.
 - Inverter and EV execution produce independent runtime status entries using the shared `actionKind` / `outcome` contract.
@@ -120,6 +120,8 @@ Then validate with the local-hass-api skill:
    moved to the expected values.
 6. Update the currently active slot action and confirm the executor reconciles immediately to the new state.
 7. Call `helman/get_schedule` and confirm the current slot runtime branch is populated as read-only data.
+
+Live validation for this story also confirmed that charge start/stop can lag by up to about 30 seconds on the physical charger state. The accepted backend contract is still that Helman writes only the charge switch for `charge = false` and `slot_stop`.
 
 ## Manual UI sign-off
 

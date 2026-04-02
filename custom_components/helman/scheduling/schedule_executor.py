@@ -11,6 +11,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from ..appliances.execution import (
+    ApplianceExecutionMemory,
+    AppliancesExecutionResult,
+    AppliancesExecutor,
+)
+from ..appliances.state import AppliancesRuntimeRegistry
 from ..battery_state import BatteryLiveState
 from ..const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
@@ -21,6 +27,11 @@ from ..const import (
     SCHEDULE_EXECUTOR_INTERVAL_SECONDS,
 )
 from .action_resolution import resolve_executed_schedule_action
+from .runtime_status import (
+    ActiveSlotRuntimeStatus,
+    InverterRuntimeStatus,
+    ScheduleExecutionStatus,
+)
 from .schedule import (
     NORMAL_SCHEDULE_ACTION,
     ScheduleAction,
@@ -34,7 +45,6 @@ from .schedule import (
     format_slot_id,
     prune_expired_slots,
 )
-from .runtime_status import ActiveSlotRuntimeStatus, ScheduleExecutionStatus
 
 _LOGGER = logging.getLogger(__name__)
 _UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}
@@ -47,6 +57,7 @@ class ScheduleExecutorDependencies:
     save_schedule_document: Callable[[ScheduleDocument], Awaitable[None]]
     read_schedule_control_config: Callable[[], ScheduleControlConfig | None]
     read_battery_state: Callable[[], BatteryLiveState | None]
+    read_appliances_registry: Callable[[], AppliancesRuntimeRegistry]
 
 
 @dataclass
@@ -56,9 +67,18 @@ class ScheduleExecutionRuntime:
     last_applied_action: ScheduleAction | None = None
     last_active_slot_id: str | None = None
     last_error: str | None = None
+    appliance_memories: dict[str, ApplianceExecutionMemory] = field(
+        default_factory=dict
+    )
     execution_status: ScheduleExecutionStatus = field(
         default_factory=ScheduleExecutionStatus
     )
+
+
+@dataclass(frozen=True)
+class InverterExecutionResult:
+    runtime: InverterRuntimeStatus
+    error: ScheduleError | None = None
 
 
 @dataclass(frozen=True)
@@ -95,7 +115,6 @@ class ModeEntityController:
             raise ScheduleExecutionUnavailableError(
                 f"Schedule mode entity '{self.entity_id}' is unavailable"
             )
-
         return state
 
     @staticmethod
@@ -121,7 +140,6 @@ class ModeEntityController:
             raise ScheduleExecutionUnavailableError(
                 "Schedule mode entity options must be non-empty strings"
             )
-
         return options
 
     def validate_option(self, state: Any, option: str) -> None:
@@ -151,6 +169,153 @@ class ModeEntityController:
             ) from err
 
 
+class InverterExecutor:
+    def __init__(self, hass: HomeAssistant, runtime: ScheduleExecutionRuntime) -> None:
+        self._hass = hass
+        self._runtime = runtime
+
+    def validate_control_entity(
+        self,
+        *,
+        control_config: ScheduleControlConfig,
+    ) -> tuple[ModeEntityController, Any]:
+        controller = ModeEntityController.from_entity_id(control_config.mode_entity_id)
+        state = controller.read_state(self._hass)
+        controller.validate_option(state, control_config.normal_option)
+        controller.validate_option(state, control_config.stop_charging_option)
+        controller.validate_option(state, control_config.stop_discharging_option)
+        return controller, state
+
+    async def async_execute(
+        self,
+        *,
+        control_config: ScheduleControlConfig,
+        action: ScheduleAction,
+        active_slot_id: str,
+        reference_time: datetime,
+        read_battery_state: Callable[[], BatteryLiveState | None],
+    ) -> InverterExecutionResult:
+        try:
+            resolution = self._resolve_action(
+                action=action,
+                read_battery_state=read_battery_state,
+            )
+            controller, state = self.validate_control_entity(
+                control_config=control_config
+            )
+            await self._async_apply_action(
+                controller=controller,
+                state=state,
+                control_config=control_config,
+                action=resolution.executed_action,
+                active_slot_id=active_slot_id,
+            )
+        except ScheduleError as err:
+            fallback_reason = "scheduled"
+            fallback_action = action
+            if "resolution" in locals():
+                fallback_reason = resolution.reason
+                fallback_action = resolution.executed_action
+            return InverterExecutionResult(
+                runtime=InverterRuntimeStatus(
+                    action_kind="apply",
+                    outcome="failed",
+                    executed_action=fallback_action,
+                    reason=fallback_reason,
+                    error_code=err.code,
+                ),
+                error=err,
+            )
+
+        return InverterExecutionResult(
+            runtime=InverterRuntimeStatus(
+                action_kind="apply",
+                outcome="success",
+                executed_action=resolution.executed_action,
+                reason=resolution.reason,
+            )
+        )
+
+    async def async_restore_normal(
+        self,
+        *,
+        control_config: ScheduleControlConfig,
+    ) -> None:
+        controller, state = self.validate_control_entity(control_config=control_config)
+        await self._async_apply_action(
+            controller=controller,
+            state=state,
+            control_config=control_config,
+            action=NORMAL_SCHEDULE_ACTION,
+            active_slot_id=None,
+        )
+
+    @staticmethod
+    def _resolve_action(
+        *,
+        action: ScheduleAction,
+        read_battery_state: Callable[[], BatteryLiveState | None],
+    ):
+        battery_state = None
+        if action.kind in {
+            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+        }:
+            battery_state = read_battery_state()
+        return resolve_executed_schedule_action(
+            action=action,
+            current_soc=None if battery_state is None else battery_state.current_soc,
+        )
+
+    @staticmethod
+    def _resolve_option_for_action(
+        *,
+        control_config: ScheduleControlConfig,
+        action: ScheduleAction,
+    ) -> str:
+        if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC:
+            if control_config.charge_to_target_soc_option is None:
+                raise ScheduleNotConfiguredError(
+                    "Schedule control config is missing the charge_to_target_soc action option"
+                )
+            return control_config.charge_to_target_soc_option
+        if action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC:
+            if control_config.discharge_to_target_soc_option is None:
+                raise ScheduleNotConfiguredError(
+                    "Schedule control config is missing the discharge_to_target_soc action option"
+                )
+            return control_config.discharge_to_target_soc_option
+        if action.kind == SCHEDULE_ACTION_STOP_CHARGING:
+            return control_config.stop_charging_option
+        if action.kind == SCHEDULE_ACTION_STOP_DISCHARGING:
+            return control_config.stop_discharging_option
+        return control_config.normal_option
+
+    async def _async_apply_action(
+        self,
+        *,
+        controller: ModeEntityController,
+        state: Any,
+        control_config: ScheduleControlConfig,
+        action: ScheduleAction,
+        active_slot_id: str | None,
+    ) -> None:
+        desired_option = self._resolve_option_for_action(
+            control_config=control_config,
+            action=action,
+        )
+        controller.validate_option(state, desired_option)
+
+        current_option = getattr(state, "state", None)
+        if current_option != desired_option:
+            await controller.async_select_option(self._hass, option=desired_option)
+
+        self._runtime.last_applied_entity_id = control_config.mode_entity_id
+        self._runtime.last_applied_option = desired_option
+        self._runtime.last_applied_action = action
+        self._runtime.last_active_slot_id = active_slot_id
+
+
 class ScheduleExecutor:
     def __init__(
         self,
@@ -160,6 +325,8 @@ class ScheduleExecutor:
         self._hass = hass
         self._dependencies = dependencies
         self._runtime = ScheduleExecutionRuntime()
+        self._inverter_executor = InverterExecutor(hass, self._runtime)
+        self._appliances_executor = AppliancesExecutor(hass)
         self._unsub_interval: Callable[[], None] | None = None
         self._reconcile_tasks: set[asyncio.Task[Any]] = set()
         self._stopped = True
@@ -173,6 +340,7 @@ class ScheduleExecutor:
 
     def reset_runtime(self) -> None:
         self._runtime = ScheduleExecutionRuntime()
+        self._inverter_executor = InverterExecutor(self._hass, self._runtime)
 
     async def async_start(self) -> None:
         self._stopped = False
@@ -233,38 +401,65 @@ class ScheduleExecutor:
                 self.reset_runtime()
                 return
 
-            execution_status: ScheduleExecutionStatus | None = None
-            try:
-                control_config = self._dependencies.read_schedule_control_config()
-                if control_config is None:
-                    raise ScheduleNotConfiguredError(
-                        "Schedule control config is required to execute the schedule"
-                    )
+            current_slot_id = format_slot_id(build_horizon_start(request_now))
+            active_slot = find_active_slot(
+                stored_slots=schedule_document.slots,
+                reference_time=request_now,
+            )
+            active_action = (
+                NORMAL_SCHEDULE_ACTION if active_slot is None else active_slot.domains.inverter
+            )
+            active_actions = {} if active_slot is None else dict(active_slot.domains.appliances)
 
-                controller, state = self.validate_control_entity(
-                    control_config=control_config
+            control_config = self._dependencies.read_schedule_control_config()
+            inverter_runtime: InverterRuntimeStatus | None = None
+            first_error: ScheduleError | None = None
+            if control_config is None:
+                inverter_runtime = InverterRuntimeStatus(
+                    action_kind="apply",
+                    outcome="failed",
+                    executed_action=active_action,
+                    reason="scheduled",
+                    error_code="not_configured",
                 )
-                execution_status = self.describe_execution_status(
-                    schedule_document=schedule_document,
-                    reference_time=request_now,
+                first_error = ScheduleNotConfiguredError(
+                    "Schedule control config is required to execute the schedule"
                 )
-                await self._async_apply_action_locked(
-                    controller=controller,
-                    state=state,
+            else:
+                inverter_result = await self._inverter_executor.async_execute(
                     control_config=control_config,
-                    action=execution_status.active_slot_runtime.executed_action,
-                    active_slot_id=execution_status.active_slot_id,
-                )
-            except ScheduleError as err:
-                self._runtime.execution_status = self._build_error_execution_status(
-                    schedule_document=schedule_document,
+                    action=active_action,
+                    active_slot_id=current_slot_id,
                     reference_time=request_now,
-                    error=err,
-                    execution_status=execution_status,
+                    read_battery_state=self._dependencies.read_battery_state,
                 )
-                raise
+                inverter_runtime = inverter_result.runtime
+                if inverter_result.error is not None:
+                    first_error = inverter_result.error
 
-            self._runtime.execution_status = execution_status
+            appliance_result = await self._appliances_executor.async_execute(
+                registry=self._dependencies.read_appliances_registry(),
+                active_slot_id=current_slot_id,
+                active_actions=active_actions,
+                previous_memories=self._runtime.appliance_memories,
+                reference_time=request_now,
+            )
+            if first_error is None:
+                first_error = appliance_result.first_error
+
+            self._runtime.appliance_memories = appliance_result.memories
+            self._runtime.execution_status = ScheduleExecutionStatus(
+                active_slot_id=current_slot_id,
+                active_slot_runtime=ActiveSlotRuntimeStatus(
+                    inverter=inverter_runtime,
+                    appliances=appliance_result.runtimes,
+                    reconciled_at=self._format_reconciled_at(request_now),
+                ),
+            )
+            if first_error is not None:
+                raise first_error
+
+            self._runtime.last_error = None
 
     async def async_reconcile_safely(
         self,
@@ -296,74 +491,42 @@ class ScheduleExecutor:
         del reason
 
         async with self._dependencies.schedule_lock:
-            await self._load_pruned_schedule_document_locked(
-                reference_time=dt_util.now()
+            reference_time = dt_util.now()
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=reference_time
             )
-
             control_config = self._dependencies.read_schedule_control_config()
             if control_config is None:
                 raise ScheduleNotConfiguredError(
                     "Schedule control config is required to restore normal mode"
                 )
 
-            controller, state = self.validate_control_entity(
+            active_slot = find_active_slot(
+                stored_slots=schedule_document.slots,
+                reference_time=reference_time,
+            )
+            active_actions = {} if active_slot is None else dict(active_slot.domains.appliances)
+
+            appliance_result = await self._appliances_executor.async_restore_active_slot(
+                registry=self._dependencies.read_appliances_registry(),
+                active_actions=active_actions,
+                reference_time=reference_time,
+            )
+            if appliance_result.first_error is not None:
+                raise appliance_result.first_error
+
+            await self._inverter_executor.async_restore_normal(
                 control_config=control_config
             )
-            await self._async_apply_action_locked(
-                controller=controller,
-                state=state,
-                control_config=control_config,
-                action=NORMAL_SCHEDULE_ACTION,
+            self._runtime.execution_status = ScheduleExecutionStatus(
                 active_slot_id=None,
+                active_slot_runtime=None,
             )
+            self._runtime.appliance_memories = {}
+            self._runtime.last_error = None
 
-    def validate_control_entity(
-        self,
-        *,
-        control_config: ScheduleControlConfig,
-    ) -> tuple[ModeEntityController, Any]:
-        controller = ModeEntityController.from_entity_id(
-            control_config.mode_entity_id
-        )
-        state = controller.read_state(self._hass)
-        controller.validate_option(state, control_config.normal_option)
-        controller.validate_option(state, control_config.stop_charging_option)
-        controller.validate_option(state, control_config.stop_discharging_option)
-        return controller, state
-
-    def describe_execution_status(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-    ) -> ScheduleExecutionStatus:
-        if not schedule_document.execution_enabled:
-            return ScheduleExecutionStatus()
-
-        current_slot_id = format_slot_id(build_horizon_start(reference_time))
-        active_slot = find_active_slot(
-            stored_slots=schedule_document.slots,
-            reference_time=reference_time,
-        )
-        if active_slot is None:
-            return ScheduleExecutionStatus(
-                active_slot_id=current_slot_id,
-                active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
-                    action_kind="apply",
-                    outcome="success",
-                    executed_action=NORMAL_SCHEDULE_ACTION,
-                    reason="scheduled",
-                    reconciled_at=self._format_reconciled_at(reference_time),
-                ),
-            )
-
-        return ScheduleExecutionStatus(
-            active_slot_id=current_slot_id,
-            active_slot_runtime=self._describe_active_slot_runtime(
-                slot=active_slot,
-                reference_time=reference_time,
-            ),
-        )
+    def clear_appliance_memories(self) -> None:
+        self._runtime.appliance_memories = {}
 
     async def _load_pruned_schedule_document_locked(
         self,
@@ -382,124 +545,6 @@ class ScheduleExecutor:
         if pruned_document != schedule_document:
             await self._dependencies.save_schedule_document(pruned_document)
         return pruned_document
-
-    def _describe_active_slot_runtime(
-        self,
-        *,
-        slot,
-        reference_time: datetime,
-    ) -> ActiveSlotRuntimeStatus:
-        battery_state = None
-        if slot.action.kind in {
-            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-        }:
-            battery_state = self._dependencies.read_battery_state()
-        resolution = resolve_executed_schedule_action(
-            action=slot.action,
-            current_soc=None if battery_state is None else battery_state.current_soc,
-        )
-        return ActiveSlotRuntimeStatus.from_inverter(
-            action_kind="apply",
-            outcome="success",
-            executed_action=resolution.executed_action,
-            reason=resolution.reason,
-            reconciled_at=self._format_reconciled_at(reference_time),
-        )
-
-    def _build_error_execution_status(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-        error: ScheduleError,
-        execution_status: ScheduleExecutionStatus | None,
-    ) -> ScheduleExecutionStatus:
-        if not schedule_document.execution_enabled:
-            return ScheduleExecutionStatus()
-
-        if (
-            execution_status is not None
-            and execution_status.active_slot_id is not None
-            and execution_status.active_slot_runtime is not None
-        ):
-            return ScheduleExecutionStatus(
-                active_slot_id=execution_status.active_slot_id,
-                active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
-                    action_kind=(
-                        execution_status.active_slot_runtime.inverter.action_kind
-                        if execution_status.active_slot_runtime.inverter is not None
-                        else "apply"
-                    ),
-                    outcome="failed",
-                    executed_action=execution_status.active_slot_runtime.executed_action,
-                    reason=execution_status.active_slot_runtime.reason,
-                    error_code=error.code,
-                    reconciled_at=self._format_reconciled_at(reference_time),
-                ),
-            )
-
-        return ScheduleExecutionStatus(
-            active_slot_id=format_slot_id(build_horizon_start(reference_time)),
-            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
-                action_kind="apply",
-                outcome="failed",
-                error_code=error.code,
-                reconciled_at=self._format_reconciled_at(reference_time),
-            ),
-        )
-
-    @staticmethod
-    def _resolve_option_for_action(
-        *,
-        control_config: ScheduleControlConfig,
-        action: ScheduleAction,
-    ) -> str:
-        if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC:
-            if control_config.charge_to_target_soc_option is None:
-                raise ScheduleNotConfiguredError(
-                    "Schedule control config is missing the charge_to_target_soc action option"
-                )
-            return control_config.charge_to_target_soc_option
-        if action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC:
-            if control_config.discharge_to_target_soc_option is None:
-                raise ScheduleNotConfiguredError(
-                    "Schedule control config is missing the discharge_to_target_soc action option"
-                )
-            return control_config.discharge_to_target_soc_option
-        if action.kind == SCHEDULE_ACTION_STOP_CHARGING:
-            return control_config.stop_charging_option
-        if action.kind == SCHEDULE_ACTION_STOP_DISCHARGING:
-            return control_config.stop_discharging_option
-        return control_config.normal_option
-
-    async def _async_apply_action_locked(
-        self,
-        *,
-        controller: ModeEntityController,
-        state: Any,
-        control_config: ScheduleControlConfig,
-        action: ScheduleAction,
-        active_slot_id: str | None,
-    ) -> None:
-        desired_option = self._resolve_option_for_action(
-            control_config=control_config,
-            action=action,
-        )
-        controller.validate_option(state, desired_option)
-
-        current_option = getattr(state, "state", None)
-        if current_option != desired_option:
-            await controller.async_select_option(
-                self._hass,
-                option=desired_option,
-            )
-
-        self._runtime.last_applied_entity_id = control_config.mode_entity_id
-        self._runtime.last_applied_option = desired_option
-        self._runtime.last_applied_action = action
-        self._runtime.last_active_slot_id = active_slot_id
-        self._runtime.last_error = None
 
     def _build_failure_log_context(self) -> str:
         parts: list[str] = []

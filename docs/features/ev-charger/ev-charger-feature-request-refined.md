@@ -138,7 +138,7 @@ These values were read from the local Home Assistant instance during refinement.
 
 These observed values make the following design assumptions more concrete:
 
-- `slot_stop` is a runtime transition only. When an EV charging slot ends and the next slot has no EV action for that appliance, it means turning off the charge switch only. It does not imply resetting `use_mode` to `Stop` or `eco_gear` to `6A`.
+- `slot_stop` is a runtime transition only. When an EV charging slot ends and the next slot has no EV action for that appliance, Helman turns off only the charge switch. It does not write `use_mode` or `eco_gear`, even if the charger later reflects a different mode as its own side effect.
 - vehicle charge limit is naturally modeled as percentage-based telemetry/configuration, not as energy in kWh
 - charger mode names and eco gear names should be preserved exactly as HA option strings in backend config and DTOs
 
@@ -529,8 +529,8 @@ Recommended generic runtime shape:
 - When execution starts and the current slot has **no EV action defined**, the system does **nothing** for that appliance. It does not apply safe defaults proactively.
 - When a slot **with an active EV charging action ends** and the next slot has **no EV action for that appliance**, the system:
   - Stops charging (`charge: false` / switch off)
-  - Keeps `use_mode` where it was (does not reset)
-  - Keeps `eco_gear` where it was (does not reset)
+  - Does not write `use_mode`
+  - Does not write `eco_gear`
 - If the next slot still contains an EV action for that appliance, the executor should treat it as the next normal apply/reconcile rather than as `slot_stop`.
 - This transition behavior should be documented as **`slot_stop`**, not as a generic safe-default restoration.
 
