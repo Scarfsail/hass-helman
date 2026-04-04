@@ -61,8 +61,13 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
         dt_mod.parse_datetime = datetime.fromisoformat
         dt_mod.as_local = lambda value: value
-        dt_mod.as_utc = lambda value: value
         util_pkg.dt = dt_mod
+
+    dt_mod = sys.modules["homeassistant.util.dt"]
+    dt_mod.parse_datetime = datetime.fromisoformat
+    dt_mod.as_local = lambda value: value
+    dt_mod.as_utc = lambda value: value
+    sys.modules["homeassistant.util"].dt = dt_mod
     return previous_modules
 
 
@@ -100,18 +105,32 @@ def _valid_config() -> dict:
                 "kind": "ev_charger",
                 "id": "garage-ev",
                 "name": "Garage EV",
-                "metadata": {"max_charging_power_kw": 11.0},
-                "control": {
-                    "charge_entity_id": "switch.ev_nabijeni",
-                    "use_mode_entity_id": "select.solax_ev_charger_charger_use_mode",
-                    "eco_gear_entity_id": "select.solax_ev_charger_eco_gear",
+                "limits": {"max_charging_power_kw": 11.0},
+                "controls": {
+                    "charge": {
+                        "entity_id": "switch.ev_nabijeni",
+                    },
+                    "use_mode": {
+                        "entity_id": "select.solax_ev_charger_charger_use_mode",
+                        "values": {
+                            "Fast": {"behavior": "fixed_max_power"},
+                            "ECO": {"behavior": "surplus_aware"},
+                        },
+                    },
+                    "eco_gear": {
+                        "entity_id": "select.solax_ev_charger_eco_gear",
+                        "values": {
+                            "6A": {"min_power_kw": 1.4},
+                            "10A": {"min_power_kw": 2.3},
+                        },
+                    },
                 },
                 "vehicles": [
                     {
                         "id": "kona",
                         "name": "Kona",
                         "telemetry": {"soc_entity_id": "sensor.kona_ev_battery_level"},
-                        "metadata": {
+                        "limits": {
                             "battery_capacity_kwh": 64.0,
                             "max_charging_power_kw": 11.0,
                         },
@@ -120,21 +139,12 @@ def _valid_config() -> dict:
                         "id": "tesla",
                         "name": "Tesla",
                         "telemetry": {"soc_entity_id": "sensor.tesla_soc"},
-                        "metadata": {
+                        "limits": {
                             "battery_capacity_kwh": 82.0,
                             "max_charging_power_kw": 7.4,
                         },
                     },
                 ],
-                "projection": {
-                    "modes": {
-                        "Fast": {"behavior": "fixed_power"},
-                        "ECO": {
-                            "behavior": "surplus_aware",
-                            "eco_gear_min_power_kw": {"6A": 1.4, "10A": 2.3},
-                        },
-                    }
-                },
             }
         ]
     }
@@ -210,6 +220,46 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         self.assertEqual(plan.demand_points[0].energy_kwh, 0.9867)
         self.assertEqual(plan.demand_points[1].slot_id, "2026-03-20T21:15:00+01:00")
         self.assertEqual(plan.demand_points[1].energy_kwh, 1.85)
+
+    def test_fixed_max_power_behavior_does_not_depend_on_mode_name(self) -> None:
+        config = _valid_config()
+        config["appliances"][0]["controls"]["use_mode"]["values"] = {
+            "Boost": {"behavior": "fixed_max_power"},
+            "Solar": {"behavior": "surplus_aware"},
+        }
+        registry = build_appliances_runtime_registry(config)
+        inputs = build_projection_input_bundle(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            reference_time=REFERENCE_TIME,
+        )
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                        appliances={
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "tesla",
+                                "useMode": "Boost",
+                            }
+                        }
+                    )
+                }
+            ),
+            inputs=inputs,
+        )
+
+        self.assertEqual(
+            [(point.slot_id, point.energy_kwh) for point in plan.demand_points],
+            [
+                ("2026-03-20T21:00:00+01:00", 0.9867),
+                ("2026-03-20T21:15:00+01:00", 1.85),
+            ],
+        )
 
     def test_eco_projection_uses_original_house_baseline(self) -> None:
         registry = build_appliances_runtime_registry(_valid_config())

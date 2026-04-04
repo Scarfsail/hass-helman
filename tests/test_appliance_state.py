@@ -38,13 +38,28 @@ def _valid_config() -> dict:
                 "kind": "ev_charger",
                 "id": "garage-ev",
                 "name": "Garage EV",
-                "metadata": {
+                "limits": {
                     "max_charging_power_kw": 11.0,
                 },
-                "control": {
-                    "charge_entity_id": "switch.ev_nabijeni",
-                    "use_mode_entity_id": "select.solax_ev_charger_charger_use_mode",
-                    "eco_gear_entity_id": "select.solax_ev_charger_eco_gear",
+                "controls": {
+                    "charge": {
+                        "entity_id": "switch.ev_nabijeni",
+                    },
+                    "use_mode": {
+                        "entity_id": "select.solax_ev_charger_charger_use_mode",
+                        "values": {
+                            "Fast": {"behavior": "fixed_max_power"},
+                            "ECO": {"behavior": "surplus_aware"},
+                        },
+                    },
+                    "eco_gear": {
+                        "entity_id": "select.solax_ev_charger_eco_gear",
+                        "values": {
+                            "6A": {"min_power_kw": 1.4},
+                            "10A": {"min_power_kw": 2.3},
+                            "16A": {"min_power_kw": 3.7},
+                        },
+                    },
                 },
                 "vehicles": [
                     {
@@ -54,25 +69,12 @@ def _valid_config() -> dict:
                             "soc_entity_id": "sensor.kona_ev_battery_level",
                             "charge_limit_entity_id": "number.kona_ac_charging_limit",
                         },
-                        "metadata": {
+                        "limits": {
                             "battery_capacity_kwh": 64.0,
                             "max_charging_power_kw": 11.0,
                         },
                     }
                 ],
-                "projection": {
-                    "modes": {
-                        "Fast": {"behavior": "fixed_power"},
-                        "ECO": {
-                            "behavior": "surplus_aware",
-                            "eco_gear_min_power_kw": {
-                                "6A": 1.4,
-                                "10A": 2.3,
-                                "16A": 3.7,
-                            },
-                        },
-                    }
-                },
             }
         ]
     }
@@ -140,16 +142,16 @@ class ApplianceStateTests(unittest.TestCase):
                 "telemetry": {
                     "soc_entity_id": "sensor.enyaq_soc",
                 },
-                "metadata": {
+                "limits": {
                     "battery_capacity_kwh": 82.0,
                     "max_charging_power_kw": 11.0,
                 },
             }
         )
-        config["appliances"][0]["projection"]["modes"]["ECO"]["eco_gear_min_power_kw"] = {
-            "16A": 3.7,
-            "6A": 1.4,
-            "10A": 2.3,
+        config["appliances"][0]["controls"]["eco_gear"]["values"] = {
+            "16A": {"min_power_kw": 3.7},
+            "6A": {"min_power_kw": 1.4},
+            "10A": {"min_power_kw": 2.3},
         }
 
         registry = build_appliances_runtime_registry(config)

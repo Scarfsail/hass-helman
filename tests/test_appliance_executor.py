@@ -61,6 +61,8 @@ _install_import_stubs()
 
 from custom_components.helman.appliances.ev_charger import (  # noqa: E402
     EvChargerApplianceRuntime,
+    EvChargerEcoGearRuntime,
+    EvChargerUseModeRuntime,
     EvVehicleRuntime,
 )
 from custom_components.helman.appliances.execution import (  # noqa: E402
@@ -125,7 +127,26 @@ def _build_appliance() -> EvChargerApplianceRuntime:
         charge_entity_id="switch.ev_nabijeni",
         use_mode_entity_id="select.solax_ev_charger_charger_use_mode",
         eco_gear_entity_id="select.solax_ev_charger_eco_gear",
-        eco_gear_min_power_kw=(("6A", 1.4), ("10A", 2.3)),
+        use_mode_configs=(
+            EvChargerUseModeRuntime(
+                id="Fast",
+                behavior="fixed_max_power",
+            ),
+            EvChargerUseModeRuntime(
+                id="ECO",
+                behavior="surplus_aware",
+            ),
+        ),
+        eco_gear_configs=(
+            EvChargerEcoGearRuntime(
+                id="6A",
+                min_power_kw=1.4,
+            ),
+            EvChargerEcoGearRuntime(
+                id="10A",
+                min_power_kw=2.3,
+            ),
+        ),
         vehicles=(
             EvVehicleRuntime(
                 id="kona",

@@ -228,48 +228,54 @@ appliances:
   - kind: ev_charger
     id: garage-ev
     name: Charger EV in Garage
-    metadata:
+    limits:
       max_charging_power_kw: 11.0
-    control:
-      charge_entity_id: switch.ev_nabijeni
-      use_mode_entity_id: select.solax_ev_charger_charger_use_mode
-      eco_gear_entity_id: select.solax_ev_charger_eco_gear
+    controls:
+      charge:
+        entity_id: switch.ev_nabijeni
+      use_mode:
+        entity_id: select.solax_ev_charger_charger_use_mode
+        values:
+          Fast:
+            behavior: fixed_max_power
+          ECO:
+            behavior: surplus_aware
+      eco_gear:
+        entity_id: select.solax_ev_charger_eco_gear
+        values:
+          6A:
+            min_power_kw: 1.4
+          10A:
+            min_power_kw: 2.3
+          16A:
+            min_power_kw: 3.7
+          20A:
+            min_power_kw: 4.6
+          25A:
+            min_power_kw: 5.8
     vehicles:
       - id: kona
         name: Kona
         telemetry:
           soc_entity_id: sensor.kona_ev_battery_level
           charge_limit_entity_id: number.kona_ac_charging_limit
-        metadata:
+        limits:
           battery_capacity_kwh: 64.0
           max_charging_power_kw: 11.0
-    projection:
-      modes:
-        Fast:
-          behavior: fixed_power
-        ECO:
-          behavior: surplus_aware
-          eco_gear_min_power_kw:
-            6A: 1.4
-            10A: 2.3
-            16A: 3.7
-            20A: 4.6
-            25A: 5.8
 ```
 
 ### Notes on this config example
 
 - The entity IDs are grounded in the live HA entities you provided.
 - The option names `Stop`, `Fast`, `ECO`, `Green`, `6A`, `10A`, `16A`, `20A`, `25A` should be treated as exact HA-facing values.
-- `charge_entity_id` / `charge` naming is intentionally aligned with the minimal slot payload.
+- The persisted config uses nested control objects so the mode and eco-gear definitions live next to the select entities they configure.
 - The live charger entity exposes `Stop`, but in v1 authored Helman no-charge intent is still represented by `charge = false` rather than scheduling `useMode = Stop`.
-- The live charger entity exposes `Green`, but v1 should intentionally support only `Fast` and `ECO` in appliance scheduling and projection.
+- The live charger entity exposes `Green`, but the configured `use_mode.values` decide which authored modes Helman supports for this appliance.
 - `slot_stop` is runtime transition terminology in v1, not persisted appliance config. It applies only when an EV action ends and the next slot has no EV action for that appliance.
-- `Fast` is the deterministic fixed-power projection mode and should use `min(appliance max_charging_power_kw, vehicle max_charging_power_kw)` as the effective charging power.
-- `ECO` should be treated as a **surplus-aware** projection mode.
-- In `ECO`, `eco_gear` selects an explicit configured minimum-power floor. If solar surplus is lower than that floor, the remainder is satisfied from battery discharge (if allowed and available) or imported from grid. Charging can still scale upward until the effective maximum is reached.
-- Using an explicit `eco_gear_min_power_kw` map avoids baking charger phase / voltage assumptions into the backend projection logic.
-- The `projection.modes` branch documents the supported authored modes and their mode-specific parameters. It is not intended to become a generic strategy DSL that lets runtime config redefine Helman's charging policy.
+- `behavior: fixed_max_power` means the authored mode projects deterministic charging at `min(appliance max_charging_power_kw, vehicle max_charging_power_kw)`.
+- `behavior: surplus_aware` means the authored mode uses the ECO projection algorithm.
+- In a `surplus_aware` mode, `eco_gear` selects an explicit configured minimum-power floor. If solar surplus is lower than that floor, the remainder is satisfied from battery discharge (if allowed and available) or imported from grid. Charging can still scale upward until the effective maximum is reached.
+- Using an explicit `controls.eco_gear.values.*.min_power_kw` map avoids baking charger phase / voltage assumptions into the backend projection logic.
 - The effective max charging power for any mode is always `min(appliance max_charging_power_kw, vehicle max_charging_power_kw)`.
 - This EV-specific config surface may stay tailored to the current charger integration. If future charger variants need different config or command mapping, evolve that EV-specific layer without changing the generic `appliances` layer first.
 

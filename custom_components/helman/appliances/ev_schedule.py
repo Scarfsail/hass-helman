@@ -5,14 +5,13 @@ from typing import Literal, NotRequired, TypedDict
 
 from .ev_charger import EvChargerApplianceRuntime
 
-EvChargerUseMode = Literal["Fast", "ECO"]
 ApplianceScheduleNormalizationMode = Literal["strict", "load_prune"]
 
 
 class EvChargerScheduleActionDict(TypedDict):
     charge: bool
     vehicleId: NotRequired[str]
-    useMode: NotRequired[EvChargerUseMode]
+    useMode: NotRequired[str]
     ecoGear: NotRequired[str]
 
 
@@ -83,14 +82,17 @@ def normalize_ev_charger_schedule_action(
 
     if use_mode is None:
         raise ValueError(f"{context}.useMode is required when charge is true")
-    if use_mode not in appliance.use_modes:
+    use_mode_config = appliance.get_use_mode(use_mode)
+    if use_mode_config is None:
         raise ValueError(
             f"{context}.useMode must be one of {', '.join(appliance.use_modes)}"
         )
 
-    if use_mode == "ECO":
+    if use_mode_config.behavior == "surplus_aware":
         if eco_gear is None:
-            raise ValueError(f"{context}.ecoGear is required when useMode is ECO")
+            raise ValueError(
+                f"{context}.ecoGear is required when useMode is {use_mode_config.id}"
+            )
         if eco_gear not in appliance.eco_gears:
             if mode == "load_prune":
                 return None
@@ -100,14 +102,14 @@ def normalize_ev_charger_schedule_action(
         return {
             "charge": True,
             "vehicleId": vehicle_id,
-            "useMode": "ECO",
+            "useMode": use_mode_config.id,
             "ecoGear": eco_gear,
         }
 
     return {
         "charge": True,
         "vehicleId": vehicle_id,
-        "useMode": "Fast",
+        "useMode": use_mode_config.id,
     }
 
 

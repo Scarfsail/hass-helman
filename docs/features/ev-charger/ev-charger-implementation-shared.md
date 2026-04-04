@@ -35,10 +35,10 @@ These decisions are already agreed and should not be renegotiated inside impleme
 - Every appliance has an explicit `id`.
 - Every EV vehicle has an explicit `id` within its appliance.
 - `domains.appliances`, projection payloads, and appliance runtime-status payloads are keyed by `applianceId`.
-- V1 supports only `Fast` and `ECO` scheduling/projection modes.
+- V1 supports config-defined EV use modes whose behaviors are limited to `fixed_max_power` and `surplus_aware`.
 - authored EV `charge = false` may omit `vehicleId`; if `vehicleId` is present, it must still reference a configured vehicle for that appliance.
 - authored `Fast` actions may include `ecoGear` on input, but canonical schedule persistence/readback drops it.
-- `ECO` uses an explicit `ecoGear -> min power` config map; do not derive this from charger phases or voltage assumptions in backend logic.
+- `surplus_aware` modes use an explicit `ecoGear -> min power` config map; do not derive this from charger phases or voltage assumptions in backend logic.
 - `helman/get_appliance_projections` remains appliance-specific, but it should expose `energyKwh` alongside EV SoC so FE and later forecast integration can explain the same simulated charging behavior without re-deriving energy demand from SoC deltas.
 - The current Story 05 projection response is appliance-shaped: `appliances[applianceId].series[]` points carry `slotId`, `energyKwh`, `mode`, `vehicleId`, and optional `vehicleSoc`.
 - Appliance-specific projection and aggregate system forecast integration are separate stories: `helman/get_appliance_projections` stays appliance-specific, while `helman/get_forecast` later reflects aggregate battery/grid impact.

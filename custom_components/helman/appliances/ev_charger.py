@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 _EV_CHARGER_KIND = "ev_charger"
-_FAST_MODE = "Fast"
-_ECO_MODE = "ECO"
-_FAST_BEHAVIOR = "fixed_power"
-_ECO_BEHAVIOR = "surplus_aware"
-_SUPPORTED_USE_MODES = (_FAST_MODE, _ECO_MODE)
+_FIXED_MAX_POWER_BEHAVIOR = "fixed_max_power"
+_SURPLUS_AWARE_BEHAVIOR = "surplus_aware"
+EvChargerUseModeBehavior = Literal["fixed_max_power", "surplus_aware"]
 
 
 class EvChargerConfigError(ValueError):
@@ -27,6 +25,18 @@ class EvVehicleRuntime:
 
 
 @dataclass(frozen=True)
+class EvChargerUseModeRuntime:
+    id: str
+    behavior: EvChargerUseModeBehavior
+
+
+@dataclass(frozen=True)
+class EvChargerEcoGearRuntime:
+    id: str
+    min_power_kw: float
+
+
+@dataclass(frozen=True)
 class EvChargerApplianceRuntime:
     id: str
     name: str
@@ -34,7 +44,8 @@ class EvChargerApplianceRuntime:
     charge_entity_id: str
     use_mode_entity_id: str
     eco_gear_entity_id: str
-    eco_gear_min_power_kw: tuple[tuple[str, float], ...]
+    use_mode_configs: tuple[EvChargerUseModeRuntime, ...]
+    eco_gear_configs: tuple[EvChargerEcoGearRuntime, ...]
     vehicles: tuple[EvVehicleRuntime, ...]
 
     @property
@@ -43,11 +54,15 @@ class EvChargerApplianceRuntime:
 
     @property
     def use_modes(self) -> tuple[str, ...]:
-        return _SUPPORTED_USE_MODES
+        return tuple(use_mode.id for use_mode in self.use_mode_configs)
+
+    @property
+    def use_modes_by_id(self) -> dict[str, EvChargerUseModeRuntime]:
+        return {use_mode.id: use_mode for use_mode in self.use_mode_configs}
 
     @property
     def eco_gears(self) -> tuple[str, ...]:
-        return tuple(gear_name for gear_name, _ in self.eco_gear_min_power_kw)
+        return tuple(gear.id for gear in self.eco_gear_configs)
 
     @property
     def vehicles_by_id(self) -> dict[str, EvVehicleRuntime]:
@@ -55,7 +70,10 @@ class EvChargerApplianceRuntime:
 
     @property
     def eco_gear_min_power_kw_by_id(self) -> dict[str, float]:
-        return dict(self.eco_gear_min_power_kw)
+        return {gear.id: gear.min_power_kw for gear in self.eco_gear_configs}
+
+    def get_use_mode(self, use_mode_id: str) -> EvChargerUseModeRuntime | None:
+        return self.use_modes_by_id.get(use_mode_id)
 
     def get_vehicle(self, vehicle_id: str) -> EvVehicleRuntime | None:
         return self.vehicles_by_id.get(vehicle_id)
@@ -121,37 +139,32 @@ def read_ev_charger_appliance(
         raise EvChargerConfigError(f"{path}.kind must be {_EV_CHARGER_KIND!r}")
 
     vehicles = _read_vehicles(appliance.get("vehicles"), path=f"{path}.vehicles")
-    projection = _require_mapping(appliance.get("projection"), f"{path}.projection")
+    controls = _require_mapping(appliance.get("controls"), f"{path}.controls")
+    use_mode_entity_id, use_mode_configs = _read_use_mode_control(
+        controls.get("use_mode"),
+        path=f"{path}.controls.use_mode",
+    )
+    eco_gear_entity_id, eco_gear_configs = _read_eco_gear_control(
+        controls.get("eco_gear"),
+        path=f"{path}.controls.eco_gear",
+    )
 
     return EvChargerApplianceRuntime(
         id=_require_non_empty_string(appliance.get("id"), f"{path}.id"),
         name=_require_non_empty_string(appliance.get("name"), f"{path}.name"),
-        max_charging_power_kw=_read_appliance_metadata(
-            appliance.get("metadata"),
-            path=f"{path}.metadata",
+        max_charging_power_kw=_read_limits(
+            appliance.get("limits"),
+            path=f"{path}.limits",
         ),
         charge_entity_id=_read_control_entity_id(
-            appliance.get("control"),
-            field_name="charge_entity_id",
+            controls.get("charge"),
             expected_domain="switch",
-            path=f"{path}.control",
+            path=f"{path}.controls.charge",
         ),
-        use_mode_entity_id=_read_control_entity_id(
-            appliance.get("control"),
-            field_name="use_mode_entity_id",
-            expected_domain="select",
-            path=f"{path}.control",
-        ),
-        eco_gear_entity_id=_read_control_entity_id(
-            appliance.get("control"),
-            field_name="eco_gear_entity_id",
-            expected_domain="select",
-            path=f"{path}.control",
-        ),
-        eco_gear_min_power_kw=_read_projection_modes(
-            projection.get("modes"),
-            path=f"{path}.projection.modes",
-        ),
+        use_mode_entity_id=use_mode_entity_id,
+        eco_gear_entity_id=eco_gear_entity_id,
+        use_mode_configs=use_mode_configs,
+        eco_gear_configs=eco_gear_configs,
         vehicles=vehicles,
     )
 
@@ -201,10 +214,10 @@ def _build_vehicle_metadata_dict(vehicle: EvVehicleRuntime) -> EvVehicleResponse
     }
 
 
-def _read_appliance_metadata(value: object, *, path: str) -> float:
-    metadata = _require_mapping(value, path)
+def _read_limits(value: object, *, path: str) -> float:
+    limits = _require_mapping(value, path)
     return _require_positive_float(
-        metadata.get("max_charging_power_kw"),
+        limits.get("max_charging_power_kw"),
         f"{path}.max_charging_power_kw",
     )
 
@@ -212,15 +225,96 @@ def _read_appliance_metadata(value: object, *, path: str) -> float:
 def _read_control_entity_id(
     value: object,
     *,
-    field_name: str,
     expected_domain: str,
     path: str,
 ) -> str:
     control = _require_mapping(value, path)
     return _require_entity_id(
-        control.get(field_name),
+        control.get("entity_id"),
         expected_domain=expected_domain,
-        path=f"{path}.{field_name}",
+        path=f"{path}.entity_id",
+    )
+
+
+def _read_use_mode_control(
+    value: object,
+    *,
+    path: str,
+) -> tuple[str, tuple[EvChargerUseModeRuntime, ...]]:
+    control = _require_mapping(value, path)
+    values = _require_mapping(control.get("values"), f"{path}.values")
+    if not values:
+        raise EvChargerConfigError(f"{path}.values must not be empty")
+
+    use_modes: list[EvChargerUseModeRuntime] = []
+    for raw_mode_id, raw_mode_config in values.items():
+        mode_id = _require_non_empty_string(raw_mode_id, f"{path}.values keys")
+        mode_config = _require_mapping(raw_mode_config, f"{path}.values.{mode_id}")
+        use_modes.append(
+            EvChargerUseModeRuntime(
+                id=mode_id,
+                behavior=_read_use_mode_behavior(
+                    mode_config.get("behavior"),
+                    path=f"{path}.values.{mode_id}.behavior",
+                ),
+            )
+        )
+
+    return (
+        _read_control_entity_id(
+            control,
+            expected_domain="select",
+            path=path,
+        ),
+        tuple(use_modes),
+    )
+
+
+def _read_use_mode_behavior(
+    value: object,
+    *,
+    path: str,
+) -> EvChargerUseModeBehavior:
+    behavior = _require_non_empty_string(value, path)
+    if behavior not in {_FIXED_MAX_POWER_BEHAVIOR, _SURPLUS_AWARE_BEHAVIOR}:
+        raise EvChargerConfigError(
+            f"{path} must be one of {_FIXED_MAX_POWER_BEHAVIOR!r}, "
+            f"{_SURPLUS_AWARE_BEHAVIOR!r}"
+        )
+    return behavior
+
+
+def _read_eco_gear_control(
+    value: object,
+    *,
+    path: str,
+) -> tuple[str, tuple[EvChargerEcoGearRuntime, ...]]:
+    control = _require_mapping(value, path)
+    values = _require_mapping(control.get("values"), f"{path}.values")
+    if not values:
+        raise EvChargerConfigError(f"{path}.values must not be empty")
+
+    eco_gears: list[EvChargerEcoGearRuntime] = []
+    for raw_gear_id, raw_gear_config in values.items():
+        gear_id = _require_non_empty_string(raw_gear_id, f"{path}.values keys")
+        gear_config = _require_mapping(raw_gear_config, f"{path}.values.{gear_id}")
+        eco_gears.append(
+            EvChargerEcoGearRuntime(
+                id=gear_id,
+                min_power_kw=_require_positive_float(
+                    gear_config.get("min_power_kw"),
+                    f"{path}.values.{gear_id}.min_power_kw",
+                ),
+            )
+        )
+
+    return (
+        _read_control_entity_id(
+            control,
+            expected_domain="select",
+            path=path,
+        ),
+        tuple(eco_gears),
     )
 
 
@@ -246,7 +340,7 @@ def _read_vehicles(value: object, *, path: str) -> tuple[EvVehicleRuntime, ...]:
 def _read_vehicle(value: object, *, path: str) -> EvVehicleRuntime:
     vehicle = _require_mapping(value, path)
     telemetry = _require_mapping(vehicle.get("telemetry"), f"{path}.telemetry")
-    metadata = _require_mapping(vehicle.get("metadata"), f"{path}.metadata")
+    limits = _require_mapping(vehicle.get("limits"), f"{path}.limits")
 
     charge_limit_entity_id = telemetry.get("charge_limit_entity_id")
     return EvVehicleRuntime(
@@ -267,61 +361,14 @@ def _read_vehicle(value: object, *, path: str) -> EvVehicleRuntime:
             )
         ),
         battery_capacity_kwh=_require_positive_float(
-            metadata.get("battery_capacity_kwh"),
-            f"{path}.metadata.battery_capacity_kwh",
+            limits.get("battery_capacity_kwh"),
+            f"{path}.limits.battery_capacity_kwh",
         ),
         max_charging_power_kw=_require_positive_float(
-            metadata.get("max_charging_power_kw"),
-            f"{path}.metadata.max_charging_power_kw",
+            limits.get("max_charging_power_kw"),
+            f"{path}.limits.max_charging_power_kw",
         ),
     )
-
-
-def _read_projection_modes(
-    value: object,
-    *,
-    path: str,
-) -> tuple[tuple[str, float], ...]:
-    modes = _require_mapping(value, path)
-
-    fast = _require_mapping(modes.get(_FAST_MODE), f"{path}.{_FAST_MODE}")
-    if fast.get("behavior") != _FAST_BEHAVIOR:
-        raise EvChargerConfigError(
-            f"{path}.{_FAST_MODE}.behavior must be {_FAST_BEHAVIOR!r}"
-        )
-
-    eco = _require_mapping(modes.get(_ECO_MODE), f"{path}.{_ECO_MODE}")
-    if eco.get("behavior") != _ECO_BEHAVIOR:
-        raise EvChargerConfigError(
-            f"{path}.{_ECO_MODE}.behavior must be {_ECO_BEHAVIOR!r}"
-        )
-
-    eco_gear_map = _require_mapping(
-        eco.get("eco_gear_min_power_kw"),
-        f"{path}.{_ECO_MODE}.eco_gear_min_power_kw",
-    )
-    if not eco_gear_map:
-        raise EvChargerConfigError(
-            f"{path}.{_ECO_MODE}.eco_gear_min_power_kw must not be empty"
-        )
-
-    eco_gears: list[tuple[str, float]] = []
-    for gear_name, gear_power in eco_gear_map.items():
-        if not isinstance(gear_name, str) or not gear_name.strip():
-            raise EvChargerConfigError(
-                f"{path}.{_ECO_MODE}.eco_gear_min_power_kw keys must be non-empty strings"
-            )
-        eco_gears.append(
-            (
-                gear_name,
-                _require_positive_float(
-                    gear_power,
-                    f"{path}.{_ECO_MODE}.eco_gear_min_power_kw.{gear_name}",
-                ),
-            )
-        )
-
-    return tuple(eco_gears)
 
 
 def _require_mapping(value: object, path: str) -> Mapping[str, Any]:

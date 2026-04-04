@@ -95,6 +95,8 @@ ApplianceProjectionPlanPoint = projection_builder_module.ApplianceProjectionPlan
 ApplianceProjectionSeries = projection_builder_module.ApplianceProjectionSeries
 AppliancesRuntimeRegistry = state_module.AppliancesRuntimeRegistry
 EvChargerApplianceRuntime = ev_charger_module.EvChargerApplianceRuntime
+EvChargerEcoGearRuntime = ev_charger_module.EvChargerEcoGearRuntime
+EvChargerUseModeRuntime = ev_charger_module.EvChargerUseModeRuntime
 EvVehicleRuntime = ev_charger_module.EvVehicleRuntime
 build_appliance_projections_response = (
     projection_response_module.build_appliance_projections_response
@@ -129,7 +131,22 @@ def _registry() -> AppliancesRuntimeRegistry:
                 charge_entity_id="switch.ev_nabijeni",
                 use_mode_entity_id="select.use_mode",
                 eco_gear_entity_id="select.eco_gear",
-                eco_gear_min_power_kw=(("6A", 1.4),),
+                use_mode_configs=(
+                    EvChargerUseModeRuntime(
+                        id="Fast",
+                        behavior="fixed_max_power",
+                    ),
+                    EvChargerUseModeRuntime(
+                        id="ECO",
+                        behavior="surplus_aware",
+                    ),
+                ),
+                eco_gear_configs=(
+                    EvChargerEcoGearRuntime(
+                        id="6A",
+                        min_power_kw=1.4,
+                    ),
+                ),
                 vehicles=(
                     EvVehicleRuntime(
                         id="kona",

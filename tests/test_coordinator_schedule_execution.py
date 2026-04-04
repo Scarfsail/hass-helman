@@ -218,11 +218,24 @@ def _valid_appliances_config() -> dict:
                 "kind": "ev_charger",
                 "id": "garage-ev",
                 "name": "Garage EV",
-                "metadata": {"max_charging_power_kw": 11.0},
-                "control": {
-                    "charge_entity_id": "switch.ev_nabijeni",
-                    "use_mode_entity_id": "select.solax_ev_charger_charger_use_mode",
-                    "eco_gear_entity_id": "select.solax_ev_charger_eco_gear",
+                "limits": {"max_charging_power_kw": 11.0},
+                "controls": {
+                    "charge": {
+                        "entity_id": "switch.ev_nabijeni",
+                    },
+                    "use_mode": {
+                        "entity_id": "select.solax_ev_charger_charger_use_mode",
+                        "values": {
+                            "Fast": {"behavior": "fixed_max_power"},
+                            "ECO": {"behavior": "surplus_aware"},
+                        },
+                    },
+                    "eco_gear": {
+                        "entity_id": "select.solax_ev_charger_eco_gear",
+                        "values": {
+                            "6A": {"min_power_kw": 1.4},
+                        },
+                    },
                 },
                 "vehicles": [
                     {
@@ -231,21 +244,12 @@ def _valid_appliances_config() -> dict:
                         "telemetry": {
                             "soc_entity_id": "sensor.kona_ev_battery_level",
                         },
-                        "metadata": {
+                        "limits": {
                             "battery_capacity_kwh": 64.0,
                             "max_charging_power_kw": 11.0,
                         },
                     }
                 ],
-                "projection": {
-                    "modes": {
-                        "Fast": {"behavior": "fixed_power"},
-                        "ECO": {
-                            "behavior": "surplus_aware",
-                            "eco_gear_min_power_kw": {"6A": 1.4},
-                        },
-                    }
-                },
             }
         ]
     }
@@ -1130,11 +1134,24 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     "kind": "ev_charger",
                     "id": "garage-ev",
                     "name": "Garage EV",
-                    "metadata": {"max_charging_power_kw": 11.0},
-                    "control": {
-                        "charge_entity_id": "switch.ev_nabijeni",
-                        "use_mode_entity_id": "select.solax_ev_charger_charger_use_mode",
-                        "eco_gear_entity_id": "select.solax_ev_charger_eco_gear",
+                    "limits": {"max_charging_power_kw": 11.0},
+                    "controls": {
+                        "charge": {
+                            "entity_id": "switch.ev_nabijeni",
+                        },
+                        "use_mode": {
+                            "entity_id": "select.solax_ev_charger_charger_use_mode",
+                            "values": {
+                                "Fast": {"behavior": "fixed_max_power"},
+                                "ECO": {"behavior": "surplus_aware"},
+                            },
+                        },
+                        "eco_gear": {
+                            "entity_id": "select.solax_ev_charger_eco_gear",
+                            "values": {
+                                "6A": {"min_power_kw": 1.4},
+                            },
+                        },
                     },
                     "vehicles": [
                         {
@@ -1143,21 +1160,12 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                             "telemetry": {
                                 "soc_entity_id": "sensor.kona_ev_battery_level",
                             },
-                            "metadata": {
+                            "limits": {
                                 "battery_capacity_kwh": 64.0,
                                 "max_charging_power_kw": 11.0,
                             },
                         }
                     ],
-                    "projection": {
-                        "modes": {
-                            "Fast": {"behavior": "fixed_power"},
-                            "ECO": {
-                                "behavior": "surplus_aware",
-                                "eco_gear_min_power_kw": {"6A": 1.4},
-                            },
-                        }
-                    },
                 }
             ]
         }

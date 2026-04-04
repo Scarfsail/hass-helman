@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from .ev_charger import (
     EvChargerApplianceResponseDict,
     build_ev_charger_metadata_dict,
 )
-from .projection_response import ApplianceProjectionsResponseDict
 from .state import AppliancesRuntimeRegistry
+
+if TYPE_CHECKING:
+    from .projection_response import ApplianceProjectionsResponseDict
 
 
 class ApplianceMetadataResponseDict(TypedDict):

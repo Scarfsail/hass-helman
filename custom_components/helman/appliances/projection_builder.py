@@ -14,7 +14,11 @@ from ..scheduling.schedule import (
     format_slot_id,
     parse_slot_id,
 )
-from .ev_charger import EvChargerApplianceRuntime, EvVehicleRuntime
+from .ev_charger import (
+    EvChargerApplianceRuntime,
+    EvChargerUseModeRuntime,
+    EvVehicleRuntime,
+)
 from .state import AppliancesRuntimeRegistry
 
 _CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
@@ -162,7 +166,10 @@ def _build_ev_charger_projection_series(
             continue
 
         mode = action.get("useMode")
-        if mode not in {"Fast", "ECO"}:
+        if not isinstance(mode, str):
+            continue
+        use_mode = appliance.get_use_mode(mode)
+        if use_mode is None:
             continue
 
         slot_slices = _build_schedule_slot_slices(slot_id=slot_id, inputs=inputs)
@@ -174,6 +181,7 @@ def _build_ev_charger_projection_series(
                 appliance=appliance,
                 vehicle=vehicle,
                 action=action,
+                use_mode=use_mode,
                 slot_slice=slot_slice,
             )
             for slot_slice in slot_slices
@@ -265,14 +273,14 @@ def _calculate_slot_slice_energy(
     appliance: EvChargerApplianceRuntime,
     vehicle: EvVehicleRuntime,
     action: dict[str, Any],
+    use_mode: EvChargerUseModeRuntime,
     slot_slice: _ProjectionSlotSlice,
 ) -> float:
     effective_max_power_kw = min(
         appliance.max_charging_power_kw,
         vehicle.max_charging_power_kw,
     )
-    mode = action["useMode"]
-    if mode == "Fast":
+    if use_mode.behavior == "fixed_max_power":
         return effective_max_power_kw * slot_slice.duration_hours
 
     eco_gear = action.get("ecoGear")
