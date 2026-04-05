@@ -116,10 +116,10 @@ async def ws_save_config(
         return
 
     await stor.async_save(msg["config"])
-    coordinator = domain_data.get("coordinator")
-    if coordinator:
-        await coordinator.async_handle_config_saved()
+
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
     connection.send_result(msg["id"], {"success": True})
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 @websocket_api.websocket_command({

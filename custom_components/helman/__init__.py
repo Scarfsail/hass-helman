@@ -9,6 +9,12 @@ from .websockets import async_register_websocket_commands
 PLATFORMS = ["sensor"]
 
 
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up Helman Energy (called once per HASS lifetime)."""
+    async_register_websocket_commands(hass)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Helman Energy from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -23,7 +29,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["coordinator"] = coordinator
     hass.data[DOMAIN][entry.entry_id] = {}
 
-    async_register_websocket_commands(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

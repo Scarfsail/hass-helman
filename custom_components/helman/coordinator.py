@@ -983,15 +983,6 @@ class HelmanCoordinator:
                 reference_time=request_now,
             )
 
-    async def async_handle_config_saved(self) -> None:
-        self.invalidate_tree()
-        self.invalidate_forecast()
-        self._schedule_executor.reset_runtime()
-        await self._async_reconcile_schedule_execution_if_enabled(
-            reason="config_saved",
-            reference_time=dt_util.now(),
-        )
-
     def invalidate_forecast(self) -> None:
         """Trigger a background house forecast refresh."""
         self._cached_forecast = None
