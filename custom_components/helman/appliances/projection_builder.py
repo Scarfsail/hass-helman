@@ -107,6 +107,7 @@ def build_appliance_projection_plan(
     registry: AppliancesRuntimeRegistry,
     schedule_document: ScheduleDocument,
     inputs: ProjectionInputBundle,
+    hass,
 ) -> ApplianceProjectionPlan:
     appliances_by_id: dict[str, ApplianceProjectionSeries] = {}
     demand_points: list[ApplianceDemandPoint] = []
@@ -116,6 +117,7 @@ def build_appliance_projection_plan(
             appliance=appliance,
             schedule_document=schedule_document,
             inputs=inputs,
+            hass=hass,
         )
         series = result.series
         if not series.points:
@@ -149,9 +151,12 @@ def _build_ev_charger_projection_series(
     appliance: EvChargerApplianceRuntime,
     schedule_document: ScheduleDocument,
     inputs: ProjectionInputBundle,
+    hass,
 ) -> _ApplianceProjectionBuildResult:
     points: list[ApplianceProjectionPlanPoint] = []
     demand_points: list[ApplianceDemandPoint] = []
+    vehicle_charged_kwh: dict[str, float] = {}
+    vehicle_remaining_kwh: dict[str, float | None] = {}
 
     for slot_id, domains in sorted(schedule_document.slots.items()):
         action = domains.appliances.get(appliance.id)
@@ -172,11 +177,25 @@ def _build_ev_charger_projection_series(
         if use_mode is None:
             continue
 
+        if vehicle.id not in vehicle_remaining_kwh:
+            vehicle_remaining_kwh[vehicle.id] = _read_vehicle_remaining_capacity_kwh(
+                hass=hass, vehicle=vehicle
+            )
+
+        remaining = vehicle_remaining_kwh[vehicle.id]
+        charged_so_far = vehicle_charged_kwh.get(vehicle.id, 0.0)
+        if remaining is not None:
+            capacity_left = max(0.0, remaining - charged_so_far)
+            if capacity_left <= 0:
+                continue
+        else:
+            capacity_left = None
+
         slot_slices = _build_schedule_slot_slices(slot_id=slot_id, inputs=inputs)
         if slot_slices is None or not slot_slices:
             continue
 
-        slice_energy_kwhs = tuple(
+        raw_slice_energies = tuple(
             _calculate_slot_slice_energy(
                 appliance=appliance,
                 vehicle=vehicle,
@@ -186,9 +205,17 @@ def _build_ev_charger_projection_series(
             )
             for slot_slice in slot_slices
         )
+        slice_energy_kwhs = (
+            _cap_slice_energies(raw_slice_energies, capacity_left)
+            if capacity_left is not None
+            else raw_slice_energies
+        )
+
         energy_kwh = sum(slice_energy_kwhs)
         if energy_kwh <= 0:
             continue
+
+        vehicle_charged_kwh[vehicle.id] = charged_so_far + energy_kwh
 
         points.append(
             ApplianceProjectionPlanPoint(
@@ -297,6 +324,58 @@ def _calculate_slot_slice_energy(
             eco_min_power_kw * slot_slice.duration_hours,
         ),
     )
+
+
+def _cap_slice_energies(
+    slice_energies: tuple[float, ...], capacity: float
+) -> tuple[float, ...]:
+    capped: list[float] = []
+    remaining = capacity
+    for energy in slice_energies:
+        capped_energy = min(energy, max(0.0, remaining))
+        capped.append(capped_energy)
+        remaining -= capped_energy
+    return tuple(capped)
+
+
+def _read_vehicle_remaining_capacity_kwh(
+    *,
+    hass,
+    vehicle: EvVehicleRuntime,
+) -> float | None:
+    if hass is None:
+        return None
+    current_soc = _read_entity_float(hass, vehicle.soc_entity_id)
+    if current_soc is None:
+        return None
+    if vehicle.charge_limit_entity_id is not None:
+        target_soc = _read_entity_float(hass, vehicle.charge_limit_entity_id)
+        if target_soc is None:
+            return None
+    else:
+        target_soc = 100.0
+    pct_remaining = max(0.0, target_soc - current_soc)
+    return (pct_remaining / 100.0) * vehicle.battery_capacity_kwh
+
+
+def _read_entity_float(hass, entity_id: str) -> float | None:
+    state = hass.states.get(entity_id)
+    if state is None:
+        return None
+    raw = getattr(state, "state", None)
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if not isinstance(raw, str):
+        return None
+    stripped = raw.strip()
+    if not stripped or stripped.lower() in _UNAVAILABLE_STATES:
+        return None
+    try:
+        return float(stripped)
+    except ValueError:
+        return None
 
 
 def _read_current_slot_house_value(

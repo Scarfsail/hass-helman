@@ -82,18 +82,27 @@ def _restore_modules(previous_modules: dict[str, types.ModuleType | None]) -> No
 _previous_modules = _install_import_stubs()
 try:
     config_module = importlib.import_module("custom_components.helman.appliances.config")
+    ev_charger_module = importlib.import_module(
+        "custom_components.helman.appliances.ev_charger"
+    )
     projection_builder_module = importlib.import_module(
         "custom_components.helman.appliances.projection_builder"
     )
     schedule_module = importlib.import_module(
         "custom_components.helman.scheduling.schedule"
     )
+    state_module = importlib.import_module("custom_components.helman.appliances.state")
 finally:
     _restore_modules(_previous_modules)
 
 build_appliance_projection_plan = projection_builder_module.build_appliance_projection_plan
 build_appliances_runtime_registry = config_module.build_appliances_runtime_registry
 build_projection_input_bundle = projection_builder_module.build_projection_input_bundle
+AppliancesRuntimeRegistry = state_module.AppliancesRuntimeRegistry
+EvChargerApplianceRuntime = ev_charger_module.EvChargerApplianceRuntime
+EvChargerEcoGearRuntime = ev_charger_module.EvChargerEcoGearRuntime
+EvChargerUseModeRuntime = ev_charger_module.EvChargerUseModeRuntime
+EvVehicleRuntime = ev_charger_module.EvVehicleRuntime
 ScheduleDocument = schedule_module.ScheduleDocument
 ScheduleDomains = schedule_module.ScheduleDomains
 
@@ -199,6 +208,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         plan = build_appliance_projection_plan(
             generated_at=REFERENCE_TIME.isoformat(),
             registry=registry,
+            hass=None,
             schedule_document=ScheduleDocument(
                 slots={
                     "2026-03-20T21:00:00+01:00": ScheduleDomains(
@@ -237,6 +247,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         plan = build_appliance_projection_plan(
             generated_at=REFERENCE_TIME.isoformat(),
             registry=registry,
+            hass=None,
             schedule_document=ScheduleDocument(
                 slots={
                     "2026-03-20T21:00:00+01:00": ScheduleDomains(
@@ -272,6 +283,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         plan = build_appliance_projection_plan(
             generated_at=REFERENCE_TIME.isoformat(),
             registry=registry,
+            hass=None,
             schedule_document=ScheduleDocument(
                 slots={
                     "2026-03-20T21:30:00+01:00": ScheduleDomains(
@@ -308,6 +320,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         plan = build_appliance_projection_plan(
             generated_at=REFERENCE_TIME.isoformat(),
             registry=registry,
+            hass=None,
             schedule_document=ScheduleDocument(
                 slots={
                     "2026-03-20T21:00:00+01:00": ScheduleDomains(
@@ -332,6 +345,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         plan = build_appliance_projection_plan(
             generated_at=REFERENCE_TIME.isoformat(),
             registry=registry,
+            hass=None,
             schedule_document=ScheduleDocument(
                 slots={
                     "2026-03-20T21:00:00+01:00": ScheduleDomains(
@@ -359,6 +373,263 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
         series = plan.appliances_by_id["garage-ev"].points
         self.assertEqual([point.vehicle_id for point in series], ["kona", "tesla"])
+
+
+class _FakeState:
+    def __init__(self, state) -> None:
+        self.state = state
+
+
+class _FakeStates:
+    def __init__(self, states: dict[str, _FakeState]) -> None:
+        self._states = states
+
+    def get(self, entity_id: str):
+        return self._states.get(entity_id)
+
+
+class _FakeHass:
+    def __init__(self, states: dict[str, _FakeState]) -> None:
+        self.states = _FakeStates(states)
+
+
+def _registry_with_charge_limit() -> AppliancesRuntimeRegistry:
+    return AppliancesRuntimeRegistry.from_appliances(
+        [
+            EvChargerApplianceRuntime(
+                id="garage-ev",
+                name="Garage EV",
+                max_charging_power_kw=11.0,
+                charge_entity_id="switch.ev_nabijeni",
+                use_mode_entity_id="select.use_mode",
+                eco_gear_entity_id="select.eco_gear",
+                use_mode_configs=(
+                    EvChargerUseModeRuntime(id="Fast", behavior="fixed_max_power"),
+                    EvChargerUseModeRuntime(id="ECO", behavior="surplus_aware"),
+                ),
+                eco_gear_configs=(
+                    EvChargerEcoGearRuntime(id="6A", min_power_kw=1.4),
+                ),
+                vehicles=(
+                    EvVehicleRuntime(
+                        id="kona",
+                        name="Kona",
+                        soc_entity_id="sensor.kona_soc",
+                        charge_limit_entity_id="number.kona_charge_limit",
+                        battery_capacity_kwh=64.0,
+                        max_charging_power_kw=11.0,
+                    ),
+                ),
+            )
+        ]
+    )
+
+
+# Reference time exactly on a canonical slot boundary to avoid partial-first-slice maths.
+_SOC_REFERENCE_TIME = datetime.fromisoformat("2026-03-20T10:00:00+01:00")
+
+
+def _make_house_forecast_for_soc_test() -> dict:
+    """Covers canonical slots 10:00–12:45 (13 slots)."""
+    series_timestamps = [
+        f"2026-03-20T{h:02d}:{m:02d}:00+01:00"
+        for h, m in [
+            (10, 15), (10, 30), (10, 45),
+            (11, 0), (11, 15), (11, 30), (11, 45),
+            (12, 0), (12, 15), (12, 30), (12, 45),
+        ]
+    ]
+    return {
+        "status": "available",
+        "currentSlot": {
+            "timestamp": "2026-03-20T10:00:00+01:00",
+            "nonDeferrable": {"value": 0.1},
+        },
+        "series": [
+            {"timestamp": ts, "nonDeferrable": {"value": 0.1}}
+            for ts in series_timestamps
+        ],
+    }
+
+
+def _make_solar_forecast_for_soc_test() -> dict:
+    """2000 Wh per canonical slot = 8 kWh/h solar, enough for ECO surplus tests."""
+    point_timestamps = [
+        f"2026-03-20T{h:02d}:{m:02d}:00+01:00"
+        for h, m in [
+            (10, 0), (10, 15), (10, 30), (10, 45),
+            (11, 0), (11, 15), (11, 30), (11, 45),
+            (12, 0), (12, 15), (12, 30), (12, 45),
+        ]
+    ]
+    return {
+        "status": "available",
+        "points": [{"timestamp": ts, "value": 2000.0} for ts in point_timestamps],
+    }
+
+
+def _six_hour_schedule(vehicle_id: str, mode: str, extra: dict | None = None) -> ScheduleDocument:
+    """Six consecutive 30-min schedule slots starting at 10:00 (= 3 hours total)."""
+    action: dict = {"charge": True, "vehicleId": vehicle_id, "useMode": mode}
+    if extra:
+        action.update(extra)
+    slot_starts = [
+        f"2026-03-20T{h:02d}:{m:02d}:00+01:00"
+        for h, m in [
+            (10, 0), (10, 30), (11, 0), (11, 30), (12, 0), (12, 30),
+        ]
+    ]
+    return ScheduleDocument(
+        slots={slot_id: ScheduleDomains(appliances={"garage-ev": action}) for slot_id in slot_starts}
+    )
+
+
+class EvChargerProjectionSoCCapTests(unittest.TestCase):
+    """Verify that projection energy is capped when vehicle reaches target SoC."""
+
+    def _inputs(self):
+        return build_projection_input_bundle(
+            solar_forecast=_make_solar_forecast_for_soc_test(),
+            house_forecast=_make_house_forecast_for_soc_test(),
+            reference_time=_SOC_REFERENCE_TIME,
+        )
+
+    def test_fast_mode_energy_capped_at_target_soc(self) -> None:
+        # 50% current SoC, 90% target → 25.6 kWh remaining
+        # Fast mode: 11 kW charger → 2.75 kWh per 15-min slice, 5.5 kWh per 30-min slot
+        # 25.6 / 5.5 = 4.65 slots → slots 1-4 full (22 kWh), slot 5 partial (3.6 kWh), slot 6 zero
+        registry = _registry_with_charge_limit()
+        hass = _FakeHass({
+            "sensor.kona_soc": _FakeState("50"),
+            "number.kona_charge_limit": _FakeState("90"),
+        })
+
+        plan = build_appliance_projection_plan(
+            generated_at=_SOC_REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=hass,
+            schedule_document=_six_hour_schedule("kona", "Fast"),
+            inputs=self._inputs(),
+        )
+
+        series = plan.appliances_by_id["garage-ev"].points
+        # Only 5 slots should appear (slot 6 has zero capacity left)
+        self.assertEqual(len(series), 5)
+        self.assertEqual(series[0].energy_kwh, 5.5)
+        self.assertEqual(series[1].energy_kwh, 5.5)
+        self.assertEqual(series[2].energy_kwh, 5.5)
+        self.assertEqual(series[3].energy_kwh, 5.5)
+        self.assertEqual(series[4].energy_kwh, round(25.6 - 22.0, 4))  # 3.6
+
+        total = sum(p.energy_kwh for p in series)
+        self.assertAlmostEqual(total, 25.6, places=4)
+
+    def test_fast_mode_demand_points_stop_at_target_soc(self) -> None:
+        # 10 demand points expected: 8 full (2.75 kWh) + 1 partial (2.75) + 1 partial (0.85)
+        registry = _registry_with_charge_limit()
+        hass = _FakeHass({
+            "sensor.kona_soc": _FakeState("50"),
+            "number.kona_charge_limit": _FakeState("90"),
+        })
+
+        plan = build_appliance_projection_plan(
+            generated_at=_SOC_REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=hass,
+            schedule_document=_six_hour_schedule("kona", "Fast"),
+            inputs=self._inputs(),
+        )
+
+        demand = plan.demand_points
+        # Slots 1-4 produce 2 canonical demand points each = 8, slot 5 adds 2 more = 10
+        self.assertEqual(len(demand), 10)
+        for dp in demand[:9]:
+            self.assertEqual(dp.energy_kwh, 2.75)
+        self.assertEqual(demand[9].energy_kwh, round(25.6 - 22.0 - 2.75, 4))  # 0.85
+
+    def test_vehicle_already_at_target_produces_no_projection(self) -> None:
+        registry = _registry_with_charge_limit()
+        hass = _FakeHass({
+            "sensor.kona_soc": _FakeState("90"),
+            "number.kona_charge_limit": _FakeState("90"),
+        })
+
+        plan = build_appliance_projection_plan(
+            generated_at=_SOC_REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=hass,
+            schedule_document=_six_hour_schedule("kona", "Fast"),
+            inputs=self._inputs(),
+        )
+
+        self.assertEqual(plan.appliances_by_id, {})
+        self.assertEqual(plan.demand_points, ())
+
+    def test_unavailable_soc_disables_capping(self) -> None:
+        # When SoC entity is unavailable, projection runs uncapped (all 6 slots)
+        registry = _registry_with_charge_limit()
+        hass = _FakeHass({
+            "sensor.kona_soc": _FakeState("unavailable"),
+            "number.kona_charge_limit": _FakeState("90"),
+        })
+
+        plan = build_appliance_projection_plan(
+            generated_at=_SOC_REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=hass,
+            schedule_document=_six_hour_schedule("kona", "Fast"),
+            inputs=self._inputs(),
+        )
+
+        series = plan.appliances_by_id["garage-ev"].points
+        self.assertEqual(len(series), 6)
+
+    def test_no_charge_limit_entity_caps_at_100_pct(self) -> None:
+        # Vehicle with no charge_limit_entity_id: caps at 100%
+        registry = AppliancesRuntimeRegistry.from_appliances(
+            [
+                EvChargerApplianceRuntime(
+                    id="garage-ev",
+                    name="Garage EV",
+                    max_charging_power_kw=11.0,
+                    charge_entity_id="switch.ev_nabijeni",
+                    use_mode_entity_id="select.use_mode",
+                    eco_gear_entity_id="select.eco_gear",
+                    use_mode_configs=(
+                        EvChargerUseModeRuntime(id="Fast", behavior="fixed_max_power"),
+                    ),
+                    eco_gear_configs=(
+                        EvChargerEcoGearRuntime(id="6A", min_power_kw=1.4),
+                    ),
+                    vehicles=(
+                        EvVehicleRuntime(
+                            id="kona",
+                            name="Kona",
+                            soc_entity_id="sensor.kona_soc",
+                            charge_limit_entity_id=None,
+                            battery_capacity_kwh=64.0,
+                            max_charging_power_kw=11.0,
+                        ),
+                    ),
+                )
+            ]
+        )
+        # At 95% SoC with 64 kWh battery → only 3.2 kWh remaining to 100%
+        # Fast mode 11 kW → 2.75 kWh per canonical slot → first slot partial, rest zero
+        hass = _FakeHass({"sensor.kona_soc": _FakeState("95")})
+
+        plan = build_appliance_projection_plan(
+            generated_at=_SOC_REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=hass,
+            schedule_document=_six_hour_schedule("kona", "Fast"),
+            inputs=self._inputs(),
+        )
+
+        series = plan.appliances_by_id["garage-ev"].points
+        self.assertEqual(len(series), 1)
+        total = sum(p.energy_kwh for p in series)
+        self.assertAlmostEqual(total, 3.2, places=4)
 
 
 if __name__ == "__main__":

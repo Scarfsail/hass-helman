@@ -1100,6 +1100,7 @@ class HelmanCoordinator:
                 registry=self._appliances_registry,
                 schedule_document=projection_schedule_document,
                 inputs=input_bundle,
+                hass=self._hass,
             )
         adjusted_house_forecast = build_adjusted_house_forecast(
             house_forecast=house_forecast,

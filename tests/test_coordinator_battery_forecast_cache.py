@@ -627,6 +627,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             registry=coordinator._appliances_registry,
             schedule_document=_make_schedule_document(),
             inputs=build_input_bundle.return_value,
+            hass=coordinator._hass,
         )
         coordinator._build_battery_forecast.assert_awaited_once()
 
