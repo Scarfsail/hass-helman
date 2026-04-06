@@ -33,7 +33,8 @@
       "unsaved_changes": "Neuložené změny",
       "stored_config_loaded": "Uložená konfigurace načtena",
       "last_validation_passed": "Poslední validace prošla",
-      "validation_stale": "Výsledek validace je zastaralý, dokud nespustíte validaci nebo uložení"
+      "validation_stale": "Výsledek validace je zastaralý, dokud nespustíte validaci nebo uložení",
+      "fix_yaml_errors": "Před validací nebo uložením opravte chyby v YAML"
     },
     "issues": {
       "errors": "Chyby",
@@ -153,8 +154,12 @@
       "config_saved": "Konfigurace byla uložena.",
       "config_saved_reload_failed": "Konfigurace byla uložena, ale restart Helman selhal.",
       "save_rejected": "Uložení bylo odmítnuto, protože backendová validace našla chyby.",
-      "save_failed": "Nepodařilo se uložit konfiguraci Helman.",
-      "load_ha_form_failed": "Nepodařilo se načíst formulářové komponenty Home Assistantu."
+        "save_failed": "Nepodařilo se uložit konfiguraci Helman.",
+        "load_ha_form_failed": "Nepodařilo se načíst formulářové komponenty Home Assistantu.",
+        "load_ha_yaml_editor_failed": "Nepodařilo se načíst YAML editor Home Assistantu.",
+        "fix_yaml_errors_first": "Před validací nebo uložením opravte chyby v YAML.",
+        "fix_descendant_yaml_errors": "Před přepnutím této úrovně do YAML opravte chyby v YAML v podřízených částech.",
+        "enter_yaml_failed": "Nepodařilo se otevřít YAML editor pro tuto část."
     },
     "confirm": {
       "discard_changes": "Zahodit neuložené změny a znovu načíst uloženou konfiguraci?"
@@ -170,6 +175,28 @@
       "surplus_aware": "Řízeno přebytkem",
       "unknown": "neznámý",
       "missing_id": "chybí id"
+    },
+    "mode": {
+      "visual": "Vizuální",
+      "yaml": "YAML"
+    },
+    "yaml": {
+      "field_label": "YAML",
+      "aria_label": "YAML editor pro {scope}",
+      "helpers": {
+        "document": "Upravujete celý konfigurační dokument jako YAML.",
+        "tab": "Upravujete jako YAML jen větev aktuální karty.",
+        "section": "Upravujete jako YAML jen větev této sekce."
+      },
+      "errors": {
+        "fix_before_leaving": "Před návratem do vizuálního režimu opravte chyby v YAML.",
+        "parse_failed": "Syntaxe YAML v této části není platná.",
+        "non_json_value": "YAML v této části se musí převést jen na JSON-kompatibilní hodnoty.",
+        "expected_object": "YAML pro tuto část musí být objekt.",
+        "expected_array": "YAML pro tuto část musí být seznam.",
+        "unexpected_key": "Klíč YAML {key} není v této části podporovaný.",
+        "apply_failed": "Nepodařilo se promítnout YAML změny do této části."
+      }
     },
     "dynamic": {
       "consumer": "Spotřebič {index}",

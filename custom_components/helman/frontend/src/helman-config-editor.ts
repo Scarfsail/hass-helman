@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
+import { cache } from "lit/directives/cache.js";
 
 import {
   appendListItem,
@@ -26,39 +27,43 @@ import {
   setValueAtPath,
   unsetValueAtPath,
 } from "./config-document";
+import {
+  DOCUMENT_SCOPE_ID,
+  SECTION_SCOPE_IDS,
+  TAB_SCOPE_IDS,
+  TAB_SECTIONS,
+  TABS,
+  type EditorMode,
+  getDescendantScopeIds,
+  getScope,
+  type ScopeId,
+  type TabId,
+} from "./config-editor-scopes";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
-import { loadHaForm } from "./load-ha-elements";
+import { loadHaForm, loadHaYamlEditor } from "./load-ha-elements";
 import type {
   HomeAssistantLike,
   JsonObject,
+  JsonValue,
   PathSegment,
   SaveConfigResponse,
   StatusMessage,
   ValidationIssue,
   ValidationReport,
 } from "./types";
-
-type TabId = "general" | "power_devices" | "scheduler" | "appliances";
-
-const TABS: Array<{ id: TabId; labelKey: string }> = [
-  { id: "general", labelKey: "editor.tabs.general" },
-  { id: "power_devices", labelKey: "editor.tabs.power_devices" },
-  { id: "scheduler", labelKey: "editor.tabs.scheduler" },
-  { id: "appliances", labelKey: "editor.tabs.appliances" },
-];
-
-const TAB_SECTIONS: Record<string, TabId> = {
-  general: "general",
-  power_devices: "power_devices",
-  scheduler_control: "scheduler",
-  appliances: "appliances",
-  root: "general",
-};
+import type { ScopeAdapterValidationError } from "./config-scope-adapters";
+import { normalizeYamlValue } from "./yaml-codec";
 
 const USE_MODE_BEHAVIORS = [
   { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
   { value: "surplus_aware", labelKey: "editor.values.surplus_aware" },
 ];
+
+interface YamlEditorValueChangedDetail {
+  value: unknown;
+  isValid: boolean;
+  errorMsg?: string;
+}
 
 export class HelmanConfigEditorPanel extends LitElement {
   static properties = {
@@ -75,6 +80,9 @@ export class HelmanConfigEditorPanel extends LitElement {
     _validation: { state: true },
     _message: { state: true },
     _hasLoadedOnce: { state: true },
+    _scopeModes: { state: true },
+    _scopeYamlValues: { state: true },
+    _scopeYamlErrors: { state: true },
   };
 
   static styles = css`
@@ -122,6 +130,41 @@ export class HelmanConfigEditorPanel extends LitElement {
       gap: 12px;
       align-items: center;
       justify-content: flex-end;
+    }
+
+    .mode-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid var(--divider-color);
+      border-radius: 999px;
+      background: var(--card-background-color);
+    }
+
+    .mode-toggle button {
+      border: none;
+      background: transparent;
+      color: var(--secondary-text-color);
+      padding: 4px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.76rem;
+      font-weight: 600;
+    }
+
+    .mode-toggle button:hover {
+      background: rgba(127, 127, 127, 0.08);
+    }
+
+    .mode-toggle button.active {
+      background: rgba(3, 169, 244, 0.12);
+      color: var(--primary-color);
+    }
+
+    .mode-toggle button.active:hover {
+      background: rgba(3, 169, 244, 0.16);
     }
 
     .actions button,
@@ -302,6 +345,18 @@ export class HelmanConfigEditorPanel extends LitElement {
       gap: 16px;
     }
 
+    .tab-scope {
+      display: grid;
+      gap: 16px;
+    }
+
+    .scope-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+    }
+
     details.section-card,
     .list-card,
     .nested-card {
@@ -320,6 +375,17 @@ export class HelmanConfigEditorPanel extends LitElement {
       padding: 18px 0;
       font-size: 1.04rem;
       font-weight: 600;
+    }
+
+    .section-summary-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .section-summary-label {
+      min-width: 0;
     }
 
     details.section-card > summary::-webkit-details-marker {
@@ -386,6 +452,26 @@ export class HelmanConfigEditorPanel extends LitElement {
     .field textarea {
       min-height: 120px;
       resize: vertical;
+    }
+
+    .yaml-surface {
+      display: grid;
+      gap: 12px;
+    }
+
+    .yaml-field ha-yaml-editor {
+      display: block;
+      --code-mirror-height: clamp(320px, 58vh, 720px);
+      --code-mirror-max-height: clamp(320px, 58vh, 720px);
+    }
+
+    .yaml-field--document ha-yaml-editor {
+      --code-mirror-height: clamp(420px, 72vh, 980px);
+      --code-mirror-max-height: clamp(420px, 72vh, 980px);
+    }
+
+    .yaml-error {
+      margin: 0;
     }
 
     .field ha-entity-picker {
@@ -467,7 +553,8 @@ export class HelmanConfigEditorPanel extends LitElement {
         flex-direction: column;
       }
 
-      .actions {
+      .actions,
+      .scope-toolbar {
         justify-content: flex-start;
       }
     }
@@ -489,6 +576,9 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _validation: ValidationReport | null = null;
   private _message: StatusMessage | null = null;
   private _hasLoadedOnce = false;
+  private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
+  private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
+  private _scopeYamlErrors: Partial<Record<ScopeId, string>> = {};
 
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
@@ -530,6 +620,7 @@ export class HelmanConfigEditorPanel extends LitElement {
 
   render(): TemplateResult {
     const issueCounts = this._buildTabIssueCounts();
+    const hasBlockingYamlErrors = this._hasBlockingYamlErrors();
 
     return html`
       <div class="page">
@@ -541,6 +632,7 @@ export class HelmanConfigEditorPanel extends LitElement {
             </p>
           </div>
           <div class="actions">
+            ${this._renderModeToggle(DOCUMENT_SCOPE_ID)}
             <button
               type="button"
               ?disabled=${this._loading || this._saving || this._validating}
@@ -550,7 +642,13 @@ export class HelmanConfigEditorPanel extends LitElement {
             </button>
             <button
               type="button"
-              ?disabled=${this._loading || this._saving || this._validating || !this._config}
+              ?disabled=${
+                this._loading ||
+                this._saving ||
+                this._validating ||
+                !this._config ||
+                hasBlockingYamlErrors
+              }
               @click=${this._handleValidateClick}
             >
               ${this._validating
@@ -560,7 +658,13 @@ export class HelmanConfigEditorPanel extends LitElement {
             <button
               type="button"
               class="primary"
-              ?disabled=${this._loading || this._saving || this._validating || !this._config}
+              ?disabled=${
+                this._loading ||
+                this._saving ||
+                this._validating ||
+                !this._config ||
+                hasBlockingYamlErrors
+              }
               @click=${this._handleSaveClick}
             >
               ${this._saving
@@ -583,6 +687,9 @@ export class HelmanConfigEditorPanel extends LitElement {
           ${this._dirty
             ? html`<span class="badge info">${this._t("editor.status.validation_stale")}</span>`
             : nothing}
+          ${hasBlockingYamlErrors
+            ? html`<span class="badge info">${this._t("editor.status.fix_yaml_errors")}</span>`
+            : nothing}
         </div>
 
         ${this._message
@@ -591,55 +698,196 @@ export class HelmanConfigEditorPanel extends LitElement {
 
         ${this._renderIssueBoard()}
 
-        <div class="tabs">
-          ${TABS.map((tab) => {
-            const counts = issueCounts[tab.id];
-            return html`
-              <button
-                type="button"
-                class=${this._activeTab === tab.id ? "active" : ""}
-                @click=${() => {
-                  this._activeTab = tab.id;
-                }}
-              >
-                <span>${this._t(tab.labelKey)}</span>
-                ${counts.errors > 0
-                  ? html`<span class="tab-count errors">${counts.errors}</span>`
-                  : counts.warnings > 0
-                    ? html`<span class="tab-count warnings">${counts.warnings}</span>`
-                    : nothing}
-              </button>
-            `;
-          })}
-        </div>
-
-        ${this._config
-          ? html`<div class="tab-body">${this._renderActiveTab()}</div>`
-          : nothing}
+        ${this._config ? this._renderDocumentBody(issueCounts) : nothing}
       </div>
+    `;
+  }
+
+  private _renderDocumentBody(
+    issueCounts: Record<TabId, { errors: number; warnings: number }>,
+  ): TemplateResult {
+    if (this._isScopeYaml(DOCUMENT_SCOPE_ID)) {
+      return html`<div class="list-card">${this._renderYamlEditor(DOCUMENT_SCOPE_ID)}</div>`;
+    }
+
+    return html`
+      <div class="tabs">
+        ${TABS.map((tab) => {
+          const counts = issueCounts[tab.id];
+          return html`
+            <button
+              type="button"
+              class=${this._activeTab === tab.id ? "active" : ""}
+              @click=${() => {
+                this._activeTab = tab.id;
+              }}
+            >
+              <span>${this._t(tab.labelKey)}</span>
+              ${counts.errors > 0
+                ? html`<span class="tab-count errors">${counts.errors}</span>`
+                : counts.warnings > 0
+                  ? html`<span class="tab-count warnings">${counts.warnings}</span>`
+                  : nothing}
+            </button>
+          `;
+        })}
+      </div>
+
+      ${cache(this._renderActiveTab())}
     `;
   }
 
   private _renderActiveTab(): TemplateResult {
     switch (this._activeTab) {
       case "general":
-        return this._renderGeneralTab();
+        return this._renderTabScope(TAB_SCOPE_IDS.general, this._renderGeneralTab());
       case "power_devices":
-        return this._renderPowerDevicesTab();
+        return this._renderTabScope(
+          TAB_SCOPE_IDS.power_devices,
+          this._renderPowerDevicesTab(),
+        );
       case "scheduler":
-        return this._renderSchedulerTab();
+        return this._renderTabScope(TAB_SCOPE_IDS.scheduler, this._renderSchedulerTab());
       case "appliances":
-        return this._renderAppliancesTab();
+        return this._renderTabScope(
+          TAB_SCOPE_IDS.appliances,
+          this._renderAppliancesTab(),
+        );
       default:
         return html``;
     }
   }
 
-  private _renderGeneralTab(): TemplateResult {
+  private _renderTabScope(scopeId: ScopeId, content: TemplateResult): TemplateResult {
+    return html`
+      <div class="tab-scope">
+        <div class="scope-toolbar">
+          ${this._renderModeToggle(scopeId)}
+        </div>
+        ${this._isScopeYaml(scopeId)
+          ? html`<div class="list-card">${this._renderYamlEditor(scopeId)}</div>`
+          : html`<div class="tab-body">${content}</div>`}
+      </div>
+    `;
+  }
+
+  private _renderSectionScope(scopeId: ScopeId, content: TemplateResult): TemplateResult {
+    const scope = getScope(scopeId);
+
     return html`
       <details class="section-card" open>
-        <summary>${this._t("editor.sections.core_labels_and_history")}</summary>
+        <summary>
+          <div class="section-summary-row">
+            <span class="section-summary-label">${this._t(scope.labelKey)}</span>
+            ${this._renderModeToggle(scopeId, { inSummary: true })}
+          </div>
+        </summary>
         <div class="section-content">
+          ${this._isScopeYaml(scopeId)
+            ? this._renderYamlEditor(scopeId)
+            : content}
+        </div>
+      </details>
+    `;
+  }
+
+  private _renderModeToggle(
+    scopeId: ScopeId,
+    options: { inSummary?: boolean } = {},
+  ): TemplateResult {
+    const mode = this._getScopeMode(scopeId);
+
+    return html`
+      <div
+        class="mode-toggle"
+        @click=${options.inSummary ? this._preventSummaryToggle : undefined}
+      >
+        <button
+          type="button"
+          class=${mode === "visual" ? "active" : ""}
+          aria-pressed=${mode === "visual"}
+          @click=${(event: Event) =>
+            this._handleScopeModeSelection(scopeId, "visual", event)}
+        >
+          ${this._t("editor.mode.visual")}
+        </button>
+        <button
+          type="button"
+          class=${mode === "yaml" ? "active" : ""}
+          aria-pressed=${mode === "yaml"}
+          @click=${(event: Event) =>
+            this._handleScopeModeSelection(scopeId, "yaml", event)}
+        >
+          ${this._t("editor.mode.yaml")}
+        </button>
+      </div>
+    `;
+  }
+
+  private _renderYamlEditor(scopeId: ScopeId): TemplateResult {
+    const scope = getScope(scopeId);
+    const scopeLabel = this._t(scope.labelKey);
+    const helperKey =
+      scope.kind === "document"
+        ? "editor.yaml.helpers.document"
+        : scope.kind === "tab"
+          ? "editor.yaml.helpers.tab"
+          : "editor.yaml.helpers.section";
+    const error = this._scopeYamlErrors[scopeId];
+    const scopeDomId = this._scopeDomId(scopeId);
+    const helperId = `${scopeDomId}-yaml-helper`;
+    const errorId = `${scopeDomId}-yaml-error`;
+    const describedBy = error ? `${helperId} ${errorId}` : helperId;
+    const editorValue =
+      this._scopeYamlValues[scopeId] ??
+      scope.adapter.read(this._config ?? ({} as JsonObject));
+
+    return html`
+      <div class="yaml-surface">
+        <div
+          class=${[
+            "field",
+            "yaml-field",
+            scope.kind === "document" ? "yaml-field--document" : "",
+          ]
+            .filter((className) => className.length > 0)
+            .join(" ")}
+        >
+          <label>${this._t("editor.yaml.field_label")}</label>
+          <div id=${helperId} class="helper">${this._t(helperKey)}</div>
+          <ha-yaml-editor
+            .hass=${this.hass}
+            .defaultValue=${editorValue}
+            .showErrors=${false}
+            aria-label=${this._tFormat("editor.yaml.aria_label", { scope: scopeLabel })}
+            aria-describedby=${describedBy}
+            dir="ltr"
+            @value-changed=${(event: CustomEvent<YamlEditorValueChangedDetail>) =>
+              this._handleYamlValueChanged(scopeId, event)}
+          ></ha-yaml-editor>
+        </div>
+        ${error
+          ? html`
+              <div id=${errorId} class="message error yaml-error">
+                <div>${error}</div>
+                <div class="helper">${this._t("editor.yaml.errors.fix_before_leaving")}</div>
+              </div>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _preventSummaryToggle = (event: Event): void => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  private _renderGeneralTab(): TemplateResult {
+    return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.general.core_labels_and_history,
+        html`
           <div class="field-grid">
             ${this._renderOptionalNumberField(
               ["history_buckets"],
@@ -671,12 +919,12 @@ export class HelmanConfigEditorPanel extends LitElement {
               true,
             )}
           </div>
-        </div>
-      </details>
+        `,
+      )}
 
-      <details class="section-card" open>
-        <summary>${this._t("editor.sections.device_label_text")}</summary>
-        <div class="section-content">
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.general.device_label_text,
+        html`
           <p class="inline-note">
             ${this._t("editor.notes.device_label_text")}
           </p>
@@ -688,8 +936,8 @@ export class HelmanConfigEditorPanel extends LitElement {
               ${this._t("editor.actions.add_category")}
             </button>
           </div>
-        </div>
-      </details>
+        `,
+      )}
     `;
   }
 
@@ -704,9 +952,9 @@ export class HelmanConfigEditorPanel extends LitElement {
       asJsonArray(this._getValue(["power_devices", "grid", "forecast", "import_price_windows"])) ?? [];
 
     return html`
-      <details class="section-card" open>
-        <summary>${this._t("editor.sections.house")}</summary>
-        <div class="section-content">
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.power_devices.house,
+        html`
           <div class="field-grid">
             ${this._renderRequiredEntityField(
               ["power_devices", "house", "entities", "power"],
@@ -750,12 +998,12 @@ export class HelmanConfigEditorPanel extends LitElement {
               ${this._t("editor.actions.add_deferrable_consumer")}
             </button>
           </div>
-        </div>
-      </details>
+        `,
+      )}
 
-      <details class="section-card" open>
-        <summary>${this._t("editor.sections.solar")}</summary>
-        <div class="section-content">
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.power_devices.solar,
+        html`
           <div class="field-grid field-grid--roomy">
             ${this._renderOptionalEntityField(
               ["power_devices", "solar", "entities", "power"],
@@ -794,12 +1042,12 @@ export class HelmanConfigEditorPanel extends LitElement {
               ${this._t("editor.actions.add_daily_energy_entity")}
             </button>
           </div>
-        </div>
-      </details>
+        `,
+      )}
 
-      <details class="section-card" open>
-        <summary>${this._t("editor.sections.battery")}</summary>
-        <div class="section-content">
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.power_devices.battery,
+        html`
           <p class="inline-note">
             ${this._t("editor.notes.battery_entities")}
           </p>
@@ -848,12 +1096,12 @@ export class HelmanConfigEditorPanel extends LitElement {
               "editor.fields.max_discharge_power_w",
             )}
           </div>
-        </div>
-      </details>
+        `,
+      )}
 
-      <details class="section-card" open>
-        <summary>${this._t("editor.sections.grid")}</summary>
-        <div class="section-content">
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.power_devices.grid,
+        html`
           <div class="field-grid">
             ${this._renderOptionalEntityField(
               ["power_devices", "grid", "entities", "power"],
@@ -885,16 +1133,16 @@ export class HelmanConfigEditorPanel extends LitElement {
               ${this._t("editor.actions.add_import_price_window")}
             </button>
           </div>
-        </div>
-      </details>
+        `,
+      )}
     `;
   }
 
   private _renderSchedulerTab(): TemplateResult {
     return html`
-      <details class="section-card" open>
-        <summary>${this._t("editor.sections.schedule_control_mapping")}</summary>
-        <div class="section-content">
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.scheduler.schedule_control_mapping,
+        html`
           <div class="field-grid">
             ${this._renderRequiredEntityField(
               ["scheduler", "control", "mode_entity_id"],
@@ -923,8 +1171,8 @@ export class HelmanConfigEditorPanel extends LitElement {
               "editor.fields.stop_discharging_option",
             )}
           </div>
-        </div>
-      </details>
+        `,
+      )}
     `;
   }
 
@@ -932,9 +1180,9 @@ export class HelmanConfigEditorPanel extends LitElement {
     const appliances = asJsonArray(this._getValue(["appliances"])) ?? [];
 
     return html`
-      <details class="section-card" open>
-        <summary>${this._t("editor.sections.configured_appliances")}</summary>
-        <div class="section-content">
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.appliances.configured_appliances,
+        html`
           <p class="inline-note">
             ${this._t("editor.notes.appliances")}
           </p>
@@ -950,8 +1198,8 @@ export class HelmanConfigEditorPanel extends LitElement {
               ${this._t("editor.actions.add_ev_charger")}
             </button>
           </div>
-        </div>
-      </details>
+        `,
+      )}
     `;
   }
 
@@ -1879,18 +2127,28 @@ export class HelmanConfigEditorPanel extends LitElement {
       appliances: { errors: 0, warnings: 0 },
     };
 
-    if (!this._validation) {
-      return counts;
+    if (this._validation) {
+      for (const issue of this._validation.errors) {
+        const tabId = TAB_SECTIONS[issue.section] ?? "general";
+        counts[tabId].errors += 1;
+      }
+      for (const issue of this._validation.warnings) {
+        const tabId = TAB_SECTIONS[issue.section] ?? "general";
+        counts[tabId].warnings += 1;
+      }
     }
 
-    for (const issue of this._validation.errors) {
-      const tabId = TAB_SECTIONS[issue.section] ?? "general";
-      counts[tabId].errors += 1;
+    for (const scopeId of Object.keys(this._scopeYamlErrors) as ScopeId[]) {
+      if (!this._scopeYamlErrors[scopeId]) {
+        continue;
+      }
+
+      const tabId = getScope(scopeId).tabId;
+      if (tabId) {
+        counts[tabId].warnings += 1;
+      }
     }
-    for (const issue of this._validation.warnings) {
-      const tabId = TAB_SECTIONS[issue.section] ?? "general";
-      counts[tabId].warnings += 1;
-    }
+
     return counts;
   }
 
@@ -1904,6 +2162,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       this._config = asJsonObject(loaded) ? cloneJson(loaded) : {};
       this._validation = null;
       this._dirty = false;
+      this._resetScopeYamlState();
       if (options.showMessage) {
         this._message = {
           kind: "info",
@@ -1922,6 +2181,13 @@ export class HelmanConfigEditorPanel extends LitElement {
 
   private async _validateConfig(): Promise<void> {
     if (!this.hass || !this._config) {
+      return;
+    }
+    if (this._hasBlockingYamlErrors()) {
+      this._message = {
+        kind: "error",
+        text: this._t("editor.messages.fix_yaml_errors_first"),
+      };
       return;
     }
     this._validating = true;
@@ -1949,6 +2215,13 @@ export class HelmanConfigEditorPanel extends LitElement {
 
   private async _saveConfig(): Promise<void> {
     if (!this.hass || !this._config) {
+      return;
+    }
+    if (this._hasBlockingYamlErrors()) {
+      this._message = {
+        kind: "error",
+        text: this._t("editor.messages.fix_yaml_errors_first"),
+      };
       return;
     }
     this._saving = true;
@@ -1988,7 +2261,10 @@ export class HelmanConfigEditorPanel extends LitElement {
   }
 
   private _handleReloadClick = async (): Promise<void> => {
-    if (this._dirty && !window.confirm(this._t("editor.confirm.discard_changes"))) {
+    if (
+      (this._dirty || this._hasBlockingYamlErrors()) &&
+      !window.confirm(this._t("editor.confirm.discard_changes"))
+    ) {
       return;
     }
     await this._loadConfig({ showMessage: true });
@@ -2001,6 +2277,189 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _handleSaveClick = async (): Promise<void> => {
     await this._saveConfig();
   };
+
+  private _handleScopeModeSelection(
+    scopeId: ScopeId,
+    nextMode: EditorMode,
+    event: Event,
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (nextMode === "yaml") {
+      void this._enterYamlMode(scopeId);
+      return;
+    }
+
+    this._exitYamlMode(scopeId);
+  }
+
+  private async _enterYamlMode(scopeId: ScopeId): Promise<void> {
+    if (!this._config || this._isScopeYaml(scopeId)) {
+      return;
+    }
+    if (this._hasBlockingDescendantYamlErrors(scopeId)) {
+      this._message = {
+        kind: "error",
+        text: this._t("editor.messages.fix_descendant_yaml_errors"),
+      };
+      return;
+    }
+
+    const descendantScopeIds = getDescendantScopeIds(scopeId);
+
+    try {
+      await loadHaYamlEditor();
+      if (!this._config || this._isScopeYaml(scopeId)) {
+        return;
+      }
+
+      const nextModes = this._omitScopeIds(this._scopeModes, descendantScopeIds);
+      nextModes[scopeId] = "yaml";
+
+      const nextValues = this._omitScopeIds(
+        this._scopeYamlValues,
+        descendantScopeIds,
+      );
+      nextValues[scopeId] = getScope(scopeId).adapter.read(this._config);
+
+      const nextErrors = this._omitScopeIds(
+        this._scopeYamlErrors,
+        descendantScopeIds,
+      );
+      delete nextErrors[scopeId];
+
+      this._scopeModes = nextModes;
+      this._scopeYamlValues = nextValues;
+      this._scopeYamlErrors = nextErrors;
+      this._message = null;
+    } catch (error) {
+      this._message = {
+        kind: "error",
+        text: this._formatError(
+          error,
+          this._t("editor.messages.load_ha_yaml_editor_failed"),
+        ),
+      };
+    }
+  }
+
+  private _exitYamlMode(scopeId: ScopeId): void {
+    if (!this._isScopeYaml(scopeId) || this._scopeYamlErrors[scopeId]) {
+      return;
+    }
+
+    const nextModes = { ...this._scopeModes };
+    delete nextModes[scopeId];
+
+    const nextValues = { ...this._scopeYamlValues };
+    delete nextValues[scopeId];
+
+    const nextErrors = { ...this._scopeYamlErrors };
+    delete nextErrors[scopeId];
+
+    this._scopeModes = nextModes;
+    this._scopeYamlValues = nextValues;
+    this._scopeYamlErrors = nextErrors;
+  }
+
+  private _handleYamlValueChanged(
+    scopeId: ScopeId,
+    event: CustomEvent<YamlEditorValueChangedDetail>,
+  ): void {
+    event.stopPropagation();
+
+    if (!event.detail.isValid) {
+      this._scopeYamlErrors = {
+        ...this._scopeYamlErrors,
+        [scopeId]: event.detail.errorMsg ?? this._t("editor.yaml.errors.parse_failed"),
+      };
+      return;
+    }
+
+    const normalizedValue = normalizeYamlValue(event.detail.value);
+    if (!normalizedValue.ok) {
+      this._scopeYamlErrors = {
+        ...this._scopeYamlErrors,
+        [scopeId]: this._t("editor.yaml.errors.non_json_value"),
+      };
+      return;
+    }
+
+    const adapter = getScope(scopeId).adapter;
+    const validationError = adapter.validate(normalizedValue.value);
+    if (validationError) {
+      this._scopeYamlErrors = {
+        ...this._scopeYamlErrors,
+        [scopeId]: this._formatScopeYamlValidationError(validationError),
+      };
+      return;
+    }
+
+    try {
+      const nextValue = cloneJson(normalizedValue.value);
+      this._config = adapter.apply(this._config ?? {}, nextValue);
+      this._dirty = true;
+      this._validation = null;
+      this._message = null;
+      this._scopeYamlValues = {
+        ...this._scopeYamlValues,
+        [scopeId]: nextValue,
+      };
+      const nextErrors = { ...this._scopeYamlErrors };
+      delete nextErrors[scopeId];
+      this._scopeYamlErrors = nextErrors;
+    } catch (error) {
+      this._scopeYamlErrors = {
+        ...this._scopeYamlErrors,
+        [scopeId]: this._formatError(error, this._t("editor.yaml.errors.apply_failed")),
+      };
+    }
+  }
+
+  private _hasBlockingYamlErrors(): boolean {
+    return Object.values(this._scopeYamlErrors).some(
+      (error) => typeof error === "string" && error.length > 0,
+    );
+  }
+
+  private _hasBlockingDescendantYamlErrors(scopeId: ScopeId): boolean {
+    return getDescendantScopeIds(scopeId).some(
+      (descendantScopeId) => {
+        const error = this._scopeYamlErrors[descendantScopeId];
+        return typeof error === "string" && error.length > 0;
+      },
+    );
+  }
+
+  private _resetScopeYamlState(): void {
+    this._scopeModes = {};
+    this._scopeYamlValues = {};
+    this._scopeYamlErrors = {};
+  }
+
+  private _omitScopeIds<T>(
+    values: Partial<Record<ScopeId, T>>,
+    scopeIds: ScopeId[],
+  ): Partial<Record<ScopeId, T>> {
+    const nextValues = { ...values };
+    for (const scopeIdToDelete of scopeIds) {
+      delete nextValues[scopeIdToDelete];
+    }
+    return nextValues;
+  }
+
+  private _getScopeMode(scopeId: ScopeId): EditorMode {
+    return this._scopeModes[scopeId] ?? "visual";
+  }
+
+  private _isScopeYaml(scopeId: ScopeId): boolean {
+    return this._getScopeMode(scopeId) === "yaml";
+  }
+
+  private _scopeDomId(scopeId: ScopeId): string {
+    return scopeId.replaceAll(":", "-").replaceAll(".", "-");
+  }
 
   private _handleAddDeviceLabelCategory = (): void => {
     const existingKeys = objectEntries(this._getValue(["device_label_text"])).map(
@@ -2248,6 +2707,21 @@ export class HelmanConfigEditorPanel extends LitElement {
       text = text.replaceAll(`{${name}}`, String(value));
     }
     return text;
+  }
+
+  private _formatScopeYamlValidationError(
+    error: ScopeAdapterValidationError,
+  ): string {
+    switch (error.code) {
+      case "expected_object":
+        return this._t("editor.yaml.errors.expected_object");
+      case "expected_array":
+        return this._t("editor.yaml.errors.expected_array");
+      case "unexpected_key":
+        return this._tFormat("editor.yaml.errors.unexpected_key", {
+          key: error.key ?? "",
+        });
+    }
   }
 
   private _formatRenameObjectKeyError(

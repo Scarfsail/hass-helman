@@ -33,7 +33,8 @@
       "unsaved_changes": "Unsaved changes",
       "stored_config_loaded": "Stored config loaded",
       "last_validation_passed": "Last validation passed",
-      "validation_stale": "Validation results are stale until you validate or save"
+      "validation_stale": "Validation results are stale until you validate or save",
+      "fix_yaml_errors": "Fix YAML errors before validating or saving"
     },
     "issues": {
       "errors": "Errors",
@@ -153,8 +154,12 @@
       "config_saved": "Config saved.",
       "config_saved_reload_failed": "Config was saved, but Helman reload failed.",
       "save_rejected": "Save was rejected because the backend validation found errors.",
-      "save_failed": "Failed to save the Helman config.",
-      "load_ha_form_failed": "Failed to load Home Assistant form components."
+        "save_failed": "Failed to save the Helman config.",
+        "load_ha_form_failed": "Failed to load Home Assistant form components.",
+        "load_ha_yaml_editor_failed": "Failed to load the Home Assistant YAML editor.",
+        "fix_yaml_errors_first": "Fix the YAML errors before validating or saving.",
+        "fix_descendant_yaml_errors": "Fix child YAML errors before switching this scope to YAML.",
+        "enter_yaml_failed": "Failed to open the YAML editor for this scope."
     },
     "confirm": {
       "discard_changes": "Discard unsaved changes and reload the stored config?"
@@ -170,6 +175,28 @@
       "surplus_aware": "Surplus aware",
       "unknown": "unknown",
       "missing_id": "missing id"
+    },
+    "mode": {
+      "visual": "Visual",
+      "yaml": "YAML"
+    },
+    "yaml": {
+      "field_label": "YAML",
+      "aria_label": "YAML editor for {scope}",
+      "helpers": {
+        "document": "Editing the full config document as YAML.",
+        "tab": "Editing only the current tab branch as YAML.",
+        "section": "Editing only this section branch as YAML."
+      },
+      "errors": {
+        "fix_before_leaving": "Fix the YAML errors before switching back to visual mode.",
+        "parse_failed": "YAML syntax is invalid for this scope.",
+        "non_json_value": "YAML for this scope must resolve to JSON-compatible values only.",
+        "expected_object": "YAML for this scope must be an object.",
+        "expected_array": "YAML for this scope must be a list.",
+        "unexpected_key": "YAML key {key} is not supported in this scope.",
+        "apply_failed": "Failed to apply the YAML changes to this scope."
+      }
     },
     "dynamic": {
       "consumer": "Consumer {index}",
