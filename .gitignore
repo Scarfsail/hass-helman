@@ -8,6 +8,8 @@ __pycache__/
 # Distribution / packaging
 *.egg-info/
 dist/
+!custom_components/helman/frontend/dist/
+!custom_components/helman/frontend/dist/helman-config-editor.js
 build/
 
 # Virtual environments
