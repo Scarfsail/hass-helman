@@ -225,10 +225,19 @@ def _read_limits(value: object, *, path: str) -> float:
 def _read_control_entity_id(
     value: object,
     *,
-    expected_domain: str,
+    expected_domain: str | None = None,
+    expected_domains: tuple[str, ...] | None = None,
     path: str,
 ) -> str:
     control = _require_mapping(value, path)
+    if expected_domains is not None:
+        return _require_entity_id_in_domains(
+            control.get("entity_id"),
+            expected_domains=expected_domains,
+            path=f"{path}.entity_id",
+        )
+    if expected_domain is None:
+        raise ValueError("expected_domain or expected_domains must be provided")
     return _require_entity_id(
         control.get("entity_id"),
         expected_domain=expected_domain,
@@ -263,7 +272,7 @@ def _read_use_mode_control(
     return (
         _read_control_entity_id(
             control,
-            expected_domain="select",
+            expected_domains=("input_select", "select"),
             path=path,
         ),
         tuple(use_modes),
@@ -311,7 +320,7 @@ def _read_eco_gear_control(
     return (
         _read_control_entity_id(
             control,
-            expected_domain="select",
+            expected_domains=("input_select", "select"),
             path=path,
         ),
         tuple(eco_gears),
@@ -400,3 +409,20 @@ def _require_entity_id(value: object, *, expected_domain: str, path: str) -> str
             f"{path} must use {expected_domain!r} domain"
         )
     return entity_id
+
+
+def _require_entity_id_in_domains(
+    value: object,
+    *,
+    expected_domains: tuple[str, ...],
+    path: str,
+) -> str:
+    entity_id = _require_non_empty_string(value, path)
+    for domain in expected_domains:
+        if entity_id.startswith(f"{domain}."):
+            return entity_id
+
+    formatted_domains = ", ".join(repr(domain) for domain in expected_domains)
+    raise EvChargerConfigError(
+        f"{path} must use one of {formatted_domains} domains"
+    )

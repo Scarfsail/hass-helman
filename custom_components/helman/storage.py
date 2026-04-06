@@ -18,6 +18,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "consumers_title": "Energy Consumers",
     "others_group_label": "Others",
     "groups_title": "Group by:",
+    "show_others_group": True,
     "device_label_text": {},
     "power_devices": {},
 }

@@ -2,6 +2,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .panel import async_register_panel
 from .coordinator import HelmanCoordinator
 from .storage import HelmanStorage
 from .websockets import async_register_websocket_commands
@@ -11,25 +12,40 @@ PLATFORMS = ["sensor"]
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up Helman Energy (called once per HASS lifetime)."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if "storage" not in domain_data:
+        stor = HelmanStorage(hass)
+        await stor.async_load()
+        domain_data["storage"] = stor
     async_register_websocket_commands(hass)
+    await async_register_panel(hass)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Helman Energy from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {})
 
-    stor = HelmanStorage(hass)
-    await stor.async_load()
+    stor = domain_data.get("storage")
+    if stor is None:
+        stor = HelmanStorage(hass)
+        await stor.async_load()
+        domain_data["storage"] = stor
 
+    await async_register_panel(hass)
     coordinator = HelmanCoordinator(hass, stor)
     await coordinator.async_setup()
 
-    hass.data[DOMAIN]["storage"] = stor
-    hass.data[DOMAIN]["coordinator"] = coordinator
-    hass.data[DOMAIN][entry.entry_id] = {}
+    domain_data["coordinator"] = coordinator
+    domain_data[entry.entry_id] = {}
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        await coordinator.async_unload()
+        domain_data.pop("coordinator", None)
+        domain_data.pop(entry.entry_id, None)
+        raise
     return True
 
 
@@ -43,6 +59,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if coordinator:
         await coordinator.async_unload()
     hass.data[DOMAIN].pop(entry.entry_id, None)
-    hass.data[DOMAIN].pop("storage", None)
     hass.data[DOMAIN].pop("coordinator", None)
     return unload_ok

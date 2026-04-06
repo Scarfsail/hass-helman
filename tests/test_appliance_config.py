@@ -150,6 +150,15 @@ class ApplianceConfigTests(unittest.TestCase):
         self.assertEqual(registry.appliances, ())
         self.assertIn("soc_entity_id", captured.output[0])
 
+    def test_input_select_domains_are_accepted_for_ev_select_controls(self) -> None:
+        config = _valid_config()
+        config["appliances"][0]["controls"]["use_mode"]["entity_id"] = "input_select.ev_use_mode"
+        config["appliances"][0]["controls"]["eco_gear"]["entity_id"] = "input_select.ev_eco_gear"
+
+        registry = build_appliances_runtime_registry(config)
+
+        self.assertEqual([appliance.id for appliance in registry.appliances], ["garage-ev"])
+
     def test_preserves_appliance_order(self) -> None:
         config = _valid_config()
         second = copy.deepcopy(config["appliances"][0])

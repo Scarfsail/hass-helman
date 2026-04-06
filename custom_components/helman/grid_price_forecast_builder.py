@@ -165,28 +165,7 @@ class GridPriceForecastBuilder:
         return points
 
     def _read_import_price_config(self) -> FixedGridImportPriceConfig | None:
-        power_devices = self._read_dict(self._config.get("power_devices"))
-        grid_config = self._read_dict(power_devices.get("grid"))
-        grid_forecast = self._read_dict(grid_config.get("forecast"))
-
-        raw_unit = grid_forecast.get("import_price_unit")
-        raw_windows = grid_forecast.get("import_price_windows")
-
-        if raw_unit is None and raw_windows is None:
-            return None
-
-        if not isinstance(raw_unit, str) or not raw_unit.strip():
-            raise GridImportPriceConfigError(
-                "power_devices.grid.forecast.import_price_unit must be a non-empty string"
-            )
-        if not isinstance(raw_windows, list) or not raw_windows:
-            raise GridImportPriceConfigError(
-                "power_devices.grid.forecast.import_price_windows must be a non-empty list"
-            )
-
-        windows = tuple(self._read_import_price_window(index, item) for index, item in enumerate(raw_windows))
-        self._validate_daily_window_coverage(windows)
-        return FixedGridImportPriceConfig(unit=raw_unit.strip(), windows=windows)
+        return read_grid_import_price_config(self._config)
 
     def _read_import_price_window(
         self,
@@ -418,3 +397,97 @@ class GridPriceForecastBuilder:
     def _format_minute_of_day(minute_of_day: int) -> str:
         hours, minutes = divmod(minute_of_day, 60)
         return f"{hours:02d}:{minutes:02d}"
+
+
+def read_grid_import_price_config(
+    config: dict[str, Any] | Any,
+) -> FixedGridImportPriceConfig | None:
+    power_devices = GridPriceForecastBuilder._read_dict(config.get("power_devices"))
+    grid_config = GridPriceForecastBuilder._read_dict(power_devices.get("grid"))
+    grid_forecast = GridPriceForecastBuilder._read_dict(grid_config.get("forecast"))
+
+    raw_unit = grid_forecast.get("import_price_unit")
+    raw_windows = grid_forecast.get("import_price_windows")
+
+    if raw_unit is None and raw_windows is None:
+        return None
+
+    if not isinstance(raw_unit, str) or not raw_unit.strip():
+        raise GridImportPriceConfigError(
+            "power_devices.grid.forecast.import_price_unit must be a non-empty string"
+        )
+    if not isinstance(raw_windows, list) or not raw_windows:
+        raise GridImportPriceConfigError(
+            "power_devices.grid.forecast.import_price_windows must be a non-empty list"
+        )
+
+    windows = tuple(
+        _read_grid_import_price_window(index, item)
+        for index, item in enumerate(raw_windows)
+    )
+    _validate_grid_import_price_window_coverage(windows)
+    return FixedGridImportPriceConfig(unit=raw_unit.strip(), windows=windows)
+
+
+def _read_grid_import_price_window(
+    index: int,
+    raw_value: Any,
+) -> FixedGridImportPriceWindow:
+    if not isinstance(raw_value, dict):
+        raise GridImportPriceConfigError(
+            f"power_devices.grid.forecast.import_price_windows[{index}] must be an object"
+        )
+
+    start_minutes = GridPriceForecastBuilder._parse_window_time(
+        raw_value.get("start"),
+        field_name=f"import_price_windows[{index}].start",
+    )
+    end_minutes = GridPriceForecastBuilder._parse_window_time(
+        raw_value.get("end"),
+        field_name=f"import_price_windows[{index}].end",
+    )
+    if start_minutes == end_minutes:
+        raise GridImportPriceConfigError(
+            f"power_devices.grid.forecast.import_price_windows[{index}] must not have the same start and end"
+        )
+
+    price = GridPriceForecastBuilder._read_float(raw_value.get("price"))
+    if price is None:
+        raise GridImportPriceConfigError(
+            f"power_devices.grid.forecast.import_price_windows[{index}].price must be numeric"
+        )
+
+    return FixedGridImportPriceWindow(
+        start_minutes=start_minutes,
+        end_minutes=end_minutes,
+        price=price,
+    )
+
+
+def _validate_grid_import_price_window_coverage(
+    windows: tuple[FixedGridImportPriceWindow, ...],
+) -> None:
+    for minute_of_day in range(0, 24 * 60, FORECAST_CANONICAL_GRANULARITY_MINUTES):
+        matching_windows = [
+            window
+            for window in windows
+            if _grid_import_window_contains_minute(window, minute_of_day)
+        ]
+        formatted_time = GridPriceForecastBuilder._format_minute_of_day(minute_of_day)
+        if not matching_windows:
+            raise GridImportPriceConfigError(
+                f"power_devices.grid.forecast.import_price_windows leave a gap at {formatted_time}"
+            )
+        if len(matching_windows) > 1:
+            raise GridImportPriceConfigError(
+                f"power_devices.grid.forecast.import_price_windows overlap at {formatted_time}"
+            )
+
+
+def _grid_import_window_contains_minute(
+    window: FixedGridImportPriceWindow,
+    minute_of_day: int,
+) -> bool:
+    if window.start_minutes < window.end_minutes:
+        return window.start_minutes <= minute_of_day < window.end_minutes
+    return minute_of_day >= window.start_minutes or minute_of_day < window.end_minutes

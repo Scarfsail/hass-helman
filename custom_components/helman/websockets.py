@@ -11,6 +11,7 @@ from .const import (
     MAX_FORECAST_DAYS,
     SCHEDULE_ACTION_KINDS,
 )
+from .config_validation import validate_config_document
 from .forecast_request import (
     ForecastRequestNotSupportedError,
     ensure_supported_forecast_request,
@@ -72,6 +73,7 @@ def _validate_forecast_days(value: object) -> int:
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
+    async_register_command(hass, ws_validate_config)
     async_register_command(hass, ws_save_config)
     async_register_command(hass, ws_get_schedule)
     async_register_command(hass, ws_set_schedule)
@@ -92,11 +94,28 @@ def ws_get_config(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
+    if not _require_admin(connection, msg):
+        return
     stor: HelmanStorage | None = hass.data.get(DOMAIN, {}).get("storage")
     if not stor:
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
     connection.send_result(msg["id"], stor.config)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/validate_config",
+    vol.Required("config"): dict,
+})
+@callback
+def ws_validate_config(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    if not _require_admin(connection, msg):
+        return
+    connection.send_result(msg["id"], validate_config_document(msg["config"]).to_dict())
 
 
 @websocket_api.websocket_command({
@@ -109,17 +128,51 @@ async def ws_save_config(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
+    if not _require_admin(connection, msg):
+        return
     domain_data = hass.data.get(DOMAIN, {})
     stor: HelmanStorage | None = domain_data.get("storage")
     if not stor:
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
 
+    validation = validate_config_document(msg["config"])
+    if not validation.valid:
+        connection.send_result(
+            msg["id"],
+            {
+                "success": False,
+                "validation": validation.to_dict(),
+                "reloadStarted": False,
+            },
+        )
+        return
+
     await stor.async_save(msg["config"])
 
-    entry = hass.config_entries.async_entries(DOMAIN)[0]
-    connection.send_result(msg["id"], {"success": True})
-    await hass.config_entries.async_reload(entry.entry_id)
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not entries:
+        connection.send_error(msg["id"], "not_loaded", "Helman entry not available")
+        return
+
+    reload_started = True
+    reload_succeeded = False
+    reload_error: str | None = None
+    try:
+        reload_succeeded = await hass.config_entries.async_reload(entries[0].entry_id)
+    except Exception as err:
+        reload_error = str(err)
+
+    connection.send_result(
+        msg["id"],
+        {
+            "success": reload_succeeded,
+            "validation": validation.to_dict(),
+            "reloadStarted": reload_started,
+            "reloadSucceeded": reload_succeeded,
+            "reloadError": reload_error,
+        },
+    )
 
 
 @websocket_api.websocket_command({
@@ -284,3 +337,14 @@ async def ws_get_forecast(
         connection.send_error(msg["id"], "not_supported", str(err))
         return
     connection.send_result(msg["id"], forecast)
+
+
+def _require_admin(
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> bool:
+    user = getattr(connection, "user", None)
+    if user is None or not getattr(user, "is_admin", False):
+        connection.send_error(msg["id"], "unauthorized", "Admin access required")
+        return False
+    return True
