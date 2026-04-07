@@ -124,6 +124,7 @@
       "stop_discharging_option": "Stop discharging option",
       "appliance_id": "Appliance id",
         "appliance_name": "Appliance name",
+        "appliance_icon": "Appliance icon",
         "kind": "Kind",
         "switch_entity": "Switch entity",
         "projection_strategy": "Projection strategy",
@@ -151,6 +152,7 @@
         "power_sensor_name_cleaner_regex": "Optional regex applied when normalizing power sensor names.",
         "import_price_unit": "Example: CZK/kWh",
         "mode_entity": "Helman writes schedule action options to this entity.",
+        "appliance_icon": "Optional. Leave empty to use the default energy icon in appliance metadata.",
         "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption."
       },
     "messages": {

@@ -1,4 +1,9 @@
-const REQUIRED_ELEMENTS = ["ha-entity-picker", "ha-formfield", "ha-switch"] as const;
+const REQUIRED_ELEMENTS = [
+  "ha-entity-picker",
+  "ha-form",
+  "ha-formfield",
+  "ha-switch",
+] as const;
 const YAML_EDITOR_TAG = "ha-yaml-editor";
 
 let loadHaFormPromise: Promise<void> | null = null;

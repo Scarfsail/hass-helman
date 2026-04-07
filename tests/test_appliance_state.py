@@ -114,6 +114,7 @@ class ApplianceStateTests(unittest.TestCase):
                         "name": "Garage EV",
                         "kind": "ev_charger",
                         "metadata": {
+                            "icon": "mdi:lightning-bolt",
                             "maxChargingPowerKw": 11.0,
                             "scheduleCapabilities": {
                                 "chargeToggle": True,
@@ -217,6 +218,7 @@ class ApplianceStateTests(unittest.TestCase):
                 "name": "Dishwasher",
                 "kind": "generic",
                 "metadata": {
+                    "icon": "mdi:lightning-bolt",
                     "scheduleCapabilities": {
                         "onOffToggle": True,
                     }
@@ -226,6 +228,19 @@ class ApplianceStateTests(unittest.TestCase):
                 },
             },
         )
+
+    def test_configured_icons_are_preserved_in_metadata(self) -> None:
+        config = _valid_config()
+        config["appliances"][0]["icon"] = "hass:car-electric"
+        generic = _generic_appliance()
+        generic["icon"] = "phu:socket-eu"
+        config["appliances"].append(generic)
+
+        registry = build_appliances_runtime_registry(config)
+        response = build_appliances_response(registry)
+
+        self.assertEqual(response["appliances"][0]["metadata"]["icon"], "hass:car-electric")
+        self.assertEqual(response["appliances"][1]["metadata"]["icon"], "phu:socket-eu")
 
 
 if __name__ == "__main__":

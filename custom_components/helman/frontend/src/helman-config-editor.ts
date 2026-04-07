@@ -65,6 +65,10 @@ const GENERIC_PROJECTION_STRATEGIES = [
   { value: "history_average", labelKey: "editor.values.history_average" },
 ];
 
+const APPLIANCE_ICON_SELECTOR = {
+  icon: {},
+} as const;
+
 interface YamlEditorValueChangedDetail {
   value: unknown;
   isValid: boolean;
@@ -480,7 +484,8 @@ export class HelmanConfigEditorPanel extends LitElement {
       margin: 0;
     }
 
-    .field ha-entity-picker {
+    .field ha-entity-picker,
+    .field ha-selector {
       display: block;
       width: 100%;
       min-width: 0;
@@ -1657,6 +1662,11 @@ export class HelmanConfigEditorPanel extends LitElement {
             <div class="field-grid">
               ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id")}
               ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name")}
+              ${this._renderOptionalIconField(
+                [...basePath, "icon"],
+                "editor.fields.appliance_icon",
+                "editor.helpers.appliance_icon",
+              )}
               <div class="field">
                 <label>${this._t("editor.fields.kind")}</label>
                 <input value="ev_charger" disabled />
@@ -1807,6 +1817,11 @@ export class HelmanConfigEditorPanel extends LitElement {
             <div class="field-grid">
               ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id")}
               ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name")}
+              ${this._renderOptionalIconField(
+                [...basePath, "icon"],
+                "editor.fields.appliance_icon",
+                "editor.helpers.appliance_icon",
+              )}
               <div class="field">
                 <label>${this._t("editor.fields.kind")}</label>
                 <input value="generic" disabled />
@@ -2137,6 +2152,30 @@ export class HelmanConfigEditorPanel extends LitElement {
           @change=${(event: Event) =>
             this._setRequiredNumber(path, (event.currentTarget as HTMLInputElement).value)}
         />
+      </div>
+    `;
+  }
+
+  private _renderOptionalIconField(
+    path: PathSegment[],
+    labelKey: string,
+    helperKey?: string,
+  ): TemplateResult {
+    return html`
+      <div class="field">
+        <ha-selector
+          .hass=${this.hass}
+          .narrow=${this.narrow ?? false}
+          .selector=${APPLIANCE_ICON_SELECTOR}
+          .label=${this._t(labelKey)}
+          .helper=${helperKey ? this._t(helperKey) : undefined}
+          .required=${false}
+          .value=${this._stringValue(this._getValue(path))}
+          @value-changed=${(event: Event) => {
+            const nextValue = (event as CustomEvent<{ value?: string }>).detail?.value ?? "";
+            this._setOptionalString(path, nextValue);
+          }}
+        ></ha-selector>
       </div>
     `;
   }

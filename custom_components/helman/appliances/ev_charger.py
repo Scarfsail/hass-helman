@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, NotRequired, TypedDict
 
+from .icon import read_optional_appliance_icon, resolve_appliance_icon
+
 _EV_CHARGER_KIND = "ev_charger"
 _FIXED_MAX_POWER_BEHAVIOR = "fixed_max_power"
 _SURPLUS_AWARE_BEHAVIOR = "surplus_aware"
@@ -47,6 +49,7 @@ class EvChargerApplianceRuntime:
     use_mode_configs: tuple[EvChargerUseModeRuntime, ...]
     eco_gear_configs: tuple[EvChargerEcoGearRuntime, ...]
     vehicles: tuple[EvVehicleRuntime, ...]
+    icon: str | None = None
 
     @property
     def kind(self) -> str:
@@ -114,6 +117,7 @@ class EvVehicleResponseDict(TypedDict):
 
 
 class EvChargerMetadataDict(TypedDict):
+    icon: str
     maxChargingPowerKw: float
     scheduleCapabilities: ApplianceScheduleCapabilitiesDict
 
@@ -166,6 +170,11 @@ def read_ev_charger_appliance(
         use_mode_configs=use_mode_configs,
         eco_gear_configs=eco_gear_configs,
         vehicles=vehicles,
+        icon=read_optional_appliance_icon(
+            appliance.get("icon"),
+            path=f"{path}.icon",
+            error_type=EvChargerConfigError,
+        ),
     )
 
 
@@ -177,6 +186,7 @@ def build_ev_charger_metadata_dict(
         "name": appliance.name,
         "kind": appliance.kind,
         "metadata": {
+            "icon": resolve_appliance_icon(appliance.icon),
             "maxChargingPowerKw": appliance.max_charging_power_kw,
             "scheduleCapabilities": {
                 "chargeToggle": True,

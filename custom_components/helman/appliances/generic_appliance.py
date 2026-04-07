@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
+from .icon import read_optional_appliance_icon, resolve_appliance_icon
+
 _GENERIC_APPLIANCE_KIND = "generic"
 _DEFAULT_HISTORY_LOOKBACK_DAYS = 30
 _GENERIC_PROJECTION_STRATEGIES = {"fixed", "history_average"}
@@ -24,6 +26,7 @@ class GenericApplianceRuntime:
     hourly_energy_kwh: float
     history_energy_entity_id: str | None
     history_lookback_days: int = _DEFAULT_HISTORY_LOOKBACK_DAYS
+    icon: str | None = None
 
     @property
     def kind(self) -> str:
@@ -46,6 +49,7 @@ class GenericApplianceScheduleCapabilitiesDict(TypedDict):
 
 
 class GenericApplianceMetadataDict(TypedDict):
+    icon: str
     scheduleCapabilities: GenericApplianceScheduleCapabilitiesDict
 
 
@@ -69,6 +73,7 @@ def build_generic_appliance_metadata_dict(
         "name": appliance.name,
         "kind": appliance.kind,
         "metadata": {
+            "icon": resolve_appliance_icon(appliance.icon),
             "scheduleCapabilities": {
                 "onOffToggle": True,
             }
@@ -145,6 +150,11 @@ def read_generic_appliance(
         hourly_energy_kwh=hourly_energy_kwh,
         history_energy_entity_id=history_energy_entity_id,
         history_lookback_days=history_lookback_days,
+        icon=read_optional_appliance_icon(
+            value.get("icon"),
+            path=f"{path}.icon",
+            error_type=GenericApplianceConfigError,
+        ),
     )
 
 

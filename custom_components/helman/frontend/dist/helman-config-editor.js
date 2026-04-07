@@ -45,7 +45,7 @@ const rt = (s) => new He(typeof s == "string" ? s : s + "", void 0, he), st = (s
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: at, defineProperty: nt, getOwnPropertyDescriptor: dt, getOwnPropertyNames: lt, getOwnPropertySymbols: ct, getPrototypeOf: _t } = Object, O = globalThis, ve = O.trustedTypes, pt = ve ? ve.emptyScript : "", ie = O.reactiveElementPolyfillSupport, H = (s, e) => s, de = { toAttribute(s, e) {
+const { is: at, defineProperty: nt, getOwnPropertyDescriptor: dt, getOwnPropertyNames: lt, getOwnPropertySymbols: ct, getPrototypeOf: _t } = Object, j = globalThis, ve = j.trustedTypes, pt = ve ? ve.emptyScript : "", ie = j.reactiveElementPolyfillSupport, H = (s, e) => s, de = { toAttribute(s, e) {
   switch (e) {
     case Boolean:
       s = s ? pt : null;
@@ -74,7 +74,7 @@ const { is: at, defineProperty: nt, getOwnPropertyDescriptor: dt, getOwnProperty
   }
   return t;
 } }, Ke = (s, e) => !at(s, e), fe = { attribute: !0, type: String, converter: de, reflect: !1, useDefault: !1, hasChanged: Ke };
-Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), O.litPropertyMetadata ?? (O.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
+Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), j.litPropertyMetadata ?? (j.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
 let L = class extends HTMLElement {
   static addInitializer(e) {
     this._$Ei(), (this.l ?? (this.l = [])).push(e);
@@ -278,13 +278,13 @@ let L = class extends HTMLElement {
   firstUpdated(e) {
   }
 };
-L.elementStyles = [], L.shadowRootOptions = { mode: "open" }, L[H("elementProperties")] = /* @__PURE__ */ new Map(), L[H("finalized")] = /* @__PURE__ */ new Map(), ie == null || ie({ ReactiveElement: L }), (O.reactiveElementVersions ?? (O.reactiveElementVersions = [])).push("2.1.2");
+L.elementStyles = [], L.shadowRootOptions = { mode: "open" }, L[H("elementProperties")] = /* @__PURE__ */ new Map(), L[H("finalized")] = /* @__PURE__ */ new Map(), ie == null || ie({ ReactiveElement: L }), (j.reactiveElementVersions ?? (j.reactiveElementVersions = [])).push("2.1.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const K = globalThis, be = (s) => s, X = K.trustedTypes, $e = X ? X.createPolicy("lit-html", { createHTML: (s) => s }) : void 0, Be = "$lit$", j = `lit$${Math.random().toFixed(9).slice(2)}$`, qe = "?" + j, ht = `<${qe}>`, P = document, W = () => P.createComment(""), G = (s) => s === null || typeof s != "object" && typeof s != "function", ue = Array.isArray, ut = (s) => ue(s) || typeof (s == null ? void 0 : s[Symbol.iterator]) == "function", re = `[ 	
+const K = globalThis, be = (s) => s, X = K.trustedTypes, $e = X ? X.createPolicy("lit-html", { createHTML: (s) => s }) : void 0, Be = "$lit$", O = `lit$${Math.random().toFixed(9).slice(2)}$`, qe = "?" + O, ht = `<${qe}>`, P = document, W = () => P.createComment(""), G = (s) => s === null || typeof s != "object" && typeof s != "function", ue = Array.isArray, ut = (s) => ue(s) || typeof (s == null ? void 0 : s[Symbol.iterator]) == "function", re = `[ 	
 \f\r]`, I = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, we = /-->/g, ke = />/g, M = RegExp(`>|${re}(?:([^\\s"'>=/]+)(${re}*=${re}*(?:[^ 	
 \f\r"'\`<>=]|("|')|))|$)`, "g"), xe = /'/g, Ae = /"/g, We = /^(?:script|style|textarea|title)$/i, gt = (s) => (e, ...t) => ({ _$litType$: s, strings: e, values: t }), l = gt(1), N = Symbol.for("lit-noChange"), h = Symbol.for("lit-nothing"), Ee = /* @__PURE__ */ new WeakMap(), C = P.createTreeWalker(P, 129);
 function Ge(s, e) {
@@ -299,7 +299,7 @@ const mt = (s, e) => {
     let c, _, p = -1, $ = 0;
     for (; $ < n.length && (a.lastIndex = $, _ = a.exec(n), _ !== null); ) $ = a.lastIndex, a === I ? _[1] === "!--" ? a = we : _[1] !== void 0 ? a = ke : _[2] !== void 0 ? (We.test(_[2]) && (r = RegExp("</" + _[2], "g")), a = M) : _[3] !== void 0 && (a = M) : a === M ? _[0] === ">" ? (a = r ?? I, p = -1) : _[1] === void 0 ? p = -2 : (p = a.lastIndex - _[2].length, c = _[1], a = _[3] === void 0 ? M : _[3] === '"' ? Ae : xe) : a === Ae || a === xe ? a = M : a === we || a === ke ? a = I : (a = M, r = void 0);
     const A = a === M && s[d + 1].startsWith("/>") ? " " : "";
-    o += a === I ? n + ht : p >= 0 ? (i.push(c), n.slice(0, p) + Be + n.slice(p) + j + A) : n + j + (p === -2 ? d : A);
+    o += a === I ? n + ht : p >= 0 ? (i.push(c), n.slice(0, p) + Be + n.slice(p) + O + A) : n + O + (p === -2 ? d : A);
   }
   return [Ge(s, o + (s[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
@@ -316,11 +316,11 @@ class J {
     for (; (r = C.nextNode()) !== null && n.length < d; ) {
       if (r.nodeType === 1) {
         if (r.hasAttributes()) for (const p of r.getAttributeNames()) if (p.endsWith(Be)) {
-          const $ = _[a++], A = r.getAttribute(p).split(j), Z = /([.?@])?(.*)/.exec($);
+          const $ = _[a++], A = r.getAttribute(p).split(O), Z = /([.?@])?(.*)/.exec($);
           n.push({ type: 1, index: o, name: Z[2], strings: A, ctor: Z[1] === "." ? vt : Z[1] === "?" ? ft : Z[1] === "@" ? bt : te }), r.removeAttribute(p);
-        } else p.startsWith(j) && (n.push({ type: 6, index: o }), r.removeAttribute(p));
+        } else p.startsWith(O) && (n.push({ type: 6, index: o }), r.removeAttribute(p));
         if (We.test(r.tagName)) {
-          const p = r.textContent.split(j), $ = p.length - 1;
+          const p = r.textContent.split(O), $ = p.length - 1;
           if ($ > 0) {
             r.textContent = X ? X.emptyScript : "";
             for (let A = 0; A < $; A++) r.append(p[A], W()), C.nextNode(), n.push({ type: 2, index: ++o });
@@ -330,7 +330,7 @@ class J {
       } else if (r.nodeType === 8) if (r.data === qe) n.push({ type: 2, index: o });
       else {
         let p = -1;
-        for (; (p = r.data.indexOf(j, p + 1)) !== -1; ) n.push({ type: 7, index: o }), p += j.length - 1;
+        for (; (p = r.data.indexOf(O, p + 1)) !== -1; ) n.push({ type: 7, index: o }), p += O.length - 1;
       }
       o++;
     }
@@ -578,14 +578,14 @@ let xt = class {
  * Copyright 2020 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { I: At } = wt, Se = (s) => s, je = (s, e) => (s == null ? void 0 : s._$litType$) !== void 0, Et = (s) => {
+const { I: At } = wt, Se = (s) => s, Oe = (s, e) => (s == null ? void 0 : s._$litType$) !== void 0, Et = (s) => {
   var e;
   return ((e = s == null ? void 0 : s._$litType$) == null ? void 0 : e.h) != null;
-}, Oe = () => document.createComment(""), Me = (s, e, t) => {
+}, je = () => document.createComment(""), Me = (s, e, t) => {
   var o;
   const i = s._$AA.parentNode, r = s._$AB;
   if (t === void 0) {
-    const a = i.insertBefore(Oe(), r), d = i.insertBefore(Oe(), r);
+    const a = i.insertBefore(je(), r), d = i.insertBefore(je(), r);
     t = new At(a, d, s, s.options);
   } else {
     const a = t._$AB.nextSibling, d = t._$AM, n = d !== s;
@@ -602,7 +602,7 @@ const { I: At } = wt, Se = (s) => s, je = (s, e) => (s == null ? void 0 : s._$li
     }
   }
   return t;
-}, St = {}, Ce = (s, e = St) => s._$AH = e, Ve = (s) => s._$AH, jt = (s) => {
+}, St = {}, Ce = (s, e = St) => s._$AH = e, Ve = (s) => s._$AH, Ot = (s) => {
   s._$AR();
 };
 /**
@@ -610,7 +610,7 @@ const { I: At } = wt, Se = (s) => s, je = (s, e) => (s == null ? void 0 : s._$li
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Pe = (s) => Et(s) ? s._$litType$.h : s.strings, Ot = kt(class extends xt {
+const Pe = (s) => Et(s) ? s._$litType$.h : s.strings, jt = kt(class extends xt {
   constructor(s) {
     super(s), this.et = /* @__PURE__ */ new WeakMap();
   }
@@ -618,7 +618,7 @@ const Pe = (s) => Et(s) ? s._$litType$.h : s.strings, Ot = kt(class extends xt {
     return [s];
   }
   update(s, [e]) {
-    const t = je(this.it) ? Pe(this.it) : null, i = je(e) ? Pe(e) : null;
+    const t = Oe(this.it) ? Pe(this.it) : null, i = Oe(e) ? Pe(e) : null;
     if (t !== null && (i === null || t !== i)) {
       const r = Ve(s).pop();
       let o = this.et.get(t);
@@ -633,7 +633,7 @@ const Pe = (s) => Et(s) ? s._$litType$.h : s.strings, Ot = kt(class extends xt {
         const r = this.et.get(i);
         if (r !== void 0) {
           const o = Ve(r).pop();
-          jt(s), Me(s, void 0, o), Ce(s, [o]);
+          Ot(s), Me(s, void 0, o), Ce(s, [o]);
         }
       }
       this.it = e;
@@ -1276,6 +1276,7 @@ const tt = {
     stop_discharging_option: "Volba Zastavit vybíjení",
     appliance_id: "ID spotřebiče",
     appliance_name: "Název spotřebiče",
+    appliance_icon: "Ikona spotřebiče",
     kind: "Druh",
     switch_entity: "Entita přepínače",
     projection_strategy: "Strategie projekce",
@@ -1303,6 +1304,7 @@ const tt = {
     power_sensor_name_cleaner_regex: "Volitelný regex použitý při normalizaci názvů power senzorů.",
     import_price_unit: "Např.: CZK/kWh",
     mode_entity: "Helman zapisuje volby akcí plánování do této entity.",
+    appliance_icon: "Volitelné. Když pole necháte prázdné, metadata spotřebiče použijí výchozí energetickou ikonu.",
     history_energy_entity: "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče."
   },
   messages: {
@@ -1502,6 +1504,7 @@ const tt = {
     stop_discharging_option: "Stop discharging option",
     appliance_id: "Appliance id",
     appliance_name: "Appliance name",
+    appliance_icon: "Appliance icon",
     kind: "Kind",
     switch_entity: "Switch entity",
     projection_strategy: "Projection strategy",
@@ -1529,6 +1532,7 @@ const tt = {
     power_sensor_name_cleaner_regex: "Optional regex applied when normalizing power sensor names.",
     import_price_unit: "Example: CZK/kWh",
     mode_entity: "Helman writes schedule action options to this entity.",
+    appliance_icon: "Optional. Leave empty to use the default energy icon in appliance metadata.",
     history_energy_entity: "Use a cumulative energy sensor that tracks the appliance energy consumption."
   },
   messages: {
@@ -1635,7 +1639,12 @@ function ti(s, e = "cs") {
 function ii(s) {
   return s ? s.substring(0, 2) : "cs";
 }
-const Ie = ["ha-entity-picker", "ha-formfield", "ha-switch"], ze = "ha-yaml-editor";
+const Ie = [
+  "ha-entity-picker",
+  "ha-form",
+  "ha-formfield",
+  "ha-switch"
+], ze = "ha-yaml-editor";
 let D = null, U = null;
 const ri = async () => {
   if (!Ie.every((s) => customElements.get(s))) {
@@ -1724,7 +1733,9 @@ const ai = [
 ], ni = [
   { value: "fixed", labelKey: "editor.values.fixed" },
   { value: "history_average", labelKey: "editor.values.history_average" }
-], ee = class ee extends B {
+], di = {
+  icon: {}
+}, ee = class ee extends B {
   constructor() {
     super(...arguments), this._fallbackLocalize = Ye(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._preventSummaryToggle = (e) => {
       e.preventDefault(), e.stopPropagation();
@@ -1904,7 +1915,7 @@ const ai = [
     })}
       </div>
 
-      ${Ot(this._renderActiveTab())}
+      ${jt(this._renderActiveTab())}
     `;
   }
   _renderActiveTab() {
@@ -2702,6 +2713,11 @@ const ai = [
             <div class="field-grid">
               ${this._renderRequiredTextField([...r, "id"], "editor.fields.appliance_id")}
               ${this._renderRequiredTextField([...r, "name"], "editor.fields.appliance_name")}
+              ${this._renderOptionalIconField(
+      [...r, "icon"],
+      "editor.fields.appliance_icon",
+      "editor.helpers.appliance_icon"
+    )}
               <div class="field">
                 <label>${this._t("editor.fields.kind")}</label>
                 <input value="ev_charger" disabled />
@@ -2839,6 +2855,11 @@ const ai = [
             <div class="field-grid">
               ${this._renderRequiredTextField([...r, "id"], "editor.fields.appliance_id")}
               ${this._renderRequiredTextField([...r, "name"], "editor.fields.appliance_name")}
+              ${this._renderOptionalIconField(
+      [...r, "icon"],
+      "editor.fields.appliance_icon",
+      "editor.helpers.appliance_icon"
+    )}
               <div class="field">
                 <label>${this._t("editor.fields.kind")}</label>
                 <input value="generic" disabled />
@@ -3117,6 +3138,26 @@ const ai = [
           .value=${this._stringValue(o)}
           @change=${(a) => this._setRequiredNumber(e, a.currentTarget.value)}
         />
+      </div>
+    `;
+  }
+  _renderOptionalIconField(e, t, i) {
+    return l`
+      <div class="field">
+        <ha-selector
+          .hass=${this.hass}
+          .narrow=${this.narrow ?? !1}
+          .selector=${di}
+          .label=${this._t(t)}
+          .helper=${i ? this._t(i) : void 0}
+          .required=${!1}
+          .value=${this._stringValue(this._getValue(e))}
+          @value-changed=${(r) => {
+      var a;
+      const o = ((a = r.detail) == null ? void 0 : a.value) ?? "";
+      this._setOptionalString(e, o);
+    }}
+        ></ha-selector>
       </div>
     `;
   }
@@ -4031,7 +4072,8 @@ ee.properties = {
       margin: 0;
     }
 
-    .field ha-entity-picker {
+    .field ha-entity-picker,
+    .field ha-selector {
       display: block;
       width: 100%;
       min-width: 0;

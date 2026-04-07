@@ -111,6 +111,7 @@ class ApplianceConfigTests(unittest.TestCase):
         self.assertEqual(appliance.id, "garage-ev")
         self.assertEqual(appliance.name, "Garage EV")
         self.assertEqual(appliance.kind, "ev_charger")
+        self.assertIsNone(appliance.icon)
         self.assertEqual(appliance.vehicles[0].id, "kona")
         self.assertEqual(appliance.eco_gears, ("6A", "10A", "16A"))
 
@@ -203,6 +204,7 @@ class ApplianceConfigTests(unittest.TestCase):
         appliance = registry.appliances[0]
         self.assertEqual(appliance.id, "dishwasher")
         self.assertEqual(appliance.kind, "generic")
+        self.assertIsNone(appliance.icon)
         self.assertEqual(appliance.switch_entity_id, "switch.dishwasher")
         self.assertEqual(appliance.projection_strategy, "history_average")
         self.assertEqual(
@@ -210,6 +212,31 @@ class ApplianceConfigTests(unittest.TestCase):
             "sensor.dishwasher_energy_total",
         )
         self.assertEqual(appliance.history_lookback_days, 21)
+
+    def test_ev_icon_is_preserved(self) -> None:
+        config = _valid_config()
+        config["appliances"][0]["icon"] = "hass:car-electric"
+
+        registry = build_appliances_runtime_registry(config)
+
+        self.assertEqual(registry.appliances[0].icon, "hass:car-electric")
+
+    def test_generic_icon_is_preserved(self) -> None:
+        registry = build_appliances_runtime_registry(
+            {"appliances": [{**_generic_appliance(), "icon": "phu:socket-eu"}]}
+        )
+
+        self.assertEqual(registry.appliances[0].icon, "phu:socket-eu")
+
+    def test_blank_ev_icon_is_rejected(self) -> None:
+        config = _valid_config()
+        config["appliances"][0]["icon"] = "   "
+
+        with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
+            registry = build_appliances_runtime_registry(config)
+
+        self.assertEqual(registry.appliances, ())
+        self.assertIn(".icon", captured.output[0])
 
     def test_invalid_generic_history_strategy_is_ignored_with_error_log(self) -> None:
         invalid = _generic_appliance()

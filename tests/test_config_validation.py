@@ -278,6 +278,15 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(report.valid)
         self.assertEqual(report.errors, [])
 
+    def test_appliance_icon_accepts_non_mdi_value(self) -> None:
+        config = _valid_config()
+        config["appliances"][0]["icon"] = "hass:car-electric"
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.errors, [])
+
     def test_generic_history_average_requires_energy_entity(self) -> None:
         config = _valid_config()
         appliance = _generic_appliance(strategy="history_average")
@@ -291,6 +300,23 @@ class ConfigValidationTests(unittest.TestCase):
             any(
                 issue.path == "appliances[0]"
                 and "history_average is required" in issue.message
+                for issue in report.errors
+            )
+        )
+
+    def test_blank_appliance_icon_is_error(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance()
+        appliance["icon"] = "   "
+        config["appliances"] = [appliance]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "appliances[0]"
+                and ".icon must be a non-empty string" in issue.message
                 for issue in report.errors
             )
         )

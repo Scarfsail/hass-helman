@@ -124,6 +124,7 @@
       "stop_discharging_option": "Volba Zastavit vybíjení",
       "appliance_id": "ID spotřebiče",
         "appliance_name": "Název spotřebiče",
+        "appliance_icon": "Ikona spotřebiče",
         "kind": "Druh",
         "switch_entity": "Entita přepínače",
         "projection_strategy": "Strategie projekce",
@@ -151,6 +152,7 @@
         "power_sensor_name_cleaner_regex": "Volitelný regex použitý při normalizaci názvů power senzorů.",
         "import_price_unit": "Např.: CZK/kWh",
         "mode_entity": "Helman zapisuje volby akcí plánování do této entity.",
+        "appliance_icon": "Volitelné. Když pole necháte prázdné, metadata spotřebiče použijí výchozí energetickou ikonu.",
         "history_energy_entity": "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče."
       },
     "messages": {
