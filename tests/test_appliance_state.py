@@ -80,6 +80,21 @@ def _valid_config() -> dict:
     }
 
 
+def _generic_appliance() -> dict:
+    return {
+        "kind": "generic",
+        "id": "dishwasher",
+        "name": "Dishwasher",
+        "controls": {
+            "switch": {"entity_id": "switch.dishwasher"},
+        },
+        "projection": {
+            "strategy": "fixed",
+            "hourly_energy_kwh": 0.9,
+        },
+    }
+
+
 class ApplianceStateTests(unittest.TestCase):
     def test_empty_registry_builds_empty_response(self) -> None:
         self.assertEqual(
@@ -188,6 +203,29 @@ class ApplianceStateTests(unittest.TestCase):
 
         self.assertEqual(active_response["appliances"][0]["name"], "Garage EV")
         self.assertEqual(rebuilt_response["appliances"][0]["name"], "Updated EV")
+
+    def test_generic_appliance_response_matches_metadata_only_shape(self) -> None:
+        config = _valid_config()
+        config["appliances"].append(_generic_appliance())
+
+        registry = build_appliances_runtime_registry(config)
+
+        self.assertEqual(
+            build_appliances_response(registry)["appliances"][1],
+            {
+                "id": "dishwasher",
+                "name": "Dishwasher",
+                "kind": "generic",
+                "metadata": {
+                    "scheduleCapabilities": {
+                        "onOffToggle": True,
+                    }
+                },
+                "controls": {
+                    "switch": {"entityId": "switch.dishwasher"},
+                },
+            },
+        )
 
 
 if __name__ == "__main__":

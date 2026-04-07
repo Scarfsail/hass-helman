@@ -237,6 +237,76 @@ async def query_hour_boundary_state_values(
     )
 
 
+async def estimate_average_hourly_energy_when_switch_on(
+    hass: HomeAssistant,
+    *,
+    switch_entity_id: str,
+    energy_entity_id: str,
+    reference_time: datetime,
+    lookback_days: int,
+) -> float | None:
+    if (
+        isinstance(lookback_days, bool)
+        or not isinstance(lookback_days, int)
+        or lookback_days <= 0
+    ):
+        raise ValueError("lookback_days must be a positive integer")
+
+    local_end = dt_util.as_local(reference_time)
+    local_start = local_end - timedelta(days=lookback_days)
+    utc_start = dt_util.as_utc(local_start)
+    utc_end = dt_util.as_utc(local_end)
+
+    current_energy_state = hass.states.get(energy_entity_id)
+    default_unit = None
+    if current_energy_state is not None:
+        default_unit = current_energy_state.attributes.get("unit_of_measurement")
+
+    recorder = get_instance(hass)
+    switch_history = await recorder.async_add_executor_job(
+        lambda: state_changes_during_period(
+            hass,
+            utc_start,
+            utc_end,
+            switch_entity_id,
+            True,
+            False,
+            None,
+            True,
+        )
+    )
+    energy_history = await recorder.async_add_executor_job(
+        lambda: state_changes_during_period(
+            hass,
+            utc_start,
+            utc_end,
+            energy_entity_id,
+            False,
+            False,
+            None,
+            True,
+        )
+    )
+
+    switch_states = (
+        switch_history.get(switch_entity_id)
+        or switch_history.get(switch_entity_id.lower())
+        or []
+    )
+    energy_states = (
+        energy_history.get(energy_entity_id)
+        or energy_history.get(energy_entity_id.lower())
+        or []
+    )
+    return _estimate_average_hourly_energy_kwh_for_on_intervals(
+        switch_states=switch_states,
+        energy_states=energy_states,
+        window_start=utc_start,
+        window_end=utc_end,
+        default_unit=default_unit,
+    )
+
+
 def _build_slot_energy_changes_from_boundaries(
     boundaries: list[datetime],
     samples: dict[datetime, float],
@@ -323,6 +393,109 @@ def _sample_energy_observations_at_boundaries(
             samples[boundary] = latest_value
 
     return samples
+
+
+def _estimate_average_hourly_energy_kwh_for_on_intervals(
+    *,
+    switch_states: list[Any],
+    energy_states: list[Any],
+    window_start: datetime,
+    window_end: datetime,
+    default_unit: Any,
+) -> float | None:
+    on_intervals = _build_switch_on_intervals(
+        states=switch_states,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    if not on_intervals:
+        return None
+
+    observations = _build_unwrapped_energy_observations(
+        _parse_energy_observations(
+            energy_states,
+            default_unit=default_unit,
+        )
+    )
+    if not observations:
+        return None
+
+    boundaries = sorted({boundary for interval in on_intervals for boundary in interval})
+    boundary_samples = _sample_energy_observations_at_boundaries(
+        observations,
+        boundaries,
+    )
+
+    total_energy_kwh = 0.0
+    total_on_hours = 0.0
+    for interval_start, interval_end in on_intervals:
+        start_value = boundary_samples.get(interval_start)
+        end_value = boundary_samples.get(interval_end)
+        if start_value is None or end_value is None:
+            continue
+
+        delta = end_value - start_value
+        if delta < 0:
+            continue
+
+        duration_hours = (interval_end - interval_start).total_seconds() / 3600
+        if duration_hours <= 0:
+            continue
+
+        total_energy_kwh += delta
+        total_on_hours += duration_hours
+
+    if (
+        total_on_hours <= 0
+        or total_energy_kwh <= _ENERGY_TOLERANCE_KWH
+    ):
+        return None
+
+    return round(total_energy_kwh / total_on_hours, 4)
+
+
+def _build_switch_on_intervals(
+    *,
+    states: list[Any],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    if not states or window_end <= window_start:
+        return []
+
+    intervals: list[tuple[datetime, datetime]] = []
+    active_start: datetime | None = None
+    for state in states:
+        last_updated = getattr(state, "last_updated", None)
+        if last_updated is None:
+            continue
+
+        updated_at = dt_util.as_utc(last_updated)
+        if updated_at > window_end:
+            break
+
+        is_on = _is_switch_on_state(getattr(state, "state", None))
+        if is_on:
+            if active_start is None:
+                active_start = max(updated_at, window_start)
+            continue
+
+        if active_start is None:
+            continue
+
+        interval_end = min(updated_at, window_end)
+        if interval_end > active_start:
+            intervals.append((active_start, interval_end))
+        active_start = None
+
+    if active_start is not None and window_end > active_start:
+        intervals.append((active_start, window_end))
+
+    return intervals
+
+
+def _is_switch_on_state(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower() == "on"
 
 
 def _get_local_day_start(reference_time: datetime) -> datetime:

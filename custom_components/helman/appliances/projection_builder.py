@@ -19,6 +19,7 @@ from .ev_charger import (
     EvChargerUseModeRuntime,
     EvVehicleRuntime,
 )
+from .generic_appliance import GenericApplianceRuntime
 from .state import AppliancesRuntimeRegistry
 
 _CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
@@ -37,8 +38,9 @@ class ApplianceDemandPoint:
 class ApplianceProjectionPlanPoint:
     slot_id: str
     energy_kwh: float
-    mode: str
-    vehicle_id: str | None
+    mode: str | None = None
+    vehicle_id: str | None = None
+    projection_method: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,19 +108,50 @@ def build_appliance_projection_plan(
     generated_at: str,
     registry: AppliancesRuntimeRegistry,
     schedule_document: ScheduleDocument,
-    inputs: ProjectionInputBundle,
+    inputs: ProjectionInputBundle | None,
     hass,
+    reference_time: datetime | None = None,
+    generic_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None = None,
 ) -> ApplianceProjectionPlan:
     appliances_by_id: dict[str, ApplianceProjectionSeries] = {}
     demand_points: list[ApplianceDemandPoint] = []
+    history_hourly_energy_by_appliance_id = (
+        {}
+        if generic_hourly_energy_kwh_by_appliance_id is None
+        else generic_hourly_energy_kwh_by_appliance_id
+    )
+    active_reference_time = (
+        inputs.reference_time
+        if inputs is not None
+        else None if reference_time is None else dt_util.as_local(reference_time)
+    )
 
     for appliance in registry.appliances:
-        result = _build_ev_charger_projection_series(
-            appliance=appliance,
-            schedule_document=schedule_document,
-            inputs=inputs,
-            hass=hass,
-        )
+        if isinstance(appliance, EvChargerApplianceRuntime):
+            if inputs is None:
+                continue
+            result = _build_ev_charger_projection_series(
+                appliance=appliance,
+                schedule_document=schedule_document,
+                inputs=inputs,
+                hass=hass,
+            )
+        elif isinstance(appliance, GenericApplianceRuntime):
+            if active_reference_time is None:
+                raise ValueError(
+                    "reference_time is required when projecting generic appliances "
+                    "without forecast inputs"
+                )
+            result = _build_generic_appliance_projection_series(
+                appliance=appliance,
+                schedule_document=schedule_document,
+                reference_time=active_reference_time,
+                historical_hourly_energy_kwh=history_hourly_energy_by_appliance_id.get(
+                    appliance.id
+                ),
+            )
+        else:
+            continue
         series = result.series
         if not series.points:
             continue
@@ -133,9 +166,13 @@ def build_appliance_projection_plan(
 
 
 @dataclass(frozen=True)
-class _ProjectionSlotSlice:
+class _ProjectionTimeSlice:
     slot_start: datetime
     duration_hours: float
+
+
+@dataclass(frozen=True)
+class _ProjectionSlotSlice(_ProjectionTimeSlice):
     solar_kwh: float
     baseline_house_kwh: float
 
@@ -248,48 +285,147 @@ def _build_ev_charger_projection_series(
     )
 
 
+def _build_generic_appliance_projection_series(
+    *,
+    appliance: GenericApplianceRuntime,
+    schedule_document: ScheduleDocument,
+    reference_time: datetime,
+    historical_hourly_energy_kwh: float | None,
+) -> _ApplianceProjectionBuildResult:
+    points: list[ApplianceProjectionPlanPoint] = []
+    demand_points: list[ApplianceDemandPoint] = []
+    resolved_hourly_energy_kwh, projection_method = (
+        _resolve_generic_hourly_energy_kwh(
+            appliance=appliance,
+            historical_hourly_energy_kwh=historical_hourly_energy_kwh,
+        )
+    )
+
+    for slot_id, domains in sorted(schedule_document.slots.items()):
+        action = domains.appliances.get(appliance.id)
+        if not action or action.get("on") is not True:
+            continue
+
+        time_slices = _build_time_slices(
+            slot_id=slot_id,
+            reference_time=reference_time,
+        )
+        if not time_slices:
+            continue
+
+        slice_energy_kwhs = tuple(
+            resolved_hourly_energy_kwh * slot_slice.duration_hours
+            for slot_slice in time_slices
+        )
+        energy_kwh = sum(slice_energy_kwhs)
+        if energy_kwh <= 0:
+            continue
+
+        points.append(
+            ApplianceProjectionPlanPoint(
+                slot_id=slot_id,
+                energy_kwh=round(energy_kwh, 4),
+                projection_method=projection_method,
+            )
+        )
+        demand_points.extend(
+            ApplianceDemandPoint(
+                appliance_id=appliance.id,
+                slot_id=format_slot_id(slot_slice.slot_start),
+                energy_kwh=round(slice_energy_kwh, 4),
+            )
+            for slot_slice, slice_energy_kwh in zip(
+                time_slices,
+                slice_energy_kwhs,
+                strict=True,
+            )
+            if slice_energy_kwh > 0
+        )
+
+    return _ApplianceProjectionBuildResult(
+        series=ApplianceProjectionSeries(
+            appliance_id=appliance.id,
+            points=tuple(points),
+        ),
+        demand_points=tuple(demand_points),
+    )
+
+
+def _resolve_generic_hourly_energy_kwh(
+    *,
+    appliance: GenericApplianceRuntime,
+    historical_hourly_energy_kwh: float | None,
+) -> tuple[float, str]:
+    if appliance.projection_strategy != "history_average":
+        return appliance.hourly_energy_kwh, "fixed"
+    if (
+        historical_hourly_energy_kwh is None
+        or historical_hourly_energy_kwh <= 0
+    ):
+        return appliance.hourly_energy_kwh, "fixed_fallback"
+    return historical_hourly_energy_kwh, "history_average"
+
+
 def _build_schedule_slot_slices(
     *,
     slot_id: str,
     inputs: ProjectionInputBundle,
 ) -> list[_ProjectionSlotSlice] | None:
-    slot_start = parse_slot_id(slot_id)
-    slot_end = slot_start + SCHEDULE_SLOT_DURATION
-    if slot_end <= inputs.reference_time:
-        return []
-
     slices: list[_ProjectionSlotSlice] = []
-    cursor = slot_start
-    while cursor < slot_end:
-        slice_end = min(cursor + _CANONICAL_SLOT_DURATION, slot_end)
-        if slice_end <= inputs.reference_time:
-            cursor = slice_end
-            continue
-
-        effective_start = max(cursor, inputs.reference_time)
-        duration_hours = (slice_end - effective_start).total_seconds() / 3600
-        if duration_hours <= 0:
-            cursor = slice_end
-            continue
-
+    for time_slice in _build_time_slices(
+        slot_id=slot_id,
+        reference_time=inputs.reference_time,
+    ):
         baseline_house_kwh = (
             inputs.current_house_kwh
-            if cursor == inputs.current_slot_start
-            else inputs.house_series_by_slot.get(cursor)
+            if time_slice.slot_start == inputs.current_slot_start
+            else inputs.house_series_by_slot.get(time_slice.slot_start)
         )
-        solar_wh = inputs.solar_by_slot_wh.get(cursor)
+        solar_wh = inputs.solar_by_slot_wh.get(time_slice.slot_start)
         if baseline_house_kwh is None or solar_wh is None:
             return None
 
-        scale = duration_hours / _CANONICAL_SLOT_HOURS
+        scale = time_slice.duration_hours / _CANONICAL_SLOT_HOURS
         slices.append(
             _ProjectionSlotSlice(
-                slot_start=cursor,
-                duration_hours=duration_hours,
+                slot_start=time_slice.slot_start,
+                duration_hours=time_slice.duration_hours,
                 solar_kwh=(solar_wh / 1000) * scale,
                 baseline_house_kwh=baseline_house_kwh * scale,
             )
         )
+
+    return slices
+
+
+def _build_time_slices(
+    *,
+    slot_id: str,
+    reference_time: datetime,
+) -> list[_ProjectionTimeSlice]:
+    slot_start = parse_slot_id(slot_id)
+    slot_end = slot_start + SCHEDULE_SLOT_DURATION
+    local_reference_time = dt_util.as_local(reference_time)
+    if slot_end <= local_reference_time:
+        return []
+
+    slices: list[_ProjectionTimeSlice] = []
+    cursor = slot_start
+    while cursor < slot_end:
+        slice_end = min(cursor + _CANONICAL_SLOT_DURATION, slot_end)
+        if slice_end <= local_reference_time:
+            cursor = slice_end
+            continue
+
+        effective_start = max(cursor, local_reference_time)
+        duration_hours = (slice_end - effective_start).total_seconds() / 3600
+        if duration_hours > 0:
+            slices.append(
+                _ProjectionTimeSlice(
+                    slot_start=cursor,
+                    duration_hours=duration_hours,
+                )
+            )
         cursor = slice_end
 
     return slices

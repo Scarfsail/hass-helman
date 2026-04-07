@@ -19,6 +19,10 @@ __all__ = [
     "ApplianceScheduleActionDict",
     "ApplianceScheduleActionsDict",
     "EvChargerExecutor",
+    "GenericApplianceResponseDict",
+    "GenericApplianceRuntime",
+    "GenericApplianceConfigError",
+    "GenericApplianceScheduleActionDict",
     "EvChargerApplianceResponseDict",
     "EvChargerApplianceRuntime",
     "EvChargerConfigError",
@@ -35,6 +39,7 @@ __all__ = [
     "aggregate_appliance_demand_by_slot",
     "build_adjusted_house_forecast",
     "normalize_appliance_schedule_actions",
+    "read_generic_appliance",
     "read_ev_charger_appliance",
     "read_appliance_schedule_actions",
 ]
@@ -62,6 +67,19 @@ _EXPORTS = {
     "ApplianceScheduleActionDict": (".schedule", "ApplianceScheduleActionDict"),
     "ApplianceScheduleActionsDict": (".schedule", "ApplianceScheduleActionsDict"),
     "EvChargerExecutor": (".execution", "EvChargerExecutor"),
+    "GenericApplianceResponseDict": (
+        ".generic_appliance",
+        "GenericApplianceResponseDict",
+    ),
+    "GenericApplianceRuntime": (".generic_appliance", "GenericApplianceRuntime"),
+    "GenericApplianceConfigError": (
+        ".generic_appliance",
+        "GenericApplianceConfigError",
+    ),
+    "GenericApplianceScheduleActionDict": (
+        ".generic_schedule",
+        "GenericApplianceScheduleActionDict",
+    ),
     "EvChargerApplianceResponseDict": (".ev_charger", "EvChargerApplianceResponseDict"),
     "EvChargerApplianceRuntime": (".ev_charger", "EvChargerApplianceRuntime"),
     "EvChargerConfigError": (".ev_charger", "EvChargerConfigError"),
@@ -93,6 +111,7 @@ _EXPORTS = {
         ".schedule",
         "normalize_appliance_schedule_actions",
     ),
+    "read_generic_appliance": (".generic_appliance", "read_generic_appliance"),
     "read_ev_charger_appliance": (".ev_charger", "read_ev_charger_appliance"),
     "read_appliance_schedule_actions": (".schedule", "read_appliance_schedule_actions"),
 }

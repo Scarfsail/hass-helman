@@ -65,9 +65,13 @@ from custom_components.helman.appliances.ev_charger import (  # noqa: E402
     EvChargerUseModeRuntime,
     EvVehicleRuntime,
 )
+from custom_components.helman.appliances.generic_appliance import (  # noqa: E402
+    GenericApplianceRuntime,
+)
 from custom_components.helman.appliances.execution import (  # noqa: E402
     ApplianceExecutionMemory,
     EvChargerExecutor,
+    GenericApplianceExecutor,
 )
 
 
@@ -160,6 +164,17 @@ def _build_appliance() -> EvChargerApplianceRuntime:
     )
 
 
+def _build_generic_appliance() -> GenericApplianceRuntime:
+    return GenericApplianceRuntime(
+        id="dishwasher",
+        name="Dishwasher",
+        switch_entity_id="switch.dishwasher",
+        projection_strategy="fixed",
+        hourly_energy_kwh=1.1,
+        history_energy_entity_id=None,
+    )
+
+
 class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def test_charge_true_writes_charge_then_mode_then_eco(self) -> None:
         hass = FakeHass(
@@ -216,7 +231,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(runtime.action_kind, "apply")
         self.assertEqual(runtime.outcome, "success")
-        self.assertTrue(memory.last_charge_enabled)
+        self.assertTrue(memory.last_enabled)
 
     async def test_charge_false_turns_off_only_charge_switch(self) -> None:
         hass = FakeHass(
@@ -271,7 +286,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             memory=ApplianceExecutionMemory(
                 last_active_slot_id="2026-03-20T20:30:00+01:00",
                 last_action_signature=(True, "kona", "ECO", "10A"),
-                last_charge_enabled=True,
+                last_enabled=True,
                 last_runtime_action_kind="apply",
             ),
             active_slot_id=CURRENT_SLOT_ID,
@@ -285,7 +300,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "slot_stop")
         self.assertEqual(runtime.outcome, "success")
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
-        self.assertFalse(memory.last_charge_enabled)
+        self.assertFalse(memory.last_enabled)
 
     async def test_unchanged_same_slot_is_noop(self) -> None:
         hass = FakeHass(
@@ -309,7 +324,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             memory=ApplianceExecutionMemory(
                 last_active_slot_id=CURRENT_SLOT_ID,
                 last_action_signature=(True, "kona", "Fast", None),
-                last_charge_enabled=True,
+                last_enabled=True,
                 last_runtime_action_kind="apply",
             ),
             active_slot_id=CURRENT_SLOT_ID,
@@ -342,7 +357,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             memory=ApplianceExecutionMemory(
                 last_active_slot_id=CURRENT_SLOT_ID,
                 last_action_signature=None,
-                last_charge_enabled=True,
+                last_enabled=True,
                 last_runtime_action_kind="slot_stop",
             ),
             active_slot_id=CURRENT_SLOT_ID,
@@ -353,6 +368,138 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "slot_stop")
         self.assertEqual(runtime.outcome, "success")
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
+
+    async def test_generic_on_turns_on_switch(self) -> None:
+        hass = FakeHass({"switch.dishwasher": FakeState("off")})
+        executor = GenericApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action={"on": True},
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [("switch", "turn_on", {"entity_id": "switch.dishwasher"}, True)],
+        )
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertTrue(memory.last_enabled)
+
+    async def test_generic_missing_action_after_previous_on_emits_slot_stop(self) -> None:
+        hass = FakeHass({"switch.dishwasher": FakeState("on")})
+        executor = GenericApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action=None,
+            memory=ApplianceExecutionMemory(
+                last_active_slot_id="2026-03-20T20:30:00+01:00",
+                last_action_signature=(True,),
+                last_enabled=True,
+                last_runtime_action_kind="apply",
+            ),
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [("switch", "turn_off", {"entity_id": "switch.dishwasher"}, True)],
+        )
+        self.assertEqual(runtime.action_kind, "slot_stop")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertFalse(memory.last_enabled)
+
+    async def test_generic_unchanged_same_slot_is_noop(self) -> None:
+        hass = FakeHass({"switch.dishwasher": FakeState("on")})
+        executor = GenericApplianceExecutor(hass)
+
+        runtime, _memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action={"on": True},
+            memory=ApplianceExecutionMemory(
+                last_active_slot_id=CURRENT_SLOT_ID,
+                last_action_signature=(True,),
+                last_enabled=True,
+                last_runtime_action_kind="apply",
+            ),
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(runtime.action_kind, "noop")
+        self.assertEqual(runtime.outcome, "skipped")
+
+    async def test_generic_failed_apply_stays_retryable_within_same_slot(self) -> None:
+        hass = FakeHass({"switch.dishwasher": FakeState("off")})
+        hass.services.error = RuntimeError("temporary outage")
+        executor = GenericApplianceExecutor(hass)
+
+        first_runtime, first_memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action={"on": True},
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(first_runtime.outcome, "failed")
+        self.assertIsNone(first_memory)
+
+        hass.services.error = None
+        second_runtime, second_memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action={"on": True},
+            memory=first_memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(len(hass.services.calls), 1)
+        self.assertEqual(second_runtime.outcome, "success")
+        self.assertIsNotNone(second_memory)
+        self.assertTrue(second_memory.last_enabled)
+
+    async def test_generic_failed_slot_stop_retries_with_previous_memory(self) -> None:
+        hass = FakeHass({"switch.dishwasher": FakeState("on")})
+        hass.services.error = RuntimeError("temporary outage")
+        executor = GenericApplianceExecutor(hass)
+        previous_memory = ApplianceExecutionMemory(
+            last_active_slot_id="2026-03-20T20:30:00+01:00",
+            last_action_signature=(True,),
+            last_enabled=True,
+            last_runtime_action_kind="apply",
+        )
+
+        first_runtime, first_memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action=None,
+            memory=previous_memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(first_runtime.outcome, "failed")
+        self.assertEqual(first_memory, previous_memory)
+
+        hass.services.error = None
+        second_runtime, second_memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action=None,
+            memory=first_memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(len(hass.services.calls), 1)
+        self.assertEqual(second_runtime.outcome, "success")
+        self.assertIsNotNone(second_memory)
+        self.assertFalse(second_memory.last_enabled)
 
     async def test_timeout_waiting_for_charge_on_fails_before_selects(self) -> None:
         hass = FakeHass(

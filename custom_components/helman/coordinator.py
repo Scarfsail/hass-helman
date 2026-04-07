@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import asyncio
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -64,7 +65,10 @@ from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
-from .recorder_hourly_series import get_local_current_slot_start
+from .recorder_hourly_series import (
+    estimate_average_hourly_energy_when_switch_on,
+    get_local_current_slot_start,
+)
 from .scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
@@ -85,6 +89,7 @@ from .scheduling.schedule import (
     slot_to_dict,
     validate_slot_patch_request,
 )
+from .appliances.generic_appliance import GenericApplianceRuntime
 from .scheduling.runtime_status import (
     ScheduleExecutionStatus,
     schedule_execution_status_to_dict,
@@ -1074,25 +1079,28 @@ class HelmanCoordinator:
                 reference_time=started_at,
             )
         generated_at = started_at.isoformat()
+        generic_hourly_energy_kwh_by_appliance_id = (
+            await self._async_build_generic_projection_hourly_energy_by_appliance_id(
+                schedule_document=projection_schedule_document,
+                reference_time=started_at,
+            )
+        )
         input_bundle = build_projection_input_bundle(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             reference_time=started_at,
         )
-        if input_bundle is None:
-            projection_plan = ApplianceProjectionPlan(
-                generated_at=generated_at,
-                appliances_by_id={},
-                demand_points=(),
-            )
-        else:
-            projection_plan = build_appliance_projection_plan(
-                generated_at=generated_at,
-                registry=self._appliances_registry,
-                schedule_document=projection_schedule_document,
-                inputs=input_bundle,
-                hass=self._hass,
-            )
+        projection_plan = build_appliance_projection_plan(
+            generated_at=generated_at,
+            registry=self._appliances_registry,
+            schedule_document=projection_schedule_document,
+            inputs=input_bundle,
+            hass=self._hass,
+            reference_time=started_at,
+            generic_hourly_energy_kwh_by_appliance_id=(
+                generic_hourly_energy_kwh_by_appliance_id
+            ),
+        )
         adjusted_house_forecast = build_adjusted_house_forecast(
             house_forecast=house_forecast,
             demand_points=projection_plan.demand_points,
@@ -1490,6 +1498,68 @@ class HelmanCoordinator:
             )
             for slot_id, domains in sorted(schedule_document.slots.items())
         )
+
+    async def _async_build_generic_projection_hourly_energy_by_appliance_id(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        reference_time: datetime,
+    ) -> dict[str, float | None]:
+        projected_appliances = self._iter_projected_generic_history_appliances(
+            schedule_document=schedule_document
+        )
+        if not projected_appliances:
+            return {}
+
+        estimates: dict[str, float | None] = {}
+        for appliance in projected_appliances:
+            try:
+                estimates[appliance.id] = (
+                    await estimate_average_hourly_energy_when_switch_on(
+                        self._hass,
+                        switch_entity_id=appliance.switch_entity_id,
+                        energy_entity_id=appliance.history_energy_entity_id,
+                        reference_time=reference_time,
+                        lookback_days=appliance.history_lookback_days,
+                    )
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Error estimating history-average projection for generic "
+                    "appliance %r",
+                    appliance.id,
+                )
+                estimates[appliance.id] = None
+
+        return estimates
+
+    def _iter_projected_generic_history_appliances(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+    ) -> list[GenericApplianceRuntime]:
+        projected: list[GenericApplianceRuntime] = []
+        seen_appliance_ids: set[str] = set()
+
+        for domains in schedule_document.slots.values():
+            for appliance_id, action in domains.appliances.items():
+                if appliance_id in seen_appliance_ids:
+                    continue
+                if not isinstance(action, Mapping) or action.get("on") is not True:
+                    continue
+
+                appliance = self._appliances_registry.get_appliance(appliance_id)
+                if (
+                    not isinstance(appliance, GenericApplianceRuntime)
+                    or not appliance.uses_history_average
+                    or appliance.history_energy_entity_id is None
+                ):
+                    continue
+
+                seen_appliance_ids.add(appliance_id)
+                projected.append(appliance)
+
+        return projected
 
     def _has_compatible_battery_forecast_live_state(self) -> bool:
         battery_entity_config = read_battery_entity_config(self._active_config)

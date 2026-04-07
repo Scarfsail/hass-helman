@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .appliances.ev_charger import EvChargerConfigError, read_ev_charger_appliance
+from .appliances.generic_appliance import (
+    GenericApplianceConfigError,
+    read_generic_appliance,
+)
 from .battery_state import describe_battery_entity_config_issue
 from .grid_price_forecast_builder import (
     GridImportPriceConfigError,
@@ -13,7 +17,7 @@ from .grid_price_forecast_builder import (
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
 
-SUPPORTED_EDITABLE_APPLIANCE_KINDS = ("ev_charger",)
+SUPPORTED_EDITABLE_APPLIANCE_KINDS = ("ev_charger", "generic")
 
 
 @dataclass(frozen=True)
@@ -565,8 +569,8 @@ def _validate_appliances_config(
             continue
 
         try:
-            appliance = read_ev_charger_appliance(raw_appliance, path=path)
-        except EvChargerConfigError as err:
+            appliance = _read_supported_appliance(raw_appliance, path=path, kind=kind)
+        except (EvChargerConfigError, GenericApplianceConfigError) as err:
             report.add_error(
                 section=section,
                 path=path,
@@ -585,6 +589,19 @@ def _validate_appliances_config(
             continue
 
         seen_appliance_ids.add(appliance.id)
+
+
+def _read_supported_appliance(
+    raw_appliance: Mapping[str, Any],
+    *,
+    path: str,
+    kind: str,
+):
+    if kind == "ev_charger":
+        return read_ev_charger_appliance(raw_appliance, path=path)
+    if kind == "generic":
+        return read_generic_appliance(raw_appliance, path=path)
+    raise ValueError(f"Unsupported editable appliance kind {kind!r}")
 
 
 def _validate_device_label_text(

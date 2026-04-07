@@ -17,10 +17,11 @@
       "add_category": "Add category",
       "add_badge_text": "Add badge text",
       "add_deferrable_consumer": "Add deferrable consumer",
-      "add_daily_energy_entity": "Add daily energy entity",
-      "add_import_price_window": "Add import price window",
-      "add_ev_charger": "Add EV charger",
-      "add_vehicle": "Add vehicle",
+        "add_daily_energy_entity": "Add daily energy entity",
+        "add_import_price_window": "Add import price window",
+        "add_ev_charger": "Add EV charger",
+        "add_generic_appliance": "Add generic appliance",
+        "add_vehicle": "Add vehicle",
       "add_use_mode": "Add use mode",
       "add_eco_gear": "Add eco gear",
       "remove": "Remove",
@@ -48,19 +49,21 @@
       "battery": "Battery",
       "grid": "Grid",
       "schedule_control_mapping": "Schedule control mapping",
-      "configured_appliances": "Configured appliances",
-      "identity_and_limits": "Identity and limits",
-      "controls": "Controls",
-      "use_modes": "Use modes",
-      "eco_gears": "Eco gears",
-      "vehicles": "Vehicles"
-    },
-    "notes": {
+        "configured_appliances": "Configured appliances",
+        "identity_and_limits": "Identity and limits",
+        "controls": "Controls",
+        "projection": "Projection",
+        "use_modes": "Use modes",
+        "eco_gears": "Eco gears",
+        "vehicles": "Vehicles"
+      },
+      "notes": {
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
       "battery_entities": "Remaining energy, capacity, min SoC, and max SoC work as one battery entity group. Configure them together when battery forecasting is enabled.",
       "grid_import_windows": "Import price windows must cover the whole day without gaps or overlaps.",
-      "appliances": "EV charger editing is supported directly. Unsupported future appliance kinds are preserved and shown read-only unless you remove them."
-    },
+        "appliances": "EV charger and generic appliance editing are supported directly. Unsupported future appliance kinds are preserved and shown read-only unless you remove them.",
+        "generic_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient."
+      },
     "empty": {
       "no_appliances": "No appliances configured yet.",
       "no_device_label_categories": "No device label categories configured."
@@ -120,10 +123,15 @@
       "stop_charging_option": "Stop charging option",
       "stop_discharging_option": "Stop discharging option",
       "appliance_id": "Appliance id",
-      "appliance_name": "Appliance name",
-      "kind": "Kind",
-      "max_charging_power_kw": "Max charging power kW",
-      "charge_switch_entity": "Charge switch entity",
+        "appliance_name": "Appliance name",
+        "kind": "Kind",
+        "switch_entity": "Switch entity",
+        "projection_strategy": "Projection strategy",
+        "hourly_energy_kwh": "Average hourly energy kWh",
+        "history_energy_entity": "History energy entity",
+        "history_lookback_days": "History lookback days",
+        "max_charging_power_kw": "Max charging power kW",
+        "charge_switch_entity": "Charge switch entity",
       "use_mode_entity": "Use mode entity",
       "eco_gear_entity": "Eco gear entity",
       "mode_id": "Mode id",
@@ -140,10 +148,11 @@
     "helpers": {
       "history_buckets": "How many history buckets Helman keeps for UI history.",
       "history_bucket_duration": "Duration of one history bucket in hours.",
-      "power_sensor_name_cleaner_regex": "Optional regex applied when normalizing power sensor names.",
-      "import_price_unit": "Example: CZK/kWh",
-      "mode_entity": "Helman writes schedule action options to this entity."
-    },
+        "power_sensor_name_cleaner_regex": "Optional regex applied when normalizing power sensor names.",
+        "import_price_unit": "Example: CZK/kWh",
+        "mode_entity": "Helman writes schedule action options to this entity.",
+        "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption."
+      },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
       "load_config_failed": "Failed to load the stored Helman config.",
@@ -171,10 +180,12 @@
       "key_missing": "Key {key} does not exist."
     },
     "values": {
-      "fixed_max_power": "Fixed max power",
-      "surplus_aware": "Surplus aware",
-      "unknown": "unknown",
-      "missing_id": "missing id"
+        "fixed_max_power": "Fixed max power",
+        "surplus_aware": "Surplus aware",
+        "fixed": "Fixed",
+        "history_average": "History average",
+        "unknown": "unknown",
+        "missing_id": "missing id"
     },
     "mode": {
       "visual": "Visual",
@@ -202,10 +213,11 @@
       "consumer": "Consumer {index}",
       "daily_energy_entity": "Daily energy entity {index}",
       "import_window": "Import window {index}",
-      "appliance": "Appliance {index}",
-      "ev_charger": "EV Charger {index}",
-      "vehicle": "Vehicle {index}",
-      "unsupported_appliance_kind": "Unsupported appliance kind: {kind}"
-    }
+        "appliance": "Appliance {index}",
+        "ev_charger": "EV Charger {index}",
+        "generic_appliance": "Generic appliance {index}",
+        "vehicle": "Vehicle {index}",
+        "unsupported_appliance_kind": "Unsupported appliance kind: {kind}"
+      }
   }
 }

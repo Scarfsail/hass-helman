@@ -26,6 +26,8 @@ def build_adjusted_house_forecast(
     demand_points: Iterable[ApplianceDemandPoint],
 ) -> dict[str, Any]:
     adjusted_forecast = deepcopy(house_forecast)
+    if adjusted_forecast.get("status") != "available":
+        return adjusted_forecast
     demand_by_slot = aggregate_appliance_demand_by_slot(demand_points)
     if not demand_by_slot:
         return adjusted_forecast

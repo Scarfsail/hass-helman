@@ -189,6 +189,27 @@ def _valid_config() -> dict:
     }
 
 
+def _generic_appliance(*, strategy: str = "fixed") -> dict:
+    appliance = {
+        "kind": "generic",
+        "id": "dishwasher",
+        "name": "Dishwasher",
+        "controls": {
+            "switch": {"entity_id": "switch.dishwasher"},
+        },
+        "projection": {
+            "strategy": strategy,
+            "hourly_energy_kwh": 1.2,
+        },
+    }
+    if strategy == "history_average":
+        appliance["projection"]["history_average"] = {
+            "energy_entity_id": "sensor.dishwasher_energy_total",
+            "lookback_days": 30,
+        }
+    return appliance
+
+
 class ConfigValidationTests(unittest.TestCase):
     def test_valid_document_passes(self) -> None:
         report = validate_config_document(_valid_config())
@@ -247,6 +268,32 @@ class ConfigValidationTests(unittest.TestCase):
         report = validate_config_document(_valid_config())
 
         self.assertTrue(report.valid)
+
+    def test_valid_generic_appliance_passes(self) -> None:
+        config = _valid_config()
+        config["appliances"] = [_generic_appliance(strategy="history_average")]
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.errors, [])
+
+    def test_generic_history_average_requires_energy_entity(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance(strategy="history_average")
+        del appliance["projection"]["history_average"]
+        config["appliances"] = [appliance]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "appliances[0]"
+                and "history_average is required" in issue.message
+                for issue in report.errors
+            )
+        )
 
     def test_invalid_device_label_text_shape_is_reported(self) -> None:
         config = _valid_config()

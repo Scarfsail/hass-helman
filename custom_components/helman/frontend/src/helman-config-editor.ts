@@ -8,6 +8,7 @@ import {
   asJsonObject,
   cloneJson,
   createApplianceDraft,
+  createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
   createDeferrableConsumerDraft,
@@ -57,6 +58,11 @@ import { normalizeYamlValue } from "./yaml-codec";
 const USE_MODE_BEHAVIORS = [
   { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
   { value: "surplus_aware", labelKey: "editor.values.surplus_aware" },
+];
+
+const GENERIC_PROJECTION_STRATEGIES = [
+  { value: "fixed", labelKey: "editor.values.fixed" },
+  { value: "history_average", labelKey: "editor.values.history_average" },
 ];
 
 interface YamlEditorValueChangedDetail {
@@ -1194,8 +1200,15 @@ export class HelmanConfigEditorPanel extends LitElement {
                 )}
           </div>
           <div class="section-footer">
-            <button type="button" class="add-button primary" @click=${this._handleAddAppliance}>
+            <button type="button" class="add-button primary" @click=${this._handleAddEvCharger}>
               ${this._t("editor.actions.add_ev_charger")}
+            </button>
+            <button
+              type="button"
+              class="add-button"
+              @click=${this._handleAddGenericAppliance}
+            >
+              ${this._t("editor.actions.add_generic_appliance")}
             </button>
           </div>
         `,
@@ -1535,10 +1548,13 @@ export class HelmanConfigEditorPanel extends LitElement {
   ): TemplateResult {
     const applianceObject = asJsonObject(appliance) ?? {};
     const kind = this._stringValue(applianceObject.kind);
-    if (kind !== "ev_charger") {
-      return this._renderUnsupportedAppliance(applianceObject, index, total);
+    if (kind === "ev_charger") {
+      return this._renderEvChargerAppliance(applianceObject, index, total);
     }
-    return this._renderEvChargerAppliance(applianceObject, index, total);
+    if (kind === "generic") {
+      return this._renderGenericAppliance(applianceObject, index, total);
+    }
+    return this._renderUnsupportedAppliance(applianceObject, index, total);
   }
 
   private _renderUnsupportedAppliance(
@@ -1733,6 +1749,132 @@ export class HelmanConfigEditorPanel extends LitElement {
                 ${this._t("editor.actions.add_vehicle")}
               </button>
             </div>
+          </div>
+        </details>
+      </div>
+    `;
+  }
+
+  private _renderGenericAppliance(
+    appliance: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["appliances", index];
+    const historyAveragePath: PathSegment[] = [...basePath, "projection", "history_average"];
+    const projectionStrategy =
+      this._stringValue(this._getValue([...basePath, "projection", "strategy"])) || "fixed";
+    const applianceName =
+      this._stringValue(appliance.name) ||
+      this._tFormat("editor.dynamic.generic_appliance", { index: index + 1 });
+    const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
+
+    return html`
+      <div class="list-card">
+        <div class="card-header">
+          <div class="card-title">
+            <strong>${applianceName}</strong>
+            <span class="card-subtitle">${applianceId}</span>
+          </div>
+          <div class="list-actions">
+            <button
+              type="button"
+              ?disabled=${index === 0}
+              @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+            >
+              ${this._t("editor.actions.up")}
+            </button>
+            <button
+              type="button"
+              ?disabled=${index === total - 1}
+              @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+            >
+              ${this._t("editor.actions.down")}
+            </button>
+            <button
+              type="button"
+              class="danger"
+              @click=${() => this._removeListItem(["appliances"], index)}
+            >
+              ${this._t("editor.actions.remove")}
+            </button>
+          </div>
+        </div>
+
+        <details class="section-card" open>
+          <summary>${this._t("editor.sections.identity_and_limits")}</summary>
+          <div class="section-content">
+            <div class="field-grid">
+              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id")}
+              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name")}
+              <div class="field">
+                <label>${this._t("editor.fields.kind")}</label>
+                <input value="generic" disabled />
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="section-card" open>
+          <summary>${this._t("editor.sections.controls")}</summary>
+          <div class="section-content">
+            <div class="field-grid">
+              ${this._renderRequiredEntityField(
+                [...basePath, "controls", "switch", "entity_id"],
+                "editor.fields.switch_entity",
+                ["switch"],
+              )}
+            </div>
+          </div>
+        </details>
+
+        <details class="section-card" open>
+          <summary>${this._t("editor.sections.projection")}</summary>
+          <div class="section-content">
+            <p class="inline-note">
+              ${this._t("editor.notes.generic_appliance_projection")}
+            </p>
+            <div class="field-grid">
+              <div class="field">
+                <label>${this._t("editor.fields.projection_strategy")}</label>
+                <select
+                  .value=${projectionStrategy}
+                  @change=${(event: Event) =>
+                    this._handleGenericProjectionStrategyChange(
+                      index,
+                      (event.currentTarget as HTMLSelectElement).value,
+                    )}
+                >
+                  ${GENERIC_PROJECTION_STRATEGIES.map(
+                    (option) => html`
+                      <option value=${option.value}>${this._t(option.labelKey)}</option>
+                    `,
+                  )}
+                </select>
+              </div>
+              ${this._renderRequiredNumberField(
+                [...basePath, "projection", "hourly_energy_kwh"],
+                "editor.fields.hourly_energy_kwh",
+              )}
+            </div>
+            ${projectionStrategy === "history_average"
+              ? html`
+                  <div class="field-grid">
+                    ${this._renderRequiredEntityField(
+                      [...historyAveragePath, "energy_entity_id"],
+                      "editor.fields.history_energy_entity",
+                      ["sensor"],
+                      "editor.helpers.history_energy_entity",
+                    )}
+                    ${this._renderRequiredNumberField(
+                      [...historyAveragePath, "lookback_days"],
+                      "editor.fields.history_lookback_days",
+                      undefined,
+                      "1",
+                    )}
+                  </div>
+                `
+              : nothing}
           </div>
         </details>
       </div>
@@ -1982,6 +2124,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     path: PathSegment[],
     labelKey: string,
     explicitValue?: unknown,
+    step = "any",
   ): TemplateResult {
     const value = explicitValue === undefined ? this._getValue(path) : explicitValue;
     return html`
@@ -1989,7 +2132,7 @@ export class HelmanConfigEditorPanel extends LitElement {
         <label>${this._t(labelKey)}</label>
         <input
           type="number"
-          step="any"
+          .step=${step}
           .value=${this._stringValue(value)}
           @change=${(event: Event) =>
             this._setRequiredNumber(path, (event.currentTarget as HTMLInputElement).value)}
@@ -2517,7 +2660,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
   };
 
-  private _handleAddAppliance = (): void => {
+  private _handleAddEvCharger = (): void => {
     const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
       .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
       .filter((value) => value.length > 0);
@@ -2529,6 +2672,24 @@ export class HelmanConfigEditorPanel extends LitElement {
           existingIds,
           this._tFormat("editor.dynamic.ev_charger", { index: existingIds.length + 1 }),
           this._tFormat("editor.dynamic.vehicle", { index: 1 }),
+        ),
+      );
+    });
+  };
+
+  private _handleAddGenericAppliance = (): void => {
+    const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
+      .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
+      .filter((value) => value.length > 0);
+    this._applyMutation((draft) => {
+      appendListItem(
+        draft,
+        ["appliances"],
+        createGenericApplianceDraft(
+          existingIds,
+          this._tFormat("editor.dynamic.generic_appliance", {
+            index: existingIds.length + 1,
+          }),
         ),
       );
     });
@@ -2576,6 +2737,35 @@ export class HelmanConfigEditorPanel extends LitElement {
     const gearKey = createGearKey(objectEntries(this._getValue(path)).map(([key]) => key));
     this._applyMutation((draft) => {
       setValueAtPath(draft, [...path, gearKey], createEcoGearEntry());
+    });
+  }
+
+  private _handleGenericProjectionStrategyChange(
+    applianceIndex: number,
+    strategy: string,
+  ): void {
+    if (!["fixed", "history_average"].includes(strategy)) {
+      return;
+    }
+
+    this._applyMutation((draft) => {
+      const basePath: PathSegment[] = ["appliances", applianceIndex, "projection"];
+      setValueAtPath(draft, [...basePath, "strategy"], strategy);
+      if (strategy !== "history_average") {
+        return;
+      }
+
+      const existingHistoryAverage = asJsonObject(
+        getValueAtPath(draft, [...basePath, "history_average"]),
+      );
+      const existingLookbackDays = existingHistoryAverage?.lookback_days;
+      setValueAtPath(draft, [...basePath, "history_average"], {
+        energy_entity_id: this._stringValue(existingHistoryAverage?.energy_entity_id),
+        lookback_days:
+          typeof existingLookbackDays === "number" && Number.isFinite(existingLookbackDays)
+            ? existingLookbackDays
+            : 30,
+      });
     });
   }
 

@@ -39,6 +39,12 @@ def _install_import_stubs() -> None:
             microsecond=0,
         )
     )
+    async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
+        return None
+
+    recorder_mod.estimate_average_hourly_energy_when_switch_on = (
+        _estimate_average_hourly_energy_when_switch_on
+    )
 
     homeassistant_pkg = sys.modules.get("homeassistant")
     if homeassistant_pkg is None:

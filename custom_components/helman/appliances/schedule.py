@@ -9,9 +9,16 @@ from .ev_schedule import (
     EvChargerScheduleActionDict,
     normalize_ev_charger_schedule_action,
 )
+from .generic_appliance import GenericApplianceRuntime
+from .generic_schedule import (
+    GenericApplianceScheduleActionDict,
+    normalize_generic_appliance_schedule_action,
+)
 from .state import AppliancesRuntimeRegistry
 
-ApplianceScheduleActionDict = EvChargerScheduleActionDict
+ApplianceScheduleActionDict = (
+    EvChargerScheduleActionDict | GenericApplianceScheduleActionDict
+)
 ApplianceScheduleActionsDict = dict[str, ApplianceScheduleActionDict]
 
 
@@ -54,20 +61,27 @@ def normalize_appliance_schedule_actions(
                 f"{context}.{appliance_id} must reference a configured appliance"
             )
 
-        if not isinstance(appliance, EvChargerApplianceRuntime):
+        if isinstance(appliance, EvChargerApplianceRuntime):
+            normalized_action = normalize_ev_charger_schedule_action(
+                action,
+                appliance=appliance,
+                context=f"{context}.{appliance_id}",
+                mode=mode,
+            )
+        elif isinstance(appliance, GenericApplianceRuntime):
+            normalized_action = normalize_generic_appliance_schedule_action(
+                action,
+                appliance=appliance,
+                context=f"{context}.{appliance_id}",
+                mode=mode,
+            )
+        else:
             if mode == "load_prune":
                 continue
             raise ValueError(
                 f"{context}.{appliance_id} references unsupported appliance kind "
                 f"{appliance.kind!r}"
             )
-
-        normalized_action = normalize_ev_charger_schedule_action(
-            action,
-            appliance=appliance,
-            context=f"{context}.{appliance_id}",
-            mode=mode,
-        )
         if normalized_action is not None:
             normalized[appliance_id] = normalized_action
 

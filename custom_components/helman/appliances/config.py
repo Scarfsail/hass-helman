@@ -5,11 +5,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from .ev_charger import EvChargerConfigError, read_ev_charger_appliance
+from .generic_appliance import GenericApplianceConfigError, read_generic_appliance
 from .state import AppliancesRuntimeRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
 _EV_CHARGER_KIND = "ev_charger"
+_GENERIC_APPLIANCE_KIND = "generic"
 
 
 def build_appliances_runtime_registry(
@@ -27,18 +29,13 @@ def build_appliances_runtime_registry(
 
     for index, raw_appliance in enumerate(appliances_config):
         appliance_id = _peek_appliance_id(raw_appliance)
-        kind = _peek_appliance_kind(raw_appliance)
 
         try:
-            if kind != _EV_CHARGER_KIND:
-                raise EvChargerConfigError(
-                    f"appliances[{index}].kind must be {_EV_CHARGER_KIND!r}"
-                )
-            appliance = read_ev_charger_appliance(
+            appliance = _read_appliance_runtime(
                 raw_appliance,
                 path=f"appliances[{index}]",
             )
-        except EvChargerConfigError as err:
+        except (EvChargerConfigError, GenericApplianceConfigError) as err:
             _log_invalid_appliance(
                 logger=active_logger,
                 index=index,
@@ -99,6 +96,26 @@ def _peek_appliance_kind(value: object) -> str | None:
         return None
     stripped = appliance_kind.strip()
     return stripped or None
+
+
+def _read_appliance_runtime(
+    value: object,
+    *,
+    path: str,
+):
+    if not isinstance(value, Mapping):
+        raise GenericApplianceConfigError(f"{path} must be an object")
+
+    kind = _peek_appliance_kind(value)
+    if kind == _EV_CHARGER_KIND:
+        return read_ev_charger_appliance(value, path=path)
+    if kind == _GENERIC_APPLIANCE_KIND:
+        return read_generic_appliance(value, path=path)
+
+    raise GenericApplianceConfigError(
+        f"{path}.kind must be one of {_EV_CHARGER_KIND!r}, "
+        f"{_GENERIC_APPLIANCE_KIND!r}"
+    )
 
 
 def _log_invalid_appliance(

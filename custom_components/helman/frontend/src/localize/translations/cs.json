@@ -17,10 +17,11 @@
       "add_category": "Přidat kategorii",
       "add_badge_text": "Přidat text štítku",
       "add_deferrable_consumer": "Přidat odložitelný spotřebič",
-      "add_daily_energy_entity": "Přidat entitu denní energie",
-      "add_import_price_window": "Přidat okno ceny importu",
-      "add_ev_charger": "Přidat EV nabíječku",
-      "add_vehicle": "Přidat vozidlo",
+        "add_daily_energy_entity": "Přidat entitu denní energie",
+        "add_import_price_window": "Přidat okno ceny importu",
+        "add_ev_charger": "Přidat EV nabíječku",
+        "add_generic_appliance": "Přidat obecný spotřebič",
+        "add_vehicle": "Přidat vozidlo",
       "add_use_mode": "Přidat režim použití",
       "add_eco_gear": "Přidat eco gear",
       "remove": "Odstranit",
@@ -48,19 +49,21 @@
       "battery": "Baterie",
       "grid": "Síť",
       "schedule_control_mapping": "Mapování ovládání plánování",
-      "configured_appliances": "Nakonfigurované spotřebiče",
-      "identity_and_limits": "Identita a limity",
-      "controls": "Ovládání",
-      "use_modes": "Režimy použití",
-      "eco_gears": "Eco gears",
-      "vehicles": "Vozidla"
-    },
-    "notes": {
+        "configured_appliances": "Nakonfigurované spotřebiče",
+        "identity_and_limits": "Identita a limity",
+        "controls": "Ovládání",
+        "projection": "Projekce",
+        "use_modes": "Režimy použití",
+        "eco_gears": "Eco gears",
+        "vehicles": "Vozidla"
+      },
+      "notes": {
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
-      "appliances": "Editace EV nabíječky je podporovaná přímo. Nepodporované budoucí typy spotřebičů se zachovají a zobrazí jen pro čtení, dokud je neodstraníte."
-    },
+        "appliances": "Editace EV nabíječky a obecného spotřebiče je podporovaná přímo. Nepodporované budoucí typy spotřebičů se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
+        "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu."
+      },
     "empty": {
       "no_appliances": "Zatím nejsou nakonfigurovány žádné spotřebiče.",
       "no_device_label_categories": "Nejsou nakonfigurovány žádné kategorie textů štítků."
@@ -120,10 +123,15 @@
       "stop_charging_option": "Volba Zastavit nabíjení",
       "stop_discharging_option": "Volba Zastavit vybíjení",
       "appliance_id": "ID spotřebiče",
-      "appliance_name": "Název spotřebiče",
-      "kind": "Druh",
-      "max_charging_power_kw": "Max. nabíjecí výkon kW",
-      "charge_switch_entity": "Entita přepínače nabíjení",
+        "appliance_name": "Název spotřebiče",
+        "kind": "Druh",
+        "switch_entity": "Entita přepínače",
+        "projection_strategy": "Strategie projekce",
+        "hourly_energy_kwh": "Průměrná hodinová energie kWh",
+        "history_energy_entity": "Entita energie pro historii",
+        "history_lookback_days": "Počet dní historie",
+        "max_charging_power_kw": "Max. nabíjecí výkon kW",
+        "charge_switch_entity": "Entita přepínače nabíjení",
       "use_mode_entity": "Entita režimu použití",
       "eco_gear_entity": "Entita eco gear",
       "mode_id": "ID režimu",
@@ -140,10 +148,11 @@
     "helpers": {
       "history_buckets": "Kolik bucketů historie Helman drží pro UI historii.",
       "history_bucket_duration": "Délka jednoho bucketu historie v hodinách.",
-      "power_sensor_name_cleaner_regex": "Volitelný regex použitý při normalizaci názvů power senzorů.",
-      "import_price_unit": "Např.: CZK/kWh",
-      "mode_entity": "Helman zapisuje volby akcí plánování do této entity."
-    },
+        "power_sensor_name_cleaner_regex": "Volitelný regex použitý při normalizaci názvů power senzorů.",
+        "import_price_unit": "Např.: CZK/kWh",
+        "mode_entity": "Helman zapisuje volby akcí plánování do této entity.",
+        "history_energy_entity": "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče."
+      },
     "messages": {
       "reloaded_config": "Uložená konfigurace Helman byla znovu načtena z backendu.",
       "load_config_failed": "Nepodařilo se načíst uloženou konfiguraci Helman.",
@@ -171,10 +180,12 @@
       "key_missing": "Klíč {key} neexistuje."
     },
     "values": {
-      "fixed_max_power": "Pevný maximální výkon",
-      "surplus_aware": "Řízeno přebytkem",
-      "unknown": "neznámý",
-      "missing_id": "chybí id"
+        "fixed_max_power": "Pevný maximální výkon",
+        "surplus_aware": "Řízeno přebytkem",
+        "fixed": "Pevná hodnota",
+        "history_average": "Historický průměr",
+        "unknown": "neznámý",
+        "missing_id": "chybí id"
     },
     "mode": {
       "visual": "Vizuální",
@@ -202,10 +213,11 @@
       "consumer": "Spotřebič {index}",
       "daily_energy_entity": "Entita denní energie {index}",
       "import_window": "Importní okno {index}",
-      "appliance": "Spotřebič {index}",
-      "ev_charger": "EV nabíječka {index}",
-      "vehicle": "Vozidlo {index}",
-      "unsupported_appliance_kind": "Nepodporovaný typ spotřebiče: {kind}"
-    }
+        "appliance": "Spotřebič {index}",
+        "ev_charger": "EV nabíječka {index}",
+        "generic_appliance": "Obecný spotřebič {index}",
+        "vehicle": "Vozidlo {index}",
+        "unsupported_appliance_kind": "Nepodporovaný typ spotřebiče: {kind}"
+      }
   }
 }

@@ -4,7 +4,13 @@ from typing import TYPE_CHECKING, TypedDict
 
 from .ev_charger import (
     EvChargerApplianceResponseDict,
+    EvChargerApplianceRuntime,
     build_ev_charger_metadata_dict,
+)
+from .generic_appliance import (
+    GenericApplianceResponseDict,
+    GenericApplianceRuntime,
+    build_generic_appliance_metadata_dict,
 )
 from .state import AppliancesRuntimeRegistry
 
@@ -12,8 +18,11 @@ if TYPE_CHECKING:
     from .projection_response import ApplianceProjectionsResponseDict
 
 
+ApplianceResponseDict = EvChargerApplianceResponseDict | GenericApplianceResponseDict
+
+
 class ApplianceMetadataResponseDict(TypedDict):
-    appliances: list[EvChargerApplianceResponseDict]
+    appliances: list[ApplianceResponseDict]
 
 
 def build_appliances_response(
@@ -23,15 +32,20 @@ def build_appliances_response(
         return build_empty_appliances_response()
 
     return {
-        "appliances": [
-            build_ev_charger_metadata_dict(appliance)
-            for appliance in registry.appliances
-        ]
+        "appliances": [_build_appliance_metadata(appliance) for appliance in registry.appliances]
     }
 
 
 def build_empty_appliances_response() -> ApplianceMetadataResponseDict:
     return {"appliances": []}
+
+
+def _build_appliance_metadata(appliance) -> ApplianceResponseDict:
+    if isinstance(appliance, EvChargerApplianceRuntime):
+        return build_ev_charger_metadata_dict(appliance)
+    if isinstance(appliance, GenericApplianceRuntime):
+        return build_generic_appliance_metadata_dict(appliance)
+    raise TypeError(f"Unsupported appliance runtime {type(appliance)!r}")
 
 
 def build_empty_appliance_projections_response(

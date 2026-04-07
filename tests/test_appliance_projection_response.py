@@ -38,6 +38,12 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
             microsecond=0,
         )
     )
+    async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
+        return None
+
+    recorder_slots_mod.estimate_average_hourly_energy_when_switch_on = (
+        _estimate_average_hourly_energy_when_switch_on
+    )
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     try:
@@ -80,6 +86,9 @@ try:
     ev_charger_module = importlib.import_module(
         "custom_components.helman.appliances.ev_charger"
     )
+    generic_appliance_module = importlib.import_module(
+        "custom_components.helman.appliances.generic_appliance"
+    )
     projection_builder_module = importlib.import_module(
         "custom_components.helman.appliances.projection_builder"
     )
@@ -98,6 +107,7 @@ EvChargerApplianceRuntime = ev_charger_module.EvChargerApplianceRuntime
 EvChargerEcoGearRuntime = ev_charger_module.EvChargerEcoGearRuntime
 EvChargerUseModeRuntime = ev_charger_module.EvChargerUseModeRuntime
 EvVehicleRuntime = ev_charger_module.EvVehicleRuntime
+GenericApplianceRuntime = generic_appliance_module.GenericApplianceRuntime
 build_appliance_projections_response = (
     projection_response_module.build_appliance_projections_response
 )
@@ -157,6 +167,21 @@ def _registry() -> AppliancesRuntimeRegistry:
                         max_charging_power_kw=11.0,
                     ),
                 ),
+            )
+        ]
+    )
+
+
+def _generic_registry() -> AppliancesRuntimeRegistry:
+    return AppliancesRuntimeRegistry.from_appliances(
+        [
+            GenericApplianceRuntime(
+                id="dishwasher",
+                name="Dishwasher",
+                switch_entity_id="switch.dishwasher",
+                projection_strategy="fixed",
+                hourly_energy_kwh=0.9,
+                history_energy_entity_id=None,
             )
         ]
     )
@@ -231,6 +256,46 @@ class ApplianceProjectionResponseTests(unittest.TestCase):
 
         self.assertIsNone(
             response["appliances"]["garage-ev"]["series"][0]["vehicleSoc"]
+        )
+
+    def test_generic_response_uses_projection_method_only(self) -> None:
+        response = build_appliance_projections_response(
+            plan=ApplianceProjectionPlan(
+                generated_at="2026-03-20T21:07:00+01:00",
+                appliances_by_id={
+                    "dishwasher": ApplianceProjectionSeries(
+                        appliance_id="dishwasher",
+                        points=(
+                            ApplianceProjectionPlanPoint(
+                                slot_id="2026-03-20T21:00:00+01:00",
+                                energy_kwh=0.46,
+                                projection_method="fixed_fallback",
+                            ),
+                        ),
+                    )
+                },
+                demand_points=(),
+            ),
+            registry=_generic_registry(),
+            hass=_FakeHass({}),
+        )
+
+        self.assertEqual(
+            response,
+            {
+                "generatedAt": "2026-03-20T21:07:00+01:00",
+                "appliances": {
+                    "dishwasher": {
+                        "series": [
+                            {
+                                "slotId": "2026-03-20T21:00:00+01:00",
+                                "energyKwh": 0.46,
+                                "projectionMethod": "fixed_fallback",
+                            }
+                        ]
+                    }
+                },
+            },
         )
 
 

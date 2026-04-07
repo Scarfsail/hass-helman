@@ -77,6 +77,27 @@ def _valid_config() -> dict:
     }
 
 
+def _generic_appliance() -> dict:
+    return {
+        "kind": "generic",
+        "id": "dishwasher",
+        "name": "Dishwasher",
+        "controls": {
+            "switch": {
+                "entity_id": "switch.dishwasher",
+            }
+        },
+        "projection": {
+            "strategy": "history_average",
+            "hourly_energy_kwh": 1.2,
+            "history_average": {
+                "energy_entity_id": "sensor.dishwasher_energy_total",
+                "lookback_days": 21,
+            },
+        },
+    }
+
+
 class ApplianceConfigTests(unittest.TestCase):
     def test_missing_appliances_key_returns_empty_registry(self) -> None:
         registry = build_appliances_runtime_registry({})
@@ -174,6 +195,31 @@ class ApplianceConfigTests(unittest.TestCase):
             [appliance.id for appliance in registry.appliances],
             ["garage-ev", "driveway-ev"],
         )
+
+    def test_valid_generic_config_builds_registry(self) -> None:
+        registry = build_appliances_runtime_registry({"appliances": [_generic_appliance()]})
+
+        self.assertEqual(len(registry.appliances), 1)
+        appliance = registry.appliances[0]
+        self.assertEqual(appliance.id, "dishwasher")
+        self.assertEqual(appliance.kind, "generic")
+        self.assertEqual(appliance.switch_entity_id, "switch.dishwasher")
+        self.assertEqual(appliance.projection_strategy, "history_average")
+        self.assertEqual(
+            appliance.history_energy_entity_id,
+            "sensor.dishwasher_energy_total",
+        )
+        self.assertEqual(appliance.history_lookback_days, 21)
+
+    def test_invalid_generic_history_strategy_is_ignored_with_error_log(self) -> None:
+        invalid = _generic_appliance()
+        del invalid["projection"]["history_average"]
+
+        with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
+            registry = build_appliances_runtime_registry({"appliances": [invalid]})
+
+        self.assertEqual(registry.appliances, ())
+        self.assertIn("history_average is required", captured.output[0])
 
 
 if __name__ == "__main__":

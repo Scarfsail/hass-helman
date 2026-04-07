@@ -264,6 +264,27 @@ export function createApplianceDraft(
   };
 }
 
+export function createGenericApplianceDraft(
+  existingIds: string[],
+  applianceName: string,
+): JsonObject {
+  const applianceId = createUniqueKey(existingIds, "generic-appliance");
+  return {
+    kind: "generic",
+    id: applianceId,
+    name: applianceName,
+    controls: {
+      switch: {
+        entity_id: "",
+      },
+    },
+    projection: {
+      strategy: "fixed",
+      hourly_energy_kwh: 1,
+    },
+  };
+}
+
 export function createVehicleDraft(existingIds: string[], vehicleName: string): JsonObject {
   const vehicleId = createUniqueKey(existingIds, "vehicle");
   return {

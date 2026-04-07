@@ -79,7 +79,11 @@ from custom_components.helman.scheduling.schedule import (
 )
 
 
-def _valid_config(*, include_second_appliance: bool = False) -> dict:
+def _valid_config(
+    *,
+    include_second_appliance: bool = False,
+    include_generic: bool = False,
+) -> dict:
     appliances = [
         {
             "kind": "ev_charger",
@@ -141,6 +145,23 @@ def _valid_config(*, include_second_appliance: bool = False) -> dict:
                         },
                     }
                 ],
+            }
+        )
+    if include_generic:
+        appliances.append(
+            {
+                "kind": "generic",
+                "id": "dishwasher",
+                "name": "Dishwasher",
+                "controls": {
+                    "switch": {
+                        "entity_id": "switch.dishwasher",
+                    }
+                },
+                "projection": {
+                    "strategy": "fixed",
+                    "hourly_energy_kwh": 1.1,
+                },
             }
         )
     return {"appliances": appliances}
@@ -294,6 +315,34 @@ class ScheduleApplianceTests(unittest.TestCase):
                 reference_time=REFERENCE_TIME,
                 battery_soc_bounds=None,
                 appliances_registry=_registry(),
+            )
+
+    def test_generic_on_action_is_normalized(self) -> None:
+        slot = slot_from_dict(_slot_payload(appliances={"dishwasher": {"on": True}}))
+
+        normalized = normalize_slot_patch_request(
+            slots=[slot],
+            reference_time=REFERENCE_TIME,
+            battery_soc_bounds=None,
+            appliances_registry=_registry(config=_valid_config(include_generic=True)),
+        )
+
+        self.assertEqual(
+            normalized[0].domains.appliances,
+            {"dishwasher": {"on": True}},
+        )
+
+    def test_generic_action_rejects_unsupported_fields(self) -> None:
+        slot = slot_from_dict(
+            _slot_payload(appliances={"dishwasher": {"on": True, "mode": "eco"}})
+        )
+
+        with self.assertRaises(ScheduleActionError):
+            normalize_slot_patch_request(
+                slots=[slot],
+                reference_time=REFERENCE_TIME,
+                battery_soc_bounds=None,
+                appliances_registry=_registry(config=_valid_config(include_generic=True)),
             )
 
     def test_unknown_appliance_id_is_rejected(self) -> None:

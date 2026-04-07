@@ -227,6 +227,98 @@ class ForecastRecorderSlotTests(unittest.TestCase):
 
         self.assertEqual(changes, {boundaries[0]: 0.25})
 
+    def test_build_switch_on_intervals_clamps_to_window(self) -> None:
+        states = [
+            SimpleNamespace(
+                state="on",
+                last_updated=datetime(2026, 3, 20, 9, 50, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="off",
+                last_updated=datetime(2026, 3, 20, 10, 30, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="on",
+                last_updated=datetime(2026, 3, 20, 10, 45, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="off",
+                last_updated=datetime(2026, 3, 20, 11, 10, tzinfo=UTC),
+            ),
+        ]
+
+        intervals = recorder_hourly_series._build_switch_on_intervals(
+            states=states,
+            window_start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+            window_end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+        )
+
+        self.assertEqual(
+            intervals,
+            [
+                (
+                    datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+                    datetime(2026, 3, 20, 10, 30, tzinfo=UTC),
+                ),
+                (
+                    datetime(2026, 3, 20, 10, 45, tzinfo=UTC),
+                    datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+                ),
+            ],
+        )
+
+    def test_estimate_average_hourly_energy_for_on_intervals(self) -> None:
+        switch_states = [
+            SimpleNamespace(
+                state="on",
+                last_updated=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="off",
+                last_updated=datetime(2026, 3, 20, 10, 30, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="on",
+                last_updated=datetime(2026, 3, 20, 10, 45, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="off",
+                last_updated=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+            ),
+        ]
+        energy_states = [
+            SimpleNamespace(
+                state="0.0",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="0.5",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 20, 10, 30, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="0.75",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 20, 10, 45, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="1.25",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+            ),
+        ]
+
+        estimate = recorder_hourly_series._estimate_average_hourly_energy_kwh_for_on_intervals(
+            switch_states=switch_states,
+            energy_states=energy_states,
+            window_start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+            window_end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+            default_unit="kWh",
+        )
+
+        self.assertEqual(estimate, 1.3333)
+
 
 if __name__ == "__main__":
     unittest.main()
