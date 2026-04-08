@@ -83,6 +83,9 @@ def _restore_modules(previous_modules: dict[str, types.ModuleType | None]) -> No
 
 _previous_modules = _install_import_stubs()
 try:
+    climate_appliance_module = importlib.import_module(
+        "custom_components.helman.appliances.climate_appliance"
+    )
     ev_charger_module = importlib.import_module(
         "custom_components.helman.appliances.ev_charger"
     )
@@ -103,6 +106,7 @@ ApplianceProjectionPlan = projection_builder_module.ApplianceProjectionPlan
 ApplianceProjectionPlanPoint = projection_builder_module.ApplianceProjectionPlanPoint
 ApplianceProjectionSeries = projection_builder_module.ApplianceProjectionSeries
 AppliancesRuntimeRegistry = state_module.AppliancesRuntimeRegistry
+ClimateApplianceRuntime = climate_appliance_module.ClimateApplianceRuntime
 EvChargerApplianceRuntime = ev_charger_module.EvChargerApplianceRuntime
 EvChargerEcoGearRuntime = ev_charger_module.EvChargerEcoGearRuntime
 EvChargerUseModeRuntime = ev_charger_module.EvChargerUseModeRuntime
@@ -181,6 +185,21 @@ def _generic_registry() -> AppliancesRuntimeRegistry:
                 switch_entity_id="switch.dishwasher",
                 projection_strategy="fixed",
                 hourly_energy_kwh=0.9,
+                history_energy_entity_id=None,
+            )
+        ]
+    )
+
+
+def _climate_registry() -> AppliancesRuntimeRegistry:
+    return AppliancesRuntimeRegistry.from_appliances(
+        [
+            ClimateApplianceRuntime(
+                id="living-room-hvac",
+                name="Living Room HVAC",
+                climate_entity_id="climate.living_room",
+                projection_strategy="fixed",
+                hourly_energy_kwh=1.5,
                 history_energy_entity_id=None,
             )
         ]
@@ -291,6 +310,48 @@ class ApplianceProjectionResponseTests(unittest.TestCase):
                                 "slotId": "2026-03-20T21:00:00+01:00",
                                 "energyKwh": 0.46,
                                 "projectionMethod": "fixed_fallback",
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+
+    def test_climate_response_includes_mode_and_projection_method(self) -> None:
+        response = build_appliance_projections_response(
+            plan=ApplianceProjectionPlan(
+                generated_at="2026-03-20T21:07:00+01:00",
+                appliances_by_id={
+                    "living-room-hvac": ApplianceProjectionSeries(
+                        appliance_id="living-room-hvac",
+                        points=(
+                            ApplianceProjectionPlanPoint(
+                                slot_id="2026-03-20T21:00:00+01:00",
+                                energy_kwh=0.575,
+                                mode="cool",
+                                projection_method="history_average",
+                            ),
+                        ),
+                    )
+                },
+                demand_points=(),
+            ),
+            registry=_climate_registry(),
+            hass=_FakeHass({}),
+        )
+
+        self.assertEqual(
+            response,
+            {
+                "generatedAt": "2026-03-20T21:07:00+01:00",
+                "appliances": {
+                    "living-room-hvac": {
+                        "series": [
+                            {
+                                "slotId": "2026-03-20T21:00:00+01:00",
+                                "energyKwh": 0.575,
+                                "mode": "cool",
+                                "projectionMethod": "history_average",
                             }
                         ]
                     }

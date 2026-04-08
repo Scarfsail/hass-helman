@@ -176,6 +176,7 @@ def _install_import_stubs() -> None:
             sys.modules["homeassistant.util.dt"] = dt_mod
         dt_mod.parse_datetime = datetime.fromisoformat
         dt_mod.as_local = lambda value: value
+        dt_mod.as_utc = lambda value: value
         dt_mod.now = lambda: REFERENCE_TIME
         util_pkg.dt = dt_mod
 
@@ -250,6 +251,27 @@ def _valid_appliances_config() -> dict:
                         },
                     }
                 ],
+            }
+        ]
+    }
+
+
+def _valid_climate_config() -> dict:
+    return {
+        "appliances": [
+            {
+                "kind": "climate",
+                "id": "living-room-hvac",
+                "name": "Living Room HVAC",
+                "controls": {
+                    "climate": {
+                        "entity_id": "climate.living_room",
+                    }
+                },
+                "projection": {
+                    "strategy": "fixed",
+                    "hourly_energy_kwh": 1.5,
+                },
             }
         ]
     }
@@ -429,6 +451,75 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slots": {},
             },
         )
+
+    async def test_get_appliances_uses_live_climate_capabilities(self) -> None:
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+            config=_valid_climate_config(),
+        )
+        coordinator = HelmanCoordinator(
+            FakeHass(
+                {
+                    "climate.living_room": FakeState(
+                        "heat",
+                        attributes={"hvac_modes": ["off", "heat"]},
+                    )
+                }
+            ),
+            storage,
+        )
+        coordinator._active_config = storage.config
+        coordinator._appliances_registry = build_appliances_runtime_registry(storage.config)
+
+        response = await coordinator.get_appliances()
+
+        self.assertEqual(
+            response["appliances"][0]["metadata"]["scheduleCapabilities"]["modes"],
+            ["heat"],
+        )
+
+    async def test_set_schedule_rejects_climate_mode_missing_from_live_capabilities(
+        self,
+    ) -> None:
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+            config=_valid_climate_config(),
+        )
+        coordinator = HelmanCoordinator(
+            FakeHass(
+                {
+                    "climate.living_room": FakeState(
+                        "heat",
+                        attributes={"hvac_modes": ["off", "heat"]},
+                    )
+                }
+            ),
+            storage,
+        )
+        coordinator._active_config = storage.config
+        coordinator._appliances_registry = build_appliances_runtime_registry(storage.config)
+
+        with self.assertRaises(ScheduleActionError):
+            await coordinator.set_schedule(
+                slots=[
+                    ScheduleSlot(
+                        id=CURRENT_SLOT_ID,
+                        domains={
+                            "inverter": {"kind": "normal"},
+                            "appliances": {"living-room-hvac": {"mode": "cool"}},
+                        },
+                    )
+                ],
+                reference_time=REFERENCE_TIME,
+            )
 
     async def test_normalize_schedule_document_resets_incompatible_slot_minutes(
         self,

@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, TypedDict
 
+from .climate_appliance import (
+    ClimateApplianceResponseDict,
+    ClimateApplianceRuntime,
+    build_climate_appliance_metadata_dict,
+)
 from .ev_charger import (
     EvChargerApplianceResponseDict,
     EvChargerApplianceRuntime,
@@ -18,7 +23,11 @@ if TYPE_CHECKING:
     from .projection_response import ApplianceProjectionsResponseDict
 
 
-ApplianceResponseDict = EvChargerApplianceResponseDict | GenericApplianceResponseDict
+ApplianceResponseDict = (
+    ClimateApplianceResponseDict
+    | EvChargerApplianceResponseDict
+    | GenericApplianceResponseDict
+)
 
 
 class ApplianceMetadataResponseDict(TypedDict):
@@ -41,6 +50,8 @@ def build_empty_appliances_response() -> ApplianceMetadataResponseDict:
 
 
 def _build_appliance_metadata(appliance) -> ApplianceResponseDict:
+    if isinstance(appliance, ClimateApplianceRuntime):
+        return build_climate_appliance_metadata_dict(appliance)
     if isinstance(appliance, EvChargerApplianceRuntime):
         return build_ev_charger_metadata_dict(appliance)
     if isinstance(appliance, GenericApplianceRuntime):

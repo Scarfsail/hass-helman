@@ -20,6 +20,7 @@
         "add_daily_energy_entity": "Přidat entitu denní energie",
         "add_import_price_window": "Přidat okno ceny importu",
         "add_ev_charger": "Přidat EV nabíječku",
+        "add_climate_appliance": "Přidat topení/klimatizaci",
         "add_generic_appliance": "Přidat obecný spotřebič",
         "add_vehicle": "Přidat vozidlo",
       "add_use_mode": "Přidat režim použití",
@@ -61,8 +62,9 @@
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
-        "appliances": "Editace EV nabíječky a obecného spotřebiče je podporovaná přímo. Nepodporované budoucí typy spotřebičů se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
-        "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu."
+        "appliances": "Editace EV nabíječky, topení/klimatizace a obecného spotřebiče je podporovaná přímo. Nepodporované budoucí typy spotřebičů se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
+        "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
+        "climate_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu."
       },
     "empty": {
       "no_appliances": "Zatím nejsou nakonfigurovány žádné spotřebiče.",
@@ -126,6 +128,7 @@
         "appliance_name": "Název spotřebiče",
         "appliance_icon": "Ikona spotřebiče",
         "kind": "Druh",
+        "climate_entity": "Entita topení/klimatizace",
         "switch_entity": "Entita přepínače",
         "projection_strategy": "Strategie projekce",
         "hourly_energy_kwh": "Průměrná hodinová energie kWh",
@@ -217,6 +220,7 @@
       "import_window": "Importní okno {index}",
         "appliance": "Spotřebič {index}",
         "ev_charger": "EV nabíječka {index}",
+        "climate_appliance": "Topení/klimatizace {index}",
         "generic_appliance": "Obecný spotřebič {index}",
         "vehicle": "Vozidlo {index}",
         "unsupported_appliance_kind": "Nepodporovaný typ spotřebiče: {kind}"

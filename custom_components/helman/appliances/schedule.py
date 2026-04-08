@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .climate_appliance import ClimateApplianceRuntime
+from .climate_schedule import (
+    ClimateApplianceScheduleActionDict,
+    normalize_climate_appliance_schedule_action,
+)
 from .ev_charger import EvChargerApplianceRuntime
 from .ev_schedule import (
     ApplianceScheduleNormalizationMode,
@@ -17,7 +22,9 @@ from .generic_schedule import (
 from .state import AppliancesRuntimeRegistry
 
 ApplianceScheduleActionDict = (
-    EvChargerScheduleActionDict | GenericApplianceScheduleActionDict
+    ClimateApplianceScheduleActionDict
+    | EvChargerScheduleActionDict
+    | GenericApplianceScheduleActionDict
 )
 ApplianceScheduleActionsDict = dict[str, ApplianceScheduleActionDict]
 
@@ -61,7 +68,14 @@ def normalize_appliance_schedule_actions(
                 f"{context}.{appliance_id} must reference a configured appliance"
             )
 
-        if isinstance(appliance, EvChargerApplianceRuntime):
+        if isinstance(appliance, ClimateApplianceRuntime):
+            normalized_action = normalize_climate_appliance_schedule_action(
+                action,
+                appliance=appliance,
+                context=f"{context}.{appliance_id}",
+                mode=mode,
+            )
+        elif isinstance(appliance, EvChargerApplianceRuntime):
             normalized_action = normalize_ev_charger_schedule_action(
                 action,
                 appliance=appliance,

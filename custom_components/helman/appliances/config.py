@@ -4,12 +4,14 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from .climate_appliance import ClimateApplianceConfigError, read_climate_appliance
 from .ev_charger import EvChargerConfigError, read_ev_charger_appliance
 from .generic_appliance import GenericApplianceConfigError, read_generic_appliance
 from .state import AppliancesRuntimeRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
+_CLIMATE_APPLIANCE_KIND = "climate"
 _EV_CHARGER_KIND = "ev_charger"
 _GENERIC_APPLIANCE_KIND = "generic"
 
@@ -35,7 +37,11 @@ def build_appliances_runtime_registry(
                 raw_appliance,
                 path=f"appliances[{index}]",
             )
-        except (EvChargerConfigError, GenericApplianceConfigError) as err:
+        except (
+            ClimateApplianceConfigError,
+            EvChargerConfigError,
+            GenericApplianceConfigError,
+        ) as err:
             _log_invalid_appliance(
                 logger=active_logger,
                 index=index,
@@ -107,14 +113,16 @@ def _read_appliance_runtime(
         raise GenericApplianceConfigError(f"{path} must be an object")
 
     kind = _peek_appliance_kind(value)
+    if kind == _CLIMATE_APPLIANCE_KIND:
+        return read_climate_appliance(value, path=path)
     if kind == _EV_CHARGER_KIND:
         return read_ev_charger_appliance(value, path=path)
     if kind == _GENERIC_APPLIANCE_KIND:
         return read_generic_appliance(value, path=path)
 
     raise GenericApplianceConfigError(
-        f"{path}.kind must be one of {_EV_CHARGER_KIND!r}, "
-        f"{_GENERIC_APPLIANCE_KIND!r}"
+        f"{path}.kind must be one of {_CLIMATE_APPLIANCE_KIND!r}, "
+        f"{_EV_CHARGER_KIND!r}, {_GENERIC_APPLIANCE_KIND!r}"
     )
 
 

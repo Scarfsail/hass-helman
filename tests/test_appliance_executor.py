@@ -59,6 +59,9 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from custom_components.helman.appliances.climate_appliance import (  # noqa: E402
+    ClimateApplianceRuntime,
+)
 from custom_components.helman.appliances.ev_charger import (  # noqa: E402
     EvChargerApplianceRuntime,
     EvChargerEcoGearRuntime,
@@ -70,6 +73,7 @@ from custom_components.helman.appliances.generic_appliance import (  # noqa: E40
 )
 from custom_components.helman.appliances.execution import (  # noqa: E402
     ApplianceExecutionMemory,
+    ClimateApplianceExecutor,
     EvChargerExecutor,
     GenericApplianceExecutor,
 )
@@ -112,6 +116,8 @@ class FakeServices:
                 self._hass.states._states[entity_id].state = "on"
         elif domain == "switch" and service == "turn_off":
             self._hass.states._states[entity_id].state = "off"
+        elif domain == "climate" and service == "set_hvac_mode":
+            self._hass.states._states[entity_id].state = data["hvac_mode"]
         elif service == "select_option":
             self._hass.states._states[entity_id].state = data["option"]
 
@@ -175,6 +181,17 @@ def _build_generic_appliance() -> GenericApplianceRuntime:
     )
 
 
+def _build_climate_appliance() -> ClimateApplianceRuntime:
+    return ClimateApplianceRuntime(
+        id="living-room-hvac",
+        name="Living Room HVAC",
+        climate_entity_id="climate.living_room",
+        projection_strategy="fixed",
+        hourly_energy_kwh=1.5,
+        history_energy_entity_id=None,
+    )
+
+
 class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def test_charge_true_writes_charge_then_mode_then_eco(self) -> None:
         hass = FakeHass(
@@ -200,6 +217,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 "useMode": "ECO",
                 "ecoGear": "10A",
             },
+            last_scheduled_action=None,
             memory=None,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
@@ -252,6 +270,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, _memory = await executor.async_execute(
             appliance=_build_appliance(),
             action={"charge": False},
+            last_scheduled_action=None,
             memory=None,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
@@ -283,6 +302,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, memory = await executor.async_execute(
             appliance=_build_appliance(),
             action=None,
+            last_scheduled_action=None,
             memory=ApplianceExecutionMemory(
                 last_active_slot_id="2026-03-20T20:30:00+01:00",
                 last_action_signature=(True, "kona", "ECO", "10A"),
@@ -300,6 +320,39 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "slot_stop")
         self.assertEqual(runtime.outcome, "success")
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
+        self.assertFalse(memory.last_enabled)
+
+    async def test_missing_action_after_restart_uses_last_scheduled_charge_action(self) -> None:
+        hass = FakeHass(
+            {
+                "switch.ev_nabijeni": FakeState("on"),
+                "select.solax_ev_charger_charger_use_mode": FakeState(
+                    "ECO",
+                    attributes={"options": ["Stop", "Fast", "ECO"]},
+                ),
+                "select.solax_ev_charger_eco_gear": FakeState(
+                    "10A",
+                    attributes={"options": ["6A", "10A"]},
+                ),
+            }
+        )
+        executor = EvChargerExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_appliance(),
+            action=None,
+            last_scheduled_action={"charge": True, "vehicleId": "kona", "useMode": "ECO"},
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [("switch", "turn_off", {"entity_id": "switch.ev_nabijeni"}, True)],
+        )
+        self.assertEqual(runtime.action_kind, "slot_stop")
+        self.assertEqual(runtime.outcome, "success")
         self.assertFalse(memory.last_enabled)
 
     async def test_unchanged_same_slot_is_noop(self) -> None:
@@ -321,6 +374,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, _memory = await executor.async_execute(
             appliance=_build_appliance(),
             action={"charge": True, "vehicleId": "kona", "useMode": "Fast"},
+            last_scheduled_action=None,
             memory=ApplianceExecutionMemory(
                 last_active_slot_id=CURRENT_SLOT_ID,
                 last_action_signature=(True, "kona", "Fast", None),
@@ -354,10 +408,11 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, memory = await executor.async_execute(
             appliance=_build_appliance(),
             action=None,
+            last_scheduled_action=None,
             memory=ApplianceExecutionMemory(
                 last_active_slot_id=CURRENT_SLOT_ID,
                 last_action_signature=None,
-                last_enabled=True,
+                last_enabled=False,
                 last_runtime_action_kind="slot_stop",
             ),
             active_slot_id=CURRENT_SLOT_ID,
@@ -376,6 +431,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
             action={"on": True},
+            last_scheduled_action=None,
             memory=None,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
@@ -396,12 +452,36 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
             action=None,
+            last_scheduled_action=None,
             memory=ApplianceExecutionMemory(
                 last_active_slot_id="2026-03-20T20:30:00+01:00",
                 last_action_signature=(True,),
                 last_enabled=True,
                 last_runtime_action_kind="apply",
             ),
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [("switch", "turn_off", {"entity_id": "switch.dishwasher"}, True)],
+        )
+        self.assertEqual(runtime.action_kind, "slot_stop")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertFalse(memory.last_enabled)
+
+    async def test_generic_missing_action_after_restart_uses_last_scheduled_on_action(
+        self,
+    ) -> None:
+        hass = FakeHass({"switch.dishwasher": FakeState("on")})
+        executor = GenericApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_generic_appliance(),
+            action=None,
+            last_scheduled_action={"on": True},
+            memory=None,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
         )
@@ -421,6 +501,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, _memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
             action={"on": True},
+            last_scheduled_action=None,
             memory=ApplianceExecutionMemory(
                 last_active_slot_id=CURRENT_SLOT_ID,
                 last_action_signature=(True,),
@@ -443,6 +524,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         first_runtime, first_memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
             action={"on": True},
+            last_scheduled_action=None,
             memory=None,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
@@ -455,6 +537,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         second_runtime, second_memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
             action={"on": True},
+            last_scheduled_action=None,
             memory=first_memory,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
@@ -479,6 +562,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         first_runtime, first_memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
             action=None,
+            last_scheduled_action=None,
             memory=previous_memory,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
@@ -491,6 +575,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         second_runtime, second_memory = await executor.async_execute(
             appliance=_build_generic_appliance(),
             action=None,
+            last_scheduled_action=None,
             memory=first_memory,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,
@@ -500,6 +585,156 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_runtime.outcome, "success")
         self.assertIsNotNone(second_memory)
         self.assertFalse(second_memory.last_enabled)
+
+    async def test_climate_heat_sets_hvac_mode(self) -> None:
+        hass = FakeHass(
+            {
+                "climate.living_room": FakeState(
+                    "off",
+                    attributes={"hvac_modes": ["off", "heat", "cool"]},
+                )
+            }
+        )
+        executor = ClimateApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_climate_appliance(),
+            action={"mode": "heat"},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "climate",
+                    "set_hvac_mode",
+                    {
+                        "entity_id": "climate.living_room",
+                        "hvac_mode": "heat",
+                    },
+                    True,
+                )
+            ],
+        )
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertTrue(memory.last_enabled)
+
+    async def test_climate_missing_action_after_previous_mode_emits_slot_stop(self) -> None:
+        hass = FakeHass(
+            {
+                "climate.living_room": FakeState(
+                    "cool",
+                    attributes={"hvac_modes": ["off", "heat", "cool"]},
+                )
+            }
+        )
+        executor = ClimateApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_climate_appliance(),
+            action=None,
+            last_scheduled_action=None,
+            memory=ApplianceExecutionMemory(
+                last_active_slot_id="2026-03-20T20:30:00+01:00",
+                last_action_signature=("cool",),
+                last_enabled=True,
+                last_runtime_action_kind="apply",
+            ),
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "climate",
+                    "set_hvac_mode",
+                    {
+                        "entity_id": "climate.living_room",
+                        "hvac_mode": "off",
+                    },
+                    True,
+                )
+            ],
+        )
+        self.assertEqual(runtime.action_kind, "slot_stop")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertFalse(memory.last_enabled)
+
+    async def test_climate_missing_action_after_restart_uses_last_scheduled_mode(
+        self,
+    ) -> None:
+        hass = FakeHass(
+            {
+                "climate.living_room": FakeState(
+                    "cool",
+                    attributes={"hvac_modes": ["off", "heat", "cool"]},
+                )
+            }
+        )
+        executor = ClimateApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_climate_appliance(),
+            action=None,
+            last_scheduled_action={"mode": "cool"},
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "climate",
+                    "set_hvac_mode",
+                    {
+                        "entity_id": "climate.living_room",
+                        "hvac_mode": "off",
+                    },
+                    True,
+                )
+            ],
+        )
+        self.assertEqual(runtime.action_kind, "slot_stop")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertFalse(memory.last_enabled)
+
+    async def test_climate_unchanged_same_slot_is_noop(self) -> None:
+        hass = FakeHass(
+            {
+                "climate.living_room": FakeState(
+                    "heat",
+                    attributes={"hvac_modes": ["off", "heat", "cool"]},
+                )
+            }
+        )
+        executor = ClimateApplianceExecutor(hass)
+
+        runtime, _memory = await executor.async_execute(
+            appliance=_build_climate_appliance(),
+            action={"mode": "heat"},
+            last_scheduled_action=None,
+            memory=ApplianceExecutionMemory(
+                last_active_slot_id=CURRENT_SLOT_ID,
+                last_action_signature=("heat",),
+                last_enabled=True,
+                last_runtime_action_kind="apply",
+            ),
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(runtime.action_kind, "noop")
+        self.assertEqual(runtime.outcome, "skipped")
 
     async def test_timeout_waiting_for_charge_on_fails_before_selects(self) -> None:
         hass = FakeHass(
@@ -525,6 +760,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         runtime, _memory = await executor.async_execute(
             appliance=_build_appliance(),
             action={"charge": True, "vehicleId": "kona", "useMode": "Fast"},
+            last_scheduled_action=None,
             memory=None,
             active_slot_id=CURRENT_SLOT_ID,
             reference_time=REFERENCE_TIME,

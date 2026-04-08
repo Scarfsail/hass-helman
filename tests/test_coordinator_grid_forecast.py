@@ -140,8 +140,14 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
         return None
 
+    async def _estimate_average_hourly_energy_when_climate_active(*args, **kwargs):
+        return None
+
     recorder_slots_mod.estimate_average_hourly_energy_when_switch_on = (
         _estimate_average_hourly_energy_when_switch_on
+    )
+    recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
+        _estimate_average_hourly_energy_when_climate_active
     )
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 

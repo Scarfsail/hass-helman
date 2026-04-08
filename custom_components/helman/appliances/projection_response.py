@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import NotRequired, TypedDict
 
+from .climate_appliance import ClimateApplianceRuntime
 from .ev_charger import EvChargerApplianceRuntime
 from .generic_appliance import GenericApplianceRuntime
 from .projection_builder import ApplianceProjectionPlan, ApplianceProjectionSeries
@@ -49,7 +50,9 @@ def build_appliance_projections_response(
         if appliance is None:
             continue
 
-        if isinstance(appliance, EvChargerApplianceRuntime):
+        if isinstance(appliance, ClimateApplianceRuntime):
+            response_points = _build_climate_projection_points(series=series)
+        elif isinstance(appliance, EvChargerApplianceRuntime):
             response_points = _build_ev_projection_points(
                 series=series,
                 appliance=appliance,
@@ -129,6 +132,26 @@ def _build_generic_projection_points(
             "slotId": point.slot_id,
             "energyKwh": point.energy_kwh,
         }
+        if point.projection_method is not None:
+            response_point["projectionMethod"] = point.projection_method
+        response_points.append(response_point)
+
+    return response_points
+
+
+def _build_climate_projection_points(
+    *,
+    series: ApplianceProjectionSeries,
+) -> list[ApplianceProjectionPointDict]:
+    response_points: list[ApplianceProjectionPointDict] = []
+
+    for point in series.points:
+        response_point: ApplianceProjectionPointDict = {
+            "slotId": point.slot_id,
+            "energyKwh": point.energy_kwh,
+        }
+        if point.mode is not None:
+            response_point["mode"] = point.mode
         if point.projection_method is not None:
             response_point["projectionMethod"] = point.projection_method
         response_points.append(response_point)

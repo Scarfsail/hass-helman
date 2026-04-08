@@ -464,6 +464,45 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results, [(1, {"success": True})])
         self.assertEqual(connection.errors, [])
 
+    async def test_set_schedule_forwards_climate_appliance_action(self) -> None:
+        coordinator = FakeCoordinator()
+        connection = FakeConnection()
+        msg = {
+            "id": 1,
+            **SET_SCHEDULE_REQUEST_SCHEMA(
+                {
+                    "type": "helman/set_schedule",
+                    "slots": [
+                        {
+                            "id": CURRENT_SLOT_ID,
+                            "domains": {
+                                "inverter": {"kind": "normal"},
+                                "appliances": {
+                                    "living-room-hvac": {
+                                        "mode": "heat",
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                }
+            ),
+        }
+
+        await ws_set_schedule(FakeHass(coordinator), connection, msg)
+
+        slot = coordinator.schedule_calls[0][0]
+        self.assertEqual(
+            slot.domains.appliances,
+            {
+                "living-room-hvac": {
+                    "mode": "heat",
+                }
+            },
+        )
+        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.errors, [])
+
     async def test_set_schedule_surfaces_coordinator_validation_error(self) -> None:
         coordinator = FakeCoordinator()
         coordinator.schedule_error = ScheduleActionError("bad appliance action")

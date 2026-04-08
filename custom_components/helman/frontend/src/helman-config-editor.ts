@@ -8,6 +8,7 @@ import {
   asJsonObject,
   cloneJson,
   createApplianceDraft,
+  createClimateApplianceDraft,
   createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
@@ -1211,6 +1212,13 @@ export class HelmanConfigEditorPanel extends LitElement {
             <button
               type="button"
               class="add-button"
+              @click=${this._handleAddClimateAppliance}
+            >
+              ${this._t("editor.actions.add_climate_appliance")}
+            </button>
+            <button
+              type="button"
+              class="add-button"
               @click=${this._handleAddGenericAppliance}
             >
               ${this._t("editor.actions.add_generic_appliance")}
@@ -1556,6 +1564,9 @@ export class HelmanConfigEditorPanel extends LitElement {
     if (kind === "ev_charger") {
       return this._renderEvChargerAppliance(applianceObject, index, total);
     }
+    if (kind === "climate") {
+      return this._renderClimateAppliance(applianceObject, index, total);
+    }
     if (kind === "generic") {
       return this._renderGenericAppliance(applianceObject, index, total);
     }
@@ -1845,53 +1856,162 @@ export class HelmanConfigEditorPanel extends LitElement {
 
         <details class="section-card" open>
           <summary>${this._t("editor.sections.projection")}</summary>
+          ${this._renderProjectedApplianceProjectionSection(
+            basePath,
+            projectionStrategy,
+            historyAveragePath,
+            "editor.notes.generic_appliance_projection",
+            (strategy) =>
+              this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+          )}
+        </details>
+      </div>
+    `;
+  }
+
+  private _renderClimateAppliance(
+    appliance: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["appliances", index];
+    const historyAveragePath: PathSegment[] = [...basePath, "projection", "history_average"];
+    const projectionStrategy =
+      this._stringValue(this._getValue([...basePath, "projection", "strategy"])) || "fixed";
+    const applianceName =
+      this._stringValue(appliance.name) ||
+      this._tFormat("editor.dynamic.climate_appliance", { index: index + 1 });
+    const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
+
+    return html`
+      <div class="list-card">
+        <div class="card-header">
+          <div class="card-title">
+            <strong>${applianceName}</strong>
+            <span class="card-subtitle">${applianceId}</span>
+          </div>
+          <div class="list-actions">
+            <button
+              type="button"
+              ?disabled=${index === 0}
+              @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+            >
+              ${this._t("editor.actions.up")}
+            </button>
+            <button
+              type="button"
+              ?disabled=${index === total - 1}
+              @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+            >
+              ${this._t("editor.actions.down")}
+            </button>
+            <button
+              type="button"
+              class="danger"
+              @click=${() => this._removeListItem(["appliances"], index)}
+            >
+              ${this._t("editor.actions.remove")}
+            </button>
+          </div>
+        </div>
+
+        <details class="section-card" open>
+          <summary>${this._t("editor.sections.identity_and_limits")}</summary>
           <div class="section-content">
-            <p class="inline-note">
-              ${this._t("editor.notes.generic_appliance_projection")}
-            </p>
             <div class="field-grid">
-              <div class="field">
-                <label>${this._t("editor.fields.projection_strategy")}</label>
-                <select
-                  .value=${projectionStrategy}
-                  @change=${(event: Event) =>
-                    this._handleGenericProjectionStrategyChange(
-                      index,
-                      (event.currentTarget as HTMLSelectElement).value,
-                    )}
-                >
-                  ${GENERIC_PROJECTION_STRATEGIES.map(
-                    (option) => html`
-                      <option value=${option.value}>${this._t(option.labelKey)}</option>
-                    `,
-                  )}
-                </select>
-              </div>
-              ${this._renderRequiredNumberField(
-                [...basePath, "projection", "hourly_energy_kwh"],
-                "editor.fields.hourly_energy_kwh",
+              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id")}
+              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name")}
+              ${this._renderOptionalIconField(
+                [...basePath, "icon"],
+                "editor.fields.appliance_icon",
+                "editor.helpers.appliance_icon",
               )}
+              <div class="field">
+                <label>${this._t("editor.fields.kind")}</label>
+                <input value="climate" disabled />
+              </div>
             </div>
-            ${projectionStrategy === "history_average"
-              ? html`
-                  <div class="field-grid">
-                    ${this._renderRequiredEntityField(
-                      [...historyAveragePath, "energy_entity_id"],
-                      "editor.fields.history_energy_entity",
-                      ["sensor"],
-                      "editor.helpers.history_energy_entity",
-                    )}
-                    ${this._renderRequiredNumberField(
-                      [...historyAveragePath, "lookback_days"],
-                      "editor.fields.history_lookback_days",
-                      undefined,
-                      "1",
-                    )}
-                  </div>
-                `
-              : nothing}
           </div>
         </details>
+
+        <details class="section-card" open>
+          <summary>${this._t("editor.sections.controls")}</summary>
+          <div class="section-content">
+            <div class="field-grid">
+              ${this._renderRequiredEntityField(
+                [...basePath, "controls", "climate", "entity_id"],
+                "editor.fields.climate_entity",
+                ["climate"],
+              )}
+            </div>
+          </div>
+        </details>
+
+        <details class="section-card" open>
+          <summary>${this._t("editor.sections.projection")}</summary>
+          ${this._renderProjectedApplianceProjectionSection(
+            basePath,
+            projectionStrategy,
+            historyAveragePath,
+            "editor.notes.climate_appliance_projection",
+            (strategy) =>
+              this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+          )}
+        </details>
+      </div>
+    `;
+  }
+
+  private _renderProjectedApplianceProjectionSection(
+    appliancePath: PathSegment[],
+    projectionStrategy: string,
+    historyAveragePath: PathSegment[],
+    noteKey: string,
+    onStrategyChange: (strategy: string) => void,
+  ): TemplateResult {
+    return html`
+      <div class="section-content">
+        <p class="inline-note">
+          ${this._t(noteKey)}
+        </p>
+        <div class="field-grid">
+          <div class="field">
+            <label>${this._t("editor.fields.projection_strategy")}</label>
+            <select
+              .value=${projectionStrategy}
+              @change=${(event: Event) =>
+                onStrategyChange((event.currentTarget as HTMLSelectElement).value)}
+            >
+              ${GENERIC_PROJECTION_STRATEGIES.map(
+                (option) => html`
+                  <option value=${option.value}>${this._t(option.labelKey)}</option>
+                `,
+              )}
+            </select>
+          </div>
+          ${this._renderRequiredNumberField(
+            [...appliancePath, "projection", "hourly_energy_kwh"],
+            "editor.fields.hourly_energy_kwh",
+          )}
+        </div>
+        ${projectionStrategy === "history_average"
+          ? html`
+              <div class="field-grid">
+                ${this._renderRequiredEntityField(
+                  [...historyAveragePath, "energy_entity_id"],
+                  "editor.fields.history_energy_entity",
+                  ["sensor"],
+                  "editor.helpers.history_energy_entity",
+                )}
+                ${this._renderRequiredNumberField(
+                  [...historyAveragePath, "lookback_days"],
+                  "editor.fields.history_lookback_days",
+                  undefined,
+                  "1",
+                )}
+              </div>
+            `
+          : nothing}
       </div>
     `;
   }
@@ -2716,6 +2836,24 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
   };
 
+  private _handleAddClimateAppliance = (): void => {
+    const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
+      .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
+      .filter((value) => value.length > 0);
+    this._applyMutation((draft) => {
+      appendListItem(
+        draft,
+        ["appliances"],
+        createClimateApplianceDraft(
+          existingIds,
+          this._tFormat("editor.dynamic.climate_appliance", {
+            index: existingIds.length + 1,
+          }),
+        ),
+      );
+    });
+  };
+
   private _handleAddGenericAppliance = (): void => {
     const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
       .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
@@ -2779,7 +2917,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
   }
 
-  private _handleGenericProjectionStrategyChange(
+  private _handleProjectedApplianceProjectionStrategyChange(
     applianceIndex: number,
     strategy: string,
   ): void {

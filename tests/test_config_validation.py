@@ -210,6 +210,29 @@ def _generic_appliance(*, strategy: str = "fixed") -> dict:
     return appliance
 
 
+def _climate_appliance(*, strategy: str = "fixed") -> dict:
+    appliance = {
+        "kind": "climate",
+        "id": "living-room-hvac",
+        "name": "Living Room HVAC",
+        "controls": {
+            "climate": {
+                "entity_id": "climate.living_room",
+            }
+        },
+        "projection": {
+            "strategy": strategy,
+            "hourly_energy_kwh": 1.5,
+        },
+    }
+    if strategy == "history_average":
+        appliance["projection"]["history_average"] = {
+            "energy_entity_id": "sensor.living_room_hvac_energy_total",
+            "lookback_days": 30,
+        }
+    return appliance
+
+
 class ConfigValidationTests(unittest.TestCase):
     def test_valid_document_passes(self) -> None:
         report = validate_config_document(_valid_config())
@@ -278,6 +301,15 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(report.valid)
         self.assertEqual(report.errors, [])
 
+    def test_valid_climate_appliance_passes(self) -> None:
+        config = _valid_config()
+        config["appliances"] = [_climate_appliance(strategy="history_average")]
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.errors, [])
+
     def test_appliance_icon_accepts_non_mdi_value(self) -> None:
         config = _valid_config()
         config["appliances"][0]["icon"] = "hass:car-electric"
@@ -300,6 +332,23 @@ class ConfigValidationTests(unittest.TestCase):
             any(
                 issue.path == "appliances[0]"
                 and "history_average is required" in issue.message
+                for issue in report.errors
+            )
+        )
+
+    def test_climate_requires_climate_domain(self) -> None:
+        config = _valid_config()
+        appliance = _climate_appliance()
+        appliance["controls"]["climate"]["entity_id"] = "switch.not_a_climate"
+        config["appliances"] = [appliance]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "appliances[0]"
+                and "controls.climate.entity_id" in issue.message
                 for issue in report.errors
             )
         )

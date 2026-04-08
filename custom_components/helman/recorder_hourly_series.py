@@ -245,6 +245,43 @@ async def estimate_average_hourly_energy_when_switch_on(
     reference_time: datetime,
     lookback_days: int,
 ) -> float | None:
+    return await _estimate_average_hourly_energy_when_entity_active(
+        hass,
+        entity_id=switch_entity_id,
+        energy_entity_id=energy_entity_id,
+        reference_time=reference_time,
+        lookback_days=lookback_days,
+        active_states=("on",),
+    )
+
+
+async def estimate_average_hourly_energy_when_climate_active(
+    hass: HomeAssistant,
+    *,
+    climate_entity_id: str,
+    energy_entity_id: str,
+    reference_time: datetime,
+    lookback_days: int,
+) -> float | None:
+    return await _estimate_average_hourly_energy_when_entity_active(
+        hass,
+        entity_id=climate_entity_id,
+        energy_entity_id=energy_entity_id,
+        reference_time=reference_time,
+        lookback_days=lookback_days,
+        active_states=("heat", "cool"),
+    )
+
+
+async def _estimate_average_hourly_energy_when_entity_active(
+    hass: HomeAssistant,
+    *,
+    entity_id: str,
+    energy_entity_id: str,
+    reference_time: datetime,
+    lookback_days: int,
+    active_states: tuple[str, ...],
+) -> float | None:
     if (
         isinstance(lookback_days, bool)
         or not isinstance(lookback_days, int)
@@ -263,12 +300,12 @@ async def estimate_average_hourly_energy_when_switch_on(
         default_unit = current_energy_state.attributes.get("unit_of_measurement")
 
     recorder = get_instance(hass)
-    switch_history = await recorder.async_add_executor_job(
+    entity_history = await recorder.async_add_executor_job(
         lambda: state_changes_during_period(
             hass,
             utc_start,
             utc_end,
-            switch_entity_id,
+            entity_id,
             True,
             False,
             None,
@@ -288,22 +325,21 @@ async def estimate_average_hourly_energy_when_switch_on(
         )
     )
 
-    switch_states = (
-        switch_history.get(switch_entity_id)
-        or switch_history.get(switch_entity_id.lower())
-        or []
+    entity_states = (
+        entity_history.get(entity_id) or entity_history.get(entity_id.lower()) or []
     )
     energy_states = (
         energy_history.get(energy_entity_id)
         or energy_history.get(energy_entity_id.lower())
         or []
     )
-    return _estimate_average_hourly_energy_kwh_for_on_intervals(
-        switch_states=switch_states,
+    return _estimate_average_hourly_energy_kwh_for_active_intervals(
+        entity_states=entity_states,
         energy_states=energy_states,
         window_start=utc_start,
         window_end=utc_end,
         default_unit=default_unit,
+        active_states=active_states,
     )
 
 
@@ -403,12 +439,32 @@ def _estimate_average_hourly_energy_kwh_for_on_intervals(
     window_end: datetime,
     default_unit: Any,
 ) -> float | None:
-    on_intervals = _build_switch_on_intervals(
-        states=switch_states,
+    return _estimate_average_hourly_energy_kwh_for_active_intervals(
+        entity_states=switch_states,
+        energy_states=energy_states,
         window_start=window_start,
         window_end=window_end,
+        default_unit=default_unit,
+        active_states=("on",),
     )
-    if not on_intervals:
+
+
+def _estimate_average_hourly_energy_kwh_for_active_intervals(
+    *,
+    entity_states: list[Any],
+    energy_states: list[Any],
+    window_start: datetime,
+    window_end: datetime,
+    default_unit: Any,
+    active_states: tuple[str, ...],
+) -> float | None:
+    active_intervals = _build_active_state_intervals(
+        states=entity_states,
+        window_start=window_start,
+        window_end=window_end,
+        active_states=active_states,
+    )
+    if not active_intervals:
         return None
 
     observations = _build_unwrapped_energy_observations(
@@ -420,15 +476,17 @@ def _estimate_average_hourly_energy_kwh_for_on_intervals(
     if not observations:
         return None
 
-    boundaries = sorted({boundary for interval in on_intervals for boundary in interval})
+    boundaries = sorted(
+        {boundary for interval in active_intervals for boundary in interval}
+    )
     boundary_samples = _sample_energy_observations_at_boundaries(
         observations,
         boundaries,
     )
 
     total_energy_kwh = 0.0
-    total_on_hours = 0.0
-    for interval_start, interval_end in on_intervals:
+    total_active_hours = 0.0
+    for interval_start, interval_end in active_intervals:
         start_value = boundary_samples.get(interval_start)
         end_value = boundary_samples.get(interval_end)
         if start_value is None or end_value is None:
@@ -443,15 +501,15 @@ def _estimate_average_hourly_energy_kwh_for_on_intervals(
             continue
 
         total_energy_kwh += delta
-        total_on_hours += duration_hours
+        total_active_hours += duration_hours
 
     if (
-        total_on_hours <= 0
+        total_active_hours <= 0
         or total_energy_kwh <= _ENERGY_TOLERANCE_KWH
     ):
         return None
 
-    return round(total_energy_kwh / total_on_hours, 4)
+    return round(total_energy_kwh / total_active_hours, 4)
 
 
 def _build_switch_on_intervals(
@@ -460,9 +518,27 @@ def _build_switch_on_intervals(
     window_start: datetime,
     window_end: datetime,
 ) -> list[tuple[datetime, datetime]]:
+    return _build_active_state_intervals(
+        states=states,
+        window_start=window_start,
+        window_end=window_end,
+        active_states=("on",),
+    )
+
+
+def _build_active_state_intervals(
+    *,
+    states: list[Any],
+    window_start: datetime,
+    window_end: datetime,
+    active_states: tuple[str, ...],
+) -> list[tuple[datetime, datetime]]:
     if not states or window_end <= window_start:
         return []
 
+    normalized_active_states = {
+        state.strip().lower() for state in active_states if state.strip()
+    }
     intervals: list[tuple[datetime, datetime]] = []
     active_start: datetime | None = None
     for state in states:
@@ -474,8 +550,7 @@ def _build_switch_on_intervals(
         if updated_at > window_end:
             break
 
-        is_on = _is_switch_on_state(getattr(state, "state", None))
-        if is_on:
+        if _is_active_state(getattr(state, "state", None), normalized_active_states):
             if active_start is None:
                 active_start = max(updated_at, window_start)
             continue
@@ -492,6 +567,10 @@ def _build_switch_on_intervals(
         intervals.append((active_start, window_end))
 
     return intervals
+
+
+def _is_active_state(value: Any, active_states: set[str]) -> bool:
+    return isinstance(value, str) and value.strip().lower() in active_states
 
 
 def _is_switch_on_state(value: Any) -> bool:

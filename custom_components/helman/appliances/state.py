@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
+    from .climate_appliance import ClimateApplianceRuntime
     from .ev_charger import EvChargerApplianceRuntime
     from .generic_appliance import GenericApplianceRuntime
 
-    ApplianceRuntime: TypeAlias = EvChargerApplianceRuntime | GenericApplianceRuntime
+    ApplianceRuntime: TypeAlias = (
+        ClimateApplianceRuntime | EvChargerApplianceRuntime | GenericApplianceRuntime
+    )
 else:
     ApplianceRuntime: TypeAlias = object
 

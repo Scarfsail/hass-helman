@@ -26,6 +26,7 @@ _install_import_stubs()
 
 from custom_components.helman.appliances import (
     AppliancesRuntimeRegistry,
+    ClimateApplianceRuntime,
     build_appliances_response,
     build_appliances_runtime_registry,
 )
@@ -91,6 +92,21 @@ def _generic_appliance() -> dict:
         "projection": {
             "strategy": "fixed",
             "hourly_energy_kwh": 0.9,
+        },
+    }
+
+
+def _climate_appliance() -> dict:
+    return {
+        "kind": "climate",
+        "id": "living-room-hvac",
+        "name": "Living Room HVAC",
+        "controls": {
+            "climate": {"entity_id": "climate.living_room"},
+        },
+        "projection": {
+            "strategy": "fixed",
+            "hourly_energy_kwh": 1.5,
         },
     }
 
@@ -227,6 +243,53 @@ class ApplianceStateTests(unittest.TestCase):
                     "switch": {"entityId": "switch.dishwasher"},
                 },
             },
+        )
+
+    def test_climate_appliance_response_matches_metadata_only_shape(self) -> None:
+        config = _valid_config()
+        config["appliances"].append(_climate_appliance())
+
+        registry = build_appliances_runtime_registry(config)
+
+        self.assertEqual(
+            build_appliances_response(registry)["appliances"][1],
+            {
+                "id": "living-room-hvac",
+                "name": "Living Room HVAC",
+                "kind": "climate",
+                "metadata": {
+                    "icon": "mdi:lightning-bolt",
+                    "scheduleCapabilities": {
+                        "modes": ["heat", "cool"],
+                    },
+                },
+                "controls": {
+                    "climate": {"entityId": "climate.living_room"},
+                },
+            },
+        )
+
+    def test_climate_appliance_response_uses_runtime_supported_modes(self) -> None:
+        registry = AppliancesRuntimeRegistry.from_appliances(
+            [
+                ClimateApplianceRuntime(
+                    id="living-room-hvac",
+                    name="Living Room HVAC",
+                    climate_entity_id="climate.living_room",
+                    projection_strategy="fixed",
+                    hourly_energy_kwh=1.5,
+                    history_energy_entity_id=None,
+                    supported_modes=("heat",),
+                    stop_hvac_mode="off",
+                )
+            ]
+        )
+
+        self.assertEqual(
+            build_appliances_response(registry)["appliances"][0]["metadata"][
+                "scheduleCapabilities"
+            ]["modes"],
+            ["heat"],
         )
 
     def test_configured_icons_are_preserved_in_metadata(self) -> None:

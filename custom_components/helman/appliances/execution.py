@@ -15,6 +15,8 @@ from ..scheduling.runtime_status import (
     RuntimeOutcome,
 )
 from ..scheduling.schedule import ScheduleError, ScheduleExecutionUnavailableError
+from .climate_appliance import ClimateApplianceRuntime
+from .climate_schedule import ClimateApplianceScheduleActionDict
 from .ev_charger import EvChargerApplianceRuntime
 from .ev_schedule import EvChargerScheduleActionDict
 from .generic_appliance import GenericApplianceRuntime
@@ -182,6 +184,81 @@ class SelectEntityController:
             ) from err
 
 
+class ClimateEntityController:
+    def __init__(self, entity_id: str) -> None:
+        domain, separator, object_id = entity_id.partition(".")
+        if not separator or not object_id or domain != "climate":
+            raise ScheduleExecutionUnavailableError(
+                "Climate entity must use the climate domain"
+            )
+        self.entity_id = entity_id
+
+    def read_state(self, hass: HomeAssistant) -> Any:
+        state = hass.states.get(self.entity_id)
+        if state is None:
+            raise ScheduleExecutionUnavailableError(
+                f"Climate entity '{self.entity_id}' is not available"
+            )
+
+        raw_state = getattr(state, "state", None)
+        if (
+            not isinstance(raw_state, str)
+            or not raw_state.strip()
+            or raw_state.strip().lower() in _UNAVAILABLE_STATES
+        ):
+            raise ScheduleExecutionUnavailableError(
+                f"Climate entity '{self.entity_id}' is unavailable"
+            )
+        return state
+
+    @staticmethod
+    def read_available_hvac_modes(state: Any) -> list[str]:
+        raw_attributes = getattr(state, "attributes", {})
+        if not isinstance(raw_attributes, Mapping):
+            raise ScheduleExecutionUnavailableError(
+                "Climate HVAC modes are unavailable"
+            )
+
+        raw_modes = raw_attributes.get("hvac_modes")
+        if not isinstance(raw_modes, (list, tuple)) or not raw_modes:
+            raise ScheduleExecutionUnavailableError(
+                "Climate HVAC modes are unavailable"
+            )
+
+        modes = [mode for mode in raw_modes if isinstance(mode, str) and mode.strip()]
+        if len(modes) != len(raw_modes):
+            raise ScheduleExecutionUnavailableError(
+                "Climate HVAC modes must be non-empty strings"
+            )
+        return modes
+
+    def validate_hvac_mode(self, state: Any, hvac_mode: str) -> None:
+        if hvac_mode not in self.read_available_hvac_modes(state):
+            raise ScheduleExecutionUnavailableError(
+                f"Climate HVAC mode '{hvac_mode}' is not available on "
+                f"'{self.entity_id}'"
+            )
+
+    async def async_set_hvac_mode(
+        self,
+        hass: HomeAssistant,
+        *,
+        hvac_mode: str,
+    ) -> None:
+        try:
+            await hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": self.entity_id, "hvac_mode": hvac_mode},
+                blocking=True,
+            )
+        except Exception as err:
+            raise ScheduleExecutionUnavailableError(
+                f"Failed to apply climate HVAC mode '{hvac_mode}' to "
+                f"'{self.entity_id}'"
+            ) from err
+
+
 class EvChargerExecutor:
     def __init__(
         self,
@@ -201,15 +278,15 @@ class EvChargerExecutor:
         *,
         appliance: EvChargerApplianceRuntime,
         action: EvChargerScheduleActionDict | None,
+        last_scheduled_action: EvChargerScheduleActionDict | None,
         memory: ApplianceExecutionMemory | None,
         active_slot_id: str,
         reference_time: datetime,
     ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
         if action is None:
-            if memory is None or not memory.last_enabled:
-                return None, None
             if (
-                memory.last_active_slot_id == active_slot_id
+                memory is not None
+                and memory.last_active_slot_id == active_slot_id
                 and memory.last_runtime_action_kind == "slot_stop"
             ):
                 runtime = _build_runtime_status(
@@ -218,6 +295,15 @@ class EvChargerExecutor:
                     reference_time=reference_time,
                 )
                 return runtime, memory
+            if memory is not None and not memory.last_enabled:
+                return None, None
+            if (
+                memory is None
+                and not self._last_scheduled_action_requires_slot_stop(
+                    last_scheduled_action
+                )
+            ):
+                return None, None
             runtime = await self._async_stop_charge_only(
                 appliance=appliance,
                 action_kind="slot_stop",
@@ -405,6 +491,12 @@ class EvChargerExecutor:
             action.get("ecoGear"),
         )
 
+    @staticmethod
+    def _last_scheduled_action_requires_slot_stop(
+        action: EvChargerScheduleActionDict | None,
+    ) -> bool:
+        return bool(action is not None and action["charge"])
+
 
 class GenericApplianceExecutor:
     def __init__(self, hass: HomeAssistant) -> None:
@@ -415,15 +507,15 @@ class GenericApplianceExecutor:
         *,
         appliance: GenericApplianceRuntime,
         action: GenericApplianceScheduleActionDict | None,
+        last_scheduled_action: GenericApplianceScheduleActionDict | None,
         memory: ApplianceExecutionMemory | None,
         active_slot_id: str,
         reference_time: datetime,
     ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
         if action is None:
-            if memory is None or not memory.last_enabled:
-                return None, None
             if (
-                memory.last_active_slot_id == active_slot_id
+                memory is not None
+                and memory.last_active_slot_id == active_slot_id
                 and memory.last_runtime_action_kind == "slot_stop"
             ):
                 runtime = _build_runtime_status(
@@ -432,6 +524,15 @@ class GenericApplianceExecutor:
                     reference_time=reference_time,
                 )
                 return runtime, memory
+            if memory is not None and not memory.last_enabled:
+                return None, None
+            if (
+                memory is None
+                and not self._last_scheduled_action_requires_slot_stop(
+                    last_scheduled_action
+                )
+            ):
+                return None, None
             runtime = await self._async_apply_enabled_state(
                 appliance=appliance,
                 enabled=False,
@@ -544,6 +645,173 @@ class GenericApplianceExecutor:
     ) -> tuple[object, ...]:
         return (bool(action["on"]),)
 
+    @staticmethod
+    def _last_scheduled_action_requires_slot_stop(
+        action: GenericApplianceScheduleActionDict | None,
+    ) -> bool:
+        return bool(action is not None and action["on"])
+
+
+class ClimateApplianceExecutor:
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+
+    async def async_execute(
+        self,
+        *,
+        appliance: ClimateApplianceRuntime,
+        action: ClimateApplianceScheduleActionDict | None,
+        last_scheduled_action: ClimateApplianceScheduleActionDict | None,
+        memory: ApplianceExecutionMemory | None,
+        active_slot_id: str,
+        reference_time: datetime,
+    ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
+        if action is None:
+            if (
+                memory is not None
+                and memory.last_active_slot_id == active_slot_id
+                and memory.last_runtime_action_kind == "slot_stop"
+            ):
+                runtime = _build_runtime_status(
+                    action_kind="slot_stop",
+                    outcome="success",
+                    reference_time=reference_time,
+                )
+                return runtime, memory
+            if memory is not None and not memory.last_enabled:
+                return None, None
+            if (
+                memory is None
+                and not self._last_scheduled_action_requires_slot_stop(
+                    last_scheduled_action
+                )
+            ):
+                return None, None
+            runtime = await self._async_apply_hvac_mode(
+                appliance=appliance,
+                hvac_mode=appliance.stop_hvac_mode,
+                action_kind="slot_stop",
+                reference_time=reference_time,
+            )
+            if runtime.outcome != "success":
+                return runtime, memory
+            return (
+                runtime,
+                ApplianceExecutionMemory(
+                    last_active_slot_id=active_slot_id,
+                    last_action_signature=None,
+                    last_enabled=False,
+                    last_runtime_action_kind="slot_stop",
+                ),
+            )
+
+        signature = self._signature_for_action(action)
+        if (
+            memory is not None
+            and memory.last_active_slot_id == active_slot_id
+            and memory.last_action_signature == signature
+        ):
+            return (
+                _build_runtime_status(
+                    action_kind="noop",
+                    outcome="skipped",
+                    reference_time=reference_time,
+                ),
+                ApplianceExecutionMemory(
+                    last_active_slot_id=active_slot_id,
+                    last_action_signature=signature,
+                    last_enabled=True,
+                    last_runtime_action_kind="noop",
+                ),
+            )
+
+        runtime = await self._async_apply_hvac_mode(
+            appliance=appliance,
+            hvac_mode=action["mode"],
+            action_kind="apply",
+            reference_time=reference_time,
+        )
+        if runtime.outcome != "success":
+            return runtime, memory
+        return (
+            runtime,
+            ApplianceExecutionMemory(
+                last_active_slot_id=active_slot_id,
+                last_action_signature=signature,
+                last_enabled=True,
+                last_runtime_action_kind="apply",
+            ),
+        )
+
+    async def async_disable_active_action(
+        self,
+        *,
+        appliance: ClimateApplianceRuntime,
+        action: ClimateApplianceScheduleActionDict | None,
+        reference_time: datetime,
+    ) -> ApplianceRuntimeStatus | None:
+        if action is None:
+            return None
+        return await self._async_apply_hvac_mode(
+            appliance=appliance,
+            hvac_mode=appliance.stop_hvac_mode,
+            action_kind="slot_stop",
+            reference_time=reference_time,
+        )
+
+    async def _async_apply_hvac_mode(
+        self,
+        *,
+        appliance: ClimateApplianceRuntime,
+        hvac_mode: str | None,
+        action_kind: RuntimeActionKind,
+        reference_time: datetime,
+    ) -> ApplianceRuntimeStatus:
+        if hvac_mode is None:
+            return _build_runtime_status(
+                action_kind=action_kind,
+                outcome="failed",
+                error=ScheduleExecutionUnavailableError(
+                    f"Climate appliance {appliance.id!r} cannot be stopped because "
+                    "HVAC mode 'off' is unavailable"
+                ),
+                reference_time=reference_time,
+            )
+        try:
+            climate_controller = ClimateEntityController(appliance.climate_entity_id)
+            climate_state = climate_controller.read_state(self._hass)
+            climate_controller.validate_hvac_mode(climate_state, hvac_mode)
+            if getattr(climate_state, "state", None) != hvac_mode:
+                await climate_controller.async_set_hvac_mode(
+                    self._hass,
+                    hvac_mode=hvac_mode,
+                )
+        except ScheduleError as err:
+            return _build_runtime_status(
+                action_kind=action_kind,
+                outcome="failed",
+                error=err,
+                reference_time=reference_time,
+            )
+
+        return _build_runtime_status(
+            action_kind=action_kind,
+            outcome="success",
+            reference_time=reference_time,
+        )
+
+    @staticmethod
+    def _signature_for_action(
+        action: ClimateApplianceScheduleActionDict,
+    ) -> tuple[object, ...]:
+        return (action["mode"],)
+
+    @staticmethod
+    def _last_scheduled_action_requires_slot_stop(
+        action: ClimateApplianceScheduleActionDict | None,
+    ) -> bool:
+        return action is not None
+
 
 def _build_runtime_status(
     *,
@@ -570,6 +838,7 @@ class AppliancesExecutor:
         poll_interval_seconds: float = _CHARGE_POLL_INTERVAL_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
+        self._climate_executor = ClimateApplianceExecutor(hass)
         self._ev_executor = EvChargerExecutor(
             hass,
             charge_on_wait_seconds=charge_on_wait_seconds,
@@ -584,6 +853,7 @@ class AppliancesExecutor:
         registry: AppliancesRuntimeRegistry,
         active_slot_id: str,
         active_actions: Mapping[str, ApplianceScheduleActionDict],
+        last_scheduled_actions: Mapping[str, ApplianceScheduleActionDict],
         previous_memories: Mapping[str, ApplianceExecutionMemory],
         reference_time: datetime,
     ) -> AppliancesExecutionResult:
@@ -595,6 +865,7 @@ class AppliancesExecutor:
             runtime, memory = await self._async_execute_for_appliance(
                 appliance=appliance,
                 action=active_actions.get(appliance.id),
+                last_scheduled_action=last_scheduled_actions.get(appliance.id),
                 memory=previous_memories.get(appliance.id),
                 active_slot_id=active_slot_id,
                 reference_time=reference_time,
@@ -649,14 +920,25 @@ class AppliancesExecutor:
         *,
         appliance,
         action: ApplianceScheduleActionDict | None,
+        last_scheduled_action: ApplianceScheduleActionDict | None,
         memory: ApplianceExecutionMemory | None,
         active_slot_id: str,
         reference_time: datetime,
     ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
+        if isinstance(appliance, ClimateApplianceRuntime):
+            return await self._climate_executor.async_execute(
+                appliance=appliance,
+                action=action,
+                last_scheduled_action=last_scheduled_action,
+                memory=memory,
+                active_slot_id=active_slot_id,
+                reference_time=reference_time,
+            )
         if isinstance(appliance, EvChargerApplianceRuntime):
             return await self._ev_executor.async_execute(
                 appliance=appliance,
                 action=action,
+                last_scheduled_action=last_scheduled_action,
                 memory=memory,
                 active_slot_id=active_slot_id,
                 reference_time=reference_time,
@@ -665,6 +947,7 @@ class AppliancesExecutor:
             return await self._generic_executor.async_execute(
                 appliance=appliance,
                 action=action,
+                last_scheduled_action=last_scheduled_action,
                 memory=memory,
                 active_slot_id=active_slot_id,
                 reference_time=reference_time,
@@ -678,6 +961,12 @@ class AppliancesExecutor:
         action: ApplianceScheduleActionDict | None,
         reference_time: datetime,
     ) -> ApplianceRuntimeStatus | None:
+        if isinstance(appliance, ClimateApplianceRuntime):
+            return await self._climate_executor.async_disable_active_action(
+                appliance=appliance,
+                action=action,
+                reference_time=reference_time,
+            )
         if isinstance(appliance, EvChargerApplianceRuntime):
             return await self._ev_executor.async_disable_active_action(
                 appliance=appliance,

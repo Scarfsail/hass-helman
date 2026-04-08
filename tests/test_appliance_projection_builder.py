@@ -217,6 +217,27 @@ def _generic_appliance(*, strategy: str = "fixed") -> dict:
     return appliance
 
 
+def _climate_appliance(*, strategy: str = "fixed") -> dict:
+    appliance = {
+        "kind": "climate",
+        "id": "living-room-hvac",
+        "name": "Living Room HVAC",
+        "controls": {
+            "climate": {"entity_id": "climate.living_room"},
+        },
+        "projection": {
+            "strategy": strategy,
+            "hourly_energy_kwh": 1.5,
+        },
+    }
+    if strategy == "history_average":
+        appliance["projection"]["history_average"] = {
+            "energy_entity_id": "sensor.living_room_hvac_energy_total",
+            "lookback_days": 30,
+        }
+    return appliance
+
+
 class ApplianceProjectionBuilderTests(unittest.TestCase):
     def test_fast_projection_uses_effective_power_cap(self) -> None:
         registry = build_appliances_runtime_registry(_valid_config())
@@ -477,6 +498,91 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         series = plan.appliances_by_id["dishwasher"].points
         self.assertEqual(len(series), 1)
         self.assertEqual(series[0].energy_kwh, 0.46)
+        self.assertEqual(series[0].projection_method, "fixed_fallback")
+
+    def test_climate_fixed_projection_prorates_slot_duration_and_emits_mode(self) -> None:
+        registry = build_appliances_runtime_registry({"appliances": [_climate_appliance()]})
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                        appliances={"living-room-hvac": {"mode": "heat"}}
+                    )
+                }
+            ),
+            inputs=None,
+            reference_time=REFERENCE_TIME,
+        )
+
+        series = plan.appliances_by_id["living-room-hvac"].points
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0].energy_kwh, 0.575)
+        self.assertEqual(series[0].mode, "heat")
+        self.assertEqual(series[0].projection_method, "fixed")
+        self.assertEqual(
+            [(point.slot_id, point.energy_kwh) for point in plan.demand_points],
+            [
+                ("2026-03-20T21:00:00+01:00", 0.2),
+                ("2026-03-20T21:15:00+01:00", 0.375),
+            ],
+        )
+
+    def test_climate_history_projection_prefers_estimate(self) -> None:
+        registry = build_appliances_runtime_registry(
+            {"appliances": [_climate_appliance(strategy="history_average")]}
+        )
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                        appliances={"living-room-hvac": {"mode": "cool"}}
+                    )
+                }
+            ),
+            inputs=None,
+            reference_time=REFERENCE_TIME,
+            generic_hourly_energy_kwh_by_appliance_id={"living-room-hvac": 0.9},
+        )
+
+        series = plan.appliances_by_id["living-room-hvac"].points
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0].energy_kwh, 0.345)
+        self.assertEqual(series[0].mode, "cool")
+        self.assertEqual(series[0].projection_method, "history_average")
+
+    def test_climate_history_projection_falls_back_without_estimate(self) -> None:
+        registry = build_appliances_runtime_registry(
+            {"appliances": [_climate_appliance(strategy="history_average")]}
+        )
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                        appliances={"living-room-hvac": {"mode": "heat"}}
+                    )
+                }
+            ),
+            inputs=None,
+            reference_time=REFERENCE_TIME,
+            generic_hourly_energy_kwh_by_appliance_id={"living-room-hvac": None},
+        )
+
+        series = plan.appliances_by_id["living-room-hvac"].points
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0].energy_kwh, 0.575)
+        self.assertEqual(series[0].mode, "heat")
         self.assertEqual(series[0].projection_method, "fixed_fallback")
 
 

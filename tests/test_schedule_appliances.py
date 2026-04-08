@@ -65,7 +65,11 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman.appliances import build_appliances_runtime_registry
+from custom_components.helman.appliances import (
+    AppliancesRuntimeRegistry,
+    ClimateApplianceRuntime,
+    build_appliances_runtime_registry,
+)
 from custom_components.helman.scheduling.schedule import (
     ScheduleActionError,
     ScheduleDocument,
@@ -83,6 +87,7 @@ def _valid_config(
     *,
     include_second_appliance: bool = False,
     include_generic: bool = False,
+    include_climate: bool = False,
 ) -> dict:
     appliances = [
         {
@@ -161,6 +166,23 @@ def _valid_config(
                 "projection": {
                     "strategy": "fixed",
                     "hourly_energy_kwh": 1.1,
+                },
+            }
+        )
+    if include_climate:
+        appliances.append(
+            {
+                "kind": "climate",
+                "id": "living-room-hvac",
+                "name": "Living Room HVAC",
+                "controls": {
+                    "climate": {
+                        "entity_id": "climate.living_room",
+                    }
+                },
+                "projection": {
+                    "strategy": "fixed",
+                    "hourly_energy_kwh": 1.5,
                 },
             }
         )
@@ -343,6 +365,83 @@ class ScheduleApplianceTests(unittest.TestCase):
                 reference_time=REFERENCE_TIME,
                 battery_soc_bounds=None,
                 appliances_registry=_registry(config=_valid_config(include_generic=True)),
+            )
+
+    def test_climate_mode_action_is_normalized(self) -> None:
+        slot = slot_from_dict(
+            _slot_payload(appliances={"living-room-hvac": {"mode": "heat"}})
+        )
+
+        normalized = normalize_slot_patch_request(
+            slots=[slot],
+            reference_time=REFERENCE_TIME,
+            battery_soc_bounds=None,
+            appliances_registry=_registry(config=_valid_config(include_climate=True)),
+        )
+
+        self.assertEqual(
+            normalized[0].domains.appliances,
+            {"living-room-hvac": {"mode": "heat"}},
+        )
+
+    def test_climate_action_rejects_off_mode(self) -> None:
+        slot = slot_from_dict(
+            _slot_payload(appliances={"living-room-hvac": {"mode": "off"}})
+        )
+
+        with self.assertRaises(ScheduleActionError):
+            normalize_slot_patch_request(
+                slots=[slot],
+                reference_time=REFERENCE_TIME,
+                battery_soc_bounds=None,
+                appliances_registry=_registry(config=_valid_config(include_climate=True)),
+            )
+
+    def test_climate_action_rejects_mode_not_supported_by_runtime(self) -> None:
+        slot = slot_from_dict(
+            _slot_payload(appliances={"living-room-hvac": {"mode": "cool"}})
+        )
+        registry = AppliancesRuntimeRegistry.from_appliances(
+            [
+                ClimateApplianceRuntime(
+                    id="living-room-hvac",
+                    name="Living Room HVAC",
+                    climate_entity_id="climate.living_room",
+                    projection_strategy="fixed",
+                    hourly_energy_kwh=1.5,
+                    history_energy_entity_id=None,
+                    supported_modes=("heat",),
+                    stop_hvac_mode="off",
+                )
+            ]
+        )
+
+        with self.assertRaises(ScheduleActionError):
+            normalize_slot_patch_request(
+                slots=[slot],
+                reference_time=REFERENCE_TIME,
+                battery_soc_bounds=None,
+                appliances_registry=registry,
+            )
+
+    def test_climate_action_rejects_unsupported_fields(self) -> None:
+        slot = slot_from_dict(
+            _slot_payload(
+                appliances={
+                    "living-room-hvac": {
+                        "mode": "cool",
+                        "targetTemperature": 22,
+                    }
+                }
+            )
+        )
+
+        with self.assertRaises(ScheduleActionError):
+            normalize_slot_patch_request(
+                slots=[slot],
+                reference_time=REFERENCE_TIME,
+                battery_soc_bounds=None,
+                appliances_registry=_registry(config=_valid_config(include_climate=True)),
             )
 
     def test_unknown_appliance_id_is_rejected(self) -> None:

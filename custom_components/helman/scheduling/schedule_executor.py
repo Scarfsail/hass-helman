@@ -13,9 +13,9 @@ from homeassistant.util import dt as dt_util
 
 from ..appliances.execution import (
     ApplianceExecutionMemory,
-    AppliancesExecutionResult,
     AppliancesExecutor,
 )
+from ..appliances.schedule import ApplianceScheduleActionDict
 from ..appliances.state import AppliancesRuntimeRegistry
 from ..battery_state import BatteryLiveState
 from ..const import (
@@ -43,6 +43,7 @@ from .schedule import (
     build_horizon_start,
     find_active_slot,
     format_slot_id,
+    parse_slot_id,
     prune_expired_slots,
 )
 
@@ -410,6 +411,10 @@ class ScheduleExecutor:
                 NORMAL_SCHEDULE_ACTION if active_slot is None else active_slot.domains.inverter
             )
             active_actions = {} if active_slot is None else dict(active_slot.domains.appliances)
+            last_scheduled_actions = _build_last_scheduled_appliance_actions(
+                stored_slots=schedule_document.slots,
+                reference_time=request_now,
+            )
 
             control_config = self._dependencies.read_schedule_control_config()
             inverter_runtime: InverterRuntimeStatus | None = None
@@ -441,6 +446,7 @@ class ScheduleExecutor:
                 registry=self._dependencies.read_appliances_registry(),
                 active_slot_id=current_slot_id,
                 active_actions=active_actions,
+                last_scheduled_actions=last_scheduled_actions,
                 previous_memories=self._runtime.appliance_memories,
                 reference_time=request_now,
             )
@@ -569,3 +575,23 @@ class ScheduleExecutor:
     @staticmethod
     def _format_reconciled_at(reference_time: datetime) -> str:
         return dt_util.as_local(reference_time).isoformat(timespec="seconds")
+
+
+def _build_last_scheduled_appliance_actions(
+    *,
+    stored_slots: Mapping[str, Any],
+    reference_time: datetime,
+) -> dict[str, ApplianceScheduleActionDict]:
+    current_slot_start = build_horizon_start(reference_time)
+    last_actions: dict[str, ApplianceScheduleActionDict] = {}
+
+    for slot_id, domains in sorted(
+        stored_slots.items(),
+        key=lambda item: parse_slot_id(item[0]),
+    ):
+        if parse_slot_id(slot_id) > current_slot_start:
+            break
+        for appliance_id, action in domains.appliances.items():
+            last_actions[appliance_id] = action
+
+    return last_actions

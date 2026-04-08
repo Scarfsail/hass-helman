@@ -4,7 +4,7 @@ from copy import deepcopy
 import asyncio
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Sequence
@@ -32,6 +32,8 @@ from .appliances import (
     build_projection_input_bundle,
     build_empty_appliance_projections_response,
 )
+from .appliances.climate_appliance import ClimateApplianceRuntime
+from .appliances.climate_appliance import resolve_supported_climate_modes
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
@@ -66,6 +68,7 @@ from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
 from .recorder_hourly_series import (
+    estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
     get_local_current_slot_start,
 )
@@ -103,6 +106,7 @@ from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
+_UNAVAILABLE_ENTITY_STATES = {"unknown", "unavailable", "none"}
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 
@@ -696,7 +700,65 @@ class HelmanCoordinator:
             self._last_schedule_control_config_issue = issue
         return None
 
+    def _refresh_climate_appliance_capabilities(self) -> None:
+        refreshed_appliances = []
+        changed = False
+
+        for appliance in self._appliances_registry.appliances:
+            if not isinstance(appliance, ClimateApplianceRuntime):
+                refreshed_appliances.append(appliance)
+                continue
+
+            refreshed_appliance = self._resolve_climate_appliance_capabilities(appliance)
+            refreshed_appliances.append(refreshed_appliance)
+            if refreshed_appliance != appliance:
+                changed = True
+
+        if changed:
+            self._appliances_registry = AppliancesRuntimeRegistry.from_appliances(
+                refreshed_appliances
+            )
+
+    def _resolve_climate_appliance_capabilities(
+        self,
+        appliance: ClimateApplianceRuntime,
+    ) -> ClimateApplianceRuntime:
+        climate_state = self._hass.states.get(appliance.climate_entity_id)
+        if climate_state is None:
+            return appliance
+
+        raw_state = getattr(climate_state, "state", None)
+        if (
+            not isinstance(raw_state, str)
+            or not raw_state.strip()
+            or raw_state.strip().lower() in _UNAVAILABLE_ENTITY_STATES
+        ):
+            return appliance
+
+        raw_attributes = getattr(climate_state, "attributes", {})
+        if not isinstance(raw_attributes, Mapping):
+            return appliance
+
+        raw_hvac_modes = raw_attributes.get("hvac_modes")
+        if not isinstance(raw_hvac_modes, (list, tuple)) or not raw_hvac_modes:
+            return appliance
+
+        hvac_modes: list[str] = []
+        for raw_mode in raw_hvac_modes:
+            if not isinstance(raw_mode, str) or not raw_mode.strip():
+                return appliance
+            hvac_modes.append(raw_mode.strip())
+
+        supported_modes = resolve_supported_climate_modes(hvac_modes)
+        stop_hvac_mode = "off" if "off" in hvac_modes else None
+        return replace(
+            appliance,
+            supported_modes=supported_modes,
+            stop_hvac_mode=stop_hvac_mode,
+        )
+
     async def _async_normalize_schedule_document(self) -> None:
+        self._refresh_climate_appliance_capabilities()
         raw_document = self._storage.schedule_document
         if raw_document is None:
             return
@@ -730,6 +792,7 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
     ) -> ScheduleDocument:
+        self._refresh_climate_appliance_capabilities()
         loaded_document = self._load_schedule_document()
         schedule_document = normalize_schedule_document_for_registry(
             loaded_document,
@@ -796,9 +859,11 @@ class HelmanCoordinator:
             )
 
     async def get_appliances(self) -> ApplianceMetadataResponseDict:
+        self._refresh_climate_appliance_capabilities()
         return build_appliances_response(self._appliances_registry)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
+        self._refresh_climate_appliance_capabilities()
         request_now = dt_util.now()
         raw_result = await HelmanForecastBuilder(
             self._hass,
@@ -1079,8 +1144,8 @@ class HelmanCoordinator:
                 reference_time=started_at,
             )
         generated_at = started_at.isoformat()
-        generic_hourly_energy_kwh_by_appliance_id = (
-            await self._async_build_generic_projection_hourly_energy_by_appliance_id(
+        history_hourly_energy_kwh_by_appliance_id = (
+            await self._async_build_history_projection_hourly_energy_by_appliance_id(
                 schedule_document=projection_schedule_document,
                 reference_time=started_at,
             )
@@ -1098,7 +1163,7 @@ class HelmanCoordinator:
             hass=self._hass,
             reference_time=started_at,
             generic_hourly_energy_kwh_by_appliance_id=(
-                generic_hourly_energy_kwh_by_appliance_id
+                history_hourly_energy_kwh_by_appliance_id
             ),
         )
         adjusted_house_forecast = build_adjusted_house_forecast(
@@ -1499,13 +1564,13 @@ class HelmanCoordinator:
             for slot_id, domains in sorted(schedule_document.slots.items())
         )
 
-    async def _async_build_generic_projection_hourly_energy_by_appliance_id(
+    async def _async_build_history_projection_hourly_energy_by_appliance_id(
         self,
         *,
         schedule_document: ScheduleDocument,
         reference_time: datetime,
     ) -> dict[str, float | None]:
-        projected_appliances = self._iter_projected_generic_history_appliances(
+        projected_appliances = self._iter_projected_history_appliances(
             schedule_document=schedule_document
         )
         if not projected_appliances:
@@ -1514,52 +1579,90 @@ class HelmanCoordinator:
         estimates: dict[str, float | None] = {}
         for appliance in projected_appliances:
             try:
-                estimates[appliance.id] = (
-                    await estimate_average_hourly_energy_when_switch_on(
-                        self._hass,
-                        switch_entity_id=appliance.switch_entity_id,
-                        energy_entity_id=appliance.history_energy_entity_id,
-                        reference_time=reference_time,
-                        lookback_days=appliance.history_lookback_days,
-                    )
+                estimates[appliance.id] = await self._async_estimate_projected_appliance(
+                    appliance=appliance,
+                    reference_time=reference_time,
                 )
             except Exception:
                 _LOGGER.exception(
-                    "Error estimating history-average projection for generic "
-                    "appliance %r",
+                    "Error estimating history-average projection for %s appliance %r",
+                    appliance.kind,
                     appliance.id,
                 )
                 estimates[appliance.id] = None
 
         return estimates
 
-    def _iter_projected_generic_history_appliances(
+    async def _async_estimate_projected_appliance(
+        self,
+        *,
+        appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
+        reference_time: datetime,
+    ) -> float | None:
+        energy_entity_id = appliance.history_energy_entity_id
+        if energy_entity_id is None:
+            return None
+        if isinstance(appliance, GenericApplianceRuntime):
+            return await estimate_average_hourly_energy_when_switch_on(
+                self._hass,
+                switch_entity_id=appliance.switch_entity_id,
+                energy_entity_id=energy_entity_id,
+                reference_time=reference_time,
+                lookback_days=appliance.history_lookback_days,
+            )
+        return await estimate_average_hourly_energy_when_climate_active(
+            self._hass,
+            climate_entity_id=appliance.climate_entity_id,
+            energy_entity_id=energy_entity_id,
+            reference_time=reference_time,
+            lookback_days=appliance.history_lookback_days,
+        )
+
+    def _iter_projected_history_appliances(
         self,
         *,
         schedule_document: ScheduleDocument,
-    ) -> list[GenericApplianceRuntime]:
-        projected: list[GenericApplianceRuntime] = []
+    ) -> list[GenericApplianceRuntime | ClimateApplianceRuntime]:
+        projected: list[GenericApplianceRuntime | ClimateApplianceRuntime] = []
         seen_appliance_ids: set[str] = set()
 
         for domains in schedule_document.slots.values():
             for appliance_id, action in domains.appliances.items():
                 if appliance_id in seen_appliance_ids:
                     continue
-                if not isinstance(action, Mapping) or action.get("on") is not True:
-                    continue
 
                 appliance = self._appliances_registry.get_appliance(appliance_id)
-                if (
-                    not isinstance(appliance, GenericApplianceRuntime)
-                    or not appliance.uses_history_average
-                    or appliance.history_energy_entity_id is None
+                if not self._is_projected_history_action_active(
+                    appliance=appliance,
+                    action=action,
                 ):
+                    continue
+                if appliance.history_energy_entity_id is None:
                     continue
 
                 seen_appliance_ids.add(appliance_id)
                 projected.append(appliance)
 
         return projected
+
+    @staticmethod
+    def _is_projected_history_action_active(
+        *,
+        appliance,
+        action: object,
+    ) -> bool:
+        if not isinstance(action, Mapping):
+            return False
+        if isinstance(appliance, GenericApplianceRuntime):
+            return appliance.uses_history_average and action.get("on") is True
+        if isinstance(appliance, ClimateApplianceRuntime):
+            mode = action.get("mode")
+            return (
+                appliance.uses_history_average
+                and isinstance(mode, str)
+                and mode in {"heat", "cool"}
+            )
+        return False
 
     def _has_compatible_battery_forecast_live_state(self) -> bool:
         battery_entity_config = read_battery_entity_config(self._active_config)

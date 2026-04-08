@@ -20,6 +20,7 @@
         "add_daily_energy_entity": "Add daily energy entity",
         "add_import_price_window": "Add import price window",
         "add_ev_charger": "Add EV charger",
+        "add_climate_appliance": "Add climate appliance",
         "add_generic_appliance": "Add generic appliance",
         "add_vehicle": "Add vehicle",
       "add_use_mode": "Add use mode",
@@ -61,8 +62,9 @@
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
       "battery_entities": "Remaining energy, capacity, min SoC, and max SoC work as one battery entity group. Configure them together when battery forecasting is enabled.",
       "grid_import_windows": "Import price windows must cover the whole day without gaps or overlaps.",
-        "appliances": "EV charger and generic appliance editing are supported directly. Unsupported future appliance kinds are preserved and shown read-only unless you remove them.",
-        "generic_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient."
+        "appliances": "EV charger, climate appliance, and generic appliance editing are supported directly. Unsupported future appliance kinds are preserved and shown read-only unless you remove them.",
+        "generic_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient.",
+        "climate_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the climate entity was active in heat or cool mode and falls back to the fixed value if history is insufficient."
       },
     "empty": {
       "no_appliances": "No appliances configured yet.",
@@ -126,6 +128,7 @@
         "appliance_name": "Appliance name",
         "appliance_icon": "Appliance icon",
         "kind": "Kind",
+        "climate_entity": "Climate entity",
         "switch_entity": "Switch entity",
         "projection_strategy": "Projection strategy",
         "hourly_energy_kwh": "Average hourly energy kWh",
@@ -217,6 +220,7 @@
       "import_window": "Import window {index}",
         "appliance": "Appliance {index}",
         "ev_charger": "EV Charger {index}",
+        "climate_appliance": "Climate appliance {index}",
         "generic_appliance": "Generic appliance {index}",
         "vehicle": "Vehicle {index}",
         "unsupported_appliance_kind": "Unsupported appliance kind: {kind}"

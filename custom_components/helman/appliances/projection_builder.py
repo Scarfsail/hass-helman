@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -14,6 +15,7 @@ from ..scheduling.schedule import (
     format_slot_id,
     parse_slot_id,
 )
+from .climate_appliance import ClimateApplianceRuntime
 from .ev_charger import (
     EvChargerApplianceRuntime,
     EvChargerUseModeRuntime,
@@ -135,6 +137,20 @@ def build_appliance_projection_plan(
                 schedule_document=schedule_document,
                 inputs=inputs,
                 hass=hass,
+            )
+        elif isinstance(appliance, ClimateApplianceRuntime):
+            if active_reference_time is None:
+                raise ValueError(
+                    "reference_time is required when projecting climate appliances "
+                    "without forecast inputs"
+                )
+            result = _build_climate_appliance_projection_series(
+                appliance=appliance,
+                schedule_document=schedule_document,
+                reference_time=active_reference_time,
+                historical_hourly_energy_kwh=history_hourly_energy_by_appliance_id.get(
+                    appliance.id
+                ),
             )
         elif isinstance(appliance, GenericApplianceRuntime):
             if active_reference_time is None:
@@ -292,18 +308,87 @@ def _build_generic_appliance_projection_series(
     reference_time: datetime,
     historical_hourly_energy_kwh: float | None,
 ) -> _ApplianceProjectionBuildResult:
-    points: list[ApplianceProjectionPlanPoint] = []
-    demand_points: list[ApplianceDemandPoint] = []
     resolved_hourly_energy_kwh, projection_method = (
-        _resolve_generic_hourly_energy_kwh(
-            appliance=appliance,
+        _resolve_projected_hourly_energy_kwh(
+            projection_strategy=appliance.projection_strategy,
+            hourly_energy_kwh=appliance.hourly_energy_kwh,
             historical_hourly_energy_kwh=historical_hourly_energy_kwh,
         )
     )
+    return _build_constant_hourly_projection_series(
+        appliance_id=appliance.id,
+        schedule_document=schedule_document,
+        reference_time=reference_time,
+        hourly_energy_kwh=resolved_hourly_energy_kwh,
+        projection_method=projection_method,
+        resolve_action_projection=_resolve_generic_action_projection,
+    )
+
+
+def _build_climate_appliance_projection_series(
+    *,
+    appliance: ClimateApplianceRuntime,
+    schedule_document: ScheduleDocument,
+    reference_time: datetime,
+    historical_hourly_energy_kwh: float | None,
+) -> _ApplianceProjectionBuildResult:
+    resolved_hourly_energy_kwh, projection_method = (
+        _resolve_projected_hourly_energy_kwh(
+            projection_strategy=appliance.projection_strategy,
+            hourly_energy_kwh=appliance.hourly_energy_kwh,
+            historical_hourly_energy_kwh=historical_hourly_energy_kwh,
+        )
+    )
+    return _build_constant_hourly_projection_series(
+        appliance_id=appliance.id,
+        schedule_document=schedule_document,
+        reference_time=reference_time,
+        hourly_energy_kwh=resolved_hourly_energy_kwh,
+        projection_method=projection_method,
+        resolve_action_projection=lambda action: _resolve_climate_action_projection(
+            action,
+            appliance=appliance,
+        ),
+    )
+
+
+def _resolve_projected_hourly_energy_kwh(
+    *,
+    projection_strategy: str,
+    hourly_energy_kwh: float,
+    historical_hourly_energy_kwh: float | None,
+) -> tuple[float, str]:
+    if projection_strategy != "history_average":
+        return hourly_energy_kwh, "fixed"
+    if (
+        historical_hourly_energy_kwh is None
+        or historical_hourly_energy_kwh <= 0
+    ):
+        return hourly_energy_kwh, "fixed_fallback"
+    return historical_hourly_energy_kwh, "history_average"
+
+
+def _build_constant_hourly_projection_series(
+    *,
+    appliance_id: str,
+    schedule_document: ScheduleDocument,
+    reference_time: datetime,
+    hourly_energy_kwh: float,
+    projection_method: str,
+    resolve_action_projection: Callable[
+        [Mapping[str, object]], tuple[bool, str | None]
+    ],
+) -> _ApplianceProjectionBuildResult:
+    points: list[ApplianceProjectionPlanPoint] = []
+    demand_points: list[ApplianceDemandPoint] = []
 
     for slot_id, domains in sorted(schedule_document.slots.items()):
-        action = domains.appliances.get(appliance.id)
-        if not action or action.get("on") is not True:
+        action = domains.appliances.get(appliance_id)
+        if not isinstance(action, Mapping):
+            continue
+
+        is_active, mode = resolve_action_projection(action)
+        if not is_active:
             continue
 
         time_slices = _build_time_slices(
@@ -314,8 +399,7 @@ def _build_generic_appliance_projection_series(
             continue
 
         slice_energy_kwhs = tuple(
-            resolved_hourly_energy_kwh * slot_slice.duration_hours
-            for slot_slice in time_slices
+            hourly_energy_kwh * slot_slice.duration_hours for slot_slice in time_slices
         )
         energy_kwh = sum(slice_energy_kwhs)
         if energy_kwh <= 0:
@@ -325,12 +409,13 @@ def _build_generic_appliance_projection_series(
             ApplianceProjectionPlanPoint(
                 slot_id=slot_id,
                 energy_kwh=round(energy_kwh, 4),
+                mode=mode,
                 projection_method=projection_method,
             )
         )
         demand_points.extend(
             ApplianceDemandPoint(
-                appliance_id=appliance.id,
+                appliance_id=appliance_id,
                 slot_id=format_slot_id(slot_slice.slot_start),
                 energy_kwh=round(slice_energy_kwh, 4),
             )
@@ -344,26 +429,28 @@ def _build_generic_appliance_projection_series(
 
     return _ApplianceProjectionBuildResult(
         series=ApplianceProjectionSeries(
-            appliance_id=appliance.id,
+            appliance_id=appliance_id,
             points=tuple(points),
         ),
         demand_points=tuple(demand_points),
     )
 
 
-def _resolve_generic_hourly_energy_kwh(
+def _resolve_generic_action_projection(
+    action: Mapping[str, object],
+) -> tuple[bool, str | None]:
+    return action.get("on") is True, None
+
+
+def _resolve_climate_action_projection(
+    action: Mapping[str, object],
     *,
-    appliance: GenericApplianceRuntime,
-    historical_hourly_energy_kwh: float | None,
-) -> tuple[float, str]:
-    if appliance.projection_strategy != "history_average":
-        return appliance.hourly_energy_kwh, "fixed"
-    if (
-        historical_hourly_energy_kwh is None
-        or historical_hourly_energy_kwh <= 0
-    ):
-        return appliance.hourly_energy_kwh, "fixed_fallback"
-    return historical_hourly_energy_kwh, "history_average"
+    appliance: ClimateApplianceRuntime,
+) -> tuple[bool, str | None]:
+    mode = action.get("mode")
+    if isinstance(mode, str) and mode in appliance.authorable_modes:
+        return True, mode
+    return False, None
 
 
 def _build_schedule_slot_slices(

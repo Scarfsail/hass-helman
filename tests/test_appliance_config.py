@@ -98,6 +98,29 @@ def _generic_appliance() -> dict:
     }
 
 
+def _climate_appliance(*, strategy: str = "fixed") -> dict:
+    appliance = {
+        "kind": "climate",
+        "id": "living-room-hvac",
+        "name": "Living Room HVAC",
+        "controls": {
+            "climate": {
+                "entity_id": "climate.living_room",
+            }
+        },
+        "projection": {
+            "strategy": strategy,
+            "hourly_energy_kwh": 1.5,
+        },
+    }
+    if strategy == "history_average":
+        appliance["projection"]["history_average"] = {
+            "energy_entity_id": "sensor.living_room_hvac_energy_total",
+            "lookback_days": 14,
+        }
+    return appliance
+
+
 class ApplianceConfigTests(unittest.TestCase):
     def test_missing_appliances_key_returns_empty_registry(self) -> None:
         registry = build_appliances_runtime_registry({})
@@ -213,6 +236,23 @@ class ApplianceConfigTests(unittest.TestCase):
         )
         self.assertEqual(appliance.history_lookback_days, 21)
 
+    def test_valid_climate_config_builds_registry(self) -> None:
+        registry = build_appliances_runtime_registry(
+            {"appliances": [_climate_appliance(strategy="history_average")]}
+        )
+
+        self.assertEqual(len(registry.appliances), 1)
+        appliance = registry.appliances[0]
+        self.assertEqual(appliance.id, "living-room-hvac")
+        self.assertEqual(appliance.kind, "climate")
+        self.assertEqual(appliance.climate_entity_id, "climate.living_room")
+        self.assertEqual(appliance.projection_strategy, "history_average")
+        self.assertEqual(
+            appliance.history_energy_entity_id,
+            "sensor.living_room_hvac_energy_total",
+        )
+        self.assertEqual(appliance.history_lookback_days, 14)
+
     def test_ev_icon_is_preserved(self) -> None:
         config = _valid_config()
         config["appliances"][0]["icon"] = "hass:car-electric"
@@ -247,6 +287,16 @@ class ApplianceConfigTests(unittest.TestCase):
 
         self.assertEqual(registry.appliances, ())
         self.assertIn("history_average is required", captured.output[0])
+
+    def test_invalid_climate_domain_is_ignored_with_error_log(self) -> None:
+        invalid = _climate_appliance()
+        invalid["controls"]["climate"]["entity_id"] = "switch.not_a_climate"
+
+        with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
+            registry = build_appliances_runtime_registry({"appliances": [invalid]})
+
+        self.assertEqual(registry.appliances, ())
+        self.assertIn("controls.climate.entity_id", captured.output[0])
 
 
 if __name__ == "__main__":
