@@ -69,6 +69,7 @@ from custom_components.helman.const import (
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_STOP_EXPORT,
     SCHEDULE_HORIZON_HOURS,
     SCHEDULE_SLOT_MINUTES,
 )
@@ -431,6 +432,48 @@ class ScheduleHelperTests(unittest.TestCase):
         )
         self.assertIsNone(control_config.charge_to_target_soc_option)
         self.assertIsNone(control_config.discharge_to_target_soc_option)
+        self.assertIsNone(control_config.stop_export_option)
+
+    def test_read_schedule_control_config_reads_stop_export_option(self) -> None:
+        control_config = read_schedule_control_config(
+            {
+                "scheduler": {
+                    "control": {
+                        "mode_entity_id": "input_select.rezim_fv",
+                        "action_option_map": {
+                            "normal": "Standardní",
+                            "stop_charging": "Zákaz nabíjení",
+                            "stop_discharging": "Zákaz vybíjení",
+                            "stop_export": "Zákaz exportu",
+                        },
+                    }
+                }
+            }
+        )
+
+        self.assertIsNotNone(control_config)
+        assert control_config is not None
+        self.assertEqual(control_config.stop_export_option, "Zákaz exportu")
+
+    def test_schedule_document_accepts_stop_export_action(self) -> None:
+        slot_id = "2026-03-20T21:00:00+01:00"
+        payload = {
+            "slotMinutes": SCHEDULE_SLOT_MINUTES,
+            "executionEnabled": True,
+            "slots": {
+                slot_id: {
+                    "inverter": {"kind": SCHEDULE_ACTION_STOP_EXPORT},
+                    "appliances": {},
+                }
+            },
+        }
+
+        document = schedule_document_from_dict(payload)
+
+        self.assertEqual(
+            document.slots[slot_id].inverter.kind,
+            SCHEDULE_ACTION_STOP_EXPORT,
+        )
 
 
 if __name__ == "__main__":

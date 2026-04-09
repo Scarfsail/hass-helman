@@ -20,6 +20,7 @@ from ..const import (
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_STOP_EXPORT,
     SCHEDULE_HORIZON_HOURS,
     SCHEDULE_SLOT_MINUTES,
 )
@@ -34,6 +35,7 @@ ScheduleActionKind = Literal[
     "discharge_to_target_soc",
     "stop_charging",
     "stop_discharging",
+    "stop_export",
 ]
 
 TARGET_ACTION_KINDS = {
@@ -141,6 +143,7 @@ class ScheduleControlConfig:
     stop_discharging_option: str
     charge_to_target_soc_option: str | None = None
     discharge_to_target_soc_option: str | None = None
+    stop_export_option: str | None = None
 
 
 class ScheduleError(Exception):
@@ -372,6 +375,9 @@ def read_schedule_control_config(
     stop_discharging_option = _read_non_empty_string(
         action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)
     )
+    stop_export_option = _read_non_empty_string(
+        action_option_map.get(SCHEDULE_ACTION_STOP_EXPORT)
+    )
 
     if (
         mode_entity_id is None
@@ -388,6 +394,7 @@ def read_schedule_control_config(
         stop_discharging_option=stop_discharging_option,
         charge_to_target_soc_option=charge_to_target_soc_option,
         discharge_to_target_soc_option=discharge_to_target_soc_option,
+        stop_export_option=stop_export_option,
     )
 
 

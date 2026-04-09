@@ -124,6 +124,7 @@
       "discharge_to_target_soc_option": "Discharge to target SoC option",
       "stop_charging_option": "Stop charging option",
       "stop_discharging_option": "Stop discharging option",
+      "stop_export_option": "Stop export option",
       "appliance_id": "Appliance id",
         "appliance_name": "Appliance name",
         "appliance_icon": "Appliance icon",

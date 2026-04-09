@@ -1632,6 +1632,12 @@ export class HelmanConfigEditorPanel extends LitElement {
               undefined,
               "editor.help.scheduler_action_option",
             )}
+            ${this._renderOptionalTextField(
+              ["scheduler", "control", "action_option_map", "stop_export"],
+              "editor.fields.stop_export_option",
+              undefined,
+              "editor.help.scheduler_action_option",
+            )}
           </div>
         `,
       )}

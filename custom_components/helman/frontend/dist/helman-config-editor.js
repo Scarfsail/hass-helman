@@ -1306,6 +1306,7 @@ const rt = {
     discharge_to_target_soc_option: "Volba Vybít do cílového SoC",
     stop_charging_option: "Volba Zastavit nabíjení",
     stop_discharging_option: "Volba Zastavit vybíjení",
+    stop_export_option: "Volba Zastavit export",
     appliance_id: "ID spotřebiče",
     appliance_name: "Název spotřebiče",
     appliance_icon: "Ikona spotřebiče",
@@ -1588,6 +1589,7 @@ const rt = {
     discharge_to_target_soc_option: "Discharge to target SoC option",
     stop_charging_option: "Stop charging option",
     stop_discharging_option: "Stop discharging option",
+    stop_export_option: "Stop export option",
     appliance_id: "Appliance id",
     appliance_name: "Appliance name",
     appliance_icon: "Appliance icon",
@@ -2648,6 +2650,12 @@ const di = [
             ${this._renderOptionalTextField(
         ["scheduler", "control", "action_option_map", "stop_discharging"],
         "editor.fields.stop_discharging_option",
+        void 0,
+        "editor.help.scheduler_action_option"
+      )}
+            ${this._renderOptionalTextField(
+        ["scheduler", "control", "action_option_map", "stop_export"],
+        "editor.fields.stop_export_option",
         void 0,
         "editor.help.scheduler_action_option"
       )}

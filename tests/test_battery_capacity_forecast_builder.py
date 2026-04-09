@@ -540,6 +540,154 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"][1]["remainingEnergyKwh"], 5.0)
         self.assertEqual(payload["series"][1]["baselineRemainingEnergyKwh"], 5.2)
 
+    async def test_build_with_stop_export_overlay_curtails_remaining_surplus(self) -> None:
+        module, builder = self._make_builder()
+        started_at = datetime(2026, 3, 20, 21, 0, tzinfo=TZ)
+        house_forecast = _make_house_forecast(
+            current_slot_start=started_at,
+            current_slot_value=0.1,
+            future_values=[0.0, 0.0, 0.0],
+        )
+        solar_forecast = _make_solar_forecast(
+            {
+                started_at: 300.0,
+                datetime(2026, 3, 20, 21, 15, tzinfo=TZ): 0.0,
+            }
+        )
+        schedule_overlay = _FakeScheduleOverlay(
+            horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
+            actions_by_slot={
+                started_at: SimpleNamespace(kind="stop_export", target_soc=None)
+            },
+        )
+
+        with (
+            patch.object(
+                module,
+                "read_battery_entity_config",
+                return_value=module.BatteryEntityConfig(
+                    remaining_energy_entity_id="sensor.remaining",
+                    capacity_entity_id="sensor.capacity",
+                    min_soc_entity_id="sensor.min_soc",
+                    max_soc_entity_id="sensor.max_soc",
+                ),
+            ),
+            patch.object(
+                module,
+                "read_battery_forecast_settings",
+                return_value=module.BatteryForecastSettings(
+                    charge_efficiency=1.0,
+                    discharge_efficiency=1.0,
+                    max_charge_power_w=100.0,
+                    max_discharge_power_w=10000.0,
+                ),
+            ),
+            patch.object(
+                module,
+                "read_battery_live_state",
+                return_value=module.BatteryLiveState(
+                    current_remaining_energy_kwh=5.0,
+                    current_soc=50.0,
+                    min_soc=0.0,
+                    max_soc=100.0,
+                    nominal_capacity_kwh=10.0,
+                    min_energy_kwh=0.0,
+                    max_energy_kwh=10.0,
+                ),
+            ),
+            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = await builder.build(
+                solar_forecast=solar_forecast,
+                house_forecast=house_forecast,
+                started_at=started_at,
+                schedule_overlay=schedule_overlay,
+            )
+
+        self.assertTrue(payload["scheduleAdjusted"])
+        self.assertEqual(payload["series"][0]["chargedKwh"], 0.025)
+        self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 5.025)
+        self.assertEqual(payload["series"][0]["exportedToGridKwh"], 0.0)
+        self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 5.025)
+        self.assertEqual(payload["series"][0]["baselineSocPct"], 50.25)
+
+    async def test_build_with_stop_export_overlay_blocks_export_when_battery_is_full(
+        self,
+    ) -> None:
+        module, builder = self._make_builder()
+        started_at = datetime(2026, 3, 20, 21, 0, tzinfo=TZ)
+        house_forecast = _make_house_forecast(
+            current_slot_start=started_at,
+            current_slot_value=0.1,
+            future_values=[0.0, 0.0, 0.0],
+        )
+        solar_forecast = _make_solar_forecast(
+            {
+                started_at: 300.0,
+                datetime(2026, 3, 20, 21, 15, tzinfo=TZ): 0.0,
+            }
+        )
+        schedule_overlay = _FakeScheduleOverlay(
+            horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
+            actions_by_slot={
+                started_at: SimpleNamespace(kind="stop_export", target_soc=None)
+            },
+        )
+
+        with (
+            patch.object(
+                module,
+                "read_battery_entity_config",
+                return_value=module.BatteryEntityConfig(
+                    remaining_energy_entity_id="sensor.remaining",
+                    capacity_entity_id="sensor.capacity",
+                    min_soc_entity_id="sensor.min_soc",
+                    max_soc_entity_id="sensor.max_soc",
+                ),
+            ),
+            patch.object(
+                module,
+                "read_battery_forecast_settings",
+                return_value=module.BatteryForecastSettings(
+                    charge_efficiency=1.0,
+                    discharge_efficiency=1.0,
+                    max_charge_power_w=10000.0,
+                    max_discharge_power_w=10000.0,
+                ),
+            ),
+            patch.object(
+                module,
+                "read_battery_live_state",
+                return_value=module.BatteryLiveState(
+                    current_remaining_energy_kwh=10.0,
+                    current_soc=100.0,
+                    min_soc=0.0,
+                    max_soc=100.0,
+                    nominal_capacity_kwh=10.0,
+                    min_energy_kwh=0.0,
+                    max_energy_kwh=10.0,
+                ),
+            ),
+            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = await builder.build(
+                solar_forecast=solar_forecast,
+                house_forecast=house_forecast,
+                started_at=started_at,
+                schedule_overlay=schedule_overlay,
+            )
+
+        self.assertTrue(payload["scheduleAdjusted"])
+        self.assertEqual(payload["series"][0]["chargedKwh"], 0.0)
+        self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 10.0)
+        self.assertEqual(payload["series"][0]["exportedToGridKwh"], 0.0)
+        self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 10.0)
+        self.assertEqual(payload["series"][0]["baselineSocPct"], 100.0)
+
     async def test_build_with_normal_only_overlay_keeps_baseline_contract(self) -> None:
         module, builder = self._make_builder()
         started_at = datetime(2026, 3, 20, 21, 0, tzinfo=TZ)

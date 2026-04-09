@@ -493,6 +493,7 @@ def _validate_scheduler_control_config(
                 "stop_discharging",
                 "charge_to_target_soc",
                 "discharge_to_target_soc",
+                "stop_export",
             ):
                 _validate_optional_string(
                     report,

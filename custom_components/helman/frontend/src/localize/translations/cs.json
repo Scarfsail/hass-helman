@@ -124,6 +124,7 @@
       "discharge_to_target_soc_option": "Volba Vybít do cílového SoC",
       "stop_charging_option": "Volba Zastavit nabíjení",
       "stop_discharging_option": "Volba Zastavit vybíjení",
+      "stop_export_option": "Volba Zastavit export",
       "appliance_id": "ID spotřebiče",
         "appliance_name": "Název spotřebiče",
         "appliance_icon": "Ikona spotřebiče",

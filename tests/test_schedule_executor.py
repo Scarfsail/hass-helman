@@ -88,6 +88,7 @@ from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_STOP_EXPORT,
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
@@ -164,6 +165,7 @@ def _build_control_config(entity_id: str) -> ScheduleControlConfig:
         discharge_to_target_soc_option="Discharge To Target",
         stop_charging_option="Stop Charging",
         stop_discharging_option="Stop Discharging",
+        stop_export_option="Stop Export",
     )
 
 
@@ -186,6 +188,7 @@ def _build_mode_options() -> list[str]:
         "Discharge To Target",
         "Stop Charging",
         "Stop Discharging",
+        "Stop Export",
     ]
 
 
@@ -282,6 +285,37 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
+
+    async def test_reconcile_uses_select_service_for_stop_export(self) -> None:
+        executor, hass, _store = _build_executor(
+            entity_id="select.mode",
+            state=FakeState(
+                "Normal",
+                options=["Normal", "Stop Charging", "Stop Discharging", "Stop Export"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)},
+            ),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": "select.mode",
+                        "option": "Stop Export",
+                    },
+                    True,
+                )
+            ],
+        )
+        self.assertEqual(executor.runtime.last_applied_option, "Stop Export")
 
     async def test_reconcile_restores_normal_for_implicit_slot(self) -> None:
         executor, hass, _store = _build_executor(
@@ -627,6 +661,39 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             executor.runtime.execution_status.active_slot_runtime.status,
             "applied",
+        )
+
+    async def test_reconcile_raises_when_stop_export_option_is_missing(self) -> None:
+        executor, _hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=["Normal", "Stop Charging", "Stop Discharging", "Stop Export"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)},
+            ),
+            control_config=ScheduleControlConfig(
+                mode_entity_id="input_select.mode",
+                normal_option="Normal",
+                charge_to_target_soc_option="Charge To Target",
+                discharge_to_target_soc_option="Discharge To Target",
+                stop_charging_option="Stop Charging",
+                stop_discharging_option="Stop Discharging",
+                stop_export_option=None,
+            ),
+        )
+
+        with self.assertRaises(ScheduleNotConfiguredError):
+            await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "error",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.error_code,
+            "not_configured",
         )
 
     async def test_reconcile_raises_when_mode_entity_is_missing(self) -> None:

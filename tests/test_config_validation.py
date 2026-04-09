@@ -140,6 +140,7 @@ def _valid_config() -> dict:
                     "discharge_to_target_soc": "Discharge",
                     "stop_charging": "Stop charging",
                     "stop_discharging": "Stop discharging",
+                    "stop_export": "Stop export",
                 },
             }
         },
@@ -268,6 +269,21 @@ class ConfigValidationTests(unittest.TestCase):
             any(issue.code == "invalid_scheduler_control" for issue in report.errors)
         )
         self.assertTrue(any(issue.code == "invalid_domain" for issue in report.errors))
+
+    def test_invalid_stop_export_option_type_is_error(self) -> None:
+        config = _valid_config()
+        config["scheduler"]["control"]["action_option_map"]["stop_export"] = 42
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "scheduler.control.action_option_map.stop_export"
+                and issue.code == "invalid_type"
+                for issue in report.errors
+            )
+        )
 
     def test_invalid_grid_import_windows_are_reported(self) -> None:
         config = _valid_config()

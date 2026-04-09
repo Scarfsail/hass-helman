@@ -406,10 +406,12 @@ def _make_control_config(
     *,
     charge_to_target_soc_option: str | None = "charge_target",
     discharge_to_target_soc_option: str | None = "discharge_target",
+    stop_export_option: str | None = "stop_export",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         charge_to_target_soc_option=charge_to_target_soc_option,
         discharge_to_target_soc_option=discharge_to_target_soc_option,
+        stop_export_option=stop_export_option,
     )
 
 
@@ -457,6 +459,37 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._read_schedule_control_config = Mock(
             return_value=_make_control_config(charge_to_target_soc_option=None)
+        )
+
+        forecast_schedule_document = (
+            coordinator._build_battery_forecast_schedule_document(
+                schedule_document=schedule_document
+            )
+        )
+
+        self.assertTrue(forecast_schedule_document.execution_enabled)
+        self.assertEqual(
+            forecast_schedule_document.slots,
+            {
+                "2026-03-20T21:30:00+01:00": schedule_document.slots[
+                    "2026-03-20T21:30:00+01:00"
+                ],
+            },
+        )
+
+    def test_build_battery_forecast_schedule_document_filters_unconfigured_stop_export(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_export"),
+                "2026-03-20T21:30:00+01:00": _make_schedule_action("stop_charging"),
+            },
+        )
+        coordinator._read_schedule_control_config = Mock(
+            return_value=_make_control_config(stop_export_option=None)
         )
 
         forecast_schedule_document = (

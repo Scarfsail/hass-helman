@@ -351,6 +351,27 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    def test_set_schedule_schema_accepts_stop_export_action(self) -> None:
+        payload = SET_SCHEDULE_REQUEST_SCHEMA(
+            {
+                "type": "helman/set_schedule",
+                "slots": [
+                    {
+                        "id": CURRENT_SLOT_ID,
+                        "domains": {
+                            "inverter": {"kind": "stop_export"},
+                            "appliances": {},
+                        },
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(
+            payload["slots"][0]["domains"]["inverter"]["kind"],
+            "stop_export",
+        )
+
     async def test_set_schedule_forwards_domains_slots(self) -> None:
         coordinator = FakeCoordinator()
         connection = FakeConnection()

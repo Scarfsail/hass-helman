@@ -26,6 +26,7 @@ from .const import (
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import get_local_current_slot_start
@@ -560,7 +561,11 @@ class BatteryCapacityForecastBuilder:
                     actual_charge_input_kwh * settings.charge_efficiency,
                     headroom_kwh,
                 )
-                exported_to_grid_kwh = max(0.0, net_kwh - actual_charge_input_kwh)
+                exported_to_grid_kwh = (
+                    0.0
+                    if action_kind == SCHEDULE_ACTION_STOP_EXPORT
+                    else max(0.0, net_kwh - actual_charge_input_kwh)
+                )
                 limited_by_charge_power = (
                     desired_charge_input_kwh - max_charge_input_kwh
                 ) > _EPSILON
@@ -1269,6 +1274,7 @@ class BatteryCapacityForecastBuilder:
             SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
             SCHEDULE_ACTION_STOP_CHARGING,
             SCHEDULE_ACTION_STOP_DISCHARGING,
+            SCHEDULE_ACTION_STOP_EXPORT,
         }
 
     @staticmethod

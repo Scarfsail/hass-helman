@@ -24,6 +24,7 @@ from ..const import (
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_STOP_EXPORT,
     SCHEDULE_EXECUTOR_INTERVAL_SECONDS,
 )
 from .action_resolution import resolve_executed_schedule_action
@@ -290,6 +291,12 @@ class InverterExecutor:
             return control_config.stop_charging_option
         if action.kind == SCHEDULE_ACTION_STOP_DISCHARGING:
             return control_config.stop_discharging_option
+        if action.kind == SCHEDULE_ACTION_STOP_EXPORT:
+            if control_config.stop_export_option is None:
+                raise ScheduleNotConfiguredError(
+                    "Schedule control config is missing the stop_export action option"
+                )
+            return control_config.stop_export_option
         return control_config.normal_option
 
     async def _async_apply_action(

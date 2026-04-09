@@ -57,6 +57,7 @@ from .const import (
     PRODUCTION_TOTAL_ENTITY_ID,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
 from .forecast_aggregation import get_forecast_resolution
@@ -1265,6 +1266,10 @@ class HelmanCoordinator:
             and not (
                 domains.inverter.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
                 and control_config.discharge_to_target_soc_option is None
+            )
+            and not (
+                domains.inverter.kind == SCHEDULE_ACTION_STOP_EXPORT
+                and control_config.stop_export_option is None
             )
         }
         return ScheduleDocument(
