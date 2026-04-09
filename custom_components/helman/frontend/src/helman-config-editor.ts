@@ -31,7 +31,9 @@ import {
 } from "./config-document";
 import {
   DOCUMENT_SCOPE_ID,
+  SECTION_ICONS,
   SECTION_SCOPE_IDS,
+  TAB_ICONS,
   TAB_SCOPE_IDS,
   TAB_SECTIONS,
   TABS,
@@ -94,6 +96,9 @@ export class HelmanConfigEditorPanel extends LitElement {
     _scopeModes: { state: true },
     _scopeYamlValues: { state: true },
     _scopeYamlErrors: { state: true },
+    _applianceModes: { state: true },
+    _applianceYamlValues: { state: true },
+    _applianceYamlErrors: { state: true },
     _helpDialog: { state: true },
   };
 
@@ -384,9 +389,17 @@ export class HelmanConfigEditorPanel extends LitElement {
     details.section-card > summary {
       list-style: none;
       cursor: pointer;
-      padding: 18px 0;
-      font-size: 1.04rem;
-      font-weight: 600;
+      padding: 14px 0;
+      font-size: 1.06rem;
+      font-weight: 700;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.15s ease;
+      user-select: none;
+    }
+
+    details.section-card[open] > summary {
+      border-bottom-color: var(--divider-color);
+      margin-bottom: 14px;
     }
 
     .section-summary-row {
@@ -396,8 +409,36 @@ export class HelmanConfigEditorPanel extends LitElement {
       gap: 12px;
     }
 
+    .section-summary-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .section-icon {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      fill: var(--primary-color);
+      opacity: 0.85;
+    }
+
     .section-summary-label {
       min-width: 0;
+    }
+
+    .section-chevron {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      fill: var(--secondary-text-color);
+      transition: transform 0.2s ease;
+      transform: rotate(0deg);
+    }
+
+    details.section-card[open] > summary .section-chevron {
+      transform: rotate(90deg);
     }
 
     details.section-card > summary::-webkit-details-marker {
@@ -407,6 +448,70 @@ export class HelmanConfigEditorPanel extends LitElement {
     .section-content {
       display: grid;
       gap: 18px;
+    }
+
+    /* Collapsible appliance cards */
+    details.list-card {
+      padding: 0;
+    }
+
+    details.list-card > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+      border-radius: 18px;
+      transition: border-radius 0.15s ease;
+      user-select: none;
+    }
+
+    details.list-card[open] > summary {
+      border-radius: 18px 18px 0 0;
+      border-bottom: 1px solid var(--divider-color);
+    }
+
+    details.list-card > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .appliance-summary-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .appliance-summary-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .appliance-chevron {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      fill: var(--secondary-text-color);
+      transition: transform 0.2s ease;
+      transform: rotate(0deg);
+      margin-left: 4px;
+    }
+
+    details.list-card[open] > summary .appliance-chevron {
+      transform: rotate(90deg);
+    }
+
+    .appliance-body {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .tab-icon {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
     }
 
     .field-grid {
@@ -689,6 +794,9 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
   private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
   private _scopeYamlErrors: Partial<Record<ScopeId, string>> = {};
+  private _applianceModes: Partial<Record<number, EditorMode>> = {};
+  private _applianceYamlValues: Partial<Record<number, JsonValue>> = {};
+  private _applianceYamlErrors: Partial<Record<number, string>> = {};
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
 
   get hass(): HomeAssistantLike | undefined {
@@ -834,6 +942,7 @@ export class HelmanConfigEditorPanel extends LitElement {
                 this._activeTab = tab.id;
               }}
             >
+              ${this._renderSvgIcon(TAB_ICONS[tab.id], "tab-icon")}
               <span>${this._t(tab.labelKey)}</span>
               ${counts.errors > 0
                 ? html`<span class="tab-count errors">${counts.errors}</span>`
@@ -883,15 +992,28 @@ export class HelmanConfigEditorPanel extends LitElement {
     `;
   }
 
-  private _renderSectionScope(scopeId: ScopeId, content: TemplateResult): TemplateResult {
+  private _renderSectionScope(
+    scopeId: ScopeId,
+    content: TemplateResult,
+    options: { initialOpen?: boolean } = {},
+  ): TemplateResult {
     const scope = getScope(scopeId);
+    const { initialOpen = true } = options;
+    const sectionIcon = SECTION_ICONS[scopeId];
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
     return html`
-      <details class="section-card" open>
+      <details class="section-card" ?open=${initialOpen}>
         <summary>
           <div class="section-summary-row">
-            <span class="section-summary-label">${this._t(scope.labelKey)}</span>
-            ${this._renderModeToggle(scopeId, { inSummary: true })}
+            <div class="section-summary-left">
+              ${sectionIcon ? this._renderSvgIcon(sectionIcon, "section-icon") : nothing}
+              <span class="section-summary-label">${this._t(scope.labelKey)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;" @click=${this._preventSummaryToggle}>
+              ${this._renderModeToggle(scopeId, { inSummary: false })}
+            </div>
+            ${this._renderSvgIcon(chevronPath, "section-chevron")}
           </div>
         </summary>
         <div class="section-content">
@@ -900,6 +1022,175 @@ export class HelmanConfigEditorPanel extends LitElement {
             : content}
         </div>
       </details>
+    `;
+  }
+
+  private _renderSvgIcon(path: string, className: string): TemplateResult {
+    return html`<svg class=${className} viewBox="0 0 24 24" aria-hidden="true"><path d=${path}/></svg>`;
+  }
+
+  private _renderSimpleSection(
+    label: string,
+    content: TemplateResult,
+    options: { open?: boolean } = {},
+  ): TemplateResult {
+    const { open = true } = options;
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    return html`
+      <details class="section-card" ?open=${open}>
+        <summary>
+          <div class="section-summary-row">
+            <div class="section-summary-left">
+              <span class="section-summary-label">${label}</span>
+            </div>
+            ${this._renderSvgIcon(chevronPath, "section-chevron")}
+          </div>
+        </summary>
+        <div class="section-content">${content}</div>
+      </details>
+    `;
+  }
+
+  private _getApplianceMode(index: number): EditorMode {
+    return this._applianceModes[index] ?? "visual";
+  }
+
+  private _renderApplianceModeToggle(index: number): TemplateResult {
+    const mode = this._getApplianceMode(index);
+    return html`
+      <div class="mode-toggle">
+        <button
+          type="button"
+          class=${mode === "visual" ? "active" : ""}
+          aria-pressed=${mode === "visual"}
+          @click=${(event: Event) => this._handleApplianceModeChange(index, "visual", event)}
+        >
+          ${this._t("editor.mode.visual")}
+        </button>
+        <button
+          type="button"
+          class=${mode === "yaml" ? "active" : ""}
+          aria-pressed=${mode === "yaml"}
+          @click=${(event: Event) => this._handleApplianceModeChange(index, "yaml", event)}
+        >
+          ${this._t("editor.mode.yaml")}
+        </button>
+      </div>
+    `;
+  }
+
+  private _handleApplianceModeChange(index: number, mode: EditorMode, event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (mode === "yaml") {
+      void this._enterApplianceYamlMode(index);
+    } else {
+      this._exitApplianceYamlMode(index);
+    }
+  }
+
+  private async _enterApplianceYamlMode(index: number): Promise<void> {
+    if (this._getApplianceMode(index) === "yaml") return;
+    try {
+      await loadHaYamlEditor();
+      if (!this._config) return;
+      const value = this._getValue(["appliances", index]) as JsonValue;
+      this._applianceModes = { ...this._applianceModes, [index]: "yaml" };
+      this._applianceYamlValues = { ...this._applianceYamlValues, [index]: value };
+      const nextErrors = { ...this._applianceYamlErrors };
+      delete nextErrors[index];
+      this._applianceYamlErrors = nextErrors;
+      this._message = null;
+    } catch (error) {
+      this._message = {
+        kind: "error",
+        text: this._formatError(error, this._t("editor.messages.load_ha_yaml_editor_failed")),
+      };
+    }
+  }
+
+  private _exitApplianceYamlMode(index: number): void {
+    if (this._getApplianceMode(index) !== "yaml" || this._applianceYamlErrors[index]) return;
+    const nextModes = { ...this._applianceModes };
+    delete nextModes[index];
+    const nextValues = { ...this._applianceYamlValues };
+    delete nextValues[index];
+    const nextErrors = { ...this._applianceYamlErrors };
+    delete nextErrors[index];
+    this._applianceModes = nextModes;
+    this._applianceYamlValues = nextValues;
+    this._applianceYamlErrors = nextErrors;
+  }
+
+  private _handleApplianceYamlChanged(
+    index: number,
+    event: CustomEvent<YamlEditorValueChangedDetail>,
+  ): void {
+    event.stopPropagation();
+    if (!event.detail.isValid) {
+      this._applianceYamlErrors = {
+        ...this._applianceYamlErrors,
+        [index]: event.detail.errorMsg ?? this._t("editor.yaml.errors.parse_failed"),
+      };
+      return;
+    }
+    const normalizedValue = normalizeYamlValue(event.detail.value);
+    if (!normalizedValue.ok) {
+      this._applianceYamlErrors = {
+        ...this._applianceYamlErrors,
+        [index]: this._t("editor.yaml.errors.non_json_value"),
+      };
+      return;
+    }
+    if (!Array.isArray(normalizedValue.value) && typeof normalizedValue.value !== "object") {
+      this._applianceYamlErrors = {
+        ...this._applianceYamlErrors,
+        [index]: this._t("editor.yaml.errors.non_json_value"),
+      };
+      return;
+    }
+    try {
+      const nextConfig = cloneJson(this._config ?? {});
+      setValueAtPath(nextConfig, ["appliances", index], cloneJson(normalizedValue.value));
+      this._config = nextConfig as JsonObject;
+      this._dirty = true;
+      this._validation = null;
+      this._message = null;
+      this._applianceYamlValues = { ...this._applianceYamlValues, [index]: normalizedValue.value };
+      const nextErrors = { ...this._applianceYamlErrors };
+      delete nextErrors[index];
+      this._applianceYamlErrors = nextErrors;
+    } catch (error) {
+      this._applianceYamlErrors = {
+        ...this._applianceYamlErrors,
+        [index]: this._formatError(error, this._t("editor.yaml.errors.apply_failed")),
+      };
+    }
+  }
+
+  private _renderApplianceYamlEditor(index: number): TemplateResult {
+    const error = this._applianceYamlErrors[index];
+    const editorId = `appliance-${index}`;
+    const helperId = `${editorId}-yaml-helper`;
+    const errorId = `${editorId}-yaml-error`;
+    const describedBy = error ? `${helperId} ${errorId}` : helperId;
+    const editorValue = this._applianceYamlValues[index] ?? this._getValue(["appliances", index]);
+    return html`
+      <div class="yaml-surface">
+        <div class="field yaml-field">
+          <label>${this._t("editor.yaml.field_label")}</label>
+          <div id=${helperId} class="helper">${this._t("editor.yaml.helpers.section")}</div>
+          <ha-yaml-editor
+            .hass=${this.hass}
+            .defaultValue=${editorValue}
+            .showErrors=${false}
+            aria-describedby=${describedBy}
+            @value-changed=${(event: CustomEvent<YamlEditorValueChangedDetail>) =>
+              this._handleApplianceYamlChanged(index, event)}
+          ></ha-yaml-editor>
+        </div>
+        ${error ? html`<div id=${errorId} class="message error">${error}</div>` : nothing}
+      </div>
     `;
   }
 
@@ -1123,6 +1414,7 @@ export class HelmanConfigEditorPanel extends LitElement {
             </button>
           </div>
         `,
+        { initialOpen: false },
       )}
 
       ${this._renderSectionScope(
@@ -1175,6 +1467,7 @@ export class HelmanConfigEditorPanel extends LitElement {
             </button>
           </div>
         `,
+        { initialOpen: false },
       )}
 
       ${this._renderSectionScope(
@@ -1247,6 +1540,7 @@ export class HelmanConfigEditorPanel extends LitElement {
             )}
           </div>
         `,
+        { initialOpen: false },
       )}
 
       ${this._renderSectionScope(
@@ -1289,6 +1583,7 @@ export class HelmanConfigEditorPanel extends LitElement {
             </button>
           </div>
         `,
+        { initialOpen: false },
       )}
     `;
   }
@@ -1742,43 +2037,45 @@ export class HelmanConfigEditorPanel extends LitElement {
     index: number,
     total: number,
   ): TemplateResult {
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const applianceName = this._stringValue(appliance.name) || this._tFormat("editor.dynamic.appliance", { index: index + 1 });
+    const subtitle = this._tFormat("editor.dynamic.unsupported_appliance_kind", {
+      kind: this._stringValue(appliance.kind) || this._t("editor.values.unknown"),
+    });
     return html`
-      <div class="list-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${this._stringValue(appliance.name) || this._tFormat("editor.dynamic.appliance", { index: index + 1 })}</strong>
-            <span class="card-subtitle">
-              ${this._tFormat("editor.dynamic.unsupported_appliance_kind", {
-                kind: this._stringValue(appliance.kind) || this._t("editor.values.unknown"),
-              })}
-            </span>
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${applianceName}</strong>
+                <span class="card-subtitle">${subtitle}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              <button
+                type="button"
+                ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button
+                type="button"
+                ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button
+                type="button"
+                class="danger"
+                @click=${() => this._removeListItem(["appliances"], index)}
+              >${this._t("editor.actions.remove")}</button>
+            </div>
           </div>
-          <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() => this._moveListItem(["appliances"], index, index - 1)}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() => this._moveListItem(["appliances"], index, index + 1)}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() => this._removeListItem(["appliances"], index)}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
+        </summary>
+        <div class="appliance-body">
+          <pre class="raw-preview">${JSON.stringify(appliance, null, 2)}</pre>
         </div>
-        <pre class="raw-preview">${JSON.stringify(appliance, null, 2)}</pre>
-      </div>
+      </details>
     `;
   }
 
@@ -1798,157 +2095,86 @@ export class HelmanConfigEditorPanel extends LitElement {
     const applianceName =
       this._stringValue(appliance.name) || this._tFormat("editor.dynamic.ev_charger", { index: index + 1 });
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const isYaml = this._getApplianceMode(index) === "yaml";
 
     return html`
-      <div class="list-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${applianceName}</strong>
-            <span class="card-subtitle">${applianceId}</span>
-          </div>
-          <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() => this._moveListItem(["appliances"], index, index - 1)}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() => this._moveListItem(["appliances"], index, index + 1)}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() => this._removeListItem(["appliances"], index)}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
-        </div>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.identity_and_limits")}</summary>
-          <div class="section-content">
-            <div class="field-grid">
-              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
-              ${this._renderOptionalIconField(
-                [...basePath, "icon"],
-                "editor.fields.appliance_icon",
-                "editor.helpers.appliance_icon",
-              )}
-              <div class="field">
-                <label>${this._t("editor.fields.kind")}</label>
-                <input value="ev_charger" disabled />
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${applianceName}</strong>
+                <span class="card-subtitle">${applianceId}</span>
               </div>
-              ${this._renderRequiredNumberField(
-                [...basePath, "limits", "max_charging_power_kw"],
-                "editor.fields.max_charging_power_kw",
-                undefined,
-                "any",
-                "editor.help.ev_max_charging_power_kw",
-              )}
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderApplianceModeToggle(index)}
+              <button type="button" ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button type="button" ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button type="button" class="danger"
+                @click=${() => this._removeListItem(["appliances"], index)}
+              >${this._t("editor.actions.remove")}</button>
             </div>
           </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.controls")}</summary>
-          <div class="section-content">
-            <div class="field-grid">
-              ${this._renderRequiredEntityField(
-                [...basePath, "controls", "charge", "entity_id"],
-                "editor.fields.charge_switch_entity",
-                ["switch"],
-                undefined,
-                undefined,
-                "editor.help.ev_charge_switch_entity",
+        </summary>
+        <div class="appliance-body">
+          ${isYaml
+            ? this._renderApplianceYamlEditor(index)
+            : html`
+              ${this._renderSimpleSection(
+                this._t("editor.sections.identity_and_limits"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
+                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
+                  ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
+                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="ev_charger" disabled /></div>
+                  ${this._renderRequiredNumberField([...basePath, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", undefined, "any", "editor.help.ev_max_charging_power_kw")}
+                </div>`,
               )}
-              ${this._renderRequiredEntityField(
-                [...basePath, "controls", "use_mode", "entity_id"],
-                "editor.fields.use_mode_entity",
-                ["input_select", "select"],
-                undefined,
-                undefined,
-                "editor.help.ev_use_mode_entity",
+              ${this._renderSimpleSection(
+                this._t("editor.sections.controls"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredEntityField([...basePath, "controls", "charge", "entity_id"], "editor.fields.charge_switch_entity", ["switch"], undefined, undefined, "editor.help.ev_charge_switch_entity")}
+                  ${this._renderRequiredEntityField([...basePath, "controls", "use_mode", "entity_id"], "editor.fields.use_mode_entity", ["input_select", "select"], undefined, undefined, "editor.help.ev_use_mode_entity")}
+                  ${this._renderRequiredEntityField([...basePath, "controls", "eco_gear", "entity_id"], "editor.fields.eco_gear_entity", ["input_select", "select"], undefined, undefined, "editor.help.ev_eco_gear_entity")}
+                </div>`,
               )}
-              ${this._renderRequiredEntityField(
-                [...basePath, "controls", "eco_gear", "entity_id"],
-                "editor.fields.eco_gear_entity",
-                ["input_select", "select"],
-                undefined,
-                undefined,
-                "editor.help.ev_eco_gear_entity",
+              ${this._renderSimpleSection(
+                this._t("editor.sections.use_modes"),
+                html`<div class="list-stack">
+                  ${useModes.map(([modeKey, modeConfig]) => this._renderUseMode(basePath, modeKey, modeConfig))}
+                </div>
+                <div class="section-footer">
+                  <button type="button" class="add-button" @click=${() => this._handleAddUseMode(index)}>${this._t("editor.actions.add_use_mode")}</button>
+                </div>`,
               )}
-            </div>
-          </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.use_modes")}</summary>
-          <div class="section-content">
-            <div class="list-stack">
-              ${useModes.map(([modeKey, modeConfig]) =>
-                this._renderUseMode(basePath, modeKey, modeConfig),
+              ${this._renderSimpleSection(
+                this._t("editor.sections.eco_gears"),
+                html`<div class="list-stack">
+                  ${ecoGears.map(([gearKey, gearConfig]) => this._renderEcoGear(basePath, gearKey, gearConfig))}
+                </div>
+                <div class="section-footer">
+                  <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(index)}>${this._t("editor.actions.add_eco_gear")}</button>
+                </div>`,
               )}
-            </div>
-            <div class="section-footer">
-              <button
-                type="button"
-                class="add-button"
-                @click=${() => this._handleAddUseMode(index)}
-              >
-                ${this._t("editor.actions.add_use_mode")}
-              </button>
-            </div>
-          </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.eco_gears")}</summary>
-          <div class="section-content">
-            <div class="list-stack">
-              ${ecoGears.map(([gearKey, gearConfig]) =>
-                this._renderEcoGear(basePath, gearKey, gearConfig),
+              ${this._renderSimpleSection(
+                this._t("editor.sections.vehicles"),
+                html`<div class="list-stack">
+                  ${vehicles.map((vehicle, vehicleIndex) => this._renderVehicle(basePath, vehicle, vehicleIndex, vehicles.length))}
+                </div>
+                <div class="section-footer">
+                  <button type="button" class="add-button" @click=${() => this._handleAddVehicle(index)}>${this._t("editor.actions.add_vehicle")}</button>
+                </div>`,
               )}
-            </div>
-            <div class="section-footer">
-              <button
-                type="button"
-                class="add-button"
-                @click=${() => this._handleAddEcoGear(index)}
-              >
-                ${this._t("editor.actions.add_eco_gear")}
-              </button>
-            </div>
-          </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.vehicles")}</summary>
-          <div class="section-content">
-            <div class="list-stack">
-              ${vehicles.map((vehicle, vehicleIndex) =>
-                this._renderVehicle(basePath, vehicle, vehicleIndex, vehicles.length),
-              )}
-            </div>
-            <div class="section-footer">
-              <button
-                type="button"
-                class="add-button"
-                @click=${() => this._handleAddVehicle(index)}
-              >
-                ${this._t("editor.actions.add_vehicle")}
-              </button>
-            </div>
-          </div>
-        </details>
-      </div>
+            `}
+        </div>
+      </details>
     `;
   }
 
@@ -1965,86 +2191,64 @@ export class HelmanConfigEditorPanel extends LitElement {
       this._stringValue(appliance.name) ||
       this._tFormat("editor.dynamic.generic_appliance", { index: index + 1 });
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const isYaml = this._getApplianceMode(index) === "yaml";
 
     return html`
-      <div class="list-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${applianceName}</strong>
-            <span class="card-subtitle">${applianceId}</span>
-          </div>
-          <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() => this._moveListItem(["appliances"], index, index - 1)}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() => this._moveListItem(["appliances"], index, index + 1)}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() => this._removeListItem(["appliances"], index)}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
-        </div>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.identity_and_limits")}</summary>
-          <div class="section-content">
-            <div class="field-grid">
-              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
-              ${this._renderOptionalIconField(
-                [...basePath, "icon"],
-                "editor.fields.appliance_icon",
-                "editor.helpers.appliance_icon",
-              )}
-              <div class="field">
-                <label>${this._t("editor.fields.kind")}</label>
-                <input value="generic" disabled />
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${applianceName}</strong>
+                <span class="card-subtitle">${applianceId}</span>
               </div>
             </div>
-          </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.controls")}</summary>
-          <div class="section-content">
-            <div class="field-grid">
-              ${this._renderRequiredEntityField(
-                [...basePath, "controls", "switch", "entity_id"],
-                "editor.fields.switch_entity",
-                ["switch"],
-                undefined,
-                undefined,
-                "editor.help.appliance_switch_entity",
-              )}
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderApplianceModeToggle(index)}
+              <button type="button" ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button type="button" ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button type="button" class="danger"
+                @click=${() => this._removeListItem(["appliances"], index)}
+              >${this._t("editor.actions.remove")}</button>
             </div>
           </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.projection")}</summary>
-          ${this._renderProjectedApplianceProjectionSection(
-            basePath,
-            projectionStrategy,
-            historyAveragePath,
-            "editor.notes.generic_appliance_projection",
-            (strategy) =>
-              this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-          )}
-        </details>
-      </div>
+        </summary>
+        <div class="appliance-body">
+          ${isYaml
+            ? this._renderApplianceYamlEditor(index)
+            : html`
+              ${this._renderSimpleSection(
+                this._t("editor.sections.identity_and_limits"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
+                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
+                  ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
+                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="generic" disabled /></div>
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.controls"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredEntityField([...basePath, "controls", "switch", "entity_id"], "editor.fields.switch_entity", ["switch"], undefined, undefined, "editor.help.appliance_switch_entity")}
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.projection"),
+                this._renderProjectedApplianceProjectionSection(
+                  basePath, projectionStrategy, historyAveragePath,
+                  "editor.notes.generic_appliance_projection",
+                  (strategy) => this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+                ),
+              )}
+            `}
+        </div>
+      </details>
     `;
   }
 
@@ -2061,86 +2265,64 @@ export class HelmanConfigEditorPanel extends LitElement {
       this._stringValue(appliance.name) ||
       this._tFormat("editor.dynamic.climate_appliance", { index: index + 1 });
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const isYaml = this._getApplianceMode(index) === "yaml";
 
     return html`
-      <div class="list-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${applianceName}</strong>
-            <span class="card-subtitle">${applianceId}</span>
-          </div>
-          <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() => this._moveListItem(["appliances"], index, index - 1)}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() => this._moveListItem(["appliances"], index, index + 1)}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() => this._removeListItem(["appliances"], index)}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
-        </div>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.identity_and_limits")}</summary>
-          <div class="section-content">
-            <div class="field-grid">
-              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
-              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
-              ${this._renderOptionalIconField(
-                [...basePath, "icon"],
-                "editor.fields.appliance_icon",
-                "editor.helpers.appliance_icon",
-              )}
-              <div class="field">
-                <label>${this._t("editor.fields.kind")}</label>
-                <input value="climate" disabled />
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${applianceName}</strong>
+                <span class="card-subtitle">${applianceId}</span>
               </div>
             </div>
-          </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.controls")}</summary>
-          <div class="section-content">
-            <div class="field-grid">
-              ${this._renderRequiredEntityField(
-                [...basePath, "controls", "climate", "entity_id"],
-                "editor.fields.climate_entity",
-                ["climate"],
-                undefined,
-                undefined,
-                "editor.help.appliance_climate_entity",
-              )}
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderApplianceModeToggle(index)}
+              <button type="button" ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button type="button" ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button type="button" class="danger"
+                @click=${() => this._removeListItem(["appliances"], index)}
+              >${this._t("editor.actions.remove")}</button>
             </div>
           </div>
-        </details>
-
-        <details class="section-card" open>
-          <summary>${this._t("editor.sections.projection")}</summary>
-          ${this._renderProjectedApplianceProjectionSection(
-            basePath,
-            projectionStrategy,
-            historyAveragePath,
-            "editor.notes.climate_appliance_projection",
-            (strategy) =>
-              this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-          )}
-        </details>
-      </div>
+        </summary>
+        <div class="appliance-body">
+          ${isYaml
+            ? this._renderApplianceYamlEditor(index)
+            : html`
+              ${this._renderSimpleSection(
+                this._t("editor.sections.identity_and_limits"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
+                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
+                  ${this._renderOptionalIconField([...basePath, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
+                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="climate" disabled /></div>
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.controls"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredEntityField([...basePath, "controls", "climate", "entity_id"], "editor.fields.climate_entity", ["climate"], undefined, undefined, "editor.help.appliance_climate_entity")}
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.projection"),
+                this._renderProjectedApplianceProjectionSection(
+                  basePath, projectionStrategy, historyAveragePath,
+                  "editor.notes.climate_appliance_projection",
+                  (strategy) => this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+                ),
+              )}
+            `}
+        </div>
+      </details>
     `;
   }
 
@@ -2985,8 +3167,13 @@ export class HelmanConfigEditorPanel extends LitElement {
   }
 
   private _hasBlockingYamlErrors(): boolean {
-    return Object.values(this._scopeYamlErrors).some(
-      (error) => typeof error === "string" && error.length > 0,
+    return (
+      Object.values(this._scopeYamlErrors).some(
+        (error) => typeof error === "string" && error.length > 0,
+      ) ||
+      Object.values(this._applianceYamlErrors).some(
+        (error) => typeof error === "string" && error.length > 0,
+      )
     );
   }
 
@@ -3003,6 +3190,9 @@ export class HelmanConfigEditorPanel extends LitElement {
     this._scopeModes = {};
     this._scopeYamlValues = {};
     this._scopeYamlErrors = {};
+    this._applianceModes = {};
+    this._applianceYamlValues = {};
+    this._applianceYamlErrors = {};
   }
 
   private _omitScopeIds<T>(
