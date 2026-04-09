@@ -94,6 +94,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     _scopeModes: { state: true },
     _scopeYamlValues: { state: true },
     _scopeYamlErrors: { state: true },
+    _helpDialog: { state: true },
   };
 
   static styles = css`
@@ -570,6 +571,103 @@ export class HelmanConfigEditorPanel extends LitElement {
         justify-content: flex-start;
       }
     }
+
+    .field-label-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .field-label-row label {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .help-btn {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid var(--secondary-text-color);
+      background: transparent;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 700;
+      line-height: 1;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .help-btn:hover {
+      border-color: var(--primary-color);
+      color: var(--primary-color);
+      background: rgba(3, 169, 244, 0.08);
+    }
+
+    .help-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .help-dialog {
+      background: var(--card-background-color);
+      border-radius: 18px;
+      padding: 22px 24px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
+    }
+
+    .help-dialog-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .help-dialog-header strong {
+      font-size: 1.05rem;
+      line-height: 1.3;
+    }
+
+    .help-dialog-close {
+      flex-shrink: 0;
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.9rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+
+    .help-dialog-close:hover {
+      background: rgba(127, 127, 127, 0.08);
+    }
+
+    .help-dialog-body {
+      color: var(--secondary-text-color);
+      line-height: 1.55;
+      margin: 0;
+      font-size: 0.93rem;
+    }
   `;
 
   declare narrow?: boolean;
@@ -591,6 +689,7 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
   private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
   private _scopeYamlErrors: Partial<Record<ScopeId, string>> = {};
+  private _helpDialog: { labelKey: string; contentKey: string } | null = null;
 
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
@@ -712,6 +811,7 @@ export class HelmanConfigEditorPanel extends LitElement {
 
         ${this._config ? this._renderDocumentBody(issueCounts) : nothing}
       </div>
+      ${this._renderHelpDialog()}
     `;
   }
 
@@ -905,11 +1005,13 @@ export class HelmanConfigEditorPanel extends LitElement {
               ["history_buckets"],
               "editor.fields.history_buckets",
               "editor.helpers.history_buckets",
+              "editor.help.history_buckets",
             )}
             ${this._renderOptionalNumberField(
               ["history_bucket_duration"],
               "editor.fields.history_bucket_duration",
               "editor.helpers.history_bucket_duration",
+              "editor.help.history_bucket_duration",
             )}
             ${this._renderOptionalTextField(["sources_title"], "editor.fields.sources_title")}
             ${this._renderOptionalTextField(["consumers_title"], "editor.fields.consumers_title")}
@@ -919,6 +1021,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               ["power_sensor_name_cleaner_regex"],
               "editor.fields.power_sensor_name_cleaner_regex",
               "editor.helpers.power_sensor_name_cleaner_regex",
+              "editor.help.power_sensor_name_cleaner_regex",
             )}
             ${this._renderBooleanField(
               ["show_empty_groups"],
@@ -972,6 +1075,9 @@ export class HelmanConfigEditorPanel extends LitElement {
               ["power_devices", "house", "entities", "power"],
               "editor.fields.house_power_entity",
               ["sensor"],
+              undefined,
+              undefined,
+              "editor.help.house_power_entity",
             )}
             ${this._renderOptionalTextField(
               ["power_devices", "house", "power_sensor_label"],
@@ -989,14 +1095,20 @@ export class HelmanConfigEditorPanel extends LitElement {
               ["power_devices", "house", "forecast", "total_energy_entity_id"],
               "editor.fields.forecast_total_energy_entity",
               ["sensor"],
+              undefined,
+              "editor.help.house_forecast_total_energy_entity",
             )}
             ${this._renderOptionalNumberField(
               ["power_devices", "house", "forecast", "min_history_days"],
               "editor.fields.min_history_days",
+              undefined,
+              "editor.help.house_min_history_days",
             )}
             ${this._renderOptionalNumberField(
               ["power_devices", "house", "forecast", "training_window_days"],
               "editor.fields.training_window_days",
+              undefined,
+              "editor.help.house_training_window_days",
             )}
           </div>
 
@@ -1021,11 +1133,15 @@ export class HelmanConfigEditorPanel extends LitElement {
               ["power_devices", "solar", "entities", "power"],
               "editor.fields.power_entity",
               ["sensor"],
+              undefined,
+              "editor.help.solar_power_entity",
             )}
             ${this._renderOptionalEntityField(
               ["power_devices", "solar", "entities", "today_energy"],
               "editor.fields.today_energy_entity",
               ["sensor"],
+              undefined,
+              "editor.help.solar_today_energy_entity",
             )}
             ${this._renderOptionalEntityField(
               [
@@ -1036,11 +1152,15 @@ export class HelmanConfigEditorPanel extends LitElement {
               ],
               "editor.fields.remaining_today_energy_forecast",
               ["sensor"],
+              undefined,
+              "editor.help.solar_remaining_today_energy_forecast",
             )}
             ${this._renderOptionalEntityField(
               ["power_devices", "solar", "forecast", "total_energy_entity_id"],
               "editor.fields.forecast_total_energy_entity",
               ["sensor"],
+              undefined,
+              "editor.help.solar_forecast_total_energy_entity",
             )}
           </div>
 
@@ -1068,44 +1188,62 @@ export class HelmanConfigEditorPanel extends LitElement {
               ["power_devices", "battery", "entities", "power"],
               "editor.fields.power_entity",
               ["sensor"],
+              undefined,
+              "editor.help.battery_power_entity",
             )}
             ${this._renderOptionalEntityField(
               ["power_devices", "battery", "entities", "remaining_energy"],
               "editor.fields.remaining_energy_entity",
               ["sensor"],
+              undefined,
+              "editor.help.battery_remaining_energy_entity",
             )}
             ${this._renderOptionalEntityField(
               ["power_devices", "battery", "entities", "capacity"],
               "editor.fields.capacity_entity",
               ["sensor"],
+              undefined,
+              "editor.help.battery_capacity_entity",
             )}
             ${this._renderOptionalEntityField(
               ["power_devices", "battery", "entities", "min_soc"],
               "editor.fields.min_soc_entity",
               ["sensor"],
+              undefined,
+              "editor.help.battery_min_soc_entity",
             )}
             ${this._renderOptionalEntityField(
               ["power_devices", "battery", "entities", "max_soc"],
               "editor.fields.max_soc_entity",
               ["sensor"],
+              undefined,
+              "editor.help.battery_max_soc_entity",
             )}
           </div>
           <div class="field-grid">
             ${this._renderOptionalNumberField(
               ["power_devices", "battery", "forecast", "charge_efficiency"],
               "editor.fields.charge_efficiency",
+              undefined,
+              "editor.help.battery_charge_efficiency",
             )}
             ${this._renderOptionalNumberField(
               ["power_devices", "battery", "forecast", "discharge_efficiency"],
               "editor.fields.discharge_efficiency",
+              undefined,
+              "editor.help.battery_discharge_efficiency",
             )}
             ${this._renderOptionalNumberField(
               ["power_devices", "battery", "forecast", "max_charge_power_w"],
               "editor.fields.max_charge_power_w",
+              undefined,
+              "editor.help.battery_max_charge_power_w",
             )}
             ${this._renderOptionalNumberField(
               ["power_devices", "battery", "forecast", "max_discharge_power_w"],
               "editor.fields.max_discharge_power_w",
+              undefined,
+              "editor.help.battery_max_discharge_power_w",
             )}
           </div>
         `,
@@ -1119,16 +1257,21 @@ export class HelmanConfigEditorPanel extends LitElement {
               ["power_devices", "grid", "entities", "power"],
               "editor.fields.power_entity",
               ["sensor"],
+              undefined,
+              "editor.help.grid_power_entity",
             )}
             ${this._renderOptionalEntityField(
               ["power_devices", "grid", "forecast", "sell_price_entity_id"],
               "editor.fields.sell_price_entity",
               ["sensor"],
+              undefined,
+              "editor.help.grid_sell_price_entity",
             )}
             ${this._renderOptionalTextField(
               ["power_devices", "grid", "forecast", "import_price_unit"],
               "editor.fields.import_price_unit",
               "editor.helpers.import_price_unit",
+              "editor.help.grid_import_price_unit",
             )}
           </div>
 
@@ -1161,26 +1304,38 @@ export class HelmanConfigEditorPanel extends LitElement {
               "editor.fields.mode_entity",
               ["input_select", "select"],
               "editor.helpers.mode_entity",
+              undefined,
+              "editor.help.scheduler_mode_entity",
             )}
             ${this._renderOptionalTextField(
               ["scheduler", "control", "action_option_map", "normal"],
               "editor.fields.normal_option",
+              undefined,
+              "editor.help.scheduler_action_option",
             )}
             ${this._renderOptionalTextField(
               ["scheduler", "control", "action_option_map", "charge_to_target_soc"],
               "editor.fields.charge_to_target_soc_option",
+              undefined,
+              "editor.help.scheduler_action_option",
             )}
             ${this._renderOptionalTextField(
               ["scheduler", "control", "action_option_map", "discharge_to_target_soc"],
               "editor.fields.discharge_to_target_soc_option",
+              undefined,
+              "editor.help.scheduler_action_option",
             )}
             ${this._renderOptionalTextField(
               ["scheduler", "control", "action_option_map", "stop_charging"],
               "editor.fields.stop_charging_option",
+              undefined,
+              "editor.help.scheduler_action_option",
             )}
             ${this._renderOptionalTextField(
               ["scheduler", "control", "action_option_map", "stop_discharging"],
               "editor.fields.stop_discharging_option",
+              undefined,
+              "editor.help.scheduler_action_option",
             )}
           </div>
         `,
@@ -1396,6 +1551,9 @@ export class HelmanConfigEditorPanel extends LitElement {
             [...basePath, "energy_entity_id"],
             "editor.fields.energy_entity",
             ["sensor"],
+            undefined,
+            undefined,
+            "editor.help.deferrable_consumer_energy_entity",
           )}
           ${this._renderOptionalTextField([...basePath, "label"], "editor.fields.label")}
         </div>
@@ -1459,7 +1617,7 @@ export class HelmanConfigEditorPanel extends LitElement {
             </button>
           </div>
         </div>
-        ${this._renderRequiredEntityField(path, "editor.fields.entity_id", ["sensor"], undefined, value)}
+        ${this._renderRequiredEntityField(path, "editor.fields.entity_id", ["sensor"], undefined, value, "editor.help.solar_daily_energy_entity")}
       </div>
     `;
   }
@@ -1525,7 +1683,10 @@ export class HelmanConfigEditorPanel extends LitElement {
         </div>
         <div class="field-grid">
           <div class="field">
-            <label>${this._t("editor.fields.start")}</label>
+            <div class="field-label-row">
+              <label>${this._t("editor.fields.start")}</label>
+              ${this._renderHelpIcon("editor.fields.start", "editor.help.import_window_start")}
+            </div>
             <input
               type="time"
               .value=${this._stringValue(windowObject.start)}
@@ -1537,7 +1698,10 @@ export class HelmanConfigEditorPanel extends LitElement {
             />
           </div>
           <div class="field">
-            <label>${this._t("editor.fields.end")}</label>
+            <div class="field-label-row">
+              <label>${this._t("editor.fields.end")}</label>
+              ${this._renderHelpIcon("editor.fields.end", "editor.help.import_window_end")}
+            </div>
             <input
               type="time"
               .value=${this._stringValue(windowObject.end)}
@@ -1548,7 +1712,7 @@ export class HelmanConfigEditorPanel extends LitElement {
                 )}
             />
           </div>
-          ${this._renderRequiredNumberField([...basePath, "price"], "editor.fields.price")}
+          ${this._renderRequiredNumberField([...basePath, "price"], "editor.fields.price", undefined, "any", "editor.help.import_window_price")}
         </div>
       </div>
     `;
@@ -1671,8 +1835,8 @@ export class HelmanConfigEditorPanel extends LitElement {
           <summary>${this._t("editor.sections.identity_and_limits")}</summary>
           <div class="section-content">
             <div class="field-grid">
-              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id")}
-              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name")}
+              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
+              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
               ${this._renderOptionalIconField(
                 [...basePath, "icon"],
                 "editor.fields.appliance_icon",
@@ -1685,6 +1849,9 @@ export class HelmanConfigEditorPanel extends LitElement {
               ${this._renderRequiredNumberField(
                 [...basePath, "limits", "max_charging_power_kw"],
                 "editor.fields.max_charging_power_kw",
+                undefined,
+                "any",
+                "editor.help.ev_max_charging_power_kw",
               )}
             </div>
           </div>
@@ -1698,16 +1865,25 @@ export class HelmanConfigEditorPanel extends LitElement {
                 [...basePath, "controls", "charge", "entity_id"],
                 "editor.fields.charge_switch_entity",
                 ["switch"],
+                undefined,
+                undefined,
+                "editor.help.ev_charge_switch_entity",
               )}
               ${this._renderRequiredEntityField(
                 [...basePath, "controls", "use_mode", "entity_id"],
                 "editor.fields.use_mode_entity",
                 ["input_select", "select"],
+                undefined,
+                undefined,
+                "editor.help.ev_use_mode_entity",
               )}
               ${this._renderRequiredEntityField(
                 [...basePath, "controls", "eco_gear", "entity_id"],
                 "editor.fields.eco_gear_entity",
                 ["input_select", "select"],
+                undefined,
+                undefined,
+                "editor.help.ev_eco_gear_entity",
               )}
             </div>
           </div>
@@ -1826,8 +2002,8 @@ export class HelmanConfigEditorPanel extends LitElement {
           <summary>${this._t("editor.sections.identity_and_limits")}</summary>
           <div class="section-content">
             <div class="field-grid">
-              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id")}
-              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name")}
+              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
+              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
               ${this._renderOptionalIconField(
                 [...basePath, "icon"],
                 "editor.fields.appliance_icon",
@@ -1849,6 +2025,9 @@ export class HelmanConfigEditorPanel extends LitElement {
                 [...basePath, "controls", "switch", "entity_id"],
                 "editor.fields.switch_entity",
                 ["switch"],
+                undefined,
+                undefined,
+                "editor.help.appliance_switch_entity",
               )}
             </div>
           </div>
@@ -1919,8 +2098,8 @@ export class HelmanConfigEditorPanel extends LitElement {
           <summary>${this._t("editor.sections.identity_and_limits")}</summary>
           <div class="section-content">
             <div class="field-grid">
-              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id")}
-              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name")}
+              ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.appliance_id", undefined, "editor.help.appliance_id")}
+              ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.appliance_name", undefined, "editor.help.appliance_name")}
               ${this._renderOptionalIconField(
                 [...basePath, "icon"],
                 "editor.fields.appliance_icon",
@@ -1942,6 +2121,9 @@ export class HelmanConfigEditorPanel extends LitElement {
                 [...basePath, "controls", "climate", "entity_id"],
                 "editor.fields.climate_entity",
                 ["climate"],
+                undefined,
+                undefined,
+                "editor.help.appliance_climate_entity",
               )}
             </div>
           </div>
@@ -1976,7 +2158,10 @@ export class HelmanConfigEditorPanel extends LitElement {
         </p>
         <div class="field-grid">
           <div class="field">
-            <label>${this._t("editor.fields.projection_strategy")}</label>
+            <div class="field-label-row">
+              <label>${this._t("editor.fields.projection_strategy")}</label>
+              ${this._renderHelpIcon("editor.fields.projection_strategy", "editor.help.appliance_projection_strategy")}
+            </div>
             <select
               .value=${projectionStrategy}
               @change=${(event: Event) =>
@@ -1992,6 +2177,9 @@ export class HelmanConfigEditorPanel extends LitElement {
           ${this._renderRequiredNumberField(
             [...appliancePath, "projection", "hourly_energy_kwh"],
             "editor.fields.hourly_energy_kwh",
+            undefined,
+            "any",
+            "editor.help.appliance_hourly_energy_kwh",
           )}
         </div>
         ${projectionStrategy === "history_average"
@@ -2008,6 +2196,7 @@ export class HelmanConfigEditorPanel extends LitElement {
                   "editor.fields.history_lookback_days",
                   undefined,
                   "1",
+                  "editor.help.appliance_history_lookback_days",
                 )}
               </div>
             `
@@ -2174,25 +2363,36 @@ export class HelmanConfigEditorPanel extends LitElement {
           </div>
         </div>
         <div class="field-grid">
-          ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.vehicle_id")}
+          ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.vehicle_id", undefined, "editor.help.vehicle_id")}
           ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.vehicle_name")}
           ${this._renderRequiredEntityField(
             [...basePath, "telemetry", "soc_entity_id"],
             "editor.fields.soc_entity",
             ["sensor"],
+            undefined,
+            undefined,
+            "editor.help.vehicle_soc_entity",
           )}
           ${this._renderOptionalEntityField(
             [...basePath, "telemetry", "charge_limit_entity_id"],
             "editor.fields.charge_limit_entity",
             ["number"],
+            undefined,
+            "editor.help.vehicle_charge_limit_entity",
           )}
           ${this._renderRequiredNumberField(
             [...basePath, "limits", "battery_capacity_kwh"],
             "editor.fields.battery_capacity_kwh",
+            undefined,
+            "any",
+            "editor.help.vehicle_battery_capacity_kwh",
           )}
           ${this._renderRequiredNumberField(
             [...basePath, "limits", "max_charging_power_kw"],
             "editor.fields.max_charging_power_kw",
+            undefined,
+            "any",
+            "editor.help.vehicle_max_charging_power_kw",
           )}
         </div>
       </div>
@@ -2203,10 +2403,14 @@ export class HelmanConfigEditorPanel extends LitElement {
     path: PathSegment[],
     labelKey: string,
     helperKey?: string,
+    helpKey?: string,
   ): TemplateResult {
     return html`
       <div class="field">
-        <label>${this._t(labelKey)}</label>
+        <div class="field-label-row">
+          <label>${this._t(labelKey)}</label>
+          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
+        </div>
         <input
           .value=${this._stringValue(this._getValue(path))}
           @change=${(event: Event) =>
@@ -2221,11 +2425,15 @@ export class HelmanConfigEditorPanel extends LitElement {
     path: PathSegment[],
     labelKey: string,
     explicitValue?: unknown,
+    helpKey?: string,
   ): TemplateResult {
     const value = explicitValue === undefined ? this._getValue(path) : explicitValue;
     return html`
       <div class="field">
-        <label>${this._t(labelKey)}</label>
+        <div class="field-label-row">
+          <label>${this._t(labelKey)}</label>
+          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
+        </div>
         <input
           .value=${this._stringValue(value)}
           @change=${(event: Event) =>
@@ -2239,10 +2447,14 @@ export class HelmanConfigEditorPanel extends LitElement {
     path: PathSegment[],
     labelKey: string,
     helperKey?: string,
+    helpKey?: string,
   ): TemplateResult {
     return html`
       <div class="field">
-        <label>${this._t(labelKey)}</label>
+        <div class="field-label-row">
+          <label>${this._t(labelKey)}</label>
+          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
+        </div>
         <input
           type="number"
           step="any"
@@ -2260,11 +2472,15 @@ export class HelmanConfigEditorPanel extends LitElement {
     labelKey: string,
     explicitValue?: unknown,
     step = "any",
+    helpKey?: string,
   ): TemplateResult {
     const value = explicitValue === undefined ? this._getValue(path) : explicitValue;
     return html`
       <div class="field">
-        <label>${this._t(labelKey)}</label>
+        <div class="field-label-row">
+          <label>${this._t(labelKey)}</label>
+          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
+        </div>
         <input
           type="number"
           .step=${step}
@@ -2327,6 +2543,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     labelKey: string,
     includeDomains?: string[],
     helperKey?: string,
+    helpKey?: string,
   ): TemplateResult {
     return this._renderEntityField(
       path,
@@ -2335,6 +2552,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       helperKey,
       false,
       this._getValue(path),
+      helpKey,
     );
   }
 
@@ -2344,6 +2562,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     includeDomains?: string[],
     helperKey?: string,
     explicitValue?: unknown,
+    helpKey?: string,
   ): TemplateResult {
     return this._renderEntityField(
       path,
@@ -2352,6 +2571,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       helperKey,
       true,
       explicitValue === undefined ? this._getValue(path) : explicitValue,
+      helpKey,
     );
   }
 
@@ -2362,10 +2582,14 @@ export class HelmanConfigEditorPanel extends LitElement {
     helperKey: string | undefined,
     required: boolean,
     value: unknown,
+    helpKey?: string,
   ): TemplateResult {
     return html`
       <div class="field">
-        <label>${this._t(labelKey)}</label>
+        <div class="field-label-row">
+          <label>${this._t(labelKey)}</label>
+          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
+        </div>
         <ha-entity-picker
           .hass=${this.hass}
           .value=${this._stringValue(value)}
@@ -2383,6 +2607,47 @@ export class HelmanConfigEditorPanel extends LitElement {
       </div>
     `;
   }
+
+  private _renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
+    return html`
+      <button
+        type="button"
+        class="help-btn"
+        aria-label=${this._t("editor.help.aria_label")}
+        @click=${(event: Event) => {
+          event.stopPropagation();
+          this._helpDialog = { labelKey, contentKey };
+        }}
+      >?</button>
+    `;
+  }
+
+  private _renderHelpDialog(): TemplateResult | typeof nothing {
+    if (!this._helpDialog) {
+      return nothing;
+    }
+    const { labelKey, contentKey } = this._helpDialog;
+    return html`
+      <div class="help-overlay" @click=${this._closeHelp}>
+        <div class="help-dialog" @click=${(e: Event) => e.stopPropagation()}>
+          <div class="help-dialog-header">
+            <strong>${this._t(labelKey)}</strong>
+            <button
+              type="button"
+              class="help-dialog-close"
+              aria-label=${this._t("editor.help.close")}
+              @click=${this._closeHelp}
+            >✕</button>
+          </div>
+          <p class="help-dialog-body">${this._t(contentKey)}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  private _closeHelp = (): void => {
+    this._helpDialog = null;
+  };
 
   private _renderIssueBoard(): TemplateResult | typeof nothing {
     if (!this._validation) {
