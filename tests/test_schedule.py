@@ -65,6 +65,7 @@ _install_import_stubs()
 
 from custom_components.helman.battery_state import BatterySocBounds
 from custom_components.helman.const import (
+    SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
@@ -124,7 +125,7 @@ class ScheduleHelperTests(unittest.TestCase):
         self.assertEqual(slot_ids[0], "2026-03-20T21:00:00+01:00")
         self.assertEqual(slot_ids[-1], expected_last_slot.isoformat(timespec="seconds"))
 
-    def test_materialize_schedule_slots_fills_missing_slots_as_normal(self) -> None:
+    def test_materialize_schedule_slots_fills_missing_slots_as_empty(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         slots = materialize_schedule_slots(
             stored_slots={
@@ -136,7 +137,7 @@ class ScheduleHelperTests(unittest.TestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(slots[0].action.kind, SCHEDULE_ACTION_NORMAL)
+        self.assertEqual(slots[0].action.kind, SCHEDULE_ACTION_EMPTY)
         self.assertEqual(slots[1].action.kind, SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
         self.assertEqual(slots[1].action.target_soc, 80)
 
@@ -154,7 +155,7 @@ class ScheduleHelperTests(unittest.TestCase):
         self.assertEqual(active_slot.id, slot_ids[0])
         self.assertEqual(active_slot.action.kind, SCHEDULE_ACTION_STOP_CHARGING)
 
-    def test_find_active_slot_returns_none_for_implicit_normal(self) -> None:
+    def test_find_active_slot_returns_none_for_implicit_empty(self) -> None:
         self.assertIsNone(
             find_active_slot(
                 stored_slots={},
@@ -162,7 +163,7 @@ class ScheduleHelperTests(unittest.TestCase):
             )
         )
 
-    def test_apply_slot_patches_removes_explicit_normal(self) -> None:
+    def test_apply_slot_patches_removes_explicit_empty(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         patched = apply_slot_patches(
             stored_slots={
@@ -174,7 +175,7 @@ class ScheduleHelperTests(unittest.TestCase):
             slot_patches=[
                 ScheduleSlot(
                     id=slot_ids[1],
-                    action=ScheduleAction(kind=SCHEDULE_ACTION_NORMAL),
+                    action=ScheduleAction(kind=SCHEDULE_ACTION_EMPTY),
                 )
             ],
         )
@@ -255,7 +256,7 @@ class ScheduleHelperTests(unittest.TestCase):
                 battery_soc_bounds=BatterySocBounds(min_soc=10, max_soc=90),
             )
 
-    def test_schedule_document_round_trip_strips_implicit_normal(self) -> None:
+    def test_schedule_document_round_trip_strips_implicit_empty(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         doc = schedule_document_from_dict(
             {
@@ -266,7 +267,7 @@ class ScheduleHelperTests(unittest.TestCase):
                         SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                         80,
                     ),
-                    slot_ids[1]: _domains_payload(SCHEDULE_ACTION_NORMAL),
+                    slot_ids[1]: _domains_payload(SCHEDULE_ACTION_EMPTY),
                 },
             }
         )
@@ -293,6 +294,38 @@ class ScheduleHelperTests(unittest.TestCase):
                         SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                         80,
                     )
+                },
+            },
+        )
+
+    def test_schedule_document_round_trip_preserves_explicit_normal(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        doc = schedule_document_from_dict(
+            {
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[1]: _domains_payload(SCHEDULE_ACTION_NORMAL),
+                },
+            }
+        )
+
+        self.assertEqual(
+            doc,
+            ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    slot_ids[1]: ScheduleAction(kind=SCHEDULE_ACTION_NORMAL),
+                },
+            ),
+        )
+        self.assertEqual(
+            schedule_document_to_dict(doc),
+            {
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[1]: _domains_payload(SCHEDULE_ACTION_NORMAL),
                 },
             },
         )

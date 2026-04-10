@@ -513,7 +513,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     ScheduleSlot(
                         id=CURRENT_SLOT_ID,
                         domains={
-                            "inverter": {"kind": "normal"},
+                            "inverter": {"kind": "empty"},
                             "appliances": {"living-room-hvac": {"mode": "cool"}},
                         },
                     )
@@ -576,7 +576,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "normal"},
+                        "inverter": {"kind": "empty"},
                         "appliances": {
                             "missing-ev": {
                                 "charge": True,
@@ -951,7 +951,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 ScheduleSlot(
                     id=CURRENT_SLOT_ID,
                     domains={
-                        "inverter": {"kind": "normal"},
+                        "inverter": {"kind": "empty"},
                         "appliances": {
                             "garage-ev": {
                                 "charge": True,
@@ -973,7 +973,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "normal"},
+                        "inverter": {"kind": "empty"},
                         "appliances": {
                             "garage-ev": {
                                 "charge": True,
@@ -1000,7 +1000,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     ScheduleSlot(
                         id=CURRENT_SLOT_ID,
                         domains={
-                            "inverter": {"kind": "normal"},
+                            "inverter": {"kind": "empty"},
                             "appliances": {
                                 "garage-ev": {
                                     "charge": True,
@@ -1021,7 +1021,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "normal"},
+                        "inverter": {"kind": "empty"},
                         "appliances": {
                             "missing-ev": {
                                 "charge": True,
@@ -1099,7 +1099,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("runtime", next_slot)
         self.assertEqual(executor.get_status_calls, 1)
 
-    async def test_get_schedule_attaches_runtime_to_implicit_current_normal_slot(
+    async def test_get_schedule_attaches_runtime_to_implicit_current_empty_slot(
         self,
     ) -> None:
         coordinator, _storage, executor = self._build_coordinator(
@@ -1108,7 +1108,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
             active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
-                action_kind="apply",
+                action_kind="slot_stop",
                 outcome="success",
                 executed_action=ScheduleAction(kind="normal"),
                 reason="scheduled",
@@ -1121,14 +1121,14 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         current_slot = next(
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
-        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "normal")
+        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "empty")
         self.assertEqual(
             schedule["runtime"],
             {
                 "activeSlotId": CURRENT_SLOT_ID,
                 "reconciledAt": CURRENT_SLOT_ID,
                 "inverter": {
-                    "actionKind": "apply",
+                    "actionKind": "slot_stop",
                     "outcome": "success",
                     "executedAction": {"kind": "normal"},
                     "reason": "scheduled",

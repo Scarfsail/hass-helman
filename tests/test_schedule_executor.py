@@ -84,8 +84,10 @@ _install_import_stubs()
 from custom_components.helman.battery_state import BatteryLiveState  # noqa: E402
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.const import (  # noqa: E402
+    SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_ACTION_STOP_DISCHARGING,
     SCHEDULE_ACTION_STOP_EXPORT,
@@ -317,7 +319,49 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(executor.runtime.last_applied_option, "Stop Export")
 
-    async def test_reconcile_restores_normal_for_implicit_slot(self) -> None:
+    async def test_reconcile_leaves_implicit_empty_slot_untouched(self) -> None:
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Stop Charging",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(execution_enabled=True, slots={}),
+            control_config=None,
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(executor.runtime.last_applied_action.kind, SCHEDULE_ACTION_EMPTY)
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_id,
+            CURRENT_SLOT_ID,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
+            SCHEDULE_ACTION_EMPTY,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.inverter.action_kind,
+            "noop",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "skipped",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.status,
+            "applied",
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.reason,
+            "scheduled",
+        )
+
+    async def test_reconcile_restores_normal_when_empty_slot_follows_override(
+        self,
+    ) -> None:
         executor, hass, _store = _build_executor(
             entity_id="input_select.mode",
             state=FakeState(
@@ -326,25 +370,23 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
             document=ScheduleDocument(execution_enabled=True, slots={}),
         )
+        executor.runtime.last_applied_action = ScheduleAction(
+            kind=SCHEDULE_ACTION_STOP_CHARGING
+        )
+        executor.runtime.last_active_slot_id = "2026-03-20T20:30:00+01:00"
+        executor.runtime.last_runtime_action_kind = "apply"
 
         await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
 
+        self.assertEqual(hass.services.calls[0][2]["option"], "Normal")
+        self.assertEqual(executor.runtime.last_applied_action.kind, SCHEDULE_ACTION_NORMAL)
         self.assertEqual(
-            hass.services.calls[0][2]["option"],
-            "Normal",
-        )
-        self.assertEqual(executor.runtime.last_applied_action.kind, "normal")
-        self.assertEqual(
-            executor.runtime.execution_status.active_slot_id,
-            CURRENT_SLOT_ID,
+            executor.runtime.execution_status.active_slot_runtime.inverter.action_kind,
+            "slot_stop",
         )
         self.assertEqual(
             executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
-            "normal",
-        )
-        self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "applied",
+            SCHEDULE_ACTION_NORMAL,
         )
         self.assertEqual(
             executor.runtime.execution_status.active_slot_runtime.reason,
@@ -700,7 +742,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         executor, _hass, _store = _build_executor(
             entity_id="input_select.mode",
             state=None,
-            document=ScheduleDocument(execution_enabled=True, slots={}),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            ),
         )
 
         with self.assertRaises(ScheduleExecutionUnavailableError):
@@ -763,7 +810,14 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        store = FakeScheduleStore(ScheduleDocument(execution_enabled=True, slots={}))
+        store = FakeScheduleStore(
+            ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            )
+        )
         executor = ScheduleExecutor(
             hass,
             ScheduleExecutorDependencies(

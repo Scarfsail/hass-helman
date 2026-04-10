@@ -21,6 +21,7 @@ from .const import (
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     MAX_FORECAST_DAYS,
+    SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_NORMAL,
@@ -31,7 +32,7 @@ from .const import (
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.action_resolution import resolve_executed_schedule_action
-from .scheduling.schedule import NORMAL_SCHEDULE_ACTION, ScheduleAction
+from .scheduling.schedule import EMPTY_SCHEDULE_ACTION, ScheduleAction
 
 _EPSILON = 1e-9
 _CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
@@ -359,7 +360,7 @@ class BatteryCapacityForecastBuilder:
         overlay_horizon_end_utc = dt_util.as_utc(schedule_overlay.horizon_end)
 
         for index, slot_input in enumerate(slot_inputs):
-            action = NORMAL_SCHEDULE_ACTION
+            action = EMPTY_SCHEDULE_ACTION
             if dt_util.as_utc(slot_input.slot_key) < overlay_horizon_end_utc:
                 action = schedule_overlay.lookup_action(slot_input.slot_key)
                 if not self._is_supported_schedule_action(action.kind):
@@ -383,7 +384,7 @@ class BatteryCapacityForecastBuilder:
                 action=action,
             )
             remaining_energy_kwh = result.remaining_energy_kwh
-            if result.effective_action_kind != SCHEDULE_ACTION_NORMAL:
+            if not self._is_baseline_schedule_action(result.effective_action_kind):
                 has_non_normal_adjustment = True
                 schedule_adjustment_coverage_until = self._slot_end(
                     slot_input.slot_start,
@@ -1269,12 +1270,20 @@ class BatteryCapacityForecastBuilder:
     @staticmethod
     def _is_supported_schedule_action(action_kind: str) -> bool:
         return action_kind in {
+            SCHEDULE_ACTION_EMPTY,
             SCHEDULE_ACTION_NORMAL,
             SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
             SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
             SCHEDULE_ACTION_STOP_CHARGING,
             SCHEDULE_ACTION_STOP_DISCHARGING,
             SCHEDULE_ACTION_STOP_EXPORT,
+        }
+
+    @staticmethod
+    def _is_baseline_schedule_action(action_kind: str) -> bool:
+        return action_kind in {
+            SCHEDULE_ACTION_EMPTY,
+            SCHEDULE_ACTION_NORMAL,
         }
 
     @staticmethod

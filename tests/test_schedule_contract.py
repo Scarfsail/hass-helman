@@ -372,6 +372,27 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
             "stop_export",
         )
 
+    def test_set_schedule_schema_accepts_empty_action(self) -> None:
+        payload = SET_SCHEDULE_REQUEST_SCHEMA(
+            {
+                "type": "helman/set_schedule",
+                "slots": [
+                    {
+                        "id": CURRENT_SLOT_ID,
+                        "domains": {
+                            "inverter": {"kind": "empty"},
+                            "appliances": {},
+                        },
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(
+            payload["slots"][0]["domains"]["inverter"]["kind"],
+            "empty",
+        )
+
     async def test_set_schedule_forwards_domains_slots(self) -> None:
         coordinator = FakeCoordinator()
         connection = FakeConnection()
@@ -452,7 +473,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "id": CURRENT_SLOT_ID,
                             "domains": {
-                                "inverter": {"kind": "normal"},
+                                "inverter": {"kind": "empty"},
                                 "appliances": {
                                     "garage-ev": {
                                         "charge": True,
@@ -497,7 +518,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "id": CURRENT_SLOT_ID,
                             "domains": {
-                                "inverter": {"kind": "normal"},
+                                "inverter": {"kind": "empty"},
                                 "appliances": {
                                     "living-room-hvac": {
                                         "mode": "heat",
@@ -536,7 +557,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "id": CURRENT_SLOT_ID,
                             "domains": {
-                                "inverter": {"kind": "normal"},
+                                "inverter": {"kind": "empty"},
                                 "appliances": {
                                     "living-room-hvac": {
                                         "mode": "off",
@@ -576,7 +597,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "id": CURRENT_SLOT_ID,
                             "domains": {
-                                "inverter": {"kind": "normal"},
+                                "inverter": {"kind": "empty"},
                                 "appliances": {
                                     "garage-ev": {
                                         "charge": True,

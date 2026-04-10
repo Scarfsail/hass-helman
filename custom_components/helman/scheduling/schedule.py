@@ -14,6 +14,7 @@ from ..appliances.schedule import (
 )
 from ..appliances.state import AppliancesRuntimeRegistry
 from ..const import (
+    SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_KINDS,
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from .runtime_status import ScheduleRuntimeDict
 
 ScheduleActionKind = Literal[
+    "empty",
     "normal",
     "charge_to_target_soc",
     "discharge_to_target_soc",
@@ -78,12 +80,13 @@ class ScheduleAction:
     target_soc: int | None = None
 
 
+EMPTY_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
 NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
 
 
 @dataclass(frozen=True)
 class ScheduleDomains:
-    inverter: ScheduleAction = field(default_factory=lambda: NORMAL_SCHEDULE_ACTION)
+    inverter: ScheduleAction = field(default_factory=lambda: EMPTY_SCHEDULE_ACTION)
     appliances: ApplianceScheduleActionsDict = field(default_factory=dict)
 
 
@@ -620,7 +623,7 @@ def normalize_slot_patch_request(
 
 
 def is_default_domains(domains: ScheduleDomains) -> bool:
-    return domains.inverter == NORMAL_SCHEDULE_ACTION and not domains.appliances
+    return domains.inverter == EMPTY_SCHEDULE_ACTION and not domains.appliances
 
 
 def validate_schedule_domains(
@@ -714,7 +717,7 @@ def _coerce_schedule_domains(value: Any) -> ScheduleDomains:
 
     if isinstance(value, Mapping):
         if "inverter" in value or "appliances" in value:
-            raw_inverter = value.get("inverter", NORMAL_SCHEDULE_ACTION)
+            raw_inverter = value.get("inverter", EMPTY_SCHEDULE_ACTION)
             return ScheduleDomains(
                 inverter=_coerce_schedule_action(raw_inverter),
                 appliances=_coerce_appliances_mapping(value.get("appliances", {})),
@@ -725,7 +728,7 @@ def _coerce_schedule_domains(value: Any) -> ScheduleDomains:
         )
 
     if hasattr(value, "inverter") or hasattr(value, "appliances"):
-        raw_inverter = getattr(value, "inverter", NORMAL_SCHEDULE_ACTION)
+        raw_inverter = getattr(value, "inverter", EMPTY_SCHEDULE_ACTION)
         raw_appliances = getattr(value, "appliances", {})
         return ScheduleDomains(
             inverter=_coerce_schedule_action(raw_inverter),
@@ -740,7 +743,7 @@ def _coerce_schedule_domains(value: Any) -> ScheduleDomains:
 
 def _coerce_schedule_action(value: Any) -> ScheduleAction:
     if value is None:
-        return NORMAL_SCHEDULE_ACTION
+        return EMPTY_SCHEDULE_ACTION
 
     if isinstance(value, ScheduleAction):
         return value

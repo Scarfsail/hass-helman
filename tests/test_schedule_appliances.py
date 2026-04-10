@@ -205,7 +205,7 @@ def _slot_payload(*, appliances: dict | None = None) -> dict:
     return {
         "id": CURRENT_SLOT_ID,
         "domains": {
-            "inverter": {"kind": "normal"},
+            "inverter": {"kind": "empty"},
             "appliances": {} if appliances is None else appliances,
         },
     }
@@ -497,7 +497,7 @@ class ScheduleApplianceTests(unittest.TestCase):
                 "slotMinutes": 30,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "normal"},
+                        "inverter": {"kind": "empty"},
                         "appliances": {
                             "garage-ev": {
                                 "charge": True,
@@ -518,7 +518,7 @@ class ScheduleApplianceTests(unittest.TestCase):
                 "slotMinutes": 30,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "normal"},
+                        "inverter": {"kind": "empty"},
                         "appliances": {
                             "garage-ev": {
                                 "charge": True,

@@ -69,6 +69,7 @@ _install_import_stubs()
 
 from custom_components.helman.const import (  # noqa: E402
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_NORMAL,
@@ -142,7 +143,7 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
         self.assertEqual(overlay.slots[0].id, "2026-03-20T21:00:00+01:00")
         self.assertEqual(
             overlay.lookup_action(build_horizon_start(REFERENCE_TIME)).kind,
-            SCHEDULE_ACTION_NORMAL,
+            SCHEDULE_ACTION_EMPTY,
         )
 
     def test_overlay_expands_stop_action_across_coarser_schedule_slot(self) -> None:
@@ -175,7 +176,7 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
                 current_slot_start
                 + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * 2)
             ).kind,
-            SCHEDULE_ACTION_NORMAL,
+            SCHEDULE_ACTION_EMPTY,
         )
 
     def test_overlay_preserves_target_actions_in_canonical_windows(self) -> None:
@@ -220,7 +221,7 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
 
         self.assertEqual(
             overlay.lookup_action(current_slot_start).kind,
-            SCHEDULE_ACTION_NORMAL,
+            SCHEDULE_ACTION_EMPTY,
         )
 
     def test_overlay_prunes_expired_slots_before_materializing(self) -> None:
@@ -248,7 +249,7 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
         )
         self.assertEqual(
             overlay.lookup_action(first_slot_start).kind,
-            SCHEDULE_ACTION_NORMAL,
+            SCHEDULE_ACTION_EMPTY,
         )
 
     def test_overlay_uses_direct_lookup_when_granularities_match(self) -> None:
@@ -278,7 +279,7 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
                     current_slot_start
                     + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
                 ).kind,
-                SCHEDULE_ACTION_NORMAL,
+                SCHEDULE_ACTION_EMPTY,
             )
 
 

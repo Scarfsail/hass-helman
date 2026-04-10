@@ -10,7 +10,7 @@ from ..const import (
     SCHEDULE_SLOT_MINUTES,
 )
 from .schedule import (
-    NORMAL_SCHEDULE_ACTION,
+    EMPTY_SCHEDULE_ACTION,
     ScheduleAction,
     ScheduleDocument,
     ScheduleSlot,
@@ -54,7 +54,7 @@ class ScheduleForecastOverlay:
     def lookup_action(self, slot_start: datetime) -> ScheduleAction:
         slot = self.lookup_slot(slot_start)
         if slot is None:
-            return NORMAL_SCHEDULE_ACTION
+            return EMPTY_SCHEDULE_ACTION
         return slot.action
 
 
