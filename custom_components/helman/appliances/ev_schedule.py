@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, NotRequired, TypedDict
 
+from ..schedule_action_metadata import (
+    ScheduleActionSetBy,
+    read_optional_schedule_action_set_by,
+)
+
 from .ev_charger import EvChargerApplianceRuntime
 
 ApplianceScheduleNormalizationMode = Literal["strict", "load_prune"]
@@ -13,6 +18,7 @@ class EvChargerScheduleActionDict(TypedDict):
     vehicleId: NotRequired[str]
     useMode: NotRequired[str]
     ecoGear: NotRequired[str]
+    setBy: NotRequired[ScheduleActionSetBy]
 
 
 def normalize_ev_charger_schedule_action(
@@ -28,7 +34,7 @@ def normalize_ev_charger_schedule_action(
     unsupported_keys = sorted(
         str(key)
         for key in value.keys()
-        if key not in {"charge", "vehicleId", "useMode", "ecoGear"}
+        if key not in {"charge", "vehicleId", "useMode", "ecoGear", "setBy"}
     )
     if unsupported_keys:
         raise ValueError(
@@ -51,6 +57,10 @@ def normalize_ev_charger_schedule_action(
         value.get("ecoGear"),
         path=f"{context}.ecoGear",
     )
+    set_by = read_optional_schedule_action_set_by(
+        value.get("setBy"),
+        path=f"{context}.setBy",
+    )
 
     if not charge:
         if use_mode is not None:
@@ -68,6 +78,8 @@ def normalize_ev_charger_schedule_action(
         payload: EvChargerScheduleActionDict = {"charge": False}
         if vehicle_id is not None:
             payload["vehicleId"] = vehicle_id
+        if set_by is not None:
+            payload["setBy"] = set_by
         return payload
 
     if vehicle_id is None:
@@ -99,18 +111,24 @@ def normalize_ev_charger_schedule_action(
             raise ValueError(
                 f"{context}.ecoGear must be one of {', '.join(appliance.eco_gears)}"
             )
-        return {
+        payload: EvChargerScheduleActionDict = {
             "charge": True,
             "vehicleId": vehicle_id,
             "useMode": use_mode_config.id,
             "ecoGear": eco_gear,
         }
+        if set_by is not None:
+            payload["setBy"] = set_by
+        return payload
 
-    return {
+    payload = {
         "charge": True,
         "vehicleId": vehicle_id,
         "useMode": use_mode_config.id,
     }
+    if set_by is not None:
+        payload["setBy"] = set_by
+    return payload
 
 
 def _read_optional_non_empty_string(value: object, *, path: str) -> str | None:

@@ -283,10 +283,10 @@ class FakeCoordinator:
             },
         }
 
-    async def set_schedule(self, *, slots) -> None:
+    async def set_schedule(self, *, slots, set_by=None) -> None:
         if self.schedule_error is not None:
             raise self.schedule_error
-        self.schedule_calls.append(list(slots))
+        self.schedule_calls.append({"slots": list(slots), "set_by": set_by})
 
     async def get_appliances(self) -> dict:
         return self.appliances_response
@@ -420,8 +420,9 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         await ws_set_schedule(FakeHass(coordinator), connection, msg)
 
         self.assertEqual(len(coordinator.schedule_calls), 1)
-        self.assertEqual(len(coordinator.schedule_calls[0]), 1)
-        slot = coordinator.schedule_calls[0][0]
+        self.assertEqual(len(coordinator.schedule_calls[0]["slots"]), 1)
+        self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
+        slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(slot.id, CURRENT_SLOT_ID)
         self.assertEqual(slot.domains.inverter.kind, "charge_to_target_soc")
         self.assertEqual(slot.domains.inverter.target_soc, 80)
@@ -491,7 +492,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
 
         await ws_set_schedule(FakeHass(coordinator), connection, msg)
 
-        slot = coordinator.schedule_calls[0][0]
+        slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(
             slot.domains.appliances,
             {
@@ -503,6 +504,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
+        self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
         self.assertEqual(connection.results, [(1, {"success": True})])
         self.assertEqual(connection.errors, [])
 
@@ -533,7 +535,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
 
         await ws_set_schedule(FakeHass(coordinator), connection, msg)
 
-        slot = coordinator.schedule_calls[0][0]
+        slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(
             slot.domains.appliances,
             {
@@ -542,6 +544,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
+        self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
         self.assertEqual(connection.results, [(1, {"success": True})])
         self.assertEqual(connection.errors, [])
 
@@ -572,7 +575,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
 
         await ws_set_schedule(FakeHass(coordinator), connection, msg)
 
-        slot = coordinator.schedule_calls[0][0]
+        slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(
             slot.domains.appliances,
             {
@@ -581,6 +584,49 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
+        self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
+        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.errors, [])
+
+    async def test_set_schedule_websocket_defaults_user_without_overwriting_explicit_set_by(
+        self,
+    ) -> None:
+        coordinator = FakeCoordinator()
+        connection = FakeConnection()
+        msg = {
+            "id": 1,
+            **SET_SCHEDULE_REQUEST_SCHEMA(
+                {
+                    "type": "helman/set_schedule",
+                    "slots": [
+                        {
+                            "id": CURRENT_SLOT_ID,
+                            "domains": {
+                                "inverter": {
+                                    "kind": "normal",
+                                    "setBy": "automation",
+                                },
+                                "appliances": {
+                                    "garage-ev": {
+                                        "charge": True,
+                                        "vehicleId": "kona",
+                                        "useMode": "Fast",
+                                        "setBy": "automation",
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                }
+            ),
+        }
+
+        await ws_set_schedule(FakeHass(coordinator), connection, msg)
+
+        slot = coordinator.schedule_calls[0]["slots"][0]
+        self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
+        self.assertEqual(slot.domains.inverter.set_by, "automation")
+        self.assertEqual(slot.domains.appliances["garage-ev"]["setBy"], "automation")
         self.assertEqual(connection.results, [(1, {"success": True})])
         self.assertEqual(connection.errors, [])
 

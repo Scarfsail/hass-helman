@@ -212,7 +212,8 @@ async def ws_set_schedule(
 
     try:
         await coordinator.set_schedule(
-            slots=[slot_from_dict(slot) for slot in msg["slots"]]
+            slots=[slot_from_dict(slot) for slot in msg["slots"]],
+            set_by="user",
         )
     except ScheduleError as err:
         connection.send_error(msg["id"], err.code, str(err))

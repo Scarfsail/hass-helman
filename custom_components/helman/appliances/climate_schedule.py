@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from .climate_appliance import (
     ClimateApplianceMode,
     ClimateApplianceRuntime,
 )
 from .ev_schedule import ApplianceScheduleNormalizationMode
+from ..schedule_action_metadata import (
+    ScheduleActionSetBy,
+    read_optional_schedule_action_set_by,
+)
 
 
 class ClimateApplianceScheduleActionDict(TypedDict):
     mode: str
+    setBy: NotRequired[ScheduleActionSetBy]
 
 
 def normalize_climate_appliance_schedule_action(
@@ -24,7 +29,9 @@ def normalize_climate_appliance_schedule_action(
     if not isinstance(value, Mapping):
         raise ValueError(f"{context} must be an object")
 
-    unsupported_keys = sorted(str(key) for key in value.keys() if key != "mode")
+    unsupported_keys = sorted(
+        str(key) for key in value.keys() if key not in {"mode", "setBy"}
+    )
     if unsupported_keys:
         raise ValueError(
             f"{context} contains unsupported fields: {', '.join(unsupported_keys)}"
@@ -45,8 +52,15 @@ def normalize_climate_appliance_schedule_action(
         )
 
     normalized_mode = raw_mode.strip()
+    set_by = read_optional_schedule_action_set_by(
+        value.get("setBy"),
+        path=f"{context}.setBy",
+    )
     if stop_mode is not None and normalized_mode == stop_mode:
-        return {"mode": normalized_mode}
+        payload: ClimateApplianceScheduleActionDict = {"mode": normalized_mode}
+        if set_by is not None:
+            payload["setBy"] = set_by
+        return payload
 
     if normalized_mode not in supported_modes:
         if mode == "load_prune":
@@ -57,4 +71,7 @@ def normalize_climate_appliance_schedule_action(
         allowed = ", ".join(allowed_modes)
         raise ValueError(f"{context}.mode must be one of {allowed}")
 
-    return {"mode": normalized_mode}
+    payload = {"mode": normalized_mode}
+    if set_by is not None:
+        payload["setBy"] = set_by
+    return payload

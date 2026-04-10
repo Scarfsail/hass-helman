@@ -91,8 +91,10 @@ from .scheduling.schedule import (
     schedule_document_from_dict,
     schedule_document_to_dict,
     slot_to_dict,
+    with_slot_set_by,
     validate_slot_patch_request,
 )
+from .schedule_action_metadata import ScheduleActionSetBy
 from .appliances.generic_appliance import GenericApplianceRuntime
 from .scheduling.runtime_status import (
     ScheduleExecutionStatus,
@@ -901,6 +903,7 @@ class HelmanCoordinator:
         *,
         slots: Sequence[ScheduleSlot],
         reference_time: datetime | None = None,
+        set_by: ScheduleActionSetBy | None = None,
     ) -> None:
         request_now = reference_time or dt_util.now()
         document_changed = False
@@ -914,11 +917,14 @@ class HelmanCoordinator:
                 battery_soc_bounds=self._read_battery_soc_bounds(),
                 appliances_registry=self._appliances_registry,
             )
+            stamped_slots = [
+                with_slot_set_by(slot, set_by=set_by) for slot in normalized_slots
+            ]
             updated_document = ScheduleDocument(
                 execution_enabled=schedule_document.execution_enabled,
                 slots=apply_slot_patches(
                     stored_slots=schedule_document.slots,
-                    slot_patches=normalized_slots,
+                    slot_patches=stamped_slots,
                 ),
             )
             if updated_document != schedule_document:

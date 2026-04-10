@@ -11,6 +11,11 @@ from ..appliances.schedule import (
     ApplianceScheduleActionsDict,
     normalize_appliance_schedule_actions,
     read_appliance_schedule_actions,
+    with_appliance_schedule_actions_set_by,
+)
+from ..schedule_action_metadata import (
+    ScheduleActionSetBy,
+    read_optional_schedule_action_set_by,
 )
 from ..appliances.state import AppliancesRuntimeRegistry
 from ..const import (
@@ -56,6 +61,7 @@ SCHEDULE_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 class ScheduleActionDict(TypedDict):
     kind: ScheduleActionKind
     targetSoc: NotRequired[int]
+    setBy: NotRequired[ScheduleActionSetBy]
 
 
 class ScheduleDomainsDict(TypedDict):
@@ -78,6 +84,7 @@ class ScheduleResponseDict(TypedDict):
 class ScheduleAction:
     kind: ScheduleActionKind
     target_soc: int | None = None
+    set_by: ScheduleActionSetBy | None = None
 
 
 EMPTY_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
@@ -185,7 +192,12 @@ def action_from_dict(data: Mapping[str, Any]) -> ScheduleAction:
         raise ScheduleActionError("Unknown schedule action kind")
 
     has_target_soc, target_soc = _read_target_soc(data)
-    action = ScheduleAction(kind=kind, target_soc=target_soc)
+    try:
+        set_by = _read_action_set_by(data)
+    except ValueError as err:
+        raise ScheduleActionError(str(err)) from err
+
+    action = ScheduleAction(kind=kind, target_soc=target_soc, set_by=set_by)
     _validate_action(
         action=action,
         has_target_soc=has_target_soc,
@@ -199,6 +211,8 @@ def action_to_dict(action: ScheduleAction) -> ScheduleActionDict:
     payload: ScheduleActionDict = {"kind": action.kind}
     if action.target_soc is not None:
         payload["targetSoc"] = action.target_soc
+    if action.set_by is not None:
+        payload["setBy"] = action.set_by
     return payload
 
 
@@ -278,6 +292,30 @@ def slot_to_dict(
     slot: ScheduleSlot,
 ) -> ScheduleSlotDict:
     return {"id": slot.id, "domains": domains_to_dict(slot.domains)}
+
+
+def with_slot_set_by(
+    slot: ScheduleSlot,
+    *,
+    set_by: ScheduleActionSetBy | None,
+) -> ScheduleSlot:
+    if set_by is None:
+        return slot
+
+    return ScheduleSlot(
+        id=slot.id,
+        domains=ScheduleDomains(
+            inverter=ScheduleAction(
+                kind=slot.domains.inverter.kind,
+                target_soc=slot.domains.inverter.target_soc,
+                set_by=slot.domains.inverter.set_by or set_by,
+            ),
+            appliances=with_appliance_schedule_actions_set_by(
+                slot.domains.appliances,
+                set_by=set_by,
+            ),
+        ),
+    )
 
 
 def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocument:
@@ -623,7 +661,7 @@ def normalize_slot_patch_request(
 
 
 def is_default_domains(domains: ScheduleDomains) -> bool:
-    return domains.inverter == EMPTY_SCHEDULE_ACTION and not domains.appliances
+    return domains.inverter.kind == SCHEDULE_ACTION_EMPTY and not domains.appliances
 
 
 def validate_schedule_domains(
@@ -762,7 +800,15 @@ def _coerce_schedule_action(value: Any) -> ScheduleAction:
     ):
         raise ScheduleActionError("targetSoc must be an integer")
 
-    action = ScheduleAction(kind=kind, target_soc=raw_target_soc)
+    try:
+        set_by = read_optional_schedule_action_set_by(
+            getattr(value, "set_by", getattr(value, "setBy", None)),
+            path="Schedule action setBy",
+        )
+    except ValueError as err:
+        raise ScheduleActionError(str(err)) from err
+
+    action = ScheduleAction(kind=kind, target_soc=raw_target_soc, set_by=set_by)
     _validate_action(
         action=action,
         has_target_soc=has_target_soc,
@@ -810,6 +856,20 @@ def _read_target_soc(data: Mapping[str, Any]) -> tuple[bool, int | None]:
         raise ScheduleActionError("targetSoc must be an integer")
 
     return True, raw_target_soc
+
+
+def _read_action_set_by(data: Mapping[str, Any]) -> ScheduleActionSetBy | None:
+    if "setBy" in data:
+        raw_set_by = data["setBy"]
+    elif "set_by" in data:
+        raw_set_by = data["set_by"]
+    else:
+        return None
+
+    return read_optional_schedule_action_set_by(
+        raw_set_by,
+        path="Schedule action setBy",
+    )
 
 
 def _is_slot_aligned(slot_start: datetime) -> bool:

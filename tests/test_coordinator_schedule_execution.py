@@ -193,6 +193,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleActionError,
     ScheduleDocument,
+    ScheduleDomains,
     ScheduleExecutionUnavailableError,
     ScheduleSlot,
 )
@@ -1197,6 +1198,125 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     "errorCode": "execution_unavailable",
                 },
                 "appliances": {},
+            },
+        )
+
+    async def test_set_schedule_stores_and_returns_set_by(self) -> None:
+        coordinator, storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            _valid_appliances_config()
+        )
+
+        await coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    domains=ScheduleDomains(
+                        inverter=ScheduleAction(kind="normal"),
+                        appliances={
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "Fast",
+                            }
+                        },
+                    ),
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+            set_by="user",
+        )
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "normal", "setBy": "user"},
+                        "appliances": {
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "Fast",
+                                "setBy": "user",
+                            }
+                        },
+                    }
+                },
+            },
+        )
+
+    async def test_set_schedule_preserves_explicit_set_by_when_default_is_user(self) -> None:
+        coordinator, storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            _valid_appliances_config()
+        )
+
+        await coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    domains=ScheduleDomains(
+                        inverter=ScheduleAction(kind="normal", set_by="automation"),
+                        appliances={
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "Fast",
+                                "setBy": "automation",
+                            }
+                        },
+                    ),
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+            set_by="user",
+        )
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "normal", "setBy": "automation"},
+                        "appliances": {
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "Fast",
+                                "setBy": "automation",
+                            }
+                        },
+                    }
+                },
+            },
+        )
+
+        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+        current_slot = next(
+            slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
+        )
+
+        self.assertEqual(
+            current_slot["domains"],
+            {
+                "inverter": {"kind": "normal", "setBy": "automation"},
+                "appliances": {
+                    "garage-ev": {
+                        "charge": True,
+                        "vehicleId": "kona",
+                        "useMode": "Fast",
+                        "setBy": "automation",
+                    }
+                },
             },
         )
 

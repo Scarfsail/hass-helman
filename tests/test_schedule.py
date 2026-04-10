@@ -330,6 +330,42 @@ class ScheduleHelperTests(unittest.TestCase):
             },
         )
 
+    def test_schedule_document_round_trip_preserves_set_by_for_inverter_action(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        doc = schedule_document_from_dict(
+            {
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[1]: {
+                        "inverter": {
+                            "kind": SCHEDULE_ACTION_NORMAL,
+                            "setBy": "user",
+                        },
+                        "appliances": {},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(doc.slots[slot_ids[1]].inverter.set_by, "user")
+        self.assertEqual(
+            schedule_document_to_dict(doc),
+            {
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[1]: {
+                        "inverter": {
+                            "kind": SCHEDULE_ACTION_NORMAL,
+                            "setBy": "user",
+                        },
+                        "appliances": {},
+                    },
+                },
+            },
+        )
+
     def test_schedule_document_round_trip_preserves_non_empty_appliance_domains(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         doc = schedule_document_from_dict(
@@ -380,6 +416,15 @@ class ScheduleHelperTests(unittest.TestCase):
             )
         )
 
+    def test_is_default_domains_ignores_set_by_on_empty_inverter(self) -> None:
+        self.assertTrue(
+            is_default_domains(
+                ScheduleDomains(
+                    inverter=ScheduleAction(kind=SCHEDULE_ACTION_EMPTY, set_by="user")
+                )
+            )
+        )
+
     def test_schedule_document_from_dict_rejects_mismatched_slot_minutes(self) -> None:
         with self.assertRaises(ScheduleStorageCompatibilityError):
             schedule_document_from_dict(
@@ -409,6 +454,28 @@ class ScheduleHelperTests(unittest.TestCase):
                     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                     80,
                 ),
+            },
+        )
+
+    def test_slot_to_dict_serializes_set_by(self) -> None:
+        slot_dict = slot_to_dict(
+            ScheduleSlot(
+                id="2026-03-20T21:00:00+01:00",
+                action=ScheduleAction(kind=SCHEDULE_ACTION_NORMAL, set_by="user"),
+            ),
+        )
+
+        self.assertEqual(
+            slot_dict,
+            {
+                "id": "2026-03-20T21:00:00+01:00",
+                "domains": {
+                    "inverter": {
+                        "kind": SCHEDULE_ACTION_NORMAL,
+                        "setBy": "user",
+                    },
+                    "appliances": {},
+                },
             },
         )
 

@@ -181,6 +181,8 @@ def _schedule_action_to_dict(action: "ScheduleAction") -> "ScheduleActionDict":
     payload: ScheduleActionDict = {"kind": action.kind}
     if action.target_soc is not None:
         payload["targetSoc"] = action.target_soc
+    if action.set_by is not None:
+        payload["setBy"] = action.set_by
     return payload
 
 

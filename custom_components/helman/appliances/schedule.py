@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..schedule_action_metadata import ScheduleActionSetBy
 from .climate_appliance import ClimateApplianceRuntime
 from .climate_schedule import (
     ClimateApplianceScheduleActionDict,
@@ -100,6 +101,22 @@ def normalize_appliance_schedule_actions(
             normalized[appliance_id] = normalized_action
 
     return normalized
+
+
+def with_appliance_schedule_actions_set_by(
+    actions: Mapping[str, ApplianceScheduleActionDict],
+    *,
+    set_by: ScheduleActionSetBy | None,
+) -> ApplianceScheduleActionsDict:
+    normalized_actions = {
+        appliance_id: dict(action) for appliance_id, action in actions.items()
+    }
+    if set_by is None:
+        return normalized_actions
+
+    for action in normalized_actions.values():
+        action.setdefault("setBy", set_by)
+    return normalized_actions
 
 
 def _read_appliance_id(value: object, *, context: str) -> str:

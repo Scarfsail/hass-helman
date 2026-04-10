@@ -354,6 +354,57 @@ class ScheduleApplianceTests(unittest.TestCase):
             {"dishwasher": {"on": True}},
         )
 
+    def test_appliance_actions_preserve_set_by(self) -> None:
+        slot = slot_from_dict(
+            _slot_payload(
+                appliances={
+                    "garage-ev": {
+                        "charge": True,
+                        "vehicleId": "kona",
+                        "useMode": "Fast",
+                        "setBy": "user",
+                    },
+                    "dishwasher": {
+                        "on": True,
+                        "setBy": "automation",
+                    },
+                    "living-room-hvac": {
+                        "mode": "heat",
+                        "setBy": "user",
+                    },
+                }
+            )
+        )
+
+        normalized = normalize_slot_patch_request(
+            slots=[slot],
+            reference_time=REFERENCE_TIME,
+            battery_soc_bounds=None,
+            appliances_registry=_registry(
+                config=_valid_config(include_generic=True, include_climate=True)
+            ),
+        )
+
+        self.assertEqual(
+            normalized[0].domains.appliances,
+            {
+                "garage-ev": {
+                    "charge": True,
+                    "vehicleId": "kona",
+                    "useMode": "Fast",
+                    "setBy": "user",
+                },
+                "dishwasher": {
+                    "on": True,
+                    "setBy": "automation",
+                },
+                "living-room-hvac": {
+                    "mode": "heat",
+                    "setBy": "user",
+                },
+            },
+        )
+
     def test_generic_action_rejects_unsupported_fields(self) -> None:
         slot = slot_from_dict(
             _slot_payload(appliances={"dishwasher": {"on": True, "mode": "eco"}})
@@ -504,6 +555,7 @@ class ScheduleApplianceTests(unittest.TestCase):
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
                                 "ecoGear": "6A",
+                                "setBy": "user",
                             }
                         },
                     }
@@ -525,6 +577,7 @@ class ScheduleApplianceTests(unittest.TestCase):
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
                                 "ecoGear": "6A",
+                                "setBy": "user",
                             }
                         },
                     }
