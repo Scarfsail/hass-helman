@@ -448,7 +448,11 @@ def _resolve_climate_action_projection(
     appliance: ClimateApplianceRuntime,
 ) -> tuple[bool, str | None]:
     mode = action.get("mode")
-    if isinstance(mode, str) and mode in appliance.authorable_modes:
+    if not isinstance(mode, str):
+        return False, None
+    if mode == appliance.stop_hvac_mode:
+        return False, None
+    if mode in appliance.authorable_modes:
         return True, mode
     return False, None
 

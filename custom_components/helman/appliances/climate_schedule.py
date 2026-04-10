@@ -11,7 +11,7 @@ from .ev_schedule import ApplianceScheduleNormalizationMode
 
 
 class ClimateApplianceScheduleActionDict(TypedDict):
-    mode: ClimateApplianceMode
+    mode: str
 
 
 def normalize_climate_appliance_schedule_action(
@@ -35,6 +35,7 @@ def normalize_climate_appliance_schedule_action(
         raise ValueError(f"{context}.mode must be a non-empty string")
 
     supported_modes = appliance.authorable_modes
+    stop_mode = appliance.stop_hvac_mode
     if not supported_modes:
         if mode == "load_prune":
             return None
@@ -44,10 +45,16 @@ def normalize_climate_appliance_schedule_action(
         )
 
     normalized_mode = raw_mode.strip()
+    if stop_mode is not None and normalized_mode == stop_mode:
+        return {"mode": normalized_mode}
+
     if normalized_mode not in supported_modes:
         if mode == "load_prune":
             return None
-        allowed = ", ".join(supported_modes)
+        allowed_modes = list(supported_modes)
+        if stop_mode is not None and stop_mode not in supported_modes:
+            allowed_modes.append(stop_mode)
+        allowed = ", ".join(allowed_modes)
         raise ValueError(f"{context}.mode must be one of {allowed}")
 
     return {"mode": normalized_mode}

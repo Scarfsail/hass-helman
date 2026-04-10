@@ -299,9 +299,7 @@ class EvChargerExecutor:
                 return None, None
             if (
                 memory is None
-                and not self._last_scheduled_action_requires_slot_stop(
-                    last_scheduled_action
-                )
+                and not self._last_scheduled_action_requires_slot_stop(last_scheduled_action)
             ):
                 return None, None
             runtime = await self._async_stop_charge_only(
@@ -528,9 +526,7 @@ class GenericApplianceExecutor:
                 return None, None
             if (
                 memory is None
-                and not self._last_scheduled_action_requires_slot_stop(
-                    last_scheduled_action
-                )
+                and not self._last_scheduled_action_requires_slot_stop(last_scheduled_action)
             ):
                 return None, None
             runtime = await self._async_apply_enabled_state(
@@ -683,7 +679,8 @@ class ClimateApplianceExecutor:
             if (
                 memory is None
                 and not self._last_scheduled_action_requires_slot_stop(
-                    last_scheduled_action
+                    appliance,
+                    last_scheduled_action,
                 )
             ):
                 return None, None
@@ -720,7 +717,7 @@ class ClimateApplianceExecutor:
                 ApplianceExecutionMemory(
                     last_active_slot_id=active_slot_id,
                     last_action_signature=signature,
-                    last_enabled=True,
+                    last_enabled=self._is_enabled_mode(appliance, action["mode"]),
                     last_runtime_action_kind="noop",
                 ),
             )
@@ -735,13 +732,13 @@ class ClimateApplianceExecutor:
             return runtime, memory
         return (
             runtime,
-            ApplianceExecutionMemory(
-                last_active_slot_id=active_slot_id,
-                last_action_signature=signature,
-                last_enabled=True,
-                last_runtime_action_kind="apply",
-            ),
-        )
+                ApplianceExecutionMemory(
+                    last_active_slot_id=active_slot_id,
+                    last_action_signature=signature,
+                    last_enabled=self._is_enabled_mode(appliance, action["mode"]),
+                    last_runtime_action_kind="apply",
+                ),
+            )
 
     async def async_disable_active_action(
         self,
@@ -750,7 +747,7 @@ class ClimateApplianceExecutor:
         action: ClimateApplianceScheduleActionDict | None,
         reference_time: datetime,
     ) -> ApplianceRuntimeStatus | None:
-        if action is None:
+        if action is None or not self._is_enabled_mode(appliance, action["mode"]):
             return None
         return await self._async_apply_hvac_mode(
             appliance=appliance,
@@ -807,10 +804,19 @@ class ClimateApplianceExecutor:
         return (action["mode"],)
 
     @staticmethod
+    def _is_enabled_mode(
+        appliance: ClimateApplianceRuntime,
+        hvac_mode: str,
+    ) -> bool:
+        return hvac_mode != appliance.stop_hvac_mode
+
+    @classmethod
     def _last_scheduled_action_requires_slot_stop(
+        cls,
+        appliance: ClimateApplianceRuntime,
         action: ClimateApplianceScheduleActionDict | None,
     ) -> bool:
-        return action is not None
+        return action is not None and cls._is_enabled_mode(appliance, action["mode"])
 
 
 def _build_runtime_status(

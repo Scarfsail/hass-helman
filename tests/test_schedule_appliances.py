@@ -384,18 +384,22 @@ class ScheduleApplianceTests(unittest.TestCase):
             {"living-room-hvac": {"mode": "heat"}},
         )
 
-    def test_climate_action_rejects_off_mode(self) -> None:
+    def test_climate_off_action_is_normalized(self) -> None:
         slot = slot_from_dict(
             _slot_payload(appliances={"living-room-hvac": {"mode": "off"}})
         )
 
-        with self.assertRaises(ScheduleActionError):
-            normalize_slot_patch_request(
-                slots=[slot],
-                reference_time=REFERENCE_TIME,
-                battery_soc_bounds=None,
-                appliances_registry=_registry(config=_valid_config(include_climate=True)),
-            )
+        normalized = normalize_slot_patch_request(
+            slots=[slot],
+            reference_time=REFERENCE_TIME,
+            battery_soc_bounds=None,
+            appliances_registry=_registry(config=_valid_config(include_climate=True)),
+        )
+
+        self.assertEqual(
+            normalized[0].domains.appliances,
+            {"living-room-hvac": {"mode": "off"}},
+        )
 
     def test_climate_action_rejects_mode_not_supported_by_runtime(self) -> None:
         slot = slot_from_dict(

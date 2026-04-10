@@ -531,6 +531,27 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             ],
         )
 
+    def test_climate_off_produces_no_projection(self) -> None:
+        registry = build_appliances_runtime_registry({"appliances": [_climate_appliance()]})
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                        appliances={"living-room-hvac": {"mode": "off"}}
+                    )
+                }
+            ),
+            inputs=None,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(plan.appliances_by_id, {})
+        self.assertEqual(plan.demand_points, ())
+
     def test_climate_history_projection_prefers_estimate(self) -> None:
         registry = build_appliances_runtime_registry(
             {"appliances": [_climate_appliance(strategy="history_average")]}

@@ -624,6 +624,44 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.outcome, "success")
         self.assertTrue(memory.last_enabled)
 
+    async def test_climate_explicit_off_sets_hvac_mode_and_marks_disabled(self) -> None:
+        hass = FakeHass(
+            {
+                "climate.living_room": FakeState(
+                    "cool",
+                    attributes={"hvac_modes": ["off", "heat", "cool"]},
+                )
+            }
+        )
+        executor = ClimateApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_climate_appliance(),
+            action={"mode": "off"},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "climate",
+                    "set_hvac_mode",
+                    {
+                        "entity_id": "climate.living_room",
+                        "hvac_mode": "off",
+                    },
+                    True,
+                )
+            ],
+        )
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertFalse(memory.last_enabled)
+
     async def test_climate_missing_action_after_previous_mode_emits_slot_stop(self) -> None:
         hass = FakeHass(
             {
@@ -706,6 +744,30 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "slot_stop")
         self.assertEqual(runtime.outcome, "success")
         self.assertFalse(memory.last_enabled)
+
+    async def test_climate_missing_action_after_explicit_off_does_not_repeat_stop(self) -> None:
+        hass = FakeHass(
+            {
+                "climate.living_room": FakeState(
+                    "off",
+                    attributes={"hvac_modes": ["off", "heat", "cool"]},
+                )
+            }
+        )
+        executor = ClimateApplianceExecutor(hass)
+
+        runtime, memory = await executor.async_execute(
+            appliance=_build_climate_appliance(),
+            action=None,
+            last_scheduled_action={"mode": "off"},
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(hass.services.calls, [])
+        self.assertIsNone(runtime)
+        self.assertIsNone(memory)
 
     async def test_climate_unchanged_same_slot_is_noop(self) -> None:
         hass = FakeHass(
