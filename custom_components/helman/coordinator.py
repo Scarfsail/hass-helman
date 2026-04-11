@@ -1260,7 +1260,7 @@ class HelmanCoordinator:
 
         control_config = self._read_schedule_control_config()
         if control_config is None:
-            return ScheduleDocument()
+            return schedule_document
 
         forecast_slots = {
             slot_id: domains
@@ -1272,10 +1272,6 @@ class HelmanCoordinator:
             and not (
                 domains.inverter.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
                 and control_config.discharge_to_target_soc_option is None
-            )
-            and not (
-                domains.inverter.kind == SCHEDULE_ACTION_STOP_EXPORT
-                and control_config.stop_export_option is None
             )
         }
         return ScheduleDocument(

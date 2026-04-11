@@ -181,6 +181,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     schedule_mod.schedule_document_from_dict = lambda raw_document: raw_document
     schedule_mod.schedule_document_to_dict = lambda doc: {}
     schedule_mod.slot_to_dict = lambda slot, runtime=None: {}
+    schedule_mod.with_slot_set_by = lambda slot, set_by=None: slot
     schedule_mod.validate_slot_patch_request = (
         lambda slots, reference_time, battery_soc_bounds: None
     )

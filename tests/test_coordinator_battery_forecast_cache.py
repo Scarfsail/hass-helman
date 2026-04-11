@@ -148,6 +148,7 @@ def _install_import_stubs() -> None:
         "slots": dict(doc.slots),
     }
     schedule_mod.slot_to_dict = lambda slot, runtime=None: {}
+    schedule_mod.with_slot_set_by = lambda slot, set_by=None: slot
     schedule_mod.validate_slot_patch_request = (
         lambda slots, reference_time, battery_soc_bounds: None
     )
@@ -477,7 +478,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    def test_build_battery_forecast_schedule_document_filters_unconfigured_stop_export(
+    def test_build_battery_forecast_schedule_document_keeps_unconfigured_stop_export(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
@@ -502,11 +503,38 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             forecast_schedule_document.slots,
             {
+                "2026-03-20T21:00:00+01:00": schedule_document.slots[
+                    "2026-03-20T21:00:00+01:00"
+                ],
                 "2026-03-20T21:30:00+01:00": schedule_document.slots[
                     "2026-03-20T21:30:00+01:00"
                 ],
             },
         )
+
+    def test_build_battery_forecast_schedule_document_keeps_slots_without_control_config(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_export"),
+                "2026-03-20T21:30:00+01:00": _make_schedule_action(
+                    "discharge_to_target_soc",
+                    20,
+                ),
+            },
+        )
+        coordinator._read_schedule_control_config = Mock(return_value=None)
+
+        forecast_schedule_document = (
+            coordinator._build_battery_forecast_schedule_document(
+                schedule_document=schedule_document
+            )
+        )
+
+        self.assertEqual(forecast_schedule_document, schedule_document)
 
     async def test_async_get_battery_forecast_reuses_cache_within_ttl(self) -> None:
         coordinator = self._make_coordinator()
