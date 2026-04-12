@@ -49,7 +49,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 ## Phase status overview
 
 - [x] **Phase 0** — Forecast input bundle capture _(commit 930a)_
-- [ ] **Phase 1** — Scaffolding, config schema, feature flag plumbing
+- [x] **Phase 1** — Scaffolding, config schema, feature flag plumbing _(committed; SHA recorded in session handoff)_
 - [ ] **Phase 2** — Config editor UI for automation config
 - [ ] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence)
 - [ ] **Phase 4** — Automation-owned action ownership invariant in persistence path

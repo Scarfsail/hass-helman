@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from .automation.config import AutomationConfigError, read_automation_config
 from .appliances.climate_appliance import (
     ClimateApplianceConfigError,
     read_climate_appliance,
@@ -83,6 +84,7 @@ def validate_config_document(config: Mapping[str, Any] | None) -> ValidationRepo
     _validate_general_config(config, report)
     _validate_power_devices_config(config, report)
     _validate_scheduler_control_config(config, report)
+    _validate_automation_config(config, report)
     _validate_appliances_config(config, report)
     return report
 
@@ -598,6 +600,24 @@ def _validate_appliances_config(
             continue
 
         seen_appliance_ids.add(appliance.id)
+
+
+def _validate_automation_config(
+    config: Mapping[str, Any],
+    report: ValidationReport,
+) -> None:
+    if "automation" not in config:
+        return
+
+    try:
+        read_automation_config(config)
+    except AutomationConfigError as err:
+        report.add_error(
+            section="automation",
+            path=err.path,
+            code=err.code,
+            message=str(err),
+        )
 
 
 def _read_supported_appliance(
