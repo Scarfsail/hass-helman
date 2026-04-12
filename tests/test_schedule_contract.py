@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 import unittest
@@ -250,14 +251,14 @@ def _install_import_stubs() -> None:
 
 
 _install_import_stubs()
+sys.modules.pop("custom_components.helman.websockets", None)
 
 from custom_components.helman.const import DOMAIN  # noqa: E402
-from custom_components.helman.websockets import (  # noqa: E402
-    SET_SCHEDULE_REQUEST_SCHEMA,
-    ws_get_appliance_projections,
-    ws_get_appliances,
-    ws_set_schedule,
-)
+websockets_module = importlib.import_module("custom_components.helman.websockets")
+SET_SCHEDULE_REQUEST_SCHEMA = websockets_module.SET_SCHEDULE_REQUEST_SCHEMA
+ws_get_appliance_projections = websockets_module.ws_get_appliance_projections
+ws_get_appliances = websockets_module.ws_get_appliances
+ws_set_schedule = websockets_module.ws_set_schedule
 from custom_components.helman.scheduling.schedule import ScheduleActionError  # noqa: E402
 
 

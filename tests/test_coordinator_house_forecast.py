@@ -1,16 +1,54 @@
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
+_STUBBED_MODULES = (
+    "custom_components",
+    "custom_components.helman",
+    "custom_components.helman.battery_capacity_forecast_builder",
+    "custom_components.helman.battery_state",
+    "custom_components.helman.consumption_forecast_builder",
+    "custom_components.helman.forecast_builder",
+    "custom_components.helman.recorder_hourly_series",
+    "custom_components.helman.scheduling",
+    "custom_components.helman.scheduling.action_resolution",
+    "custom_components.helman.scheduling.runtime_status",
+    "custom_components.helman.scheduling.schedule",
+    "custom_components.helman.scheduling.schedule_executor",
+    "custom_components.helman.storage",
+    "custom_components.helman.tree_builder",
+    "homeassistant",
+    "homeassistant.components",
+    "homeassistant.components.energy",
+    "homeassistant.components.energy.data",
+    "homeassistant.core",
+    "homeassistant.helpers",
+    "homeassistant.helpers.entity_registry",
+    "homeassistant.helpers.event",
+    "homeassistant.util",
+    "homeassistant.util.dt",
+)
 
-def _install_import_stubs() -> None:
+_original_helman_modules = {
+    module_name
+    for module_name in sys.modules
+    if module_name == "custom_components.helman"
+    or module_name.startswith("custom_components.helman.")
+}
+
+
+def _install_import_stubs() -> dict[str, types.ModuleType | None]:
+    previous_modules = {
+        module_name: sys.modules.get(module_name) for module_name in _STUBBED_MODULES
+    }
     custom_components_pkg = sys.modules.get("custom_components")
     if custom_components_pkg is None:
         custom_components_pkg = types.ModuleType("custom_components")
@@ -65,6 +103,10 @@ def _install_import_stubs() -> None:
     sys.modules[tree_builder_mod.__name__] = tree_builder_mod
 
     battery_state_mod = types.ModuleType("custom_components.helman.battery_state")
+    battery_state_mod.describe_battery_entity_config_issue = lambda config: None
+    battery_state_mod.describe_battery_live_state_issue = (
+        lambda hass, config=None: None
+    )
     battery_state_mod.read_battery_entity_config = lambda config: None
     battery_state_mod.read_battery_live_state = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds = lambda hass, config=None: None
@@ -103,10 +145,19 @@ def _install_import_stubs() -> None:
     schedule_mod.ScheduleError = type("ScheduleError", (Exception,), {})
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
+    schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
     schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
     schedule_mod.build_horizon_start = lambda reference_time: reference_time
+    schedule_mod.describe_schedule_control_config_issue = lambda config: None
     schedule_mod.format_slot_id = lambda slot: ""
+    schedule_mod.parse_slot_id = datetime.fromisoformat
     schedule_mod.materialize_schedule_slots = lambda stored_slots, reference_time: []
+    schedule_mod.normalize_schedule_document_for_registry = (
+        lambda schedule_document, runtime_registry=None: schedule_document
+    )
+    schedule_mod.normalize_slot_patch_request = (
+        lambda slot_patch, runtime_registry=None: slot_patch
+    )
     schedule_mod.prune_expired_slots = (
         lambda stored_slots, reference_time: stored_slots
     )
@@ -115,6 +166,7 @@ def _install_import_stubs() -> None:
     schedule_mod.schedule_document_to_dict = lambda doc: {}
     schedule_mod.slot_to_dict = lambda slot, runtime=None: {}
     schedule_mod.slot_from_dict = lambda raw_slot: raw_slot
+    schedule_mod.with_slot_set_by = lambda slot, set_by=None: slot
     schedule_mod.validate_slot_patch_request = (
         lambda slots, reference_time, battery_soc_bounds: None
     )
@@ -128,7 +180,18 @@ def _install_import_stubs() -> None:
         (),
         {"active_slot_id": None, "active_slot_runtime": None},
     )
+    runtime_status_mod.schedule_execution_status_to_dict = (
+        lambda execution_status: None
+    )
     sys.modules[runtime_status_mod.__name__] = runtime_status_mod
+
+    action_resolution_mod = types.ModuleType(
+        "custom_components.helman.scheduling.action_resolution"
+    )
+    action_resolution_mod.resolve_executed_schedule_action = (
+        lambda action, current_soc: None
+    )
+    sys.modules[action_resolution_mod.__name__] = action_resolution_mod
 
     schedule_executor_mod = types.ModuleType(
         "custom_components.helman.scheduling.schedule_executor"
@@ -214,37 +277,42 @@ def _install_import_stubs() -> None:
     dt_mod.parse_datetime = datetime.fromisoformat
     dt_mod.now = lambda: REFERENCE_TIME
     dt_mod.as_local = lambda value: value
+    dt_mod.as_utc = lambda value: value
     util_pkg.dt = dt_mod
+    return previous_modules
 
 
-_install_import_stubs()
+def _restore_modules(previous_modules: dict[str, types.ModuleType | None]) -> None:
+    for module_name, previous_module in previous_modules.items():
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+            continue
+        sys.modules[module_name] = previous_module
 
-from custom_components.helman.const import (  # noqa: E402
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    HOUSE_FORECAST_MODEL_ID,
-    MAX_FORECAST_DAYS,
+
+_previous_modules = _install_import_stubs()
+try:
+    const_module = importlib.import_module("custom_components.helman.const")
+    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+finally:
+    _restore_modules(_previous_modules)
+    sys.modules.pop("custom_components.helman.coordinator", None)
+    for module_name in list(sys.modules):
+        if (
+            module_name not in _original_helman_modules
+            and (
+                module_name == "custom_components.helman"
+                or module_name.startswith("custom_components.helman.")
+            )
+        ):
+            sys.modules.pop(module_name, None)
+
+FORECAST_CANONICAL_GRANULARITY_MINUTES = (
+    const_module.FORECAST_CANONICAL_GRANULARITY_MINUTES
 )
-from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
-
-
-def _cleanup_stubbed_modules() -> None:
-    for module_name in (
-        "custom_components.helman.coordinator",
-        "custom_components.helman.battery_capacity_forecast_builder",
-        "custom_components.helman.consumption_forecast_builder",
-        "custom_components.helman.forecast_builder",
-        "custom_components.helman.tree_builder",
-        "custom_components.helman.battery_state",
-        "custom_components.helman.recorder_hourly_series",
-        "custom_components.helman.scheduling.schedule",
-        "custom_components.helman.scheduling.runtime_status",
-        "custom_components.helman.scheduling.schedule_executor",
-        "custom_components.helman.storage",
-    ):
-        sys.modules.pop(module_name, None)
-
-
-_cleanup_stubbed_modules()
+HOUSE_FORECAST_MODEL_ID = const_module.HOUSE_FORECAST_MODEL_ID
+MAX_FORECAST_DAYS = const_module.MAX_FORECAST_DAYS
+HelmanCoordinator = coordinator_module.HelmanCoordinator
 
 
 class CoordinatorHouseForecastTests(unittest.TestCase):
