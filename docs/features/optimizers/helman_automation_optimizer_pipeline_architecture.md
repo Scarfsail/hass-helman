@@ -185,6 +185,8 @@ Two guardrails should be explicit:
 
 Manual or debug invocation surfaces should return an `AutomationRunResult` that distinguishes `execution_disabled`, `automation_disabled`, `no_enabled_optimizers`, and `cleanup_only`, and should include cleanup metadata such as how many automation-owned actions were stripped when cleanup actually changed the schedule.
 
+When a run does produce a snapshot, the forecast sections in that snapshot should preserve the underlying pipeline status rather than being forced to `"available"`. In practice a valid debug snapshot may therefore carry `battery_forecast.status == "partial"` (and the derived grid forecast built from it) when the existing forecast pipeline only has partial upstream coverage.
+
 `AutomationRunResult` is diagnostic metadata about the attempted run. If one optimizer fails, the result may still report earlier optimizers as `"ok"` for observability, but no optimizer output from that failed run is persisted.
 
 ### 7. Existing schedule boundaries still apply
@@ -276,6 +278,8 @@ At a high level, that rebuild should follow the existing backend flow:
 3. fold that demand into the original house forecast to produce the adjusted house forecast
 4. apply any inverter schedule effect through the existing battery forecast overlay path, including the same battery-forecast schedule filtering rules the public forecast path uses for unsupported charge/discharge target-SoC actions
 5. produce battery forecast, then compose grid forecast from battery-derived grid flow plus the cached price-forecast inputs from the same refresh bundle
+
+The key Phase 3 invariant is that the runner reuses the existing rebuild pipeline faithfully. If that pipeline yields `available`, `partial`, or another non-error forecast status, the automation snapshot should surface that same status instead of normalizing it away.
 
 Optimizers should see only the rebuilt result, not reimplement any part of that chain themselves.
 

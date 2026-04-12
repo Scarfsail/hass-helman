@@ -51,7 +51,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 0** — Forecast input bundle capture _(commit 930a)_
 - [x] **Phase 1** — Scaffolding, config schema, feature flag plumbing _(committed; SHA recorded in session handoff)_
 - [x] **Phase 2** — Config editor UI for automation config _(commit c386936; local HASS smoke passed)_
-- [ ] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence)
+- [x] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence) _(local HASS smoke passed; SHA in git history)_
 - [ ] **Phase 4** — Automation-owned action ownership invariant in persistence path
 - [ ] **Phase 5** — `export_price` optimizer (single-optimizer only)
 - [ ] **Phase 6** — Rebuild-between-optimizers loop wiring
@@ -296,7 +296,7 @@ No production trigger yet, so add a **temporary debug websocket command** `helma
 
 After restart, with `executionEnabled: true`:
 
-1. `helman/__debug_run_automation` → expect `{ ranAutomation: true, snapshot: ... }` where `snapshot` comes from `snapshot_to_dict()` and includes `scheduleSlots`, `adjustedHouseForecast.status == "available"`, `batteryForecast.status == "available"`, and `gridForecast`.
+1. `helman/__debug_run_automation` → expect `{ ranAutomation: true, snapshot: ... }` where `snapshot` comes from `snapshot_to_dict()` and includes `scheduleSlots`, `adjustedHouseForecast.status == "available"`, `batteryForecast` carrying the live pipeline status (for example `"available"` or `"partial"`), and `gridForecast`.
 2. Toggle `helman/set_schedule_execution` to `enabled: false` and call `helman/__debug_run_automation` again → expect a response shaped `{ "ranAutomation": false, "reason": "execution_disabled" }`.
 3. Re-enable execution and confirm automation runs again.
 

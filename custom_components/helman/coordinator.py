@@ -32,7 +32,9 @@ from .appliances import (
     build_projection_input_bundle,
     build_empty_appliance_projections_response,
 )
+from .automation.config import AutomationConfig, read_automation_config
 from .automation.input_bundle import AutomationInputBundle
+from .automation.snapshot import OptimizationContext, OptimizationSnapshot
 from .appliances.climate_appliance import ClimateApplianceRuntime
 from .appliances.climate_appliance import resolve_supported_climate_modes
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
@@ -145,6 +147,31 @@ def _merge_grid_forecast_responses(
     return merged_response
 
 
+def _build_grid_forecast_snapshot_with_prices(
+    *,
+    battery_forecast: dict[str, Any],
+    grid_price_forecast: dict[str, Any],
+) -> dict[str, Any]:
+    return _merge_grid_forecast_responses(
+        grid_flow_response=build_grid_flow_forecast_snapshot(battery_forecast),
+        grid_price_response=grid_price_forecast,
+    )
+
+
+def _build_price_channel_snapshot(
+    *,
+    grid_price_forecast: dict[str, Any],
+    unit_field: str,
+    current_price_field: str,
+    points_field: str,
+) -> dict[str, Any]:
+    return {
+        "unit": deepcopy(grid_price_forecast.get(unit_field)),
+        "currentPrice": deepcopy(grid_price_forecast.get(current_price_field)),
+        "points": deepcopy(grid_price_forecast.get(points_field, [])),
+    }
+
+
 @dataclass(frozen=True)
 class _ApplianceForecastPipelineSnapshot:
     started_at: datetime
@@ -152,6 +179,21 @@ class _ApplianceForecastPipelineSnapshot:
     adjusted_house_forecast: dict[str, Any]
     projection_plan: ApplianceProjectionPlan
     battery_forecast: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _ForecastScheduleDocuments:
+    forecast_schedule_document: ScheduleDocument
+    projection_schedule_document: ScheduleDocument
+    schedule_execution_enabled: bool
+
+
+@dataclass(frozen=True)
+class _ForecastRebuildSnapshot:
+    adjusted_house_forecast: dict[str, Any]
+    battery_forecast: dict[str, Any]
+    projection_plan: ApplianceProjectionPlan
+    grid_forecast: dict[str, Any] | None = None
 
 
 class HelmanCoordinator:
@@ -792,11 +834,11 @@ class HelmanCoordinator:
     async def _save_schedule_document(self, doc: ScheduleDocument) -> None:
         await self._storage.async_save_schedule_document(schedule_document_to_dict(doc))
 
-    async def _load_pruned_schedule_document_locked(
+    def _build_pruned_schedule_document(
         self,
         *,
         reference_time: datetime,
-    ) -> ScheduleDocument:
+    ) -> tuple[ScheduleDocument, ScheduleDocument]:
         self._refresh_climate_appliance_capabilities()
         loaded_document = self._load_schedule_document()
         schedule_document = normalize_schedule_document_for_registry(
@@ -811,8 +853,28 @@ class HelmanCoordinator:
             execution_enabled=schedule_document.execution_enabled,
             slots=pruned_slots,
         )
+        return loaded_document, pruned_document
+
+    async def _load_pruned_schedule_document_locked(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> ScheduleDocument:
+        loaded_document, pruned_document = self._build_pruned_schedule_document(
+            reference_time=reference_time
+        )
         if pruned_document != loaded_document:
             await self._save_schedule_document(pruned_document)
+        return pruned_document
+
+    def _build_automation_working_schedule_document_locked(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> ScheduleDocument:
+        _loaded_document, pruned_document = self._build_pruned_schedule_document(
+            reference_time=reference_time
+        )
         return pruned_document
 
     def _build_schedule_response(
@@ -899,6 +961,22 @@ class HelmanCoordinator:
             registry=self._appliances_registry,
             hass=self._hass,
         )
+
+    async def run_automation(
+        self,
+        *,
+        reference_time: datetime | None = None,
+    ) -> "AutomationRunResult":
+        from .automation.pipeline import AutomationRunner
+
+        automation_config = read_automation_config(self._active_config)
+        if automation_config is None:
+            automation_config = AutomationConfig(enabled=False)
+
+        return await AutomationRunner(
+            coordinator=self,
+            automation_config=automation_config,
+        ).run(reference_time=reference_time)
 
     async def set_schedule(
         self,
@@ -1172,6 +1250,140 @@ class HelmanCoordinator:
         )
         return pipeline.battery_forecast
 
+    def _build_forecast_schedule_documents(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+    ) -> _ForecastScheduleDocuments:
+        forecast_schedule_document = self._build_battery_forecast_schedule_document(
+            schedule_document=schedule_document
+        )
+        schedule_execution_enabled = forecast_schedule_document.execution_enabled
+        projection_schedule_document = (
+            schedule_document if schedule_execution_enabled else ScheduleDocument()
+        )
+        return _ForecastScheduleDocuments(
+            forecast_schedule_document=forecast_schedule_document,
+            projection_schedule_document=projection_schedule_document,
+            schedule_execution_enabled=schedule_execution_enabled,
+        )
+
+    async def _async_build_forecast_rebuild(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        original_house_forecast: dict[str, Any],
+        started_at: datetime,
+        forecast_schedule_document: ScheduleDocument,
+        projection_schedule_document: ScheduleDocument,
+        generic_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
+        grid_price_forecast: dict[str, Any] | None = None,
+    ) -> _ForecastRebuildSnapshot:
+        input_bundle = build_projection_input_bundle(
+            solar_forecast=solar_forecast,
+            house_forecast=original_house_forecast,
+            reference_time=started_at,
+        )
+        projection_plan = build_appliance_projection_plan(
+            generated_at=started_at.isoformat(),
+            registry=self._appliances_registry,
+            schedule_document=projection_schedule_document,
+            inputs=input_bundle,
+            hass=self._hass,
+            reference_time=started_at,
+            generic_hourly_energy_kwh_by_appliance_id=(
+                generic_hourly_energy_kwh_by_appliance_id
+            ),
+        )
+        adjusted_house_forecast = build_adjusted_house_forecast(
+            house_forecast=original_house_forecast,
+            demand_points=projection_plan.demand_points,
+        )
+        schedule_overlay = None
+        if forecast_schedule_document.execution_enabled:
+            schedule_overlay = self._build_battery_forecast_schedule_overlay(
+                schedule_document=forecast_schedule_document,
+                reference_time=started_at,
+            )
+        battery_forecast = await self._build_battery_forecast(
+            solar_forecast=solar_forecast,
+            house_forecast=adjusted_house_forecast,
+            started_at=started_at,
+            forecast_days=MAX_FORECAST_DAYS,
+            schedule_overlay=schedule_overlay,
+        )
+        grid_forecast = (
+            None
+            if grid_price_forecast is None
+            else _build_grid_forecast_snapshot_with_prices(
+                battery_forecast=battery_forecast,
+                grid_price_forecast=grid_price_forecast,
+            )
+        )
+        return _ForecastRebuildSnapshot(
+            adjusted_house_forecast=adjusted_house_forecast,
+            battery_forecast=battery_forecast,
+            projection_plan=projection_plan,
+            grid_forecast=grid_forecast,
+        )
+
+    async def _build_automation_snapshot_from_schedule_locked(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        input_bundle: AutomationInputBundle,
+        reference_time: datetime,
+    ) -> OptimizationSnapshot:
+        schedule_documents = self._build_forecast_schedule_documents(
+            schedule_document=schedule_document
+        )
+        rebuild = await self._async_build_forecast_rebuild(
+            solar_forecast=input_bundle.solar_forecast,
+            original_house_forecast=input_bundle.original_house_forecast,
+            started_at=reference_time,
+            forecast_schedule_document=schedule_documents.forecast_schedule_document,
+            projection_schedule_document=schedule_documents.projection_schedule_document,
+            generic_hourly_energy_kwh_by_appliance_id=(
+                input_bundle.when_active_hourly_energy_kwh_by_appliance_id
+            ),
+            grid_price_forecast=input_bundle.grid_price_forecast,
+        )
+        if rebuild.grid_forecast is None:
+            raise RuntimeError("Automation snapshot rebuild is missing grid forecast")
+
+        battery_entity_config = read_battery_entity_config(self._active_config)
+        battery_state = None
+        if battery_entity_config is not None:
+            battery_state = read_battery_live_state(self._hass, battery_entity_config)
+
+        return OptimizationSnapshot(
+            schedule=deepcopy(schedule_document),
+            adjusted_house_forecast=deepcopy(rebuild.adjusted_house_forecast),
+            battery_forecast=deepcopy(rebuild.battery_forecast),
+            grid_forecast=deepcopy(rebuild.grid_forecast),
+            context=OptimizationContext(
+                now=reference_time,
+                battery_state=battery_state,
+                solar_forecast=deepcopy(input_bundle.solar_forecast),
+                import_price_forecast=_build_price_channel_snapshot(
+                    grid_price_forecast=input_bundle.grid_price_forecast,
+                    unit_field="importPriceUnit",
+                    current_price_field="currentImportPrice",
+                    points_field="importPricePoints",
+                ),
+                export_price_forecast=_build_price_channel_snapshot(
+                    grid_price_forecast=input_bundle.grid_price_forecast,
+                    unit_field="exportPriceUnit",
+                    current_price_field="currentExportPrice",
+                    points_field="exportPricePoints",
+                ),
+                appliance_registry=self._appliances_registry,
+                when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
+                    input_bundle.when_active_hourly_energy_kwh_by_appliance_id
+                ),
+            ),
+        )
+
     async def _async_get_appliance_forecast_pipeline(
         self,
         *,
@@ -1183,17 +1395,16 @@ class HelmanCoordinator:
             schedule_document = await self._load_pruned_schedule_document_locked(
                 reference_time=started_at
             )
-        forecast_schedule_document = self._build_battery_forecast_schedule_document(
+        schedule_documents = self._build_forecast_schedule_documents(
             schedule_document=schedule_document
         )
-        schedule_execution_enabled = forecast_schedule_document.execution_enabled
+        forecast_schedule_document = schedule_documents.forecast_schedule_document
+        projection_schedule_document = schedule_documents.projection_schedule_document
+        schedule_execution_enabled = schedule_documents.schedule_execution_enabled
         schedule_signature = (
             self._build_battery_forecast_schedule_signature(forecast_schedule_document)
             if schedule_execution_enabled
             else ()
-        )
-        projection_schedule_document = (
-            schedule_document if schedule_execution_enabled else ScheduleDocument()
         )
         appliance_schedule_signature = (
             self._build_appliance_projection_schedule_signature(
@@ -1219,52 +1430,28 @@ class HelmanCoordinator:
                 raise RuntimeError("Forecast pipeline cache is missing shared snapshot")
             return self._cached_appliance_forecast_pipeline
 
-        schedule_overlay = None
-        if schedule_execution_enabled:
-            schedule_overlay = self._build_battery_forecast_schedule_overlay(
-                schedule_document=forecast_schedule_document,
-                reference_time=started_at,
-            )
-        generated_at = started_at.isoformat()
         history_hourly_energy_kwh_by_appliance_id = (
             await self._async_build_history_projection_hourly_energy_by_appliance_id(
                 schedule_document=projection_schedule_document,
                 reference_time=started_at,
             )
         )
-        input_bundle = build_projection_input_bundle(
+        rebuild = await self._async_build_forecast_rebuild(
             solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            reference_time=started_at,
-        )
-        projection_plan = build_appliance_projection_plan(
-            generated_at=generated_at,
-            registry=self._appliances_registry,
-            schedule_document=projection_schedule_document,
-            inputs=input_bundle,
-            hass=self._hass,
-            reference_time=started_at,
+            original_house_forecast=house_forecast,
+            started_at=started_at,
+            forecast_schedule_document=forecast_schedule_document,
+            projection_schedule_document=projection_schedule_document,
             generic_hourly_energy_kwh_by_appliance_id=(
                 history_hourly_energy_kwh_by_appliance_id
             ),
         )
-        adjusted_house_forecast = build_adjusted_house_forecast(
-            house_forecast=house_forecast,
-            demand_points=projection_plan.demand_points,
-        )
-        forecast = await self._build_battery_forecast(
-            solar_forecast=solar_forecast,
-            house_forecast=adjusted_house_forecast,
-            started_at=started_at,
-            forecast_days=MAX_FORECAST_DAYS,
-            schedule_overlay=schedule_overlay,
-        )
         pipeline = _ApplianceForecastPipelineSnapshot(
             started_at=started_at,
             original_house_forecast=deepcopy(house_forecast),
-            adjusted_house_forecast=adjusted_house_forecast,
-            projection_plan=projection_plan,
-            battery_forecast=forecast,
+            adjusted_house_forecast=rebuild.adjusted_house_forecast,
+            projection_plan=rebuild.projection_plan,
+            battery_forecast=rebuild.battery_forecast,
         )
         self._store_battery_forecast_cache(
             pipeline=pipeline,
