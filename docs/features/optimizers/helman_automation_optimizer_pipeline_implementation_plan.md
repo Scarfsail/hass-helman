@@ -50,7 +50,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 
 - [x] **Phase 0** — Forecast input bundle capture _(commit 930a)_
 - [x] **Phase 1** — Scaffolding, config schema, feature flag plumbing _(committed; SHA recorded in session handoff)_
-- [ ] **Phase 2** — Config editor UI for automation config _(code, bundle rebuild, and contract tests landed; local HASS smoke still pending before closeout)_
+- [x] **Phase 2** — Config editor UI for automation config _(commit c386936; local HASS smoke passed)_
 - [ ] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence)
 - [ ] **Phase 4** — Automation-owned action ownership invariant in persistence path
 - [ ] **Phase 5** — `export_price` optimizer (single-optimizer only)
@@ -229,7 +229,7 @@ After restart:
 ### Status note
 
 - Code implementation, frontend bundle rebuild, and focused config-panel/backend tests landed together in the Phase 2 commit.
-- The checkbox remains open until the local HASS smoke steps above are run and reviewed.
+- Local HASS smoke passed on the running instance; the checkbox is now closed.
 
 ---
 
