@@ -223,6 +223,7 @@ def _install_import_stubs() -> None:
 _install_voluptuous_stub()
 _install_import_stubs()
 
+from custom_components.helman.automation import config as automation_config_module
 from custom_components.helman.const import DOMAIN
 from custom_components.helman.websockets import (
     ws_get_config,
@@ -314,6 +315,16 @@ class FakeHass:
 
 
 class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
+    def _set_known_optimizer_kinds(self, *kinds: str) -> None:
+        original = automation_config_module.KNOWN_OPTIMIZER_KINDS
+        automation_config_module.KNOWN_OPTIMIZER_KINDS = frozenset(kinds)
+        self.addCleanup(
+            setattr,
+            automation_config_module,
+            "KNOWN_OPTIMIZER_KINDS",
+            original,
+        )
+
     def test_get_config_requires_admin(self) -> None:
         connection = FakeConnection(is_admin=False)
 
@@ -341,6 +352,25 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.errors, [])
         self.assertEqual(connection.results, [(1, {"history_buckets": 60})])
 
+    def test_get_config_returns_automation_block_unchanged(self) -> None:
+        connection = FakeConnection(is_admin=True)
+        config = {
+            "automation": {
+                "enabled": False,
+                "optimizers": [],
+                "unknown_key": "preserve-me",
+            }
+        }
+
+        ws_get_config(
+            FakeHass(FakeStorage(config)),
+            connection,
+            {"id": 1, "type": "helman/get_config"},
+        )
+
+        self.assertEqual(connection.errors, [])
+        self.assertEqual(connection.results, [(1, config)])
+
     def test_validate_config_returns_structured_report(self) -> None:
         connection = FakeConnection(is_admin=True)
 
@@ -354,6 +384,41 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results[0][0], 1)
         self.assertFalse(connection.results[0][1]["valid"])
         self.assertIn("errors", connection.results[0][1])
+
+    def test_validate_config_reports_unknown_optimizer_kind_for_automation_payload(self) -> None:
+        connection = FakeConnection(is_admin=True)
+
+        ws_validate_config(
+            FakeHass(FakeStorage()),
+            connection,
+            {
+                "id": 1,
+                "type": "helman/validate_config",
+                "config": {
+                    "automation": {
+                        "enabled": True,
+                        "optimizers": [
+                            {
+                                "id": "export",
+                                "kind": "does_not_exist",
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(connection.errors, [])
+        self.assertFalse(connection.results[0][1]["valid"])
+        self.assertEqual(
+            connection.results[0][1]["errors"][0]["section"],
+            "automation",
+        )
+        self.assertEqual(
+            connection.results[0][1]["errors"][0]["path"],
+            "automation.optimizers[0].kind",
+        )
+        self.assertIn("does_not_exist", connection.results[0][1]["errors"][0]["message"])
 
     async def test_save_config_does_not_persist_invalid_document(self) -> None:
         storage = FakeStorage()
@@ -390,6 +455,59 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.results[0][1]["reloadStarted"])
         self.assertTrue(connection.results[0][1]["reloadSucceeded"])
         self.assertIsNone(connection.results[0][1]["reloadError"])
+
+    async def test_save_config_persists_minimal_automation_config(self) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        config = {
+            "automation": {
+                "enabled": True,
+                "optimizers": [],
+            }
+        }
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertEqual(storage.saved_payloads, [config])
+        self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
+        self.assertTrue(connection.results[0][1]["success"])
+
+    async def test_save_config_preserves_optimizers_when_disabling_automation(self) -> None:
+        self._set_known_optimizer_kinds("alpha")
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        config = {
+            "automation": {
+                "enabled": False,
+                "optimizers": [
+                    {
+                        "id": "export",
+                        "kind": "alpha",
+                        "params": {"window_hours": 2},
+                        "future_flag": True,
+                    }
+                ],
+            }
+        }
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertEqual(storage.saved_payloads, [config])
+        self.assertEqual(
+            storage.config["automation"]["optimizers"],
+            config["automation"]["optimizers"],
+        )
+        self.assertTrue(connection.results[0][1]["success"])
 
     async def test_save_config_reports_reload_failure_after_persisting_document(self) -> None:
         storage = FakeStorage()

@@ -6,6 +6,7 @@
       "general": "Obecné",
       "power_devices": "Výkonová zařízení",
       "scheduler": "Plánování",
+      "automation": "Automatizace",
       "appliances": "Spotřebiče"
     },
     "actions": {
@@ -50,6 +51,8 @@
       "battery": "Baterie",
       "grid": "Síť",
       "schedule_control_mapping": "Mapování ovládání plánování",
+        "automation_settings": "Nastavení automatizace",
+        "optimizer_pipeline": "Pipeline optimalizátorů",
         "configured_appliances": "Nakonfigurované spotřebiče",
         "identity_and_limits": "Identita a limity",
         "controls": "Ovládání",
@@ -62,11 +65,14 @@
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
       "battery_entities": "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
+        "automation": "Ve fázi 2 vizuální režim zpřístupňuje jen hlavní přepínač automatizace. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
+        "optimizer_pipeline": "Seřazenou pipeline optimalizátorů upravujte v režimu YAML. Neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené.",
         "appliances": "Editace EV nabíječky, topení/klimatizace a obecného spotřebiče je podporovaná přímo. Nepodporované budoucí typy spotřebičů se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
         "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
         "climate_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu."
       },
     "empty": {
+      "no_automation_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory.",
       "no_appliances": "Zatím nejsou nakonfigurovány žádné spotřebiče.",
       "no_device_label_categories": "Nejsou nakonfigurovány žádné kategorie textů štítků."
     },
@@ -125,6 +131,7 @@
       "stop_charging_option": "Volba Zastavit nabíjení",
       "stop_discharging_option": "Volba Zastavit vybíjení",
       "stop_export_option": "Volba Zastavit export",
+      "automation_enabled": "Povolit automatizaci",
       "appliance_id": "ID spotřebiče",
         "appliance_name": "Název spotřebiče",
         "appliance_icon": "Ikona spotřebiče",
@@ -156,6 +163,7 @@
         "power_sensor_name_cleaner_regex": "Volitelný regex použitý při normalizaci názvů power senzorů.",
         "import_price_unit": "Např.: CZK/kWh",
         "mode_entity": "Helman zapisuje volby akcí plánování do této entity.",
+        "automation_enabled": "Zapnutí vytvoří automation: { enabled: true, optimizers: [] }. Vypnutí zachová aktuální seznam optimalizátorů pro pozdější úpravy.",
         "appliance_icon": "Volitelné. Když pole necháte prázdné, metadata spotřebiče použijí výchozí energetickou ikonu.",
         "history_energy_entity": "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče."
       },

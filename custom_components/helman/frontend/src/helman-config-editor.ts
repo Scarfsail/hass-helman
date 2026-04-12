@@ -969,6 +969,11 @@ export class HelmanConfigEditorPanel extends LitElement {
         );
       case "scheduler":
         return this._renderTabScope(TAB_SCOPE_IDS.scheduler, this._renderSchedulerTab());
+      case "automation":
+        return this._renderTabScope(
+          TAB_SCOPE_IDS.automation,
+          this._renderAutomationTab(),
+        );
       case "appliances":
         return this._renderTabScope(
           TAB_SCOPE_IDS.appliances,
@@ -1641,6 +1646,60 @@ export class HelmanConfigEditorPanel extends LitElement {
           </div>
         `,
       )}
+    `;
+  }
+
+  private _renderAutomationTab(): TemplateResult {
+    const optimizers = asJsonArray(this._getValue(["automation", "optimizers"])) ?? [];
+
+    return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.automation.settings,
+        html`
+          <p class="inline-note">
+            ${this._t("editor.notes.automation")}
+          </p>
+          <div class="field-grid">
+            ${this._renderAutomationEnabledField()}
+          </div>
+        `,
+      )}
+
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.automation.optimizer_pipeline,
+        html`
+          <p class="inline-note">
+            ${this._t("editor.notes.optimizer_pipeline")}
+          </p>
+          ${optimizers.length === 0
+            ? html`
+                <div class="message info">
+                  ${this._t("editor.empty.no_automation_optimizers")}
+                </div>
+              `
+            : html`<pre class="raw-preview">${JSON.stringify(optimizers, null, 2)}</pre>`}
+        `,
+        { initialOpen: false },
+      )}
+    `;
+  }
+
+  private _renderAutomationEnabledField(): TemplateResult {
+    const checked = this._getAutomationEnabled();
+
+    return html`
+      <div class="field toggle-field">
+        <ha-formfield .label=${this._t("editor.fields.automation_enabled")}>
+          <ha-switch
+            .checked=${checked}
+            @change=${(event: Event) =>
+              this._setAutomationEnabled(
+                (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+              )}
+          ></ha-switch>
+        </ha-formfield>
+        <div class="helper">${this._t("editor.helpers.automation_enabled")}</div>
+      </div>
     `;
   }
 
@@ -2879,6 +2938,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       general: { errors: 0, warnings: 0 },
       power_devices: { errors: 0, warnings: 0 },
       scheduler: { errors: 0, warnings: 0 },
+      automation: { errors: 0, warnings: 0 },
       appliances: { errors: 0, warnings: 0 },
     };
 
@@ -3486,6 +3546,39 @@ export class HelmanConfigEditorPanel extends LitElement {
       }
       const numericValue = Number(normalized);
       setValueAtPath(draft, path, Number.isFinite(numericValue) ? numericValue : normalized);
+    });
+  }
+
+  private _getAutomationEnabled(): boolean {
+    const automation = asJsonObject(this._getValue(["automation"]));
+    if (!automation) {
+      return false;
+    }
+
+    return this._booleanValue(automation["enabled"], true);
+  }
+
+  private _setAutomationEnabled(enabled: boolean): void {
+    if (!enabled && this._getValue(["automation"]) === undefined) {
+      return;
+    }
+
+    this._applyMutation((draft) => {
+      const automation = getValueAtPath(draft, ["automation"]);
+      const automationObject = asJsonObject(automation);
+
+      if (automationObject) {
+        setValueAtPath(draft, ["automation", "enabled"], enabled);
+        if (!Array.isArray(automationObject["optimizers"])) {
+          setValueAtPath(draft, ["automation", "optimizers"], []);
+        }
+        return;
+      }
+
+      setValueAtPath(draft, ["automation"], {
+        enabled,
+        optimizers: [],
+      });
     });
   }
 

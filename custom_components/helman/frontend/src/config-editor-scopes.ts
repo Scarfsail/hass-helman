@@ -7,13 +7,19 @@ import {
 } from "./config-scope-adapters";
 
 export type EditorMode = "visual" | "yaml";
-export type TabId = "general" | "power_devices" | "scheduler" | "appliances";
+export type TabId =
+  | "general"
+  | "power_devices"
+  | "scheduler"
+  | "automation"
+  | "appliances";
 
 export type ScopeId =
   | "document"
   | "tab:general"
   | "tab:power_devices"
   | "tab:scheduler"
+  | "tab:automation"
   | "tab:appliances"
   | "section:general.core_labels_and_history"
   | "section:general.device_label_text"
@@ -22,6 +28,8 @@ export type ScopeId =
   | "section:power_devices.battery"
   | "section:power_devices.grid"
   | "section:scheduler.schedule_control_mapping"
+  | "section:automation.settings"
+  | "section:automation.optimizer_pipeline"
   | "section:appliances.configured_appliances";
 
 export interface EditorScope {
@@ -38,6 +46,7 @@ export const TAB_ICONS: Record<TabId, string> = {
   general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   scheduler: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z",
+  automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   appliances: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
 };
 
@@ -49,6 +58,8 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
   "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
   "section:scheduler.schedule_control_mapping": "M16.53,11.06L15.47,10L10.59,14.88L8.47,12.76L7.41,13.82L10.59,17L16.53,11.06M19,3H18V1H16V3H8V1H6V3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M19,19H5V9H19V19M19,7H5V5H19V7Z",
+  "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
+  "section:automation.optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:appliances.configured_appliances": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z",
 };
 
@@ -56,6 +67,7 @@ export const TABS: Array<{ id: TabId; labelKey: string }> = [
   { id: "general", labelKey: "editor.tabs.general" },
   { id: "power_devices", labelKey: "editor.tabs.power_devices" },
   { id: "scheduler", labelKey: "editor.tabs.scheduler" },
+  { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "appliances", labelKey: "editor.tabs.appliances" },
 ];
 
@@ -63,6 +75,7 @@ export const TAB_SECTIONS: Record<string, TabId> = {
   general: "general",
   power_devices: "power_devices",
   scheduler_control: "scheduler",
+  automation: "automation",
   appliances: "appliances",
   root: "general",
 };
@@ -73,6 +86,7 @@ export const TAB_SCOPE_IDS = {
   general: "tab:general",
   power_devices: "tab:power_devices",
   scheduler: "tab:scheduler",
+  automation: "tab:automation",
   appliances: "tab:appliances",
 } as const satisfies Record<TabId, ScopeId>;
 
@@ -89,6 +103,10 @@ export const SECTION_SCOPE_IDS = {
   },
   scheduler: {
     schedule_control_mapping: "section:scheduler.schedule_control_mapping",
+  },
+  automation: {
+    settings: "section:automation.settings",
+    optimizer_pipeline: "section:automation.optimizer_pipeline",
   },
   appliances: {
     configured_appliances: "section:appliances.configured_appliances",
@@ -120,6 +138,12 @@ const GENERAL_PROJECTION_MEMBERS =
 const CORE_LABELS_AND_HISTORY_MEMBERS = createRootProjectionMembers(
   CORE_LABELS_AND_HISTORY_KEYS,
 );
+const AUTOMATION_SETTINGS_MEMBERS = [
+  {
+    yamlKey: "enabled",
+    documentPath: ["automation", "enabled"],
+  },
+] satisfies ScopeProjectionMember[];
 
 export const EDITOR_SCOPES = {
   [DOCUMENT_SCOPE_ID]: {
@@ -154,6 +178,17 @@ export const EDITOR_SCOPES = {
     tabId: "scheduler",
     labelKey: "editor.tabs.scheduler",
     adapter: createPathScopeAdapter(["scheduler"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [TAB_SCOPE_IDS.automation]: {
+    id: TAB_SCOPE_IDS.automation,
+    kind: "tab",
+    parentId: DOCUMENT_SCOPE_ID,
+    tabId: "automation",
+    labelKey: "editor.tabs.automation",
+    adapter: createPathScopeAdapter(["automation"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
@@ -241,6 +276,25 @@ export const EDITOR_SCOPES = {
     adapter: createPathScopeAdapter(["scheduler", "control"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
+    }),
+  },
+  [SECTION_SCOPE_IDS.automation.settings]: {
+    id: SECTION_SCOPE_IDS.automation.settings,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.automation,
+    tabId: "automation",
+    labelKey: "editor.sections.automation_settings",
+    adapter: createProjectionScopeAdapter(AUTOMATION_SETTINGS_MEMBERS),
+  },
+  [SECTION_SCOPE_IDS.automation.optimizer_pipeline]: {
+    id: SECTION_SCOPE_IDS.automation.optimizer_pipeline,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.automation,
+    tabId: "automation",
+    labelKey: "editor.sections.optimizer_pipeline",
+    adapter: createPathScopeAdapter(["automation", "optimizers"], {
+      emptyValue: EMPTY_ARRAY,
+      rootKind: "array",
     }),
   },
   [SECTION_SCOPE_IDS.appliances.configured_appliances]: {

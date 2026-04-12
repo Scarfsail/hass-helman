@@ -6,6 +6,7 @@
       "general": "General",
       "power_devices": "Power devices",
       "scheduler": "Scheduler",
+      "automation": "Automation",
       "appliances": "Appliances"
     },
     "actions": {
@@ -50,6 +51,8 @@
       "battery": "Battery",
       "grid": "Grid",
       "schedule_control_mapping": "Schedule control mapping",
+        "automation_settings": "Automation settings",
+        "optimizer_pipeline": "Optimizer pipeline",
         "configured_appliances": "Configured appliances",
         "identity_and_limits": "Identity and limits",
         "controls": "Controls",
@@ -62,11 +65,14 @@
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
       "battery_entities": "Remaining energy, capacity, min SoC, and max SoC work as one battery entity group. Configure them together when battery forecasting is enabled.",
       "grid_import_windows": "Import price windows must cover the whole day without gaps or overlaps.",
+        "automation": "Phase 2 only exposes the top-level automation enable switch in visual mode. When the automation branch is missing, the panel shows automation as disabled until you turn it on.",
+        "optimizer_pipeline": "The optimizer pipeline is YAML-first in this phase. Edit the ordered optimizer list in YAML; unknown future optimizer keys and kinds are preserved exactly as stored.",
         "appliances": "EV charger, climate appliance, and generic appliance editing are supported directly. Unsupported future appliance kinds are preserved and shown read-only unless you remove them.",
         "generic_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient.",
         "climate_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the climate entity was active in heat or cool mode and falls back to the fixed value if history is insufficient."
       },
     "empty": {
+      "no_automation_optimizers": "No optimizers configured yet.",
       "no_appliances": "No appliances configured yet.",
       "no_device_label_categories": "No device label categories configured."
     },
@@ -125,6 +131,7 @@
       "stop_charging_option": "Stop charging option",
       "stop_discharging_option": "Stop discharging option",
       "stop_export_option": "Stop export option",
+      "automation_enabled": "Enable automation",
       "appliance_id": "Appliance id",
         "appliance_name": "Appliance name",
         "appliance_icon": "Appliance icon",
@@ -156,6 +163,7 @@
         "power_sensor_name_cleaner_regex": "Optional regex applied when normalizing power sensor names.",
         "import_price_unit": "Example: CZK/kWh",
         "mode_entity": "Helman writes schedule action options to this entity.",
+        "automation_enabled": "Turning this on materializes automation: { enabled: true, optimizers: [] }. Turning it off keeps the current optimizer list for later edits.",
         "appliance_icon": "Optional. Leave empty to use the default energy icon in appliance metadata.",
         "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption."
       },
