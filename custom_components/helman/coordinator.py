@@ -32,6 +32,7 @@ from .appliances import (
     build_projection_input_bundle,
     build_empty_appliance_projections_response,
 )
+from .automation.input_bundle import AutomationInputBundle
 from .appliances.climate_appliance import ClimateApplianceRuntime
 from .appliances.climate_appliance import resolve_supported_climate_modes
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
@@ -203,6 +204,7 @@ class HelmanCoordinator:
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
             ...,
         ] | None = None
+        self._automation_input_bundle: AutomationInputBundle | None = None
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
         self._schedule_execution_lock = asyncio.Lock()
@@ -1066,14 +1068,31 @@ class HelmanCoordinator:
         self._invalidate_battery_forecast_cache()
         self._hass.async_create_task(self._async_refresh_forecast())
 
+    def get_automation_input_bundle(self) -> AutomationInputBundle | None:
+        if self._automation_input_bundle is None:
+            return None
+        return AutomationInputBundle(
+            original_house_forecast=deepcopy(
+                self._automation_input_bundle.original_house_forecast
+            ),
+            solar_forecast=deepcopy(self._automation_input_bundle.solar_forecast),
+            grid_price_forecast=deepcopy(
+                self._automation_input_bundle.grid_price_forecast
+            ),
+            when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
+                self._automation_input_bundle.when_active_hourly_energy_kwh_by_appliance_id
+            ),
+        )
+
     async def _async_refresh_forecast(
         self, reference_time: datetime | None = None
     ) -> None:
         """Build a new house forecast snapshot, cache it, and persist it."""
+        request_now = reference_time or dt_util.now()
         try:
             builder = ConsumptionForecastBuilder(self._hass, self._active_config)
             snapshot = await builder.build(
-                reference_time=reference_time,
+                reference_time=request_now,
                 forecast_days=MAX_FORECAST_DAYS,
                 padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
             )
@@ -1082,6 +1101,62 @@ class HelmanCoordinator:
             await self._storage.async_save_snapshot(snapshot)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
+            return
+
+        await self._async_refresh_automation_input_bundle(
+            reference_time=request_now,
+            house_forecast=snapshot,
+        )
+
+    async def _async_refresh_automation_input_bundle(
+        self,
+        *,
+        reference_time: datetime,
+        house_forecast: dict[str, Any],
+    ) -> None:
+        try:
+            bundle = await self._async_build_automation_input_bundle(
+                reference_time=reference_time,
+                house_forecast=house_forecast,
+            )
+        except Exception:
+            _LOGGER.exception("Error refreshing automation input bundle")
+            return
+
+        if bundle is not None:
+            self._automation_input_bundle = bundle
+
+    async def _async_build_automation_input_bundle(
+        self,
+        *,
+        reference_time: datetime,
+        house_forecast: dict[str, Any],
+    ) -> AutomationInputBundle | None:
+        if house_forecast.get("status") != "available":
+            return None
+
+        raw_result = await HelmanForecastBuilder(
+            self._hass,
+            self._active_config,
+        ).build(reference_time=reference_time)
+        return AutomationInputBundle(
+            original_house_forecast=deepcopy(house_forecast),
+            solar_forecast=build_solar_forecast_response(
+                raw_result["solar"],
+                granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+                forecast_days=MAX_FORECAST_DAYS,
+            ),
+            grid_price_forecast=build_grid_price_forecast_response(
+                raw_result["grid"],
+                granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+                forecast_days=MAX_FORECAST_DAYS,
+            ),
+            when_active_hourly_energy_kwh_by_appliance_id=(
+                await self._async_resolve_when_active_hourly_energy_kwh_by_appliance_id(
+                    reference_time=reference_time
+                )
+            ),
+        )
 
     async def _async_get_battery_forecast(
         self,
@@ -1599,6 +1674,57 @@ class HelmanCoordinator:
                 estimates[appliance.id] = None
 
         return estimates
+
+    async def _async_resolve_when_active_hourly_energy_kwh_by_appliance_id(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> dict[str, float]:
+        estimates: dict[str, float] = {}
+        for appliance in self._iter_automation_candidate_appliances():
+            estimates[appliance.id] = await self._async_resolve_when_active_hourly_energy(
+                appliance=appliance,
+                reference_time=reference_time,
+            )
+        return estimates
+
+    def _iter_automation_candidate_appliances(
+        self,
+    ) -> list[GenericApplianceRuntime | ClimateApplianceRuntime]:
+        return [
+            appliance
+            for appliance in self._appliances_registry.appliances
+            if isinstance(appliance, (GenericApplianceRuntime, ClimateApplianceRuntime))
+        ]
+
+    async def _async_resolve_when_active_hourly_energy(
+        self,
+        *,
+        appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
+        reference_time: datetime,
+    ) -> float:
+        if not appliance.uses_history_average:
+            return appliance.hourly_energy_kwh
+
+        try:
+            historical_hourly_energy_kwh = await self._async_estimate_projected_appliance(
+                appliance=appliance,
+                reference_time=reference_time,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Error estimating automation demand input for %s appliance %r",
+                appliance.kind,
+                appliance.id,
+            )
+            historical_hourly_energy_kwh = None
+
+        if (
+            historical_hourly_energy_kwh is None
+            or historical_hourly_energy_kwh <= 0
+        ):
+            return appliance.hourly_energy_kwh
+        return historical_hourly_energy_kwh
 
     async def _async_estimate_projected_appliance(
         self,
