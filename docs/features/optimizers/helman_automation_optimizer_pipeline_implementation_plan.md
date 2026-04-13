@@ -54,7 +54,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 2** — Config editor UI for automation config _(commit c386936; local HASS smoke passed)_
 - [x] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence) _(local HASS smoke passed; SHA in git history)_
 - [x] **Phase 4** — Automation-owned action ownership invariant in persistence path _(local HASS smoke passed)_
-- [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(local HASS smoke passed; stricter price-only behavior validated live after restart)_
+- [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(commit d1ce853; local HASS smoke passed; stricter price-only behavior validated live after restart)_
 - [x] **Phase 6** — Rebuild-between-optimizers loop wiring _(commit c8a90c7; local HASS smoke passed)_
 - [ ] **Phase 7** — `surplus_appliance` optimizer (generic + climate)
 - [ ] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing
@@ -460,6 +460,7 @@ Observed on 2026-04-13:
 
 ### Status note
 
+- Landed in commit `d1ce853`.
 - The conservative `export_price` behavior now keys off below-threshold price alone: after a local HASS restart with `when_price_below: 1.5`, a live debug run authored 8 automation `stop_export` slots (`12:00` through `15:30`, including `13:00`), confirming the stricter fail-safe policy is active end to end.
 
 ---
