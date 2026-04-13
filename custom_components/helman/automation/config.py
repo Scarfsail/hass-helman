@@ -7,6 +7,7 @@ from typing import Any
 from .optimizer import KNOWN_OPTIMIZER_KINDS
 
 _MISSING = object()
+_EXPORT_PRICE_OPTIMIZER_KIND = "export_price"
 
 
 class AutomationConfigError(ValueError):
@@ -137,8 +138,9 @@ def _read_optimizer(
         data.get("enabled", True),
         path=f"{path}.enabled",
     )
-    params = _read_params(
+    params = _read_optimizer_params(
         data.get("params", _MISSING),
+        kind=kind,
         path=f"{path}.params",
     )
     return OptimizerInstanceConfig(
@@ -147,6 +149,35 @@ def _read_optimizer(
         enabled=enabled,
         params=params,
     )
+
+
+def _read_optimizer_params(
+    value: object,
+    *,
+    kind: str,
+    path: str,
+) -> dict[str, Any]:
+    if kind == _EXPORT_PRICE_OPTIMIZER_KIND:
+        return _read_export_price_params(value, path=path)
+    return _read_params(value, path=path)
+
+
+def _read_export_price_params(
+    value: object,
+    *,
+    path: str,
+) -> dict[str, Any]:
+    data = _read_mapping({} if value is _MISSING else value, path=path)
+    return {
+        "when_price_below": _read_float(
+            data.get("when_price_below", 0.0),
+            path=f"{path}.when_price_below",
+        ),
+        "action": _read_export_price_action(
+            data.get("action", "stop_export"),
+            path=f"{path}.action",
+        ),
+    }
 
 
 def _read_mapping(
@@ -211,6 +242,35 @@ def _read_params(
             message=f"{path} must be an object",
         )
     return {str(key): item for key, item in value.items()}
+
+
+def _read_float(
+    value: object,
+    *,
+    path: str,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _raise_config_error(
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be a number",
+        )
+    return float(value)
+
+
+def _read_export_price_action(
+    value: object,
+    *,
+    path: str,
+) -> str:
+    action = _read_non_empty_string(value, path=path)
+    if action != "stop_export":
+        _raise_config_error(
+            path=path,
+            code="invalid_value",
+            message=f"{path} must be 'stop_export'",
+        )
+    return action
 
 
 def _raise_config_error(

@@ -171,6 +171,7 @@ class AutomationConfigTests(unittest.TestCase):
         )
 
     def test_rejects_unknown_optimizer_kinds_with_descriptive_error(self) -> None:
+        self._set_known_kinds("export_price")
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
@@ -186,7 +187,69 @@ class AutomationConfigTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "unknown_optimizer_kind")
         self.assertEqual(ctx.exception.path, "automation.optimizers[0].kind")
         self.assertIn("does_not_exist", str(ctx.exception))
-        self.assertIn("no optimizer kinds are supported in this phase", str(ctx.exception))
+        self.assertIn("supported optimizer kinds are: export_price", str(ctx.exception))
+
+    def test_parses_export_price_optimizer_params_with_defaults(self) -> None:
+        parsed = AutomationConfig.from_dict(
+            {
+                "optimizers": [
+                    {
+                        "id": "export",
+                        "kind": "export_price",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(
+            parsed.execution_optimizers[0].params,
+            {
+                "when_price_below": 0.0,
+                "action": "stop_export",
+            },
+        )
+
+    def test_rejects_invalid_export_price_action(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "export",
+                            "kind": "export_price",
+                            "params": {
+                                "when_price_below": 0.0,
+                                "action": "normal",
+                            },
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+        self.assertEqual(ctx.exception.path, "automation.optimizers[0].params.action")
+
+    def test_rejects_non_numeric_export_price_threshold(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "export",
+                            "kind": "export_price",
+                            "params": {
+                                "when_price_below": "zero",
+                            },
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "invalid_type")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].params.when_price_below",
+        )
 
     def test_is_no_op_when_automation_branch_is_absent(self) -> None:
         self.assertIsNone(read_automation_config({}))

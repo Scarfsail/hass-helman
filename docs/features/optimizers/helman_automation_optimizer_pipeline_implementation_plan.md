@@ -53,7 +53,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 2** — Config editor UI for automation config _(commit c386936; local HASS smoke passed)_
 - [x] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence) _(local HASS smoke passed; SHA in git history)_
 - [x] **Phase 4** — Automation-owned action ownership invariant in persistence path _(local HASS smoke passed)_
-- [ ] **Phase 5** — `export_price` optimizer (single-optimizer only)
+- [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(local HASS smoke passed; live `when_price_below: 0.0` branch was data-limited, so the ownership/cleanup path was exercised with a supplemental higher-threshold smoke)_
 - [ ] **Phase 6** — Rebuild-between-optimizers loop wiring
 - [ ] **Phase 7** — `surplus_appliance` optimizer (generic + climate)
 - [ ] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing
@@ -443,6 +443,11 @@ After restart, with a real grid export price forecast available:
 4. `helman/set_schedule` with a `setBy: user` inverter action for one of those same slots.
 5. `helman/__debug_run_automation` again → the user slot must be preserved as `setBy: user`; the automation-owned siblings in other slots may be refreshed.
 6. Change `automation.enabled` to `false` **or** disable the only optimizer in config, save, restart, `helman/__debug_run_automation` → all previously-automation-owned inverter actions are stripped and not replaced; user-owned slots remain intact.
+
+Observed on 2026-04-13:
+
+- The exact `when_price_below: 0.0` live smoke did return a real snapshot after the post-reload quarter-hour refresh, but the live export-price forecast contained no negative points, so no `stop_export` slots were authored in that run.
+- A supplemental live smoke with `when_price_below: 100.0` exercised the end-to-end persistence path anyway: the first debug run authored 13 `stop_export` slots with `setBy: automation`, a user overwrite on one of those slots remained `setBy: user` after the next debug rerun, and disabling the only optimizer triggered cleanup-only removal of the remaining automation-owned slots while preserving the user-owned slot.
 
 ### Done criteria
 

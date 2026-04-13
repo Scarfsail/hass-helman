@@ -312,6 +312,7 @@ _install_import_stubs()
 
 from custom_components.helman.appliances import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
+from custom_components.helman.automation.config import OptimizerInstanceConfig
 from custom_components.helman.automation.input_bundle import AutomationInputBundle
 from custom_components.helman.automation.pipeline import AutomationRunResult, AutomationRunner
 from custom_components.helman.automation.snapshot import (
@@ -323,7 +324,9 @@ from custom_components.helman.battery_state import BatteryEntityConfig, BatteryL
 from custom_components.helman.const import DOMAIN, MAX_FORECAST_DAYS
 from custom_components.helman.coordinator import HelmanCoordinator
 from custom_components.helman import coordinator as coordinator_module
+from custom_components.helman.automation import pipeline as pipeline_module
 from custom_components.helman.scheduling.schedule import (
+    ScheduleControlConfig,
     ScheduleDocument,
     schedule_document_to_dict,
 )
@@ -456,6 +459,41 @@ def _make_snapshot(
     )
 
 
+def _make_optimizer_instance(
+    *,
+    optimizer_id: str = "avoid-negative-export",
+    kind: str = "export_price",
+    enabled: bool = True,
+    params: dict[str, object] | None = None,
+) -> OptimizerInstanceConfig:
+    return OptimizerInstanceConfig(
+        id=optimizer_id,
+        kind=kind,
+        enabled=enabled,
+        params={
+            "when_price_below": 0.0,
+            "action": "stop_export",
+        }
+        if params is None
+        else params,
+    )
+
+
+def _make_automation_config(
+    *optimizers: OptimizerInstanceConfig,
+    enabled: bool = True,
+) -> AutomationConfig:
+    return AutomationConfig(
+        enabled=enabled,
+        optimizers=tuple(optimizers),
+        execution_optimizers=(
+            ()
+            if not enabled
+            else tuple(optimizer for optimizer in optimizers if optimizer.enabled)
+        ),
+    )
+
+
 class _FakeCoordinator:
     def __init__(
         self,
@@ -463,14 +501,28 @@ class _FakeCoordinator:
         schedule_document: ScheduleDocument,
         bundle: AutomationInputBundle | None,
         snapshot_factory,
+        persist_changed: bool = False,
+        control_config: ScheduleControlConfig | None = None,
     ) -> None:
         self._schedule_lock = asyncio.Lock()
         self._schedule_document = schedule_document
         self._bundle = bundle
         self._snapshot_factory = snapshot_factory
+        self._persist_changed = persist_changed
+        self._control_config = control_config
         self.snapshot_calls: list[dict[str, object]] = []
+        self.persist_calls: list[dict[str, object]] = []
+        self.saved_documents: list[ScheduleDocument] = []
+        self.post_write_calls: list[tuple[str, datetime, bool]] = []
 
     def _build_automation_working_schedule_document_locked(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> ScheduleDocument:
+        return deepcopy(self._schedule_document)
+
+    async def _load_pruned_schedule_document_locked(
         self,
         *,
         reference_time: datetime,
@@ -495,6 +547,37 @@ class _FakeCoordinator:
             }
         )
         return self._snapshot_factory(schedule_document=schedule_document)
+
+    async def _persist_automation_result_locked(
+        self,
+        *,
+        automation_result: ScheduleDocument,
+        reference_time: datetime | None = None,
+    ) -> bool:
+        self.persist_calls.append(
+            {
+                "automation_result": automation_result,
+                "reference_time": reference_time,
+            }
+        )
+        return self._persist_changed
+
+    async def _save_schedule_document(self, schedule_document: ScheduleDocument) -> None:
+        self.saved_documents.append(deepcopy(schedule_document))
+        self._schedule_document = deepcopy(schedule_document)
+
+    async def _async_run_post_schedule_write_side_effects(
+        self,
+        *,
+        reason: str,
+        reference_time: datetime,
+    ) -> None:
+        self.post_write_calls.append(
+            (reason, reference_time, self._schedule_lock.locked())
+        )
+
+    def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
+        return self._control_config
 
 
 class _FakeConnection:
@@ -543,7 +626,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await AutomationRunner(
             coordinator=coordinator,
-            automation_config=AutomationConfig(enabled=True),
+            automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
         self.assertEqual(
@@ -587,7 +670,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await AutomationRunner(
             coordinator=coordinator,
-            automation_config=AutomationConfig(enabled=True),
+            automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
         self.assertEqual(
@@ -609,11 +692,18 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         runner = AutomationRunner(
             coordinator=coordinator,
-            automation_config=AutomationConfig(enabled=True),
+            automation_config=_make_automation_config(_make_optimizer_instance()),
         )
 
-        first = await runner.run(reference_time=REFERENCE_TIME)
-        second = await runner.run(reference_time=REFERENCE_TIME)
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config: deepcopy(snapshot.schedule)
+            ),
+        ):
+            first = await runner.run(reference_time=REFERENCE_TIME)
+            second = await runner.run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(first.ran_automation)
         self.assertEqual(
@@ -631,7 +721,9 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             first.snapshot.context.when_active_hourly_energy_kwh_by_appliance_id,
             {"boiler": 1.25},
         )
-        self.assertEqual(len(coordinator.snapshot_calls), 2)
+        self.assertEqual(len(coordinator.snapshot_calls), 4)
+        self.assertEqual(len(coordinator.persist_calls), 2)
+        self.assertEqual(coordinator.post_write_calls, [])
 
     async def test_run_builds_snapshot_from_stripped_working_schedule(self) -> None:
         next_slot_id = "2026-03-20T21:30:00+01:00"
@@ -656,10 +748,17 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             snapshot_factory=_make_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
-            automation_config=AutomationConfig(enabled=True),
-        ).run(reference_time=REFERENCE_TIME)
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config: deepcopy(snapshot.schedule)
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
         self.assertEqual(
@@ -685,6 +784,155 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             schedule_document_to_dict(coordinator.snapshot_calls[0]["schedule_document"]),
             schedule_document_to_dict(result.snapshot.schedule),
         )
+        self.assertEqual(
+            schedule_document_to_dict(coordinator.snapshot_calls[1]["schedule_document"]),
+            schedule_document_to_dict(result.snapshot.schedule),
+        )
+
+    async def test_run_cleans_up_automation_owned_actions_when_automation_disabled(self) -> None:
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {},
+                }
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=schedule_document,
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=AutomationConfig(enabled=False),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(result.reason, "automation_disabled")
+        self.assertEqual(len(coordinator.saved_documents), 1)
+        self.assertEqual(
+            schedule_document_to_dict(coordinator.saved_documents[0]),
+            {
+                "executionEnabled": True,
+                "slotMinutes": 30,
+                "slots": {},
+            },
+        )
+        self.assertEqual(
+            coordinator.post_write_calls,
+            [("automation_updated", REFERENCE_TIME, False)],
+        )
+
+    async def test_run_skips_cleanup_write_when_disabled_schedule_is_already_clean(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=AutomationConfig(enabled=False),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(result.reason, "automation_disabled")
+        self.assertEqual(coordinator.saved_documents, [])
+        self.assertEqual(coordinator.post_write_calls, [])
+
+    async def test_run_persists_single_optimizer_result_and_runs_side_effects_on_change(
+        self,
+    ) -> None:
+        optimized_schedule = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {},
+                }
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+            persist_changed=True,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config: deepcopy(optimized_schedule)
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        self.assertEqual(len(coordinator.persist_calls), 1)
+        self.assertEqual(
+            schedule_document_to_dict(
+                coordinator.persist_calls[0]["automation_result"]
+            ),
+            schedule_document_to_dict(optimized_schedule),
+        )
+        self.assertEqual(
+            coordinator.post_write_calls,
+            [("automation_updated", REFERENCE_TIME, False)],
+        )
+        self.assertEqual(len(coordinator.snapshot_calls), 2)
+        self.assertEqual(
+            schedule_document_to_dict(result.snapshot.schedule),
+            schedule_document_to_dict(optimized_schedule),
+        )
+
+    async def test_run_rejects_multiple_enabled_optimizers_in_phase_five(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=_make_automation_config(
+                _make_optimizer_instance(optimizer_id="one"),
+                _make_optimizer_instance(optimizer_id="two"),
+            ),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(result.reason, "multiple_enabled_optimizers")
+        self.assertIn("Phase 6", result.message)
+        self.assertEqual(coordinator.snapshot_calls, [])
+        self.assertEqual(coordinator.persist_calls, [])
+
+    async def test_run_returns_failure_when_optimizer_raises(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=Mock(side_effect=RuntimeError("boom"))
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(result.reason, "optimizer_failed")
+        self.assertEqual(result.message, "boom")
+        self.assertEqual(coordinator.persist_calls, [])
+        self.assertEqual(coordinator.post_write_calls, [])
 
 
 class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):

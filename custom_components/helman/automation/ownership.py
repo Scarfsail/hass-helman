@@ -97,7 +97,7 @@ def _merge_inverter_action(
 ) -> "ScheduleAction":
     from ..scheduling.schedule import ScheduleAction, ScheduleActionError
 
-    if _is_user_owned_inverter_action(baseline):
+    if is_user_owned_inverter_action(baseline):
         if not _schedule_actions_match(automation_result, baseline):
             raise ScheduleActionError(
                 f"Automation cannot overwrite user-owned inverter action in slot {slot_id}"
@@ -142,7 +142,7 @@ def _merge_appliance_actions(
 
     return merged
 
-def _is_user_owned_inverter_action(action: "ScheduleAction") -> bool:
+def is_user_owned_inverter_action(action: "ScheduleAction") -> bool:
     return action.kind != SCHEDULE_ACTION_EMPTY and action.set_by != "automation"
 
 
