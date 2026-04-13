@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,13 +9,16 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.util import dt as dt_util
 
 from .config import AutomationConfig
+from .input_bundle import AutomationInputBundle
 from .ownership import strip_automation_owned_actions
 from .optimizer import build_optimizer
 from .snapshot import OptimizationSnapshot, snapshot_to_dict
-from ..scheduling.schedule import schedule_document_to_dict
+from ..scheduling.schedule import ScheduleDocument, schedule_document_to_dict
 
 if TYPE_CHECKING:
     from ..coordinator import HelmanCoordinator
+    from .config import OptimizerInstanceConfig
+    from .optimizer import Optimizer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +66,31 @@ class AutomationRunResult:
         return payload
 
 
+@dataclass(frozen=True)
+class _ResolvedOptimizerStep:
+    config: "OptimizerInstanceConfig"
+    optimizer: "Optimizer"
+
+
+@dataclass(frozen=True)
+class _PipelineExecutionResult:
+    working_schedule_document: ScheduleDocument
+    snapshot: OptimizationSnapshot
+
+
+class _OptimizerExecutionError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        optimizer_id: str,
+        optimizer_kind: str,
+        cause: Exception,
+    ) -> None:
+        super().__init__(str(cause))
+        self.optimizer_id = optimizer_id
+        self.optimizer_kind = optimizer_kind
+
+
 class AutomationRunner:
     def __init__(
         self,
@@ -105,64 +134,92 @@ class AutomationRunner:
                 )
                 result = AutomationRunResult.skipped(reason="no_enabled_optimizers")
             else:
-                if len(self._automation_config.execution_optimizers) != 1:
-                    return AutomationRunResult.skipped(
-                        reason="multiple_enabled_optimizers",
-                        message=(
-                            "Phase 5 supports exactly one enabled optimizer instance; "
-                            "multi-optimizer composition lands in Phase 6"
-                        ),
-                    )
-
                 input_bundle = self._coordinator.get_automation_input_bundle()
                 if input_bundle is None:
                     return AutomationRunResult.skipped(reason="inputs_unavailable")
-
-                optimizer_config = self._automation_config.execution_optimizers[0]
-                snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
-                    schedule_document=schedule_document,
-                    input_bundle=input_bundle,
-                    reference_time=active_reference_time,
-                )
-                optimizer = build_optimizer(
-                    optimizer_config,
-                    control_config=self._coordinator._read_schedule_control_config(),
-                )
                 try:
-                    optimized_schedule_document = optimizer.optimize(
-                        snapshot,
-                        optimizer_config,
+                    execution_result = await self._async_execute_optimizer_loop_locked(
+                        schedule_document=schedule_document,
+                        input_bundle=input_bundle,
+                        reference_time=active_reference_time,
                     )
-                except Exception as err:
+                except _OptimizerExecutionError as err:
                     _LOGGER.warning(
                         "Automation optimizer %s (%s) failed: %s",
-                        optimizer_config.id,
-                        optimizer_config.kind,
+                        err.optimizer_id,
+                        err.optimizer_kind,
                         err,
                     )
                     return AutomationRunResult.skipped(
                         reason="optimizer_failed",
                         message=str(err),
                     )
-
-                result_snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
-                    schedule_document=optimized_schedule_document,
-                    input_bundle=input_bundle,
-                    reference_time=active_reference_time,
-                )
                 run_post_write_side_effects = (
                     await self._coordinator._persist_automation_result_locked(
-                        automation_result=optimized_schedule_document,
+                        automation_result=execution_result.working_schedule_document,
                         reference_time=active_reference_time,
                     )
                 )
-                result = AutomationRunResult.completed(snapshot=result_snapshot)
+                result = AutomationRunResult.completed(snapshot=execution_result.snapshot)
         if run_post_write_side_effects:
             await self._coordinator._async_run_post_schedule_write_side_effects(
                 reason="automation_updated",
                 reference_time=active_reference_time,
             )
         return result
+
+    def _resolve_optimizer_steps(self) -> tuple[_ResolvedOptimizerStep, ...]:
+        control_config = self._coordinator._read_schedule_control_config()
+        return tuple(
+            _ResolvedOptimizerStep(
+                config=optimizer_config,
+                optimizer=build_optimizer(
+                    optimizer_config,
+                    control_config=control_config,
+                ),
+            )
+            for optimizer_config in self._automation_config.execution_optimizers
+        )
+
+    async def _async_execute_optimizer_loop_locked(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        input_bundle: AutomationInputBundle,
+        reference_time: datetime,
+    ) -> _PipelineExecutionResult:
+        steps = self._resolve_optimizer_steps()
+        working_schedule_document = schedule_document
+        snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
+            schedule_document=working_schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
+        )
+        for step in steps:
+            try:
+                candidate_schedule_document = step.optimizer.optimize(
+                    snapshot,
+                    step.config,
+                )
+            except Exception as err:
+                raise _OptimizerExecutionError(
+                    optimizer_id=step.config.id,
+                    optimizer_kind=step.config.kind,
+                    cause=err,
+                ) from err
+            working_schedule_document = _coerce_optimizer_result_schedule_document(
+                candidate_document=candidate_schedule_document,
+                execution_enabled=working_schedule_document.execution_enabled,
+            )
+            snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
+                schedule_document=working_schedule_document,
+                input_bundle=input_bundle,
+                reference_time=reference_time,
+            )
+        return _PipelineExecutionResult(
+            working_schedule_document=working_schedule_document,
+            snapshot=snapshot,
+        )
 
     async def _async_persist_cleanup_only_locked(
         self,
@@ -181,3 +238,14 @@ class AutomationRunner:
             return False
         await self._coordinator._save_schedule_document(cleaned_schedule_document)
         return True
+
+
+def _coerce_optimizer_result_schedule_document(
+    *,
+    candidate_document: ScheduleDocument,
+    execution_enabled: bool,
+) -> ScheduleDocument:
+    return ScheduleDocument(
+        execution_enabled=execution_enabled,
+        slots=deepcopy(candidate_document.slots),
+    )

@@ -55,7 +55,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence) _(local HASS smoke passed; SHA in git history)_
 - [x] **Phase 4** — Automation-owned action ownership invariant in persistence path _(local HASS smoke passed)_
 - [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(local HASS smoke passed; live `when_price_below: 0.0` branch was data-limited, so the ownership/cleanup path was exercised with a supplemental higher-threshold smoke)_
-- [ ] **Phase 6** — Rebuild-between-optimizers loop wiring
+- [x] **Phase 6** — Rebuild-between-optimizers loop wiring _(commit 0a78f6a; local HASS smoke passed)_
 - [ ] **Phase 7** — `surplus_appliance` optimizer (generic + climate)
 - [ ] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing
 - [ ] **Phase 9** — Observability + `helman/run_automation` debug websocket command
@@ -481,6 +481,7 @@ Modify:
   where `build_snapshot` internally calls the automation-only snapshot builder from Phase 3 and reuses the same fixed forecast input bundle for every rebuild in that run.
 - `custom_components/helman/automation/pipeline.py` — remove the temporary Phase 5 guard that required exactly one enabled optimizer instance.
 - `custom_components/helman/coordinator.py` — the automation snapshot builder must already accept an explicit `schedule_document` argument (from Phase 3) and continue to bypass shared forecast caches.
+- `tests/test_automation_pipeline_skeleton.py` — extend the existing runner harness with Phase 6 rebuild-loop coverage instead of duplicating the heavy import-stub / fake-coordinator scaffold in a new phase-specific test file.
 
 ### Design notes
 
@@ -492,7 +493,7 @@ Modify:
 - Later optimizers win by returning the new authoritative working document. That means a later optimizer may replace or clear an earlier automation-owned action on the same ownership key.
 - If any optimizer raises, the runner aborts the whole run, does **not** call `_persist_automation_result_locked`, and logs once. The baseline on disk is unchanged. Any earlier `"ok"` entries later surfaced in `AutomationRunResult` are diagnostic only; they do not imply partial persistence.
 
-### Unit tests (`tests/test_automation_pipeline_loop.py`)
+### Unit tests (extend `tests/test_automation_pipeline_skeleton.py`)
 
 - with a single optimizer, loop behavior equals Phase 5 behavior (regression guard)
 - with a fake second optimizer that asserts `snapshot.schedule` contains the first optimizer's writes, the loop feeds the rebuilt snapshot correctly
@@ -514,6 +515,10 @@ After restart, configure two `export_price` instances (e.g. two different thresh
 - Unit tests green.
 - Smoke test confirms later-instance-wins order and idempotency.
 - Architecture doc's pipeline flow still matches.
+
+### Status note
+
+- Local HASS smoke passed with a temporary two-instance `export_price` config: the broader later threshold instance authored 12 automation `stop_export` slots, the second debug run was idempotent, and the original single-optimizer config was restored afterward.
 
 ---
 

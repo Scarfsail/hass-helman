@@ -396,18 +396,26 @@ def _make_automation_bundle() -> AutomationInputBundle:
 def _make_snapshot(
     *,
     schedule_document: ScheduleDocument | None = None,
+    input_bundle: AutomationInputBundle | None = None,
+    reference_time: datetime | None = None,
 ) -> OptimizationSnapshot:
     return OptimizationSnapshot(
         schedule=_make_schedule_document() if schedule_document is None else schedule_document,
         adjusted_house_forecast={
             "status": "available",
-            "generatedAt": REFERENCE_TIME.isoformat(),
+            "generatedAt": (
+                REFERENCE_TIME if reference_time is None else reference_time
+            ).isoformat(),
             "series": [{"timestamp": CURRENT_SLOT_ID, "value": 3.0}],
         },
         battery_forecast={
             "status": "available",
-            "generatedAt": REFERENCE_TIME.isoformat(),
-            "startedAt": REFERENCE_TIME.isoformat(),
+            "generatedAt": (
+                REFERENCE_TIME if reference_time is None else reference_time
+            ).isoformat(),
+            "startedAt": (
+                REFERENCE_TIME if reference_time is None else reference_time
+            ).isoformat(),
             "sourceGranularityMinutes": 15,
             "series": [
                 {
@@ -432,7 +440,7 @@ def _make_snapshot(
             ],
         },
         context=OptimizationContext(
-            now=REFERENCE_TIME,
+            now=REFERENCE_TIME if reference_time is None else reference_time,
             battery_state=BatteryLiveState(
                 current_remaining_energy_kwh=7.5,
                 current_soc=50.0,
@@ -454,7 +462,13 @@ def _make_snapshot(
                 "points": [],
             },
             appliance_registry=AppliancesRuntimeRegistry(),
-            when_active_hourly_energy_kwh_by_appliance_id={"boiler": 1.25},
+            when_active_hourly_energy_kwh_by_appliance_id=(
+                {"boiler": 1.25}
+                if input_bundle is None
+                else deepcopy(
+                    input_bundle.when_active_hourly_energy_kwh_by_appliance_id
+                )
+            ),
         ),
     )
 
@@ -546,7 +560,11 @@ class _FakeCoordinator:
                 "reference_time": reference_time,
             }
         )
-        return self._snapshot_factory(schedule_document=schedule_document)
+        return self._snapshot_factory(
+            schedule_document=schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
+        )
 
     async def _persist_automation_result_locked(
         self,
@@ -890,25 +908,146 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             schedule_document_to_dict(optimized_schedule),
         )
 
-    async def test_run_rejects_multiple_enabled_optimizers_in_phase_five(self) -> None:
+    async def test_run_multi_optimizer_rebuilds_snapshot_between_steps(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+        first_schedule = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {},
+                }
+            },
+        )
+
+        def _build_optimizer_side_effect(config, *, control_config):
+            if config.id == "one":
+                return SimpleNamespace(
+                    optimize=Mock(return_value=deepcopy(first_schedule))
+                )
+
+            def _second_optimize(snapshot, current_config):
+                self.assertEqual(
+                    schedule_document_to_dict(snapshot.schedule),
+                    schedule_document_to_dict(first_schedule),
+                )
+                return deepcopy(snapshot.schedule)
+
+            return SimpleNamespace(optimize=Mock(side_effect=_second_optimize))
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=_build_optimizer_side_effect,
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(optimizer_id="one"),
+                    _make_optimizer_instance(optimizer_id="two"),
+                ),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        self.assertEqual(len(coordinator.snapshot_calls), 3)
+        self.assertEqual(
+            schedule_document_to_dict(result.snapshot.schedule),
+            schedule_document_to_dict(first_schedule),
+        )
+
+    async def test_run_multi_optimizer_reuses_same_pinned_input_bundle_for_every_rebuild(
+        self,
+    ) -> None:
         coordinator = _FakeCoordinator(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
-            automation_config=_make_automation_config(
-                _make_optimizer_instance(optimizer_id="one"),
-                _make_optimizer_instance(optimizer_id="two"),
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=lambda config, *, control_config: SimpleNamespace(
+                optimize=Mock(
+                    side_effect=lambda snapshot, current_config: deepcopy(
+                        snapshot.schedule
+                    )
+                )
             ),
-        ).run(reference_time=REFERENCE_TIME)
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(optimizer_id="one"),
+                    _make_optimizer_instance(optimizer_id="two"),
+                ),
+            ).run(reference_time=REFERENCE_TIME)
 
-        self.assertEqual(result.reason, "multiple_enabled_optimizers")
-        self.assertIn("Phase 6", result.message)
-        self.assertEqual(coordinator.snapshot_calls, [])
-        self.assertEqual(coordinator.persist_calls, [])
+        self.assertTrue(result.ran_automation)
+        self.assertEqual(len(coordinator.snapshot_calls), 3)
+        self.assertIs(
+            coordinator.snapshot_calls[0]["input_bundle"],
+            coordinator.snapshot_calls[1]["input_bundle"],
+        )
+        self.assertIs(
+            coordinator.snapshot_calls[1]["input_bundle"],
+            coordinator.snapshot_calls[2]["input_bundle"],
+        )
+        self.assertEqual(
+            coordinator.snapshot_calls[0]["input_bundle"].original_house_forecast,
+            coordinator.snapshot_calls[2]["input_bundle"].original_house_forecast,
+        )
+
+    async def test_run_multi_optimizer_later_result_wins_before_persist(self) -> None:
+        first_schedule = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {},
+                }
+            },
+        )
+        final_schedule = ScheduleDocument(execution_enabled=True)
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+            persist_changed=True,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=[
+                SimpleNamespace(optimize=Mock(return_value=deepcopy(first_schedule))),
+                SimpleNamespace(optimize=Mock(return_value=deepcopy(final_schedule))),
+            ],
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(optimizer_id="one"),
+                    _make_optimizer_instance(optimizer_id="two"),
+                ),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        self.assertEqual(len(coordinator.persist_calls), 1)
+        self.assertEqual(
+            schedule_document_to_dict(
+                coordinator.persist_calls[0]["automation_result"]
+            ),
+            schedule_document_to_dict(final_schedule),
+        )
+        self.assertEqual(
+            schedule_document_to_dict(result.snapshot.schedule),
+            schedule_document_to_dict(final_schedule),
+        )
 
     async def test_run_returns_failure_when_optimizer_raises(self) -> None:
         coordinator = _FakeCoordinator(
@@ -933,6 +1072,74 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.message, "boom")
         self.assertEqual(coordinator.persist_calls, [])
         self.assertEqual(coordinator.post_write_calls, [])
+
+    async def test_run_does_not_persist_when_later_optimizer_raises(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+        first_schedule = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {},
+                }
+            },
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=[
+                SimpleNamespace(optimize=Mock(return_value=deepcopy(first_schedule))),
+                SimpleNamespace(optimize=Mock(side_effect=RuntimeError("boom after first"))),
+            ],
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(optimizer_id="one"),
+                    _make_optimizer_instance(optimizer_id="two"),
+                ),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(result.reason, "optimizer_failed")
+        self.assertEqual(result.message, "boom after first")
+        self.assertEqual(coordinator.persist_calls, [])
+        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(len(coordinator.snapshot_calls), 2)
+
+    async def test_run_rebuilds_even_when_optimizer_returns_unchanged_document(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=lambda config, *, control_config: SimpleNamespace(
+                optimize=Mock(
+                    side_effect=lambda snapshot, current_config: deepcopy(
+                        snapshot.schedule
+                    )
+                )
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(optimizer_id="one"),
+                    _make_optimizer_instance(optimizer_id="two"),
+                ),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        self.assertEqual(len(coordinator.snapshot_calls), 3)
+        self.assertEqual(len(coordinator.persist_calls), 1)
 
 
 class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
