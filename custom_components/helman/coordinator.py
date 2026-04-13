@@ -34,8 +34,13 @@ from .appliances import (
 )
 from .automation.config import AutomationConfig, read_automation_config
 from .automation.input_bundle import AutomationInputBundle
-from .automation.ownership import merge_automation_result
+from .automation.ownership import (
+    has_automation_owned_actions,
+    merge_automation_result,
+    strip_automation_owned_actions,
+)
 from .automation.snapshot import OptimizationContext, OptimizationSnapshot
+from .automation.triggers import AutomationTriggerCoordinator
 from .appliances.climate_appliance import ClimateApplianceRuntime
 from .appliances.climate_appliance import resolve_supported_climate_modes
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
@@ -197,6 +202,12 @@ class _ForecastRebuildSnapshot:
     grid_forecast: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class _ForecastRefreshResult:
+    forecast_refreshed: bool
+    bundle_ready: bool
+
+
 class HelmanCoordinator:
     def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
         self._hass = hass
@@ -247,7 +258,13 @@ class HelmanCoordinator:
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
             ...,
         ] | None = None
+        self._create_task = getattr(self._hass, "async_create_task", asyncio.create_task)
+        self._refresh_tasks: set[asyncio.Task[Any]] = set()
         self._automation_input_bundle: AutomationInputBundle | None = None
+        self._automation_triggers = AutomationTriggerCoordinator(
+            create_task=self._create_task,
+            run_callback=self._async_run_automation_trigger_request,
+        )
         self._unsub_forecast_refresh: Callable[[], None] | None = None
         self._schedule_lock = asyncio.Lock()
         self._schedule_execution_lock = asyncio.Lock()
@@ -365,12 +382,27 @@ class HelmanCoordinator:
         self._start_forecast_refresh()
 
         await self._async_normalize_schedule_document()
+        automation_config = read_automation_config(self._active_config)
+        if automation_config is None:
+            automation_config = AutomationConfig(enabled=False)
+        if (
+            self._load_schedule_document().execution_enabled
+            and not (
+                automation_config.enabled and automation_config.execution_optimizers
+            )
+        ):
+            await self._async_cleanup_automation_owned_actions_if_needed(
+                execution_enabled=True,
+                reference_time=dt_util.now(),
+            )
         if self._load_schedule_document().execution_enabled:
             await self._async_reconcile_schedule_execution_if_enabled(
                 reason="startup",
                 reference_time=dt_util.now(),
             )
-        self._hass.async_create_task(self._async_refresh_forecast())
+        self._create_tracked_refresh_task(
+            self._async_refresh_forecast_and_request_automation(reason="startup")
+        )
 
     @callback
     def _on_registry_updated(self, event) -> None:
@@ -993,6 +1025,7 @@ class HelmanCoordinator:
         self,
         *,
         reference_time: datetime | None = None,
+        reason: str | None = None,
     ) -> "AutomationRunResult":
         from .automation.pipeline import AutomationRunner
 
@@ -1000,10 +1033,21 @@ class HelmanCoordinator:
         if automation_config is None:
             automation_config = AutomationConfig(enabled=False)
 
-        return await AutomationRunner(
+        result = await AutomationRunner(
             coordinator=self,
             automation_config=automation_config,
         ).run(reference_time=reference_time)
+        _LOGGER.info("automation run completed, reason=%s", reason or "manual")
+        return result
+
+    async def _async_run_automation_trigger_request(
+        self,
+        request,
+    ) -> None:
+        await self.run_automation(
+            reference_time=request.reference_time,
+            reason=request.reason,
+        )
 
     async def set_schedule(
         self,
@@ -1043,6 +1087,11 @@ class HelmanCoordinator:
                 reason="schedule_updated",
                 reference_time=request_now,
             )
+            if set_by == "user":
+                await self._automation_triggers.request_immediate(
+                    reason="user_edit",
+                    reference_time=request_now,
+                )
 
     async def _async_run_post_schedule_write_side_effects(
         self,
@@ -1094,6 +1143,7 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
     ) -> bool:
         request_now = reference_time or dt_util.now()
+        should_trigger_automation_on_enable = False
 
         async with self._schedule_execution_lock:
             async with self._schedule_lock:
@@ -1110,6 +1160,7 @@ class HelmanCoordinator:
                         )
                     )
                     self._invalidate_battery_forecast_cache()
+                    should_trigger_automation_on_enable = True
 
             if enabled:
                 await self._schedule_executor.async_start()
@@ -1144,6 +1195,11 @@ class HelmanCoordinator:
                                 self._invalidate_battery_forecast_cache()
                         await self._schedule_executor.async_stop()
                     raise
+                if should_trigger_automation_on_enable:
+                    await self._automation_triggers.request_immediate(
+                        reason="execution_enabled",
+                        reference_time=request_now,
+                    )
                 return True
 
             if not was_enabled:
@@ -1175,14 +1231,46 @@ class HelmanCoordinator:
                 )
                 if latest_document.execution_enabled:
                     await self._save_schedule_document(
-                        ScheduleDocument(
+                        self._build_cleaned_automation_schedule_document(
+                            schedule_document=latest_document,
                             execution_enabled=False,
-                            slots=latest_document.slots,
                         )
                     )
                     self._invalidate_battery_forecast_cache()
 
             return False
+
+    def _build_cleaned_automation_schedule_document(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        execution_enabled: bool,
+    ) -> ScheduleDocument:
+        cleaned_document = strip_automation_owned_actions(schedule_document)
+        return ScheduleDocument(
+            execution_enabled=execution_enabled,
+            slots=cleaned_document.slots,
+        )
+
+    async def _async_cleanup_automation_owned_actions_if_needed(
+        self,
+        *,
+        execution_enabled: bool,
+        reference_time: datetime,
+    ) -> bool:
+        async with self._schedule_lock:
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=reference_time
+            )
+            cleaned_document = self._build_cleaned_automation_schedule_document(
+                schedule_document=schedule_document,
+                execution_enabled=execution_enabled,
+            )
+            if cleaned_document == schedule_document:
+                return False
+            await self._save_schedule_document(cleaned_document)
+            self._invalidate_battery_forecast_cache()
+            return True
 
     async def _async_reconcile_schedule_execution_if_enabled(
         self,
@@ -1213,7 +1301,7 @@ class HelmanCoordinator:
         """Trigger a background house forecast refresh."""
         self._cached_forecast = None
         self._invalidate_battery_forecast_cache()
-        self._hass.async_create_task(self._async_refresh_forecast())
+        self._create_tracked_refresh_task(self._async_refresh_forecast())
 
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         if self._automation_input_bundle is None:
@@ -1233,7 +1321,7 @@ class HelmanCoordinator:
 
     async def _async_refresh_forecast(
         self, reference_time: datetime | None = None
-    ) -> None:
+    ) -> _ForecastRefreshResult:
         """Build a new house forecast snapshot, cache it, and persist it."""
         request_now = reference_time or dt_util.now()
         try:
@@ -1248,11 +1336,18 @@ class HelmanCoordinator:
             await self._storage.async_save_snapshot(snapshot)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
-            return
+            return _ForecastRefreshResult(
+                forecast_refreshed=False,
+                bundle_ready=False,
+            )
 
-        await self._async_refresh_automation_input_bundle(
+        bundle_ready = await self._async_refresh_automation_input_bundle(
             reference_time=request_now,
             house_forecast=snapshot,
+        )
+        return _ForecastRefreshResult(
+            forecast_refreshed=True,
+            bundle_ready=bundle_ready,
         )
 
     async def _async_refresh_automation_input_bundle(
@@ -1260,7 +1355,7 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
         house_forecast: dict[str, Any],
-    ) -> None:
+    ) -> bool:
         try:
             bundle = await self._async_build_automation_input_bundle(
                 reference_time=reference_time,
@@ -1268,10 +1363,46 @@ class HelmanCoordinator:
             )
         except Exception:
             _LOGGER.exception("Error refreshing automation input bundle")
-            return
+            return False
 
         if bundle is not None:
             self._automation_input_bundle = bundle
+            return True
+        return False
+
+    async def _async_refresh_forecast_and_request_automation(
+        self,
+        *,
+        reason: str,
+        reference_time: datetime | None = None,
+    ) -> None:
+        request_now = reference_time or dt_util.now()
+        refresh_result = await self._async_refresh_forecast(reference_time=request_now)
+
+        automation_config = read_automation_config(self._active_config)
+        if automation_config is None:
+            automation_config = AutomationConfig(enabled=False)
+
+        async with self._schedule_lock:
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=request_now
+            )
+
+        if not schedule_document.execution_enabled:
+            return
+
+        if not (automation_config.enabled and automation_config.execution_optimizers):
+            if not has_automation_owned_actions(schedule_document):
+                return
+        elif not (
+            refresh_result.forecast_refreshed and refresh_result.bundle_ready
+        ):
+            return
+
+        await self._automation_triggers.request_debounced(
+            reason=reason,
+            reference_time=request_now,
+        )
 
     async def _async_build_automation_input_bundle(
         self,
@@ -2117,7 +2248,12 @@ class HelmanCoordinator:
 
         @callback
         def _on_forecast_interval(_now: datetime) -> None:
-            self._hass.async_create_task(self._async_refresh_forecast())
+            self._create_tracked_refresh_task(
+                self._async_refresh_forecast_and_request_automation(
+                    reason="slot_refresh",
+                    reference_time=_now,
+                )
+            )
 
         self._unsub_forecast_refresh = async_track_time_change(
             self._hass,
@@ -2471,9 +2607,11 @@ class HelmanCoordinator:
 
     async def async_unload(self) -> None:
         """Clean up event listeners and stop the tick."""
-        await self._schedule_executor.async_unload()
         self._stop_tick()
         self._stop_forecast_refresh()
+        await self._async_cancel_refresh_tasks()
+        await self._automation_triggers.async_shutdown()
+        await self._schedule_executor.async_unload()
         self._invalidate_battery_forecast_cache()
 
         self._battery_time_to_full = None
@@ -2495,3 +2633,20 @@ class HelmanCoordinator:
         if self._unsub_energy is not None:
             self._unsub_energy()
             self._unsub_energy = None
+
+    def _create_tracked_refresh_task(
+        self,
+        awaitable,
+    ) -> asyncio.Task[Any]:
+        task = self._create_task(awaitable)
+        self._refresh_tasks.add(task)
+        task.add_done_callback(self._refresh_tasks.discard)
+        return task
+
+    async def _async_cancel_refresh_tasks(self) -> None:
+        tasks = tuple(self._refresh_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._refresh_tasks.clear()

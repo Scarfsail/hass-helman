@@ -155,19 +155,24 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
     schedule_mod.ScheduleControlConfig = type("ScheduleControlConfig", (), {})
+    schedule_mod.ScheduleAction = type("ScheduleAction", (), {})
     schedule_mod.ScheduleDocument = type(
         "ScheduleDocument",
         (),
         {"__init__": lambda self, execution_enabled=False, slots=None: None},
     )
+    schedule_mod.ScheduleDomains = type("ScheduleDomains", (), {})
     schedule_mod.ScheduleError = type("ScheduleError", (Exception,), {})
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
     schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
     schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
     schedule_mod.build_horizon_start = lambda reference_time: reference_time
+    schedule_mod.build_horizon_end = lambda reference_time: reference_time
     schedule_mod.describe_schedule_control_config_issue = lambda config: None
     schedule_mod.format_slot_id = lambda slot: ""
+    schedule_mod.is_default_domains = lambda domains: False
+    schedule_mod.iter_horizon_slot_ids = lambda reference_time: []
     schedule_mod.parse_slot_id = datetime.fromisoformat
     schedule_mod.materialize_schedule_slots = lambda stored_slots, reference_time: []
     schedule_mod.normalize_schedule_document_for_registry = (
@@ -629,11 +634,12 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(coordinator_module._LOGGER, "exception"),
         ):
-            await coordinator._async_refresh_automation_input_bundle(
+            refreshed = await coordinator._async_refresh_automation_input_bundle(
                 reference_time=REFERENCE_TIME,
                 house_forecast=_make_house_forecast(),
             )
 
+        self.assertFalse(refreshed)
         self.assertIs(coordinator._automation_input_bundle, previous_bundle)
 
     async def test_refresh_forecast_updates_bundle_after_house_refresh(self) -> None:
@@ -642,7 +648,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._active_config = {}
         coordinator._storage = SimpleNamespace(async_save_snapshot=AsyncMock())
         coordinator._invalidate_battery_forecast_cache = Mock()
-        coordinator._async_refresh_automation_input_bundle = AsyncMock()
+        coordinator._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
         coordinator._cached_forecast = None
 
         snapshot = _make_house_forecast()
@@ -652,9 +658,18 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             "ConsumptionForecastBuilder",
             return_value=builder_instance,
         ):
-            await coordinator._async_refresh_forecast(reference_time=REFERENCE_TIME)
+            refresh_result = await coordinator._async_refresh_forecast(
+                reference_time=REFERENCE_TIME
+            )
 
         self.assertEqual(coordinator._cached_forecast, snapshot)
+        self.assertEqual(
+            refresh_result,
+            coordinator_module._ForecastRefreshResult(
+                forecast_refreshed=True,
+                bundle_ready=True,
+            ),
+        )
         coordinator._invalidate_battery_forecast_cache.assert_called_once_with()
         coordinator._storage.async_save_snapshot.assert_awaited_once_with(snapshot)
         coordinator._async_refresh_automation_input_bundle.assert_awaited_once_with(

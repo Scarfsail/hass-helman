@@ -179,11 +179,16 @@ When execution is enabled, the v1 trigger set should be:
 
 Two guardrails should be explicit:
 
-- repeated user edits should be **coalesced into one rerun** rather than starting a fresh full pipeline run after every individual write
+- slot-refresh bursts should be **coalesced into one rerun** rather than starting a fresh full pipeline run after every refresh signal
 - the automation run should **not retrigger itself** from its own final persistence write
 - startup/reload and slot-refresh should queue automation only after a successful forecast refresh has produced usable inputs
 - if a new trigger arrives while a run is already active, coalescing may collapse bursts, but a follow-up rerun must still remain queued after the active run if newer inputs arrived
 - holding the schedule lock for the automation decision + final-save portion is the accepted v1 trade-off for correctness; user-authored writes may briefly wait behind automation work, but the shared post-write side effects should run after the lock is released
+
+For the v1 coordinator integration, treat the trigger classes differently:
+
+- **startup/reload** and **slot refresh** are refresh-originated triggers and should go through a short debounce window with a latest-reason-wins policy
+- **execution-enable** and **successful user-authored schedule edits** are immediate triggers and should not wait for the debounce window
 
 Manual or debug invocation surfaces should return an `AutomationRunResult` that distinguishes `execution_disabled`, `automation_disabled`, `no_enabled_optimizers`, and `cleanup_only`, and should include cleanup metadata such as how many automation-owned actions were stripped when cleanup actually changed the schedule.
 

@@ -72,6 +72,14 @@ def restore_automation_owned_appliance_actions(
     )
 
 
+def has_automation_owned_actions(doc: "ScheduleDocument") -> bool:
+    return any(
+        domains.inverter.set_by == "automation"
+        or any(action.get("setBy") == "automation" for action in domains.appliances.values())
+        for domains in doc.slots.values()
+    )
+
+
 def merge_automation_result(
     *,
     baseline: "ScheduleDocument",

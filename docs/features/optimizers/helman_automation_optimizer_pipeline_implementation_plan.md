@@ -57,7 +57,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(commit d1ce853; local HASS smoke passed; stricter price-only behavior validated live after restart)_
 - [x] **Phase 6** — Rebuild-between-optimizers loop wiring _(commit c8a90c7; local HASS smoke passed)_
 - [x] **Phase 7** — `surplus_appliance` optimizer (generic + climate) _(committed; local HASS smoke passed, including partial-forecast coverage within the scheduler horizon)_
-- [ ] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing
+- [x] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing _(committed; local HASS smoke passed)_
 - [ ] **Phase 9** — Observability + `helman/run_automation` debug websocket command
 - [ ] **Phase 10** — End-to-end hardening and docs sync
 
@@ -598,7 +598,7 @@ With a real generic or climate appliance and a forecast that has at least one su
 
 ### Goal
 
-Wire `coordinator.run_automation()` to real triggers so automation runs without the debug websocket command. Implement the two guardrails from the arch doc (coalesce rapid user writes; do not retrigger self from own persistence).
+Wire `coordinator.run_automation()` to real triggers so automation runs without the debug websocket command. Implement the two guardrails from the arch doc (debounce refresh-originated triggers while keeping execution-enable and user-edit triggers immediate; do not retrigger self from own persistence).
 
 ### Files
 
@@ -606,22 +606,25 @@ Modify:
 
 - `custom_components/helman/coordinator.py`:
   - add an awaited wrapper such as `_async_refresh_forecast_and_schedule_automation(reason)` and use it from startup/reload and the slot-refresh callback instead of calling `_async_refresh_forecast()` directly. The wrapper queues automation only after a successful forecast refresh with usable inputs.
-  - call `run_automation()` at the end of `set_schedule_execution(enabled=True)` on the success path.
+  - route trigger orchestration through a small internal automation-trigger coordinator/service so debounce/coalescing state does not live inside one-shot runner instances.
+  - issue an immediate automation trigger at the end of `set_schedule_execution(enabled=True)` on the success path.
   - on transition `set_schedule_execution(enabled=False)`, perform a one-shot cleanup that strips `setBy=automation` actions and persists before future automation runs short-circuit.
-  - call `run_automation()` at the end of `set_schedule()` when `set_by == "user"` succeeded and the document changed.
-  - implement a debounce/coalesce: the runner exposes a `schedule_run_soon(reason: str)` method that queues a run with a short debounce window (e.g. 500ms asyncio sleep). Repeated calls within the window collapse into one. The trigger sites call `schedule_run_soon` rather than awaiting `run` directly.
+  - issue an immediate automation trigger at the end of `set_schedule()` when `set_by == "user"` succeeded and the document changed.
+  - implement a debounce/coalesce for refresh-originated triggers with a short debounce window (e.g. 500ms asyncio sleep). Repeated refresh triggers within the window collapse into one and the latest reason wins.
   - guard against self-retrigger: keep the immediate post-edit trigger scoped to successful user-authored `set_schedule(set_by="user")` writes only. Automation persistence uses `_persist_automation_result_locked` directly and therefore must not schedule another immediate rerun from its own save path.
   - on startup/reload, if `automation.enabled=false` or there are no enabled optimizer instances, schedule a cleanup-only automation pass so stale `setBy=automation` actions are stripped promptly.
 
 ### Design notes
 
-- Coalesce window is 500ms by default, configurable via a private constant for now. This is short enough to feel responsive but long enough to collapse bursts of slot patches from the UI.
+- Coalesce window is 500ms by default, configurable via a private constant for now. This is short enough to feel responsive but long enough to collapse bursts of slot-refresh signals.
+- Keep long-lived debounce/coalescing state in a coordinator-owned helper, not inside `AutomationRunner`, because the runner is instantiated per run.
 - The post-user-edit trigger lives inside `set_schedule`, not inside the runner — that way the runner never has to inspect `set_by`.
 - Startup/reload and slot-refresh triggers must run only after a successful forecast refresh with usable data; do not queue automation from the raw time-change callback itself.
+- Successful `set_schedule_execution(enabled=True)` and successful user-authored schedule updates are immediate triggers, not debounced ones.
 - On `execution_enabled: true -> false`, perform one cleanup pass immediately so persisted automation-owned actions do not linger on disk. After that transition, `run_automation` short-circuits while execution remains disabled.
 - When execution is enabled but automation is disabled (or no enabled optimizers remain), `run_automation` performs cleanup-only behavior if stale automation-owned actions exist.
 - Holding `_schedule_lock` for the automation decision + final-save portion is the intentional v1 trade-off for consistency. User-authored writes may briefly wait behind automation if the pipeline is busy; once the save completes, shared post-write side effects run outside the lock.
-- If `schedule_run_soon(...)` is called while a debounced sleep or an active automation run already exists, bursts may be coalesced, but a follow-up rerun must remain queued after the active run if newer user edits or refresh signals arrived. Do not silently drop later triggers just because one run is already in flight.
+- If a new trigger arrives while a debounced sleep or an active automation run already exists, bursts may be coalesced, but a follow-up rerun must remain queued after the active run if newer user edits or refresh signals arrived. Do not silently drop later triggers just because one run is already in flight.
 
 ### Unit tests (`tests/test_automation_triggers.py`)
 
@@ -639,20 +642,24 @@ These tests build on the existing `tests/test_coordinator_schedule_execution.py`
 
 ### Local HASS smoke test
 
-1. Start with `execution_enabled=false` and `automation.enabled=true` with configured optimizers.
+1. Start with `execution_enabled=false` and `automation.enabled=true` with configured optimizers. If the current live optimizer threshold would not author any future automation-owned slots, temporarily widen it for smoke and restore the original config afterward.
 2. `helman/set_schedule_execution { enabled: true }` → within ~1s, `helman/get_schedule` should show automation-owned actions appearing.
-3. `helman/set_schedule` with a user-authored slot change → within ~1s, automation should have re-run and refreshed its own siblings. Confirm via `get_schedule`.
-4. Send five rapid `helman/set_schedule` patches in a row → automation should have run **once**, not five times. Verify by checking HASS logs for a single "automation run completed" log line after the burst (logging is added in Phase 9 — for this phase, add a single temporary `_LOGGER.info("automation run completed, reason=%s", reason)` line in `run_automation` and remove it in Phase 9).
-5. Wait for the next `00/15/30/45` slot boundary and observe a run triggered by the slot refresh.
-6. `helman/set_schedule_execution { enabled: false }` → persisted automation-owned actions are stripped once, user-owned actions remain, and subsequent triggers do not recreate automation state while execution stays disabled.
-7. Save config with `automation.enabled: false`, reload, and confirm previously automation-owned actions are removed while user-owned actions remain intact.
+3. Pick a future automation-owned slot and send a user-authored `helman/set_schedule` change for that slot → within ~1s, HASS logs should show one new temporary `"automation run completed"` line and `helman/get_schedule` should keep that target slot `setBy=user` while automation refreshes its own sibling slots.
+4. Wait for the next `00/15/30/45` slot boundary and observe one new `"automation run completed"` log line triggered by the refresh path. Confirm the target user-authored slot still remains `setBy=user`.
+5. `helman/set_schedule_execution { enabled: false }` → persisted automation-owned actions are stripped once, user-owned actions remain, and subsequent triggers do not recreate automation state while execution stays disabled.
+6. Clear the temporary user-authored slot and restore any temporary smoke config changes.
+7. Optional policy check: reload while `execution_enabled=false` and confirm startup does not perform a cleanup-only pass. If you need to exercise startup cleanup itself, keep execution enabled and reload with `automation.enabled=false` (or no enabled optimizers) so stale automation-owned actions are stripped once.
 
 ### Done criteria
 
 - Unit tests green.
-- All four trigger sources observed in smoke test.
-- Burst coalescing observed.
-- No self-retrigger loop (HASS logs show one automation run per user edit burst, not an ever-growing stack).
+- Live smoke confirms execution-enable, post-user-edit, slot-refresh, and disable-cleanup behavior.
+- Startup/reload behavior matches the chosen policy (no startup cleanup-only pass when execution is already disabled).
+- No self-retrigger loop (HASS logs show one automation run per immediate trigger or debounced refresh event, not an ever-growing stack).
+
+### Status note
+
+- Local HASS smoke passed with a temporary `when_price_below=100.0` export threshold: enabling execution authored 54 automation-owned slots, a user-authored override on slot `2026-04-13T21:30:00+02:00` remained user-owned after both its immediate rerun and the next quarter-hour refresh, disabling execution stripped automation-owned actions, and the original `1.5` threshold was restored afterward.
 
 ---
 
