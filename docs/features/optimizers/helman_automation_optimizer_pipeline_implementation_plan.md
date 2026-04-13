@@ -55,7 +55,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence) _(local HASS smoke passed; SHA in git history)_
 - [x] **Phase 4** — Automation-owned action ownership invariant in persistence path _(local HASS smoke passed)_
 - [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(local HASS smoke passed; live `when_price_below: 0.0` branch was data-limited, so the ownership/cleanup path was exercised with a supplemental higher-threshold smoke)_
-- [x] **Phase 6** — Rebuild-between-optimizers loop wiring _(commit 0a78f6a; local HASS smoke passed)_
+- [x] **Phase 6** — Rebuild-between-optimizers loop wiring _(commit c8a90c7; local HASS smoke passed)_
 - [ ] **Phase 7** — `surplus_appliance` optimizer (generic + climate)
 - [ ] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing
 - [ ] **Phase 9** — Observability + `helman/run_automation` debug websocket command
