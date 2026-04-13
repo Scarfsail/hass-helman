@@ -3,8 +3,8 @@
  * Copyright 2019 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Q = globalThis, ue = Q.ShadowRoot && (Q.ShadyCSS === void 0 || Q.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, me = Symbol(), ve = /* @__PURE__ */ new WeakMap();
-let Ke = class {
+const Q = globalThis, ue = Q.ShadowRoot && (Q.ShadyCSS === void 0 || Q.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, me = Symbol(), ye = /* @__PURE__ */ new WeakMap();
+let Be = class {
   constructor(e, t, i) {
     if (this._$cssResult$ = !0, i !== me) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
     this.cssText = e, this.t = t;
@@ -14,7 +14,7 @@ let Ke = class {
     const t = this.t;
     if (ue && e === void 0) {
       const i = t !== void 0 && t.length === 1;
-      i && (e = ve.get(t)), e === void 0 && ((this.o = e = new CSSStyleSheet()).replaceSync(this.cssText), i && ve.set(t, e));
+      i && (e = ye.get(t)), e === void 0 && ((this.o = e = new CSSStyleSheet()).replaceSync(this.cssText), i && ye.set(t, e));
     }
     return e;
   }
@@ -22,14 +22,14 @@ let Ke = class {
     return this.cssText;
   }
 };
-const at = (r) => new Ke(typeof r == "string" ? r : r + "", void 0, me), nt = (r, ...e) => {
+const st = (r) => new Be(typeof r == "string" ? r : r + "", void 0, me), lt = (r, ...e) => {
   const t = r.length === 1 ? r[0] : e.reduce((i, o, a) => i + ((n) => {
     if (n._$cssResult$ === !0) return n.cssText;
     if (typeof n == "number") return n;
     throw Error("Value passed to 'css' function must be a 'css' function result: " + n + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
   })(o) + r[a + 1], r[0]);
-  return new Ke(t, r, me);
-}, st = (r, e) => {
+  return new Be(t, r, me);
+}, dt = (r, e) => {
   if (ue) r.adoptedStyleSheets = e.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
   else for (const t of e) {
     const i = document.createElement("style"), o = Q.litNonce;
@@ -38,17 +38,17 @@ const at = (r) => new Ke(typeof r == "string" ? r : r + "", void 0, me), nt = (r
 }, be = ue ? (r) => r : (r) => r instanceof CSSStyleSheet ? ((e) => {
   let t = "";
   for (const i of e.cssRules) t += i.cssText;
-  return at(t);
+  return st(t);
 })(r) : r;
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: lt, defineProperty: dt, getOwnPropertyDescriptor: ct, getOwnPropertyNames: pt, getOwnPropertySymbols: _t, getPrototypeOf: ht } = Object, z = globalThis, fe = z.trustedTypes, ut = fe ? fe.emptyScript : "", ie = z.reactiveElementPolyfillSupport, U = (r, e) => r, ce = { toAttribute(r, e) {
+const { is: ct, defineProperty: pt, getOwnPropertyDescriptor: _t, getOwnPropertyNames: ht, getOwnPropertySymbols: ut, getPrototypeOf: mt } = Object, M = globalThis, fe = M.trustedTypes, gt = fe ? fe.emptyScript : "", ie = M.reactiveElementPolyfillSupport, U = (r, e) => r, ce = { toAttribute(r, e) {
   switch (e) {
     case Boolean:
-      r = r ? ut : null;
+      r = r ? gt : null;
       break;
     case Object:
     case Array:
@@ -73,8 +73,8 @@ const { is: lt, defineProperty: dt, getOwnPropertyDescriptor: ct, getOwnProperty
       }
   }
   return t;
-} }, Be = (r, e) => !lt(r, e), ke = { attribute: !0, type: String, converter: ce, reflect: !1, useDefault: !1, hasChanged: Be };
-Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), z.litPropertyMetadata ?? (z.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
+} }, Ze = (r, e) => !ct(r, e), ke = { attribute: !0, type: String, converter: ce, reflect: !1, useDefault: !1, hasChanged: Ze };
+Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), M.litPropertyMetadata ?? (M.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
 let O = class extends HTMLElement {
   static addInitializer(e) {
     this._$Ei(), (this.l ?? (this.l = [])).push(e);
@@ -85,11 +85,11 @@ let O = class extends HTMLElement {
   static createProperty(e, t = ke) {
     if (t.state && (t.attribute = !1), this._$Ei(), this.prototype.hasOwnProperty(e) && ((t = Object.create(t)).wrapped = !0), this.elementProperties.set(e, t), !t.noAccessor) {
       const i = Symbol(), o = this.getPropertyDescriptor(e, i, t);
-      o !== void 0 && dt(this.prototype, e, o);
+      o !== void 0 && pt(this.prototype, e, o);
     }
   }
   static getPropertyDescriptor(e, t, i) {
-    const { get: o, set: a } = ct(this.prototype, e) ?? { get() {
+    const { get: o, set: a } = _t(this.prototype, e) ?? { get() {
       return this[t];
     }, set(n) {
       this[t] = n;
@@ -104,13 +104,13 @@ let O = class extends HTMLElement {
   }
   static _$Ei() {
     if (this.hasOwnProperty(U("elementProperties"))) return;
-    const e = ht(this);
+    const e = mt(this);
     e.finalize(), e.l !== void 0 && (this.l = [...e.l]), this.elementProperties = new Map(e.elementProperties);
   }
   static finalize() {
     if (this.hasOwnProperty(U("finalized"))) return;
     if (this.finalized = !0, this._$Ei(), this.hasOwnProperty(U("properties"))) {
-      const t = this.properties, i = [...pt(t), ..._t(t)];
+      const t = this.properties, i = [...ht(t), ...ut(t)];
       for (const o of i) this.createProperty(o, t[o]);
     }
     const e = this[Symbol.metadata];
@@ -159,7 +159,7 @@ let O = class extends HTMLElement {
   }
   createRenderRoot() {
     const e = this.shadowRoot ?? this.attachShadow(this.constructor.shadowRootOptions);
-    return st(e, this.constructor.elementStyles), e;
+    return dt(e, this.constructor.elementStyles), e;
   }
   connectedCallback() {
     var e;
@@ -202,7 +202,7 @@ let O = class extends HTMLElement {
     var n;
     if (e !== void 0) {
       const l = this.constructor;
-      if (o === !1 && (a = this[e]), i ?? (i = l.getPropertyOptions(e)), !((i.hasChanged ?? Be)(a, t) || i.useDefault && i.reflect && a === ((n = this._$Ej) == null ? void 0 : n.get(e)) && !this.hasAttribute(l._$Eu(e, i)))) return;
+      if (o === !1 && (a = this[e]), i ?? (i = l.getPropertyOptions(e)), !((i.hasChanged ?? Ze)(a, t) || i.useDefault && i.reflect && a === ((n = this._$Ej) == null ? void 0 : n.get(e)) && !this.hasAttribute(l._$Eu(e, i)))) return;
       this.C(e, t, i);
     }
     this.isUpdatePending === !1 && (this._$ES = this._$EP());
@@ -278,59 +278,59 @@ let O = class extends HTMLElement {
   firstUpdated(e) {
   }
 };
-O.elementStyles = [], O.shadowRootOptions = { mode: "open" }, O[U("elementProperties")] = /* @__PURE__ */ new Map(), O[U("finalized")] = /* @__PURE__ */ new Map(), ie == null || ie({ ReactiveElement: O }), (z.reactiveElementVersions ?? (z.reactiveElementVersions = [])).push("2.1.2");
+O.elementStyles = [], O.shadowRootOptions = { mode: "open" }, O[U("elementProperties")] = /* @__PURE__ */ new Map(), O[U("finalized")] = /* @__PURE__ */ new Map(), ie == null || ie({ ReactiveElement: O }), (M.reactiveElementVersions ?? (M.reactiveElementVersions = [])).push("2.1.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const W = globalThis, we = (r) => r, X = W.trustedTypes, $e = X ? X.createPolicy("lit-html", { createHTML: (r) => r }) : void 0, qe = "$lit$", j = `lit$${Math.random().toFixed(9).slice(2)}$`, Ze = "?" + j, mt = `<${Ze}>`, P = document, q = () => P.createComment(""), Z = (r) => r === null || typeof r != "object" && typeof r != "function", ge = Array.isArray, gt = (r) => ge(r) || typeof (r == null ? void 0 : r[Symbol.iterator]) == "function", oe = `[ 	
-\f\r]`, R = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, xe = /-->/g, Ae = />/g, M = RegExp(`>|${oe}(?:([^\\s"'>=/]+)(${oe}*=${oe}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Ee = /'/g, Se = /"/g, Ge = /^(?:script|style|textarea|title)$/i, yt = (r) => (e, ...t) => ({ _$litType$: r, strings: e, values: t }), s = yt(1), I = Symbol.for("lit-noChange"), p = Symbol.for("lit-nothing"), je = /* @__PURE__ */ new WeakMap(), L = P.createTreeWalker(P, 129);
-function Je(r, e) {
+const W = globalThis, $e = (r) => r, X = W.trustedTypes, we = X ? X.createPolicy("lit-html", { createHTML: (r) => r }) : void 0, Ge = "$lit$", V = `lit$${Math.random().toFixed(9).slice(2)}$`, Je = "?" + V, vt = `<${Je}>`, P = document, B = () => P.createComment(""), Z = (r) => r === null || typeof r != "object" && typeof r != "function", ge = Array.isArray, yt = (r) => ge(r) || typeof (r == null ? void 0 : r[Symbol.iterator]) == "function", oe = `[ 	
+\f\r]`, R = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, xe = /-->/g, Ae = />/g, C = RegExp(`>|${oe}(?:([^\\s"'>=/]+)(${oe}*=${oe}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`, "g"), ze = /'/g, Ee = /"/g, Qe = /^(?:script|style|textarea|title)$/i, bt = (r) => (e, ...t) => ({ _$litType$: r, strings: e, values: t }), s = bt(1), I = Symbol.for("lit-noChange"), p = Symbol.for("lit-nothing"), je = /* @__PURE__ */ new WeakMap(), L = P.createTreeWalker(P, 129);
+function Xe(r, e) {
   if (!ge(r) || !r.hasOwnProperty("raw")) throw Error("invalid template strings array");
-  return $e !== void 0 ? $e.createHTML(e) : e;
+  return we !== void 0 ? we.createHTML(e) : e;
 }
-const vt = (r, e) => {
+const ft = (r, e) => {
   const t = r.length - 1, i = [];
   let o, a = e === 2 ? "<svg>" : e === 3 ? "<math>" : "", n = R;
   for (let l = 0; l < t; l++) {
     const d = r[l];
-    let c, _, h = -1, v = 0;
-    for (; v < d.length && (n.lastIndex = v, _ = n.exec(d), _ !== null); ) v = n.lastIndex, n === R ? _[1] === "!--" ? n = xe : _[1] !== void 0 ? n = Ae : _[2] !== void 0 ? (Ge.test(_[2]) && (o = RegExp("</" + _[2], "g")), n = M) : _[3] !== void 0 && (n = M) : n === M ? _[0] === ">" ? (n = o ?? R, h = -1) : _[1] === void 0 ? h = -2 : (h = n.lastIndex - _[2].length, c = _[1], n = _[3] === void 0 ? M : _[3] === '"' ? Se : Ee) : n === Se || n === Ee ? n = M : n === xe || n === Ae ? n = R : (n = M, o = void 0);
-    const f = n === M && r[l + 1].startsWith("/>") ? " " : "";
-    a += n === R ? d + mt : h >= 0 ? (i.push(c), d.slice(0, h) + qe + d.slice(h) + j + f) : d + j + (h === -2 ? l : f);
+    let c, _, h = -1, b = 0;
+    for (; b < d.length && (n.lastIndex = b, _ = n.exec(d), _ !== null); ) b = n.lastIndex, n === R ? _[1] === "!--" ? n = xe : _[1] !== void 0 ? n = Ae : _[2] !== void 0 ? (Qe.test(_[2]) && (o = RegExp("</" + _[2], "g")), n = C) : _[3] !== void 0 && (n = C) : n === C ? _[0] === ">" ? (n = o ?? R, h = -1) : _[1] === void 0 ? h = -2 : (h = n.lastIndex - _[2].length, c = _[1], n = _[3] === void 0 ? C : _[3] === '"' ? Ee : ze) : n === Ee || n === ze ? n = C : n === xe || n === Ae ? n = R : (n = C, o = void 0);
+    const f = n === C && r[l + 1].startsWith("/>") ? " " : "";
+    a += n === R ? d + vt : h >= 0 ? (i.push(c), d.slice(0, h) + Ge + d.slice(h) + V + f) : d + V + (h === -2 ? l : f);
   }
-  return [Je(r, a + (r[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
+  return [Xe(r, a + (r[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
 class G {
   constructor({ strings: e, _$litType$: t }, i) {
     let o;
     this.parts = [];
     let a = 0, n = 0;
-    const l = e.length - 1, d = this.parts, [c, _] = vt(e, t);
+    const l = e.length - 1, d = this.parts, [c, _] = ft(e, t);
     if (this.el = G.createElement(c, i), L.currentNode = this.el.content, t === 2 || t === 3) {
       const h = this.el.content.firstChild;
       h.replaceWith(...h.childNodes);
     }
     for (; (o = L.nextNode()) !== null && d.length < l; ) {
       if (o.nodeType === 1) {
-        if (o.hasAttributes()) for (const h of o.getAttributeNames()) if (h.endsWith(qe)) {
-          const v = _[n++], f = o.getAttribute(h).split(j), J = /([.?@])?(.*)/.exec(v);
-          d.push({ type: 1, index: a, name: J[2], strings: f, ctor: J[1] === "." ? ft : J[1] === "?" ? kt : J[1] === "@" ? wt : te }), o.removeAttribute(h);
-        } else h.startsWith(j) && (d.push({ type: 6, index: a }), o.removeAttribute(h));
-        if (Ge.test(o.tagName)) {
-          const h = o.textContent.split(j), v = h.length - 1;
-          if (v > 0) {
+        if (o.hasAttributes()) for (const h of o.getAttributeNames()) if (h.endsWith(Ge)) {
+          const b = _[n++], f = o.getAttribute(h).split(V), J = /([.?@])?(.*)/.exec(b);
+          d.push({ type: 1, index: a, name: J[2], strings: f, ctor: J[1] === "." ? $t : J[1] === "?" ? wt : J[1] === "@" ? xt : te }), o.removeAttribute(h);
+        } else h.startsWith(V) && (d.push({ type: 6, index: a }), o.removeAttribute(h));
+        if (Qe.test(o.tagName)) {
+          const h = o.textContent.split(V), b = h.length - 1;
+          if (b > 0) {
             o.textContent = X ? X.emptyScript : "";
-            for (let f = 0; f < v; f++) o.append(h[f], q()), L.nextNode(), d.push({ type: 2, index: ++a });
-            o.append(h[v], q());
+            for (let f = 0; f < b; f++) o.append(h[f], B()), L.nextNode(), d.push({ type: 2, index: ++a });
+            o.append(h[b], B());
           }
         }
-      } else if (o.nodeType === 8) if (o.data === Ze) d.push({ type: 2, index: a });
+      } else if (o.nodeType === 8) if (o.data === Je) d.push({ type: 2, index: a });
       else {
         let h = -1;
-        for (; (h = o.data.indexOf(j, h + 1)) !== -1; ) d.push({ type: 7, index: a }), h += j.length - 1;
+        for (; (h = o.data.indexOf(V, h + 1)) !== -1; ) d.push({ type: 7, index: a }), h += V.length - 1;
       }
       a++;
     }
@@ -347,7 +347,7 @@ function T(r, e, t = r, i) {
   const a = Z(e) ? void 0 : e._$litDirective$;
   return (o == null ? void 0 : o.constructor) !== a && ((l = o == null ? void 0 : o._$AO) == null || l.call(o, !1), a === void 0 ? o = void 0 : (o = new a(r), o._$AT(r, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = o : t._$Cl = o), o !== void 0 && (e = T(r, o._$AS(r, e.values), o, i)), e;
 }
-class bt {
+class kt {
   constructor(e, t) {
     this._$AV = [], this._$AN = void 0, this._$AD = e, this._$AM = t;
   }
@@ -364,7 +364,7 @@ class bt {
     for (; d !== void 0; ) {
       if (n === d.index) {
         let c;
-        d.type === 2 ? c = new Y(a, a.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(a, d.name, d.strings, this, e) : d.type === 6 && (c = new $t(a, this, e)), this._$AV.push(c), d = i[++l];
+        d.type === 2 ? c = new Y(a, a.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(a, d.name, d.strings, this, e) : d.type === 6 && (c = new At(a, this, e)), this._$AV.push(c), d = i[++l];
       }
       n !== (d == null ? void 0 : d.index) && (a = L.nextNode(), n++);
     }
@@ -395,7 +395,7 @@ class Y {
     return this._$AB;
   }
   _$AI(e, t = this) {
-    e = T(this, e, t), Z(e) ? e === p || e == null || e === "" ? (this._$AH !== p && this._$AR(), this._$AH = p) : e !== this._$AH && e !== I && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : gt(e) ? this.k(e) : this._(e);
+    e = T(this, e, t), Z(e) ? e === p || e == null || e === "" ? (this._$AH !== p && this._$AR(), this._$AH = p) : e !== this._$AH && e !== I && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : yt(e) ? this.k(e) : this._(e);
   }
   O(e) {
     return this._$AA.parentNode.insertBefore(e, this._$AB);
@@ -408,10 +408,10 @@ class Y {
   }
   $(e) {
     var a;
-    const { values: t, _$litType$: i } = e, o = typeof i == "number" ? this._$AC(e) : (i.el === void 0 && (i.el = G.createElement(Je(i.h, i.h[0]), this.options)), i);
+    const { values: t, _$litType$: i } = e, o = typeof i == "number" ? this._$AC(e) : (i.el === void 0 && (i.el = G.createElement(Xe(i.h, i.h[0]), this.options)), i);
     if (((a = this._$AH) == null ? void 0 : a._$AD) === o) this._$AH.p(t);
     else {
-      const n = new bt(o, this), l = n.u(this.options);
+      const n = new kt(o, this), l = n.u(this.options);
       n.p(t), this.T(l), this._$AH = n;
     }
   }
@@ -423,14 +423,14 @@ class Y {
     ge(this._$AH) || (this._$AH = [], this._$AR());
     const t = this._$AH;
     let i, o = 0;
-    for (const a of e) o === t.length ? t.push(i = new Y(this.O(q()), this.O(q()), this, this.options)) : i = t[o], i._$AI(a), o++;
+    for (const a of e) o === t.length ? t.push(i = new Y(this.O(B()), this.O(B()), this, this.options)) : i = t[o], i._$AI(a), o++;
     o < t.length && (this._$AR(i && i._$AB.nextSibling, o), t.length = o);
   }
   _$AR(e = this._$AA.nextSibling, t) {
     var i;
     for ((i = this._$AP) == null ? void 0 : i.call(this, !1, !0, t); e !== this._$AB; ) {
-      const o = we(e).nextSibling;
-      we(e).remove(), e = o;
+      const o = $e(e).nextSibling;
+      $e(e).remove(), e = o;
     }
   }
   setConnected(e) {
@@ -463,7 +463,7 @@ class te {
     e === p ? this.element.removeAttribute(this.name) : this.element.setAttribute(this.name, e ?? "");
   }
 }
-class ft extends te {
+class $t extends te {
   constructor() {
     super(...arguments), this.type = 3;
   }
@@ -471,7 +471,7 @@ class ft extends te {
     this.element[this.name] = e === p ? void 0 : e;
   }
 }
-class kt extends te {
+class wt extends te {
   constructor() {
     super(...arguments), this.type = 4;
   }
@@ -479,7 +479,7 @@ class kt extends te {
     this.element.toggleAttribute(this.name, !!e && e !== p);
   }
 }
-class wt extends te {
+class xt extends te {
   constructor(e, t, i, o, a) {
     super(e, t, i, o, a), this.type = 5;
   }
@@ -493,7 +493,7 @@ class wt extends te {
     typeof this._$AH == "function" ? this._$AH.call(((t = this.options) == null ? void 0 : t.host) ?? this.element, e) : this._$AH.handleEvent(e);
   }
 }
-class $t {
+class At {
   constructor(e, t, i) {
     this.element = e, this.type = 6, this._$AN = void 0, this._$AM = t, this.options = i;
   }
@@ -504,14 +504,14 @@ class $t {
     T(this, e);
   }
 }
-const xt = { I: Y }, re = W.litHtmlPolyfillSupport;
+const zt = { I: Y }, re = W.litHtmlPolyfillSupport;
 re == null || re(G, Y), (W.litHtmlVersions ?? (W.litHtmlVersions = [])).push("3.3.2");
-const Qe = (r, e, t) => {
+const et = (r, e, t) => {
   const i = (t == null ? void 0 : t.renderBefore) ?? e;
   let o = i._$litPart$;
   if (o === void 0) {
     const a = (t == null ? void 0 : t.renderBefore) ?? null;
-    i._$litPart$ = o = new Y(e.insertBefore(q(), a), a, void 0, t ?? {});
+    i._$litPart$ = o = new Y(e.insertBefore(B(), a), a, void 0, t ?? {});
   }
   return o._$AI(r), o;
 };
@@ -532,7 +532,7 @@ let K = class extends O {
   }
   update(e) {
     const t = this.render();
-    this.hasUpdated || (this.renderOptions.isConnected = this.isConnected), super.update(e), this._$Do = Qe(t, this.renderRoot, this.renderOptions);
+    this.hasUpdated || (this.renderOptions.isConnected = this.isConnected), super.update(e), this._$Do = et(t, this.renderRoot, this.renderOptions);
   }
   connectedCallback() {
     var e;
@@ -546,8 +546,8 @@ let K = class extends O {
     return I;
   }
 };
-var We;
-K._$litElement$ = !0, K.finalized = !0, (We = H.litElementHydrateSupport) == null || We.call(H, { LitElement: K });
+var qe;
+K._$litElement$ = !0, K.finalized = !0, (qe = H.litElementHydrateSupport) == null || qe.call(H, { LitElement: K });
 const ae = H.litElementPolyfillSupport;
 ae == null || ae({ LitElement: K });
 (H.litElementVersions ?? (H.litElementVersions = [])).push("4.2.2");
@@ -556,8 +556,8 @@ ae == null || ae({ LitElement: K });
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const At = (r) => (...e) => ({ _$litDirective$: r, values: e });
-let Et = class {
+const Et = (r) => (...e) => ({ _$litDirective$: r, values: e });
+let jt = class {
   constructor(e) {
   }
   get _$AU() {
@@ -578,7 +578,7 @@ let Et = class {
  * Copyright 2020 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { I: St } = xt, ze = (r) => r, Ve = (r, e) => (r == null ? void 0 : r._$litType$) !== void 0, jt = (r) => {
+const { I: St } = zt, Se = (r) => r, Ve = (r, e) => (r == null ? void 0 : r._$litType$) !== void 0, Vt = (r) => {
   var e;
   return ((e = r == null ? void 0 : r._$litType$) == null ? void 0 : e.h) != null;
 }, Me = () => document.createComment(""), Ce = (r, e, t) => {
@@ -596,13 +596,13 @@ const { I: St } = xt, ze = (r) => r, Ve = (r, e) => (r == null ? void 0 : r._$li
     if (n !== o || d) {
       let c = t._$AA;
       for (; c !== n; ) {
-        const _ = ze(c).nextSibling;
-        ze(i).insertBefore(c, o), c = _;
+        const _ = Se(c).nextSibling;
+        Se(i).insertBefore(c, o), c = _;
       }
     }
   }
   return t;
-}, zt = {}, Le = (r, e = zt) => r._$AH = e, He = (r) => r._$AH, Vt = (r) => {
+}, Mt = {}, Le = (r, e = Mt) => r._$AH = e, He = (r) => r._$AH, Ct = (r) => {
   r._$AR();
 };
 /**
@@ -610,7 +610,7 @@ const { I: St } = xt, ze = (r) => r, Ve = (r, e) => (r == null ? void 0 : r._$li
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Pe = (r) => jt(r) ? r._$litType$.h : r.strings, Mt = At(class extends Et {
+const Pe = (r) => Vt(r) ? r._$litType$.h : r.strings, Lt = Et(class extends jt {
   constructor(r) {
     super(r), this.et = /* @__PURE__ */ new WeakMap();
   }
@@ -624,7 +624,7 @@ const Pe = (r) => jt(r) ? r._$litType$.h : r.strings, Mt = At(class extends Et {
       let a = this.et.get(t);
       if (a === void 0) {
         const n = document.createDocumentFragment();
-        a = Qe(p, n), a.setConnected(!1), this.et.set(t, a);
+        a = et(p, n), a.setConnected(!1), this.et.set(t, a);
       }
       Le(a, [o]), Ce(a, void 0, o);
     }
@@ -633,7 +633,7 @@ const Pe = (r) => jt(r) ? r._$litType$.h : r.strings, Mt = At(class extends Et {
         const o = this.et.get(i);
         if (o !== void 0) {
           const a = He(o).pop();
-          Vt(r), Ce(r, void 0, a), Le(r, [a]);
+          Ct(r), Ce(r, void 0, a), Le(r, [a]);
         }
       }
       this.it = e;
@@ -644,20 +644,20 @@ const Pe = (r) => jt(r) ? r._$litType$.h : r.strings, Mt = At(class extends Et {
 function y(r) {
   return typeof structuredClone == "function" ? structuredClone(r) : JSON.parse(JSON.stringify(r));
 }
-function E(r) {
+function z(r) {
   return typeof r == "object" && r !== null && !Array.isArray(r);
 }
-function b(r) {
-  return E(r) ? r : void 0;
+function v(r) {
+  return z(r) ? r : void 0;
 }
-function w(r) {
+function k(r) {
   return Array.isArray(r) ? r : void 0;
 }
-function S(r) {
-  const e = b(r);
+function j(r) {
+  const e = v(r);
   return e ? Object.entries(e) : [];
 }
-function $(r, e) {
+function w(r, e) {
   let t = r;
   for (const i of e) {
     if (typeof i == "number") {
@@ -666,7 +666,7 @@ function $(r, e) {
       t = t[i];
       continue;
     }
-    if (!E(t))
+    if (!z(t))
       return;
     t = t[i];
   }
@@ -682,11 +682,11 @@ function g(r, e, t) {
       if (!Array.isArray(i))
         return;
       let _ = i[n];
-      d ? Array.isArray(_) || (_ = [], i[n] = _) : E(_) || (_ = {}, i[n] = _), i = _;
+      d ? Array.isArray(_) || (_ = [], i[n] = _) : z(_) || (_ = {}, i[n] = _), i = _;
       continue;
     }
     let c = i[n];
-    d ? Array.isArray(c) || (c = [], i[n] = c) : E(c) || (c = {}, i[n] = c), i = c;
+    d ? Array.isArray(c) || (c = [], i[n] = c) : z(c) || (c = {}, i[n] = c), i = c;
   }
   const o = e[e.length - 1];
   if (typeof o == "number") {
@@ -697,34 +697,34 @@ function g(r, e, t) {
   }
   i[o] = t;
 }
-function B(r, e) {
-  e.length !== 0 && (et(r, e), Bt(r, e.slice(0, -1)));
+function q(r, e) {
+  e.length !== 0 && (it(r, e), Zt(r, e.slice(0, -1)));
 }
-function C(r, e, t) {
-  const i = $(r, e), a = [...Array.isArray(i) ? i : [], t];
+function S(r, e, t) {
+  const i = w(r, e), a = [...Array.isArray(i) ? i : [], t];
   g(r, e, a);
 }
-function Ct(r, e, t) {
-  const i = $(r, e);
+function Ht(r, e, t) {
+  const i = w(r, e);
   if (!Array.isArray(i) || t < 0 || t >= i.length)
     return;
   const o = i.filter((a, n) => n !== t);
   if (o.length === 0) {
-    B(r, e);
+    q(r, e);
     return;
   }
   g(r, e, o);
 }
-function Lt(r, e, t, i) {
-  const o = $(r, e);
+function Pt(r, e, t, i) {
+  const o = w(r, e);
   if (!Array.isArray(o) || t < 0 || i < 0 || t >= o.length || i >= o.length || t === i)
     return;
   const a = [...o], [n] = a.splice(t, 1);
   a.splice(i, 0, n), g(r, e, a);
 }
-function Ht(r, e, t, i) {
-  const o = $(r, e);
-  if (!E(o))
+function Ot(r, e, t, i) {
+  const o = w(r, e);
+  if (!z(o))
     return { ok: !1, reason: "target_not_available" };
   const a = i.trim();
   if (!a)
@@ -745,16 +745,16 @@ function Ht(r, e, t, i) {
   }
   return g(r, e, l), { ok: !0 };
 }
-function Pt(r) {
-  return V(r, "category");
+function It(r) {
+  return E(r, "category");
 }
-function Ot(r) {
-  return V(r, "label");
+function Tt(r) {
+  return E(r, "label");
 }
-function It(r, e, t) {
+function Yt(r, e, t) {
   return {
     kind: "ev_charger",
-    id: V(r, "ev-charger"),
+    id: E(r, "ev-charger"),
     name: e,
     limits: {
       max_charging_power_kw: 11
@@ -783,13 +783,13 @@ function It(r, e, t) {
         }
       }
     },
-    vehicles: [Xe([], t)]
+    vehicles: [tt([], t)]
   };
 }
-function Tt(r, e) {
+function Rt(r, e) {
   return {
     kind: "generic",
-    id: V(r, "generic-appliance"),
+    id: E(r, "generic-appliance"),
     name: e,
     controls: {
       switch: {
@@ -802,10 +802,10 @@ function Tt(r, e) {
     }
   };
 }
-function Yt(r, e) {
+function Nt(r, e) {
   return {
     kind: "climate",
-    id: V(r, "climate-appliance"),
+    id: E(r, "climate-appliance"),
     name: e,
     controls: {
       climate: {
@@ -818,9 +818,20 @@ function Yt(r, e) {
     }
   };
 }
-function Xe(r, e) {
+function Oe(r) {
   return {
-    id: V(r, "vehicle"),
+    id: E(r, "export-price"),
+    kind: "export_price",
+    enabled: !0,
+    params: {
+      when_price_below: 0,
+      action: "stop_export"
+    }
+  };
+}
+function tt(r, e) {
+  return {
+    id: E(r, "vehicle"),
     name: e,
     telemetry: {
       soc_entity_id: ""
@@ -831,40 +842,40 @@ function Xe(r, e) {
     }
   };
 }
-function Rt() {
+function Ft() {
   return {
     behavior: "fixed_max_power"
   };
 }
-function Nt() {
+function Dt() {
   return {
     min_power_kw: 1.4
   };
 }
-function Ft(r) {
+function Ut(r) {
   return {
     energy_entity_id: "",
     label: r
   };
 }
-function Dt() {
+function Wt() {
   return {
     start: "00:00",
     end: "06:00",
     price: 1
   };
 }
-function Ut() {
+function Kt() {
   return "";
 }
-function Wt(r) {
-  return V(r, "mode");
+function qt(r) {
+  return E(r, "mode");
 }
-function Kt(r) {
-  return V(r, "gear");
+function Bt(r) {
+  return E(r, "gear");
 }
-function et(r, e) {
-  const t = e.slice(0, -1), i = t.length === 0 ? r : $(r, t);
+function it(r, e) {
+  const t = e.slice(0, -1), i = t.length === 0 ? r : w(r, t);
   if (i === void 0)
     return;
   const o = e[e.length - 1];
@@ -874,17 +885,17 @@ function et(r, e) {
     i.splice(o, 1);
     return;
   }
-  !E(i) || !(o in i) || delete i[o];
+  !z(i) || !(o in i) || delete i[o];
 }
-function Bt(r, e) {
+function Zt(r, e) {
   for (let t = e.length; t > 0; t -= 1) {
-    const i = e.slice(0, t), o = $(r, i), a = E(o) && Object.keys(o).length === 0, n = Array.isArray(o) && o.length === 0;
+    const i = e.slice(0, t), o = w(r, i), a = z(o) && Object.keys(o).length === 0, n = Array.isArray(o) && o.length === 0;
     if (!a && !n)
       break;
-    et(r, i);
+    it(r, i);
   }
 }
-function V(r, e) {
+function E(r, e) {
   const t = new Set(r);
   if (!t.has(e))
     return e;
@@ -893,7 +904,7 @@ function V(r, e) {
     i += 1;
   return `${e}-${i}`;
 }
-function qt() {
+function Gt() {
   return {
     read(r) {
       return y(r);
@@ -902,14 +913,14 @@ function qt() {
       return y(e);
     },
     validate(r) {
-      return ye(r, "object");
+      return ve(r, "object");
     }
   };
 }
-function k(r, e) {
+function $(r, e) {
   return {
     read(t) {
-      const i = r.length === 0 ? t : $(t, r);
+      const i = r.length === 0 ? t : w(t, r);
       return y(i === void 0 ? e.emptyValue : i);
     },
     apply(t, i) {
@@ -919,7 +930,7 @@ function k(r, e) {
       return g(o, r, y(i)), o;
     },
     validate(t) {
-      return ye(t, e.rootKind);
+      return ve(t, e.rootKind);
     }
   };
 }
@@ -929,7 +940,7 @@ function ne(r) {
     read(t) {
       const i = {};
       for (const o of r) {
-        const a = $(t, o.documentPath);
+        const a = w(t, o.documentPath);
         a !== void 0 && (i[o.yamlKey] = y(a));
       }
       return i;
@@ -937,7 +948,7 @@ function ne(r) {
     apply(t, i) {
       const o = y(t), a = i;
       for (const n of r)
-        B(o, n.documentPath);
+        q(o, n.documentPath);
       for (const n of r) {
         const l = a[n.yamlKey];
         l !== void 0 && g(o, n.documentPath, y(l));
@@ -945,10 +956,10 @@ function ne(r) {
       return o;
     },
     validate(t) {
-      const i = ye(t, "object");
+      const i = ve(t, "object");
       if (i)
         return i;
-      if (!E(t))
+      if (!z(t))
         return { code: "expected_object" };
       for (const o of Object.keys(t))
         if (!e.has(o))
@@ -957,16 +968,16 @@ function ne(r) {
     }
   };
 }
-function ye(r, e) {
-  return e === "array" ? Array.isArray(r) ? null : { code: "expected_array" } : E(r) ? null : { code: "expected_object" };
+function ve(r, e) {
+  return e === "array" ? Array.isArray(r) ? null : { code: "expected_array" } : z(r) ? null : { code: "expected_object" };
 }
-const Zt = {
+const Jt = {
   general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   scheduler: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   appliances: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z"
-}, Gt = {
+}, Qt = {
   "section:general.core_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
   "section:general.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
   "section:power_devices.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
@@ -977,13 +988,13 @@ const Zt = {
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:automation.optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:appliances.configured_appliances": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z"
-}, Jt = [
+}, Xt = [
   { id: "general", labelKey: "editor.tabs.general" },
   { id: "power_devices", labelKey: "editor.tabs.power_devices" },
   { id: "scheduler", labelKey: "editor.tabs.scheduler" },
   { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "appliances", labelKey: "editor.tabs.appliances" }
-], Oe = {
+], Ie = {
   general: "general",
   power_devices: "power_devices",
   scheduler_control: "scheduler",
@@ -1017,7 +1028,7 @@ const Zt = {
   appliances: {
     configured_appliances: "section:appliances.configured_appliances"
   }
-}, tt = [
+}, ot = [
   "history_buckets",
   "history_bucket_duration",
   "sources_title",
@@ -1028,11 +1039,11 @@ const Zt = {
   "show_empty_groups",
   "show_others_group",
   "device_label_text"
-], Qt = tt.filter(
+], ei = ot.filter(
   (r) => r !== "device_label_text"
-), A = {}, se = [], Xt = it(tt), ei = it(
-  Qt
-), ti = [
+), A = {}, se = [], ti = rt(ot), ii = rt(
+  ei
+), oi = [
   {
     yamlKey: "enabled",
     documentPath: ["automation", "enabled"]
@@ -1042,7 +1053,7 @@ const Zt = {
     id: x,
     kind: "document",
     labelKey: "editor.title",
-    adapter: qt()
+    adapter: Gt()
   },
   [m.general]: {
     id: m.general,
@@ -1050,7 +1061,7 @@ const Zt = {
     parentId: x,
     tabId: "general",
     labelKey: "editor.tabs.general",
-    adapter: ne(Xt)
+    adapter: ne(ti)
   },
   [m.power_devices]: {
     id: m.power_devices,
@@ -1058,7 +1069,7 @@ const Zt = {
     parentId: x,
     tabId: "power_devices",
     labelKey: "editor.tabs.power_devices",
-    adapter: k(["power_devices"], {
+    adapter: $(["power_devices"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1069,7 +1080,7 @@ const Zt = {
     parentId: x,
     tabId: "scheduler",
     labelKey: "editor.tabs.scheduler",
-    adapter: k(["scheduler"], {
+    adapter: $(["scheduler"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1080,7 +1091,7 @@ const Zt = {
     parentId: x,
     tabId: "automation",
     labelKey: "editor.tabs.automation",
-    adapter: k(["automation"], {
+    adapter: $(["automation"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1091,7 +1102,7 @@ const Zt = {
     parentId: x,
     tabId: "appliances",
     labelKey: "editor.tabs.appliances",
-    adapter: k(["appliances"], {
+    adapter: $(["appliances"], {
       emptyValue: se,
       rootKind: "array"
     })
@@ -1102,7 +1113,7 @@ const Zt = {
     parentId: m.general,
     tabId: "general",
     labelKey: "editor.sections.core_labels_and_history",
-    adapter: ne(ei)
+    adapter: ne(ii)
   },
   [u.general.device_label_text]: {
     id: u.general.device_label_text,
@@ -1110,7 +1121,7 @@ const Zt = {
     parentId: m.general,
     tabId: "general",
     labelKey: "editor.sections.device_label_text",
-    adapter: k(["device_label_text"], {
+    adapter: $(["device_label_text"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1121,7 +1132,7 @@ const Zt = {
     parentId: m.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.house",
-    adapter: k(["power_devices", "house"], {
+    adapter: $(["power_devices", "house"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1132,7 +1143,7 @@ const Zt = {
     parentId: m.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.solar",
-    adapter: k(["power_devices", "solar"], {
+    adapter: $(["power_devices", "solar"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1143,7 +1154,7 @@ const Zt = {
     parentId: m.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.battery",
-    adapter: k(["power_devices", "battery"], {
+    adapter: $(["power_devices", "battery"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1154,7 +1165,7 @@ const Zt = {
     parentId: m.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.grid",
-    adapter: k(["power_devices", "grid"], {
+    adapter: $(["power_devices", "grid"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1165,7 +1176,7 @@ const Zt = {
     parentId: m.scheduler,
     tabId: "scheduler",
     labelKey: "editor.sections.schedule_control_mapping",
-    adapter: k(["scheduler", "control"], {
+    adapter: $(["scheduler", "control"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1176,7 +1187,7 @@ const Zt = {
     parentId: m.automation,
     tabId: "automation",
     labelKey: "editor.sections.automation_settings",
-    adapter: ne(ti)
+    adapter: ne(oi)
   },
   [u.automation.optimizer_pipeline]: {
     id: u.automation.optimizer_pipeline,
@@ -1184,7 +1195,7 @@ const Zt = {
     parentId: m.automation,
     tabId: "automation",
     labelKey: "editor.sections.optimizer_pipeline",
-    adapter: k(["automation", "optimizers"], {
+    adapter: $(["automation", "optimizers"], {
       emptyValue: se,
       rootKind: "array"
     })
@@ -1195,30 +1206,30 @@ const Zt = {
     parentId: m.appliances,
     tabId: "appliances",
     labelKey: "editor.sections.configured_appliances",
-    adapter: k(["appliances"], {
+    adapter: $(["appliances"], {
       emptyValue: se,
       rootKind: "array"
     })
   }
-}, Ie = ii();
+}, Te = ri();
 function N(r) {
   return pe[r];
 }
-function Te(r) {
-  const e = [], t = [...Ie[r]];
+function Ye(r) {
+  const e = [], t = [...Te[r]];
   for (; t.length > 0; ) {
     const i = t.pop();
-    i && (e.push(i), t.push(...Ie[i]));
+    i && (e.push(i), t.push(...Te[i]));
   }
   return e;
 }
-function it(r) {
+function rt(r) {
   return r.map((e) => ({
     yamlKey: e,
     documentPath: [e]
   }));
 }
-function ii() {
+function ri() {
   const r = Object.fromEntries(
     Object.keys(pe).map((e) => [e, []])
   );
@@ -1226,7 +1237,7 @@ function ii() {
     e.parentId && r[e.parentId].push(e.id);
   return r;
 }
-const ot = {
+const at = {
   title: "Editor konfigurace Helman",
   description: "Upravte uloženou konfiguraci integrace Helman, validujte ji v backendu a uložte ji bez ztráty nepodporovaných klíčů nebo budoucích konfiguračních větví.",
   tabs: {
@@ -1250,6 +1261,7 @@ const ot = {
     add_ev_charger: "Přidat EV nabíječku",
     add_climate_appliance: "Přidat topení/klimatizaci",
     add_generic_appliance: "Přidat obecný spotřebič",
+    add_export_price_optimizer: "Přidat optimalizátor exportní ceny",
     add_vehicle: "Přidat vozidlo",
     add_use_mode: "Přidat režim použití",
     add_eco_gear: "Přidat eco gear",
@@ -1292,8 +1304,8 @@ const ot = {
     device_label_text: "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
     battery_entities: "Remaining energy, capacity, min SoC a max SoC fungují jako jedna skupina bateriových entit. Pokud zapnete predikci baterie, nastavte je společně.",
     grid_import_windows: "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
-    automation: "Ve fázi 2 vizuální režim zpřístupňuje jen hlavní přepínač automatizace. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
-    optimizer_pipeline: "Seřazenou pipeline optimalizátorů upravujte v režimu YAML. Neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené.",
+    automation: "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátor export_price z fáze 5. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
+    optimizer_pipeline: "Tady nastavíte seřazený seznam optimalizátorů. Vizuální režim umí přímo upravovat optimalizátory export_price, ale runtime ve fázi 5 stále vykoná nanejvýš jeden povolený optimalizátor najednou. Neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené, a pořád je můžete upravit v YAML.",
     appliances: "Editace EV nabíječky, topení/klimatizace a obecného spotřebiče je podporovaná přímo. Nepodporované budoucí typy spotřebičů se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
     generic_appliance_projection: "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
     climate_appliance_projection: "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu."
@@ -1310,6 +1322,7 @@ const ot = {
     daily_energy_entity: "Entita denní energie",
     import_window: "Importní okno",
     local_time_window: "Lokální časové okno",
+    optimizer: "Optimalizátor",
     use_mode_mapping: "Mapování režimu použití",
     eco_gear_mapping: "Mapování eco gear"
   },
@@ -1359,6 +1372,10 @@ const ot = {
     stop_discharging_option: "Volba Zastavit vybíjení",
     stop_export_option: "Volba Zastavit export",
     automation_enabled: "Povolit automatizaci",
+    optimizer_id: "ID optimalizátoru",
+    optimizer_enabled: "Povoleno",
+    when_price_below: "Když je cena pod",
+    optimizer_action: "Akce",
     appliance_id: "ID spotřebiče",
     appliance_name: "Název spotřebiče",
     appliance_icon: "Ikona spotřebiče",
@@ -1391,6 +1408,7 @@ const ot = {
     import_price_unit: "Např.: CZK/kWh",
     mode_entity: "Helman zapisuje volby akcí plánování do této entity.",
     automation_enabled: "Zapnutí vytvoří automation: { enabled: true, optimizers: [] }. Vypnutí zachová aktuální seznam optimalizátorů pro pozdější úpravy.",
+    export_price_action: "Ve fázi 5 tento optimalizátor podporuje jen akci stop_export.",
     appliance_icon: "Volitelné. Když pole necháte prázdné, metadata spotřebiče použijí výchozí energetickou ikonu.",
     history_energy_entity: "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče."
   },
@@ -1425,6 +1443,8 @@ const ot = {
     surplus_aware: "Řízeno přebytkem",
     fixed: "Pevná hodnota",
     history_average: "Historický průměr",
+    export_price: "Exportní cena",
+    stop_export: "Zastavit export",
     unknown: "neznámý",
     missing_id: "chybí id"
   },
@@ -1455,10 +1475,12 @@ const ot = {
     daily_energy_entity: "Entita denní energie {index}",
     import_window: "Importní okno {index}",
     appliance: "Spotřebič {index}",
+    optimizer: "Optimalizátor {index}",
     ev_charger: "EV nabíječka {index}",
     climate_appliance: "Topení/klimatizace {index}",
     generic_appliance: "Obecný spotřebič {index}",
     vehicle: "Vozidlo {index}",
+    unsupported_optimizer_kind: "Nepodporovaný typ optimalizátoru: {kind}",
     unsupported_appliance_kind: "Nepodporovaný typ spotřebiče: {kind}"
   },
   help: {
@@ -1493,6 +1515,9 @@ const ot = {
     import_window_price: "Cena elektřiny při importu v průběhu tohoto časového okna, v jednotce nakonfigurované výše. Optimalizátor baterie ji používá k nalezení nejlevnějších čas pro nabíjení.",
     scheduler_mode_entity: "Entita input_select nebo select, do které Helman zapisuje příkazy akcí plánování. Helman nastaví hodnotu volby odpovídající požadovanému režimu baterie (nabíjení, vybíjení, normální atd.). Vyžadováno pro skutečné řízení baterie plánovačem.",
     scheduler_action_option: "Hodnota volby, kterou Helman zapíše do entity režimu při naplánování této akce. Musí přesně odpovídat jedné z voleb v entitě select. Nechte prázdné, pokud vaše střídač tuto akci nepodporuje.",
+    automation_optimizer_id: "Jedinečný identifikátor optimalizátoru uložený v automation.optimizers[].id. Držte ho stabilní, aby budoucí reference, logy a ladění zůstaly čitelné.",
+    export_price_when_price_below: "Prahová hodnota ve stejné jednotce jako předpověď exportní ceny. Když předpovězená exportní cena klesne pod tuto hodnotu, optimalizátor vytvoří sloty stop_export tam, kde je očekávaný export.",
+    export_price_action: "Ve fázi 5 je podporovaná jen akce stop_export. Další fáze mohou přidat další akce optimalizátorů, ale toto pole je zatím pevné.",
     deferrable_consumer_energy_entity: "Kumulativní senzor energie (kWh) sledující celkovou spotřebu elektřiny tohoto spotřebiče. Helman používá jeho zaznamenanou historii k odhadu, kolik energie tento spotřebič spotřebuje v nadcházejících časových slotech, aby ho mohl přesunout do levnějších period.",
     appliance_id: "Jedinečný interní identifikátor tohoto spotřebiče. Používá se v odkazech automatizací a sledování plánování. Neměňte ho po nakonfigurování spotřebiče, mohlo by to rozbít existující automatizace.",
     appliance_name: "Zobrazovaný název tohoto spotřebiče v dashboardu Helman a přehledech energie.",
@@ -1511,13 +1536,13 @@ const ot = {
     vehicle_battery_capacity_kwh: "Celková využitelná kapacita baterie vozidla v kWh. Vyžadováno pro přesné výpočty cíle nabíjení a délky nabíjení.",
     vehicle_max_charging_power_kw: "Maximální výkon AC nabíjení tohoto vozidla v kW. Slouží k modelování rychlosti nabíjení vozidla a plánování délky oken nabíjení."
   }
-}, oi = {
-  editor: ot
-}, ri = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+}, ai = {
+  editor: at
+}, ni = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  default: oi,
-  editor: ot
-}, Symbol.toStringTag, { value: "Module" })), rt = {
+  default: ai,
+  editor: at
+}, Symbol.toStringTag, { value: "Module" })), nt = {
   title: "Helman config editor",
   description: "Edit the stored Helman integration config, validate it in the backend, and save it without losing unsupported keys or future config branches.",
   tabs: {
@@ -1541,6 +1566,7 @@ const ot = {
     add_ev_charger: "Add EV charger",
     add_climate_appliance: "Add climate appliance",
     add_generic_appliance: "Add generic appliance",
+    add_export_price_optimizer: "Add export price optimizer",
     add_vehicle: "Add vehicle",
     add_use_mode: "Add use mode",
     add_eco_gear: "Add eco gear",
@@ -1583,8 +1609,8 @@ const ot = {
     device_label_text: "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
     battery_entities: "Remaining energy, capacity, min SoC, and max SoC work as one battery entity group. Configure them together when battery forecasting is enabled.",
     grid_import_windows: "Import price windows must cover the whole day without gaps or overlaps.",
-    automation: "Phase 2 only exposes the top-level automation enable switch in visual mode. When the automation branch is missing, the panel shows automation as disabled until you turn it on.",
-    optimizer_pipeline: "The optimizer pipeline is YAML-first in this phase. Edit the ordered optimizer list in YAML; unknown future optimizer keys and kinds are preserved exactly as stored.",
+    automation: "Visual mode supports the automation enable switch and the Phase 5 export_price optimizer. When the automation branch is missing, the panel shows automation as disabled until you turn it on.",
+    optimizer_pipeline: "Configure the ordered optimizer list here. Visual mode supports export_price optimizers directly, but the Phase 5 runtime still executes at most one enabled optimizer at a time. Unknown future optimizer keys and kinds are preserved exactly as stored and can still be edited in YAML.",
     appliances: "EV charger, climate appliance, and generic appliance editing are supported directly. Unsupported future appliance kinds are preserved and shown read-only unless you remove them.",
     generic_appliance_projection: "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient.",
     climate_appliance_projection: "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the climate entity was active in heat or cool mode and falls back to the fixed value if history is insufficient."
@@ -1601,6 +1627,7 @@ const ot = {
     daily_energy_entity: "Daily energy entity",
     import_window: "Import window",
     local_time_window: "Local time window",
+    optimizer: "Optimizer",
     use_mode_mapping: "Use mode mapping",
     eco_gear_mapping: "Eco gear mapping"
   },
@@ -1650,6 +1677,10 @@ const ot = {
     stop_discharging_option: "Stop discharging option",
     stop_export_option: "Stop export option",
     automation_enabled: "Enable automation",
+    optimizer_id: "Optimizer id",
+    optimizer_enabled: "Enabled",
+    when_price_below: "When price below",
+    optimizer_action: "Action",
     appliance_id: "Appliance id",
     appliance_name: "Appliance name",
     appliance_icon: "Appliance icon",
@@ -1682,6 +1713,7 @@ const ot = {
     import_price_unit: "Example: CZK/kWh",
     mode_entity: "Helman writes schedule action options to this entity.",
     automation_enabled: "Turning this on materializes automation: { enabled: true, optimizers: [] }. Turning it off keeps the current optimizer list for later edits.",
+    export_price_action: "Phase 5 only supports the stop_export action for this optimizer.",
     appliance_icon: "Optional. Leave empty to use the default energy icon in appliance metadata.",
     history_energy_entity: "Use a cumulative energy sensor that tracks the appliance energy consumption."
   },
@@ -1716,6 +1748,8 @@ const ot = {
     surplus_aware: "Surplus aware",
     fixed: "Fixed",
     history_average: "History average",
+    export_price: "Export price",
+    stop_export: "Stop export",
     unknown: "unknown",
     missing_id: "missing id"
   },
@@ -1746,10 +1780,12 @@ const ot = {
     daily_energy_entity: "Daily energy entity {index}",
     import_window: "Import window {index}",
     appliance: "Appliance {index}",
+    optimizer: "Optimizer {index}",
     ev_charger: "EV Charger {index}",
     climate_appliance: "Climate appliance {index}",
     generic_appliance: "Generic appliance {index}",
     vehicle: "Vehicle {index}",
+    unsupported_optimizer_kind: "Unsupported optimizer kind: {kind}",
     unsupported_appliance_kind: "Unsupported appliance kind: {kind}"
   },
   help: {
@@ -1784,6 +1820,9 @@ const ot = {
     import_window_price: "Import electricity price during this time window, in the unit configured above. Used by the battery optimizer to find the cheapest times to charge.",
     scheduler_mode_entity: "Input select or select entity that Helman writes schedule action commands to. Helman sets the option value that corresponds to the desired battery mode (charge, discharge, normal, etc.). Required for the scheduler to actually control the battery.",
     scheduler_action_option: "The option value that Helman will write to the mode entity when this action is scheduled. Must exactly match one of the options in the select entity. Leave empty if this action is not supported by your inverter.",
+    automation_optimizer_id: "Unique optimizer identifier stored in automation.optimizers[].id. Keep it stable so future references, logs, and debugging stay readable.",
+    export_price_when_price_below: "Threshold in the same unit as the export price forecast. When the forecasted export price drops below this value, the optimizer authors stop_export slots where export is projected.",
+    export_price_action: "Phase 5 only supports stop_export. Future phases may add more optimizer actions, but this field is fixed for now.",
     deferrable_consumer_energy_entity: "Cumulative energy sensor (kWh) that tracks this appliance's total electricity consumption. Helman uses its recorded history to estimate how much energy this appliance will consume in upcoming time slots, so it can be deferred to cheaper periods.",
     appliance_id: "Unique internal identifier for this appliance. Used in automation references and schedule tracking. Should not be changed after the appliance is configured, as it may break existing automations.",
     appliance_name: "Display name shown for this appliance in the Helman dashboard and energy breakdowns.",
@@ -1802,22 +1841,22 @@ const ot = {
     vehicle_battery_capacity_kwh: "Total usable battery capacity of the vehicle in kWh. Required for accurate charge target and duration calculations.",
     vehicle_max_charging_power_kw: "Maximum AC charging power for this vehicle in kW. Used to model how quickly the vehicle charges and to plan charging window durations."
   }
-}, ai = {
-  editor: rt
-}, ni = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+}, si = {
+  editor: nt
+}, li = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  default: ai,
-  editor: rt
+  default: si,
+  editor: nt
 }, Symbol.toStringTag, { value: "Module" })), le = {
-  cs: ri,
-  en: ni
+  cs: ni,
+  en: li
 };
-function Ye(r) {
+function Re(r) {
   var t;
-  const e = li((r == null ? void 0 : r.language) || ((t = r == null ? void 0 : r.locale) == null ? void 0 : t.language) || "cs");
-  return (i) => si(i, e);
+  const e = ci((r == null ? void 0 : r.language) || ((t = r == null ? void 0 : r.locale) == null ? void 0 : t.language) || "cs");
+  return (i) => di(i, e);
 }
-function si(r, e = "cs") {
+function di(r, e = "cs") {
   const t = e.replace(/['"]+/g, "").replace("_", "-");
   let i;
   try {
@@ -1837,18 +1876,18 @@ function si(r, e = "cs") {
     }
   return i;
 }
-function li(r) {
+function ci(r) {
   return r ? r.substring(0, 2) : "cs";
 }
-const Re = [
+const Ne = [
   "ha-entity-picker",
   "ha-form",
   "ha-formfield",
   "ha-switch"
-], Ne = "ha-yaml-editor";
+], Fe = "ha-yaml-editor";
 let F = null, D = null;
-const di = async () => {
-  if (!Re.every((r) => customElements.get(r))) {
+const pi = async () => {
+  if (!Ne.every((r) => customElements.get(r))) {
     if (F)
       return F;
     F = (async () => {
@@ -1863,7 +1902,7 @@ const di = async () => {
             component_name: "config"
           }
         ]
-      }, r._updateRoutes(), await r.routerOptions.routes.tmp.load(), await customElements.whenDefined("ha-panel-config"), await document.createElement("ha-panel-config").routerOptions.routes.automation.load(), await Promise.all(Re.map((t) => customElements.whenDefined(t)));
+      }, r._updateRoutes(), await r.routerOptions.routes.tmp.load(), await customElements.whenDefined("ha-panel-config"), await document.createElement("ha-panel-config").routerOptions.routes.automation.load(), await Promise.all(Ne.map((t) => customElements.whenDefined(t)));
     })();
     try {
       await F;
@@ -1871,8 +1910,8 @@ const di = async () => {
       throw F = null, r;
     }
   }
-}, Fe = async () => {
-  if (!customElements.get(Ne)) {
+}, De = async () => {
+  if (!customElements.get(Fe)) {
     if (D)
       return D;
     D = (async () => {
@@ -1886,7 +1925,7 @@ const di = async () => {
         }
       ]).routes) == null ? void 0 : i.tmp) == null ? void 0 : o.load) == null ? void 0 : a.call(o)), await customElements.whenDefined("developer-tools-router"), await ((c = (d = (l = (n = document.createElement(
         "developer-tools-router"
-      ).routerOptions) == null ? void 0 : n.routes) == null ? void 0 : l.service) == null ? void 0 : d.load) == null ? void 0 : c.call(d)), await customElements.whenDefined(Ne);
+      ).routerOptions) == null ? void 0 : n.routes) == null ? void 0 : l.service) == null ? void 0 : d.load) == null ? void 0 : c.call(d)), await customElements.whenDefined(Fe);
     })();
     try {
       await D;
@@ -1895,7 +1934,7 @@ const di = async () => {
     }
   }
 }, de = "YAML must resolve to JSON-compatible scalars, arrays, and objects.";
-function De(r) {
+function Ue(r) {
   try {
     return {
       ok: !0,
@@ -1928,17 +1967,17 @@ function _e(r) {
   }
   throw new Error(de);
 }
-const ci = [
+const _i = [
   { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
   { value: "surplus_aware", labelKey: "editor.values.surplus_aware" }
-], pi = [
+], hi = [
   { value: "fixed", labelKey: "editor.values.fixed" },
   { value: "history_average", labelKey: "editor.values.history_average" }
-], _i = {
+], We = "export_price", ui = "stop_export", mi = {
   icon: {}
 }, ee = class ee extends K {
   constructor() {
-    super(...arguments), this._fallbackLocalize = Ye(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._helpDialog = null, this._preventSummaryToggle = (e) => {
+    super(...arguments), this._fallbackLocalize = Re(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._helpDialog = null, this._preventSummaryToggle = (e) => {
       e.preventDefault(), e.stopPropagation();
     }, this._closeHelp = () => {
       this._helpDialog = null;
@@ -1949,52 +1988,71 @@ const ci = [
     }, this._handleSaveClick = async () => {
       await this._saveConfig();
     }, this._handleAddDeviceLabelCategory = () => {
-      const e = S(this._getValue(["device_label_text"])).map(
+      const e = j(this._getValue(["device_label_text"])).map(
         ([i]) => i
-      ), t = Pt(e);
+      ), t = It(e);
       this._applyMutation((i) => {
         g(i, ["device_label_text", t], {});
       });
     }, this._handleAddDeferrableConsumer = () => {
       var t;
-      const e = ((t = w(
+      const e = ((t = k(
         this._getValue(["power_devices", "house", "forecast", "deferrable_consumers"])
       )) == null ? void 0 : t.length) ?? 0;
       this._applyMutation((i) => {
-        C(
+        S(
           i,
           ["power_devices", "house", "forecast", "deferrable_consumers"],
-          Ft(
+          Ut(
             this._tFormat("editor.dynamic.consumer", { index: e + 1 })
           )
         );
       });
     }, this._handleAddDailyEnergyEntity = () => {
       this._applyMutation((e) => {
-        C(
+        S(
           e,
           ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-          Ut()
+          Kt()
         );
       });
     }, this._handleAddImportPriceWindow = () => {
       this._applyMutation((e) => {
-        C(
+        S(
           e,
           ["power_devices", "grid", "forecast", "import_price_windows"],
-          Dt()
+          Wt()
+        );
+      });
+    }, this._handleAddExportPriceOptimizer = () => {
+      const e = (k(this._getValue(["automation", "optimizers"])) ?? []).map((t) => {
+        var i;
+        return this._stringValue((i = v(t)) == null ? void 0 : i.id);
+      }).filter((t) => t.length > 0);
+      this._applyMutation((t) => {
+        if (!v(w(t, ["automation"]))) {
+          g(t, ["automation"], {
+            enabled: !0,
+            optimizers: [Oe(e)]
+          });
+          return;
+        }
+        S(
+          t,
+          ["automation", "optimizers"],
+          Oe(e)
         );
       });
     }, this._handleAddEvCharger = () => {
-      const e = (w(this._getValue(["appliances"])) ?? []).map((t) => {
+      const e = (k(this._getValue(["appliances"])) ?? []).map((t) => {
         var i;
-        return this._stringValue((i = b(t)) == null ? void 0 : i.id);
+        return this._stringValue((i = v(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        C(
+        S(
           t,
           ["appliances"],
-          It(
+          Yt(
             e,
             this._tFormat("editor.dynamic.ev_charger", { index: e.length + 1 }),
             this._tFormat("editor.dynamic.vehicle", { index: 1 })
@@ -2002,15 +2060,15 @@ const ci = [
         );
       });
     }, this._handleAddClimateAppliance = () => {
-      const e = (w(this._getValue(["appliances"])) ?? []).map((t) => {
+      const e = (k(this._getValue(["appliances"])) ?? []).map((t) => {
         var i;
-        return this._stringValue((i = b(t)) == null ? void 0 : i.id);
+        return this._stringValue((i = v(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        C(
+        S(
           t,
           ["appliances"],
-          Yt(
+          Nt(
             e,
             this._tFormat("editor.dynamic.climate_appliance", {
               index: e.length + 1
@@ -2019,15 +2077,15 @@ const ci = [
         );
       });
     }, this._handleAddGenericAppliance = () => {
-      const e = (w(this._getValue(["appliances"])) ?? []).map((t) => {
+      const e = (k(this._getValue(["appliances"])) ?? []).map((t) => {
         var i;
-        return this._stringValue((i = b(t)) == null ? void 0 : i.id);
+        return this._stringValue((i = v(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        C(
+        S(
           t,
           ["appliances"],
-          Tt(
+          Rt(
             e,
             this._tFormat("editor.dynamic.generic_appliance", {
               index: e.length + 1
@@ -2042,10 +2100,10 @@ const ci = [
   }
   set hass(e) {
     const t = this._hass;
-    this._hass = e, e && !this._localize && (this._localize = Ye(e)), this.requestUpdate("hass", t);
+    this._hass = e, e && !this._localize && (this._localize = Re(e)), this.requestUpdate("hass", t);
   }
   connectedCallback() {
-    super.connectedCallback(), di().then(() => {
+    super.connectedCallback(), pi().then(() => {
       this.requestUpdate();
     }).catch((e) => {
       this._message = {
@@ -2119,7 +2177,7 @@ const ci = [
   _renderDocumentBody(e) {
     return this._isScopeYaml(x) ? s`<div class="list-card">${this._renderYamlEditor(x)}</div>` : s`
       <div class="tabs">
-        ${Jt.map((t) => {
+        ${Xt.map((t) => {
       const i = e[t.id];
       return s`
             <button
@@ -2129,7 +2187,7 @@ const ci = [
         this._activeTab = t.id;
       }}
             >
-              ${this._renderSvgIcon(Zt[t.id], "tab-icon")}
+              ${this._renderSvgIcon(Jt[t.id], "tab-icon")}
               <span>${this._t(t.labelKey)}</span>
               ${i.errors > 0 ? s`<span class="tab-count errors">${i.errors}</span>` : i.warnings > 0 ? s`<span class="tab-count warnings">${i.warnings}</span>` : p}
             </button>
@@ -2137,7 +2195,7 @@ const ci = [
     })}
       </div>
 
-      ${Mt(this._renderActiveTab())}
+      ${Lt(this._renderActiveTab())}
     `;
   }
   _renderActiveTab() {
@@ -2176,7 +2234,7 @@ const ci = [
     `;
   }
   _renderSectionScope(e, t, i = {}) {
-    const o = N(e), { initialOpen: a = !0 } = i, n = Gt[e];
+    const o = N(e), { initialOpen: a = !0 } = i, n = Qt[e];
     return s`
       <details class="section-card" ?open=${a}>
         <summary>
@@ -2248,7 +2306,7 @@ const ci = [
   async _enterApplianceYamlMode(e) {
     if (this._getApplianceMode(e) !== "yaml")
       try {
-        if (await Fe(), !this._config) return;
+        if (await De(), !this._config) return;
         const t = this._getValue(["appliances", e]);
         this._applianceModes = { ...this._applianceModes, [e]: "yaml" }, this._applianceYamlValues = { ...this._applianceYamlValues, [e]: t };
         const i = { ...this._applianceYamlErrors };
@@ -2277,7 +2335,7 @@ const ci = [
       };
       return;
     }
-    const i = De(t.detail.value);
+    const i = Ue(t.detail.value);
     if (!i.ok) {
       this._applianceYamlErrors = {
         ...this._applianceYamlErrors,
@@ -2442,9 +2500,9 @@ const ci = [
     `;
   }
   _renderPowerDevicesTab() {
-    const e = w(this._getValue(["power_devices", "solar", "forecast", "daily_energy_entity_ids"])) ?? [], t = w(
+    const e = k(this._getValue(["power_devices", "solar", "forecast", "daily_energy_entity_ids"])) ?? [], t = k(
       this._getValue(["power_devices", "house", "forecast", "deferrable_consumers"])
-    ) ?? [], i = w(this._getValue(["power_devices", "grid", "forecast", "import_price_windows"])) ?? [];
+    ) ?? [], i = k(this._getValue(["power_devices", "grid", "forecast", "import_price_windows"])) ?? [];
     return s`
       ${this._renderSectionScope(
       u.power_devices.house,
@@ -2731,7 +2789,7 @@ const ci = [
     `;
   }
   _renderAutomationTab() {
-    const e = w(this._getValue(["automation", "optimizers"])) ?? [];
+    const e = k(this._getValue(["automation", "optimizers"])) ?? [];
     return s`
       ${this._renderSectionScope(
       u.automation.settings,
@@ -2751,15 +2809,29 @@ const ci = [
           <p class="inline-note">
             ${this._t("editor.notes.optimizer_pipeline")}
           </p>
+          <div class="list-stack">
+            ${e.map(
+        (t, i) => this._renderAutomationOptimizerCard(t, i, e.length)
+      )}
+          </div>
           ${e.length === 0 ? s`
                 <div class="message info">
                   ${this._t("editor.empty.no_automation_optimizers")}
                 </div>
-              ` : s`<pre class="raw-preview">${JSON.stringify(e, null, 2)}</pre>`}
+              ` : p}
+          <div class="section-footer">
+            <button type="button" class="add-button" @click=${this._handleAddExportPriceOptimizer}>
+              ${this._t("editor.actions.add_export_price_optimizer")}
+            </button>
+          </div>
         `,
       { initialOpen: !1 }
     )}
     `;
+  }
+  _renderAutomationOptimizerCard(e, t, i) {
+    const o = v(e) ?? {};
+    return this._stringValue(o.kind) === We ? this._renderExportPriceOptimizerCard(o, t, i) : this._renderUnsupportedAutomationOptimizerCard(o, t, i);
   }
   _renderAutomationEnabledField() {
     const e = this._getAutomationEnabled();
@@ -2777,8 +2849,116 @@ const ci = [
       </div>
     `;
   }
+  _renderExportPriceOptimizerCard(e, t, i) {
+    const o = ["automation", "optimizers", t], a = [...o, "params"], n = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), l = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", d = this._stringValue(this._getValue([...a, "action"])) || ui, c = this._getValue([...a, "when_price_below"]) ?? 0;
+    return s`
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(l, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${n}</strong>
+                <span class="card-subtitle">${this._t("editor.values.export_price")}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              <button
+                type="button"
+                ?disabled=${t === 0}
+                @click=${() => this._moveListItem(["automation", "optimizers"], t, t - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button
+                type="button"
+                ?disabled=${t === i - 1}
+                @click=${() => this._moveListItem(["automation", "optimizers"], t, t + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button
+                type="button"
+                class="danger"
+                @click=${() => this._removeListItem(["automation", "optimizers"], t)}
+              >${this._t("editor.actions.remove")}</button>
+            </div>
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <div class="field-grid">
+            ${this._renderRequiredTextField(
+      [...o, "id"],
+      "editor.fields.optimizer_id",
+      void 0,
+      "editor.help.automation_optimizer_id"
+    )}
+            ${this._renderBooleanField([...o, "enabled"], "editor.fields.optimizer_enabled", !0)}
+            <div class="field">
+              <label>${this._t("editor.fields.kind")}</label>
+              <input .value=${We} disabled />
+            </div>
+            ${this._renderRequiredNumberField(
+      [...a, "when_price_below"],
+      "editor.fields.when_price_below",
+      c,
+      "any",
+      "editor.help.export_price_when_price_below"
+    )}
+            <div class="field">
+              <div class="field-label-row">
+                <label>${this._t("editor.fields.optimizer_action")}</label>
+                ${this._renderHelpIcon(
+      "editor.fields.optimizer_action",
+      "editor.help.export_price_action"
+    )}
+              </div>
+              <input .value=${d} disabled />
+              <div class="helper">${this._t("editor.helpers.export_price_action")}</div>
+            </div>
+          </div>
+        </div>
+      </details>
+    `;
+  }
+  _renderUnsupportedAutomationOptimizerCard(e, t, i) {
+    const o = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", a = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), n = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
+      kind: this._stringValue(e.kind) || this._t("editor.values.unknown")
+    });
+    return s`
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(o, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${a}</strong>
+                <span class="card-subtitle">${n}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              <button
+                type="button"
+                ?disabled=${t === 0}
+                @click=${() => this._moveListItem(["automation", "optimizers"], t, t - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button
+                type="button"
+                ?disabled=${t === i - 1}
+                @click=${() => this._moveListItem(["automation", "optimizers"], t, t + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button
+                type="button"
+                class="danger"
+                @click=${() => this._removeListItem(["automation", "optimizers"], t)}
+              >${this._t("editor.actions.remove")}</button>
+            </div>
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <pre class="raw-preview">${JSON.stringify(e, null, 2)}</pre>
+        </div>
+      </details>
+    `;
+  }
   _renderAppliancesTab() {
-    const e = w(this._getValue(["appliances"])) ?? [];
+    const e = k(this._getValue(["appliances"])) ?? [];
     return s`
       ${this._renderSectionScope(
       u.appliances.configured_appliances,
@@ -2815,9 +2995,9 @@ const ci = [
     `;
   }
   _renderDeviceLabelCategories() {
-    const e = S(this._getValue(["device_label_text"]));
+    const e = j(this._getValue(["device_label_text"]));
     return e.length === 0 ? [s`<div class="message info">${this._t("editor.empty.no_device_label_categories")}</div>`] : e.map(([t, i]) => {
-      const o = S(i);
+      const o = j(i);
       return s`
         <div class="list-card">
           <div class="card-header">
@@ -2912,7 +3092,7 @@ const ci = [
     });
   }
   _renderDeferrableConsumer(e, t, i) {
-    const o = b(e) ?? {}, a = [
+    const o = v(e) ?? {}, a = [
       "power_devices",
       "house",
       "forecast",
@@ -3029,7 +3209,7 @@ const ci = [
     `;
   }
   _renderImportPriceWindow(e, t, i) {
-    const o = b(e) ?? {}, a = [
+    const o = v(e) ?? {}, a = [
       "power_devices",
       "grid",
       "forecast",
@@ -3113,7 +3293,7 @@ const ci = [
     `;
   }
   _renderApplianceCard(e, t, i) {
-    const o = b(e) ?? {}, a = this._stringValue(o.kind);
+    const o = v(e) ?? {}, a = this._stringValue(o.kind);
     return a === "ev_charger" ? this._renderEvChargerAppliance(o, t, i) : a === "climate" ? this._renderClimateAppliance(o, t, i) : a === "generic" ? this._renderGenericAppliance(o, t, i) : this._renderUnsupportedAppliance(o, t, i);
   }
   _renderUnsupportedAppliance(e, t, i) {
@@ -3157,11 +3337,11 @@ const ci = [
     `;
   }
   _renderEvChargerAppliance(e, t, i) {
-    const o = ["appliances", t], a = S(
+    const o = ["appliances", t], a = j(
       this._getValue([...o, "controls", "use_mode", "values"])
-    ), n = S(
+    ), n = j(
       this._getValue([...o, "controls", "eco_gear", "values"])
-    ), l = w(this._getValue([...o, "vehicles"])) ?? [], d = this._stringValue(e.name) || this._tFormat("editor.dynamic.ev_charger", { index: t + 1 }), c = this._stringValue(e.id) || this._t("editor.values.missing_id"), _ = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", h = this._getApplianceMode(t) === "yaml";
+    ), l = k(this._getValue([...o, "vehicles"])) ?? [], d = this._stringValue(e.name) || this._tFormat("editor.dynamic.ev_charger", { index: t + 1 }), c = this._stringValue(e.id) || this._t("editor.values.missing_id"), _ = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", h = this._getApplianceMode(t) === "yaml";
     return s`
       <details class="list-card">
         <summary>
@@ -3210,7 +3390,7 @@ const ci = [
               ${this._renderSimpleSection(
       this._t("editor.sections.use_modes"),
       s`<div class="list-stack">
-                  ${a.map(([v, f]) => this._renderUseMode(o, v, f))}
+                  ${a.map(([b, f]) => this._renderUseMode(o, b, f))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddUseMode(t)}>${this._t("editor.actions.add_use_mode")}</button>
@@ -3219,7 +3399,7 @@ const ci = [
               ${this._renderSimpleSection(
       this._t("editor.sections.eco_gears"),
       s`<div class="list-stack">
-                  ${n.map(([v, f]) => this._renderEcoGear(o, v, f))}
+                  ${n.map(([b, f]) => this._renderEcoGear(o, b, f))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(t)}>${this._t("editor.actions.add_eco_gear")}</button>
@@ -3228,7 +3408,7 @@ const ci = [
               ${this._renderSimpleSection(
       this._t("editor.sections.vehicles"),
       s`<div class="list-stack">
-                  ${l.map((v, f) => this._renderVehicle(o, v, f, l.length))}
+                  ${l.map((b, f) => this._renderVehicle(o, b, f, l.length))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddVehicle(t)}>${this._t("editor.actions.add_vehicle")}</button>
@@ -3373,7 +3553,7 @@ const ci = [
               .value=${t}
               @change=${(n) => a(n.currentTarget.value)}
             >
-              ${pi.map(
+              ${hi.map(
       (n) => s`
                   <option value=${n.value}>${this._t(n.labelKey)}</option>
                 `
@@ -3409,7 +3589,7 @@ const ci = [
     `;
   }
   _renderUseMode(e, t, i) {
-    const o = b(i) ?? {}, a = [
+    const o = v(i) ?? {}, a = [
       ...e,
       "controls",
       "use_mode",
@@ -3453,7 +3633,7 @@ const ci = [
       n.currentTarget.value
     )}
             >
-              ${ci.map(
+              ${_i.map(
       (n) => s`
                   <option value=${n.value}>${this._t(n.labelKey)}</option>
                 `
@@ -3465,7 +3645,7 @@ const ci = [
     `;
   }
   _renderEcoGear(e, t, i) {
-    const o = b(i) ?? {}, a = [
+    const o = v(i) ?? {}, a = [
       ...e,
       "controls",
       "eco_gear",
@@ -3510,7 +3690,7 @@ const ci = [
     `;
   }
   _renderVehicle(e, t, i, o) {
-    const a = b(t) ?? {}, n = [...e, "vehicles", i];
+    const a = v(t) ?? {}, n = [...e, "vehicles", i];
     return s`
       <div class="nested-card">
         <div class="card-header">
@@ -3648,7 +3828,7 @@ const ci = [
         <ha-selector
           .hass=${this.hass}
           .narrow=${this.narrow ?? !1}
-          .selector=${_i}
+          .selector=${mi}
           .label=${this._t(t)}
           .helper=${i ? this._t(i) : void 0}
           .required=${!1}
@@ -3793,11 +3973,11 @@ const ci = [
     };
     if (this._validation) {
       for (const t of this._validation.errors) {
-        const i = Oe[t.section] ?? "general";
+        const i = Ie[t.section] ?? "general";
         e[i].errors += 1;
       }
       for (const t of this._validation.warnings) {
-        const i = Oe[t.section] ?? "general";
+        const i = Ie[t.section] ?? "general";
         e[i].warnings += 1;
       }
     }
@@ -3814,7 +3994,7 @@ const ci = [
       this._loading = !0;
       try {
         const t = await this.hass.callWS({ type: "helman/get_config" });
-        this._config = b(t) ? y(t) : {}, this._validation = null, this._dirty = !1, this._resetScopeYamlState(), e.showMessage && (this._message = {
+        this._config = v(t) ? y(t) : {}, this._validation = null, this._dirty = !1, this._resetScopeYamlState(), e.showMessage && (this._message = {
           kind: "info",
           text: this._t("editor.messages.reloaded_config")
         });
@@ -3910,9 +4090,9 @@ const ci = [
       };
       return;
     }
-    const t = Te(e);
+    const t = Ye(e);
     try {
-      if (await Fe(), !this._config || this._isScopeYaml(e))
+      if (await De(), !this._config || this._isScopeYaml(e))
         return;
       const i = this._omitScopeIds(this._scopeModes, t);
       i[e] = "yaml";
@@ -3954,7 +4134,7 @@ const ci = [
       };
       return;
     }
-    const i = De(t.detail.value);
+    const i = Ue(t.detail.value);
     if (!i.ok) {
       this._scopeYamlErrors = {
         ...this._scopeYamlErrors,
@@ -3993,7 +4173,7 @@ const ci = [
     );
   }
   _hasBlockingDescendantYamlErrors(e) {
-    return Te(e).some(
+    return Ye(e).some(
       (t) => {
         const i = this._scopeYamlErrors[t];
         return typeof i == "string" && i.length > 0;
@@ -4019,23 +4199,23 @@ const ci = [
     return e.replaceAll(":", "-").replaceAll(".", "-");
   }
   _handleAddDeviceLabel(e) {
-    const t = S(this._getValue(["device_label_text", e])).map(
+    const t = j(this._getValue(["device_label_text", e])).map(
       ([o]) => o
-    ), i = Ot(t);
+    ), i = Tt(t);
     this._applyMutation((o) => {
       g(o, ["device_label_text", e, i], "");
     });
   }
   _handleAddVehicle(e) {
-    const t = ["appliances", e, "vehicles"], i = (w(this._getValue(t)) ?? []).map((o) => {
+    const t = ["appliances", e, "vehicles"], i = (k(this._getValue(t)) ?? []).map((o) => {
       var a;
-      return this._stringValue((a = b(o)) == null ? void 0 : a.id);
+      return this._stringValue((a = v(o)) == null ? void 0 : a.id);
     }).filter((o) => o.length > 0);
     this._applyMutation((o) => {
-      C(
+      S(
         o,
         t,
-        Xe(
+        tt(
           i,
           this._tFormat("editor.dynamic.vehicle", { index: i.length + 1 })
         )
@@ -4049,9 +4229,9 @@ const ci = [
       "controls",
       "use_mode",
       "values"
-    ], i = Wt(S(this._getValue(t)).map(([o]) => o));
+    ], i = qt(j(this._getValue(t)).map(([o]) => o));
     this._applyMutation((o) => {
-      g(o, [...t, i], Rt());
+      g(o, [...t, i], Ft());
     });
   }
   _handleAddEcoGear(e) {
@@ -4061,9 +4241,9 @@ const ci = [
       "controls",
       "eco_gear",
       "values"
-    ], i = Kt(S(this._getValue(t)).map(([o]) => o));
+    ], i = Bt(j(this._getValue(t)).map(([o]) => o));
     this._applyMutation((o) => {
-      g(o, [...t, i], Nt());
+      g(o, [...t, i], Dt());
     });
   }
   _handleProjectedApplianceProjectionStrategyChange(e, t) {
@@ -4071,8 +4251,8 @@ const ci = [
       const o = ["appliances", e, "projection"];
       if (g(i, [...o, "strategy"], t), t !== "history_average")
         return;
-      const a = b(
-        $(i, [...o, "history_average"])
+      const a = v(
+        w(i, [...o, "history_average"])
       ), n = a == null ? void 0 : a.lookback_days;
       g(i, [...o, "history_average"], {
         energy_entity_id: this._stringValue(a == null ? void 0 : a.energy_entity_id),
@@ -4084,7 +4264,7 @@ const ci = [
     const o = i.trim();
     if (!o || o === t || !this._config)
       return;
-    const a = y(this._config), n = Ht(a, e, t, o);
+    const a = y(this._config), n = Ot(a, e, t, o);
     if (!n.ok) {
       this._message = { kind: "error", text: this._formatRenameObjectKeyError(n) };
       return;
@@ -4093,24 +4273,24 @@ const ci = [
   }
   _moveListItem(e, t, i) {
     this._applyMutation((o) => {
-      Lt(o, e, t, i);
+      Pt(o, e, t, i);
     });
   }
   _removeListItem(e, t) {
     this._applyMutation((i) => {
-      Ct(i, e, t);
+      Ht(i, e, t);
     });
   }
   _removePath(e) {
     this._applyMutation((t) => {
-      B(t, e);
+      q(t, e);
     });
   }
   _setOptionalString(e, t) {
     const i = t.trim();
     this._applyMutation((o) => {
       if (!i) {
-        B(o, e);
+        q(o, e);
         return;
       }
       g(o, e, i);
@@ -4125,7 +4305,7 @@ const ci = [
     const i = t.trim();
     this._applyMutation((o) => {
       if (!i) {
-        B(o, e);
+        q(o, e);
         return;
       }
       const a = Number(i);
@@ -4144,12 +4324,12 @@ const ci = [
     });
   }
   _getAutomationEnabled() {
-    const e = b(this._getValue(["automation"]));
+    const e = v(this._getValue(["automation"]));
     return e ? this._booleanValue(e.enabled, !0) : !1;
   }
   _setAutomationEnabled(e) {
     !e && this._getValue(["automation"]) === void 0 || this._applyMutation((t) => {
-      const i = $(t, ["automation"]), o = b(i);
+      const i = w(t, ["automation"]), o = v(i);
       if (o) {
         g(t, ["automation", "enabled"], e), Array.isArray(o.optimizers) || g(t, ["automation", "optimizers"], []);
         return;
@@ -4171,7 +4351,7 @@ const ci = [
   }
   _getValue(e) {
     if (this._config)
-      return $(this._config, e);
+      return w(this._config, e);
   }
   _stringValue(e) {
     return typeof e == "string" ? e : typeof e == "number" ? String(e) : "";
@@ -4246,7 +4426,7 @@ ee.properties = {
   _applianceYamlValues: { state: !0 },
   _applianceYamlErrors: { state: !0 },
   _helpDialog: { state: !0 }
-}, ee.styles = nt`
+}, ee.styles = lt`
     :host {
       display: block;
       min-height: 100%;
@@ -4919,5 +5099,5 @@ ee.properties = {
     }
   `;
 let he = ee;
-const Ue = "helman-config-editor-panel";
-customElements.get(Ue) || customElements.define(Ue, he);
+const Ke = "helman-config-editor-panel";
+customElements.get(Ke) || customElements.define(Ke, he);

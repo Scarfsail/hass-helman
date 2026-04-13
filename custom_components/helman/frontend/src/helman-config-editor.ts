@@ -9,6 +9,7 @@ import {
   cloneJson,
   createApplianceDraft,
   createClimateApplianceDraft,
+  createExportPriceOptimizerDraft,
   createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
@@ -67,6 +68,9 @@ const GENERIC_PROJECTION_STRATEGIES = [
   { value: "fixed", labelKey: "editor.values.fixed" },
   { value: "history_average", labelKey: "editor.values.history_average" },
 ];
+
+const EXPORT_PRICE_OPTIMIZER_KIND = "export_price";
+const EXPORT_PRICE_OPTIMIZER_ACTION = "stop_export";
 
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
@@ -1671,17 +1675,40 @@ export class HelmanConfigEditorPanel extends LitElement {
           <p class="inline-note">
             ${this._t("editor.notes.optimizer_pipeline")}
           </p>
+          <div class="list-stack">
+            ${optimizers.map((optimizer, index) =>
+              this._renderAutomationOptimizerCard(optimizer, index, optimizers.length),
+            )}
+          </div>
           ${optimizers.length === 0
             ? html`
                 <div class="message info">
                   ${this._t("editor.empty.no_automation_optimizers")}
                 </div>
               `
-            : html`<pre class="raw-preview">${JSON.stringify(optimizers, null, 2)}</pre>`}
+            : nothing}
+          <div class="section-footer">
+            <button type="button" class="add-button" @click=${this._handleAddExportPriceOptimizer}>
+              ${this._t("editor.actions.add_export_price_optimizer")}
+            </button>
+          </div>
         `,
         { initialOpen: false },
       )}
     `;
+  }
+
+  private _renderAutomationOptimizerCard(
+    optimizer: unknown,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const optimizerObject = asJsonObject(optimizer) ?? {};
+    const kind = this._stringValue(optimizerObject.kind);
+    if (kind === EXPORT_PRICE_OPTIMIZER_KIND) {
+      return this._renderExportPriceOptimizerCard(optimizerObject, index, total);
+    }
+    return this._renderUnsupportedAutomationOptimizerCard(optimizerObject, index, total);
   }
 
   private _renderAutomationEnabledField(): TemplateResult {
@@ -1700,6 +1727,139 @@ export class HelmanConfigEditorPanel extends LitElement {
         </ha-formfield>
         <div class="helper">${this._t("editor.helpers.automation_enabled")}</div>
       </div>
+    `;
+  }
+
+  private _renderExportPriceOptimizerCard(
+    optimizer: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["automation", "optimizers", index];
+    const paramsPath: PathSegment[] = [...basePath, "params"];
+    const optimizerId =
+      this._stringValue(optimizer.id) ||
+      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const action =
+      this._stringValue(this._getValue([...paramsPath, "action"])) ||
+      EXPORT_PRICE_OPTIMIZER_ACTION;
+    const thresholdValue = this._getValue([...paramsPath, "when_price_below"]) ?? 0;
+
+    return html`
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${optimizerId}</strong>
+                <span class="card-subtitle">${this._t("editor.values.export_price")}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              <button
+                type="button"
+                ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button
+                type="button"
+                ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button
+                type="button"
+                class="danger"
+                @click=${() => this._removeListItem(["automation", "optimizers"], index)}
+              >${this._t("editor.actions.remove")}</button>
+            </div>
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <div class="field-grid">
+            ${this._renderRequiredTextField(
+              [...basePath, "id"],
+              "editor.fields.optimizer_id",
+              undefined,
+              "editor.help.automation_optimizer_id",
+            )}
+            ${this._renderBooleanField([...basePath, "enabled"], "editor.fields.optimizer_enabled", true)}
+            <div class="field">
+              <label>${this._t("editor.fields.kind")}</label>
+              <input .value=${EXPORT_PRICE_OPTIMIZER_KIND} disabled />
+            </div>
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "when_price_below"],
+              "editor.fields.when_price_below",
+              thresholdValue,
+              "any",
+              "editor.help.export_price_when_price_below",
+            )}
+            <div class="field">
+              <div class="field-label-row">
+                <label>${this._t("editor.fields.optimizer_action")}</label>
+                ${this._renderHelpIcon(
+                  "editor.fields.optimizer_action",
+                  "editor.help.export_price_action",
+                )}
+              </div>
+              <input .value=${action} disabled />
+              <div class="helper">${this._t("editor.helpers.export_price_action")}</div>
+            </div>
+          </div>
+        </div>
+      </details>
+    `;
+  }
+
+  private _renderUnsupportedAutomationOptimizerCard(
+    optimizer: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const optimizerId =
+      this._stringValue(optimizer.id) ||
+      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
+    const subtitle = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
+      kind: this._stringValue(optimizer.kind) || this._t("editor.values.unknown"),
+    });
+
+    return html`
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${optimizerId}</strong>
+                <span class="card-subtitle">${subtitle}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              <button
+                type="button"
+                ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button
+                type="button"
+                ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button
+                type="button"
+                class="danger"
+                @click=${() => this._removeListItem(["automation", "optimizers"], index)}
+              >${this._t("editor.actions.remove")}</button>
+            </div>
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <pre class="raw-preview">${JSON.stringify(optimizer, null, 2)}</pre>
+        </div>
+      </details>
     `;
   }
 
@@ -3336,6 +3496,28 @@ export class HelmanConfigEditorPanel extends LitElement {
         draft,
         ["power_devices", "grid", "forecast", "import_price_windows"],
         createImportPriceWindowDraft(),
+      );
+    });
+  };
+
+  private _handleAddExportPriceOptimizer = (): void => {
+    const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
+      .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
+      .filter((value) => value.length > 0);
+    this._applyMutation((draft) => {
+      const automation = asJsonObject(getValueAtPath(draft, ["automation"]));
+      if (!automation) {
+        setValueAtPath(draft, ["automation"], {
+          enabled: true,
+          optimizers: [createExportPriceOptimizerDraft(existingIds)],
+        });
+        return;
+      }
+
+      appendListItem(
+        draft,
+        ["automation", "optimizers"],
+        createExportPriceOptimizerDraft(existingIds),
       );
     });
   };

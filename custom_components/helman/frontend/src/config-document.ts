@@ -306,6 +306,19 @@ export function createClimateApplianceDraft(
   };
 }
 
+export function createExportPriceOptimizerDraft(existingIds: string[]): JsonObject {
+  const optimizerId = createUniqueKey(existingIds, "export-price");
+  return {
+    id: optimizerId,
+    kind: "export_price",
+    enabled: true,
+    params: {
+      when_price_below: 0,
+      action: "stop_export",
+    },
+  };
+}
+
 export function createVehicleDraft(existingIds: string[], vehicleName: string): JsonObject {
   const vehicleId = createUniqueKey(existingIds, "vehicle");
   return {
