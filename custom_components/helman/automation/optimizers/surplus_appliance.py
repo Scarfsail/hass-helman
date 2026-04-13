@@ -12,6 +12,7 @@ from ...appliances.generic_appliance import GenericApplianceRuntime
 from ...scheduling.schedule import (
     ScheduleDocument,
     ScheduleDomains,
+    build_horizon_end,
     is_default_domains,
     iter_horizon_slot_ids,
 )
@@ -221,10 +222,18 @@ def _build_export_surplus_by_bucket_start(
     *,
     snapshot: "OptimizationSnapshot",
 ) -> dict[datetime, float] | None:
-    if (
-        snapshot.adjusted_house_forecast.get("status") != "available"
-        or snapshot.battery_forecast.get("status") != "available"
-        or snapshot.grid_forecast.get("status") != "available"
+    if snapshot.adjusted_house_forecast.get("status") != "available":
+        return None
+
+    required_coverage_until = build_horizon_end(snapshot.context.now)
+    if not _forecast_covers_schedule_horizon(
+        snapshot.battery_forecast,
+        required_coverage_until=required_coverage_until,
+    ):
+        return None
+    if not _forecast_covers_schedule_horizon(
+        snapshot.grid_forecast,
+        required_coverage_until=required_coverage_until,
     ):
         return None
 
@@ -243,6 +252,23 @@ def _build_export_surplus_by_bucket_start(
         export_surplus_by_bucket_start[bucket_start] = exported_to_grid_kwh
 
     return export_surplus_by_bucket_start
+
+
+def _forecast_covers_schedule_horizon(
+    forecast: dict[str, Any],
+    *,
+    required_coverage_until: datetime,
+) -> bool:
+    status = forecast.get("status")
+    if status == "available":
+        return True
+    if status != "partial":
+        return False
+
+    coverage_until = _parse_timestamp(forecast.get("coverageUntil"))
+    if coverage_until is None:
+        return False
+    return coverage_until >= required_coverage_until
 
 
 def _slot_has_sufficient_surplus(

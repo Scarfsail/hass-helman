@@ -362,7 +362,7 @@ V1 scope and authored output:
 - for climate appliances, config requires `climate_mode`; in the current backend that means `heat` or `cool`
 - EV charging is intentionally out of scope for this optimizer kind in v1
 - if forecast inputs or demand-profile inputs are unavailable at run time, the optimizer logs a skip reason and leaves the schedule unchanged
-- in the current implementation, `batteryForecast.status` and `gridForecast.status` must both be fully `available`; live `partial` forecast coverage is treated as unavailable for `surplus_appliance` and causes a skip with no writes
+- `surplus_appliance` requires `adjustedHouseForecast.status == "available"`, but it may also consume `batteryForecast` / `gridForecast` with `status == "partial"` when their `coverageUntil` still reaches the full rolling scheduler horizon; only partial coverage that ends before the scheduler horizon is treated as unavailable and causes a skip with no writes
 
 Important detail:
 

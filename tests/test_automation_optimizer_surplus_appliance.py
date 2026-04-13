@@ -111,6 +111,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleDocument,
+    build_horizon_end,
     schedule_document_to_dict,
 )
 
@@ -177,7 +178,10 @@ def _make_snapshot(
     when_active_hourly_energy_kwh_by_appliance_id: dict[str, float] | None = None,
     schedule_document: ScheduleDocument | None = None,
     grid_series: list[dict[str, object]] | None = None,
+    battery_status: str = "available",
+    battery_coverage_until: str | None = None,
     grid_status: str = "available",
+    grid_coverage_until: str | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances(appliances)
     return OptimizationSnapshot(
@@ -185,9 +189,14 @@ def _make_snapshot(
         if schedule_document is None
         else schedule_document,
         adjusted_house_forecast={"status": "available", "series": []},
-        battery_forecast={"status": "available", "series": []},
+        battery_forecast={
+            "status": battery_status,
+            "coverageUntil": battery_coverage_until,
+            "series": [],
+        },
         grid_forecast={
             "status": grid_status,
+            "coverageUntil": grid_coverage_until,
             "series": [] if grid_series is None else deepcopy(grid_series),
         },
         context=OptimizationContext(
@@ -509,6 +518,63 @@ class SurplusApplianceOptimizerTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(no_forecast_ctx.exception.appliance_id, appliance.id)
+
+    def test_partial_forecasts_covering_schedule_horizon_are_accepted(self) -> None:
+        appliance = _make_generic_runtime()
+        optimizer = build_surplus_appliance_optimizer(
+            _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0),
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+
+        result = optimizer.optimize(
+            _make_snapshot(
+                appliances=(appliance,),
+                when_active_hourly_energy_kwh_by_appliance_id={appliance.id: 1.0},
+                grid_series=_grid_series([0.3] * 192),
+                battery_status="partial",
+                battery_coverage_until=build_horizon_end(REFERENCE_TIME).isoformat(),
+                grid_status="partial",
+                grid_coverage_until=build_horizon_end(REFERENCE_TIME).isoformat(),
+            ),
+            _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0),
+        )
+
+        self.assertEqual(
+            schedule_document_to_dict(result)["slots"][CURRENT_SLOT_ID]["appliances"],
+            {"boiler": {"on": True, "setBy": "automation"}},
+        )
+
+    def test_partial_forecasts_ending_before_schedule_horizon_still_skip(self) -> None:
+        appliance = _make_generic_runtime()
+        optimizer = build_surplus_appliance_optimizer(
+            _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0),
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+
+        with self.assertRaisesRegex(
+            SurplusApplianceSkip,
+            "forecast surplus inputs are unavailable",
+        ) as partial_ctx:
+            optimizer.optimize(
+                _make_snapshot(
+                    appliances=(appliance,),
+                    when_active_hourly_energy_kwh_by_appliance_id={appliance.id: 1.0},
+                    grid_series=_grid_series([0.3] * 192),
+                    battery_status="partial",
+                    battery_coverage_until=(
+                        build_horizon_end(REFERENCE_TIME) - timedelta(minutes=15)
+                    ).isoformat(),
+                    grid_status="partial",
+                    grid_coverage_until=(
+                        build_horizon_end(REFERENCE_TIME) - timedelta(minutes=15)
+                    ).isoformat(),
+                ),
+                _make_optimizer_config(
+                    appliance_id=appliance.id,
+                    min_surplus_buffer_pct=0,
+                ),
+            )
+        self.assertEqual(partial_ctx.exception.appliance_id, appliance.id)
 
 
 if __name__ == "__main__":
