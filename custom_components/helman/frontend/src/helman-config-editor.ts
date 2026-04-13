@@ -477,6 +477,20 @@ export class HelmanConfigEditorPanel extends LitElement {
       display: none;
     }
 
+    details.optimizer-card > summary {
+      border: 1px solid transparent;
+    }
+
+    details.optimizer-card.optimizer-card--enabled > summary {
+      background: rgba(46, 125, 50, 0.1);
+      border-color: rgba(46, 125, 50, 0.28);
+    }
+
+    details.optimizer-card.optimizer-card--disabled > summary {
+      background: rgba(127, 127, 127, 0.08);
+      border-color: rgba(127, 127, 127, 0.22);
+    }
+
     .appliance-summary-row {
       display: flex;
       align-items: center;
@@ -646,6 +660,25 @@ export class HelmanConfigEditorPanel extends LitElement {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      align-items: center;
+    }
+
+    .summary-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      font-size: 0.82rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .summary-toggle ha-switch {
+      --mdc-theme-secondary: var(--primary-color);
     }
 
     .inline-note {
@@ -1295,6 +1328,10 @@ export class HelmanConfigEditorPanel extends LitElement {
     event.stopPropagation();
   };
 
+  private _stopSummaryToggle = (event: Event): void => {
+    event.stopPropagation();
+  };
+
   private _renderGeneralTab(): TemplateResult {
     return html`
       ${this._renderSectionScope(
@@ -1693,7 +1730,6 @@ export class HelmanConfigEditorPanel extends LitElement {
             </button>
           </div>
         `,
-        { initialOpen: false },
       )}
     `;
   }
@@ -1737,6 +1773,7 @@ export class HelmanConfigEditorPanel extends LitElement {
   ): TemplateResult {
     const basePath: PathSegment[] = ["automation", "optimizers", index];
     const paramsPath: PathSegment[] = [...basePath, "params"];
+    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
     const optimizerId =
       this._stringValue(optimizer.id) ||
       this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
@@ -1747,7 +1784,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     const thresholdValue = this._getValue([...paramsPath, "when_price_below"]) ?? 0;
 
     return html`
-      <details class="list-card">
+      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -1758,6 +1795,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
               <button
                 type="button"
                 ?disabled=${index === 0}
@@ -1784,7 +1822,6 @@ export class HelmanConfigEditorPanel extends LitElement {
               undefined,
               "editor.help.automation_optimizer_id",
             )}
-            ${this._renderBooleanField([...basePath, "enabled"], "editor.fields.optimizer_enabled", true)}
             <div class="field">
               <label>${this._t("editor.fields.kind")}</label>
               <input .value=${EXPORT_PRICE_OPTIMIZER_KIND} disabled />
@@ -1818,6 +1855,8 @@ export class HelmanConfigEditorPanel extends LitElement {
     index: number,
     total: number,
   ): TemplateResult {
+    const basePath: PathSegment[] = ["automation", "optimizers", index];
+    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     const optimizerId =
       this._stringValue(optimizer.id) ||
@@ -1827,7 +1866,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
 
     return html`
-      <details class="list-card">
+      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
@@ -1838,6 +1877,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
               <button
                 type="button"
                 ?disabled=${index === 0}
@@ -1860,6 +1900,25 @@ export class HelmanConfigEditorPanel extends LitElement {
           <pre class="raw-preview">${JSON.stringify(optimizer, null, 2)}</pre>
         </div>
       </details>
+    `;
+  }
+
+  private _renderOptimizerEnabledToggle(
+    path: PathSegment[],
+    enabled: boolean,
+  ): TemplateResult {
+    return html`
+      <div class="summary-toggle" @click=${this._stopSummaryToggle}>
+        <span>${this._t("editor.fields.optimizer_enabled")}</span>
+        <ha-switch
+          .checked=${enabled}
+          @change=${(event: Event) =>
+            this._setBoolean(
+              path,
+              (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+            )}
+        ></ha-switch>
+      </div>
     `;
   }
 

@@ -27,9 +27,10 @@ Every phase follows the same closing ritual before the commit lands:
    All tests must pass before moving on.
 3. Ask the user to restart local HASS. After the user confirms the restart, run the **Local HASS smoke test** steps for the phase via the HASS websocket API. Capture the observed responses in the session for review.
 4. If the smoke test surfaced behavior that diverges from the architecture doc, **update [`helman_automation_optimizer_pipeline_architecture.md`](helman_automation_optimizer_pipeline_architecture.md) to reflect reality**. Do not silently absorb the divergence.
-5. Mark the phase as **Done** in this file by checking its status box and appending a short note with the commit SHA once committed.
-6. Re-read the remainder of this document and adjust any later phases whose assumptions have changed (file paths, class names, config keys, invariants).
-7. Commit. One phase = one commit. Commit message format: `feat(automation): phase N - <short title>`.
+5. If the phase introduces or materially changes operator-facing config and it makes sense to expose that change in visual mode, **update the frontend config editor in the same phase** and rebuild `custom_components/helman/frontend/dist/helman-config-editor.js` before the commit. Do not leave UI catch-up as an implicit later cleanup task.
+6. Mark the phase as **Done** in this file by checking its status box and appending a short note with the commit SHA once committed.
+7. Re-read the remainder of this document and adjust any later phases whose assumptions have changed (file paths, class names, config keys, invariants).
+8. Commit. One phase = one commit. Commit message format: `feat(automation): phase N - <short title>`.
 
 ### Websocket smoke test harness (reference)
 
@@ -757,3 +758,4 @@ Modify:
 - **One commit per phase.** This makes bisecting trivial if a later regression is spotted.
 - **Tests live under `tests/` and are runnable via `python3 -m unittest discover -s tests -v`.** No new test framework is introduced.
 - **Docs sync is part of the commit, not a follow-up.** If the architecture doc is out of date at commit time, the commit is incomplete.
+- **Config-editor catch-up is part of the phase when it makes sense.** If a phase adds or materially changes user-facing config that should be editable in visual mode, update the frontend editor and ship the rebuilt bundle in the same phase.

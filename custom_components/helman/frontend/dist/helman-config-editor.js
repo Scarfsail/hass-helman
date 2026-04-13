@@ -1979,6 +1979,8 @@ const _i = [
   constructor() {
     super(...arguments), this._fallbackLocalize = Re(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._helpDialog = null, this._preventSummaryToggle = (e) => {
       e.preventDefault(), e.stopPropagation();
+    }, this._stopSummaryToggle = (e) => {
+      e.stopPropagation();
     }, this._closeHelp = () => {
       this._helpDialog = null;
     }, this._handleReloadClick = async () => {
@@ -2824,8 +2826,7 @@ const _i = [
               ${this._t("editor.actions.add_export_price_optimizer")}
             </button>
           </div>
-        `,
-      { initialOpen: !1 }
+        `
     )}
     `;
   }
@@ -2850,19 +2851,20 @@ const _i = [
     `;
   }
   _renderExportPriceOptimizerCard(e, t, i) {
-    const o = ["automation", "optimizers", t], a = [...o, "params"], n = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), l = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", d = this._stringValue(this._getValue([...a, "action"])) || ui, c = this._getValue([...a, "when_price_below"]) ?? 0;
+    const o = ["automation", "optimizers", t], a = [...o, "params"], n = this._booleanValue(this._getValue([...o, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...a, "action"])) || ui, _ = this._getValue([...a, "when_price_below"]) ?? 0;
     return s`
-      <details class="list-card">
+      <details class=${`list-card optimizer-card optimizer-card--${n ? "enabled" : "disabled"}`}>
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
-              ${this._renderSvgIcon(l, "appliance-chevron")}
+              ${this._renderSvgIcon(d, "appliance-chevron")}
               <div class="card-title">
-                <strong>${n}</strong>
+                <strong>${l}</strong>
                 <span class="card-subtitle">${this._t("editor.values.export_price")}</span>
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderOptimizerEnabledToggle([...o, "enabled"], n)}
               <button
                 type="button"
                 ?disabled=${t === 0}
@@ -2889,7 +2891,6 @@ const _i = [
       void 0,
       "editor.help.automation_optimizer_id"
     )}
-            ${this._renderBooleanField([...o, "enabled"], "editor.fields.optimizer_enabled", !0)}
             <div class="field">
               <label>${this._t("editor.fields.kind")}</label>
               <input .value=${We} disabled />
@@ -2897,7 +2898,7 @@ const _i = [
             ${this._renderRequiredNumberField(
       [...a, "when_price_below"],
       "editor.fields.when_price_below",
-      c,
+      _,
       "any",
       "editor.help.export_price_when_price_below"
     )}
@@ -2909,7 +2910,7 @@ const _i = [
       "editor.help.export_price_action"
     )}
               </div>
-              <input .value=${d} disabled />
+              <input .value=${c} disabled />
               <div class="helper">${this._t("editor.helpers.export_price_action")}</div>
             </div>
           </div>
@@ -2918,21 +2919,22 @@ const _i = [
     `;
   }
   _renderUnsupportedAutomationOptimizerCard(e, t, i) {
-    const o = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", a = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), n = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
+    const o = ["automation", "optimizers", t], a = this._booleanValue(this._getValue([...o, "enabled"]), !0), n = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
       kind: this._stringValue(e.kind) || this._t("editor.values.unknown")
     });
     return s`
-      <details class="list-card">
+      <details class=${`list-card optimizer-card optimizer-card--${a ? "enabled" : "disabled"}`}>
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
-              ${this._renderSvgIcon(o, "appliance-chevron")}
+              ${this._renderSvgIcon(n, "appliance-chevron")}
               <div class="card-title">
-                <strong>${a}</strong>
-                <span class="card-subtitle">${n}</span>
+                <strong>${l}</strong>
+                <span class="card-subtitle">${d}</span>
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderOptimizerEnabledToggle([...o, "enabled"], a)}
               <button
                 type="button"
                 ?disabled=${t === 0}
@@ -2955,6 +2957,20 @@ const _i = [
           <pre class="raw-preview">${JSON.stringify(e, null, 2)}</pre>
         </div>
       </details>
+    `;
+  }
+  _renderOptimizerEnabledToggle(e, t) {
+    return s`
+      <div class="summary-toggle" @click=${this._stopSummaryToggle}>
+        <span>${this._t("editor.fields.optimizer_enabled")}</span>
+        <ha-switch
+          .checked=${t}
+          @change=${(i) => this._setBoolean(
+      e,
+      i.currentTarget.checked
+    )}
+        ></ha-switch>
+      </div>
     `;
   }
   _renderAppliancesTab() {
@@ -4797,6 +4813,20 @@ ee.properties = {
       display: none;
     }
 
+    details.optimizer-card > summary {
+      border: 1px solid transparent;
+    }
+
+    details.optimizer-card.optimizer-card--enabled > summary {
+      background: rgba(46, 125, 50, 0.1);
+      border-color: rgba(46, 125, 50, 0.28);
+    }
+
+    details.optimizer-card.optimizer-card--disabled > summary {
+      background: rgba(127, 127, 127, 0.08);
+      border-color: rgba(127, 127, 127, 0.22);
+    }
+
     .appliance-summary-row {
       display: flex;
       align-items: center;
@@ -4966,6 +4996,25 @@ ee.properties = {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      align-items: center;
+    }
+
+    .summary-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      font-size: 0.82rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .summary-toggle ha-switch {
+      --mdc-theme-secondary: var(--primary-color);
     }
 
     .inline-note {
