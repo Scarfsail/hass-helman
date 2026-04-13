@@ -317,7 +317,12 @@ from custom_components.helman.automation.input_bundle import AutomationInputBund
 from custom_components.helman.automation.optimizers.surplus_appliance import (
     SurplusApplianceSkip,
 )
-from custom_components.helman.automation.pipeline import AutomationRunResult, AutomationRunner
+from custom_components.helman.automation.pipeline import (
+    AutomationCleanupSummary,
+    AutomationRunResult,
+    AutomationRunner,
+    OptimizerRunSummary,
+)
 from custom_components.helman.automation.snapshot import (
     OptimizationContext,
     OptimizationSnapshot,
@@ -333,7 +338,10 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleDocument,
     schedule_document_to_dict,
 )
-from custom_components.helman.websockets import ws_debug_run_automation
+from custom_components.helman.websockets import (
+    ws_get_last_automation_run,
+    ws_run_automation,
+)
 
 for module_name in (
     "custom_components.helman.battery_capacity_forecast_builder",
@@ -605,7 +613,7 @@ class _FakeCoordinator:
 class _FakeConnection:
     def __init__(self, *, is_admin: bool) -> None:
         self.user = SimpleNamespace(is_admin=is_admin)
-        self.results: list[tuple[int, dict]] = []
+        self.results: list[tuple[int, object]] = []
         self.errors: list[tuple[int, str, str]] = []
 
     def send_result(self, msg_id: int, result: dict) -> None:
@@ -638,6 +646,39 @@ class SnapshotSerializationTests(unittest.TestCase):
         self.assertEqual(payload["context"]["applianceRegistry"], {"appliances": []})
 
 
+class AutomationRunResultSerializationTests(unittest.TestCase):
+    def test_to_dict_preserves_envelope_while_adding_observability_fields(self) -> None:
+        payload = AutomationRunResult.completed(
+            snapshot=_make_snapshot(),
+            optimizers=(
+                OptimizerRunSummary(
+                    id="avoid-negative-export",
+                    kind="export_price",
+                    status="ok",
+                    slots_written=2,
+                    duration_ms=17,
+                ),
+            ),
+            duration_ms=41,
+        ).to_dict()
+
+        self.assertTrue(payload["ranAutomation"])
+        self.assertIn("scheduleSlots", payload["snapshot"])
+        self.assertEqual(
+            payload["optimizers"],
+            [
+                {
+                    "id": "avoid-negative-export",
+                    "kind": "export_price",
+                    "status": "ok",
+                    "slotsWritten": 2,
+                    "durationMs": 17,
+                }
+            ],
+        )
+        self.assertEqual(payload["durationMs"], 41)
+
+
 class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_returns_execution_disabled_when_execution_flag_is_off(self) -> None:
         coordinator = _FakeCoordinator(
@@ -651,14 +692,12 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
-        self.assertEqual(
-            result.to_dict(),
-            {
-                "ranAutomation": False,
-                "reason": "execution_disabled",
-                "snapshot": None,
-            },
-        )
+        payload = result.to_dict()
+        self.assertFalse(payload["ranAutomation"])
+        self.assertEqual(payload["reason"], "execution_disabled")
+        self.assertIsNone(payload["snapshot"])
+        self.assertEqual(payload["optimizers"], [])
+        self.assertIsInstance(payload["durationMs"], int)
         self.assertEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_automation_disabled_when_config_disabled(self) -> None:
@@ -673,14 +712,12 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
-        self.assertEqual(
-            result.to_dict(),
-            {
-                "ranAutomation": False,
-                "reason": "automation_disabled",
-                "snapshot": None,
-            },
-        )
+        payload = result.to_dict()
+        self.assertFalse(payload["ranAutomation"])
+        self.assertEqual(payload["reason"], "automation_disabled")
+        self.assertIsNone(payload["snapshot"])
+        self.assertEqual(payload["optimizers"], [])
+        self.assertIsInstance(payload["durationMs"], int)
         self.assertEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_inputs_unavailable_without_bundle(self) -> None:
@@ -695,14 +732,12 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
-        self.assertEqual(
-            result.to_dict(),
-            {
-                "ranAutomation": False,
-                "reason": "inputs_unavailable",
-                "snapshot": None,
-            },
-        )
+        payload = result.to_dict()
+        self.assertFalse(payload["ranAutomation"])
+        self.assertEqual(payload["reason"], "inputs_unavailable")
+        self.assertIsNone(payload["snapshot"])
+        self.assertEqual(payload["optimizers"], [])
+        self.assertIsInstance(payload["durationMs"], int)
         self.assertEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_snapshot_and_is_repeatable(self) -> None:
@@ -739,6 +774,9 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.snapshot.adjusted_house_forecast["status"], "available")
         self.assertEqual(first.snapshot.battery_forecast["status"], "available")
         self.assertEqual(first.snapshot.grid_forecast["currentImportPrice"], 7.0)
+        self.assertEqual(len(first.optimizers), 1)
+        self.assertEqual(first.optimizers[0].status, "ok")
+        self.assertGreaterEqual(first.duration_ms, 0)
         self.assertEqual(
             first.snapshot.context.when_active_hourly_energy_kwh_by_appliance_id,
             {"boiler": 1.25},
@@ -832,7 +870,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
-        self.assertEqual(result.reason, "automation_disabled")
+        self.assertEqual(result.reason, "cleanup_only")
+        self.assertEqual(
+            result.cleanup,
+            AutomationCleanupSummary(
+                reason="automation_disabled",
+                actions_stripped=1,
+            ),
+        )
         self.assertEqual(len(coordinator.saved_documents), 1)
         self.assertEqual(
             schedule_document_to_dict(coordinator.saved_documents[0]),
@@ -860,6 +905,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         ).run(reference_time=REFERENCE_TIME)
 
         self.assertEqual(result.reason, "automation_disabled")
+        self.assertIsNone(result.cleanup)
         self.assertEqual(coordinator.saved_documents, [])
         self.assertEqual(coordinator.post_write_calls, [])
 
@@ -907,6 +953,18 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             [("automation_updated", REFERENCE_TIME, False)],
         )
         self.assertEqual(len(coordinator.snapshot_calls), 2)
+        self.assertEqual(
+            result.optimizers,
+            (
+                OptimizerRunSummary(
+                    id="avoid-negative-export",
+                    kind="export_price",
+                    status="ok",
+                    slots_written=1,
+                    duration_ms=result.optimizers[0].duration_ms,
+                ),
+            ),
+        )
         self.assertEqual(
             schedule_document_to_dict(result.snapshot.schedule),
             schedule_document_to_dict(optimized_schedule),
@@ -957,6 +1015,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
         self.assertEqual(len(coordinator.snapshot_calls), 3)
         self.assertEqual(
             schedule_document_to_dict(result.snapshot.schedule),
@@ -992,6 +1051,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
         self.assertEqual(len(coordinator.snapshot_calls), 3)
         self.assertIs(
             coordinator.snapshot_calls[0]["input_bundle"],
@@ -1041,6 +1101,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
         self.assertEqual(len(coordinator.persist_calls), 1)
         self.assertEqual(
             schedule_document_to_dict(
@@ -1099,6 +1160,9 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
+        self.assertEqual(len(result.optimizers), 1)
+        self.assertEqual(result.optimizers[0].status, "skipped")
+        self.assertEqual(result.optimizers[0].error, "when-active demand is unavailable")
         self.assertEqual(len(coordinator.persist_calls), 1)
         self.assertEqual(
             schedule_document_to_dict(
@@ -1132,6 +1196,9 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.reason, "optimizer_failed")
         self.assertEqual(result.message, "boom")
+        self.assertEqual(len(result.optimizers), 1)
+        self.assertEqual(result.optimizers[0].status, "failed")
+        self.assertEqual(result.optimizers[0].error, "boom")
         self.assertEqual(coordinator.persist_calls, [])
         self.assertEqual(coordinator.post_write_calls, [])
 
@@ -1154,7 +1221,11 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.reason, "optimizer_failed")
         self.assertEqual(result.message, "bad target")
-        self.assertEqual(coordinator.snapshot_calls, [])
+        self.assertEqual(len(result.optimizers), 1)
+        self.assertEqual(result.optimizers[0].status, "failed")
+        self.assertEqual(result.optimizers[0].error, "bad target")
+        self.assertEqual(len(coordinator.snapshot_calls), 1)
+        self.assertIsNotNone(result.snapshot)
         self.assertEqual(coordinator.persist_calls, [])
         self.assertEqual(coordinator.post_write_calls, [])
 
@@ -1192,6 +1263,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.reason, "optimizer_failed")
         self.assertEqual(result.message, "boom after first")
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok", "failed"])
+        self.assertEqual(result.optimizers[1].error, "boom after first")
         self.assertEqual(coordinator.persist_calls, [])
         self.assertEqual(coordinator.post_write_calls, [])
         self.assertEqual(len(coordinator.snapshot_calls), 2)
@@ -1223,6 +1296,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
         self.assertEqual(len(coordinator.snapshot_calls), 3)
         self.assertEqual(len(coordinator.persist_calls), 1)
 
@@ -1382,8 +1456,73 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.context.battery_state.current_soc, 50.0)
 
 
-class DebugAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
-    async def test_debug_run_automation_returns_serialized_result(self) -> None:
+class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_automation_stores_last_result_and_returns_copies(self) -> None:
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._active_config = {}
+        coordinator._last_automation_run_result = None
+        result = AutomationRunResult.completed(snapshot=_make_snapshot())
+
+        class _FakeRunner:
+            def __init__(self, *, coordinator, automation_config) -> None:
+                self._result = result
+
+            async def run(self, *, reference_time=None, run_reason=None):
+                return self._result
+
+        with (
+            patch.object(coordinator_module, "read_automation_config", return_value=None),
+            patch.object(pipeline_module, "AutomationRunner", _FakeRunner),
+        ):
+            returned = await coordinator.run_automation(
+                reference_time=REFERENCE_TIME,
+                reason="trigger",
+            )
+
+        cached_first = coordinator.get_last_automation_run_result()
+        cached_second = coordinator.get_last_automation_run_result()
+
+        self.assertIs(returned, result)
+        self.assertEqual(cached_first.to_dict(), result.to_dict())
+        self.assertEqual(cached_second.to_dict(), result.to_dict())
+        self.assertIsNot(cached_first, result)
+        self.assertIsNot(cached_second, cached_first)
+
+    async def test_run_automation_overwrites_cached_result_with_latest_run(self) -> None:
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._active_config = {}
+        coordinator._last_automation_run_result = None
+        first_result = AutomationRunResult.skipped(reason="first_run")
+        second_result = AutomationRunResult.completed(snapshot=_make_snapshot())
+        queued_results = [first_result, second_result]
+
+        class _FakeRunner:
+            def __init__(self, *, coordinator, automation_config) -> None:
+                self._result = queued_results.pop(0)
+
+            async def run(self, *, reference_time=None, run_reason=None):
+                return self._result
+
+        with (
+            patch.object(coordinator_module, "read_automation_config", return_value=None),
+            patch.object(pipeline_module, "AutomationRunner", _FakeRunner),
+        ):
+            await coordinator.run_automation(
+                reference_time=REFERENCE_TIME,
+                reason="trigger:first",
+            )
+            await coordinator.run_automation(
+                reference_time=REFERENCE_TIME,
+                reason="trigger:second",
+            )
+
+        cached_result = coordinator.get_last_automation_run_result()
+
+        self.assertEqual(cached_result.to_dict(), second_result.to_dict())
+
+
+class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_automation_returns_serialized_result(self) -> None:
         coordinator = SimpleNamespace(
             run_automation=AsyncMock(
                 return_value=AutomationRunResult.completed(snapshot=_make_snapshot())
@@ -1391,31 +1530,125 @@ class DebugAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         connection = _FakeConnection(is_admin=True)
 
-        await ws_debug_run_automation(
+        await ws_run_automation(
             _FakeHass(coordinator),
             connection,
-            {"id": 1, "type": "helman/__debug_run_automation"},
+            {"id": 1, "type": "helman/run_automation"},
         )
 
-        coordinator.run_automation.assert_awaited_once_with()
+        coordinator.run_automation.assert_awaited_once_with(reason="websocket")
         self.assertEqual(connection.errors, [])
         self.assertTrue(connection.results[0][1]["ranAutomation"])
         self.assertIn("scheduleSlots", connection.results[0][1]["snapshot"])
+        self.assertIn("optimizers", connection.results[0][1])
+        self.assertIn("durationMs", connection.results[0][1])
 
-    async def test_debug_run_automation_requires_admin(self) -> None:
+    async def test_run_automation_returns_skipped_result(self) -> None:
+        coordinator = SimpleNamespace(
+            run_automation=AsyncMock(
+                return_value=AutomationRunResult.skipped(reason="execution_disabled")
+            )
+        )
+        connection = _FakeConnection(is_admin=True)
+
+        await ws_run_automation(
+            _FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/run_automation"},
+        )
+
+        self.assertFalse(connection.results[0][1]["ranAutomation"])
+        self.assertEqual(connection.results[0][1]["reason"], "execution_disabled")
+
+    async def test_run_automation_requires_admin(self) -> None:
         coordinator = SimpleNamespace(run_automation=AsyncMock())
         connection = _FakeConnection(is_admin=False)
 
-        await ws_debug_run_automation(
+        await ws_run_automation(
             _FakeHass(coordinator),
             connection,
-            {"id": 1, "type": "helman/__debug_run_automation"},
+            {"id": 1, "type": "helman/run_automation"},
         )
 
         coordinator.run_automation.assert_not_awaited()
         self.assertEqual(
             connection.errors,
             [(1, "unauthorized", "Admin access required")],
+        )
+
+    async def test_get_last_automation_run_returns_null_before_first_run(self) -> None:
+        coordinator = SimpleNamespace(
+            get_last_automation_run_result=Mock(return_value=None),
+            run_automation=AsyncMock(),
+        )
+        connection = _FakeConnection(is_admin=True)
+
+        ws_get_last_automation_run(
+            _FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/get_last_automation_run"},
+        )
+
+        coordinator.get_last_automation_run_result.assert_called_once_with()
+        coordinator.run_automation.assert_not_awaited()
+        self.assertEqual(connection.errors, [])
+        self.assertEqual(connection.results, [(1, None)])
+
+    async def test_get_last_automation_run_returns_serialized_cached_result(self) -> None:
+        coordinator = SimpleNamespace(
+            get_last_automation_run_result=Mock(
+                return_value=AutomationRunResult.completed(snapshot=_make_snapshot())
+            ),
+            run_automation=AsyncMock(),
+        )
+        connection = _FakeConnection(is_admin=True)
+
+        ws_get_last_automation_run(
+            _FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/get_last_automation_run"},
+        )
+
+        coordinator.get_last_automation_run_result.assert_called_once_with()
+        coordinator.run_automation.assert_not_awaited()
+        self.assertEqual(connection.errors, [])
+        self.assertTrue(connection.results[0][1]["ranAutomation"])
+        self.assertIn("snapshot", connection.results[0][1])
+
+    async def test_get_last_automation_run_requires_admin(self) -> None:
+        coordinator = SimpleNamespace(
+            get_last_automation_run_result=Mock(),
+            run_automation=AsyncMock(),
+        )
+        connection = _FakeConnection(is_admin=False)
+
+        ws_get_last_automation_run(
+            _FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/get_last_automation_run"},
+        )
+
+        coordinator.get_last_automation_run_result.assert_not_called()
+        coordinator.run_automation.assert_not_awaited()
+        self.assertEqual(
+            connection.errors,
+            [(1, "unauthorized", "Admin access required")],
+        )
+
+    async def test_get_last_automation_run_returns_not_loaded_when_missing(self) -> None:
+        connection = _FakeConnection(is_admin=True)
+        hass = SimpleNamespace(data={DOMAIN: {}})
+
+        ws_get_last_automation_run(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/get_last_automation_run"},
+        )
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "not_loaded", "Helman coordinator not available")],
         )
 
 

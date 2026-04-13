@@ -123,6 +123,7 @@ _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 
 if TYPE_CHECKING:
+    from .automation.pipeline import AutomationRunResult
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
 
 
@@ -261,6 +262,7 @@ class HelmanCoordinator:
         self._create_task = getattr(self._hass, "async_create_task", asyncio.create_task)
         self._refresh_tasks: set[asyncio.Task[Any]] = set()
         self._automation_input_bundle: AutomationInputBundle | None = None
+        self._last_automation_run_result: AutomationRunResult | None = None
         self._automation_triggers = AutomationTriggerCoordinator(
             create_task=self._create_task,
             run_callback=self._async_run_automation_trigger_request,
@@ -290,6 +292,14 @@ class HelmanCoordinator:
     @property
     def config(self) -> dict:
         return self._active_config
+
+    def get_last_automation_run_result(self) -> AutomationRunResult | None:
+        if self._last_automation_run_result is None:
+            return None
+        return deepcopy(self._last_automation_run_result)
+
+    def _set_last_automation_run_result(self, result: AutomationRunResult) -> None:
+        self._last_automation_run_result = deepcopy(result)
 
     @staticmethod
     def collect_qualifying_nodes(tree: dict) -> dict[str, str | None]:
@@ -1036,8 +1046,8 @@ class HelmanCoordinator:
         result = await AutomationRunner(
             coordinator=self,
             automation_config=automation_config,
-        ).run(reference_time=reference_time)
-        _LOGGER.info("automation run completed, reason=%s", reason or "manual")
+        ).run(reference_time=reference_time, run_reason=reason)
+        self._set_last_automation_run_result(result)
         return result
 
     async def _async_run_automation_trigger_request(
@@ -2625,6 +2635,7 @@ class HelmanCoordinator:
         self._entry = None
         self._removing_entity_ids.clear()
         self._power_history.clear()
+        self._last_automation_run_result = None
 
         for unsub in self._unsub_listeners:
             unsub()

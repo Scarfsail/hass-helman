@@ -58,7 +58,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 6** — Rebuild-between-optimizers loop wiring _(commit c8a90c7; local HASS smoke passed)_
 - [x] **Phase 7** — `surplus_appliance` optimizer (generic + climate) _(committed; local HASS smoke passed, including partial-forecast coverage within the scheduler horizon)_
 - [x] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing _(committed; local HASS smoke passed)_
-- [ ] **Phase 9** — Observability + `helman/run_automation` debug websocket command
+- [x] **Phase 9** — Observability + automation websocket APIs _(completed: `helman/run_automation` + `helman/get_last_automation_run`)_
 - [ ] **Phase 10** — End-to-end hardening and docs sync
 
 Each phase's "Done" box is checked as part of the ritual in step 5 above.
@@ -663,17 +663,14 @@ These tests build on the existing `tests/test_coordinator_schedule_execution.py`
 
 ---
 
-## Phase 9 — Observability + `helman/run_automation` debug websocket command
+## Phase 9 — Observability + automation websocket APIs
 
 ### Goal
 
-Replace the temporary debug command from earlier phases with a first-class, admin-only `helman/run_automation` websocket command that exposes:
+Replace the temporary debug command from earlier phases with first-class, admin-only automation websocket APIs:
 
-- the final snapshot
-- which optimizers ran
-- per-optimizer count of written actions
-- duration
-- any errors
+- `helman/run_automation`, which triggers a run and exposes the final snapshot, optimizer summaries, duration, and errors
+- `helman/get_last_automation_run`, which returns the most recent in-memory `AutomationRunResult` from any source (`websocket` or internal trigger) without starting a new run, or `null` before the first run
 
 Also add structured logging in `pipeline.py` at INFO level for one line per run and DEBUG level for per-optimizer detail.
 
@@ -685,7 +682,8 @@ Create:
 
 Modify:
 
-- `custom_components/helman/websockets.py` — register `helman/run_automation` with `@websocket_api.async_response`, admin required, parameter-less. It calls `coordinator.run_automation()` and returns the enriched `AutomationRunResult`.
+- `custom_components/helman/websockets.py` — register `helman/run_automation` with `@websocket_api.async_response`, admin required, parameter-less. It calls `coordinator.run_automation()` and returns the enriched `AutomationRunResult`. Also register `helman/get_last_automation_run` as an admin-only getter that returns the most recent cached result or `null`.
+- `custom_components/helman/coordinator.py` — cache the latest `AutomationRunResult` in memory after every attempted run, expose a small getter for the websocket layer, and clear the cached value on unload/reload.
 - `custom_components/helman/automation/pipeline.py` — extend the existing `AutomationRunResult` with per-optimizer summary, duration, and cleanup metadata. Existing callers keep using the same envelope.
 - Remove any temporary `__debug_run_automation` command introduced in Phase 3 if still present.
 - Remove the temporary single INFO log line from Phase 8 in favor of the structured logging introduced here.
@@ -697,6 +695,7 @@ Modify:
 - Top-level non-running / cleanup reasons should be explicit, e.g. `execution_disabled`, `automation_disabled`, `no_enabled_optimizers`, or `cleanup_only`.
 - `AutomationRunResult` is diagnostic metadata about the attempted run. If a later optimizer fails, earlier optimizer entries may still appear as `"ok"` for observability, but none of that failed run's candidate changes are persisted.
 - The websocket command holds no special privilege compared to what trigger-driven runs do — it simply manually kicks the runner and returns the same result. Use the existing `_require_admin` helper.
+- `helman/get_last_automation_run` is read-only: it returns the cached result from the coordinator, never recomputes a run, and returns `null` before the first attempt in the current coordinator lifetime.
 
 ### Unit tests
 
@@ -707,18 +706,21 @@ Modify:
 - cleanup-only runs are reported distinctly from "did not run" results
 - the websocket command returns a valid dict when execution is enabled and a `{ ranAutomation: false }` style result when execution is disabled
 - admin check: a non-admin connection is rejected
+- `helman/get_last_automation_run` returns `null` before the first run, returns the last cached result afterward, and does not trigger a new run
 
 ### Local HASS smoke test
 
 1. `helman/run_automation` with admin → returns `{ ranAutomation: true, snapshot: {...}, optimizers: [...] }` with at least the snapshot fields described above.
-2. Induce a failure by configuring a `surplus_appliance` pointing at a non-existent appliance → `helman/run_automation` returns one of the optimizers with `status: "failed"` and a readable error, the previous optimizers still show `"ok"`, and the baseline on disk is unchanged.
+2. Induce a failure with a run-time-valid config that still faults during optimizer execution or construction. Note: a `surplus_appliance` pointing at a non-existent appliance is rejected earlier by config validation and therefore will not reach `helman/run_automation` as a run-time failure case. For the exercised run-time failure, `helman/run_automation` should return one of the optimizers with `status: "failed"` and a readable error, the previous optimizers should still show `"ok"`, and the baseline on disk should remain unchanged.
 3. Check HASS logs: one INFO line per run, DEBUG lines per optimizer when log level is raised.
+4. `helman/get_last_automation_run` with admin → returns `null` before the first run in the current coordinator lifetime and the latest cached `AutomationRunResult` after any websocket- or trigger-driven run.
 
 ### Done criteria
 
 - Unit tests green.
 - Smoke test confirms structured result shape.
 - The debug command from Phase 3 is fully removed.
+- The getter returns the last cached run result without starting a fresh run.
 
 ---
 

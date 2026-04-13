@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
@@ -84,8 +83,28 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_device_tree)
     async_register_command(hass, ws_get_forecast)
     async_register_command(hass, ws_get_history)
-    if os.getenv("HELMAN_AUTOMATION_DEBUG"):
-        async_register_command(hass, ws_debug_run_automation)
+    async_register_command(hass, ws_run_automation)
+    async_register_command(hass, ws_get_last_automation_run)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_last_automation_run",
+})
+@callback
+def ws_get_last_automation_run(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    if not _require_admin(connection, msg):
+        return
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    result = coordinator.get_last_automation_run_result()
+    connection.send_result(msg["id"], None if result is None else result.to_dict())
 
 
 @websocket_api.websocket_command({
@@ -344,10 +363,10 @@ async def ws_get_forecast(
 
 
 @websocket_api.websocket_command({
-    vol.Required("type"): "helman/__debug_run_automation",
+    vol.Required("type"): "helman/run_automation",
 })
 @websocket_api.async_response
-async def ws_debug_run_automation(
+async def ws_run_automation(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
@@ -360,7 +379,7 @@ async def ws_debug_run_automation(
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
 
-    result = await coordinator.run_automation()
+    result = await coordinator.run_automation(reason="websocket")
     connection.send_result(msg["id"], result.to_dict())
 
 

@@ -194,7 +194,7 @@ Manual or debug invocation surfaces should return an `AutomationRunResult` that 
 
 When a run does produce a snapshot, the forecast sections in that snapshot should preserve the underlying pipeline status rather than being forced to `"available"`. In practice a valid debug snapshot may therefore carry `battery_forecast.status == "partial"` (and the derived grid forecast built from it) when the existing forecast pipeline only has partial upstream coverage.
 
-`AutomationRunResult` is diagnostic metadata about the attempted run. If one optimizer fails, the result may still report earlier optimizers as `"ok"` for observability, but no optimizer output from that failed run is persisted.
+`AutomationRunResult` is diagnostic metadata about the attempted run. If one optimizer fails, the result may still report earlier optimizers as `"ok"` for observability, but no optimizer output from that failed run is persisted. Validation failures that are rejected earlier by config parsing or optimizer construction (for example an unknown `surplus_appliance` `appliance_id`) do not require a persisted run-time failure case to keep the config boundary strict.
 
 ### 7. Existing schedule boundaries still apply
 

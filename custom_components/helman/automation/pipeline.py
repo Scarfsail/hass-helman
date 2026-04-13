@@ -4,6 +4,7 @@ from copy import deepcopy
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
@@ -12,19 +13,59 @@ from .config import AutomationConfig
 from .input_bundle import AutomationInputBundle
 from .optimizers.surplus_appliance import SurplusApplianceSkip
 from .ownership import (
+    count_automation_owned_actions,
+    is_user_owned_appliance_action,
+    is_user_owned_inverter_action,
     restore_automation_owned_appliance_actions,
     strip_automation_owned_actions,
 )
 from .optimizer import build_optimizer
 from .snapshot import OptimizationSnapshot, snapshot_to_dict
-from ..scheduling.schedule import ScheduleDocument, schedule_document_to_dict
+from ..scheduling.schedule import (
+    ScheduleDocument,
+    ScheduleDomains,
+    schedule_document_to_dict,
+)
 
 if TYPE_CHECKING:
     from ..coordinator import HelmanCoordinator
     from .config import OptimizerInstanceConfig
-    from .optimizer import Optimizer
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AutomationCleanupSummary:
+    reason: str
+    actions_stripped: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "reason": self.reason,
+            "actionsStripped": self.actions_stripped,
+        }
+
+
+@dataclass(frozen=True)
+class OptimizerRunSummary:
+    id: str
+    kind: str
+    status: str
+    slots_written: int
+    duration_ms: int
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "id": self.id,
+            "kind": self.kind,
+            "status": self.status,
+            "slotsWritten": self.slots_written,
+            "durationMs": self.duration_ms,
+        }
+        if self.error is not None:
+            payload["error"] = self.error
+        return payload
 
 
 @dataclass(frozen=True)
@@ -33,6 +74,9 @@ class AutomationRunResult:
     reason: str | None = None
     snapshot: OptimizationSnapshot | None = None
     message: str | None = None
+    optimizers: tuple[OptimizerRunSummary, ...] = ()
+    duration_ms: int = 0
+    cleanup: AutomationCleanupSummary | None = None
 
     @classmethod
     def skipped(
@@ -40,12 +84,19 @@ class AutomationRunResult:
         *,
         reason: str,
         message: str | None = None,
+        snapshot: OptimizationSnapshot | None = None,
+        optimizers: tuple[OptimizerRunSummary, ...] = (),
+        duration_ms: int = 0,
+        cleanup: AutomationCleanupSummary | None = None,
     ) -> "AutomationRunResult":
         return cls(
             ran_automation=False,
             reason=reason,
-            snapshot=None,
+            snapshot=snapshot,
             message=message,
+            optimizers=optimizers,
+            duration_ms=duration_ms,
+            cleanup=cleanup,
         )
 
     @classmethod
@@ -53,8 +104,16 @@ class AutomationRunResult:
         cls,
         *,
         snapshot: OptimizationSnapshot,
+        optimizers: tuple[OptimizerRunSummary, ...] = (),
+        duration_ms: int = 0,
     ) -> "AutomationRunResult":
-        return cls(ran_automation=True, reason=None, snapshot=snapshot)
+        return cls(
+            ran_automation=True,
+            reason=None,
+            snapshot=snapshot,
+            optimizers=optimizers,
+            duration_ms=duration_ms,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -62,37 +121,43 @@ class AutomationRunResult:
             "snapshot": (
                 None if self.snapshot is None else snapshot_to_dict(self.snapshot)
             ),
+            "optimizers": [optimizer.to_dict() for optimizer in self.optimizers],
+            "durationMs": self.duration_ms,
         }
         if self.reason is not None:
             payload["reason"] = self.reason
         if self.message is not None:
             payload["message"] = self.message
+        if self.cleanup is not None:
+            payload["cleanup"] = self.cleanup.to_dict()
         return payload
-
-
-@dataclass(frozen=True)
-class _ResolvedOptimizerStep:
-    config: "OptimizerInstanceConfig"
-    optimizer: "Optimizer"
 
 
 @dataclass(frozen=True)
 class _PipelineExecutionResult:
     working_schedule_document: ScheduleDocument
     snapshot: OptimizationSnapshot
+    optimizers: tuple[OptimizerRunSummary, ...]
+
+
+@dataclass(frozen=True)
+class _CleanupOutcome:
+    changed: bool
+    actions_stripped: int
 
 
 class _OptimizerExecutionError(RuntimeError):
     def __init__(
         self,
         *,
-        optimizer_id: str,
-        optimizer_kind: str,
-        cause: Exception,
+        summary: OptimizerRunSummary,
+        completed_optimizers: tuple[OptimizerRunSummary, ...] = (),
+        snapshot: OptimizationSnapshot | None = None,
     ) -> None:
-        super().__init__(str(cause))
-        self.optimizer_id = optimizer_id
-        self.optimizer_kind = optimizer_kind
+        super().__init__(summary.error or "")
+        self.summary = summary
+        self.completed_optimizers = completed_optimizers
+        self.snapshot = snapshot
 
 
 class AutomationRunner:
@@ -109,8 +174,10 @@ class AutomationRunner:
         self,
         *,
         reference_time: datetime | None = None,
+        run_reason: str | None = None,
     ) -> AutomationRunResult:
         active_reference_time = reference_time or dt_util.now()
+        run_started_at = time.perf_counter()
         result: AutomationRunResult
         run_post_write_side_effects = False
         async with self._coordinator._schedule_lock:
@@ -123,24 +190,42 @@ class AutomationRunner:
                 baseline_schedule_document
             )
             if not baseline_schedule_document.execution_enabled:
-                return AutomationRunResult.skipped(reason="execution_disabled")
+                result = AutomationRunResult.skipped(reason="execution_disabled")
+                return self._finalize_result(
+                    result=result,
+                    run_reason=run_reason,
+                    run_started_at=run_started_at,
+                )
 
             if not self._automation_config.enabled:
-                run_post_write_side_effects = await self._async_persist_cleanup_only_locked(
-                    reference_time=active_reference_time,
+                cleanup_outcome = await self._async_persist_cleanup_only_locked(
+                    baseline_schedule_document=baseline_schedule_document,
                     cleaned_schedule_document=schedule_document,
                 )
-                result = AutomationRunResult.skipped(reason="automation_disabled")
+                run_post_write_side_effects = cleanup_outcome.changed
+                result = _build_cleanup_only_or_skipped_result(
+                    cleanup_reason="automation_disabled",
+                    cleanup_outcome=cleanup_outcome,
+                )
             elif not self._automation_config.execution_optimizers:
-                run_post_write_side_effects = await self._async_persist_cleanup_only_locked(
-                    reference_time=active_reference_time,
+                cleanup_outcome = await self._async_persist_cleanup_only_locked(
+                    baseline_schedule_document=baseline_schedule_document,
                     cleaned_schedule_document=schedule_document,
                 )
-                result = AutomationRunResult.skipped(reason="no_enabled_optimizers")
+                run_post_write_side_effects = cleanup_outcome.changed
+                result = _build_cleanup_only_or_skipped_result(
+                    cleanup_reason="no_enabled_optimizers",
+                    cleanup_outcome=cleanup_outcome,
+                )
             else:
                 input_bundle = self._coordinator.get_automation_input_bundle()
                 if input_bundle is None:
-                    return AutomationRunResult.skipped(reason="inputs_unavailable")
+                    result = AutomationRunResult.skipped(reason="inputs_unavailable")
+                    return self._finalize_result(
+                        result=result,
+                        run_reason=run_reason,
+                        run_started_at=run_started_at,
+                    )
                 try:
                     execution_result = await self._async_execute_optimizer_loop_locked(
                         baseline_schedule_document=baseline_schedule_document,
@@ -149,53 +234,33 @@ class AutomationRunner:
                         reference_time=active_reference_time,
                     )
                 except _OptimizerExecutionError as err:
-                    _LOGGER.warning(
-                        "Automation optimizer %s (%s) failed: %s",
-                        err.optimizer_id,
-                        err.optimizer_kind,
-                        err,
-                    )
-                    return AutomationRunResult.skipped(
+                    result = AutomationRunResult.skipped(
                         reason="optimizer_failed",
-                        message=str(err),
+                        message=err.summary.error,
+                        snapshot=err.snapshot,
+                        optimizers=err.completed_optimizers + (err.summary,),
                     )
-                run_post_write_side_effects = (
-                    await self._coordinator._persist_automation_result_locked(
-                        automation_result=execution_result.working_schedule_document,
-                        reference_time=active_reference_time,
+                else:
+                    run_post_write_side_effects = (
+                        await self._coordinator._persist_automation_result_locked(
+                            automation_result=execution_result.working_schedule_document,
+                            reference_time=active_reference_time,
+                        )
                     )
-                )
-                result = AutomationRunResult.completed(snapshot=execution_result.snapshot)
+                    result = AutomationRunResult.completed(
+                        snapshot=execution_result.snapshot,
+                        optimizers=execution_result.optimizers,
+                    )
         if run_post_write_side_effects:
             await self._coordinator._async_run_post_schedule_write_side_effects(
                 reason="automation_updated",
                 reference_time=active_reference_time,
             )
-        return result
-
-    def _resolve_optimizer_steps(self) -> tuple[_ResolvedOptimizerStep, ...]:
-        control_config = self._coordinator._read_schedule_control_config()
-        steps: list[_ResolvedOptimizerStep] = []
-        for optimizer_config in self._automation_config.execution_optimizers:
-            try:
-                optimizer = build_optimizer(
-                    optimizer_config,
-                    control_config=control_config,
-                    appliance_registry=self._coordinator._appliances_registry,
-                )
-            except Exception as err:
-                raise _OptimizerExecutionError(
-                    optimizer_id=optimizer_config.id,
-                    optimizer_kind=optimizer_config.kind,
-                    cause=err,
-                ) from err
-            steps.append(
-                _ResolvedOptimizerStep(
-                    config=optimizer_config,
-                    optimizer=optimizer,
-                )
-            )
-        return tuple(steps)
+        return self._finalize_result(
+            result=result,
+            run_reason=run_reason,
+            run_started_at=run_started_at,
+        )
 
     async def _async_execute_optimizer_loop_locked(
         self,
@@ -205,74 +270,143 @@ class AutomationRunner:
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
     ) -> _PipelineExecutionResult:
-        steps = self._resolve_optimizer_steps()
         working_schedule_document = schedule_document
         snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
             schedule_document=working_schedule_document,
             input_bundle=input_bundle,
             reference_time=reference_time,
         )
-        for step in steps:
+        control_config = self._coordinator._read_schedule_control_config()
+        optimizer_summaries: list[OptimizerRunSummary] = []
+        for optimizer_config in self._automation_config.execution_optimizers:
+            optimizer_started_at = time.perf_counter()
             try:
-                candidate_schedule_document = step.optimizer.optimize(
+                optimizer = build_optimizer(
+                    optimizer_config,
+                    control_config=control_config,
+                    appliance_registry=self._coordinator._appliances_registry,
+                )
+                candidate_schedule_document = optimizer.optimize(
                     snapshot,
-                    step.config,
+                    optimizer_config,
                 )
             except SurplusApplianceSkip as err:
-                _LOGGER.warning(
-                    "Automation optimizer %s (%s) is skipping because %s",
-                    step.config.id,
-                    step.config.kind,
-                    err,
+                try:
+                    working_schedule_document = restore_automation_owned_appliance_actions(
+                        baseline=baseline_schedule_document,
+                        current=working_schedule_document,
+                        appliance_id=err.appliance_id,
+                    )
+                    snapshot = (
+                        await self._coordinator._build_automation_snapshot_from_schedule_locked(
+                            schedule_document=working_schedule_document,
+                            input_bundle=input_bundle,
+                            reference_time=reference_time,
+                        )
+                    )
+                except Exception as rebuild_err:
+                    raise _build_optimizer_error(
+                        config=optimizer_config,
+                        duration_ms=_elapsed_ms(optimizer_started_at),
+                        error=str(rebuild_err),
+                        completed_optimizers=tuple(optimizer_summaries),
+                        snapshot=snapshot,
+                    ) from rebuild_err
+                optimizer_summaries.append(
+                    _build_optimizer_summary(
+                        optimizer_id=optimizer_config.id,
+                        optimizer_kind=optimizer_config.kind,
+                        status="skipped",
+                        slots_written=0,
+                        duration_ms=_elapsed_ms(optimizer_started_at),
+                        error=str(err),
+                    )
                 )
-                working_schedule_document = restore_automation_owned_appliance_actions(
-                    baseline=baseline_schedule_document,
-                    current=working_schedule_document,
-                    appliance_id=err.appliance_id,
+                continue
+            except Exception as err:
+                raise _build_optimizer_error(
+                    config=optimizer_config,
+                    duration_ms=_elapsed_ms(optimizer_started_at),
+                    error=str(err),
+                    completed_optimizers=tuple(optimizer_summaries),
+                    snapshot=snapshot,
+                ) from err
+
+            previous_schedule_document = working_schedule_document
+            try:
+                working_schedule_document = _coerce_optimizer_result_schedule_document(
+                    candidate_document=candidate_schedule_document,
+                    execution_enabled=working_schedule_document.execution_enabled,
                 )
                 snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
                     schedule_document=working_schedule_document,
                     input_bundle=input_bundle,
                     reference_time=reference_time,
                 )
-                continue
             except Exception as err:
-                raise _OptimizerExecutionError(
-                    optimizer_id=step.config.id,
-                    optimizer_kind=step.config.kind,
-                    cause=err,
+                raise _build_optimizer_error(
+                    config=optimizer_config,
+                    duration_ms=_elapsed_ms(optimizer_started_at),
+                    error=str(err),
+                    completed_optimizers=tuple(optimizer_summaries),
+                    snapshot=snapshot,
                 ) from err
-            working_schedule_document = _coerce_optimizer_result_schedule_document(
-                candidate_document=candidate_schedule_document,
-                execution_enabled=working_schedule_document.execution_enabled,
-            )
-            snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
-                schedule_document=working_schedule_document,
-                input_bundle=input_bundle,
-                reference_time=reference_time,
+            optimizer_summaries.append(
+                _build_optimizer_summary(
+                    optimizer_id=optimizer_config.id,
+                    optimizer_kind=optimizer_config.kind,
+                    status="ok",
+                    slots_written=_count_changed_writable_action_positions(
+                        before_document=previous_schedule_document,
+                        after_document=working_schedule_document,
+                    ),
+                    duration_ms=_elapsed_ms(optimizer_started_at),
+                )
             )
         return _PipelineExecutionResult(
             working_schedule_document=working_schedule_document,
             snapshot=snapshot,
+            optimizers=tuple(optimizer_summaries),
         )
 
     async def _async_persist_cleanup_only_locked(
         self,
         *,
-        reference_time: datetime,
-        cleaned_schedule_document,
-    ) -> bool:
-        baseline_schedule_document = (
-            await self._coordinator._load_pruned_schedule_document_locked(
-                reference_time=reference_time
-            )
-        )
+        baseline_schedule_document: ScheduleDocument,
+        cleaned_schedule_document: ScheduleDocument,
+    ) -> _CleanupOutcome:
+        actions_stripped = count_automation_owned_actions(baseline_schedule_document)
         if schedule_document_to_dict(
             cleaned_schedule_document
         ) == schedule_document_to_dict(baseline_schedule_document):
-            return False
+            return _CleanupOutcome(
+                changed=False,
+                actions_stripped=actions_stripped,
+            )
         await self._coordinator._save_schedule_document(cleaned_schedule_document)
-        return True
+        return _CleanupOutcome(
+            changed=True,
+            actions_stripped=actions_stripped,
+        )
+
+    def _finalize_result(
+        self,
+        *,
+        result: AutomationRunResult,
+        run_reason: str | None,
+        run_started_at: float,
+    ) -> AutomationRunResult:
+        finalized = AutomationRunResult(
+            ran_automation=result.ran_automation,
+            reason=result.reason,
+            snapshot=result.snapshot,
+            message=result.message,
+            optimizers=result.optimizers,
+            duration_ms=_elapsed_ms(run_started_at),
+            cleanup=result.cleanup,
+        )
+        _log_run_result(result=finalized, run_reason=run_reason)
+        return finalized
 
 
 def _coerce_optimizer_result_schedule_document(
@@ -284,3 +418,123 @@ def _coerce_optimizer_result_schedule_document(
         execution_enabled=execution_enabled,
         slots=deepcopy(candidate_document.slots),
     )
+
+
+def _build_cleanup_only_or_skipped_result(
+    *,
+    cleanup_reason: str,
+    cleanup_outcome: _CleanupOutcome,
+) -> AutomationRunResult:
+    if not cleanup_outcome.changed:
+        return AutomationRunResult.skipped(reason=cleanup_reason)
+    return AutomationRunResult.skipped(
+        reason="cleanup_only",
+        cleanup=AutomationCleanupSummary(
+            reason=cleanup_reason,
+            actions_stripped=cleanup_outcome.actions_stripped,
+        ),
+    )
+
+
+def _count_changed_writable_action_positions(
+    *,
+    before_document: ScheduleDocument,
+    after_document: ScheduleDocument,
+) -> int:
+    changed_positions = 0
+    for slot_id in sorted(set(before_document.slots) | set(after_document.slots)):
+        before_domains = before_document.slots.get(slot_id, ScheduleDomains())
+        after_domains = after_document.slots.get(slot_id, ScheduleDomains())
+        if (
+            before_domains.inverter != after_domains.inverter
+            and not is_user_owned_inverter_action(before_domains.inverter)
+            and not is_user_owned_inverter_action(after_domains.inverter)
+        ):
+            changed_positions += 1
+        for appliance_id in sorted(
+            set(before_domains.appliances) | set(after_domains.appliances)
+        ):
+            before_action = before_domains.appliances.get(appliance_id)
+            after_action = after_domains.appliances.get(appliance_id)
+            if before_action == after_action:
+                continue
+            if is_user_owned_appliance_action(
+                before_action
+            ) or is_user_owned_appliance_action(after_action):
+                continue
+            changed_positions += 1
+    return changed_positions
+
+
+def _build_optimizer_summary(
+    *,
+    optimizer_id: str,
+    optimizer_kind: str,
+    status: str,
+    slots_written: int,
+    duration_ms: int,
+    error: str | None = None,
+) -> OptimizerRunSummary:
+    return OptimizerRunSummary(
+        id=optimizer_id,
+        kind=optimizer_kind,
+        status=status,
+        slots_written=slots_written,
+        duration_ms=duration_ms,
+        error=error,
+    )
+
+
+def _build_optimizer_error(
+    *,
+    config: "OptimizerInstanceConfig",
+    duration_ms: int,
+    error: str,
+    completed_optimizers: tuple[OptimizerRunSummary, ...],
+    snapshot: OptimizationSnapshot | None,
+) -> _OptimizerExecutionError:
+    return _OptimizerExecutionError(
+        summary=_build_optimizer_summary(
+            optimizer_id=config.id,
+            optimizer_kind=config.kind,
+            status="failed",
+            slots_written=0,
+            duration_ms=duration_ms,
+            error=error,
+        ),
+        completed_optimizers=completed_optimizers,
+        snapshot=snapshot,
+    )
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+def _log_run_result(
+    *,
+    result: AutomationRunResult,
+    run_reason: str | None,
+) -> None:
+    cleanup_reason = None if result.cleanup is None else result.cleanup.reason
+    cleanup_actions = 0 if result.cleanup is None else result.cleanup.actions_stripped
+    _LOGGER.info(
+        "automation run result trigger=%s outcome=%s ran=%s optimizers=%s duration_ms=%s cleanup_reason=%s cleanup_actions=%s",
+        run_reason or "manual",
+        result.reason or "completed",
+        result.ran_automation,
+        len(result.optimizers),
+        result.duration_ms,
+        cleanup_reason,
+        cleanup_actions,
+    )
+    for optimizer in result.optimizers:
+        _LOGGER.debug(
+            "automation optimizer result id=%s kind=%s status=%s slots_written=%s duration_ms=%s error=%s",
+            optimizer.id,
+            optimizer.kind,
+            optimizer.status,
+            optimizer.slots_written,
+            optimizer.duration_ms,
+            optimizer.error,
+        )

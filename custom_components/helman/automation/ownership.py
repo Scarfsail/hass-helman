@@ -80,6 +80,16 @@ def has_automation_owned_actions(doc: "ScheduleDocument") -> bool:
     )
 
 
+def count_automation_owned_actions(doc: "ScheduleDocument") -> int:
+    return sum(
+        (1 if domains.inverter.set_by == "automation" else 0)
+        + sum(
+            1 for action in domains.appliances.values() if action.get("setBy") == "automation"
+        )
+        for domains in doc.slots.values()
+    )
+
+
 def merge_automation_result(
     *,
     baseline: "ScheduleDocument",
