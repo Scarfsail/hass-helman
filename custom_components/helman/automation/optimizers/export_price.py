@@ -25,9 +25,6 @@ if TYPE_CHECKING:
     from ..snapshot import OptimizationSnapshot
 
 _LOGGER = logging.getLogger(__name__)
-_EPSILON = 1e-9
-
-
 @dataclass(frozen=True)
 class ExportPriceOptimizer:
     id: str
@@ -93,14 +90,9 @@ def _find_candidate_slot_ids(
         threshold=threshold,
         reference_time=snapshot.context.now,
     )
-    export_bucket_starts = _find_export_bucket_starts(
-        grid_forecast=snapshot.grid_forecast,
-        battery_forecast=snapshot.battery_forecast,
-    )
-    overlapping_bucket_starts = negative_price_bucket_starts & export_bucket_starts
     candidate_slot_id_set = {
         format_slot_id(build_horizon_start(bucket_start))
-        for bucket_start in overlapping_bucket_starts
+        for bucket_start in negative_price_bucket_starts
     }
     return tuple(
         slot_id
@@ -135,36 +127,6 @@ def _find_negative_price_bucket_starts(
         negative_bucket_starts.add(_canonical_bucket_start(timestamp))
 
     return negative_bucket_starts
-
-
-def _find_export_bucket_starts(
-    *,
-    grid_forecast: dict[str, Any],
-    battery_forecast: dict[str, Any],
-) -> set[datetime]:
-    export_bucket_starts: set[datetime] = set()
-    raw_series = grid_forecast.get("series")
-    if not isinstance(raw_series, list):
-        raw_series = battery_forecast.get("series", [])
-    if not isinstance(raw_series, list):
-        return export_bucket_starts
-
-    for entry in raw_series:
-        if not isinstance(entry, dict):
-            continue
-        timestamp = _parse_timestamp(entry.get("timestamp"))
-        exported_to_grid_kwh = _read_optional_float(entry.get("exportedToGridKwh"))
-        if (
-            timestamp is None
-            or exported_to_grid_kwh is None
-            or exported_to_grid_kwh <= _EPSILON
-        ):
-            continue
-        export_bucket_starts.add(_canonical_bucket_start(timestamp))
-
-    return export_bucket_starts
-
-
 def _canonical_bucket_start(timestamp: datetime) -> datetime:
     local_reference = dt_util.as_local(timestamp)
     local_day_start = local_reference.replace(

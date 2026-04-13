@@ -218,7 +218,7 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             },
         )
 
-    def test_does_not_write_when_negative_price_and_export_do_not_overlap(self) -> None:
+    def test_writes_when_price_is_below_threshold_even_without_expected_export(self) -> None:
         snapshot = _make_snapshot(
             schedule_document=ScheduleDocument(execution_enabled=True),
             export_price_points=[
@@ -238,7 +238,19 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             stop_export_supported=True,
         ).optimize(snapshot, _make_optimizer_config())
 
-        self.assertEqual(schedule_document_to_dict(result)["slots"], {})
+        self.assertEqual(
+            schedule_document_to_dict(result),
+            {
+                "executionEnabled": True,
+                "slotMinutes": 30,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "stop_export", "setBy": "automation"},
+                        "appliances": {},
+                    }
+                },
+            },
+        )
 
     def test_leaves_user_owned_inverter_slots_untouched(self) -> None:
         schedule_document = ScheduleDocument(

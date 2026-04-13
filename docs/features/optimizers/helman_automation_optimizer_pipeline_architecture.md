@@ -321,8 +321,11 @@ Purpose:
 Reads:
 
 - export price forecast
-- working battery/grid forecast
 - current schedule state
+
+Safety rule:
+
+- when export price is below the configured threshold, `export_price` should proactively write `stop_export` for the affected scheduler slots even if the current forecast does not yet predict positive exported energy in those buckets; avoiding a potential negative-price export takes precedence over trusting the export forecast
 
 Writes:
 

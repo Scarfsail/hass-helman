@@ -54,7 +54,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 2** — Config editor UI for automation config _(commit c386936; local HASS smoke passed)_
 - [x] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence) _(local HASS smoke passed; SHA in git history)_
 - [x] **Phase 4** — Automation-owned action ownership invariant in persistence path _(local HASS smoke passed)_
-- [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(local HASS smoke passed; live `when_price_below: 0.0` branch was data-limited, so the ownership/cleanup path was exercised with a supplemental higher-threshold smoke)_
+- [x] **Phase 5** — `export_price` optimizer (single-optimizer only) _(local HASS smoke passed; stricter price-only behavior validated live after restart)_
 - [x] **Phase 6** — Rebuild-between-optimizers loop wiring _(commit c8a90c7; local HASS smoke passed)_
 - [ ] **Phase 7** — `surplus_appliance` optimizer (generic + climate)
 - [ ] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing
@@ -398,7 +398,7 @@ Create:
 - `custom_components/helman/automation/optimizers/__init__.py`
 - `custom_components/helman/automation/optimizers/export_price.py`
   - `ExportPriceOptimizer` implementing the `Optimizer` protocol
-  - reads `snapshot.context.export_price_forecast` and the already-computed `snapshot.battery_forecast` / `snapshot.grid_forecast`
+  - reads `snapshot.context.export_price_forecast`
   - writes inverter actions only to action positions that are empty or automation-owned
   - uses `stop_export` when `ScheduleControlConfig.stop_export_option` is available; otherwise skips the affected slot(s) and logs a warning rather than guessing an alternate inverter action
 - `tests/test_automation_optimizer_export_price.py`
@@ -414,6 +414,7 @@ Modify:
 - The optimizer **reads** the forecast-side of the snapshot, but **writes** only to `snapshot.schedule`. It returns a new `ScheduleDocument`; it does not mutate in place.
 - Treat non-mutating behavior as a real contract, not just a style preference. The optimizer must return a new `ScheduleDocument` and leave `snapshot.schedule` untouched; add regression tests for this instead of relying on hidden runner-side deep copies.
 - The optimizer must never write into a slot position that is user-owned. This is enforced by the optimizer itself (early skip) and re-enforced at merge time. Defensive: optimizer-level skip keeps decision logic honest even before merge.
+- `export_price` is intentionally conservative: if a canonical export-price bucket is below the configured threshold, the optimizer writes `stop_export` for the owning schedule slot regardless of whether the current rebuild predicts non-zero exported energy there. Forecast misses must not allow an accidental negative-price export.
 - `when_price_below` is interpreted in the same currency unit as `grid_price_forecast.exportPriceUnit`. No unit conversion — if the configured threshold and the forecast unit disagree, the optimizer raises.
 - If `stop_export` is unavailable for the current control mapping, v1 logs a warning and skips those slot writes. Do not guess an alternate inverter action in this phase.
 - Slot horizon is the already-existing rolling schedule horizon. The optimizer must not invent its own window.
@@ -426,6 +427,7 @@ Modify:
 
 - baseline snapshot with export price forecast all positive and `when_price_below=0` → optimizer returns an unchanged schedule
 - baseline with export price forecast containing a negative window → optimizer writes `stop_export` inverter actions for exactly those slots, stamped `setBy=automation`
+- baseline with a below-threshold price window but zero forecasted export in that bucket → optimizer still writes `stop_export` for the owning slot
 - optimizer leaves user-owned inverter slots untouched even if their window overlaps a negative-price slot
 - optimizer refreshes its own prior automation-owned actions (they've already been stripped by Phase 4's `strip_automation_owned_actions`, so this is implicitly tested by running twice)
 - optimizer with `stop_export` missing from the control mapping skips writes for those slots and logs a warning
@@ -439,7 +441,7 @@ Modify:
 After restart, with a real grid export price forecast available:
 
 1. Configure `automation.optimizers` with a single `export_price` instance, `when_price_below: 0.0`. Save via `helman/save_config`.
-2. `helman/__debug_run_automation` → inspect the returned snapshot: any slots where export price is below `0.0` should now carry an inverter action with `kind: stop_export` and `setBy: automation` when that control option is supported; otherwise the run logs a warning and leaves those slots untouched.
+2. `helman/__debug_run_automation` → inspect the returned snapshot: any slots where export price is below `0.0` should now carry an inverter action with `kind: stop_export` and `setBy: automation` when that control option is supported, regardless of whether the current forecast predicts positive exported energy there; otherwise the run logs a warning and leaves those slots untouched.
 3. `helman/get_schedule` → confirm those same slots are now persisted with `setBy: automation`.
 4. `helman/set_schedule` with a `setBy: user` inverter action for one of those same slots.
 5. `helman/__debug_run_automation` again → the user slot must be preserved as `setBy: user`; the automation-owned siblings in other slots may be refreshed.
@@ -455,6 +457,10 @@ Observed on 2026-04-13:
 - Unit tests green.
 - Smoke test confirms the `setBy=user` absolute ownership invariant under real HASS and cleanup-only behavior when automation is disabled.
 - Architecture doc's description of `export_price` still matches implementation; if the unsupported-control behavior differs from the arch doc's wording, update the arch doc.
+
+### Status note
+
+- The conservative `export_price` behavior now keys off below-threshold price alone: after a local HASS restart with `when_price_below: 1.5`, a live debug run authored 8 automation `stop_export` slots (`12:00` through `15:30`, including `13:00`), confirming the stricter fail-safe policy is active end to end.
 
 ---
 
