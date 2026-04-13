@@ -5,7 +5,7 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -936,6 +936,151 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         invalidate_cache.assert_called_once_with()
+
+    async def test_set_schedule_uses_shared_post_write_side_effect_helper(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": True, "slots": {}}
+        )
+        coordinator._async_run_post_schedule_write_side_effects = AsyncMock()
+
+        await coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+        )
+
+        coordinator._async_run_post_schedule_write_side_effects.assert_awaited_once_with(
+            reason="schedule_updated",
+            reference_time=REFERENCE_TIME,
+        )
+
+    async def test_persist_automation_result_preserves_execution_enabled(self) -> None:
+        coordinator, storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+
+        async with coordinator._schedule_lock:
+            changed = await coordinator._persist_automation_result_locked(
+                automation_result=ScheduleDocument(
+                    execution_enabled=True,
+                    slots={
+                        CURRENT_SLOT_ID: {
+                            "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                            "appliances": {},
+                        },
+                    },
+                ),
+                reference_time=REFERENCE_TIME,
+            )
+
+        self.assertTrue(changed)
+        self.assertEqual(storage.schedule_document["executionEnabled"], False)
+        self.assertEqual(
+            storage.schedule_document["slots"][CURRENT_SLOT_ID]["inverter"]["setBy"],
+            "automation",
+        )
+
+    async def test_persist_automation_result_refuses_overwrite_when_set_by_missing(
+        self,
+    ) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                        "appliances": {},
+                    }
+                },
+            }
+        )
+
+        async with coordinator._schedule_lock:
+            with self.assertRaisesRegex(
+                Exception,
+                "Automation cannot overwrite user-owned inverter action",
+            ):
+                await coordinator._persist_automation_result_locked(
+                    automation_result=ScheduleDocument(
+                        execution_enabled=False,
+                        slots={
+                            CURRENT_SLOT_ID: {
+                                "inverter": {"kind": "normal"},
+                                "appliances": {},
+                            },
+                        },
+                    ),
+                    reference_time=REFERENCE_TIME,
+                )
+
+    async def test_persist_automation_result_rejects_invalid_appliance_action(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+
+        async with coordinator._schedule_lock:
+            with self.assertRaises(ScheduleActionError):
+                await coordinator._persist_automation_result_locked(
+                    automation_result=ScheduleDocument(
+                        execution_enabled=False,
+                        slots={
+                            CURRENT_SLOT_ID: {
+                                "inverter": {"kind": "empty"},
+                                "appliances": {"unknown-appliance": {"on": True}},
+                            },
+                        },
+                    ),
+                    reference_time=REFERENCE_TIME,
+                )
+
+    async def test_persist_automation_result_defers_side_effects_until_after_unlock(
+        self,
+    ) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": True, "slots": {}}
+        )
+        events: list[tuple[str, bool]] = []
+
+        def invalidate_cache() -> None:
+            events.append(("invalidate", coordinator._schedule_lock.locked()))
+
+        async def reconcile(*, reason: str, reference_time: datetime | None = None) -> None:
+            self.assertEqual(reason, "automation_updated")
+            self.assertEqual(reference_time, REFERENCE_TIME)
+            events.append(("reconcile", coordinator._schedule_lock.locked()))
+
+        coordinator._invalidate_battery_forecast_cache = invalidate_cache
+        coordinator._async_reconcile_schedule_execution_if_enabled = reconcile
+
+        async with coordinator._schedule_lock:
+            changed = await coordinator._persist_automation_result_locked(
+                automation_result=ScheduleDocument(
+                    execution_enabled=True,
+                    slots={
+                        CURRENT_SLOT_ID: {
+                            "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
+                            "appliances": {},
+                        },
+                    },
+                ),
+                reference_time=REFERENCE_TIME,
+            )
+            self.assertTrue(changed)
+            self.assertEqual(events, [])
+
+        await coordinator._async_run_post_schedule_write_side_effects(
+            reason="automation_updated",
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            events,
+            [("invalidate", False), ("reconcile", False)],
+        )
 
     async def test_set_schedule_normalizes_appliance_actions_using_active_registry(
         self,

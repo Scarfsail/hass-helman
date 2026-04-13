@@ -323,7 +323,10 @@ from custom_components.helman.battery_state import BatteryEntityConfig, BatteryL
 from custom_components.helman.const import DOMAIN, MAX_FORECAST_DAYS
 from custom_components.helman.coordinator import HelmanCoordinator
 from custom_components.helman import coordinator as coordinator_module
-from custom_components.helman.scheduling.schedule import ScheduleDocument
+from custom_components.helman.scheduling.schedule import (
+    ScheduleDocument,
+    schedule_document_to_dict,
+)
 from custom_components.helman.websockets import ws_debug_run_automation
 
 for module_name in (
@@ -613,8 +616,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         second = await runner.run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(first.ran_automation)
-        self.assertEqual(first.snapshot.schedule, schedule_document)
-        self.assertEqual(second.snapshot.schedule, schedule_document)
+        self.assertEqual(
+            schedule_document_to_dict(first.snapshot.schedule),
+            schedule_document_to_dict(schedule_document),
+        )
+        self.assertEqual(
+            schedule_document_to_dict(second.snapshot.schedule),
+            schedule_document_to_dict(schedule_document),
+        )
         self.assertEqual(first.snapshot.adjusted_house_forecast["status"], "available")
         self.assertEqual(first.snapshot.battery_forecast["status"], "available")
         self.assertEqual(first.snapshot.grid_forecast["currentImportPrice"], 7.0)
@@ -623,6 +632,59 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             {"boiler": 1.25},
         )
         self.assertEqual(len(coordinator.snapshot_calls), 2)
+
+    async def test_run_builds_snapshot_from_stripped_working_schedule(self) -> None:
+        next_slot_id = "2026-03-20T21:30:00+01:00"
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {
+                        "boiler": {"on": True, "setBy": "user"},
+                    },
+                },
+                next_slot_id: {
+                    "inverter": {"kind": "normal"},
+                    "appliances": {},
+                },
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=schedule_document,
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=AutomationConfig(enabled=True),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        self.assertEqual(
+            schedule_document_to_dict(result.snapshot.schedule),
+            {
+                "executionEnabled": True,
+                "slotMinutes": 30,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "empty"},
+                        "appliances": {
+                            "boiler": {"on": True, "setBy": "user"},
+                        },
+                    },
+                    next_slot_id: {
+                        "inverter": {"kind": "normal"},
+                        "appliances": {},
+                    },
+                },
+            },
+        )
+        self.assertEqual(
+            schedule_document_to_dict(coordinator.snapshot_calls[0]["schedule_document"]),
+            schedule_document_to_dict(result.snapshot.schedule),
+        )
 
 
 class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):

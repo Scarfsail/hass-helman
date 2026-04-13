@@ -52,7 +52,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 1** — Scaffolding, config schema, feature flag plumbing _(committed; SHA recorded in session handoff)_
 - [x] **Phase 2** — Config editor UI for automation config _(commit c386936; local HASS smoke passed)_
 - [x] **Phase 3** — Snapshot + runner skeleton (no optimizers, no persistence) _(local HASS smoke passed; SHA in git history)_
-- [ ] **Phase 4** — Automation-owned action ownership invariant in persistence path
+- [x] **Phase 4** — Automation-owned action ownership invariant in persistence path _(local HASS smoke passed)_
 - [ ] **Phase 5** — `export_price` optimizer (single-optimizer only)
 - [ ] **Phase 6** — Rebuild-between-optimizers loop wiring
 - [ ] **Phase 7** — `surplus_appliance` optimizer (generic + climate)

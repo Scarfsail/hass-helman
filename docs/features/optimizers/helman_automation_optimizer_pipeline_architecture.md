@@ -113,6 +113,8 @@ Compatibility rule for existing stored schedules:
 - implicit default / empty positions remain writable
 - v1 should not require an eager storage rewrite just to stamp old entries; the existing schedule normalization path can continue to normalize metadata opportunistically on later user edits if it already does so
 
+Migration note: older persisted authored actions without `setBy` stay protected as user-owned until a later explicit rewrite updates that metadata; automation must not backfill or reinterpret them as writable gaps.
+
 For v1 this means:
 
 - `export_price` may write only `domains.inverter`, and only when that inverter action is empty or already automation-owned

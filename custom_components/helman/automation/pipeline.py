@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.util import dt as dt_util
 
 from .config import AutomationConfig
+from .ownership import strip_automation_owned_actions
 from .snapshot import OptimizationSnapshot, snapshot_to_dict
 
 if TYPE_CHECKING:
@@ -60,10 +61,15 @@ class AutomationRunner:
     ) -> AutomationRunResult:
         active_reference_time = reference_time or dt_util.now()
         async with self._coordinator._schedule_lock:
-            schedule_document = self._coordinator._build_automation_working_schedule_document_locked(
-                reference_time=active_reference_time
+            baseline_schedule_document = (
+                self._coordinator._build_automation_working_schedule_document_locked(
+                    reference_time=active_reference_time
+                )
             )
-            if not schedule_document.execution_enabled:
+            schedule_document = strip_automation_owned_actions(
+                baseline_schedule_document
+            )
+            if not baseline_schedule_document.execution_enabled:
                 return AutomationRunResult.skipped(reason="execution_disabled")
 
             if not self._automation_config.enabled:

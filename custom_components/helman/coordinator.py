@@ -34,6 +34,7 @@ from .appliances import (
 )
 from .automation.config import AutomationConfig, read_automation_config
 from .automation.input_bundle import AutomationInputBundle
+from .automation.ownership import merge_automation_result
 from .automation.snapshot import OptimizationContext, OptimizationSnapshot
 from .appliances.climate_appliance import ClimateApplianceRuntime
 from .appliances.climate_appliance import resolve_supported_climate_modes
@@ -877,6 +878,32 @@ class HelmanCoordinator:
         )
         return pruned_document
 
+    def _normalize_schedule_document_for_strict_write(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        reference_time: datetime,
+    ) -> ScheduleDocument:
+        if not schedule_document.slots:
+            return ScheduleDocument(
+                execution_enabled=schedule_document.execution_enabled,
+                slots={},
+            )
+
+        normalized_slots = normalize_slot_patch_request(
+            slots=[
+                ScheduleSlot(id=slot_id, domains=domains)
+                for slot_id, domains in schedule_document.slots.items()
+            ],
+            reference_time=reference_time,
+            battery_soc_bounds=self._read_battery_soc_bounds(),
+            appliances_registry=self._appliances_registry,
+        )
+        return ScheduleDocument(
+            execution_enabled=schedule_document.execution_enabled,
+            slots=apply_slot_patches(stored_slots={}, slot_patches=normalized_slots),
+        )
+
     def _build_schedule_response(
         self,
         *,
@@ -1012,11 +1039,53 @@ class HelmanCoordinator:
                 document_changed = True
 
         if document_changed:
-            self._invalidate_battery_forecast_cache()
-            await self._async_reconcile_schedule_execution_if_enabled(
+            await self._async_run_post_schedule_write_side_effects(
                 reason="schedule_updated",
                 reference_time=request_now,
             )
+
+    async def _async_run_post_schedule_write_side_effects(
+        self,
+        *,
+        reason: str,
+        reference_time: datetime,
+    ) -> None:
+        self._invalidate_battery_forecast_cache()
+        await self._async_reconcile_schedule_execution_if_enabled(
+            reason=reason,
+            reference_time=reference_time,
+        )
+
+    async def _persist_automation_result_locked(
+        self,
+        *,
+        automation_result: ScheduleDocument,
+        reference_time: datetime | None = None,
+    ) -> bool:
+        request_now = reference_time or dt_util.now()
+        latest_document = await self._load_pruned_schedule_document_locked(
+            reference_time=request_now
+        )
+        normalized_automation_result = self._normalize_schedule_document_for_strict_write(
+            schedule_document=ScheduleDocument(
+                execution_enabled=latest_document.execution_enabled,
+                slots=automation_result.slots,
+            ),
+            reference_time=request_now,
+        )
+        merged_document = merge_automation_result(
+            baseline=latest_document,
+            automation_result=normalized_automation_result,
+        )
+        canonical_document = normalize_schedule_document_for_registry(
+            merged_document,
+            appliances_registry=self._appliances_registry,
+        )
+        if canonical_document == latest_document:
+            return False
+
+        await self._save_schedule_document(canonical_document)
+        return True
 
     async def set_schedule_execution(
         self,
