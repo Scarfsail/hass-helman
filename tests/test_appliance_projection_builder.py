@@ -98,11 +98,14 @@ finally:
 build_appliance_projection_plan = projection_builder_module.build_appliance_projection_plan
 build_appliances_runtime_registry = config_module.build_appliances_runtime_registry
 build_projection_input_bundle = projection_builder_module.build_projection_input_bundle
+build_when_active_demand_slices = projection_builder_module.build_when_active_demand_slices
+get_when_active_demand_profile = projection_builder_module.get_when_active_demand_profile
 AppliancesRuntimeRegistry = state_module.AppliancesRuntimeRegistry
 EvChargerApplianceRuntime = ev_charger_module.EvChargerApplianceRuntime
 EvChargerEcoGearRuntime = ev_charger_module.EvChargerEcoGearRuntime
 EvChargerUseModeRuntime = ev_charger_module.EvChargerUseModeRuntime
 EvVehicleRuntime = ev_charger_module.EvVehicleRuntime
+format_slot_id = schedule_module.format_slot_id
 ScheduleDocument = schedule_module.ScheduleDocument
 ScheduleDomains = schedule_module.ScheduleDomains
 
@@ -466,13 +469,56 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             ),
             inputs=None,
             reference_time=REFERENCE_TIME,
-            generic_hourly_energy_kwh_by_appliance_id={"dishwasher": 0.8},
+            when_active_hourly_energy_kwh_by_appliance_id={"dishwasher": 0.8},
         )
 
         series = plan.appliances_by_id["dishwasher"].points
         self.assertEqual(len(series), 1)
         self.assertEqual(series[0].energy_kwh, 0.3067)
         self.assertEqual(series[0].projection_method, "history_average")
+
+    def test_resolved_input_demand_profile_matches_projection_plan_demand_points(self) -> None:
+        registry = build_appliances_runtime_registry(
+            {"appliances": [_generic_appliance(strategy="history_average")]}
+        )
+        appliance = registry.appliances[0]
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                        appliances={"dishwasher": {"on": True}}
+                    )
+                }
+            ),
+            inputs=None,
+            reference_time=REFERENCE_TIME,
+            when_active_hourly_energy_kwh_by_appliance_id={"dishwasher": 0.8},
+        )
+
+        demand_profile = get_when_active_demand_profile(
+            appliance=appliance,
+            resolved_hourly_energy_kwh=0.8,
+        )
+        self.assertIsNotNone(demand_profile)
+        self.assertEqual(demand_profile.projection_method, "resolved_input")
+
+        demand_slices = build_when_active_demand_slices(
+            slot_id="2026-03-20T21:00:00+01:00",
+            reference_time=REFERENCE_TIME,
+            hourly_energy_kwh=demand_profile.hourly_energy_kwh,
+        )
+
+        self.assertEqual(
+            [(point.slot_id, point.energy_kwh) for point in plan.demand_points],
+            [
+                (format_slot_id(demand_slice.bucket_start), demand_slice.energy_kwh)
+                for demand_slice in demand_slices
+            ],
+        )
 
     def test_generic_history_projection_falls_back_without_estimate(self) -> None:
         registry = build_appliances_runtime_registry(
@@ -492,7 +538,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             ),
             inputs=None,
             reference_time=REFERENCE_TIME,
-            generic_hourly_energy_kwh_by_appliance_id={"dishwasher": None},
+            when_active_hourly_energy_kwh_by_appliance_id={"dishwasher": None},
         )
 
         series = plan.appliances_by_id["dishwasher"].points
@@ -570,7 +616,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             ),
             inputs=None,
             reference_time=REFERENCE_TIME,
-            generic_hourly_energy_kwh_by_appliance_id={"living-room-hvac": 0.9},
+            when_active_hourly_energy_kwh_by_appliance_id={"living-room-hvac": 0.9},
         )
 
         series = plan.appliances_by_id["living-room-hvac"].points
@@ -597,7 +643,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             ),
             inputs=None,
             reference_time=REFERENCE_TIME,
-            generic_hourly_energy_kwh_by_appliance_id={"living-room-hvac": None},
+            when_active_hourly_energy_kwh_by_appliance_id={"living-room-hvac": None},
         )
 
         series = plan.appliances_by_id["living-room-hvac"].points

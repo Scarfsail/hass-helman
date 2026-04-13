@@ -38,6 +38,40 @@ def strip_automation_owned_actions(doc: "ScheduleDocument") -> "ScheduleDocument
     )
 
 
+def restore_automation_owned_appliance_actions(
+    *,
+    baseline: "ScheduleDocument",
+    current: "ScheduleDocument",
+    appliance_id: str,
+) -> "ScheduleDocument":
+    from ..scheduling.schedule import ScheduleDocument, ScheduleDomains
+    from ..scheduling.schedule import is_default_domains
+
+    restored_slots: dict[str, ScheduleDomains] = {}
+    for slot_id in sorted(set(baseline.slots) | set(current.slots)):
+        baseline_domains = baseline.slots.get(slot_id, ScheduleDomains())
+        current_domains = current.slots.get(slot_id, ScheduleDomains())
+        updated_appliances = dict(current_domains.appliances)
+        baseline_action = baseline_domains.appliances.get(appliance_id)
+        if (
+            appliance_id not in updated_appliances
+            and _is_automation_owned_appliance_action(baseline_action)
+        ):
+            updated_appliances[appliance_id] = dict(baseline_action)
+        restored_domains = ScheduleDomains(
+            inverter=current_domains.inverter,
+            appliances=updated_appliances,
+        )
+        if is_default_domains(restored_domains):
+            continue
+        restored_slots[slot_id] = restored_domains
+
+    return ScheduleDocument(
+        execution_enabled=current.execution_enabled,
+        slots=restored_slots,
+    )
+
+
 def merge_automation_result(
     *,
     baseline: "ScheduleDocument",
@@ -138,9 +172,22 @@ def _merge_appliance_actions(
             continue
 
         if result_action is not None:
-            merged[appliance_id] = _stamp_automation_appliance_action(result_action)
+            merged[appliance_id] = stamp_automation_appliance_action(result_action)
 
     return merged
+
+
+def is_user_owned_appliance_action(
+    action: Mapping[str, object] | None,
+) -> bool:
+    return action is not None and action.get("setBy") != "automation"
+
+
+def _is_automation_owned_appliance_action(
+    action: Mapping[str, object] | None,
+) -> bool:
+    return action is not None and action.get("setBy") == "automation"
+
 
 def is_user_owned_inverter_action(action: "ScheduleAction") -> bool:
     return action.kind != SCHEDULE_ACTION_EMPTY and action.set_by != "automation"
@@ -157,7 +204,7 @@ def _schedule_actions_match(
     )
 
 
-def _stamp_automation_appliance_action(
+def stamp_automation_appliance_action(
     action: Mapping[str, object],
 ) -> dict[str, object]:
     stamped = {str(key): value for key, value in action.items()}

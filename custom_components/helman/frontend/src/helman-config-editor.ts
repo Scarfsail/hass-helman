@@ -20,6 +20,7 @@ import {
   createLabelKey,
   createModeKey,
   type RenameObjectKeyResult,
+  createSurplusApplianceOptimizerDraft,
   createUseModeEntry,
   createVehicleDraft,
   getValueAtPath,
@@ -71,6 +72,12 @@ const GENERIC_PROJECTION_STRATEGIES = [
 
 const EXPORT_PRICE_OPTIMIZER_KIND = "export_price";
 const EXPORT_PRICE_OPTIMIZER_ACTION = "stop_export";
+const SURPLUS_APPLIANCE_OPTIMIZER_KIND = "surplus_appliance";
+const SURPLUS_APPLIANCE_OPTIMIZER_ACTION = "on";
+const SURPLUS_APPLIANCE_CLIMATE_MODES = [
+  { value: "heat", labelKey: "editor.values.heat" },
+  { value: "cool", labelKey: "editor.values.cool" },
+];
 
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
@@ -1728,6 +1735,13 @@ export class HelmanConfigEditorPanel extends LitElement {
             <button type="button" class="add-button" @click=${this._handleAddExportPriceOptimizer}>
               ${this._t("editor.actions.add_export_price_optimizer")}
             </button>
+            <button
+              type="button"
+              class="add-button"
+              @click=${this._handleAddSurplusApplianceOptimizer}
+            >
+              ${this._t("editor.actions.add_surplus_appliance_optimizer")}
+            </button>
           </div>
         `,
       )}
@@ -1743,6 +1757,9 @@ export class HelmanConfigEditorPanel extends LitElement {
     const kind = this._stringValue(optimizerObject.kind);
     if (kind === EXPORT_PRICE_OPTIMIZER_KIND) {
       return this._renderExportPriceOptimizerCard(optimizerObject, index, total);
+    }
+    if (kind === SURPLUS_APPLIANCE_OPTIMIZER_KIND) {
+      return this._renderSurplusApplianceOptimizerCard(optimizerObject, index, total);
     }
     return this._renderUnsupportedAutomationOptimizerCard(optimizerObject, index, total);
   }
@@ -1844,6 +1861,137 @@ export class HelmanConfigEditorPanel extends LitElement {
               <input .value=${action} disabled />
               <div class="helper">${this._t("editor.helpers.export_price_action")}</div>
             </div>
+          </div>
+        </div>
+      </details>
+    `;
+  }
+
+  private _renderSurplusApplianceOptimizerCard(
+    optimizer: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["automation", "optimizers", index];
+    const paramsPath: PathSegment[] = [...basePath, "params"];
+    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
+    const optimizerId =
+      this._stringValue(optimizer.id) ||
+      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const applianceId = this._stringValue(this._getValue([...paramsPath, "appliance_id"]));
+    const action =
+      this._stringValue(this._getValue([...paramsPath, "action"])) ||
+      SURPLUS_APPLIANCE_OPTIMIZER_ACTION;
+    const minSurplusBufferPct = this._getValue([...paramsPath, "min_surplus_buffer_pct"]) ?? 5;
+    const configuredApplianceKind = this._findConfiguredApplianceKind(applianceId);
+    const climateMode =
+      this._stringValue(this._getValue([...paramsPath, "climate_mode"])) || "heat";
+
+    return html`
+      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${optimizerId}</strong>
+                <span class="card-subtitle">${this._t("editor.values.surplus_appliance")}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
+              <button
+                type="button"
+                ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button
+                type="button"
+                ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button
+                type="button"
+                class="danger"
+                @click=${() => this._removeListItem(["automation", "optimizers"], index)}
+              >${this._t("editor.actions.remove")}</button>
+            </div>
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <div class="field-grid">
+            ${this._renderRequiredTextField(
+              [...basePath, "id"],
+              "editor.fields.optimizer_id",
+              undefined,
+              "editor.help.automation_optimizer_id",
+            )}
+            <div class="field">
+              <label>${this._t("editor.fields.kind")}</label>
+              <input .value=${SURPLUS_APPLIANCE_OPTIMIZER_KIND} disabled />
+            </div>
+            <div class="field">
+              <div class="field-label-row">
+                <label>${this._t("editor.fields.appliance_id")}</label>
+                ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
+              </div>
+              <input
+                .value=${applianceId}
+                @change=${(event: Event) =>
+                  this._handleSurplusApplianceIdChange(
+                    index,
+                    (event.currentTarget as HTMLInputElement).value,
+                  )}
+              />
+              <div class="helper">${this._t("editor.helpers.surplus_appliance_id")}</div>
+            </div>
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "min_surplus_buffer_pct"],
+              "editor.fields.min_surplus_buffer_pct",
+              minSurplusBufferPct,
+              "1",
+              "editor.help.surplus_appliance_min_surplus_buffer_pct",
+            )}
+            <div class="field">
+              <div class="field-label-row">
+                <label>${this._t("editor.fields.optimizer_action")}</label>
+                ${this._renderHelpIcon(
+                  "editor.fields.optimizer_action",
+                  "editor.help.surplus_appliance_action",
+                )}
+              </div>
+              <input .value=${action} disabled />
+              <div class="helper">${this._t("editor.helpers.surplus_appliance_action")}</div>
+            </div>
+            ${configuredApplianceKind === "climate"
+              ? html`
+                  <div class="field">
+                    <div class="field-label-row">
+                      <label>${this._t("editor.fields.climate_mode")}</label>
+                      ${this._renderHelpIcon(
+                        "editor.fields.climate_mode",
+                        "editor.help.surplus_appliance_climate_mode",
+                      )}
+                    </div>
+                    <select
+                      .value=${climateMode}
+                      @change=${(event: Event) =>
+                        this._setRequiredString(
+                          [...paramsPath, "climate_mode"],
+                          (event.currentTarget as HTMLSelectElement).value,
+                        )}
+                    >
+                      ${SURPLUS_APPLIANCE_CLIMATE_MODES.map(
+                        (option) => html`
+                          <option value=${option.value}>${this._t(option.labelKey)}</option>
+                        `,
+                      )}
+                    </select>
+                    <div class="helper">${this._t("editor.helpers.surplus_appliance_climate_mode")}</div>
+                  </div>
+                `
+              : nothing}
           </div>
         </div>
       </details>
@@ -3581,6 +3729,48 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
   };
 
+  private _handleAddSurplusApplianceOptimizer = (): void => {
+    const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
+      .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
+      .filter((value) => value.length > 0);
+    this._applyMutation((draft) => {
+      const automation = asJsonObject(getValueAtPath(draft, ["automation"]));
+      if (!automation) {
+        setValueAtPath(draft, ["automation"], {
+          enabled: true,
+          optimizers: [createSurplusApplianceOptimizerDraft(existingIds)],
+        });
+        return;
+      }
+
+      appendListItem(
+        draft,
+        ["automation", "optimizers"],
+        createSurplusApplianceOptimizerDraft(existingIds),
+      );
+    });
+  };
+
+  private _handleSurplusApplianceIdChange(index: number, rawValue: string): void {
+    const applianceId = rawValue.trim();
+    const paramsPath: PathSegment[] = ["automation", "optimizers", index, "params"];
+    this._applyMutation((draft) => {
+      setValueAtPath(draft, [...paramsPath, "appliance_id"], applianceId);
+      const applianceKind = this._findConfiguredApplianceKindInConfig(draft, applianceId);
+      if (applianceKind !== "climate") {
+        unsetValueAtPath(draft, [...paramsPath, "climate_mode"]);
+        return;
+      }
+
+      const currentClimateMode = this._stringValue(
+        getValueAtPath(draft, [...paramsPath, "climate_mode"]),
+      );
+      if (!currentClimateMode) {
+        setValueAtPath(draft, [...paramsPath, "climate_mode"], "heat");
+      }
+    });
+  }
+
   private _handleAddEvCharger = (): void => {
     const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
       .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
@@ -3827,6 +4017,30 @@ export class HelmanConfigEditorPanel extends LitElement {
     this._applyMutation((draft) => {
       setValueAtPath(draft, path, value);
     });
+  }
+
+  private _findConfiguredApplianceKind(applianceId: string): string {
+    return this._findConfiguredApplianceKindInConfig(this._config, applianceId);
+  }
+
+  private _findConfiguredApplianceKindInConfig(
+    config: JsonObject | null | undefined,
+    applianceId: string,
+  ): string {
+    if (!config || applianceId.length === 0) {
+      return "";
+    }
+
+    const appliances = asJsonArray(getValueAtPath(config, ["appliances"])) ?? [];
+    for (const appliance of appliances) {
+      const applianceObject = asJsonObject(appliance);
+      if (this._stringValue(applianceObject?.id) !== applianceId) {
+        continue;
+      }
+      return this._stringValue(applianceObject?.kind);
+    }
+
+    return "";
   }
 
   private _applyMutation(mutator: (draft: JsonObject) => void): void {

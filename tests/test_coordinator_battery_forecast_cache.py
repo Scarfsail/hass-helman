@@ -702,7 +702,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             inputs=build_input_bundle.return_value,
             hass=coordinator._hass,
             reference_time=REFERENCE_TIME,
-            generic_hourly_energy_kwh_by_appliance_id={},
+            when_active_hourly_energy_kwh_by_appliance_id={},
         )
         coordinator._build_battery_forecast.assert_awaited_once()
 

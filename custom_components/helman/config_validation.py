@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .automation.config import AutomationConfigError, read_automation_config
+from .automation.optimizers.surplus_appliance import (
+    SurplusApplianceValidationError,
+    validate_surplus_appliance_optimizer_config,
+)
+from .appliances.config import build_appliances_runtime_registry
 from .appliances.climate_appliance import (
     ClimateApplianceConfigError,
     read_climate_appliance,
@@ -610,7 +615,7 @@ def _validate_automation_config(
         return
 
     try:
-        read_automation_config(config)
+        automation_config = read_automation_config(config)
     except AutomationConfigError as err:
         report.add_error(
             section="automation",
@@ -618,6 +623,24 @@ def _validate_automation_config(
             code=err.code,
             message=str(err),
         )
+        return
+
+    appliance_registry = build_appliances_runtime_registry(config)
+    for index, optimizer in enumerate(automation_config.execution_optimizers):
+        if optimizer.kind != "surplus_appliance":
+            continue
+        try:
+            validate_surplus_appliance_optimizer_config(
+                optimizer,
+                appliance_registry=appliance_registry,
+            )
+        except SurplusApplianceValidationError as err:
+            report.add_error(
+                section="automation",
+                path=f"automation.optimizers[{index}].params.{err.field}",
+                code="invalid_value",
+                message=str(err),
+            )
 
 
 def _read_supported_appliance(

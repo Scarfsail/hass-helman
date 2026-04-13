@@ -4,10 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..appliances.climate_appliance import SUPPORTED_CLIMATE_MODES
 from .optimizer import KNOWN_OPTIMIZER_KINDS
 
 _MISSING = object()
 _EXPORT_PRICE_OPTIMIZER_KIND = "export_price"
+_SURPLUS_APPLIANCE_OPTIMIZER_KIND = "surplus_appliance"
 
 
 class AutomationConfigError(ValueError):
@@ -159,6 +161,8 @@ def _read_optimizer_params(
 ) -> dict[str, Any]:
     if kind == _EXPORT_PRICE_OPTIMIZER_KIND:
         return _read_export_price_params(value, path=path)
+    if kind == _SURPLUS_APPLIANCE_OPTIMIZER_KIND:
+        return _read_surplus_appliance_params(value, path=path)
     return _read_params(value, path=path)
 
 
@@ -176,6 +180,32 @@ def _read_export_price_params(
         "action": _read_export_price_action(
             data.get("action", "stop_export"),
             path=f"{path}.action",
+        ),
+    }
+
+
+def _read_surplus_appliance_params(
+    value: object,
+    *,
+    path: str,
+) -> dict[str, Any]:
+    data = _read_mapping({} if value is _MISSING else value, path=path)
+    return {
+        "appliance_id": _read_non_empty_string(
+            data.get("appliance_id", _MISSING),
+            path=f"{path}.appliance_id",
+        ),
+        "action": _read_surplus_appliance_action(
+            data.get("action", "on"),
+            path=f"{path}.action",
+        ),
+        "climate_mode": _read_optional_surplus_climate_mode(
+            data.get("climate_mode"),
+            path=f"{path}.climate_mode",
+        ),
+        "min_surplus_buffer_pct": _read_non_negative_int(
+            data.get("min_surplus_buffer_pct", 5),
+            path=f"{path}.min_surplus_buffer_pct",
         ),
     }
 
@@ -271,6 +301,60 @@ def _read_export_price_action(
             message=f"{path} must be 'stop_export'",
         )
     return action
+
+
+def _read_surplus_appliance_action(
+    value: object,
+    *,
+    path: str,
+) -> str:
+    action = _read_non_empty_string(value, path=path)
+    if action != "on":
+        _raise_config_error(
+            path=path,
+            code="invalid_value",
+            message=f"{path} must be 'on'",
+        )
+    return action
+
+
+def _read_optional_surplus_climate_mode(
+    value: object,
+    *,
+    path: str,
+) -> str | None:
+    if value is None:
+        return None
+    climate_mode = _read_non_empty_string(value, path=path)
+    if climate_mode not in SUPPORTED_CLIMATE_MODES:
+        _raise_config_error(
+            path=path,
+            code="invalid_value",
+            message=(
+                f"{path} must be one of {', '.join(SUPPORTED_CLIMATE_MODES)}"
+            ),
+        )
+    return climate_mode
+
+
+def _read_non_negative_int(
+    value: object,
+    *,
+    path: str,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        _raise_config_error(
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be an integer",
+        )
+    if value < 0:
+        _raise_config_error(
+            path=path,
+            code="invalid_value",
+            message=f"{path} must be >= 0",
+        )
+    return value
 
 
 def _raise_config_error(

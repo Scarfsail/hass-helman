@@ -509,6 +509,53 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(connection.results[0][1]["success"])
 
+    async def test_save_config_persists_surplus_appliance_optimizer(self) -> None:
+        self._set_known_optimizer_kinds("export_price", "surplus_appliance")
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        config = {
+            "appliances": [
+                {
+                    "kind": "generic",
+                    "id": "dishwasher",
+                    "name": "Dishwasher",
+                    "controls": {
+                        "switch": {"entity_id": "switch.dishwasher"},
+                    },
+                    "projection": {
+                        "strategy": "fixed",
+                        "hourly_energy_kwh": 1.2,
+                    },
+                }
+            ],
+            "automation": {
+                "enabled": True,
+                "optimizers": [
+                    {
+                        "id": "preheat-living-room",
+                        "kind": "surplus_appliance",
+                        "enabled": True,
+                        "params": {
+                            "appliance_id": "dishwasher",
+                            "action": "on",
+                            "min_surplus_buffer_pct": 5,
+                        },
+                    }
+                ],
+            }
+        }
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertEqual(storage.saved_payloads, [config])
+        self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
+        self.assertTrue(connection.results[0][1]["success"])
+
     async def test_save_config_reports_reload_failure_after_persisting_document(self) -> None:
         storage = FakeStorage()
         connection = FakeConnection(is_admin=True)

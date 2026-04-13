@@ -251,6 +251,120 @@ class AutomationConfigTests(unittest.TestCase):
             "automation.optimizers[0].params.when_price_below",
         )
 
+    def test_parses_surplus_appliance_optimizer_params_with_defaults(self) -> None:
+        parsed = AutomationConfig.from_dict(
+            {
+                "optimizers": [
+                    {
+                        "id": "boiler-surplus",
+                        "kind": "surplus_appliance",
+                        "params": {
+                            "appliance_id": "boiler",
+                        },
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(
+            parsed.execution_optimizers[0].params,
+            {
+                "appliance_id": "boiler",
+                "action": "on",
+                "climate_mode": None,
+                "min_surplus_buffer_pct": 5,
+            },
+        )
+
+    def test_rejects_surplus_appliance_without_appliance_id(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "boiler-surplus",
+                            "kind": "surplus_appliance",
+                            "params": {},
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "required")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].params.appliance_id",
+        )
+
+    def test_rejects_invalid_surplus_appliance_action(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "boiler-surplus",
+                            "kind": "surplus_appliance",
+                            "params": {
+                                "appliance_id": "boiler",
+                                "action": "off",
+                            },
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].params.action",
+        )
+
+    def test_rejects_invalid_surplus_climate_mode(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "climate-surplus",
+                            "kind": "surplus_appliance",
+                            "params": {
+                                "appliance_id": "living-room-hvac",
+                                "climate_mode": "fan_only",
+                            },
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].params.climate_mode",
+        )
+
+    def test_rejects_negative_surplus_buffer_pct(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "boiler-surplus",
+                            "kind": "surplus_appliance",
+                            "params": {
+                                "appliance_id": "boiler",
+                                "min_surplus_buffer_pct": -1,
+                            },
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].params.min_surplus_buffer_pct",
+        )
+
     def test_is_no_op_when_automation_branch_is_absent(self) -> None:
         self.assertIsNone(read_automation_config({}))
         self.assertIsNone(read_automation_config(None))

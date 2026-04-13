@@ -319,6 +319,23 @@ export function createExportPriceOptimizerDraft(existingIds: string[]): JsonObje
   };
 }
 
+export function createSurplusApplianceOptimizerDraft(
+  existingIds: string[],
+  applianceId = "",
+): JsonObject {
+  const optimizerId = createUniqueKey(existingIds, "surplus-appliance");
+  return {
+    id: optimizerId,
+    kind: "surplus_appliance",
+    enabled: true,
+    params: {
+      appliance_id: applianceId,
+      action: "on",
+      min_surplus_buffer_pct: 5,
+    },
+  };
+}
+
 export function createVehicleDraft(existingIds: string[], vehicleName: string): JsonObject {
   const vehicleId = createUniqueKey(existingIds, "vehicle");
   return {

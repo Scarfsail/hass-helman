@@ -10,7 +10,11 @@ from homeassistant.util import dt as dt_util
 
 from .config import AutomationConfig
 from .input_bundle import AutomationInputBundle
-from .ownership import strip_automation_owned_actions
+from .optimizers.surplus_appliance import SurplusApplianceSkip
+from .ownership import (
+    restore_automation_owned_appliance_actions,
+    strip_automation_owned_actions,
+)
 from .optimizer import build_optimizer
 from .snapshot import OptimizationSnapshot, snapshot_to_dict
 from ..scheduling.schedule import ScheduleDocument, schedule_document_to_dict
@@ -139,6 +143,7 @@ class AutomationRunner:
                     return AutomationRunResult.skipped(reason="inputs_unavailable")
                 try:
                     execution_result = await self._async_execute_optimizer_loop_locked(
+                        baseline_schedule_document=baseline_schedule_document,
                         schedule_document=schedule_document,
                         input_bundle=input_bundle,
                         reference_time=active_reference_time,
@@ -170,20 +175,32 @@ class AutomationRunner:
 
     def _resolve_optimizer_steps(self) -> tuple[_ResolvedOptimizerStep, ...]:
         control_config = self._coordinator._read_schedule_control_config()
-        return tuple(
-            _ResolvedOptimizerStep(
-                config=optimizer_config,
-                optimizer=build_optimizer(
+        steps: list[_ResolvedOptimizerStep] = []
+        for optimizer_config in self._automation_config.execution_optimizers:
+            try:
+                optimizer = build_optimizer(
                     optimizer_config,
                     control_config=control_config,
-                ),
+                    appliance_registry=self._coordinator._appliances_registry,
+                )
+            except Exception as err:
+                raise _OptimizerExecutionError(
+                    optimizer_id=optimizer_config.id,
+                    optimizer_kind=optimizer_config.kind,
+                    cause=err,
+                ) from err
+            steps.append(
+                _ResolvedOptimizerStep(
+                    config=optimizer_config,
+                    optimizer=optimizer,
+                )
             )
-            for optimizer_config in self._automation_config.execution_optimizers
-        )
+        return tuple(steps)
 
     async def _async_execute_optimizer_loop_locked(
         self,
         *,
+        baseline_schedule_document: ScheduleDocument,
         schedule_document: ScheduleDocument,
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
@@ -201,6 +218,24 @@ class AutomationRunner:
                     snapshot,
                     step.config,
                 )
+            except SurplusApplianceSkip as err:
+                _LOGGER.warning(
+                    "Automation optimizer %s (%s) is skipping because %s",
+                    step.config.id,
+                    step.config.kind,
+                    err,
+                )
+                working_schedule_document = restore_automation_owned_appliance_actions(
+                    baseline=baseline_schedule_document,
+                    current=working_schedule_document,
+                    appliance_id=err.appliance_id,
+                )
+                snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
+                    schedule_document=working_schedule_document,
+                    input_bundle=input_bundle,
+                    reference_time=reference_time,
+                )
+                continue
             except Exception as err:
                 raise _OptimizerExecutionError(
                     optimizer_id=step.config.id,

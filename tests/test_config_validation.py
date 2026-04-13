@@ -303,6 +303,84 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_surplus_appliance_optimizer_passes_for_configured_generic_appliance(self) -> None:
+        config = _valid_config()
+        config["appliances"].append(_generic_appliance())
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": [
+                {
+                    "id": "run-dishwasher-on-surplus",
+                    "kind": "surplus_appliance",
+                    "params": {
+                        "appliance_id": "dishwasher",
+                        "action": "on",
+                    },
+                }
+            ],
+        }
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.errors, [])
+
+    def test_surplus_appliance_optimizer_rejects_unknown_appliance_id(self) -> None:
+        config = _valid_config()
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": [
+                {
+                    "id": "run-unknown-on-surplus",
+                    "kind": "surplus_appliance",
+                    "params": {
+                        "appliance_id": "missing-appliance",
+                        "action": "on",
+                    },
+                }
+            ],
+        }
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "automation.optimizers[0].params.appliance_id"
+                for issue in report.errors
+            )
+        )
+
+    def test_surplus_appliance_optimizer_rejects_climate_mode_for_generic_appliance(
+        self,
+    ) -> None:
+        config = _valid_config()
+        config["appliances"].append(_generic_appliance())
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": [
+                {
+                    "id": "run-dishwasher-on-surplus",
+                    "kind": "surplus_appliance",
+                    "params": {
+                        "appliance_id": "dishwasher",
+                        "action": "on",
+                        "climate_mode": "heat",
+                    },
+                }
+            ],
+        }
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "automation.optimizers[0].params.climate_mode"
+                for issue in report.errors
+            )
+        )
+
     def test_input_select_ev_controls_are_accepted(self) -> None:
         report = validate_config_document(_valid_config())
 

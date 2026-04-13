@@ -1345,7 +1345,7 @@ class HelmanCoordinator:
         started_at: datetime,
         forecast_schedule_document: ScheduleDocument,
         projection_schedule_document: ScheduleDocument,
-        generic_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
+        when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
         grid_price_forecast: dict[str, Any] | None = None,
     ) -> _ForecastRebuildSnapshot:
         input_bundle = build_projection_input_bundle(
@@ -1360,8 +1360,8 @@ class HelmanCoordinator:
             inputs=input_bundle,
             hass=self._hass,
             reference_time=started_at,
-            generic_hourly_energy_kwh_by_appliance_id=(
-                generic_hourly_energy_kwh_by_appliance_id
+            when_active_hourly_energy_kwh_by_appliance_id=(
+                when_active_hourly_energy_kwh_by_appliance_id
             ),
         )
         adjusted_house_forecast = build_adjusted_house_forecast(
@@ -1412,7 +1412,7 @@ class HelmanCoordinator:
             started_at=reference_time,
             forecast_schedule_document=schedule_documents.forecast_schedule_document,
             projection_schedule_document=schedule_documents.projection_schedule_document,
-            generic_hourly_energy_kwh_by_appliance_id=(
+            when_active_hourly_energy_kwh_by_appliance_id=(
                 input_bundle.when_active_hourly_energy_kwh_by_appliance_id
             ),
             grid_price_forecast=input_bundle.grid_price_forecast,
@@ -1511,7 +1511,7 @@ class HelmanCoordinator:
             started_at=started_at,
             forecast_schedule_document=forecast_schedule_document,
             projection_schedule_document=projection_schedule_document,
-            generic_hourly_energy_kwh_by_appliance_id=(
+            when_active_hourly_energy_kwh_by_appliance_id=(
                 history_hourly_energy_kwh_by_appliance_id
             ),
         )

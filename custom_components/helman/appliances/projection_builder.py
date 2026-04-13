@@ -67,6 +67,19 @@ class ProjectionInputBundle:
     solar_by_slot_wh: dict[datetime, float]
 
 
+@dataclass(frozen=True)
+class WhenActiveDemandProfile:
+    hourly_energy_kwh: float
+    projection_method: str
+
+
+@dataclass(frozen=True)
+class WhenActiveDemandSlice:
+    bucket_start: datetime
+    duration_hours: float
+    energy_kwh: float
+
+
 def build_projection_input_bundle(
     *,
     solar_forecast: dict[str, Any],
@@ -113,14 +126,14 @@ def build_appliance_projection_plan(
     inputs: ProjectionInputBundle | None,
     hass,
     reference_time: datetime | None = None,
-    generic_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None = None,
+    when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None = None,
 ) -> ApplianceProjectionPlan:
     appliances_by_id: dict[str, ApplianceProjectionSeries] = {}
     demand_points: list[ApplianceDemandPoint] = []
-    history_hourly_energy_by_appliance_id = (
+    historical_hourly_energy_by_appliance_id = (
         {}
-        if generic_hourly_energy_kwh_by_appliance_id is None
-        else generic_hourly_energy_kwh_by_appliance_id
+        if when_active_hourly_energy_kwh_by_appliance_id is None
+        else when_active_hourly_energy_kwh_by_appliance_id
     )
     active_reference_time = (
         inputs.reference_time
@@ -148,7 +161,7 @@ def build_appliance_projection_plan(
                 appliance=appliance,
                 schedule_document=schedule_document,
                 reference_time=active_reference_time,
-                historical_hourly_energy_kwh=history_hourly_energy_by_appliance_id.get(
+                historical_hourly_energy_kwh=historical_hourly_energy_by_appliance_id.get(
                     appliance.id
                 ),
             )
@@ -162,7 +175,7 @@ def build_appliance_projection_plan(
                 appliance=appliance,
                 schedule_document=schedule_document,
                 reference_time=active_reference_time,
-                historical_hourly_energy_kwh=history_hourly_energy_by_appliance_id.get(
+                historical_hourly_energy_kwh=historical_hourly_energy_by_appliance_id.get(
                     appliance.id
                 ),
             )
@@ -308,19 +321,15 @@ def _build_generic_appliance_projection_series(
     reference_time: datetime,
     historical_hourly_energy_kwh: float | None,
 ) -> _ApplianceProjectionBuildResult:
-    resolved_hourly_energy_kwh, projection_method = (
-        _resolve_projected_hourly_energy_kwh(
-            projection_strategy=appliance.projection_strategy,
-            hourly_energy_kwh=appliance.hourly_energy_kwh,
-            historical_hourly_energy_kwh=historical_hourly_energy_kwh,
-        )
+    demand_profile = get_when_active_demand_profile(
+        appliance=appliance,
+        historical_hourly_energy_kwh=historical_hourly_energy_kwh,
     )
     return _build_constant_hourly_projection_series(
         appliance_id=appliance.id,
         schedule_document=schedule_document,
         reference_time=reference_time,
-        hourly_energy_kwh=resolved_hourly_energy_kwh,
-        projection_method=projection_method,
+        demand_profile=demand_profile,
         resolve_action_projection=_resolve_generic_action_projection,
     )
 
@@ -332,19 +341,15 @@ def _build_climate_appliance_projection_series(
     reference_time: datetime,
     historical_hourly_energy_kwh: float | None,
 ) -> _ApplianceProjectionBuildResult:
-    resolved_hourly_energy_kwh, projection_method = (
-        _resolve_projected_hourly_energy_kwh(
-            projection_strategy=appliance.projection_strategy,
-            hourly_energy_kwh=appliance.hourly_energy_kwh,
-            historical_hourly_energy_kwh=historical_hourly_energy_kwh,
-        )
+    demand_profile = get_when_active_demand_profile(
+        appliance=appliance,
+        historical_hourly_energy_kwh=historical_hourly_energy_kwh,
     )
     return _build_constant_hourly_projection_series(
         appliance_id=appliance.id,
         schedule_document=schedule_document,
         reference_time=reference_time,
-        hourly_energy_kwh=resolved_hourly_energy_kwh,
-        projection_method=projection_method,
+        demand_profile=demand_profile,
         resolve_action_projection=lambda action: _resolve_climate_action_projection(
             action,
             appliance=appliance,
@@ -368,13 +373,63 @@ def _resolve_projected_hourly_energy_kwh(
     return historical_hourly_energy_kwh, "history_average"
 
 
+def get_when_active_demand_profile(
+    *,
+    appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
+    historical_hourly_energy_kwh: float | None = None,
+    resolved_hourly_energy_kwh: float | None = None,
+) -> WhenActiveDemandProfile | None:
+    if resolved_hourly_energy_kwh is not None:
+        if resolved_hourly_energy_kwh <= 0:
+            return None
+        return WhenActiveDemandProfile(
+            hourly_energy_kwh=resolved_hourly_energy_kwh,
+            projection_method="resolved_input",
+        )
+
+    resolved_hourly_energy_kwh, projection_method = (
+        _resolve_projected_hourly_energy_kwh(
+            projection_strategy=appliance.projection_strategy,
+            hourly_energy_kwh=appliance.hourly_energy_kwh,
+            historical_hourly_energy_kwh=historical_hourly_energy_kwh,
+        )
+    )
+    if resolved_hourly_energy_kwh <= 0:
+        return None
+    return WhenActiveDemandProfile(
+        hourly_energy_kwh=resolved_hourly_energy_kwh,
+        projection_method=projection_method,
+    )
+
+
+def build_when_active_demand_slices(
+    *,
+    slot_id: str,
+    reference_time: datetime,
+    hourly_energy_kwh: float,
+) -> tuple[WhenActiveDemandSlice, ...]:
+    if hourly_energy_kwh <= 0:
+        return ()
+    return tuple(
+        WhenActiveDemandSlice(
+            bucket_start=time_slice.slot_start,
+            duration_hours=time_slice.duration_hours,
+            energy_kwh=round(hourly_energy_kwh * time_slice.duration_hours, 4),
+        )
+        for time_slice in _build_time_slices(
+            slot_id=slot_id,
+            reference_time=reference_time,
+        )
+        if hourly_energy_kwh * time_slice.duration_hours > 0
+    )
+
+
 def _build_constant_hourly_projection_series(
     *,
     appliance_id: str,
     schedule_document: ScheduleDocument,
     reference_time: datetime,
-    hourly_energy_kwh: float,
-    projection_method: str,
+    demand_profile: WhenActiveDemandProfile | None,
     resolve_action_projection: Callable[
         [Mapping[str, object]], tuple[bool, str | None]
     ],
@@ -391,17 +446,18 @@ def _build_constant_hourly_projection_series(
         if not is_active:
             continue
 
-        time_slices = _build_time_slices(
-            slot_id=slot_id,
-            reference_time=reference_time,
-        )
-        if not time_slices:
+        if demand_profile is None:
             continue
 
-        slice_energy_kwhs = tuple(
-            hourly_energy_kwh * slot_slice.duration_hours for slot_slice in time_slices
+        demand_slices = build_when_active_demand_slices(
+            slot_id=slot_id,
+            reference_time=reference_time,
+            hourly_energy_kwh=demand_profile.hourly_energy_kwh,
         )
-        energy_kwh = sum(slice_energy_kwhs)
+        if not demand_slices:
+            continue
+
+        energy_kwh = sum(demand_slice.energy_kwh for demand_slice in demand_slices)
         if energy_kwh <= 0:
             continue
 
@@ -410,21 +466,16 @@ def _build_constant_hourly_projection_series(
                 slot_id=slot_id,
                 energy_kwh=round(energy_kwh, 4),
                 mode=mode,
-                projection_method=projection_method,
+                projection_method=demand_profile.projection_method,
             )
         )
         demand_points.extend(
             ApplianceDemandPoint(
                 appliance_id=appliance_id,
-                slot_id=format_slot_id(slot_slice.slot_start),
-                energy_kwh=round(slice_energy_kwh, 4),
+                slot_id=format_slot_id(demand_slice.bucket_start),
+                energy_kwh=demand_slice.energy_kwh,
             )
-            for slot_slice, slice_energy_kwh in zip(
-                time_slices,
-                slice_energy_kwhs,
-                strict=True,
-            )
-            if slice_energy_kwh > 0
+            for demand_slice in demand_slices
         )
 
     return _ApplianceProjectionBuildResult(

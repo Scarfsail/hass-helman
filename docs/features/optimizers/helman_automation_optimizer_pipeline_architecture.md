@@ -348,7 +348,7 @@ Reads:
 - adjusted house forecast after previous optimizers
 - battery/grid forecast after previous optimizers
 - appliance when-active demand profile resolved through shared logic next to the existing projection builder, using `context.when_active_hourly_energy_kwh_by_appliance_id`
-- appliance capabilities and configured thresholds
+- appliance runtime registry and configured thresholds
 
 Writes:
 
@@ -361,6 +361,8 @@ V1 scope and authored output:
 - climate appliances emit the existing authored DTO `{ "mode": climate_mode }`
 - for climate appliances, config requires `climate_mode`; in the current backend that means `heat` or `cool`
 - EV charging is intentionally out of scope for this optimizer kind in v1
+- if forecast inputs or demand-profile inputs are unavailable at run time, the optimizer logs a skip reason and leaves the schedule unchanged
+- in the current implementation, `batteryForecast.status` and `gridForecast.status` must both be fully `available`; live `partial` forecast coverage is treated as unavailable for `surplus_appliance` and causes a skip with no writes
 
 Important detail:
 
@@ -385,22 +387,25 @@ automation:
     - id: avoid-negative-export
       kind: export_price
       enabled: true
-      when_price_below: 0.0
-      action: stop_export
+      params:
+        when_price_below: 0.0
+        action: stop_export
 
     - id: run-boiler-on-surplus
       kind: surplus_appliance
       enabled: true
-      appliance_id: boiler
-      action: on
-      min_surplus_buffer_pct: 5
+      params:
+        appliance_id: boiler
+        action: on
+        min_surplus_buffer_pct: 5
 
     - id: preheat-living-room
       kind: surplus_appliance
       enabled: true
-      appliance_id: living_room_climate
-      action: on
-      climate_mode: heat
+      params:
+        appliance_id: living_room_climate
+        action: on
+        climate_mode: heat
 ```
 
 Notes:
@@ -412,6 +417,7 @@ Notes:
 - for `surplus_appliance`, `climate_mode` is required for climate appliances and forbidden for generic appliances
 - `min_surplus_buffer_pct` is optional and defaults to `5`; the actual required surplus is derived from the appliance demand profile plus this buffer
 - if two optimizers target the same ownership key, later config order wins by design
+- construction validates the configured appliance against the runtime registry, so unknown ids and unsupported appliance kinds fail loudly before the optimizer step runs
 
 ## Suggested package shape
 
