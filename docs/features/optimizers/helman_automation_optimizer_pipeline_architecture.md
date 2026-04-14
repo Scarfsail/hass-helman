@@ -190,11 +190,13 @@ For the v1 coordinator integration, treat the trigger classes differently:
 - **startup/reload** and **slot refresh** are refresh-originated triggers and should go through a short debounce window with a latest-reason-wins policy
 - **execution-enable** and **successful user-authored schedule edits** are immediate triggers and should not wait for the debounce window
 
-Manual or debug invocation surfaces should return an `AutomationRunResult` that distinguishes `execution_disabled`, `automation_disabled`, `no_enabled_optimizers`, and `cleanup_only`, and should include cleanup metadata such as how many automation-owned actions were stripped when cleanup actually changed the schedule.
+The shipped admin-only manual invocation surfaces are `helman/run_automation` and `helman/get_last_automation_run`. Their `AutomationRunResult` payloads should distinguish `execution_disabled`, `automation_disabled`, `no_enabled_optimizers`, `cleanup_only`, `inputs_unavailable`, `optimizer_failed`, and `runner_failed`, and should include cleanup metadata such as how many automation-owned actions were stripped when cleanup actually changed the schedule. For unexpected orchestration failures outside the optimizer loop, the payload should also carry a structured `failure` object describing the failing stage. Each attempted run should also emit one INFO summary log line and DEBUG per-optimizer detail when that log level is enabled.
 
 When a run does produce a snapshot, the forecast sections in that snapshot should preserve the underlying pipeline status rather than being forced to `"available"`. In practice a valid debug snapshot may therefore carry `battery_forecast.status == "partial"` (and the derived grid forecast built from it) when the existing forecast pipeline only has partial upstream coverage.
 
-`AutomationRunResult` is diagnostic metadata about the attempted run. If one optimizer fails, the result may still report earlier optimizers as `"ok"` for observability, but no optimizer output from that failed run is persisted. Validation failures that are rejected earlier by config parsing or optimizer construction (for example an unknown `surplus_appliance` `appliance_id`) do not require a persisted run-time failure case to keep the config boundary strict.
+`AutomationRunResult` is diagnostic metadata about the attempted run. If one optimizer fails, the result may still report earlier optimizers as `"ok"` for observability, but no optimizer output from that failed run is persisted. Optimizer construction failures that happen during runner execution can still surface as `optimizer_failed`, while unexpected non-optimizer orchestration failures (initial snapshot build, cleanup persistence, final persistence, post-write side effects, or a last-resort coordinator escape) should surface as `runner_failed` with `failure.stage` describing where the run broke.
+
+Startup/reload currently has one extra implementation detail beyond the trigger model above: when schedule execution is enabled but automation is effectively inactive (`automation.enabled=false` or no enabled optimizers), the coordinator may perform one eager direct cleanup of stale automation-owned actions before scheduling the debounced startup refresh flow.
 
 ### 7. Existing schedule boundaries still apply
 
@@ -366,7 +368,7 @@ V1 scope and authored output:
 - climate appliances emit the existing authored DTO `{ "mode": climate_mode }`
 - for climate appliances, config requires `climate_mode`; in the current backend that means `heat` or `cool`
 - EV charging is intentionally out of scope for this optimizer kind in v1
-- if forecast inputs or demand-profile inputs are unavailable at run time, the optimizer logs a skip reason and leaves the schedule unchanged
+- if forecast inputs or demand-profile inputs are unavailable at run time, the optimizer logs a skip reason and preserves any previously automation-owned action for that same appliance rather than blanking it out
 - `surplus_appliance` requires `adjustedHouseForecast.status == "available"`, but it may also consume `batteryForecast` / `gridForecast` with `status == "partial"` when their `coverageUntil` still reaches the full rolling scheduler horizon; only partial coverage that ends before the scheduler horizon is treated as unavailable and causes a skip with no writes
 
 Important detail:

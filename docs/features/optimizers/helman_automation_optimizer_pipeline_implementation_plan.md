@@ -59,7 +59,7 @@ The pre-existing commands used repeatedly in smoke tests are:
 - [x] **Phase 7** — `surplus_appliance` optimizer (generic + climate) _(committed; local HASS smoke passed, including partial-forecast coverage within the scheduler horizon)_
 - [x] **Phase 8** — Coordinator triggers (startup, execution-enable, slot refresh, post-user-edit) with coalescing _(committed; local HASS smoke passed)_
 - [x] **Phase 9** — Observability + automation websocket APIs _(completed: `helman/run_automation` + `helman/get_last_automation_run`)_
-- [ ] **Phase 10** — End-to-end hardening and docs sync
+- [x] **Phase 10** — End-to-end hardening and docs sync _(commit 58bbc53, later amended; local HASS smoke passed with temporary `when_price_below=100.0`, then restored to `1.5`)_
 
 Each phase's "Done" box is checked as part of the ritual in step 5 above.
 
@@ -142,7 +142,7 @@ Modify:
 - `AutomationConfig` must be **entirely derivable from the config document**. No HASS dependency, no I/O. That keeps it trivially unit-testable and reusable.
 - If the `automation` block is present and `enabled` is omitted, default it to `true`. If the entire `automation` block is absent, automation is treated as disabled.
 - `optimizers` list order is execution order. `id` uniqueness is enforced at parse time.
-- `enabled: false` instances are parsed but filtered out of the execution order at parse time so downstream code never sees them.
+- `enabled: false` instances are still parsed and preserved in `AutomationConfig.optimizers` for round-trip/editing purposes, but they are filtered out of `execution_optimizers` so downstream execution code never runs them.
 - Unknown `kind` values should produce a clear validation error (not silent drop) so typos in config surface immediately.
 
 ### Unit tests (`tests/test_automation_config.py`)
@@ -415,7 +415,7 @@ Modify:
 - Treat non-mutating behavior as a real contract, not just a style preference. The optimizer must return a new `ScheduleDocument` and leave `snapshot.schedule` untouched; add regression tests for this instead of relying on hidden runner-side deep copies.
 - The optimizer must never write into a slot position that is user-owned. This is enforced by the optimizer itself (early skip) and re-enforced at merge time. Defensive: optimizer-level skip keeps decision logic honest even before merge.
 - `export_price` is intentionally conservative: if a canonical export-price bucket is below the configured threshold, the optimizer writes `stop_export` for the owning schedule slot regardless of whether the current rebuild predicts non-zero exported energy there. Forecast misses must not allow an accidental negative-price export.
-- `when_price_below` is interpreted in the same currency unit as `grid_price_forecast.exportPriceUnit`. No unit conversion — if the configured threshold and the forecast unit disagree, the optimizer raises.
+- `when_price_below` is interpreted as a raw numeric threshold against `grid_price_forecast.exportPriceUnit`. V1 performs no unit conversion or compatibility enforcement, so configs are expected to use the same unit as the forecast source.
 - If `stop_export` is unavailable for the current control mapping, v1 logs a warning and skips those slot writes. Do not guess an alternate inverter action in this phase.
 - Slot horizon is the already-existing rolling schedule horizon. The optimizer must not invent its own window.
 - Phase 5 intentionally rejects configs with more than one enabled optimizer instance. That temporary guard is removed in Phase 6 once rebuild-between-optimizers exists.
@@ -692,7 +692,7 @@ Modify:
 
 - The run result dataclass is in-memory only, not persisted. Only the final schedule state lives on disk.
 - Summary shape per optimizer: `{ id, kind, status: "ok"|"skipped"|"failed", slotsWritten, durationMs, error? }`.
-- Top-level non-running / cleanup reasons should be explicit, e.g. `execution_disabled`, `automation_disabled`, `no_enabled_optimizers`, or `cleanup_only`.
+- Top-level non-running / failure reasons should be explicit, e.g. `execution_disabled`, `automation_disabled`, `no_enabled_optimizers`, `cleanup_only`, `inputs_unavailable`, `optimizer_failed`, or `runner_failed`.
 - `AutomationRunResult` is diagnostic metadata about the attempted run. If a later optimizer fails, earlier optimizer entries may still appear as `"ok"` for observability, but none of that failed run's candidate changes are persisted.
 - The websocket command holds no special privilege compared to what trigger-driven runs do — it simply manually kicks the runner and returns the same result. Use the existing `_require_admin` helper.
 - `helman/get_last_automation_run` is read-only: it returns the cached result from the coordinator, never recomputes a run, and returns `null` before the first attempt in the current coordinator lifetime.
@@ -745,6 +745,8 @@ Modify:
 ### Unit tests
 
 - Run the full suite. Add a regression test for any bug discovered during the smoke steps of earlier phases.
+- Unexpected runner-level failures outside the optimizer loop (for example initial snapshot build, cleanup persistence, final persistence, or post-write side effects) should return a structured `runner_failed` result instead of bubbling out raw exceptions.
+- `helman/get_last_automation_run` should cache that structured failure result just like any other attempted run.
 
 ### Local HASS smoke test
 
@@ -766,6 +768,12 @@ Modify:
 - Smoke test has no regressions.
 - Architecture doc matches the shipped code.
 - All phases in this file are marked done.
+
+### Status note
+
+- Phase 10 hardened unexpected runner-level failures into structured `runner_failed` results with `failure.stage`, kept `helman/get_last_automation_run` cacheable on fallback paths, and added regression coverage for snapshot/build/persist/post-write/coordinator-escape failures.
+- Local HASS smoke passed end to end after temporarily raising `export_price.when_price_below` from `1.5` to `100.0`: automation authored future slots, a user override on slot `2026-04-14T12:30:00+02:00` remained `setBy=user` after rerun, disable, and re-enable, `helman/run_automation` returned a sane snapshot, and the original threshold was restored afterward.
+- Live logs still showed pre-existing asyncio slow-task warnings around refresh/trigger coroutines, but no new Helman runner failure was observed during the smoke.
 
 ---
 

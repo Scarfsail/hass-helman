@@ -319,6 +319,7 @@ from custom_components.helman.automation.optimizers.surplus_appliance import (
 )
 from custom_components.helman.automation.pipeline import (
     AutomationCleanupSummary,
+    AutomationRunFailure,
     AutomationRunResult,
     AutomationRunner,
     OptimizerRunSummary,
@@ -678,6 +679,27 @@ class AutomationRunResultSerializationTests(unittest.TestCase):
         )
         self.assertEqual(payload["durationMs"], 41)
 
+    def test_to_dict_includes_failure_payload(self) -> None:
+        payload = AutomationRunResult.failed(
+            reason="runner_failed",
+            failure=AutomationRunFailure(
+                stage="final_persist",
+                message="disk full",
+            ),
+        ).to_dict()
+
+        self.assertFalse(payload["ranAutomation"])
+        self.assertEqual(payload["reason"], "runner_failed")
+        self.assertEqual(payload["message"], "disk full")
+        self.assertEqual(
+            payload["failure"],
+            {
+                "stage": "final_persist",
+                "message": "disk full",
+                "unexpected": True,
+            },
+        )
+
 
 class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_returns_execution_disabled_when_execution_flag_is_off(self) -> None:
@@ -739,6 +761,73 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["optimizers"], [])
         self.assertIsInstance(payload["durationMs"], int)
         self.assertEqual(coordinator.snapshot_calls, [])
+
+    async def test_run_returns_runner_failed_when_initial_snapshot_build_raises(
+        self,
+    ) -> None:
+        def _raise_snapshot(**kwargs):
+            raise RuntimeError("snapshot boom")
+
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_raise_snapshot,
+        )
+
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=_make_automation_config(_make_optimizer_instance()),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "runner_failed")
+        self.assertEqual(
+            result.failure,
+            AutomationRunFailure(
+                stage="initial_snapshot",
+                message="snapshot boom",
+            ),
+        )
+        self.assertIsNone(result.snapshot)
+        self.assertEqual(result.optimizers, ())
+        self.assertEqual(coordinator.persist_calls, [])
+        self.assertEqual(coordinator.post_write_calls, [])
+
+    async def test_run_returns_runner_failed_when_cleanup_persist_raises(self) -> None:
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {},
+                }
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=schedule_document,
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+        coordinator._save_schedule_document = AsyncMock(
+            side_effect=RuntimeError("cleanup write failed")
+        )
+
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=AutomationConfig(enabled=False),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "runner_failed")
+        self.assertEqual(
+            result.failure,
+            AutomationRunFailure(
+                stage="cleanup_persist",
+                message="cleanup write failed",
+            ),
+        )
+        self.assertEqual(coordinator.saved_documents, [])
+        self.assertEqual(coordinator.post_write_calls, [])
 
     async def test_run_returns_snapshot_and_is_repeatable(self) -> None:
         schedule_document = _make_schedule_document()
@@ -1229,6 +1318,121 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.persist_calls, [])
         self.assertEqual(coordinator.post_write_calls, [])
 
+    async def test_run_returns_runner_failed_when_final_persist_raises(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+        coordinator._persist_automation_result_locked = AsyncMock(
+            side_effect=RuntimeError("persist boom")
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=Mock(side_effect=lambda snapshot, config: deepcopy(snapshot.schedule))
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "runner_failed")
+        self.assertEqual(
+            result.failure,
+            AutomationRunFailure(
+                stage="final_persist",
+                message="persist boom",
+            ),
+        )
+        self.assertIsNotNone(result.snapshot)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok"])
+        self.assertEqual(coordinator.post_write_calls, [])
+
+    async def test_run_returns_runner_failed_when_post_write_side_effects_raise(
+        self,
+    ) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+            persist_changed=True,
+        )
+        coordinator._async_run_post_schedule_write_side_effects = AsyncMock(
+            side_effect=RuntimeError("side effects boom")
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=Mock(side_effect=lambda snapshot, config: deepcopy(snapshot.schedule))
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        self.assertEqual(result.reason, "runner_failed")
+        self.assertEqual(
+            result.failure,
+            AutomationRunFailure(
+                stage="post_write_side_effects",
+                message="side effects boom",
+            ),
+        )
+        self.assertIsNotNone(result.snapshot)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok"])
+
+    async def test_run_preserves_cleanup_metadata_when_cleanup_post_write_fails(
+        self,
+    ) -> None:
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    "appliances": {},
+                }
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=schedule_document,
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+        coordinator._async_run_post_schedule_write_side_effects = AsyncMock(
+            side_effect=RuntimeError("cleanup side effects boom")
+        )
+
+        result = await AutomationRunner(
+            coordinator=coordinator,
+            automation_config=AutomationConfig(enabled=False),
+        ).run(reference_time=REFERENCE_TIME)
+
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "runner_failed")
+        self.assertEqual(
+            result.failure,
+            AutomationRunFailure(
+                stage="post_write_side_effects",
+                message="cleanup side effects boom",
+            ),
+        )
+        self.assertEqual(
+            result.cleanup,
+            AutomationCleanupSummary(
+                reason="automation_disabled",
+                actions_stripped=1,
+            ),
+        )
+
     async def test_run_does_not_persist_when_later_optimizer_raises(self) -> None:
         coordinator = _FakeCoordinator(
             schedule_document=ScheduleDocument(execution_enabled=True),
@@ -1520,6 +1724,43 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(cached_result.to_dict(), second_result.to_dict())
 
+    async def test_run_automation_caches_runner_failed_result_when_runner_escapes(
+        self,
+    ) -> None:
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._active_config = {}
+        coordinator._last_automation_run_result = None
+
+        class _FailingRunner:
+            def __init__(self, *, coordinator, automation_config) -> None:
+                pass
+
+            async def run(self, *, reference_time=None, run_reason=None):
+                raise RuntimeError("escaped runner failure")
+
+        with (
+            patch.object(coordinator_module, "read_automation_config", return_value=None),
+            patch.object(pipeline_module, "AutomationRunner", _FailingRunner),
+        ):
+            result = await coordinator.run_automation(
+                reference_time=REFERENCE_TIME,
+                reason="trigger",
+            )
+
+        cached_result = coordinator.get_last_automation_run_result()
+
+        self.assertEqual(result.reason, "runner_failed")
+        self.assertEqual(
+            result.failure,
+            AutomationRunFailure(
+                stage="coordinator",
+                message="escaped runner failure",
+            ),
+        )
+        self.assertIsInstance(result.duration_ms, int)
+        self.assertEqual(cached_result.to_dict(), result.to_dict())
+        self.assertIsNot(cached_result, result)
+
 
 class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_automation_returns_serialized_result(self) -> None:
@@ -1559,6 +1800,37 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(connection.results[0][1]["ranAutomation"])
         self.assertEqual(connection.results[0][1]["reason"], "execution_disabled")
+
+    async def test_run_automation_returns_failed_result(self) -> None:
+        coordinator = SimpleNamespace(
+            run_automation=AsyncMock(
+                return_value=AutomationRunResult.failed(
+                    reason="runner_failed",
+                    failure=AutomationRunFailure(
+                        stage="final_persist",
+                        message="disk full",
+                    ),
+                )
+            )
+        )
+        connection = _FakeConnection(is_admin=True)
+
+        await ws_run_automation(
+            _FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/run_automation"},
+        )
+
+        self.assertFalse(connection.results[0][1]["ranAutomation"])
+        self.assertEqual(connection.results[0][1]["reason"], "runner_failed")
+        self.assertEqual(
+            connection.results[0][1]["failure"],
+            {
+                "stage": "final_persist",
+                "message": "disk full",
+                "unexpected": True,
+            },
+        )
 
     async def test_run_automation_requires_admin(self) -> None:
         coordinator = SimpleNamespace(run_automation=AsyncMock())

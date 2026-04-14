@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import asyncio
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from collections import deque
@@ -374,7 +375,7 @@ class HelmanCoordinator:
         self._init_buffers(tree)
         self._start_tick()
 
-        # House forecast: load persisted snapshot, schedule hourly refresh
+        # House forecast: load persisted snapshot and schedule recurring refreshes.
         self._cached_forecast = self._storage.forecast_snapshot
         (
             total_energy_entity_id,
@@ -1037,16 +1038,43 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
         reason: str | None = None,
     ) -> "AutomationRunResult":
-        from .automation.pipeline import AutomationRunner
+        from .automation.pipeline import (
+            AutomationRunFailure,
+            AutomationRunResult,
+            AutomationRunner,
+        )
 
         automation_config = read_automation_config(self._active_config)
         if automation_config is None:
             automation_config = AutomationConfig(enabled=False)
 
-        result = await AutomationRunner(
-            coordinator=self,
-            automation_config=automation_config,
-        ).run(reference_time=reference_time, run_reason=reason)
+        run_started_at = time.perf_counter()
+        try:
+            result = await AutomationRunner(
+                coordinator=self,
+                automation_config=automation_config,
+            ).run(reference_time=reference_time, run_reason=reason)
+        except Exception as err:
+            _LOGGER.exception("Automation runner escaped coordinator boundary")
+            result = AutomationRunResult.failed(
+                reason="runner_failed",
+                failure=AutomationRunFailure(
+                    stage="coordinator",
+                    message=str(err) or err.__class__.__name__,
+                ),
+                duration_ms=max(0, int((time.perf_counter() - run_started_at) * 1000)),
+            )
+            _LOGGER.info(
+                "automation run result trigger=%s outcome=%s ran=%s optimizers=%s duration_ms=%s cleanup_reason=%s cleanup_actions=%s failure_stage=%s",
+                reason or "manual",
+                result.reason or "completed",
+                result.ran_automation,
+                len(result.optimizers),
+                result.duration_ms,
+                None,
+                0,
+                result.failure.stage,
+            )
         self._set_last_automation_run_result(result)
         return result
 
