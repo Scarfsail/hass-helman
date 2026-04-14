@@ -38,3 +38,19 @@ export interface StatusMessage {
   kind: "success" | "error" | "info";
   text: string;
 }
+
+export interface ApplianceMetadataEntry {
+  id: string;
+  name: string;
+  kind: string;
+  metadata?: {
+    scheduleCapabilities?: {
+      onOffToggle?: boolean;
+      modes?: string[];
+    };
+  };
+}
+
+export interface ApplianceMetadataResponse {
+  appliances: ApplianceMetadataEntry[];
+}

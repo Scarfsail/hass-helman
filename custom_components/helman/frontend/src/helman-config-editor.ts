@@ -32,6 +32,13 @@ import {
   unsetValueAtPath,
 } from "./config-document";
 import {
+  buildSurplusApplianceSelectionState,
+  buildSurplusClimateModeFieldState,
+  type SurplusApplianceOption,
+  type SurplusApplianceSelectionState,
+  type SurplusClimateModeFieldState,
+} from "./surplus-appliance-ui";
+import {
   DOCUMENT_SCOPE_ID,
   SECTION_ICONS,
   SECTION_SCOPE_IDS,
@@ -52,6 +59,7 @@ import type {
   JsonObject,
   JsonValue,
   PathSegment,
+  ApplianceMetadataResponse,
   SaveConfigResponse,
   StatusMessage,
   ValidationIssue,
@@ -74,10 +82,6 @@ const EXPORT_PRICE_OPTIMIZER_KIND = "export_price";
 const EXPORT_PRICE_OPTIMIZER_ACTION = "stop_export";
 const SURPLUS_APPLIANCE_OPTIMIZER_KIND = "surplus_appliance";
 const SURPLUS_APPLIANCE_OPTIMIZER_ACTION = "on";
-const SURPLUS_APPLIANCE_CLIMATE_MODES = [
-  { value: "heat", labelKey: "editor.values.heat" },
-  { value: "cool", labelKey: "editor.values.cool" },
-];
 
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
@@ -110,6 +114,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     _applianceModes: { state: true },
     _applianceYamlValues: { state: true },
     _applianceYamlErrors: { state: true },
+    _liveApplianceMetadata: { state: true },
     _helpDialog: { state: true },
   };
 
@@ -841,6 +846,7 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _applianceModes: Partial<Record<number, EditorMode>> = {};
   private _applianceYamlValues: Partial<Record<number, JsonValue>> = {};
   private _applianceYamlErrors: Partial<Record<number, string>> = {};
+  private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
 
   get hass(): HomeAssistantLike | undefined {
@@ -1884,9 +1890,15 @@ export class HelmanConfigEditorPanel extends LitElement {
       this._stringValue(this._getValue([...paramsPath, "action"])) ||
       SURPLUS_APPLIANCE_OPTIMIZER_ACTION;
     const minSurplusBufferPct = this._getValue([...paramsPath, "min_surplus_buffer_pct"]) ?? 5;
-    const configuredApplianceKind = this._findConfiguredApplianceKind(applianceId);
-    const climateMode =
-      this._stringValue(this._getValue([...paramsPath, "climate_mode"])) || "heat";
+    const selectionState = buildSurplusApplianceSelectionState(
+      this._config,
+      this._liveApplianceMetadata,
+      applianceId,
+    );
+    const climateModeFieldState = buildSurplusClimateModeFieldState(
+      selectionState,
+      this._stringValue(this._getValue([...paramsPath, "climate_mode"])),
+    );
 
     return html`
       <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
@@ -1936,15 +1948,35 @@ export class HelmanConfigEditorPanel extends LitElement {
                 <label>${this._t("editor.fields.appliance_id")}</label>
                 ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
               </div>
-              <input
-                .value=${applianceId}
+              <select
+                .value=${selectionState.selectedId}
                 @change=${(event: Event) =>
                   this._handleSurplusApplianceIdChange(
                     index,
-                    (event.currentTarget as HTMLInputElement).value,
+                    (event.currentTarget as HTMLSelectElement).value,
                   )}
-              />
-              <div class="helper">${this._t("editor.helpers.surplus_appliance_id")}</div>
+              >
+                <option value="">${this._t("editor.values.select_appliance")}</option>
+                ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
+                  ? html`
+                      <option value=${selectionState.selectedId}>
+                        ${this._tFormat("editor.dynamic.stale_appliance", {
+                          id: selectionState.selectedId,
+                        })}
+                      </option>
+                    `
+                  : nothing}
+                ${selectionState.options.map(
+                  (option) => html`
+                    <option value=${option.id} ?disabled=${option.selectionDisabled}>
+                      ${this._formatSurplusApplianceOptionLabel(option)}
+                    </option>
+                  `,
+                )}
+              </select>
+              <div class="helper">
+                ${this._renderSurplusApplianceIdHelper(selectionState)}
+              </div>
             </div>
             ${this._renderRequiredNumberField(
               [...paramsPath, "min_surplus_buffer_pct"],
@@ -1953,45 +1985,9 @@ export class HelmanConfigEditorPanel extends LitElement {
               "1",
               "editor.help.surplus_appliance_min_surplus_buffer_pct",
             )}
-            <div class="field">
-              <div class="field-label-row">
-                <label>${this._t("editor.fields.optimizer_action")}</label>
-                ${this._renderHelpIcon(
-                  "editor.fields.optimizer_action",
-                  "editor.help.surplus_appliance_action",
-                )}
-              </div>
-              <input .value=${action} disabled />
-              <div class="helper">${this._t("editor.helpers.surplus_appliance_action")}</div>
-            </div>
-            ${configuredApplianceKind === "climate"
-              ? html`
-                  <div class="field">
-                    <div class="field-label-row">
-                      <label>${this._t("editor.fields.climate_mode")}</label>
-                      ${this._renderHelpIcon(
-                        "editor.fields.climate_mode",
-                        "editor.help.surplus_appliance_climate_mode",
-                      )}
-                    </div>
-                    <select
-                      .value=${climateMode}
-                      @change=${(event: Event) =>
-                        this._setRequiredString(
-                          [...paramsPath, "climate_mode"],
-                          (event.currentTarget as HTMLSelectElement).value,
-                        )}
-                    >
-                      ${SURPLUS_APPLIANCE_CLIMATE_MODES.map(
-                        (option) => html`
-                          <option value=${option.value}>${this._t(option.labelKey)}</option>
-                        `,
-                      )}
-                    </select>
-                    <div class="helper">${this._t("editor.helpers.surplus_appliance_climate_mode")}</div>
-                  </div>
-                `
-              : nothing}
+            ${climateModeFieldState.visible
+              ? this._renderSurplusClimateModeField(paramsPath, climateModeFieldState)
+              : this._renderSurplusApplianceActionField(action)}
           </div>
         </div>
       </details>
@@ -3340,10 +3336,22 @@ export class HelmanConfigEditorPanel extends LitElement {
     }
     this._loading = true;
     try {
-      const loaded = await this.hass.callWS<unknown>({ type: "helman/get_config" });
-      this._config = asJsonObject(loaded) ? cloneJson(loaded) : {};
+      const [loadedResult, liveApplianceMetadataResult] = await Promise.allSettled([
+        this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        this._loadLiveApplianceMetadata(),
+      ]);
+      if (loadedResult.status !== "fulfilled") {
+        throw loadedResult.reason;
+      }
+      this._config = asJsonObject(loadedResult.value) ? cloneJson(loadedResult.value) : {};
+      this._liveApplianceMetadata =
+        liveApplianceMetadataResult.status === "fulfilled"
+          ? liveApplianceMetadataResult.value
+          : null;
       this._validation = null;
-      this._dirty = false;
+      this._dirty = this._config
+        ? this._normalizeSurplusApplianceOptimizerParams(this._config)
+        : false;
       this._resetScopeYamlState();
       if (options.showMessage) {
         this._message = {
@@ -3352,6 +3360,7 @@ export class HelmanConfigEditorPanel extends LitElement {
         };
       }
     } catch (error) {
+      this._liveApplianceMetadata = null;
       this._message = {
         kind: "error",
         text: this._formatError(error, this._t("editor.messages.load_config_failed")),
@@ -3414,7 +3423,10 @@ export class HelmanConfigEditorPanel extends LitElement {
       });
       this._validation = response.validation;
       if (response.success) {
-        this._dirty = false;
+        this._liveApplianceMetadata = await this._loadLiveApplianceMetadata();
+        this._dirty = this._config
+          ? this._normalizeSurplusApplianceOptimizerParams(this._config)
+          : false;
         this._message = {
           kind: "success",
           text: response.reloadStarted
@@ -3756,18 +3768,20 @@ export class HelmanConfigEditorPanel extends LitElement {
     const paramsPath: PathSegment[] = ["automation", "optimizers", index, "params"];
     this._applyMutation((draft) => {
       setValueAtPath(draft, [...paramsPath, "appliance_id"], applianceId);
-      const applianceKind = this._findConfiguredApplianceKindInConfig(draft, applianceId);
-      if (applianceKind !== "climate") {
+      const selectionState = buildSurplusApplianceSelectionState(
+        draft,
+        this._liveApplianceMetadata,
+        applianceId,
+      );
+      const climateModeFieldState = buildSurplusClimateModeFieldState(
+        selectionState,
+        this._stringValue(getValueAtPath(draft, [...paramsPath, "climate_mode"])),
+      );
+      if (!climateModeFieldState.visible || climateModeFieldState.unavailable) {
         unsetValueAtPath(draft, [...paramsPath, "climate_mode"]);
         return;
       }
-
-      const currentClimateMode = this._stringValue(
-        getValueAtPath(draft, [...paramsPath, "climate_mode"]),
-      );
-      if (!currentClimateMode) {
-        setValueAtPath(draft, [...paramsPath, "climate_mode"], "heat");
-      }
+      setValueAtPath(draft, [...paramsPath, "climate_mode"], climateModeFieldState.value);
     });
   }
 
@@ -4019,28 +4033,46 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
   }
 
-  private _findConfiguredApplianceKind(applianceId: string): string {
-    return this._findConfiguredApplianceKindInConfig(this._config, applianceId);
-  }
-
-  private _findConfiguredApplianceKindInConfig(
-    config: JsonObject | null | undefined,
-    applianceId: string,
-  ): string {
-    if (!config || applianceId.length === 0) {
-      return "";
-    }
-
-    const appliances = asJsonArray(getValueAtPath(config, ["appliances"])) ?? [];
-    for (const appliance of appliances) {
-      const applianceObject = asJsonObject(appliance);
-      if (this._stringValue(applianceObject?.id) !== applianceId) {
-        continue;
+  private _normalizeSurplusApplianceOptimizerParams(config: JsonObject): boolean {
+    const optimizers = asJsonArray(getValueAtPath(config, ["automation", "optimizers"])) ?? [];
+    let changed = false;
+    optimizers.forEach((optimizer, index) => {
+      const optimizerObject = asJsonObject(optimizer);
+      if (!optimizerObject || this._stringValue(optimizerObject.kind) !== SURPLUS_APPLIANCE_OPTIMIZER_KIND) {
+        return;
       }
-      return this._stringValue(applianceObject?.kind);
-    }
 
-    return "";
+      const paramsPath: PathSegment[] = ["automation", "optimizers", index, "params"];
+      const applianceId = this._stringValue(getValueAtPath(config, [...paramsPath, "appliance_id"]));
+      const currentClimateMode = this._stringValue(
+        getValueAtPath(config, [...paramsPath, "climate_mode"]),
+      );
+      const selectionState = buildSurplusApplianceSelectionState(
+        config,
+        this._liveApplianceMetadata,
+        applianceId,
+      );
+      const climateModeFieldState = buildSurplusClimateModeFieldState(
+        selectionState,
+        currentClimateMode,
+      );
+
+      if (selectionState.selectedOption?.kind === "generic" && currentClimateMode.length > 0) {
+        unsetValueAtPath(config, [...paramsPath, "climate_mode"]);
+        changed = true;
+        return;
+      }
+      if (
+        climateModeFieldState.visible &&
+        !climateModeFieldState.unavailable &&
+        currentClimateMode.length === 0 &&
+        climateModeFieldState.value.length > 0
+      ) {
+        setValueAtPath(config, [...paramsPath, "climate_mode"], climateModeFieldState.value);
+        changed = true;
+      }
+    });
+    return changed;
   }
 
   private _applyMutation(mutator: (draft: JsonObject) => void): void {
@@ -4067,6 +4099,133 @@ export class HelmanConfigEditorPanel extends LitElement {
       return String(value);
     }
     return "";
+  }
+
+  private _renderSurplusApplianceActionField(action: string): TemplateResult {
+    return html`
+      <div class="field">
+        <div class="field-label-row">
+          <label>${this._t("editor.fields.optimizer_action")}</label>
+          ${this._renderHelpIcon(
+            "editor.fields.optimizer_action",
+            "editor.help.surplus_appliance_action",
+          )}
+        </div>
+        <input .value=${action} disabled />
+        <div class="helper">${this._t("editor.helpers.surplus_appliance_action")}</div>
+      </div>
+    `;
+  }
+
+  private _renderSurplusClimateModeField(
+    paramsPath: PathSegment[],
+    climateModeFieldState: SurplusClimateModeFieldState,
+  ): TemplateResult {
+    const selectedValue =
+      climateModeFieldState.value.length > 0
+        ? climateModeFieldState.value
+        : "__live_modes_unavailable__";
+    return html`
+      <div class="field">
+        <div class="field-label-row">
+          <label>${this._t("editor.fields.climate_mode")}</label>
+          ${this._renderHelpIcon(
+            "editor.fields.climate_mode",
+            "editor.help.surplus_appliance_climate_mode",
+          )}
+        </div>
+        <select
+          .value=${selectedValue}
+          ?disabled=${climateModeFieldState.disabled}
+          @change=${(event: Event) =>
+            this._setRequiredString(
+              [...paramsPath, "climate_mode"],
+              (event.currentTarget as HTMLSelectElement).value,
+            )}
+        >
+          ${climateModeFieldState.options.length > 0
+            ? climateModeFieldState.options.map(
+                (option) => html`
+                  <option value=${option.value}>
+                    ${this._formatSurplusClimateModeLabel(option.value, option.isUnknown)}
+                  </option>
+                `,
+              )
+            : html`
+                <option value="__live_modes_unavailable__">
+                  ${this._t("editor.values.live_modes_unavailable")}
+                </option>
+              `}
+        </select>
+        <div class="helper">
+          ${this._renderSurplusClimateModeHelper(climateModeFieldState)}
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderSurplusApplianceIdHelper(
+    selectionState: SurplusApplianceSelectionState,
+  ): string {
+    if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
+      return this._t("editor.helpers.surplus_appliance_id_missing_from_draft");
+    }
+    if (selectionState.options.some((option) => option.selectionDisabled)) {
+      return this._t("editor.helpers.surplus_appliance_id_pending_reload");
+    }
+    return this._t("editor.helpers.surplus_appliance_id");
+  }
+
+  private _renderSurplusClimateModeHelper(
+    climateModeFieldState: SurplusClimateModeFieldState,
+  ): string {
+    if (climateModeFieldState.unavailable) {
+      return this._t("editor.helpers.surplus_appliance_climate_mode_unavailable");
+    }
+    if (climateModeFieldState.options.some((option) => option.isUnknown)) {
+      return this._t("editor.helpers.surplus_appliance_climate_mode_unknown");
+    }
+    if (climateModeFieldState.disabled) {
+      return this._t("editor.helpers.surplus_appliance_climate_mode_single");
+    }
+    return this._t("editor.helpers.surplus_appliance_climate_mode");
+  }
+
+  private _formatSurplusApplianceOptionLabel(option: SurplusApplianceOption): string {
+    const baseLabel =
+      option.name === option.id
+        ? option.id
+        : this._tFormat("editor.dynamic.appliance_option", {
+            name: option.name,
+            id: option.id,
+          });
+    if (!option.selectionDisabled) {
+      return baseLabel;
+    }
+    return this._tFormat("editor.dynamic.appliance_option_pending_reload", {
+      label: baseLabel,
+    });
+  }
+
+  private _formatSurplusClimateModeLabel(mode: string, isUnknown: boolean): string {
+    if (isUnknown) {
+      return this._tFormat("editor.dynamic.stale_climate_mode", { mode });
+    }
+    return this._t(`editor.values.${mode}`);
+  }
+
+  private async _loadLiveApplianceMetadata(): Promise<ApplianceMetadataResponse | null> {
+    if (!this.hass) {
+      return null;
+    }
+    try {
+      const response = await this.hass.callWS<ApplianceMetadataResponse>({
+        type: "helman/get_appliances",
+      });
+      return Array.isArray(response?.appliances) ? response : { appliances: [] };
+    } catch {
+      return null;
+    }
   }
 
   private _booleanValue(value: unknown, fallback: boolean): boolean {
