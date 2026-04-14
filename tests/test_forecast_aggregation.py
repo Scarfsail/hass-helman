@@ -278,6 +278,7 @@ class ForecastAggregationTests(unittest.TestCase):
                 "durationHours": 0.25,
                 "importedFromGridKwh": 0.2,
                 "exportedToGridKwh": 0.0,
+                "availableSurplusKwh": 0.3,
                 "baselineImportedFromGridKwh": 0.3,
                 "baselineExportedToGridKwh": 0.1,
             },
@@ -286,6 +287,7 @@ class ForecastAggregationTests(unittest.TestCase):
                 "durationHours": 0.25,
                 "importedFromGridKwh": 0.4,
                 "exportedToGridKwh": 0.1,
+                "availableSurplusKwh": 0.2,
                 "baselineImportedFromGridKwh": 0.5,
                 "baselineExportedToGridKwh": 0.0,
             },
@@ -299,6 +301,7 @@ class ForecastAggregationTests(unittest.TestCase):
                     "durationHours": 0.5,
                     "importedFromGridKwh": 0.6,
                     "exportedToGridKwh": 0.1,
+                    "availableSurplusKwh": 0.5,
                     "baselineImportedFromGridKwh": 0.8,
                     "baselineExportedToGridKwh": 0.1,
                 }

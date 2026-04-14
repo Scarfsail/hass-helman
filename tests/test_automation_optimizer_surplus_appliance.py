@@ -162,11 +162,18 @@ def _make_optimizer_config(
     )
 
 
-def _grid_series(values: list[float]) -> list[dict[str, object]]:
+def _grid_series(
+    values: list[float],
+    *,
+    exported_values: list[float] | None = None,
+) -> list[dict[str, object]]:
     return [
         {
             "timestamp": (REFERENCE_TIME + timedelta(minutes=15 * index)).isoformat(),
-            "exportedToGridKwh": value,
+            "exportedToGridKwh": (
+                value if exported_values is None else exported_values[index]
+            ),
+            "availableSurplusKwh": value,
         }
         for index, value in enumerate(values)
     ]
@@ -182,8 +189,10 @@ def _make_snapshot(
     battery_coverage_until: str | None = None,
     grid_status: str = "available",
     grid_coverage_until: str | None = None,
+    reference_time: datetime | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances(appliances)
+    current_time = REFERENCE_TIME if reference_time is None else reference_time
     return OptimizationSnapshot(
         schedule=ScheduleDocument(execution_enabled=True)
         if schedule_document is None
@@ -200,7 +209,7 @@ def _make_snapshot(
             "series": [] if grid_series is None else deepcopy(grid_series),
         },
         context=OptimizationContext(
-            now=REFERENCE_TIME,
+            now=current_time,
             battery_state=None,
             solar_forecast={"status": "available", "points": []},
             import_price_forecast={"unit": "CZK/kWh", "currentPrice": 7.0, "points": []},
@@ -329,6 +338,58 @@ class SurplusApplianceOptimizerTests(unittest.TestCase):
         )
 
         self.assertEqual(schedule_document_to_dict(result)["slots"], {})
+
+    def test_zero_export_but_positive_available_surplus_still_writes(self) -> None:
+        appliance = _make_generic_runtime()
+        optimizer = build_surplus_appliance_optimizer(
+            _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0),
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+
+        result = optimizer.optimize(
+            _make_snapshot(
+                appliances=(appliance,),
+                when_active_hourly_energy_kwh_by_appliance_id={appliance.id: 1.0},
+                grid_series=_grid_series(
+                    [0.3, 0.3, 0.3, 0.3],
+                    exported_values=[0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0),
+        )
+
+        self.assertIn(CURRENT_SLOT_ID, schedule_document_to_dict(result)["slots"])
+
+    def test_mid_slot_run_matches_current_bucket_surplus_by_canonical_start(self) -> None:
+        appliance = _make_generic_runtime()
+        optimizer = build_surplus_appliance_optimizer(
+            _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0),
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        reference_time = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
+
+        result = optimizer.optimize(
+            _make_snapshot(
+                appliances=(appliance,),
+                when_active_hourly_energy_kwh_by_appliance_id={appliance.id: 1.0},
+                reference_time=reference_time,
+                grid_series=[
+                    {
+                        "timestamp": reference_time.isoformat(),
+                        "availableSurplusKwh": 0.3,
+                        "exportedToGridKwh": 0.0,
+                    },
+                    {
+                        "timestamp": "2026-03-20T21:15:00+01:00",
+                        "availableSurplusKwh": 0.3,
+                        "exportedToGridKwh": 0.0,
+                    },
+                ],
+            ),
+            _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0),
+        )
+
+        self.assertIn(CURRENT_SLOT_ID, schedule_document_to_dict(result)["slots"])
 
     def test_user_owned_action_for_same_appliance_is_preserved(self) -> None:
         appliance = _make_generic_runtime()

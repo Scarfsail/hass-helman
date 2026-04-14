@@ -537,12 +537,14 @@ class BatteryCapacityForecastBuilder:
         discharged_kwh = 0.0
         imported_from_grid_kwh = 0.0
         exported_to_grid_kwh = 0.0
+        available_surplus_kwh = 0.0
         limited_by_charge_power = False
         limited_by_discharge_power = False
 
         if net_kwh > _EPSILON:
             if action_kind == SCHEDULE_ACTION_STOP_CHARGING:
                 exported_to_grid_kwh = net_kwh
+                available_surplus_kwh = net_kwh
             else:
                 max_charge_input_kwh = (
                     settings.max_charge_power_w / 1000
@@ -562,10 +564,14 @@ class BatteryCapacityForecastBuilder:
                     actual_charge_input_kwh * settings.charge_efficiency,
                     headroom_kwh,
                 )
+                available_surplus_kwh = max(
+                    0.0,
+                    net_kwh - actual_charge_input_kwh,
+                )
                 exported_to_grid_kwh = (
                     0.0
                     if action_kind == SCHEDULE_ACTION_STOP_EXPORT
-                    else max(0.0, net_kwh - actual_charge_input_kwh)
+                    else available_surplus_kwh
                 )
                 limited_by_charge_power = (
                     desired_charge_input_kwh - max_charge_input_kwh
@@ -631,6 +637,7 @@ class BatteryCapacityForecastBuilder:
                 remaining_energy_kwh=remaining_energy_kwh,
                 imported_from_grid_kwh=imported_from_grid_kwh,
                 exported_to_grid_kwh=exported_to_grid_kwh,
+                available_surplus_kwh=available_surplus_kwh,
                 hit_min_soc=hit_min_soc,
                 hit_max_soc=hit_max_soc,
                 limited_by_charge_power=limited_by_charge_power,
@@ -844,11 +851,12 @@ class BatteryCapacityForecastBuilder:
             0.0,
             actual_charge_input_kwh - solar_to_battery_input_kwh,
         )
-        imported_from_grid_kwh = grid_for_house_kwh + grid_to_battery_input_kwh
-        exported_to_grid_kwh = max(
+        available_surplus_kwh = max(
             0.0,
             solar_surplus_kwh - solar_to_battery_input_kwh,
         )
+        imported_from_grid_kwh = grid_for_house_kwh + grid_to_battery_input_kwh
+        exported_to_grid_kwh = available_surplus_kwh
         remaining_energy_kwh = min(
             live_state.max_energy_kwh,
             energy_before_kwh + charged_kwh,
@@ -865,6 +873,7 @@ class BatteryCapacityForecastBuilder:
                 remaining_energy_kwh=remaining_energy_kwh,
                 imported_from_grid_kwh=imported_from_grid_kwh,
                 exported_to_grid_kwh=exported_to_grid_kwh,
+                available_surplus_kwh=available_surplus_kwh,
                 hit_min_soc=(
                     remaining_energy_kwh - live_state.min_energy_kwh
                 ) <= _EPSILON,
@@ -915,6 +924,7 @@ class BatteryCapacityForecastBuilder:
         net_kwh = solar_kwh - baseline_house_kwh
         deficit_after_solar_kwh = max(0.0, -net_kwh)
         solar_surplus_kwh = max(0.0, net_kwh)
+        available_surplus_kwh = solar_surplus_kwh
         imported_from_grid_kwh = max(
             0.0,
             deficit_after_solar_kwh - actual_discharge_output_kwh,
@@ -939,6 +949,7 @@ class BatteryCapacityForecastBuilder:
                 remaining_energy_kwh=remaining_energy_kwh,
                 imported_from_grid_kwh=imported_from_grid_kwh,
                 exported_to_grid_kwh=exported_to_grid_kwh,
+                available_surplus_kwh=available_surplus_kwh,
                 hit_min_soc=(
                     remaining_energy_kwh - live_state.min_energy_kwh
                 ) <= _EPSILON,
@@ -974,6 +985,9 @@ class BatteryCapacityForecastBuilder:
             slot["importedFromGridKwh"] for slot in phase_slots
         )
         exported_to_grid_kwh = sum(slot["exportedToGridKwh"] for slot in phase_slots)
+        available_surplus_kwh = sum(
+            slot["availableSurplusKwh"] for slot in phase_slots
+        )
 
         return self._make_simulated_slot_payload(
             slot_start=slot_start,
@@ -985,6 +999,7 @@ class BatteryCapacityForecastBuilder:
             remaining_energy_kwh=remaining_energy_kwh,
             imported_from_grid_kwh=imported_from_grid_kwh,
             exported_to_grid_kwh=exported_to_grid_kwh,
+            available_surplus_kwh=available_surplus_kwh,
             hit_min_soc=(remaining_energy_kwh - live_state.min_energy_kwh) <= _EPSILON,
             hit_max_soc=(
                 live_state.max_energy_kwh - remaining_energy_kwh
@@ -1013,6 +1028,7 @@ class BatteryCapacityForecastBuilder:
         remaining_energy_kwh: float,
         imported_from_grid_kwh: float,
         exported_to_grid_kwh: float,
+        available_surplus_kwh: float,
         hit_min_soc: bool,
         hit_max_soc: bool,
         limited_by_charge_power: bool,
@@ -1031,6 +1047,7 @@ class BatteryCapacityForecastBuilder:
             "socPct": round(soc_pct, 2),
             "importedFromGridKwh": self._round_energy(imported_from_grid_kwh),
             "exportedToGridKwh": self._round_energy(exported_to_grid_kwh),
+            "availableSurplusKwh": self._round_energy(available_surplus_kwh),
             "hitMinSoc": hit_min_soc,
             "hitMaxSoc": hit_max_soc,
             "limitedByChargePower": limited_by_charge_power,

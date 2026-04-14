@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
+from ...const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from ...appliances.climate_appliance import ClimateApplianceRuntime
 from ...appliances.generic_appliance import GenericApplianceRuntime
 from ...scheduling.schedule import (
@@ -95,10 +96,10 @@ class SurplusApplianceOptimizer:
                 "when-active demand is unavailable",
             )
 
-        export_surplus_by_bucket_start = _build_export_surplus_by_bucket_start(
+        available_surplus_by_bucket_start = _build_available_surplus_by_bucket_start(
             snapshot=snapshot
         )
-        if export_surplus_by_bucket_start is None:
+        if available_surplus_by_bucket_start is None:
             raise SurplusApplianceSkip(
                 self.target.appliance.id,
                 "forecast surplus inputs are unavailable",
@@ -124,7 +125,7 @@ class SurplusApplianceOptimizer:
             if not demand_slices:
                 continue
             if not _slot_has_sufficient_surplus(
-                export_surplus_by_bucket_start=export_surplus_by_bucket_start,
+                available_surplus_by_bucket_start=available_surplus_by_bucket_start,
                 demand_slices=demand_slices,
                 buffer_multiplier=buffer_multiplier,
             ):
@@ -218,7 +219,7 @@ def validate_surplus_appliance_optimizer_config(
     )
 
 
-def _build_export_surplus_by_bucket_start(
+def _build_available_surplus_by_bucket_start(
     *,
     snapshot: "OptimizationSnapshot",
 ) -> dict[datetime, float] | None:
@@ -241,17 +242,25 @@ def _build_export_surplus_by_bucket_start(
     if not isinstance(raw_series, list):
         return None
 
-    export_surplus_by_bucket_start: dict[datetime, float] = {}
+    source_granularity_minutes = snapshot.grid_forecast.get("sourceGranularityMinutes")
+    if not isinstance(source_granularity_minutes, int) or source_granularity_minutes <= 0:
+        source_granularity_minutes = FORECAST_CANONICAL_GRANULARITY_MINUTES
+
+    available_surplus_by_bucket_start: dict[datetime, float] = {}
     for point in raw_series:
         if not isinstance(point, dict):
             continue
-        bucket_start = _parse_timestamp(point.get("timestamp"))
-        exported_to_grid_kwh = _read_optional_float(point.get("exportedToGridKwh"))
-        if bucket_start is None or exported_to_grid_kwh is None:
+        timestamp = _parse_timestamp(point.get("timestamp"))
+        available_surplus_kwh = _read_optional_float(point.get("availableSurplusKwh"))
+        if timestamp is None or available_surplus_kwh is None:
             continue
-        export_surplus_by_bucket_start[bucket_start] = exported_to_grid_kwh
+        bucket_start = _canonical_bucket_start(
+            timestamp,
+            granularity_minutes=source_granularity_minutes,
+        )
+        available_surplus_by_bucket_start[bucket_start] = available_surplus_kwh
 
-    return export_surplus_by_bucket_start
+    return available_surplus_by_bucket_start
 
 
 def _forecast_covers_schedule_horizon(
@@ -273,12 +282,12 @@ def _forecast_covers_schedule_horizon(
 
 def _slot_has_sufficient_surplus(
     *,
-    export_surplus_by_bucket_start: dict[datetime, float],
+    available_surplus_by_bucket_start: dict[datetime, float],
     demand_slices,
     buffer_multiplier: float,
 ) -> bool:
     for demand_slice in demand_slices:
-        available_surplus_kwh = export_surplus_by_bucket_start.get(
+        available_surplus_kwh = available_surplus_by_bucket_start.get(
             demand_slice.bucket_start
         )
         if available_surplus_kwh is None:
@@ -365,6 +374,32 @@ def _parse_timestamp(value: object) -> datetime | None:
     if parsed is None or parsed.tzinfo is None:
         return None
     return dt_util.as_local(parsed)
+
+
+def _canonical_bucket_start(
+    timestamp: datetime,
+    *,
+    granularity_minutes: int,
+) -> datetime:
+    local_reference = dt_util.as_local(timestamp)
+    local_day_start = local_reference.replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    slot_duration_seconds = granularity_minutes * 60
+    elapsed_seconds = max(
+        0.0,
+        (
+            dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
+        ).total_seconds(),
+    )
+    slot_index = int(elapsed_seconds // slot_duration_seconds)
+    slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
+        seconds=slot_index * slot_duration_seconds
+    )
+    return dt_util.as_local(slot_start_utc)
 
 
 def _read_optional_float(value: Any) -> float | None:

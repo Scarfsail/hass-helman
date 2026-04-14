@@ -535,6 +535,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 5.0)
         self.assertEqual(payload["series"][0]["socPct"], 50.0)
         self.assertEqual(payload["series"][0]["exportedToGridKwh"], 0.2)
+        self.assertEqual(payload["series"][0]["availableSurplusKwh"], 0.2)
         self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 5.2)
         self.assertEqual(payload["series"][0]["baselineSocPct"], 52.0)
         self.assertEqual(payload["series"][1]["remainingEnergyKwh"], 5.0)
@@ -610,6 +611,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"][0]["chargedKwh"], 0.025)
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 5.025)
         self.assertEqual(payload["series"][0]["exportedToGridKwh"], 0.0)
+        self.assertEqual(payload["series"][0]["availableSurplusKwh"], 0.175)
         self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 5.025)
         self.assertEqual(payload["series"][0]["baselineSocPct"], 50.25)
 
@@ -685,6 +687,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"][0]["chargedKwh"], 0.0)
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 10.0)
         self.assertEqual(payload["series"][0]["exportedToGridKwh"], 0.0)
+        self.assertEqual(payload["series"][0]["availableSurplusKwh"], 0.2)
         self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 10.0)
         self.assertEqual(payload["series"][0]["baselineSocPct"], 100.0)
 
@@ -1156,6 +1159,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"][0]["durationHours"], 0.1333)
         self.assertEqual(payload["series"][0]["chargedKwh"], 1.0)
         self.assertEqual(payload["series"][0]["importedFromGridKwh"], 1.0)
+        self.assertEqual(payload["series"][0]["availableSurplusKwh"], 0.0)
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 6.0)
         self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 5.0)
 
@@ -1233,6 +1237,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["scheduleAdjusted"])
         self.assertEqual(payload["series"][0]["chargedKwh"], 0.0)
         self.assertEqual(payload["series"][0]["exportedToGridKwh"], 0.2)
+        self.assertEqual(payload["series"][0]["availableSurplusKwh"], 0.2)
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 3.0)
         self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 3.2)
 
@@ -1312,6 +1317,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"][0]["durationHours"], 0.1333)
         self.assertEqual(payload["series"][0]["dischargedKwh"], 1.0)
         self.assertEqual(payload["series"][0]["exportedToGridKwh"], 1.0)
+        self.assertEqual(payload["series"][0]["availableSurplusKwh"], 0.0)
         self.assertEqual(payload["series"][0]["remainingEnergyKwh"], 4.0)
         self.assertEqual(payload["series"][0]["baselineRemainingEnergyKwh"], 5.0)
 

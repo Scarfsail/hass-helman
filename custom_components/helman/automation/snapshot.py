@@ -6,6 +6,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from ..appliances import AppliancesRuntimeRegistry, build_appliances_response
+from ..forecast_series_fields import (
+    BATTERY_PUBLIC_SERIES_FIELDS,
+    project_series_fields,
+)
 from ..scheduling.schedule import (
     ScheduleDocument,
     materialize_schedule_slots,
@@ -48,7 +52,7 @@ def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:
             )
         ],
         "adjustedHouseForecast": deepcopy(snapshot.adjusted_house_forecast),
-        "batteryForecast": deepcopy(snapshot.battery_forecast),
+        "batteryForecast": _serialize_battery_forecast(snapshot.battery_forecast),
         "gridForecast": deepcopy(snapshot.grid_forecast),
         "context": {
             "now": snapshot.context.now.isoformat(),
@@ -64,6 +68,17 @@ def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:
             ),
         },
     }
+
+
+def _serialize_battery_forecast(battery_forecast: dict[str, Any]) -> dict[str, Any]:
+    serialized = deepcopy(battery_forecast)
+    for field in ("series", "baselineSeries"):
+        if isinstance(serialized.get(field), list):
+            serialized[field] = project_series_fields(
+                serialized[field],
+                BATTERY_PUBLIC_SERIES_FIELDS,
+            )
+    return serialized
 
 
 def _battery_state_to_dict(

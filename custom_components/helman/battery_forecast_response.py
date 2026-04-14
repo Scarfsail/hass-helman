@@ -7,6 +7,10 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
+from .forecast_series_fields import (
+    BATTERY_PUBLIC_SERIES_FIELDS,
+    project_series_fields,
+)
 from .forecast_aggregation import (
     aggregate_battery_history_entries,
     aggregate_battery_series,
@@ -73,12 +77,15 @@ def _build_series(
     granularity: int,
     group_size: int,
 ) -> list[dict[str, Any]]:
-    return build_started_slot_series(
-        raw_entries=snapshot.get("series"),
-        started_at=started_at,
-        granularity=granularity,
-        group_size=group_size,
-        aggregate_entries=aggregate_battery_series,
+    return project_series_fields(
+        build_started_slot_series(
+            raw_entries=snapshot.get("series"),
+            started_at=started_at,
+            granularity=granularity,
+            group_size=group_size,
+            aggregate_entries=aggregate_battery_series,
+        ),
+        BATTERY_PUBLIC_SERIES_FIELDS,
     )
 
 

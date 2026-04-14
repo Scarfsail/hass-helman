@@ -354,6 +354,7 @@ Reads:
 - working schedule
 - adjusted house forecast after previous optimizers
 - battery/grid forecast after previous optimizers
+- `gridForecast.series[].availableSurplusKwh` as the optimizer-facing "redirectable surplus" signal; unlike `exportedToGridKwh`, it stays positive when export is blocked but surplus solar still exists
 - appliance when-active demand profile resolved through shared logic next to the existing projection builder, using `context.when_active_hourly_energy_kwh_by_appliance_id`
 - appliance runtime registry and configured thresholds
 
@@ -374,6 +375,8 @@ V1 scope and authored output:
 Important detail:
 
 This optimizer should look at **remaining surplus after previous optimizer effects**, not at raw solar alone. That is exactly why the pipeline should rebuild the snapshot between optimizer steps.
+
+That remaining-surplus signal should come from `availableSurplusKwh`, not `exportedToGridKwh`. `exportedToGridKwh` remains the execution forecast after inverter/export policy, while `availableSurplusKwh` keeps the effective schedule-adjusted solar-origin surplus visible even when `stop_export` blocks actual export.
 
 It should **not** read appliance projections as an input. Projections are created only after schedule actions exist, so using them for this optimizer would duplicate calculation logic and create a circular dependency. The optimizer should instead use the already rebuilt forecast plus the appliance's own expected when-active consumption profile.
 

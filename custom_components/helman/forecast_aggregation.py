@@ -28,6 +28,7 @@ _GRID_FLOW_SUM_FIELDS = (
     "durationHours",
     "importedFromGridKwh",
     "exportedToGridKwh",
+    "availableSurplusKwh",
     "baselineImportedFromGridKwh",
     "baselineExportedToGridKwh",
 )

@@ -49,6 +49,7 @@ class GridFlowForecastBuilderTests(unittest.TestCase):
                     "durationHours": 10 / 60,
                     "importedFromGridKwh": 0.2,
                     "exportedToGridKwh": 0.0,
+                    "availableSurplusKwh": 0.15,
                     "remainingEnergyKwh": 5.1,
                 }
             ],
@@ -58,6 +59,7 @@ class GridFlowForecastBuilderTests(unittest.TestCase):
                     "durationHours": 10 / 60,
                     "importedFromGridKwh": 0.3,
                     "exportedToGridKwh": 0.1,
+                    "availableSurplusKwh": 0.25,
                     "remainingEnergyKwh": 4.9,
                 }
             ],
@@ -76,6 +78,7 @@ class GridFlowForecastBuilderTests(unittest.TestCase):
                     "durationHours": 10 / 60,
                     "importedFromGridKwh": 0.2,
                     "exportedToGridKwh": 0.0,
+                    "availableSurplusKwh": 0.15,
                 }
             ],
         )
@@ -105,6 +108,7 @@ class GridFlowForecastBuilderTests(unittest.TestCase):
                         "durationHours": 10 / 60,
                         "importedFromGridKwh": 0.0,
                         "exportedToGridKwh": 0.1,
+                        "availableSurplusKwh": 0.1,
                     }
                 ],
             }

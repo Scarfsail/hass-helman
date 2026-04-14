@@ -390,6 +390,18 @@ class BatteryForecastResponseTests(unittest.TestCase):
 
         self.assertNotIn("baselineSeries", response)
 
+    def test_response_does_not_expose_internal_available_surplus_field(self) -> None:
+        snapshot = _make_snapshot()
+        snapshot["series"][0]["availableSurplusKwh"] = 0.2
+
+        response = battery_forecast_response.build_battery_forecast_response(
+            snapshot,
+            granularity=15,
+            forecast_days=1,
+        )
+
+        self.assertNotIn("availableSurplusKwh", response["series"][0])
+
     def test_hourly_response_keeps_schedule_adjustment_coverage_distinct_from_coverage_until(
         self,
     ) -> None:

@@ -100,6 +100,10 @@ def _build_public_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "importedFromGridKwh": deepcopy(entry.get("importedFromGridKwh")),
         "exportedToGridKwh": deepcopy(entry.get("exportedToGridKwh")),
     }
+    if "availableSurplusKwh" in entry:
+        public_entry["availableSurplusKwh"] = deepcopy(
+            entry.get("availableSurplusKwh")
+        )
     if (
         "baselineImportedFromGridKwh" in entry
         or "baselineExportedToGridKwh" in entry

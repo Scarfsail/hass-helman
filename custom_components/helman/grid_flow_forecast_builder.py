@@ -4,6 +4,11 @@ from copy import deepcopy
 from typing import Any
 
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
+from .forecast_series_fields import (
+    GRID_FLOW_BASELINE_SERIES_FIELDS,
+    GRID_FLOW_EFFECTIVE_SERIES_FIELDS,
+    project_series_fields,
+)
 
 _METADATA_FIELDS = (
     "status",
@@ -14,12 +19,6 @@ _METADATA_FIELDS = (
     "coverageUntil",
     "scheduleAdjusted",
     "scheduleAdjustmentCoverageUntil",
-)
-_SERIES_FIELDS = (
-    "timestamp",
-    "durationHours",
-    "importedFromGridKwh",
-    "exportedToGridKwh",
 )
 
 
@@ -36,28 +35,16 @@ def build_grid_flow_forecast_snapshot(
         "sourceGranularityMinutes",
         FORECAST_CANONICAL_GRANULARITY_MINUTES,
     )
-    snapshot["series"] = _project_series(battery_snapshot.get("series"))
+    snapshot["series"] = project_series_fields(
+        battery_snapshot.get("series"),
+        GRID_FLOW_EFFECTIVE_SERIES_FIELDS,
+    )
 
     baseline_series = battery_snapshot.get("baselineSeries")
     if isinstance(baseline_series, list):
-        snapshot["baselineSeries"] = _project_series(baseline_series)
+        snapshot["baselineSeries"] = project_series_fields(
+            baseline_series,
+            GRID_FLOW_BASELINE_SERIES_FIELDS,
+        )
 
     return snapshot
-
-
-def _project_series(raw_series: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_series, list):
-        return []
-
-    projected: list[dict[str, Any]] = []
-    for raw_entry in raw_series:
-        if not isinstance(raw_entry, dict):
-            continue
-        projected.append(
-            {
-                key: deepcopy(raw_entry[key])
-                for key in _SERIES_FIELDS
-                if key in raw_entry
-            }
-        )
-    return projected

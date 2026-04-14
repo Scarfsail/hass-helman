@@ -644,6 +644,27 @@ class SnapshotSerializationTests(unittest.TestCase):
             payload["context"]["whenActiveHourlyEnergyKwhByApplianceId"],
             {"boiler": 1.25},
         )
+
+    def test_snapshot_to_dict_hides_internal_battery_available_surplus_field(self) -> None:
+        snapshot = _make_snapshot()
+        snapshot.battery_forecast["series"][0]["availableSurplusKwh"] = 0.2
+        snapshot.battery_forecast["baselineSeries"] = [
+            {
+                "timestamp": CURRENT_SLOT_ID,
+                "durationHours": 0.25,
+                "availableSurplusKwh": 0.3,
+                "importedFromGridKwh": 1.0,
+                "exportedToGridKwh": 0.0,
+            }
+        ]
+
+        payload = snapshot_to_dict(snapshot)
+
+        self.assertNotIn("availableSurplusKwh", payload["batteryForecast"]["series"][0])
+        self.assertNotIn(
+            "availableSurplusKwh",
+            payload["batteryForecast"]["baselineSeries"][0],
+        )
         self.assertEqual(payload["context"]["applianceRegistry"], {"appliances": []})
 
 
