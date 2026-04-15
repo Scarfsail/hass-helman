@@ -283,7 +283,9 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "apply")
         self.assertEqual(runtime.outcome, "success")
 
-    async def test_missing_action_after_previous_charge_emits_slot_stop(self) -> None:
+    async def test_missing_action_after_previous_charge_clears_runtime_after_stop(
+        self,
+    ) -> None:
         hass = FakeHass(
             {
                 "switch.ev_nabijeni": FakeState("on"),
@@ -317,12 +319,13 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             hass.services.calls,
             [("switch", "turn_off", {"entity_id": "switch.ev_nabijeni"}, True)],
         )
-        self.assertEqual(runtime.action_kind, "slot_stop")
-        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(runtime)
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
         self.assertFalse(memory.last_enabled)
 
-    async def test_missing_action_after_restart_uses_last_scheduled_charge_action(self) -> None:
+    async def test_missing_action_after_restart_uses_last_scheduled_charge_action(
+        self,
+    ) -> None:
         hass = FakeHass(
             {
                 "switch.ev_nabijeni": FakeState("on"),
@@ -351,8 +354,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             hass.services.calls,
             [("switch", "turn_off", {"entity_id": "switch.ev_nabijeni"}, True)],
         )
-        self.assertEqual(runtime.action_kind, "slot_stop")
-        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(runtime)
         self.assertFalse(memory.last_enabled)
 
     async def test_unchanged_same_slot_is_noop(self) -> None:
@@ -389,7 +391,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "noop")
         self.assertEqual(runtime.outcome, "skipped")
 
-    async def test_slot_stop_runtime_persists_within_same_slot(self) -> None:
+    async def test_slot_stop_runtime_is_hidden_within_same_slot(self) -> None:
         hass = FakeHass(
             {
                 "switch.ev_nabijeni": FakeState("off"),
@@ -420,8 +422,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(hass.services.calls, [])
-        self.assertEqual(runtime.action_kind, "slot_stop")
-        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(runtime)
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
 
     async def test_generic_on_turns_on_switch(self) -> None:
@@ -445,7 +446,9 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.outcome, "success")
         self.assertTrue(memory.last_enabled)
 
-    async def test_generic_missing_action_after_previous_on_emits_slot_stop(self) -> None:
+    async def test_generic_missing_action_after_previous_on_clears_runtime_after_stop(
+        self,
+    ) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("on")})
         executor = GenericApplianceExecutor(hass)
 
@@ -467,8 +470,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             hass.services.calls,
             [("switch", "turn_off", {"entity_id": "switch.dishwasher"}, True)],
         )
-        self.assertEqual(runtime.action_kind, "slot_stop")
-        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(runtime)
         self.assertFalse(memory.last_enabled)
 
     async def test_generic_missing_action_after_restart_uses_last_scheduled_on_action(
@@ -490,8 +492,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             hass.services.calls,
             [("switch", "turn_off", {"entity_id": "switch.dishwasher"}, True)],
         )
-        self.assertEqual(runtime.action_kind, "slot_stop")
-        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(runtime)
         self.assertFalse(memory.last_enabled)
 
     async def test_generic_unchanged_same_slot_is_noop(self) -> None:
@@ -582,7 +583,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(hass.services.calls), 1)
-        self.assertEqual(second_runtime.outcome, "success")
+        self.assertIsNone(second_runtime)
         self.assertIsNotNone(second_memory)
         self.assertFalse(second_memory.last_enabled)
 
@@ -662,7 +663,9 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.outcome, "success")
         self.assertFalse(memory.last_enabled)
 
-    async def test_climate_missing_action_after_previous_mode_emits_slot_stop(self) -> None:
+    async def test_climate_missing_action_after_previous_mode_clears_runtime_after_stop(
+        self,
+    ) -> None:
         hass = FakeHass(
             {
                 "climate.living_room": FakeState(
@@ -701,8 +704,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        self.assertEqual(runtime.action_kind, "slot_stop")
-        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(runtime)
         self.assertFalse(memory.last_enabled)
 
     async def test_climate_missing_action_after_restart_uses_last_scheduled_mode(
@@ -741,8 +743,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        self.assertEqual(runtime.action_kind, "slot_stop")
-        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(runtime)
         self.assertFalse(memory.last_enabled)
 
     async def test_climate_missing_action_after_explicit_off_does_not_repeat_stop(self) -> None:

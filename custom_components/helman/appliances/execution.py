@@ -289,14 +289,9 @@ class EvChargerExecutor:
                 and memory.last_active_slot_id == active_slot_id
                 and memory.last_runtime_action_kind == "slot_stop"
             ):
-                runtime = _build_runtime_status(
-                    action_kind="slot_stop",
-                    outcome="success",
-                    reference_time=reference_time,
-                )
-                return runtime, memory
+                return None, memory
             if memory is not None and not memory.last_enabled:
-                return None, None
+                return None, memory
             if (
                 memory is None
                 and not self._last_scheduled_action_requires_slot_stop(last_scheduled_action)
@@ -307,8 +302,10 @@ class EvChargerExecutor:
                 action_kind="slot_stop",
                 reference_time=reference_time,
             )
+            if runtime.outcome != "success":
+                return runtime, memory
             return (
-                runtime,
+                None,
                 ApplianceExecutionMemory(
                     last_active_slot_id=active_slot_id,
                     last_action_signature=None,
@@ -516,14 +513,9 @@ class GenericApplianceExecutor:
                 and memory.last_active_slot_id == active_slot_id
                 and memory.last_runtime_action_kind == "slot_stop"
             ):
-                runtime = _build_runtime_status(
-                    action_kind="slot_stop",
-                    outcome="success",
-                    reference_time=reference_time,
-                )
-                return runtime, memory
+                return None, memory
             if memory is not None and not memory.last_enabled:
-                return None, None
+                return None, memory
             if (
                 memory is None
                 and not self._last_scheduled_action_requires_slot_stop(last_scheduled_action)
@@ -538,7 +530,7 @@ class GenericApplianceExecutor:
             if runtime.outcome != "success":
                 return runtime, memory
             return (
-                runtime,
+                None,
                 ApplianceExecutionMemory(
                     last_active_slot_id=active_slot_id,
                     last_action_signature=None,
@@ -668,14 +660,9 @@ class ClimateApplianceExecutor:
                 and memory.last_active_slot_id == active_slot_id
                 and memory.last_runtime_action_kind == "slot_stop"
             ):
-                runtime = _build_runtime_status(
-                    action_kind="slot_stop",
-                    outcome="success",
-                    reference_time=reference_time,
-                )
-                return runtime, memory
+                return None, memory
             if memory is not None and not memory.last_enabled:
-                return None, None
+                return None, memory
             if (
                 memory is None
                 and not self._last_scheduled_action_requires_slot_stop(
@@ -693,7 +680,7 @@ class ClimateApplianceExecutor:
             if runtime.outcome != "success":
                 return runtime, memory
             return (
-                runtime,
+                None,
                 ApplianceExecutionMemory(
                     last_active_slot_id=active_slot_id,
                     last_action_signature=None,
