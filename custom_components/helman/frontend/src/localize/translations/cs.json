@@ -139,7 +139,7 @@
       "optimizer_enabled": "Povoleno",
       "when_price_below": "Když je cena pod",
       "optimizer_action": "Akce",
-      "appliance_id": "ID spotřebiče",
+      "appliance_id": "Spotřebič",
       "climate_mode": "Režim topení/klimatizace",
       "min_surplus_buffer_pct": "Min. buffer přebytku %",
         "appliance_name": "Název spotřebiče",

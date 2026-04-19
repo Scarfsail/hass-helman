@@ -1845,10 +1845,6 @@ export class HelmanConfigEditorPanel extends LitElement {
               undefined,
               "editor.help.automation_optimizer_id",
             )}
-            <div class="field">
-              <label>${this._t("editor.fields.kind")}</label>
-              <input .value=${EXPORT_PRICE_OPTIMIZER_KIND} disabled />
-            </div>
             ${this._renderRequiredNumberField(
               [...paramsPath, "when_price_below"],
               "editor.fields.when_price_below",
@@ -1899,6 +1895,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       selectionState,
       this._stringValue(this._getValue([...paramsPath, "climate_mode"])),
     );
+    const summaryTitle = this._getSurplusApplianceOptimizerTitle(selectionState, optimizerId);
 
     return html`
       <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
@@ -1907,7 +1904,7 @@ export class HelmanConfigEditorPanel extends LitElement {
             <div class="appliance-summary-left">
               ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
-                <strong>${optimizerId}</strong>
+                <strong>${summaryTitle}</strong>
                 <span class="card-subtitle">${this._t("editor.values.surplus_appliance")}</span>
               </div>
             </div>
@@ -1940,26 +1937,26 @@ export class HelmanConfigEditorPanel extends LitElement {
               "editor.help.automation_optimizer_id",
             )}
             <div class="field">
-              <label>${this._t("editor.fields.kind")}</label>
-              <input .value=${SURPLUS_APPLIANCE_OPTIMIZER_KIND} disabled />
-            </div>
-            <div class="field">
               <div class="field-label-row">
                 <label>${this._t("editor.fields.appliance_id")}</label>
                 ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
               </div>
               <select
-                .value=${selectionState.selectedId}
                 @change=${(event: Event) =>
                   this._handleSurplusApplianceIdChange(
                     index,
                     (event.currentTarget as HTMLSelectElement).value,
                   )}
               >
-                <option value="">${this._t("editor.values.select_appliance")}</option>
+                <option value="" ?selected=${selectionState.selectedId.length === 0}>
+                  ${this._t("editor.values.select_appliance")}
+                </option>
                 ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
                   ? html`
-                      <option value=${selectionState.selectedId}>
+                      <option
+                        value=${selectionState.selectedId}
+                        ?selected=${true}
+                      >
                         ${this._tFormat("editor.dynamic.stale_appliance", {
                           id: selectionState.selectedId,
                         })}
@@ -1968,7 +1965,11 @@ export class HelmanConfigEditorPanel extends LitElement {
                   : nothing}
                 ${selectionState.options.map(
                   (option) => html`
-                    <option value=${option.id} ?disabled=${option.selectionDisabled}>
+                    <option
+                      value=${option.id}
+                      ?disabled=${option.selectionDisabled}
+                      ?selected=${option.id === selectionState.selectedId}
+                    >
                       ${this._formatSurplusApplianceOptionLabel(option)}
                     </option>
                   `,
@@ -4135,7 +4136,6 @@ export class HelmanConfigEditorPanel extends LitElement {
           )}
         </div>
         <select
-          .value=${selectedValue}
           ?disabled=${climateModeFieldState.disabled}
           @change=${(event: Event) =>
             this._setRequiredString(
@@ -4146,13 +4146,16 @@ export class HelmanConfigEditorPanel extends LitElement {
           ${climateModeFieldState.options.length > 0
             ? climateModeFieldState.options.map(
                 (option) => html`
-                  <option value=${option.value}>
+                  <option
+                    value=${option.value}
+                    ?selected=${option.value === selectedValue}
+                  >
                     ${this._formatSurplusClimateModeLabel(option.value, option.isUnknown)}
                   </option>
                 `,
               )
             : html`
-                <option value="__live_modes_unavailable__">
+                <option value="__live_modes_unavailable__" ?selected=${true}>
                   ${this._t("editor.values.live_modes_unavailable")}
                 </option>
               `}
@@ -4174,6 +4177,21 @@ export class HelmanConfigEditorPanel extends LitElement {
       return this._t("editor.helpers.surplus_appliance_id_pending_reload");
     }
     return this._t("editor.helpers.surplus_appliance_id");
+  }
+
+  private _getSurplusApplianceOptimizerTitle(
+    selectionState: SurplusApplianceSelectionState,
+    fallbackTitle: string,
+  ): string {
+    if (selectionState.selectedOption) {
+      return selectionState.selectedOption.name;
+    }
+    if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
+      return this._tFormat("editor.dynamic.stale_appliance", {
+        id: selectionState.selectedId,
+      });
+    }
+    return fallbackTitle;
   }
 
   private _renderSurplusClimateModeHelper(
