@@ -327,9 +327,9 @@ Finish the end-to-end contract: aggregate all forecast sections correctly, wire 
 - `custom_components/helman/coordinator.py`
 - `custom_components/helman/websockets.py`
 - `custom_components/helman/const.py`
-- `docs/features/house_consumption_forecast/README.md`
-- `docs/features/house_consumption_forecast/history_behavior_explained.md`
-- `docs/features/battery_capacity_forecast/README.md`
+- `docs/features/forecast/house-consumption-forecast/README.md`
+- `docs/features/forecast/house-consumption-forecast/history-behavior-explained.md`
+- `docs/features/forecast/battery-capacity-forecast/README.md`
 
 ### Scope
 

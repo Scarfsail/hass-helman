@@ -2,7 +2,7 @@
 
 ## Why this document exists
 
-`helman_automation.md` captures the problem well: you want Helman to stop being only a forecast viewer and start acting like an energy planner for the next day or two.
+`helman-automation.md` captures the problem well: you want Helman to stop being only a forecast viewer and start acting like an energy planner for the next day or two.
 
 This document keeps things high level and turns that raw idea into concrete directions we can compare before deciding what to build.
 
@@ -285,12 +285,12 @@ The main open topic is no longer the broad direction. It is the shape of the **c
 
 If we move forward, I would likely keep:
 
-- `helman_automation.md` as the original idea note
-- `helman_automation_options.md` as the decision document
-- `helman_automation_constraint_model.md` as the decision-rules document
+- `helman-automation.md` as the original idea note
+- `helman-automation-options.md` as the decision document
+- `helman-automation-constraint-model.md` as the decision-rules document
 
 And once we choose a direction, add a more standard feature-doc set:
 
 - `docs/features/automation/README.md`
-- `docs/features/automation/implementation_strategy.md`
-- `docs/features/automation/implementation_progress.md`
+- `docs/features/automation/implementation-strategy.md`
+- `docs/features/automation/implementation-progress.md`

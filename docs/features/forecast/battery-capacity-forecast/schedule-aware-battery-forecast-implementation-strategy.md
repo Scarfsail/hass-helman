@@ -12,15 +12,15 @@ After every increment:
 - run the full backend unit suite before handoff
 - ask the user to confirm that local Home Assistant has been restarted with the new code
 - only after that confirmation, use the `local-hass-api` skill and validate via websocket API against the local HA instance
-- update `schedule_aware_battery_forecast_implementation_progress.md`
+- update `schedule-aware-battery-forecast-implementation-progress.md`
 - stop and wait for review before starting the next increment
 
 ## References
 
-- **Analysis**: [`schedule_aware_battery_forecast_analysis.md`](./schedule_aware_battery_forecast_analysis.md)
-- **Implementation progress**: [`schedule_aware_battery_forecast_implementation_progress.md`](./schedule_aware_battery_forecast_implementation_progress.md)
+- **Analysis**: [`schedule-aware-battery-forecast-analysis.md`](./schedule-aware-battery-forecast-analysis.md)
+- **Implementation progress**: [`schedule-aware-battery-forecast-implementation-progress.md`](./schedule-aware-battery-forecast-implementation-progress.md)
 - **Feature overview**: [`README.md`](./README.md)
-- **Related live smoke guide**: [`../automation/helman_manual_schedule_live_smoke.md`](../automation/helman_manual_schedule_live_smoke.md)
+- **Related live smoke guide**: [`../../automation/scheduling/helman-manual-schedule-live-smoke.md`](../../automation/scheduling/helman-manual-schedule-live-smoke.md)
 - **Backend repo root**: `/home/ondra/dev/hass/hass-helman`
 - **Backend code**: `/home/ondra/dev/hass/hass-helman/custom_components/helman/`
 - **Backend tests**: `/home/ondra/dev/hass/hass-helman/tests/`
@@ -414,9 +414,9 @@ Close the rollout with horizon-boundary correctness, final cache polish, and cur
 
 - Repo root: `/home/ondra/dev/hass/hass-helman`
 - Likely files:
-  - `/home/ondra/dev/hass/hass-helman/docs/features/battery_capacity_forecast/README.md`
-  - `/home/ondra/dev/hass/hass-helman/docs/features/automation/helman_manual_schedule_live_smoke.md`
-  - `/home/ondra/dev/hass/hass-helman/docs/features/battery_capacity_forecast/schedule_aware_battery_forecast_analysis.md` (only if cross-links or small follow-up notes are needed)
+  - `/home/ondra/dev/hass/hass-helman/docs/features/forecast/battery-capacity-forecast/README.md`
+  - `/home/ondra/dev/hass/hass-helman/docs/features/automation/scheduling/helman-manual-schedule-live-smoke.md`
+  - `/home/ondra/dev/hass/hass-helman/docs/features/forecast/battery-capacity-forecast/schedule-aware-battery-forecast-analysis.md` (only if cross-links or small follow-up notes are needed)
   - tests touched only if final regression fixes are needed
 
 ### Scope

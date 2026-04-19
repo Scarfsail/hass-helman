@@ -4,7 +4,7 @@
 
 This document is the implementation handoff for a future coding session.
 
-> Note: the shipped implementation has since evolved beyond the original weighted-baseline plan. The authoritative current-state docs are `README.md` and `history_behavior_explained.md`, which now describe the equal-weight winsorized model with a `56`-day default window.
+> Note: the shipped implementation has since evolved beyond the original weighted-baseline plan. The authoritative current-state docs are `README.md` and `history-behavior-explained.md`, which now describe the equal-weight winsorized model with a `56`-day default window.
 
 The next session should implement the feature **increment by increment**, not all at once.
 
@@ -691,9 +691,9 @@ Make the shipped feature understandable and easy to operate, and close the docum
 
 Update:
 
-- `hass-helman/docs/features/house_consumption_forecast/README.md`
-- `hass-helman/docs/features/house_consumption_forecast/implementation_plan.md` if reality drifted
-- `hass-helman/docs/features/house_consumption_forecast/implementation_progress.md`
+- `hass-helman/docs/features/forecast/house-consumption-forecast/README.md`
+- `hass-helman/docs/features/forecast/house-consumption-forecast/implementation-plan.md` if reality drifted
+- `hass-helman/docs/features/forecast/house-consumption-forecast/implementation-progress.md`
 - `hass-helman-card/README.md`
 
 Document:

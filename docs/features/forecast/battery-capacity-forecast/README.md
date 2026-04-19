@@ -8,11 +8,11 @@ The battery simulation now runs on a **canonical 15-minute model** and the respo
 
 ## References
 
-- **Implementation strategy**: [`implementation_strategy.md`](./implementation_strategy.md)
-- **Implementation progress**: [`implementation_progress.md`](./implementation_progress.md)
-- **Schedule-aware analysis**: [`schedule_aware_battery_forecast_analysis.md`](./schedule_aware_battery_forecast_analysis.md)
-- **Schedule-aware implementation strategy**: [`schedule_aware_battery_forecast_implementation_strategy.md`](./schedule_aware_battery_forecast_implementation_strategy.md)
-- **Schedule-aware implementation progress**: [`schedule_aware_battery_forecast_implementation_progress.md`](./schedule_aware_battery_forecast_implementation_progress.md)
+- **Implementation strategy**: [`implementation-strategy.md`](./implementation-strategy.md)
+- **Implementation progress**: [`implementation-progress.md`](./implementation-progress.md)
+- **Schedule-aware analysis**: [`schedule-aware-battery-forecast-analysis.md`](./schedule-aware-battery-forecast-analysis.md)
+- **Schedule-aware implementation strategy**: [`schedule-aware-battery-forecast-implementation-strategy.md`](./schedule-aware-battery-forecast-implementation-strategy.md)
+- **Schedule-aware implementation progress**: [`schedule-aware-battery-forecast-implementation-progress.md`](./schedule-aware-battery-forecast-implementation-progress.md)
 - **Backend repo**: `/home/ondra/dev/hass/hass-helman/custom_components/helman/`
 - **Frontend repo**: `/home/ondra/dev/hass/hass-helman-card/src/`
 

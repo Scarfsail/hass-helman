@@ -8,9 +8,9 @@ The backend now stores the house forecast as a **canonical 15-minute snapshot** 
 
 ## References
 
-- **Implementation plan**: [`implementation_plan.md`](./implementation_plan.md)
-- **Implementation progress**: [`implementation_progress.md`](./implementation_progress.md)
-- **History behavior explainer**: [`history_behavior_explained.md`](./history_behavior_explained.md)
+- **Implementation plan**: [`implementation-plan.md`](./implementation-plan.md)
+- **Implementation progress**: [`implementation-progress.md`](./implementation-progress.md)
+- **History behavior explainer**: [`history-behavior-explained.md`](./history-behavior-explained.md)
 
 ## Configuration
 

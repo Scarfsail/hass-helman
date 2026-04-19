@@ -4,7 +4,7 @@
 
 This document turns the manual schedule architecture into a code-ready backend contract.
 
-For live validation steps and expected runtime outcomes on a running Home Assistant instance, see [`helman_manual_schedule_live_smoke.md`](./helman_manual_schedule_live_smoke.md).
+For live validation steps and expected runtime outcomes on a running Home Assistant instance, see [`helman-manual-schedule-live-smoke.md`](./helman-manual-schedule-live-smoke.md).
 
 It focuses on:
 

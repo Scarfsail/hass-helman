@@ -2,8 +2,8 @@
 
 ## References
 
-- Exact DTOs and websocket schemas: [`helman_manual_schedule_dto_spec.md`](./helman_manual_schedule_dto_spec.md)
-- Live smoke scenarios and expected outcomes: [`helman_manual_schedule_live_smoke.md`](./helman_manual_schedule_live_smoke.md)
+- Exact DTOs and websocket schemas: [`helman-manual-schedule-dto-spec.md`](./helman-manual-schedule-dto-spec.md)
+- Live smoke scenarios and expected outcomes: [`helman-manual-schedule-live-smoke.md`](./helman-manual-schedule-live-smoke.md)
 
 ## Goal
 

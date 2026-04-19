@@ -1,6 +1,6 @@
 # Helman Automation - Optimizer Pipeline Implementation Plan
 
-Companion to [`helman_automation_optimizer_pipeline_architecture.md`](helman_automation_optimizer_pipeline_architecture.md).
+Companion to [`helman-automation-optimizer-pipeline-architecture.md`](helman-automation-optimizer-pipeline-architecture.md).
 
 This document breaks the architecture into small, independently implementable, independently testable, and independently commitable phases. Each phase is scoped so that the repo stays shippable after every commit.
 
@@ -26,7 +26,7 @@ Every phase follows the same closing ritual before the commit lands:
    ```
    All tests must pass before moving on.
 3. Ask the user to restart local HASS. After the user confirms the restart, run the **Local HASS smoke test** steps for the phase via the HASS websocket API. Capture the observed responses in the session for review.
-4. If the smoke test surfaced behavior that diverges from the architecture doc, **update [`helman_automation_optimizer_pipeline_architecture.md`](helman_automation_optimizer_pipeline_architecture.md) to reflect reality**. Do not silently absorb the divergence.
+4. If the smoke test surfaced behavior that diverges from the architecture doc, **update [`helman-automation-optimizer-pipeline-architecture.md`](helman-automation-optimizer-pipeline-architecture.md) to reflect reality**. Do not silently absorb the divergence.
 5. If the phase introduces or materially changes operator-facing config and it makes sense to expose that change in visual mode, **update the frontend config editor in the same phase** and rebuild `custom_components/helman/frontend/dist/helman-config-editor.js` before the commit. Do not leave UI catch-up as an implicit later cleanup task.
 6. Mark the phase as **Done** in this file by checking its status box and appending a short note with the commit SHA once committed.
 7. Re-read the remainder of this document and adjust any later phases whose assumptions have changed (file paths, class names, config keys, invariants).
@@ -735,8 +735,8 @@ Tighten the rough edges discovered during the previous phases and make sure the 
 Modify:
 
 - Any file where rough edges were flagged in earlier phases.
-- `docs/features/optimizers/helman_automation_optimizer_pipeline_architecture.md` — sweep for any details that drifted.
-- `docs/features/optimizers/helman_automation_optimizer_pipeline_implementation_plan.md` (this file) — mark all phases done.
+- `docs/features/automation/optimizers/helman-automation-optimizer-pipeline-architecture.md` — sweep for any details that drifted.
+- `docs/features/automation/optimizers/helman-automation-optimizer-pipeline-implementation-plan.md` (this file) — mark all phases done.
 
 ### Design notes
 

@@ -10,16 +10,16 @@ After every increment:
 
 - run the validation that exists for the touched repo(s)
 - provide the user with the increment-specific manual testing checklist
-- update `implementation_progress.md`
+- update `implementation-progress.md`
 - stop and wait for user confirmation before starting the next increment
 
 ## References
 
 - **Feature proposal**: [`README.md`](./README.md)
-- **Implementation progress**: [`implementation_progress.md`](./implementation_progress.md)
+- **Implementation progress**: [`implementation-progress.md`](./implementation-progress.md)
 - **Backend repo root**: `/home/ondra/dev/hass/hass-helman`
 - **Backend code**: `/home/ondra/dev/hass/hass-helman/custom_components/helman/`
-- **Backend docs**: `/home/ondra/dev/hass/hass-helman/docs/features/battery_capacity_forecast/`
+- **Backend docs**: `/home/ondra/dev/hass/hass-helman/docs/features/forecast/battery-capacity-forecast/`
 - **Frontend repo root**: `/home/ondra/dev/hass/hass-helman-card`
 - **Frontend code**: `/home/ondra/dev/hass/hass-helman-card/src/`
 - **Frontend battery detail area**: `/home/ondra/dev/hass/hass-helman-card/src/helman-simple/node-detail/`
@@ -570,8 +570,8 @@ Finish the battery detail experience with hourly detail rendering and close out 
 
 ### Docs paths
 
-- `/home/ondra/dev/hass/hass-helman/docs/features/battery_capacity_forecast/README.md`
-- `/home/ondra/dev/hass/hass-helman/docs/features/battery_capacity_forecast/implementation_progress.md`
+- `/home/ondra/dev/hass/hass-helman/docs/features/forecast/battery-capacity-forecast/README.md`
+- `/home/ondra/dev/hass/hass-helman/docs/features/forecast/battery-capacity-forecast/implementation-progress.md`
 
 ### Scope
 
@@ -622,7 +622,7 @@ console.table(dayRows);
   - partial coverage is clearly explained
 - Docs:
   - README is updated to current-state behavior
-  - `implementation_progress.md` reflects the completed increments
+  - `implementation-progress.md` reflects the completed increments
 
 ### Exit criteria
 

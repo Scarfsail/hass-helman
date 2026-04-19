@@ -266,8 +266,8 @@ Critical test cases:
 
 Files likely affected:
 
-- `docs/features/optimizers/helman_automation_optimizer_pipeline_architecture.md`
-- `docs/features/battery_capacity_forecast/schedule_aware_battery_forecast_fe_contract.md` or a grid-forecast contract note
+- `docs/features/automation/optimizers/helman-automation-optimizer-pipeline-architecture.md`
+- `docs/features/forecast/battery-capacity-forecast/schedule-aware-battery-forecast-fe-contract.md` or a grid-forecast contract note
 
 ## Naming decision
 

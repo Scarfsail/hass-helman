@@ -2,7 +2,7 @@
 
 ## References
 
-- **Implementation plan**: [`implementation_plan.md`](./implementation_plan.md) in this folder
+- **Implementation plan**: [`implementation-plan.md`](./implementation-plan.md) in this folder
 - **Backend repo**: `/home/ondra/dev/hass/hass-helman/custom_components/helman/`
 - **Frontend repo**: `/home/ondra/dev/hass/hass-helman-card/src/`
 
@@ -223,16 +223,16 @@ Frontend:
 
 **Docs** — aligned the user-facing documentation with the shipped feature:
 - `README.md`: rewritten from proposal framing to a current-state feature reference
-- `implementation_plan.md`: Increment 6 scope updated to reflect docs/progress closeout only
+- `implementation-plan.md`: Increment 6 scope updated to reflect docs/progress closeout only
 - `hass-helman-card/README.md`: documented `power_devices.house.forecast`, data requirements, example config, and troubleshooting notes
-- `implementation_progress.md`: marked Increment 6 complete
+- `implementation-progress.md`: marked Increment 6 complete
 
 ### Files touched
 
 Backend/docs:
-- `docs/features/house_consumption_forecast/README.md`
-- `docs/features/house_consumption_forecast/implementation_plan.md`
-- `docs/features/house_consumption_forecast/implementation_progress.md`
+- `docs/features/forecast/house-consumption-forecast/README.md`
+- `docs/features/forecast/house-consumption-forecast/implementation-plan.md`
+- `docs/features/forecast/house-consumption-forecast/implementation-progress.md`
 
 Frontend/docs:
 - `hass-helman-card/README.md`
@@ -263,7 +263,7 @@ Frontend/docs:
 
 **Docs** — updated the current-state docs to explain the new algorithm:
 - `README.md`: default window `56`, winsorized center, equal-weight behavior
-- `history_behavior_explained.md`: rewritten around the new model with updated examples
+- `history-behavior-explained.md`: rewritten around the new model with updated examples
 
 ### Files touched
 
@@ -275,10 +275,10 @@ Backend:
 - `custom_components/helman/coordinator.py`
 
 Docs:
-- `docs/features/house_consumption_forecast/README.md`
-- `docs/features/house_consumption_forecast/history_behavior_explained.md`
-- `docs/features/house_consumption_forecast/implementation_progress.md`
-- `docs/features/house_consumption_forecast/implementation_plan.md`
+- `docs/features/forecast/house-consumption-forecast/README.md`
+- `docs/features/forecast/house-consumption-forecast/history-behavior-explained.md`
+- `docs/features/forecast/house-consumption-forecast/implementation-progress.md`
+- `docs/features/forecast/house-consumption-forecast/implementation-plan.md`
 
 ### Design decisions
 

@@ -328,9 +328,9 @@ The `resolution` and `horizonHours` fields should reflect the **requested** gran
 ## Documentation Impact
 
 Files to update:
-- `docs/features/house_consumption_forecast/README.md`
-- `docs/features/house_consumption_forecast/history_behavior_explained.md`
-- `docs/features/battery_capacity_forecast/README.md`
+- `docs/features/forecast/house-consumption-forecast/README.md`
+- `docs/features/forecast/house-consumption-forecast/history-behavior-explained.md`
+- `docs/features/forecast/battery-capacity-forecast/README.md`
 - Websocket API docs (new params `granularity` and `forecast_days`, response format changes, `currentHour` -> `currentSlot`)
 
 Note: battery docs currently mention a short-lived cache that isn't implemented. This gets resolved as part of this feature.
