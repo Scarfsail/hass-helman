@@ -488,8 +488,40 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             async_train=AsyncMock(
                 return_value={
                     "status": "training_failed",
+                    "lastOutcome": "training_failed",
                     "errorReason": "boom",
                     "trainedAt": "2026-04-24T03:00:00+02:00",
+                }
+            )
+        )
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        with self.assertLogs(
+            "custom_components.helman.solar_bias_correction.websocket",
+            level="ERROR",
+        ) as captured:
+            await self.solar_bias_ws.ws_train_solar_bias_now(
+                FakeHass(coordinator),
+                connection,
+                {"id": 1, "type": "helman/solar_bias/train_now"},
+            )
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "internal_error", "Unexpected solar bias training failure")],
+        )
+        self.assertIn("Unexpected solar bias training failure", captured.output[0])
+
+    async def test_train_now_returns_internal_error_for_failed_stale_retrain_payload(self) -> None:
+        service = SimpleNamespace(
+            async_train=AsyncMock(
+                return_value={
+                    "status": "config_changed_pending_retrain",
+                    "lastOutcome": "training_failed",
+                    "errorReason": "boom",
+                    "trainedAt": "2026-04-20T03:00:00+02:00",
                 }
             )
         )

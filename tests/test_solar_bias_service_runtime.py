@@ -411,6 +411,102 @@ def test_failed_retrain_keeps_original_trained_at_for_preserved_profile():
     asyncio.run(_inner())
 
 
+def test_failed_stale_retrain_preserves_previous_fingerprint_after_reload():
+    class _SavingStore:
+        profile = None
+
+        def __init__(self) -> None:
+            self.saved_payloads = []
+
+        async def async_save(self, payload):
+            self.saved_payloads.append(payload)
+            self.profile = payload
+
+    async def _inner():
+        store = _SavingStore()
+        base_cfg = _make_cfg()
+        service = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            store,
+            base_cfg,
+        )
+        service._profile = models.SolarBiasProfile(
+            factors={"12:00": 2.0},
+            omitted_slots=[],
+        )
+        service._metadata = models.SolarBiasMetadata(
+            trained_at="2026-04-20T03:00:00+02:00",
+            training_config_fingerprint=service_mod.compute_fingerprint(base_cfg),
+            usable_days=12,
+            dropped_days=[],
+            factor_min=2.0,
+            factor_max=2.0,
+            factor_median=2.0,
+            omitted_slot_count=0,
+            last_outcome="profile_trained",
+            error_reason=None,
+        )
+
+        changed_cfg = models.BiasConfig(
+            enabled=True,
+            min_history_days=3,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=[],
+            total_energy_entity_id=None,
+        )
+        service.update_config(changed_cfg)
+
+        old_now = service_mod.dt_util.now
+        old_samples = service_mod.load_trainer_samples
+        old_actuals = service_mod.load_actuals_window
+        try:
+            from datetime import datetime
+
+            now = datetime.fromisoformat("2026-04-25T04:00:00+02:00")
+            service_mod.dt_util.now = lambda: now
+
+            async def _samples(*args, **kwargs):
+                return ["sample"]
+
+            async def _actuals(*args, **kwargs):
+                raise RuntimeError("boom")
+
+            service_mod.load_trainer_samples = _samples
+            service_mod.load_actuals_window = _actuals
+
+            payload = await service.async_train()
+        finally:
+            service_mod.dt_util.now = old_now
+            service_mod.load_trainer_samples = old_samples
+            service_mod.load_actuals_window = old_actuals
+
+        reloaded = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            store,
+            changed_cfg,
+        )
+        await reloaded.async_setup()
+
+        assert payload["status"] == "config_changed_pending_retrain"
+        assert payload["effectiveVariant"] == "raw"
+        assert payload["lastOutcome"] == "training_failed"
+        assert store.saved_payloads[-1]["metadata"]["training_config_fingerprint"] == service_mod.compute_fingerprint(base_cfg)
+        assert reloaded.get_profile_payload()["factors"] == {"12:00": 2.0}
+
+        service_mod.dt_util.now = lambda: now
+        try:
+            reloaded_status = reloaded.get_status_payload()
+        finally:
+            service_mod.dt_util.now = old_now
+        assert reloaded_status["status"] == "config_changed_pending_retrain"
+        assert reloaded_status["effectiveVariant"] == "raw"
+        assert reloaded_status["isStale"] is True
+
+    asyncio.run(_inner())
+
+
 def test_scheduler_registers_sync_callback_that_schedules_training():
     captured: dict[str, object] = {}
 

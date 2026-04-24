@@ -66,7 +66,7 @@ async def ws_train_solar_bias_now(
         )
         return
 
-    if payload.get("status") == "training_failed" and payload.get("errorReason"):
+    if payload.get("lastOutcome") == "training_failed" and payload.get("errorReason"):
         _LOGGER.error(
             "Unexpected solar bias training failure: %s",
             payload["errorReason"],

@@ -133,6 +133,11 @@ class SolarBiasCorrectionService:
                     if preserve_profile
                     else dt_util.now().isoformat()
                 ),
+                training_config_fingerprint=(
+                    previous_metadata.training_config_fingerprint
+                    if preserve_profile
+                    else self._current_fingerprint
+                ),
             )
             self._profile = previous_profile if preserve_profile else None
             self._metadata = failure_metadata
@@ -255,11 +260,12 @@ class SolarBiasCorrectionService:
         previous_metadata: SolarBiasMetadata,
         error_reason: str,
         trained_at: str,
+        training_config_fingerprint: str,
     ) -> SolarBiasMetadata:
         previous = previous_metadata
         return SolarBiasMetadata(
             trained_at=trained_at,
-            training_config_fingerprint=self._current_fingerprint,
+            training_config_fingerprint=training_config_fingerprint,
             usable_days=previous.usable_days,
             dropped_days=deepcopy(previous.dropped_days),
             factor_min=previous.factor_min,
