@@ -1216,10 +1216,13 @@ const ci = {
     parentId: x,
     tabId: "bias_correction",
     labelKey: "editor.tabs.bias_correction",
-    adapter: w(["bias_correction"], {
-      emptyValue: z,
-      rootKind: "object"
-    })
+    adapter: w(
+      ["power_devices", "solar", "forecast", "bias_correction"],
+      {
+        emptyValue: z,
+        rootKind: "object"
+      }
+    )
   },
   [h.general.core_labels_and_history]: {
     id: h.general.core_labels_and_history,
