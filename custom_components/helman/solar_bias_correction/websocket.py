@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -61,6 +60,16 @@ async def ws_train_solar_bias_now(
         )
         return
 
+    if payload.get("status") == "training_failed" and payload.get("errorReason"):
+        _LOGGER.error(
+            "Unexpected solar bias training failure: %s",
+            payload["errorReason"],
+        )
+        connection.send_error(
+            msg["id"], "internal_error", "Unexpected solar bias training failure"
+        )
+        return
+
     connection.send_result(msg["id"], payload)
 
 
@@ -79,9 +88,7 @@ def ws_get_solar_bias_profile(
     if service is None:
         return
 
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    store = getattr(service, "_store", None) or getattr(coordinator, "_solar_bias_store", None)
-    profile_payload = _build_profile_payload(getattr(store, "profile", None))
+    profile_payload = service.get_profile_payload()
     if profile_payload is None:
         connection.send_error(msg["id"], "no_profile", "No solar bias profile available")
         return
@@ -115,49 +122,3 @@ def _get_training_error_types():
     from .service import BiasNotConfiguredError, TrainingInProgressError
 
     return TrainingInProgressError, BiasNotConfiguredError
-
-
-def _build_profile_payload(stored_payload: Any) -> dict[str, Any] | None:
-    if not isinstance(stored_payload, dict):
-        return None
-
-    raw_metadata = stored_payload.get("metadata")
-    if not isinstance(raw_metadata, dict):
-        return None
-
-    trained_at = raw_metadata.get("trained_at")
-    if not isinstance(trained_at, str) or not trained_at:
-        return None
-
-    raw_profile = stored_payload.get("profile")
-    if not isinstance(raw_profile, dict):
-        return None
-
-    raw_factors = raw_profile.get("factors", raw_profile)
-    if not isinstance(raw_factors, dict):
-        return None
-
-    factors: dict[str, float] = {}
-    for slot, value in raw_factors.items():
-        if not isinstance(slot, str):
-            continue
-        try:
-            factors[slot] = float(value)
-        except (TypeError, ValueError):
-            continue
-
-    raw_omitted_slots = raw_profile.get(
-        "omitted_slots",
-        raw_profile.get("omittedSlots", []),
-    )
-    omitted_slots = (
-        [slot for slot in raw_omitted_slots if isinstance(slot, str)]
-        if isinstance(raw_omitted_slots, list)
-        else []
-    )
-
-    return {
-        "trainedAt": trained_at,
-        "factors": factors,
-        "omittedSlots": omitted_slots,
-    }

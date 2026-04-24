@@ -362,6 +362,37 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results, [(1, payload)])
         self.assertEqual(connection.errors, [])
 
+    async def test_train_now_returns_not_loaded_when_missing(self) -> None:
+        cases = (
+            (
+                None,
+                [(1, "not_loaded", "Helman coordinator not available")],
+            ),
+            (
+                SimpleNamespace(_solar_bias_service=None),
+                [
+                    (
+                        1,
+                        "not_loaded",
+                        "Helman solar bias correction service not available",
+                    )
+                ],
+            ),
+        )
+
+        for coordinator, expected_error in cases:
+            with self.subTest(coordinator=coordinator):
+                connection = FakeConnection()
+
+                await self.solar_bias_ws.ws_train_solar_bias_now(
+                    FakeHass(coordinator),
+                    connection,
+                    {"id": 1, "type": "helman/solar_bias/train_now"},
+                )
+
+                self.assertEqual(connection.results, [])
+                self.assertEqual(connection.errors, expected_error)
+
     async def test_train_now_returns_training_in_progress(self) -> None:
         training_in_progress_error, _ = self.solar_bias_ws._get_training_error_types()
         service = SimpleNamespace(
@@ -417,7 +448,15 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_train_now_returns_internal_error_and_logs(self) -> None:
-        service = SimpleNamespace(async_train=AsyncMock(side_effect=RuntimeError("boom")))
+        service = SimpleNamespace(
+            async_train=AsyncMock(
+                return_value={
+                    "status": "training_failed",
+                    "errorReason": "boom",
+                    "trainedAt": "2026-04-24T03:00:00+02:00",
+                }
+            )
+        )
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
@@ -439,20 +478,16 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Unexpected solar bias training failure", captured.output[0])
 
     def test_profile_returns_persisted_profile_shape(self) -> None:
-        store = SimpleNamespace(
-            profile={
-                "version": 1,
-                "profile": {
+        service = SimpleNamespace(
+            get_profile_payload=Mock(
+                return_value={
+                    "trainedAt": "2026-04-24T03:00:00+02:00",
                     "factors": {"08:00": 1.1, "08:30": 0.9},
-                    "omitted_slots": ["07:30", "09:00"],
-                },
-                "metadata": {
-                    "trained_at": "2026-04-24T03:00:00+02:00",
-                },
-            }
+                    "omittedSlots": ["07:30", "09:00"],
+                }
+            )
         )
-        service = SimpleNamespace(_store=store)
-        coordinator = SimpleNamespace(_solar_bias_service=service, _solar_bias_store=store)
+        coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
         self.solar_bias_ws.ws_get_solar_bias_profile(
@@ -477,9 +512,8 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.errors, [])
 
     def test_profile_returns_no_profile_before_training(self) -> None:
-        store = SimpleNamespace(profile=None)
-        service = SimpleNamespace(_store=store)
-        coordinator = SimpleNamespace(_solar_bias_service=service, _solar_bias_store=store)
+        service = SimpleNamespace(get_profile_payload=Mock(return_value=None))
+        coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
         self.solar_bias_ws.ws_get_solar_bias_profile(
@@ -490,6 +524,37 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(connection.results, [])
         self.assertEqual(connection.errors, [(1, "no_profile", "No solar bias profile available")])
+
+    def test_profile_returns_not_loaded_when_missing(self) -> None:
+        cases = (
+            (
+                None,
+                [(1, "not_loaded", "Helman coordinator not available")],
+            ),
+            (
+                SimpleNamespace(_solar_bias_service=None),
+                [
+                    (
+                        1,
+                        "not_loaded",
+                        "Helman solar bias correction service not available",
+                    )
+                ],
+            ),
+        )
+
+        for coordinator, expected_error in cases:
+            with self.subTest(coordinator=coordinator):
+                connection = FakeConnection()
+
+                self.solar_bias_ws.ws_get_solar_bias_profile(
+                    FakeHass(coordinator),
+                    connection,
+                    {"id": 1, "type": "helman/solar_bias/profile"},
+                )
+
+                self.assertEqual(connection.results, [])
+                self.assertEqual(connection.errors, expected_error)
 
     def test_registration_wiring_includes_solar_bias_handlers(self) -> None:
         registered: list[object] = []

@@ -180,6 +180,16 @@ class SolarBiasCorrectionService:
             "errorReason": self._metadata.error_reason,
         }
 
+    def get_profile_payload(self) -> dict[str, Any] | None:
+        if self._profile is None:
+            return None
+
+        return {
+            "trainedAt": self._trained_at,
+            "factors": deepcopy(self._profile.factors),
+            "omittedSlots": list(self._profile.omitted_slots),
+        }
+
     @property
     def _current_fingerprint(self) -> str:
         return compute_fingerprint(self._cfg)

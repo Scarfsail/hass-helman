@@ -26,6 +26,7 @@ if "homeassistant" not in sys.modules:
 
 core_mod = types.ModuleType("homeassistant.core")
 core_mod.HomeAssistant = type("HomeAssistant", (), {})
+core_mod.callback = lambda func: func
 sys.modules["homeassistant.core"] = core_mod
 
 util_mod = types.ModuleType("homeassistant.util")
@@ -57,6 +58,7 @@ sys.modules[forecast_history_mod.__name__] = forecast_history_mod
 
 
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
+sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
 service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
 scheduler_mod = importlib.import_module("custom_components.helman.solar_bias_correction.scheduler")
 
@@ -138,6 +140,58 @@ def test_training_failed_without_profile_falls_back_to_raw():
     assert result.status == "training_failed"
     assert result.effective_variant == "raw"
     assert result.adjusted_points[0]["value"] == 10.0
+
+
+def test_get_profile_payload_returns_none_without_real_profile():
+    service = service_mod.SolarBiasCorrectionService(
+        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _DummyStore(),
+        _make_cfg(),
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-24T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=0,
+        dropped_days=[],
+        factor_min=None,
+        factor_max=None,
+        factor_median=None,
+        omitted_slot_count=0,
+        last_outcome="training_failed",
+        error_reason="boom",
+    )
+
+    assert service.get_profile_payload() is None
+
+
+def test_get_profile_payload_returns_runtime_profile():
+    service = service_mod.SolarBiasCorrectionService(
+        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _DummyStore(),
+        _make_cfg(),
+    )
+    service._profile = models.SolarBiasProfile(
+        factors={"12:00": 2.0},
+        omitted_slots=["11:30"],
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-24T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=2.0,
+        factor_max=2.0,
+        factor_median=2.0,
+        omitted_slot_count=1,
+        last_outcome="profile_trained",
+        error_reason=None,
+    )
+
+    assert service.get_profile_payload() == {
+        "trainedAt": "2026-04-24T03:00:00+02:00",
+        "factors": {"12:00": 2.0},
+        "omittedSlots": ["11:30"],
+    }
 
 
 def test_scheduler_registers_sync_callback_that_schedules_training():
