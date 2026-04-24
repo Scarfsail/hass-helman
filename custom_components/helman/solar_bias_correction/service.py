@@ -87,6 +87,9 @@ class SolarBiasCorrectionService:
         if not self._cfg.enabled:
             raise BiasNotConfiguredError("Solar bias correction is disabled")
 
+        previous_profile = self._profile
+        previous_metadata = self._metadata
+        previous_is_stale = self._is_stale
         self._training_in_progress = True
         await self._training_lock.acquire()
         try:
@@ -98,15 +101,24 @@ class SolarBiasCorrectionService:
                 days=_TRAINING_LOOKBACK_DAYS,
             )
             outcome = train(samples, actuals, self._cfg, now=now)
+            payload = {
+                "version": 1,
+                "profile": asdict(outcome.profile),
+                "metadata": asdict(outcome.metadata),
+            }
+            await self._store.async_save(payload)
             self._profile = outcome.profile
             self._metadata = outcome.metadata
             self._is_stale = False
-            await self._store.async_save(self._serialize_state())
         except Exception as err:
-            self._metadata = self._build_failure_metadata(
+            failure_metadata = self._build_failure_metadata(
+                previous_metadata=previous_metadata,
                 error_reason=str(err) or err.__class__.__name__,
                 trained_at=dt_util.now().isoformat(),
             )
+            self._profile = previous_profile
+            self._metadata = failure_metadata
+            self._is_stale = previous_is_stale
             await self._store.async_save(self._serialize_state())
         finally:
             self._training_lock.release()
@@ -212,10 +224,11 @@ class SolarBiasCorrectionService:
     def _build_failure_metadata(
         self,
         *,
+        previous_metadata: SolarBiasMetadata,
         error_reason: str,
         trained_at: str,
     ) -> SolarBiasMetadata:
-        previous = self._metadata
+        previous = previous_metadata
         return SolarBiasMetadata(
             trained_at=trained_at,
             training_config_fingerprint=self._current_fingerprint,
