@@ -204,7 +204,7 @@ class SolarBiasCorrectionService:
         }
 
     def get_profile_payload(self) -> dict[str, Any] | None:
-        if self._profile is None:
+        if not self._has_usable_profile():
             return None
 
         return {
@@ -288,6 +288,13 @@ class SolarBiasCorrectionService:
             return False
 
         return metadata.usable_days >= self._cfg.min_history_days
+
+    def _has_usable_profile(self) -> bool:
+        if self._profile is None:
+            return False
+        if self._metadata.last_outcome == "profile_trained":
+            return True
+        return self._should_preserve_profile(self._profile, self._metadata)
 
     def _next_scheduled_training_at(self) -> str | None:
         if not self._cfg.enabled:

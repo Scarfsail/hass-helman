@@ -633,6 +633,23 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results, [])
         self.assertEqual(connection.errors, [(1, "no_profile", "No solar bias profile available")])
 
+    def test_profile_returns_no_profile_for_insufficient_history_state(self) -> None:
+        service = SimpleNamespace(get_profile_payload=Mock(return_value=None))
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        self.solar_bias_ws.ws_get_solar_bias_profile(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/solar_bias/profile"},
+        )
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "no_profile", "No solar bias profile available")],
+        )
+
     def test_profile_returns_not_loaded_when_missing(self) -> None:
         cases = (
             (

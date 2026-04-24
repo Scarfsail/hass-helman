@@ -164,6 +164,32 @@ def test_get_profile_payload_returns_none_without_real_profile():
     assert service.get_profile_payload() is None
 
 
+def test_get_profile_payload_returns_none_for_insufficient_history_placeholder():
+    service = service_mod.SolarBiasCorrectionService(
+        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _DummyStore(),
+        _make_cfg(),
+    )
+    service._profile = models.SolarBiasProfile(
+        factors={},
+        omitted_slots=["00:00", "00:15"],
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-24T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=0,
+        dropped_days=[],
+        factor_min=None,
+        factor_max=None,
+        factor_median=None,
+        omitted_slot_count=96,
+        last_outcome="insufficient_history",
+        error_reason=None,
+    )
+
+    assert service.get_profile_payload() is None
+
+
 def test_get_profile_payload_returns_runtime_profile():
     service = service_mod.SolarBiasCorrectionService(
         SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
@@ -192,6 +218,41 @@ def test_get_profile_payload_returns_runtime_profile():
         "factors": {"12:00": 2.0},
         "omittedSlots": ["11:30"],
     }
+
+
+def test_reloaded_insufficient_history_payload_keeps_profile_unavailable():
+    async def _inner():
+        store = _DummyStore()
+        store.profile = {
+            "version": 1,
+            "profile": {
+                "factors": {},
+                "omitted_slots": ["00:00", "00:15"],
+            },
+            "metadata": {
+                "trained_at": "2026-04-24T03:00:00+02:00",
+                "training_config_fingerprint": service_mod.compute_fingerprint(_make_cfg()),
+                "usable_days": 0,
+                "dropped_days": [],
+                "factor_min": None,
+                "factor_max": None,
+                "factor_median": None,
+                "omitted_slot_count": 96,
+                "last_outcome": "insufficient_history",
+                "error_reason": None,
+            },
+        }
+
+        service = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            store,
+            _make_cfg(),
+        )
+        await service.async_setup()
+
+        assert service.get_profile_payload() is None
+
+    asyncio.run(_inner())
 
 
 def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
