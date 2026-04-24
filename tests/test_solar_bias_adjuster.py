@@ -7,54 +7,37 @@ import pytest
 
 import sys
 import types
+import os
 
-# Create a minimal stub for homeassistant.util.dt.as_local for tests
+# Stub homeassistant.util.dt.as_local so tests are deterministic without HA
 if "homeassistant" not in sys.modules:
     hass_mod = types.ModuleType("homeassistant")
-    util_mod = types.ModuleType("homeassistant.util")
+    util_pkg = types.ModuleType("homeassistant.util")
     dt_mod = types.ModuleType("homeassistant.util.dt")
     dt_mod.as_local = lambda dt_obj: dt_obj
     sys.modules["homeassistant"] = hass_mod
-    sys.modules["homeassistant.util"] = util_mod
+    sys.modules["homeassistant.util"] = util_pkg
     sys.modules["homeassistant.util.dt"] = dt_mod
 
-import homeassistant.util.dt as hass_dt
+# Provide package stubs so normal imports below don't execute integration __init__
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if "custom_components" not in sys.modules:
+    cc = types.ModuleType("custom_components")
+    cc.__path__ = [os.path.join(repo_root, "custom_components")]
+    sys.modules["custom_components"] = cc
+if "custom_components.helman" not in sys.modules:
+    helman = types.ModuleType("custom_components.helman")
+    helman.__path__ = [os.path.join(repo_root, "custom_components", "helman")]
+    sys.modules["custom_components.helman"] = helman
 
-import os
-from dataclasses import dataclass
-
-# Minimal stand-in for the real SolarBiasProfile to keep tests focused and
-# avoid importing the whole Home Assistant environment during unit tests.
-@dataclass
-class SolarBiasProfile:
-    factors: dict[str, float]
-    omitted_slots: list[str]
-
-# adjust will be implemented in adjuster.py; import it at runtime to keep collection fast
-import importlib.util
-
-def _get_adjust():
-    path = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "custom_components",
-            "helman",
-            "solar_bias_correction",
-            "adjuster.py",
-        )
-    )
-    spec = importlib.util.spec_from_file_location("helman.solar_bias_correction.adjuster", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.adjust
+# Now import the real modules under test
+from custom_components.helman.solar_bias_correction.adjuster import adjust
+from custom_components.helman.solar_bias_correction.models import SolarBiasProfile
 
 
 def test_applies_factor_to_matching_slot():
     profile = SolarBiasProfile(factors={"10:00": 2.0}, omitted_slots=[])
     raw = [{"timestamp": "2026-04-24T10:00:00+00:00", "value": 100.0}]
-
-    adjust = _get_adjust()
 
     out = adjust(raw, profile)
 
@@ -66,8 +49,6 @@ def test_missing_slot_defaults_to_factor_1():
     profile = SolarBiasProfile(factors={}, omitted_slots=[])
     raw = [{"timestamp": "2026-04-24T10:00:00+00:00", "value": 100.0}]
 
-    adjust = _get_adjust()
-
     out = adjust(raw, profile)
 
     assert out[0]["value"] == 100.0
@@ -76,8 +57,6 @@ def test_missing_slot_defaults_to_factor_1():
 def test_zero_raw_stays_zero():
     profile = SolarBiasProfile(factors={"10:00": 2.0}, omitted_slots=[])
     raw = [{"timestamp": "2026-04-24T10:00:00+00:00", "value": 0.0}]
-
-    adjust = _get_adjust()
 
     out = adjust(raw, profile)
 
@@ -88,8 +67,6 @@ def test_non_negativity_clamp():
     profile = SolarBiasProfile(factors={"10:00": -1.0}, omitted_slots=[])
     raw = [{"timestamp": "2026-04-24T10:00:00+00:00", "value": 100.0}]
 
-    adjust = _get_adjust()
-
     out = adjust(raw, profile)
 
     assert out[0]["value"] == 0.0
@@ -98,8 +75,6 @@ def test_non_negativity_clamp():
 def test_preserves_timestamp():
     profile = SolarBiasProfile(factors={"10:00": 1.5}, omitted_slots=[])
     raw = [{"timestamp": "2026-04-24T10:00:00+00:00", "value": 10.0}]
-
-    adjust = _get_adjust()
 
     out = adjust(raw, profile)
 
@@ -110,8 +85,6 @@ def test_raw_series_is_not_mutated():
     profile = SolarBiasProfile(factors={"10:00": 2.0}, omitted_slots=[])
     raw = [{"timestamp": "2026-04-24T10:00:00+00:00", "value": 5.0}]
     raw_copy = deepcopy(raw)
-
-    adjust = _get_adjust()
 
     out = adjust(raw, profile)
 
@@ -126,8 +99,29 @@ def test_empty_raw_returns_empty():
     profile = SolarBiasProfile(factors={"10:00": 2.0}, omitted_slots=[])
     raw: list[dict[str, Any]] = []
 
-    adjust = _get_adjust()
-
     out = adjust(raw, profile)
 
     assert out == []
+
+
+def test_unparseable_timestamp_preserves_point():
+    profile = SolarBiasProfile(factors={"10:00": 2.0}, omitted_slots=[])
+    raw = [{"timestamp": "not-a-timestamp", "value": 10.0}]
+
+    out = adjust(raw, profile)
+
+    # point should be preserved (copied but equal)
+    assert out == raw
+    assert out is not raw
+    assert out[0] is not raw[0]
+
+
+def test_missing_value_preserves_point():
+    profile = SolarBiasProfile(factors={"10:00": 2.0}, omitted_slots=[])
+    raw = [{"timestamp": "2026-04-24T10:00:00+00:00"}]
+
+    out = adjust(raw, profile)
+
+    assert out == raw
+    assert out is not raw
+    assert out[0] is not raw[0]
