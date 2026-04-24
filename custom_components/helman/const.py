@@ -52,3 +52,10 @@ PANEL_TITLE = f"{NAME} Config"
 PANEL_ICON = "mdi:home-lightning-bolt-outline"
 PANEL_NAME = "helman-config-editor-panel"
 PANEL_FRONTEND_URL_PATH = f"{DOMAIN}-config"
+
+# Solar bias correction defaults
+SOLAR_BIAS_DEFAULT_ENABLED = True
+SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS = 10
+SOLAR_BIAS_DEFAULT_TRAINING_TIME = "03:00"
+SOLAR_BIAS_DEFAULT_CLAMP_MIN = 0.3
+SOLAR_BIAS_DEFAULT_CLAMP_MAX = 2.0
