@@ -286,7 +286,7 @@ R.elementStyles = [], R.shadowRootOptions = { mode: "open" }, R[q("elementProper
  */
 const Z = globalThis, Ee = (o) => o, ee = Z.trustedTypes, Se = ee ? ee.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ot = "$lit$", V = `lit$${Math.random().toFixed(9).slice(2)}$`, rt = "?" + V, zt = `<${rt}>`, H = document, G = () => H.createComment(""), J = (o) => o === null || typeof o != "object" && typeof o != "function", fe = Array.isArray, At = (o) => fe(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", oe = `[ 	
 \f\r]`, U = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, je = /-->/g, Ve = />/g, C = RegExp(`>|${oe}(?:([^\\s"'>=/]+)(${oe}*=${oe}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Me = /'/g, Ce = /"/g, st = /^(?:script|style|textarea|title)$/i, Et = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = Et(1), F = Symbol.for("lit-noChange"), _ = Symbol.for("lit-nothing"), Le = /* @__PURE__ */ new WeakMap(), P = H.createTreeWalker(H, 129);
+\f\r"'\`<>=]|("|')|))|$)`, "g"), Me = /'/g, Ce = /"/g, st = /^(?:script|style|textarea|title)$/i, Et = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = Et(1), N = Symbol.for("lit-noChange"), _ = Symbol.for("lit-nothing"), Le = /* @__PURE__ */ new WeakMap(), P = H.createTreeWalker(H, 129);
 function nt(o, e) {
   if (!fe(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
   return Se !== void 0 ? Se.createHTML(e) : e;
@@ -340,12 +340,12 @@ class Q {
     return i.innerHTML = e, i;
   }
 }
-function N(o, e, t = o, i) {
+function F(o, e, t = o, i) {
   var s, l;
-  if (e === F) return e;
+  if (e === N) return e;
   let a = i !== void 0 ? (s = t._$Co) == null ? void 0 : s[i] : t._$Cl;
   const r = J(e) ? void 0 : e._$litDirective$;
-  return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = N(o, a._$AS(o, e.values), a, i)), e;
+  return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = F(o, a._$AS(o, e.values), a, i)), e;
 }
 class jt {
   constructor(e, t) {
@@ -395,7 +395,7 @@ class D {
     return this._$AB;
   }
   _$AI(e, t = this) {
-    e = N(this, e, t), J(e) ? e === _ || e == null || e === "" ? (this._$AH !== _ && this._$AR(), this._$AH = _) : e !== this._$AH && e !== F && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : At(e) ? this.k(e) : this._(e);
+    e = F(this, e, t), J(e) ? e === _ || e == null || e === "" ? (this._$AH !== _ && this._$AR(), this._$AH = _) : e !== this._$AH && e !== N && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : At(e) ? this.k(e) : this._(e);
   }
   O(e) {
     return this._$AA.parentNode.insertBefore(e, this._$AB);
@@ -451,11 +451,11 @@ class ie {
   _$AI(e, t = this, i, a) {
     const r = this.strings;
     let s = !1;
-    if (r === void 0) e = N(this, e, t, 0), s = !J(e) || e !== this._$AH && e !== F, s && (this._$AH = e);
+    if (r === void 0) e = F(this, e, t, 0), s = !J(e) || e !== this._$AH && e !== N, s && (this._$AH = e);
     else {
       const l = e;
       let d, c;
-      for (e = r[0], d = 0; d < r.length - 1; d++) c = N(this, l[i + d], t, d), c === F && (c = this._$AH[d]), s || (s = !J(c) || c !== this._$AH[d]), c === _ ? e = _ : e !== _ && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
+      for (e = r[0], d = 0; d < r.length - 1; d++) c = F(this, l[i + d], t, d), c === N && (c = this._$AH[d]), s || (s = !J(c) || c !== this._$AH[d]), c === _ ? e = _ : e !== _ && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
     }
     s && !a && this.j(e);
   }
@@ -484,7 +484,7 @@ class Ct extends ie {
     super(e, t, i, a, r), this.type = 5;
   }
   _$AI(e, t = this) {
-    if ((e = N(this, e, t, 0) ?? _) === F) return;
+    if ((e = F(this, e, t, 0) ?? _) === N) return;
     const i = this._$AH, a = e === _ && i !== _ || e.capture !== i.capture || e.once !== i.once || e.passive !== i.passive, r = e !== _ && (i === _ || a);
     a && this.element.removeEventListener(this.name, this, i), r && this.element.addEventListener(this.name, this, e), this._$AH = e;
   }
@@ -501,7 +501,7 @@ class Lt {
     return this._$AM._$AU;
   }
   _$AI(e) {
-    N(this, e);
+    F(this, e);
   }
 }
 const Pt = { I: D }, re = Z.litHtmlPolyfillSupport;
@@ -543,7 +543,7 @@ let Y = class extends R {
     super.disconnectedCallback(), (e = this._$Do) == null || e.setConnected(!1);
   }
   render() {
-    return F;
+    return N;
   }
 };
 var et;
@@ -610,7 +610,7 @@ const { I: It } = Pt, Pe = (o) => o, Oe = (o, e) => (o == null ? void 0 : o._$li
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Ye = (o) => Tt(o) ? o._$litType$.h : o.strings, Ft = Ot(class extends Ht {
+const Ye = (o) => Tt(o) ? o._$litType$.h : o.strings, Nt = Ot(class extends Ht {
   constructor(o) {
     super(o), this.et = /* @__PURE__ */ new WeakMap();
   }
@@ -704,7 +704,7 @@ function E(o, e, t) {
   const i = f(o, e), r = [...Array.isArray(i) ? i : [], t];
   v(o, e, r);
 }
-function Nt(o, e, t) {
+function Ft(o, e, t) {
   const i = f(o, e);
   if (!Array.isArray(i) || t < 0 || t >= i.length)
     return;
@@ -818,7 +818,7 @@ function Zt(o, e) {
     }
   };
 }
-function Fe(o) {
+function Ne(o) {
   return {
     id: A(o, "export-price"),
     kind: "export_price",
@@ -829,7 +829,7 @@ function Fe(o) {
     }
   };
 }
-function Ne(o, e = "") {
+function Fe(o, e = "") {
   return {
     id: A(o, "surplus-appliance"),
     kind: "surplus_appliance",
@@ -2162,8 +2162,16 @@ const xi = async () => {
         return { text: e || "Unknown", class: "badge-info" };
     }
   }
+  _formatDate(e) {
+    if (!e) return "N/A";
+    try {
+      return new Date(e).toLocaleString();
+    } catch {
+      return e;
+    }
+  }
   render() {
-    var t, i, a, r, s;
+    var t;
     if (this._loading)
       return n`<div class="container"><p>Loading status…</p></div>`;
     if (!this._status)
@@ -2175,67 +2183,56 @@ const xi = async () => {
           <div class="section-title">Status</div>
           <div class="status-grid">
             <div class="status-row">
+              <span class="status-label">Enabled</span>
+              <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
+            </div>
+            <div class="status-row">
               <span class="status-label">Current Status</span>
               <span class="badge ${e.class}">${e.text}</span>
             </div>
-            ${this._status.status === "profile_trained" ? n`
+            ${this._status.trainedAt ? n`
                   <div class="status-row">
                     <span class="status-label">Trained At</span>
-                    <span class="status-value">${this._status.trained_at || "N/A"}</span>
+                    <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
                   </div>
-                  ${this._status.num_factors ? n`
-                        <div class="status-row">
-                          <span class="status-label">Factors</span>
-                          <span class="status-value">${this._status.num_factors}</span>
-                        </div>
-                      ` : ""}
-                  ${this._status.confidence != null ? n`
-                        <div class="status-row">
-                          <span class="status-label">Confidence</span>
-                          <span class="status-value">${(this._status.confidence * 100).toFixed(1)}%</span>
-                        </div>
-                      ` : ""}
                 ` : ""}
-            ${this._status.status === "training_failed" ? n`
+            ${this._status.nextScheduledTrainingAt ? n`
                   <div class="status-row">
-                    <span class="status-label">Failure Reason</span>
-                    <span class="status-value">${this._status.failure_reason || "Unknown"}</span>
+                    <span class="status-label">Next Training</span>
+                    <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
                   </div>
-                  ${this._status.last_attempt_at ? n`
-                        <div class="status-row">
-                          <span class="status-label">Failed At</span>
-                          <span class="status-value">${this._status.last_attempt_at}</span>
-                        </div>
-                      ` : ""}
                 ` : ""}
+            <div class="status-row">
+              <span class="status-label">Effective Variant</span>
+              <span class="status-value">${this._status.effectiveVariant}</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Data Available</span>
+              <span class="status-value">${this._status.usableDays} days</span>
+            </div>
             ${this._status.status === "insufficient_history" ? n`
-                  <div class="status-row">
-                    <span class="status-label">Data Available</span>
-                    <span class="status-value">${this._status.usable_days || 0} days</span>
-                  </div>
-                  <div class="status-row">
-                    <span class="status-label">Minimum Required</span>
-                    <span class="status-value">${this._status.min_history_required || "N/A"} days</span>
+                  <div class="info-box" style="margin-top: 8px;">
+                    Not enough historical data yet. Need at least 7 days of data for training.
                   </div>
                 ` : ""}
-            ${this._status.status === "config_changed_pending_retrain" ? n`
-                  <div class="status-row">
-                    <span class="status-label">Changes Detected</span>
-                    <span class="status-value">${((t = this._status.config_changes) == null ? void 0 : t.join(", ")) || "Configuration changed"}</span>
+            ${this._status.errorReason ? n`
+                  <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
+                    <span class="status-label">Error</span>
+                    <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
                   </div>
                 ` : ""}
           </div>
         </div>
 
-        ${this._profile ? n`
+        ${this._status.droppedDays && this._status.droppedDays.length > 0 ? n`
               <div class="section">
-                <div class="section-title">Profile Information</div>
-                <div class="profile-section">
-                  <ul class="profile-list">
-                    ${(i = this._profile.metadata) != null && i.trained_at ? n`<li><strong>Trained:</strong> ${this._profile.metadata.trained_at}</li>` : ""}
-                    ${(a = this._profile.metadata) != null && a.num_factors ? n`<li><strong>Factors:</strong> ${this._profile.metadata.num_factors}</li>` : ""}
-                    ${(r = this._profile.metadata) != null && r.fingerprint ? n`<li><strong>Fingerprint:</strong> ${this._profile.metadata.fingerprint}</li>` : ""}
-                  </ul>
+                <div class="section-title">Dropped Days</div>
+                <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
+                  ${this._status.droppedDays.map((i) => n`
+                    <div style="padding: 4px 0;">
+                      <strong>${i.date}:</strong> ${i.reason}
+                    </div>
+                  `)}
                 </div>
               </div>
             ` : ""}
@@ -2246,15 +2243,15 @@ const xi = async () => {
             <button
               class="primary"
               @click=${this._trainNow}
-              ?disabled=${this._trainInProgress || ((s = this._status) == null ? void 0 : s.status) === "not_configured"}
+              ?disabled=${this._trainInProgress || ((t = this._status) == null ? void 0 : t.enabled) === !1}
             >
               ${this._trainInProgress ? n`<span class="spinner"></span> Training…` : "Train Now"}
             </button>
             <button
-              @click=${this._loadProfile}
-              ?disabled=${!this._status || this._status.status !== "profile_trained"}
+              @click=${this._loadStatus}
+              ?disabled=${this._loading}
             >
-              View Profile
+              Refresh Status
             </button>
           </div>
         </div>
@@ -2543,14 +2540,14 @@ const zi = [
         if (!y(f(t, ["automation"]))) {
           v(t, ["automation"], {
             enabled: !0,
-            optimizers: [Fe(e)]
+            optimizers: [Ne(e)]
           });
           return;
         }
         E(
           t,
           ["automation", "optimizers"],
-          Fe(e)
+          Ne(e)
         );
       });
     }, this._handleAddSurplusApplianceOptimizer = () => {
@@ -2562,14 +2559,14 @@ const zi = [
         if (!y(f(t, ["automation"]))) {
           v(t, ["automation"], {
             enabled: !0,
-            optimizers: [Ne(e)]
+            optimizers: [Fe(e)]
           });
           return;
         }
         E(
           t,
           ["automation", "optimizers"],
-          Ne(e)
+          Fe(e)
         );
       });
     }, this._handleAddEvCharger = () => {
@@ -2724,7 +2721,7 @@ const zi = [
     })}
       </div>
 
-      ${Ft(this._renderActiveTab())}
+      ${Nt(this._renderActiveTab())}
     `;
   }
   _renderActiveTab() {
@@ -4966,7 +4963,7 @@ const zi = [
   }
   _removeListItem(e, t) {
     this._applyMutation((i) => {
-      Nt(i, e, t);
+      Ft(i, e, t);
     });
   }
   _removePath(e) {

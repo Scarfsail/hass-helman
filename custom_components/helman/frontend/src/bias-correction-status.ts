@@ -247,6 +247,15 @@ export class HelmanBiasCorrectionStatus extends LitElement {
     }
   }
 
+  private _formatDate(dateStr: string | null): string {
+    if (!dateStr) return "N/A";
+    try {
+      return new Date(dateStr).toLocaleString();
+    } catch {
+      return dateStr;
+    }
+  }
+
   render() {
     if (this._loading) {
       return html`<div class="container"><p>Loading status…</p></div>`;
@@ -264,88 +273,65 @@ export class HelmanBiasCorrectionStatus extends LitElement {
           <div class="section-title">Status</div>
           <div class="status-grid">
             <div class="status-row">
+              <span class="status-label">Enabled</span>
+              <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
+            </div>
+            <div class="status-row">
               <span class="status-label">Current Status</span>
               <span class="badge ${statusBadge.class}">${statusBadge.text}</span>
             </div>
-            ${this._status.status === "profile_trained"
+            ${this._status.trainedAt
               ? html`
                   <div class="status-row">
                     <span class="status-label">Trained At</span>
-                    <span class="status-value">${this._status.trained_at || "N/A"}</span>
+                    <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
                   </div>
-                  ${this._status.num_factors
-                    ? html`
-                        <div class="status-row">
-                          <span class="status-label">Factors</span>
-                          <span class="status-value">${this._status.num_factors}</span>
-                        </div>
-                      `
-                    : ""}
-                  ${this._status.confidence != null
-                    ? html`
-                        <div class="status-row">
-                          <span class="status-label">Confidence</span>
-                          <span class="status-value">${(this._status.confidence * 100).toFixed(1)}%</span>
-                        </div>
-                      `
-                    : ""}
                 `
               : ""}
-            ${this._status.status === "training_failed"
+            ${this._status.nextScheduledTrainingAt
               ? html`
                   <div class="status-row">
-                    <span class="status-label">Failure Reason</span>
-                    <span class="status-value">${this._status.failure_reason || "Unknown"}</span>
+                    <span class="status-label">Next Training</span>
+                    <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
                   </div>
-                  ${this._status.last_attempt_at
-                    ? html`
-                        <div class="status-row">
-                          <span class="status-label">Failed At</span>
-                          <span class="status-value">${this._status.last_attempt_at}</span>
-                        </div>
-                      `
-                    : ""}
                 `
               : ""}
+            <div class="status-row">
+              <span class="status-label">Effective Variant</span>
+              <span class="status-value">${this._status.effectiveVariant}</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Data Available</span>
+              <span class="status-value">${this._status.usableDays} days</span>
+            </div>
             ${this._status.status === "insufficient_history"
               ? html`
-                  <div class="status-row">
-                    <span class="status-label">Data Available</span>
-                    <span class="status-value">${this._status.usable_days || 0} days</span>
-                  </div>
-                  <div class="status-row">
-                    <span class="status-label">Minimum Required</span>
-                    <span class="status-value">${this._status.min_history_required || "N/A"} days</span>
+                  <div class="info-box" style="margin-top: 8px;">
+                    Not enough historical data yet. Need at least 7 days of data for training.
                   </div>
                 `
               : ""}
-            ${this._status.status === "config_changed_pending_retrain"
+            ${this._status.errorReason
               ? html`
-                  <div class="status-row">
-                    <span class="status-label">Changes Detected</span>
-                    <span class="status-value">${this._status.config_changes?.join(", ") || "Configuration changed"}</span>
+                  <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
+                    <span class="status-label">Error</span>
+                    <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
                   </div>
                 `
               : ""}
           </div>
         </div>
 
-        ${this._profile
+        ${this._status.droppedDays && this._status.droppedDays.length > 0
           ? html`
               <div class="section">
-                <div class="section-title">Profile Information</div>
-                <div class="profile-section">
-                  <ul class="profile-list">
-                    ${this._profile.metadata?.trained_at
-                      ? html`<li><strong>Trained:</strong> ${this._profile.metadata.trained_at}</li>`
-                      : ""}
-                    ${this._profile.metadata?.num_factors
-                      ? html`<li><strong>Factors:</strong> ${this._profile.metadata.num_factors}</li>`
-                      : ""}
-                    ${this._profile.metadata?.fingerprint
-                      ? html`<li><strong>Fingerprint:</strong> ${this._profile.metadata.fingerprint}</li>`
-                      : ""}
-                  </ul>
+                <div class="section-title">Dropped Days</div>
+                <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
+                  ${this._status.droppedDays.map((day: any) => html`
+                    <div style="padding: 4px 0;">
+                      <strong>${day.date}:</strong> ${day.reason}
+                    </div>
+                  `)}
                 </div>
               </div>
             `
@@ -357,15 +343,15 @@ export class HelmanBiasCorrectionStatus extends LitElement {
             <button
               class="primary"
               @click=${this._trainNow}
-              ?disabled=${this._trainInProgress || this._status?.status === "not_configured"}
+              ?disabled=${this._trainInProgress || this._status?.enabled === false}
             >
               ${this._trainInProgress ? html`<span class="spinner"></span> Training…` : "Train Now"}
             </button>
             <button
-              @click=${this._loadProfile}
-              ?disabled=${!this._status || this._status.status !== "profile_trained"}
+              @click=${this._loadStatus}
+              ?disabled=${this._loading}
             >
-              View Profile
+              Refresh Status
             </button>
           </div>
         </div>
