@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 
 from homeassistant.core import HomeAssistant
@@ -21,10 +20,8 @@ class SolarBiasTrainingScheduler:
         self.cancel()
         hour, minute = self._parse_training_time(training_time)
 
-        async def _run_training(*_args) -> None:
-            getattr(self._hass, "async_create_task", asyncio.create_task)(
-                self._training_callback()
-            )
+        def _run_training(*_args) -> None:
+            self._hass.async_create_task(self._training_callback())
 
         self._unsub = async_track_time_change(
             self._hass,

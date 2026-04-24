@@ -190,6 +190,8 @@ class SolarBiasCorrectionService:
         if self._metadata.last_outcome == "insufficient_history":
             return ("insufficient_history", "raw", "insufficient_history")
         if self._metadata.last_outcome == "training_failed":
+            if self._profile is not None:
+                return ("training_failed", "adjusted", None)
             return ("training_failed", "raw", "training_failed")
         return ("no_training_yet", "raw", "no_training_yet")
 
