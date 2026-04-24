@@ -460,7 +460,7 @@ class SolarBiasResponseTests(unittest.TestCase):
             ],
         }
         adjustment_result = models.SolarBiasAdjustmentResult(
-            status="profile_trained",
+            status="applied",
             effective_variant="adjusted",
             adjusted_points=[
                 {"timestamp": "2026-03-20T21:00:00+01:00", "value": 600.0},
@@ -507,7 +507,7 @@ class SolarBiasResponseTests(unittest.TestCase):
         self.assertEqual(
             response["biasCorrection"],
             {
-                "status": "profile_trained",
+                "status": "applied",
                 "effectiveVariant": "adjusted",
                 "explainability": {
                     "fallbackReason": None,
@@ -637,7 +637,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             ],
         }
         bias_result = SimpleNamespace(
-            status="profile_trained",
+            status="applied",
             effective_variant="adjusted",
             adjusted_points=[
                 {"timestamp": "2026-03-20T21:00:00+01:00", "value": 20.0},
