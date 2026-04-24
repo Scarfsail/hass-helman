@@ -78,6 +78,7 @@ from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
+from .solar_bias_correction.response import compose_solar_bias_response
 from .recorder_hourly_series import (
     estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
@@ -670,6 +671,7 @@ class HelmanCoordinator:
             forecast_days=MAX_FORECAST_DAYS,
         )
         effective_solar_forecast = deepcopy(canonical_solar_forecast)
+        bias_result = None
         solar_bias_service = getattr(self, "_solar_bias_service", None)
         if solar_bias_service is not None:
             bias_result = solar_bias_service.build_adjustment_result(
@@ -678,7 +680,14 @@ class HelmanCoordinator:
             )
             effective_solar_forecast["points"] = bias_result.adjusted_points
         result = {
-            "solar": build_solar_forecast_response(
+            "solar": compose_solar_bias_response(
+                raw_result["solar"],
+                bias_result,
+                granularity=granularity,
+                forecast_days=forecast_days,
+            )
+            if bias_result is not None
+            else build_solar_forecast_response(
                 raw_result["solar"],
                 granularity=granularity,
                 forecast_days=forecast_days,
