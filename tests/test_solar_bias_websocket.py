@@ -513,6 +513,28 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Unexpected solar bias training failure", captured.output[0])
 
+    async def test_train_now_returns_internal_error_when_service_raises_unexpected_exception(self) -> None:
+        service = SimpleNamespace(async_train=AsyncMock(side_effect=RuntimeError("boom")))
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        with self.assertLogs(
+            "custom_components.helman.solar_bias_correction.websocket",
+            level="ERROR",
+        ) as captured:
+            await self.solar_bias_ws.ws_train_solar_bias_now(
+                FakeHass(coordinator),
+                connection,
+                {"id": 1, "type": "helman/solar_bias/train_now"},
+            )
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "internal_error", "Unexpected solar bias training failure")],
+        )
+        self.assertIn("Unexpected solar bias training failure", captured.output[0])
+
     def test_profile_returns_persisted_profile_shape(self) -> None:
         service = SimpleNamespace(
             get_profile_payload=Mock(

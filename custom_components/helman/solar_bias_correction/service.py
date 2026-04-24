@@ -121,12 +121,20 @@ class SolarBiasCorrectionService:
             self._metadata = outcome.metadata
             self._is_stale = False
         except Exception as err:
+            preserve_profile = self._should_preserve_profile(
+                previous_profile,
+                previous_metadata,
+            )
             failure_metadata = self._build_failure_metadata(
                 previous_metadata=previous_metadata,
                 error_reason=str(err) or err.__class__.__name__,
-                trained_at=dt_util.now().isoformat(),
+                trained_at=(
+                    previous_metadata.trained_at
+                    if preserve_profile
+                    else dt_util.now().isoformat()
+                ),
             )
-            self._profile = previous_profile
+            self._profile = previous_profile if preserve_profile else None
             self._metadata = failure_metadata
             self._is_stale = previous_is_stale
             await self._store.async_save(self._serialize_state())
@@ -261,6 +269,19 @@ class SolarBiasCorrectionService:
             last_outcome="training_failed",
             error_reason=error_reason,
         )
+
+    def _should_preserve_profile(
+        self,
+        profile: SolarBiasProfile | None,
+        metadata: SolarBiasMetadata,
+    ) -> bool:
+        if profile is None:
+            return False
+
+        if metadata.last_outcome not in ("profile_trained", "training_failed"):
+            return False
+
+        return metadata.usable_days >= self._cfg.min_history_days
 
     def _next_scheduled_training_at(self) -> str | None:
         if not self._cfg.enabled:
