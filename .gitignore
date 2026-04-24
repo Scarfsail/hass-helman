@@ -20,6 +20,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.worktrees/
 
 # Home Assistant
 .storage/
