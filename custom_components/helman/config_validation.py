@@ -309,6 +309,135 @@ def _validate_solar_config(raw_solar: object, report: ValidationReport) -> None:
         forecast_map.get("daily_energy_entity_ids"),
     )
 
+    # bias_correction subtree validation
+    bias = forecast_map.get("bias_correction")
+    if bias is None:
+        return
+    bias_map = _require_mapping(
+        bias,
+        "power_devices.solar.forecast.bias_correction",
+        section,
+        report,
+    )
+    if bias_map is None:
+        return
+
+    base_path = "power_devices.solar.forecast.bias_correction"
+
+    # enabled: optional bool
+    _validate_optional_bool(
+        report,
+        section,
+        f"{base_path}.enabled",
+        bias_map.get("enabled"),
+    )
+
+    # min_history_days: int in [1, 365]
+    min_hist = bias_map.get("min_history_days")
+    if min_hist is not None:
+        if isinstance(min_hist, bool) or not isinstance(min_hist, int) or not (
+            1 <= min_hist <= 365
+        ):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.min_history_days",
+                code="invalid_range",
+                message=f"{base_path}.min_history_days must be an integer between 1 and 365",
+            )
+
+    # training_time: HH:MM local-time string
+    training_time = bias_map.get("training_time")
+    if training_time is not None:
+        if not _is_non_empty_string(training_time):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.training_time",
+                code="invalid_type",
+                message=f"{base_path}.training_time must be an HH:MM string",
+            )
+        else:
+            tt = training_time.strip()
+            m = re.match(r"^(\d{2}):(\d{2})$", tt)
+            if not m:
+                report.add_error(
+                    section=section,
+                    path=f"{base_path}.training_time",
+                    code="invalid_format",
+                    message=f"{base_path}.training_time must be an HH:MM string",
+                )
+            else:
+                hh = int(m.group(1))
+                mm = int(m.group(2))
+                if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                    report.add_error(
+                        section=section,
+                        path=f"{base_path}.training_time",
+                        code="invalid_value",
+                        message=f"{base_path}.training_time must be a valid time",
+                    )
+
+    # clamp_min: float in (0, 1]
+    clamp_min = bias_map.get("clamp_min")
+    if clamp_min is not None:
+        if isinstance(clamp_min, bool) or not isinstance(clamp_min, (int, float)):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.clamp_min",
+                code="invalid_type",
+                message=f"{base_path}.clamp_min must be a number",
+            )
+        else:
+            if not (clamp_min > 0 and clamp_min <= 1):
+                report.add_error(
+                    section=section,
+                    path=f"{base_path}.clamp_min",
+                    code="invalid_range",
+                    message=f"{base_path}.clamp_min must be > 0 and <= 1",
+                )
+
+    # clamp_max: float in [1, 10]
+    clamp_max = bias_map.get("clamp_max")
+    if clamp_max is not None:
+        if isinstance(clamp_max, bool) or not isinstance(clamp_max, (int, float)):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.clamp_max",
+                code="invalid_type",
+                message=f"{base_path}.clamp_max must be a number",
+            )
+        else:
+            if not (1 <= clamp_max <= 10):
+                report.add_error(
+                    section=section,
+                    path=f"{base_path}.clamp_max",
+                    code="invalid_range",
+                    message=f"{base_path}.clamp_max must be between 1 and 10",
+                )
+
+    # cross-field validation: clamp_min < clamp_max
+    if (
+        clamp_min is not None
+        and clamp_max is not None
+        and isinstance(clamp_min, (int, float))
+        and isinstance(clamp_max, (int, float))
+    ):
+        try:
+            if not (clamp_min < clamp_max):
+                report.add_error(
+                    section=section,
+                    path=base_path,
+                    code="invalid_relation",
+                    message="clamp_min must be less than clamp_max",
+                )
+        except Exception:
+            # in case values are not comparable
+            report.add_error(
+                section=section,
+                path=base_path,
+                code="invalid_relation",
+                message="clamp_min must be less than clamp_max",
+            )
+
 
 def _validate_battery_config(
     config: Mapping[str, Any],
