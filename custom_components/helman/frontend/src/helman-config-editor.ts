@@ -54,6 +54,7 @@ import {
 } from "./config-editor-scopes";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
 import { loadHaForm, loadHaYamlEditor } from "./load-ha-elements";
+import "./bias-correction-status";
 import type {
   HomeAssistantLike,
   JsonObject,
@@ -1028,6 +1029,11 @@ export class HelmanConfigEditorPanel extends LitElement {
         return this._renderTabScope(
           TAB_SCOPE_IDS.appliances,
           this._renderAppliancesTab(),
+        );
+      case "bias_correction":
+        return this._renderTabScope(
+          TAB_SCOPE_IDS.bias_correction,
+          this._renderBiasCorrectionTab(),
         );
       default:
         return html``;
@@ -2105,6 +2111,18 @@ export class HelmanConfigEditorPanel extends LitElement {
           </div>
         `,
       )}
+    `;
+  }
+
+  private _renderBiasCorrectionTab(): TemplateResult {
+    return html`
+      <div class="list-card">
+        <div class="card-title" style="margin-bottom: 16px;">
+          <strong>${this._t("editor.tabs.bias_correction")}</strong>
+          <span class="card-subtitle">Solar bias correction configuration and status</span>
+        </div>
+        <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
+      </div>
     `;
   }
 

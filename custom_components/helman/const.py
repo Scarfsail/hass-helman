@@ -53,7 +53,10 @@ PANEL_ICON = "mdi:home-lightning-bolt-outline"
 PANEL_NAME = "helman-config-editor-panel"
 PANEL_FRONTEND_URL_PATH = f"{DOMAIN}-config"
 
-# Solar bias correction defaults
+# Solar bias correction storage defaults and keys
+SOLAR_BIAS_STORAGE_KEY = f"{DOMAIN}.solar_bias_correction"
+SOLAR_BIAS_STORAGE_VERSION = 1
+SOLAR_BIAS_SUPPORTED_STORE_VERSION = 1
 SOLAR_BIAS_DEFAULT_ENABLED = True
 SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS = 10
 SOLAR_BIAS_DEFAULT_TRAINING_TIME = "03:00"

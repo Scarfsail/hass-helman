@@ -78,6 +78,7 @@ from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
+from .solar_bias_correction.response import compose_solar_bias_response
 from .recorder_hourly_series import (
     estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
@@ -115,6 +116,9 @@ from .scheduling.schedule_executor import (
     ScheduleExecutor,
     ScheduleExecutorDependencies,
 )
+from .solar_bias_correction.models import read_bias_config
+from .solar_bias_correction.scheduler import SolarBiasTrainingScheduler
+from .solar_bias_correction.service import SolarBiasCorrectionService
 from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
@@ -283,6 +287,9 @@ class HelmanCoordinator:
             ),
         )
         self._appliances_registry = AppliancesRuntimeRegistry()
+        self._solar_bias_store: Any = None
+        self._solar_bias_service: SolarBiasCorrectionService | None = None
+        self._solar_bias_scheduler: SolarBiasTrainingScheduler | None = None
         self._last_schedule_control_config_issue: str | None = None
         self._last_schedule_battery_state_issue: str | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
@@ -343,6 +350,30 @@ class HelmanCoordinator:
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
         self._active_config = deepcopy(self._storage.config)
+        from .storage import SolarBiasCorrectionStore
+
+        self._solar_bias_store = SolarBiasCorrectionStore(self._hass)
+        await self._solar_bias_store.async_load()
+        bias_config = read_bias_config(self._active_config)
+        self._solar_bias_service = SolarBiasCorrectionService(
+            self._hass,
+            self._solar_bias_store,
+            bias_config,
+        )
+        await self._solar_bias_service.async_setup()
+        if bias_config.enabled:
+            self._solar_bias_scheduler = SolarBiasTrainingScheduler(
+                self._hass,
+                self._solar_bias_service.async_train,
+            )
+            try:
+                self._solar_bias_scheduler.schedule(bias_config.training_time)
+            except ValueError:
+                _LOGGER.warning(
+                    "Solar bias training scheduler not started due to invalid training time: %s",
+                    bias_config.training_time,
+                )
+                self._solar_bias_scheduler = None
         self._appliances_registry = build_appliances_runtime_registry(
             self._active_config,
             logger=_LOGGER,
@@ -639,8 +670,24 @@ class HelmanCoordinator:
             granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days=MAX_FORECAST_DAYS,
         )
+        effective_solar_forecast = deepcopy(canonical_solar_forecast)
+        bias_result = None
+        solar_bias_service = getattr(self, "_solar_bias_service", None)
+        if solar_bias_service is not None:
+            bias_result = solar_bias_service.build_adjustment_result(
+                canonical_solar_forecast.get("points", []),
+                request_now,
+            )
+            effective_solar_forecast["points"] = bias_result.adjusted_points
         result = {
-            "solar": build_solar_forecast_response(
+            "solar": compose_solar_bias_response(
+                raw_result["solar"],
+                bias_result,
+                granularity=granularity,
+                forecast_days=forecast_days,
+            )
+            if bias_result is not None
+            else build_solar_forecast_response(
                 raw_result["solar"],
                 granularity=granularity,
                 forecast_days=forecast_days,
@@ -691,7 +738,7 @@ class HelmanCoordinator:
                     alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
                 )
         pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=canonical_solar_forecast,
+            solar_forecast=effective_solar_forecast,
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
@@ -2648,6 +2695,10 @@ class HelmanCoordinator:
         self._stop_tick()
         self._stop_forecast_refresh()
         await self._async_cancel_refresh_tasks()
+        solar_bias_scheduler = getattr(self, "_solar_bias_scheduler", None)
+        if solar_bias_scheduler is not None:
+            solar_bias_scheduler.cancel()
+            self._solar_bias_scheduler = None
         await self._automation_triggers.async_shutdown()
         await self._schedule_executor.async_unload()
         self._invalidate_battery_forecast_cache()

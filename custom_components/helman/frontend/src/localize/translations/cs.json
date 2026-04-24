@@ -7,7 +7,8 @@
       "power_devices": "Výkonová zařízení",
       "scheduler": "Plánování",
       "automation": "Automatizace",
-      "appliances": "Spotřebiče"
+      "appliances": "Spotřebiče",
+      "bias_correction": "Korekce zkreslení"
     },
     "actions": {
       "reload_config": "Načíst uloženou konfiguraci znovu",
