@@ -4632,7 +4632,8 @@ const zi = [
       power_devices: { errors: 0, warnings: 0 },
       scheduler: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
-      appliances: { errors: 0, warnings: 0 }
+      appliances: { errors: 0, warnings: 0 },
+      bias_correction: { errors: 0, warnings: 0 }
     };
     if (this._validation) {
       for (const t of this._validation.errors) {

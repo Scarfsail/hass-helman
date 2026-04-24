@@ -3322,6 +3322,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       scheduler: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
       appliances: { errors: 0, warnings: 0 },
+      bias_correction: { errors: 0, warnings: 0 },
     };
 
     if (this._validation) {
