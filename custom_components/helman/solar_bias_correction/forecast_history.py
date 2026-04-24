@@ -96,16 +96,33 @@ async def _read_history_for_entities(
 
     if get_significant_states is not None:
         try:
-            history = get_significant_states(
-                hass,
-                utc_start,
-                utc_end,
-                entity_ids=entity_ids,
-                include_start_time_state=True,
-                minimal_response=False,
-                no_attributes=True,
-                significant_changes_only=False,
-            )
+            from homeassistant.components.recorder import get_instance
+            
+            recorder = get_instance(hass)
+            if recorder is not None:
+                history = await recorder.async_add_executor_job(
+                    lambda: get_significant_states(
+                        hass,
+                        utc_start,
+                        utc_end,
+                        entity_ids=entity_ids,
+                        include_start_time_state=True,
+                        minimal_response=False,
+                        no_attributes=True,
+                        significant_changes_only=False,
+                    )
+                )
+            else:
+                history = get_significant_states(
+                    hass,
+                    utc_start,
+                    utc_end,
+                    entity_ids=entity_ids,
+                    include_start_time_state=True,
+                    minimal_response=False,
+                    no_attributes=True,
+                    significant_changes_only=False,
+                )
             if inspect.isawaitable(history):
                 history = await history
             if isinstance(history, dict):
