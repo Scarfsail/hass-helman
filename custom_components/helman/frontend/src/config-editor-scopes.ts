@@ -12,7 +12,8 @@ export type TabId =
   | "power_devices"
   | "scheduler"
   | "automation"
-  | "appliances";
+  | "appliances"
+  | "bias_correction";
 
 export type ScopeId =
   | "document"
@@ -21,6 +22,7 @@ export type ScopeId =
   | "tab:scheduler"
   | "tab:automation"
   | "tab:appliances"
+  | "tab:bias_correction"
   | "section:general.core_labels_and_history"
   | "section:general.device_label_text"
   | "section:power_devices.house"
@@ -48,6 +50,7 @@ export const TAB_ICONS: Record<TabId, string> = {
   scheduler: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   appliances: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
+  bias_correction: "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
 };
 
 export const SECTION_ICONS: Record<string, string> = {
@@ -69,6 +72,7 @@ export const TABS: Array<{ id: TabId; labelKey: string }> = [
   { id: "scheduler", labelKey: "editor.tabs.scheduler" },
   { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "appliances", labelKey: "editor.tabs.appliances" },
+  { id: "bias_correction", labelKey: "editor.tabs.bias_correction" },
 ];
 
 export const TAB_SECTIONS: Record<string, TabId> = {
@@ -88,6 +92,7 @@ export const TAB_SCOPE_IDS = {
   scheduler: "tab:scheduler",
   automation: "tab:automation",
   appliances: "tab:appliances",
+  bias_correction: "tab:bias_correction",
 } as const satisfies Record<TabId, ScopeId>;
 
 export const SECTION_SCOPE_IDS = {
@@ -202,6 +207,17 @@ export const EDITOR_SCOPES = {
     adapter: createPathScopeAdapter(["appliances"], {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
+    }),
+  },
+  [TAB_SCOPE_IDS.bias_correction]: {
+    id: TAB_SCOPE_IDS.bias_correction,
+    kind: "tab",
+    parentId: DOCUMENT_SCOPE_ID,
+    tabId: "bias_correction",
+    labelKey: "editor.tabs.bias_correction",
+    adapter: createPathScopeAdapter(["bias_correction"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
     }),
   },
   [SECTION_SCOPE_IDS.general.core_labels_and_history]: {

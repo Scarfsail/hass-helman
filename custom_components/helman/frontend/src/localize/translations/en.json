@@ -7,7 +7,8 @@
       "power_devices": "Power devices",
       "scheduler": "Scheduler",
       "automation": "Automation",
-      "appliances": "Appliances"
+      "appliances": "Appliances",
+      "bias_correction": "Bias Correction"
     },
     "actions": {
       "reload_config": "Reload stored config",
