@@ -100,6 +100,7 @@ async def _read_history_for_entities(
             
             recorder = get_instance(hass)
             if recorder is not None:
+                # Use executor to prevent blocking event loop during DB access
                 history = await recorder.async_add_executor_job(
                     lambda: get_significant_states(
                         hass,
@@ -113,6 +114,7 @@ async def _read_history_for_entities(
                     )
                 )
             else:
+                # In tests/early setup when recorder is not available
                 history = get_significant_states(
                     hass,
                     utc_start,
@@ -123,11 +125,12 @@ async def _read_history_for_entities(
                     no_attributes=True,
                     significant_changes_only=False,
                 )
+            
             if inspect.isawaitable(history):
                 history = await history
             if isinstance(history, dict):
                 return history
-        except TypeError:
+        except (TypeError, AttributeError):
             pass
 
     if state_changes_during_period is None:
