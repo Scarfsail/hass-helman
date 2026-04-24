@@ -215,10 +215,13 @@ export const EDITOR_SCOPES = {
     parentId: DOCUMENT_SCOPE_ID,
     tabId: "bias_correction",
     labelKey: "editor.tabs.bias_correction",
-    adapter: createPathScopeAdapter(["bias_correction"], {
-      emptyValue: EMPTY_OBJECT,
-      rootKind: "object",
-    }),
+    adapter: createPathScopeAdapter(
+      ["power_devices", "solar", "forecast", "bias_correction"],
+      {
+        emptyValue: EMPTY_OBJECT,
+        rootKind: "object",
+      },
+    ),
   },
   [SECTION_SCOPE_IDS.general.core_labels_and_history]: {
     id: SECTION_SCOPE_IDS.general.core_labels_and_history,
