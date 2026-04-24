@@ -256,8 +256,8 @@ from custom_components.helman.const import DOMAIN  # noqa: E402
 
 
 class FakeConnection:
-    def __init__(self) -> None:
-        self.user = SimpleNamespace(is_admin=True)
+    def __init__(self, *, is_admin: bool = True) -> None:
+        self.user = SimpleNamespace(is_admin=is_admin)
         self.results: list[tuple[int, object]] = []
         self.errors: list[tuple[int, str, str]] = []
 
@@ -315,6 +315,24 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results, [(1, payload)])
         self.assertEqual(connection.errors, [])
 
+    def test_status_requires_admin(self) -> None:
+        service = SimpleNamespace(get_status_payload=Mock())
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection(is_admin=False)
+
+        self.solar_bias_ws.ws_get_solar_bias_status(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/solar_bias/status"},
+        )
+
+        service.get_status_payload.assert_not_called()
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "unauthorized", "Admin access required")],
+        )
+
     def test_status_returns_not_loaded_when_service_or_coordinator_missing(self) -> None:
         cases = (
             (
@@ -361,6 +379,24 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         service.async_train.assert_awaited_once_with()
         self.assertEqual(connection.results, [(1, payload)])
         self.assertEqual(connection.errors, [])
+
+    async def test_train_now_requires_admin(self) -> None:
+        service = SimpleNamespace(async_train=AsyncMock())
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection(is_admin=False)
+
+        await self.solar_bias_ws.ws_train_solar_bias_now(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/solar_bias/train_now"},
+        )
+
+        service.async_train.assert_not_awaited()
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "unauthorized", "Admin access required")],
+        )
 
     async def test_train_now_returns_not_loaded_when_missing(self) -> None:
         cases = (
@@ -510,6 +546,24 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(connection.errors, [])
+
+    def test_profile_requires_admin(self) -> None:
+        service = SimpleNamespace(get_profile_payload=Mock())
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection(is_admin=False)
+
+        self.solar_bias_ws.ws_get_solar_bias_profile(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/solar_bias/profile"},
+        )
+
+        service.get_profile_payload.assert_not_called()
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "unauthorized", "Admin access required")],
+        )
 
     def test_profile_returns_no_profile_before_training(self) -> None:
         service = SimpleNamespace(get_profile_payload=Mock(return_value=None))

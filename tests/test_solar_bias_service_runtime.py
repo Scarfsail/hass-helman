@@ -194,6 +194,71 @@ def test_get_profile_payload_returns_runtime_profile():
     }
 
 
+def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
+    class _SavingStore:
+        profile = None
+
+        def __init__(self) -> None:
+            self.saved_payloads = []
+
+        async def async_save(self, payload):
+            self.saved_payloads.append(payload)
+            self.profile = payload
+
+    async def _inner():
+        store = _SavingStore()
+        service = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            store,
+            _make_cfg(),
+        )
+
+        old_now = service_mod.dt_util.now
+        old_samples = service_mod.load_trainer_samples
+        old_actuals = service_mod.load_actuals_window
+        try:
+            from datetime import datetime
+
+            now = datetime.fromisoformat("2026-04-24T03:00:00+02:00")
+            service_mod.dt_util.now = lambda: now
+
+            async def _samples(*args, **kwargs):
+                return ["sample"]
+
+            async def _actuals(*args, **kwargs):
+                raise RuntimeError("boom")
+
+            service_mod.load_trainer_samples = _samples
+            service_mod.load_actuals_window = _actuals
+
+            payload = await service.async_train()
+        finally:
+            service_mod.dt_util.now = old_now
+            service_mod.load_trainer_samples = old_samples
+            service_mod.load_actuals_window = old_actuals
+
+        reloaded = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            store,
+            _make_cfg(),
+        )
+        await reloaded.async_setup()
+
+        assert store.saved_payloads[-1]["profile"] is None
+        assert payload["status"] == "training_failed"
+        assert payload["effectiveVariant"] == "raw"
+        assert reloaded.get_profile_payload() is None
+        service_mod.dt_util.now = lambda: now
+        try:
+            reloaded_status = reloaded.get_status_payload()
+        finally:
+            service_mod.dt_util.now = old_now
+        assert reloaded_status["status"] == "training_failed"
+        assert reloaded_status["effectiveVariant"] == "raw"
+
+    asyncio.run(_inner())
+
+
 def test_scheduler_registers_sync_callback_that_schedules_training():
     captured: dict[str, object] = {}
 

@@ -60,9 +60,19 @@ class SolarBiasCorrectionService:
             self._is_stale = False
             return
 
-        profile = _profile_from_dict(stored.get("profile"))
+        raw_profile = stored.get("profile")
+        if raw_profile is None:
+            profile = None
+        else:
+            profile = _profile_from_dict(raw_profile)
+            if profile is None:
+                self._profile = None
+                self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
+                self._is_stale = False
+                return
+
         metadata = _metadata_from_dict(stored.get("metadata"))
-        if profile is None or metadata is None:
+        if metadata is None:
             self._profile = None
             self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
             self._is_stale = False
@@ -274,10 +284,9 @@ class SolarBiasCorrectionService:
         return next_run.isoformat()
 
     def _serialize_state(self) -> dict[str, Any]:
-        profile = self._profile or SolarBiasProfile(factors={}, omitted_slots=[])
         return {
             "version": 1,
-            "profile": asdict(profile),
+            "profile": None if self._profile is None else asdict(self._profile),
             "metadata": asdict(self._metadata),
         }
 

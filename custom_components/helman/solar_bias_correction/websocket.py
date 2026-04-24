@@ -22,6 +22,9 @@ def ws_get_solar_bias_status(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
+    if not _require_admin(connection, msg):
+        return
+
     service = _get_solar_bias_service(hass, connection, msg)
     if service is None:
         return
@@ -40,6 +43,9 @@ async def ws_train_solar_bias_now(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
+    if not _require_admin(connection, msg):
+        return
+
     training_in_progress_error, bias_not_configured_error = _get_training_error_types()
     service = _get_solar_bias_service(hass, connection, msg)
     if service is None:
@@ -84,6 +90,9 @@ def ws_get_solar_bias_profile(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
+    if not _require_admin(connection, msg):
+        return
+
     service = _get_solar_bias_service(hass, connection, msg)
     if service is None:
         return
@@ -122,3 +131,14 @@ def _get_training_error_types():
     from .service import BiasNotConfiguredError, TrainingInProgressError
 
     return TrainingInProgressError, BiasNotConfiguredError
+
+
+def _require_admin(
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> bool:
+    user = getattr(connection, "user", None)
+    if user is None or not getattr(user, "is_admin", False):
+        connection.send_error(msg["id"], "unauthorized", "Admin access required")
+        return False
+    return True
