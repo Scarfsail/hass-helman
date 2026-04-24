@@ -68,3 +68,44 @@ class HelmanStorage:
     ) -> None:
         self._schedule_document = schedule_document
         await self._schedule_store.async_save(schedule_document)
+
+
+class SolarBiasCorrectionStore:
+    """Persistence for solar bias correction profiles.
+
+    Persisted payload shape (v1):
+      {"version": 1, "profile": {...}, "metadata": {...}}
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        from .const import (
+            SOLAR_BIAS_STORAGE_KEY,
+            SOLAR_BIAS_STORAGE_VERSION,
+            SOLAR_BIAS_SUPPORTED_STORE_VERSION,
+        )
+
+        self._store = storage.Store(hass, SOLAR_BIAS_STORAGE_VERSION, SOLAR_BIAS_STORAGE_KEY)
+        self._profile: dict[str, Any] | None = None
+        self._supported_version = SOLAR_BIAS_SUPPORTED_STORE_VERSION
+
+    async def async_load(self) -> None:
+        stored = await self._store.async_load()
+        if not stored:
+            self._profile = None
+            return
+
+        # Version gating: unsupported versions are treated as no profile
+        version = stored.get("version")
+        if version != self._supported_version:
+            self._profile = None
+            return
+
+        self._profile = stored
+
+    @property
+    def profile(self) -> dict[str, Any] | None:
+        return self._profile
+
+    async def async_save(self, payload: dict[str, Any]) -> None:
+        self._profile = payload
+        await self._store.async_save(payload)
