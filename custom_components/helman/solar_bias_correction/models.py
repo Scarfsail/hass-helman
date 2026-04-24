@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-import importlib.util
-import pathlib
+from typing import Any
 
-# Load const.py directly to avoid importing package __init__ which depends on Home Assistant
-repo_helman_dir = pathlib.Path(__file__).resolve().parents[1]
-const_path = repo_helman_dir / "const.py"
-spec = importlib.util.spec_from_file_location("helman_const", str(const_path))
-const = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(const)  # type: ignore
+from ..const import (
+    SOLAR_BIAS_DEFAULT_ENABLED,
+    SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+    SOLAR_BIAS_DEFAULT_TRAINING_TIME,
+    SOLAR_BIAS_DEFAULT_CLAMP_MIN,
+    SOLAR_BIAS_DEFAULT_CLAMP_MAX,
+)
 
 
 @dataclass
@@ -20,8 +19,8 @@ class BiasConfig:
     training_time: str
     clamp_min: float
     clamp_max: float
-    daily_energy_entity_ids: List[str]
-    total_energy_entity_id: Optional[str]
+    daily_energy_entity_ids: list[str]
+    total_energy_entity_id: str | None
 
 
 @dataclass
@@ -32,13 +31,13 @@ class TrainerSample:
 
 @dataclass
 class SolarActualsWindow:
-    slot_actuals_by_date: Dict[str, List[float]]
+    slot_actuals_by_date: dict[str, dict[str, float]]
 
 
 @dataclass
 class SolarBiasProfile:
-    factors: Dict[str, float]
-    omitted_slots: int
+    factors: dict[str, float]
+    omitted_slots: list[str]
 
 
 @dataclass
@@ -46,13 +45,13 @@ class SolarBiasMetadata:
     trained_at: str
     training_config_fingerprint: str
     usable_days: int
-    dropped_days: int
-    factor_min: float
-    factor_max: float
-    factor_median: float
+    dropped_days: list[dict[str, str]]
+    factor_min: float | None
+    factor_max: float | None
+    factor_median: float | None
     omitted_slot_count: int
     last_outcome: str
-    error_reason: Optional[str] = None
+    error_reason: str | None = None
 
 
 @dataclass
@@ -63,38 +62,38 @@ class TrainingOutcome:
 
 @dataclass
 class SolarBiasExplainability:
-    fallback_reason: Optional[str]
-    trained_at: Optional[str]
+    fallback_reason: str | None
+    trained_at: str | None
     usable_days: int
     dropped_days: int
     omitted_slot_count: int
-    factor_min: Optional[float]
-    factor_max: Optional[float]
-    factor_median: Optional[float]
-    error: Optional[str] = None
+    factor_min: float | None
+    factor_max: float | None
+    factor_median: float | None
+    error: str | None = None
 
 
 @dataclass
 class SolarBiasAdjustmentResult:
     status: str
-    effective_variant: Optional[str]
-    adjusted_points: List[float]
-    explainability: Optional[SolarBiasExplainability]
+    effective_variant: str | None
+    adjusted_points: list[dict[str, Any]]
+    explainability: SolarBiasExplainability | None
 
 
-def read_bias_config(config: Dict[str, Any]) -> BiasConfig:
+def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     forecast = (
         config.get("power_devices", {}).get("solar", {}).get("forecast", {})
     )
     bias = forecast.get("bias_correction") or {}
 
-    enabled = bias.get("enabled", const.SOLAR_BIAS_DEFAULT_ENABLED)
+    enabled = bias.get("enabled", SOLAR_BIAS_DEFAULT_ENABLED)
     min_history_days = bias.get(
-        "min_history_days", const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+        "min_history_days", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
     )
-    training_time = bias.get("training_time", const.SOLAR_BIAS_DEFAULT_TRAINING_TIME)
-    clamp_min = bias.get("clamp_min", const.SOLAR_BIAS_DEFAULT_CLAMP_MIN)
-    clamp_max = bias.get("clamp_max", const.SOLAR_BIAS_DEFAULT_CLAMP_MAX)
+    training_time = bias.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
+    clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
+    clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
 
     daily_energy_entity_ids = forecast.get("daily_energy_entity_ids") or []
     total_energy_entity_id = forecast.get("total_energy_entity_id")

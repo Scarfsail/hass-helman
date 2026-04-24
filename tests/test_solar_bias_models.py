@@ -1,39 +1,38 @@
 from typing import Any
-import importlib.util
+import importlib
+import sys
+import types
 import pathlib
 
 
-def load_const():
-    repo_root = pathlib.Path(__file__).resolve().parents[3]
-    const_path = repo_root / "custom_components" / "helman" / "const.py"
-    spec = importlib.util.spec_from_file_location("helman_const", str(const_path))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)  # type: ignore
-    return module
+def setup_package_stubs():
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    custom_components_dir = repo_root / "custom_components"
+    helman_dir = custom_components_dir / "helman"
+
+    # custom_components package stub
+    if "custom_components" not in sys.modules:
+        pkg = types.ModuleType("custom_components")
+        pkg.__path__ = [str(custom_components_dir)]
+        sys.modules["custom_components"] = pkg
+
+    # custom_components.helman package stub
+    if "custom_components.helman" not in sys.modules:
+        pkg = types.ModuleType("custom_components.helman")
+        pkg.__path__ = [str(helman_dir)]
+        sys.modules["custom_components.helman"] = pkg
 
 
-def load_models():
-    worktree_root = pathlib.Path(__file__).resolve().parents[1]
-    models_path = (
-        worktree_root
-        / "custom_components"
-        / "helman"
-        / "solar_bias_correction"
-        / "models.py"
-    )
-    spec = importlib.util.spec_from_file_location("solar_bias_models", str(models_path))
-    module = importlib.util.module_from_spec(spec)
-    import sys
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)  # type: ignore
-    return module
+setup_package_stubs()
+
+from custom_components.helman.solar_bias_correction.models import (
+    BiasConfig,
+    read_bias_config,
+)
 
 
 def test_defaults_empty_config():
-    const = load_const()
-    models = load_models()
-    BiasConfig = models.BiasConfig
-    read_bias_config = models.read_bias_config
+    import custom_components.helman.const as const
 
     config: dict[str, Any] = {}
     bias = read_bias_config(config)
@@ -48,9 +47,6 @@ def test_defaults_empty_config():
 
 
 def test_read_nested_config():
-    models = load_models()
-    read_bias_config = models.read_bias_config
-
     config = {
         "power_devices": {
             "solar": {
