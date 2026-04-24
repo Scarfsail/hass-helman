@@ -76,7 +76,7 @@ async def _read_day_forecast_wh(
         if not states:
             return None
 
-        state_wh = _parse_first_state_wh(states)
+        state_wh = _parse_first_state_wh(states, after=dt_util.as_utc(local_start))
         if state_wh is None:
             return None
 
@@ -157,8 +157,10 @@ async def _run_recorder_query(
     return history_by_entity
 
 
-def _parse_first_state_wh(states: list[Any]) -> float | None:
+def _parse_first_state_wh(states: list[Any], *, after: datetime) -> float | None:
     for state in sorted(states, key=_state_sort_key):
+        if _state_sort_key(state) <= after:
+            continue
         parsed = _parse_state_wh(getattr(state, "state", None))
         if parsed is not None:
             return parsed
