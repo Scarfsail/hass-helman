@@ -40,7 +40,6 @@ type InspectorPayload = {
 export class HelmanBiasCorrectionInspector extends LitElement {
   @property({ attribute: false }) hass: any;
 
-  @state() private _expanded = false;
   @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
   @state() private _loading = false;
@@ -230,15 +229,12 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     if (changed.has("hass") && this.hass && !this._selectedDate) {
       this._selectedDate = this._todayIso();
     }
-    if (changed.has("hass") && this.hass && this._expanded && !this._payload) {
-      this._load();
-    }
   }
 
   render() {
     return html`
-      <details class="inspector" ?open=${this._expanded} @toggle=${this._handleToggle}>
-        <summary>
+      <details class="inspector" @toggle=${this._handleToggle}>
+        <summary @click=${this._handleSummaryClick}>
           <div class="summary-row">
             <div class="summary-left">
               <span class="summary-label">${this._t("bias_correction.inspector.title")}</span>
@@ -246,7 +242,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
             ${this._renderChevron()}
           </div>
         </summary>
-        ${this._expanded ? this._renderBody() : ""}
+        ${this._renderBody()}
       </details>
     `;
   }
@@ -463,13 +459,31 @@ export class HelmanBiasCorrectionInspector extends LitElement {
 
   private _handleToggle(event: Event) {
     const details = event.currentTarget as HTMLDetailsElement | null;
-    this._expanded = Boolean(details?.open);
-    if (this._expanded && !this._selectedDate) {
+    if (!details?.open) {
+      return;
+    }
+    if (!this._selectedDate) {
       this._selectedDate = this._todayIso();
     }
-    if (this._expanded && !this._payload) {
+    if (!this._payload) {
       this._load();
     }
+  }
+
+  private _handleSummaryClick(event: Event) {
+    const summary = event.currentTarget as HTMLElement | null;
+    const details = summary?.parentElement as HTMLDetailsElement | null;
+    queueMicrotask(() => {
+      if (!details?.open) {
+        return;
+      }
+      if (!this._selectedDate) {
+        this._selectedDate = this._todayIso();
+      }
+      if (!this._payload) {
+        this._load();
+      }
+    });
   }
 
   private _renderChevron() {
