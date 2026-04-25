@@ -32,7 +32,8 @@ export type ScopeId =
   | "section:scheduler.schedule_control_mapping"
   | "section:automation.settings"
   | "section:automation.optimizer_pipeline"
-  | "section:appliances.configured_appliances";
+  | "section:appliances.configured_appliances"
+  | "section:bias_correction.settings";
 
 export interface EditorScope {
   id: ScopeId;
@@ -115,6 +116,9 @@ export const SECTION_SCOPE_IDS = {
   },
   appliances: {
     configured_appliances: "section:appliances.configured_appliances",
+  },
+  bias_correction: {
+    settings: "section:bias_correction.settings",
   },
 } as const;
 
@@ -326,6 +330,20 @@ export const EDITOR_SCOPES = {
       emptyValue: EMPTY_ARRAY,
       rootKind: "array",
     }),
+  },
+  [SECTION_SCOPE_IDS.bias_correction.settings]: {
+    id: SECTION_SCOPE_IDS.bias_correction.settings,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.bias_correction,
+    tabId: "bias_correction",
+    labelKey: "editor.sections.bias_correction_settings",
+    adapter: createPathScopeAdapter(
+      ["power_devices", "solar", "forecast", "bias_correction"],
+      {
+        emptyValue: EMPTY_OBJECT,
+        rootKind: "object",
+      },
+    ),
   },
 } as const satisfies Record<ScopeId, EditorScope>;
 

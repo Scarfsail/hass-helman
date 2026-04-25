@@ -183,7 +183,11 @@ export class HelmanBiasCorrectionStatus extends LitElement {
   }
 
   private async _loadStatus() {
-    if (!this.hass) return;
+    if (!this.hass) {
+      this._message = "Home Assistant not available";
+      this._loading = false;
+      return;
+    }
     this._loading = true;
     try {
       const result = await this.hass.callWS({ type: "helman/solar_bias/status" });
@@ -196,6 +200,7 @@ export class HelmanBiasCorrectionStatus extends LitElement {
       console.error("Error loading bias correction status:", e);
     } finally {
       this._loading = false;
+      this.requestUpdate();
     }
   }
 
@@ -207,6 +212,8 @@ export class HelmanBiasCorrectionStatus extends LitElement {
     } catch (e: any) {
       // Silently ignore profile fetch errors
       console.debug("No profile available:", e?.message);
+    } finally {
+      this.requestUpdate();
     }
   }
 
@@ -226,6 +233,7 @@ export class HelmanBiasCorrectionStatus extends LitElement {
       console.error("Training failed:", e);
     } finally {
       this._trainInProgress = false;
+      this.requestUpdate();
     }
   }
 
@@ -265,111 +273,116 @@ export class HelmanBiasCorrectionStatus extends LitElement {
       return html`<div class="container"><div class="info-box">Unable to load bias correction status</div></div>`;
     }
 
-    const statusBadge = this._getStatusBadge();
+    try {
+      const statusBadge = this._getStatusBadge();
 
-    return html`
-      <div class="container">
-        <div class="section">
-          <div class="section-title">Status</div>
-          <div class="status-grid">
-            <div class="status-row">
-              <span class="status-label">Enabled</span>
-              <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">Current Status</span>
-              <span class="badge ${statusBadge.class}">${statusBadge.text}</span>
-            </div>
-            ${this._status.trainedAt
-              ? html`
-                  <div class="status-row">
-                    <span class="status-label">Trained At</span>
-                    <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
-                  </div>
-                `
-              : ""}
-            ${this._status.nextScheduledTrainingAt
-              ? html`
-                  <div class="status-row">
-                    <span class="status-label">Next Training</span>
-                    <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
-                  </div>
-                `
-              : ""}
-            <div class="status-row">
-              <span class="status-label">Effective Variant</span>
-              <span class="status-value">${this._status.effectiveVariant}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">Data Available</span>
-              <span class="status-value">${this._status.usableDays} days</span>
-            </div>
-            ${this._status.status === "insufficient_history"
-              ? html`
-                  <div class="info-box" style="margin-top: 8px;">
-                    Not enough historical data yet. Need at least 7 days of data for training.
-                  </div>
-                `
-              : ""}
-            ${this._status.errorReason
-              ? html`
-                  <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
-                    <span class="status-label">Error</span>
-                    <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
-                  </div>
-                `
-              : ""}
-          </div>
-        </div>
-
-        ${this._status.droppedDays && this._status.droppedDays.length > 0
-          ? html`
-              <div class="section">
-                <div class="section-title">Dropped Days</div>
-                <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
-                  ${this._status.droppedDays.map((day: any) => html`
-                    <div style="padding: 4px 0;">
-                      <strong>${day.date}:</strong> ${day.reason}
+      return html`
+        <div class="container">
+          <div class="section">
+            <div class="section-title">Status</div>
+            <div class="status-grid">
+              <div class="status-row">
+                <span class="status-label">Enabled</span>
+                <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Current Status</span>
+                <span class="badge ${statusBadge.class}">${statusBadge.text}</span>
+              </div>
+              ${this._status.trainedAt
+                ? html`
+                    <div class="status-row">
+                      <span class="status-label">Trained At</span>
+                      <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
                     </div>
-                  `)}
-                </div>
+                  `
+                : ""}
+              ${this._status.nextScheduledTrainingAt
+                ? html`
+                    <div class="status-row">
+                      <span class="status-label">Next Training</span>
+                      <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
+                    </div>
+                  `
+                : ""}
+              <div class="status-row">
+                <span class="status-label">Effective Variant</span>
+                <span class="status-value">${this._status.effectiveVariant}</span>
               </div>
-            `
-          : ""}
+              <div class="status-row">
+                <span class="status-label">Data Available</span>
+                <span class="status-value">${this._status.usableDays} days</span>
+              </div>
+              ${this._status.status === "insufficient_history"
+                ? html`
+                    <div class="info-box" style="margin-top: 8px;">
+                      Not enough historical data yet. Need at least 7 days of data for training.
+                    </div>
+                  `
+                : ""}
+              ${this._status.errorReason
+                ? html`
+                    <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
+                      <span class="status-label">Error</span>
+                      <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
+                    </div>
+                  `
+                : ""}
+            </div>
+          </div>
 
-        <div class="section">
-          <div class="section-title">Actions</div>
-          <div class="controls">
-            <button
-              class="primary"
-              @click=${this._trainNow}
-              ?disabled=${this._trainInProgress || this._status?.enabled === false}
-            >
-              ${this._trainInProgress ? html`<span class="spinner"></span> Training…` : "Train Now"}
-            </button>
-            <button
-              @click=${this._loadStatus}
-              ?disabled=${this._loading}
-            >
-              Refresh Status
-            </button>
+          ${this._status.droppedDays && this._status.droppedDays.length > 0
+            ? html`
+                <div class="section">
+                  <div class="section-title">Dropped Days</div>
+                  <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
+                    ${this._status.droppedDays.map((day: any) => html`
+                      <div style="padding: 4px 0;">
+                        <strong>${day.date}:</strong> ${day.reason}
+                      </div>
+                    `)}
+                  </div>
+                </div>
+              `
+            : ""}
+
+          <div class="section">
+            <div class="section-title">Actions</div>
+            <div class="controls">
+              <button
+                class="primary"
+                @click=${this._trainNow}
+                ?disabled=${this._trainInProgress || this._status?.enabled === false}
+              >
+                ${this._trainInProgress ? html`<span class="spinner"></span> Training…` : "Train Now"}
+              </button>
+              <button
+                @click=${this._loadStatus}
+                ?disabled=${this._loading}
+              >
+                Refresh Status
+              </button>
+            </div>
+          </div>
+
+          ${this._message
+            ? html`
+                <div class="message ${this._message.startsWith("Training failed") ? "error" : "success"}">
+                  ${this._message}
+                </div>
+              `
+            : ""}
+
+          <div class="info-box">
+            Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics.
+            Enable training to automatically improve predictions over time.
           </div>
         </div>
-
-        ${this._message
-          ? html`
-              <div class="message ${this._message.startsWith("Training failed") ? "error" : "success"}">
-                ${this._message}
-              </div>
-            `
-          : ""}
-
-        <div class="info-box">
-          Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics.
-          Enable training to automatically improve predictions over time.
-        </div>
-      </div>
-    `;
+      `;
+    } catch (e: any) {
+      console.error("Render error:", e);
+      return html`<div class="container"><div class="info-box" style="color: red;">Render error: ${e?.message}</div></div>`;
+    }
   }
 }
 

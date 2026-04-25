@@ -62,7 +62,9 @@
         "projection": "Projection",
         "use_modes": "Use modes",
         "eco_gears": "Eco gears",
-        "vehicles": "Vehicles"
+        "vehicles": "Vehicles",
+        "bias_correction_settings": "Bias correction settings",
+        "bias_correction_status": "Status and training"
       },
       "notes": {
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
@@ -165,7 +167,13 @@
       "soc_entity": "SoC entity",
       "charge_limit_entity": "Charge limit entity",
       "battery_capacity_kwh": "Battery capacity kWh",
-      "entity_id": "Entity id"
+      "entity_id": "Entity id",
+      "bias_correction_enabled": "Enable bias correction",
+      "bias_correction_min_history_days": "Min history days",
+      "bias_correction_training_time": "Training time (HH:MM)",
+      "bias_correction_clamp_min": "Min forecast clamp",
+      "bias_correction_clamp_max": "Max forecast clamp",
+      "bias_correction_total_energy_entity": "Total energy entity"
     },
     "helpers": {
       "history_buckets": "How many history buckets Helman keeps for UI history.",
@@ -184,7 +192,9 @@
         "surplus_appliance_climate_mode_single": "This climate appliance currently exposes only one authorable mode, so the field is read-only.",
         "surplus_appliance_climate_mode_unknown": "The stored climate mode is no longer supported by the selected appliance. Pick one of the live supported modes to repair it.",
         "appliance_icon": "Optional. Leave empty to use the default energy icon in appliance metadata.",
-        "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption."
+        "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption.",
+        "bias_correction_min_history_days": "Minimum days of historical data (1-365) before training begins.",
+        "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs."
       },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -322,7 +332,13 @@
       "vehicle_soc_entity": "Sensor reporting the vehicle's current battery state of charge as a percentage (0–100). Required for vehicle-aware charging scheduling — Helman uses it to determine how much charging is needed.",
       "vehicle_charge_limit_entity": "Number entity reporting the vehicle's configured charge limit as a percentage (0–100). When provided, Helman uses it as the target SoC instead of assuming 100%. Optional.",
       "vehicle_battery_capacity_kwh": "Total usable battery capacity of the vehicle in kWh. Required for accurate charge target and duration calculations.",
-      "vehicle_max_charging_power_kw": "Maximum AC charging power for this vehicle in kW. Used to model how quickly the vehicle charges and to plan charging window durations."
+      "vehicle_max_charging_power_kw": "Maximum AC charging power for this vehicle in kW. Used to model how quickly the vehicle charges and to plan charging window durations.",
+      "bias_correction_enabled": "Enable solar bias correction training. When enabled, Helman automatically trains a forecast correction model based on your actual solar production.",
+      "bias_correction_min_history_days": "Minimum number of days of recorded solar data before the model can be trained (1-365). A higher value ensures more stable training but delays corrections. Defaults to 7 days.",
+      "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs, typically during low-activity hours. Training processes historical data to continuously improve forecast accuracy.",
+      "bias_correction_clamp_min": "Lower bound (0.0-1.0) for corrected forecast values. Prevents unrealistic negative corrections from suppressing normal solar generation forecasts too aggressively.",
+      "bias_correction_clamp_max": "Upper bound (0.0-1.0) for corrected forecast values. Prevents unrealistic positive corrections from over-inflating forecast values.",
+      "bias_correction_total_energy_entity": "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model."
     }
   }
 }

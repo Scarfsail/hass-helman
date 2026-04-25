@@ -2116,10 +2116,54 @@ export class HelmanConfigEditorPanel extends LitElement {
 
   private _renderBiasCorrectionTab(): TemplateResult {
     return html`
+      ${this._renderSectionScope(
+        SECTION_SCOPE_IDS.bias_correction.settings,
+        html`
+          <div class="field-grid">
+            ${this._renderBooleanField(
+              ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
+              "editor.fields.bias_correction_enabled",
+              false,
+            )}
+            ${this._renderOptionalNumberField(
+              ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+              "editor.fields.bias_correction_min_history_days",
+              "editor.helpers.bias_correction_min_history_days",
+              "editor.help.bias_correction_min_history_days",
+            )}
+            ${this._renderOptionalTextField(
+              ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
+              "editor.fields.bias_correction_training_time",
+              "editor.helpers.bias_correction_training_time",
+              "editor.help.bias_correction_training_time",
+            )}
+            ${this._renderOptionalNumberField(
+              ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
+              "editor.fields.bias_correction_clamp_min",
+              undefined,
+              "editor.help.bias_correction_clamp_min",
+            )}
+            ${this._renderOptionalNumberField(
+              ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
+              "editor.fields.bias_correction_clamp_max",
+              undefined,
+              "editor.help.bias_correction_clamp_max",
+            )}
+            ${this._renderOptionalEntityField(
+              ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
+              "editor.fields.bias_correction_total_energy_entity",
+              ["sensor"],
+              undefined,
+              "editor.help.bias_correction_total_energy_entity",
+            )}
+          </div>
+        `,
+      )}
+
       <div class="list-card">
         <div class="card-title" style="margin-bottom: 16px;">
-          <strong>${this._t("editor.tabs.bias_correction")}</strong>
-          <span class="card-subtitle">Solar bias correction configuration and status</span>
+          <strong>${this._t("editor.sections.bias_correction_status")}</strong>
+          <span class="card-subtitle">Current bias correction status and training controls</span>
         </div>
         <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
       </div>

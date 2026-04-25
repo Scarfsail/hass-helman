@@ -45,7 +45,7 @@ const gt = (o) => new tt(typeof o == "string" ? o : o + "", void 0, be), it = (o
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: yt, defineProperty: bt, getOwnPropertyDescriptor: ft, getOwnPropertyNames: kt, getOwnPropertySymbols: $t, getPrototypeOf: wt } = Object, M = globalThis, ze = M.trustedTypes, xt = ze ? ze.emptyScript : "", ae = M.reactiveElementPolyfillSupport, q = (o, e) => o, ue = { toAttribute(o, e) {
+const { is: yt, defineProperty: bt, getOwnPropertyDescriptor: ft, getOwnPropertyNames: kt, getOwnPropertySymbols: $t, getPrototypeOf: wt } = Object, V = globalThis, ze = V.trustedTypes, xt = ze ? ze.emptyScript : "", ae = V.reactiveElementPolyfillSupport, q = (o, e) => o, ue = { toAttribute(o, e) {
   switch (e) {
     case Boolean:
       o = o ? xt : null;
@@ -74,7 +74,7 @@ const { is: yt, defineProperty: bt, getOwnPropertyDescriptor: ft, getOwnProperty
   }
   return t;
 } }, at = (o, e) => !yt(o, e), Ae = { attribute: !0, type: String, converter: ue, reflect: !1, useDefault: !1, hasChanged: at };
-Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), M.litPropertyMetadata ?? (M.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
+Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), V.litPropertyMetadata ?? (V.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
 let R = class extends HTMLElement {
   static addInitializer(e) {
     this._$Ei(), (this.l ?? (this.l = [])).push(e);
@@ -278,15 +278,15 @@ let R = class extends HTMLElement {
   firstUpdated(e) {
   }
 };
-R.elementStyles = [], R.shadowRootOptions = { mode: "open" }, R[q("elementProperties")] = /* @__PURE__ */ new Map(), R[q("finalized")] = /* @__PURE__ */ new Map(), ae == null || ae({ ReactiveElement: R }), (M.reactiveElementVersions ?? (M.reactiveElementVersions = [])).push("2.1.2");
+R.elementStyles = [], R.shadowRootOptions = { mode: "open" }, R[q("elementProperties")] = /* @__PURE__ */ new Map(), R[q("finalized")] = /* @__PURE__ */ new Map(), ae == null || ae({ ReactiveElement: R }), (V.reactiveElementVersions ?? (V.reactiveElementVersions = [])).push("2.1.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Z = globalThis, Ee = (o) => o, ee = Z.trustedTypes, Se = ee ? ee.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ot = "$lit$", V = `lit$${Math.random().toFixed(9).slice(2)}$`, rt = "?" + V, zt = `<${rt}>`, H = document, G = () => H.createComment(""), J = (o) => o === null || typeof o != "object" && typeof o != "function", fe = Array.isArray, At = (o) => fe(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", oe = `[ 	
-\f\r]`, U = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, je = /-->/g, Ve = />/g, C = RegExp(`>|${oe}(?:([^\\s"'>=/]+)(${oe}*=${oe}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Me = /'/g, Ce = /"/g, st = /^(?:script|style|textarea|title)$/i, Et = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = Et(1), N = Symbol.for("lit-noChange"), _ = Symbol.for("lit-nothing"), Le = /* @__PURE__ */ new WeakMap(), P = H.createTreeWalker(H, 129);
+const Z = globalThis, Ee = (o) => o, ee = Z.trustedTypes, Se = ee ? ee.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ot = "$lit$", M = `lit$${Math.random().toFixed(9).slice(2)}$`, rt = "?" + M, zt = `<${rt}>`, O = document, G = () => O.createComment(""), J = (o) => o === null || typeof o != "object" && typeof o != "function", fe = Array.isArray, At = (o) => fe(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", oe = `[ 	
+\f\r]`, U = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, je = /-->/g, Me = />/g, C = RegExp(`>|${oe}(?:([^\\s"'>=/]+)(${oe}*=${oe}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`, "g"), Ve = /'/g, Ce = /"/g, st = /^(?:script|style|textarea|title)$/i, Et = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = Et(1), Y = Symbol.for("lit-noChange"), _ = Symbol.for("lit-nothing"), Le = /* @__PURE__ */ new WeakMap(), H = O.createTreeWalker(O, 129);
 function nt(o, e) {
   if (!fe(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
   return Se !== void 0 ? Se.createHTML(e) : e;
@@ -297,9 +297,9 @@ const St = (o, e) => {
   for (let l = 0; l < t; l++) {
     const d = o[l];
     let c, p, u = -1, m = 0;
-    for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === U ? p[1] === "!--" ? s = je : p[1] !== void 0 ? s = Ve : p[2] !== void 0 ? (st.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = C) : p[3] !== void 0 && (s = C) : s === C ? p[0] === ">" ? (s = a ?? U, u = -1) : p[1] === void 0 ? u = -2 : (u = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? C : p[3] === '"' ? Ce : Me) : s === Ce || s === Me ? s = C : s === je || s === Ve ? s = U : (s = C, a = void 0);
+    for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === U ? p[1] === "!--" ? s = je : p[1] !== void 0 ? s = Me : p[2] !== void 0 ? (st.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = C) : p[3] !== void 0 && (s = C) : s === C ? p[0] === ">" ? (s = a ?? U, u = -1) : p[1] === void 0 ? u = -2 : (u = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? C : p[3] === '"' ? Ce : Ve) : s === Ce || s === Ve ? s = C : s === je || s === Me ? s = U : (s = C, a = void 0);
     const b = s === C && o[l + 1].startsWith("/>") ? " " : "";
-    r += s === U ? d + zt : u >= 0 ? (i.push(c), d.slice(0, u) + ot + d.slice(u) + V + b) : d + V + (u === -2 ? l : b);
+    r += s === U ? d + zt : u >= 0 ? (i.push(c), d.slice(0, u) + ot + d.slice(u) + M + b) : d + M + (u === -2 ? l : b);
   }
   return [nt(o, r + (o[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
@@ -309,40 +309,40 @@ class Q {
     this.parts = [];
     let r = 0, s = 0;
     const l = e.length - 1, d = this.parts, [c, p] = St(e, t);
-    if (this.el = Q.createElement(c, i), P.currentNode = this.el.content, t === 2 || t === 3) {
+    if (this.el = Q.createElement(c, i), H.currentNode = this.el.content, t === 2 || t === 3) {
       const u = this.el.content.firstChild;
       u.replaceWith(...u.childNodes);
     }
-    for (; (a = P.nextNode()) !== null && d.length < l; ) {
+    for (; (a = H.nextNode()) !== null && d.length < l; ) {
       if (a.nodeType === 1) {
         if (a.hasAttributes()) for (const u of a.getAttributeNames()) if (u.endsWith(ot)) {
-          const m = p[s++], b = a.getAttribute(u).split(V), I = /([.?@])?(.*)/.exec(m);
-          d.push({ type: 1, index: r, name: I[2], strings: b, ctor: I[1] === "." ? Vt : I[1] === "?" ? Mt : I[1] === "@" ? Ct : ie }), a.removeAttribute(u);
-        } else u.startsWith(V) && (d.push({ type: 6, index: r }), a.removeAttribute(u));
+          const m = p[s++], b = a.getAttribute(u).split(M), I = /([.?@])?(.*)/.exec(m);
+          d.push({ type: 1, index: r, name: I[2], strings: b, ctor: I[1] === "." ? Mt : I[1] === "?" ? Vt : I[1] === "@" ? Ct : ie }), a.removeAttribute(u);
+        } else u.startsWith(M) && (d.push({ type: 6, index: r }), a.removeAttribute(u));
         if (st.test(a.tagName)) {
-          const u = a.textContent.split(V), m = u.length - 1;
+          const u = a.textContent.split(M), m = u.length - 1;
           if (m > 0) {
             a.textContent = ee ? ee.emptyScript : "";
-            for (let b = 0; b < m; b++) a.append(u[b], G()), P.nextNode(), d.push({ type: 2, index: ++r });
+            for (let b = 0; b < m; b++) a.append(u[b], G()), H.nextNode(), d.push({ type: 2, index: ++r });
             a.append(u[m], G());
           }
         }
       } else if (a.nodeType === 8) if (a.data === rt) d.push({ type: 2, index: r });
       else {
         let u = -1;
-        for (; (u = a.data.indexOf(V, u + 1)) !== -1; ) d.push({ type: 7, index: r }), u += V.length - 1;
+        for (; (u = a.data.indexOf(M, u + 1)) !== -1; ) d.push({ type: 7, index: r }), u += M.length - 1;
       }
       r++;
     }
   }
   static createElement(e, t) {
-    const i = H.createElement("template");
+    const i = O.createElement("template");
     return i.innerHTML = e, i;
   }
 }
 function F(o, e, t = o, i) {
   var s, l;
-  if (e === N) return e;
+  if (e === Y) return e;
   let a = i !== void 0 ? (s = t._$Co) == null ? void 0 : s[i] : t._$Cl;
   const r = J(e) ? void 0 : e._$litDirective$;
   return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = F(o, a._$AS(o, e.values), a, i)), e;
@@ -358,17 +358,17 @@ class jt {
     return this._$AM._$AU;
   }
   u(e) {
-    const { el: { content: t }, parts: i } = this._$AD, a = ((e == null ? void 0 : e.creationScope) ?? H).importNode(t, !0);
-    P.currentNode = a;
-    let r = P.nextNode(), s = 0, l = 0, d = i[0];
+    const { el: { content: t }, parts: i } = this._$AD, a = ((e == null ? void 0 : e.creationScope) ?? O).importNode(t, !0);
+    H.currentNode = a;
+    let r = H.nextNode(), s = 0, l = 0, d = i[0];
     for (; d !== void 0; ) {
       if (s === d.index) {
         let c;
         d.type === 2 ? c = new D(r, r.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(r, d.name, d.strings, this, e) : d.type === 6 && (c = new Lt(r, this, e)), this._$AV.push(c), d = i[++l];
       }
-      s !== (d == null ? void 0 : d.index) && (r = P.nextNode(), s++);
+      s !== (d == null ? void 0 : d.index) && (r = H.nextNode(), s++);
     }
-    return P.currentNode = H, a;
+    return H.currentNode = O, a;
   }
   p(e) {
     let t = 0;
@@ -395,7 +395,7 @@ class D {
     return this._$AB;
   }
   _$AI(e, t = this) {
-    e = F(this, e, t), J(e) ? e === _ || e == null || e === "" ? (this._$AH !== _ && this._$AR(), this._$AH = _) : e !== this._$AH && e !== N && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : At(e) ? this.k(e) : this._(e);
+    e = F(this, e, t), J(e) ? e === _ || e == null || e === "" ? (this._$AH !== _ && this._$AR(), this._$AH = _) : e !== this._$AH && e !== Y && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : At(e) ? this.k(e) : this._(e);
   }
   O(e) {
     return this._$AA.parentNode.insertBefore(e, this._$AB);
@@ -404,7 +404,7 @@ class D {
     this._$AH !== e && (this._$AR(), this._$AH = this.O(e));
   }
   _(e) {
-    this._$AH !== _ && J(this._$AH) ? this._$AA.nextSibling.data = e : this.T(H.createTextNode(e)), this._$AH = e;
+    this._$AH !== _ && J(this._$AH) ? this._$AA.nextSibling.data = e : this.T(O.createTextNode(e)), this._$AH = e;
   }
   $(e) {
     var r;
@@ -451,11 +451,11 @@ class ie {
   _$AI(e, t = this, i, a) {
     const r = this.strings;
     let s = !1;
-    if (r === void 0) e = F(this, e, t, 0), s = !J(e) || e !== this._$AH && e !== N, s && (this._$AH = e);
+    if (r === void 0) e = F(this, e, t, 0), s = !J(e) || e !== this._$AH && e !== Y, s && (this._$AH = e);
     else {
       const l = e;
       let d, c;
-      for (e = r[0], d = 0; d < r.length - 1; d++) c = F(this, l[i + d], t, d), c === N && (c = this._$AH[d]), s || (s = !J(c) || c !== this._$AH[d]), c === _ ? e = _ : e !== _ && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
+      for (e = r[0], d = 0; d < r.length - 1; d++) c = F(this, l[i + d], t, d), c === Y && (c = this._$AH[d]), s || (s = !J(c) || c !== this._$AH[d]), c === _ ? e = _ : e !== _ && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
     }
     s && !a && this.j(e);
   }
@@ -463,7 +463,7 @@ class ie {
     e === _ ? this.element.removeAttribute(this.name) : this.element.setAttribute(this.name, e ?? "");
   }
 }
-class Vt extends ie {
+class Mt extends ie {
   constructor() {
     super(...arguments), this.type = 3;
   }
@@ -471,7 +471,7 @@ class Vt extends ie {
     this.element[this.name] = e === _ ? void 0 : e;
   }
 }
-class Mt extends ie {
+class Vt extends ie {
   constructor() {
     super(...arguments), this.type = 4;
   }
@@ -484,7 +484,7 @@ class Ct extends ie {
     super(e, t, i, a, r), this.type = 5;
   }
   _$AI(e, t = this) {
-    if ((e = F(this, e, t, 0) ?? _) === N) return;
+    if ((e = F(this, e, t, 0) ?? _) === Y) return;
     const i = this._$AH, a = e === _ && i !== _ || e.capture !== i.capture || e.once !== i.once || e.passive !== i.passive, r = e !== _ && (i === _ || a);
     a && this.element.removeEventListener(this.name, this, i), r && this.element.addEventListener(this.name, this, e), this._$AH = e;
   }
@@ -504,7 +504,7 @@ class Lt {
     F(this, e);
   }
 }
-const Pt = { I: D }, re = Z.litHtmlPolyfillSupport;
+const Ht = { I: D }, re = Z.litHtmlPolyfillSupport;
 re == null || re(Q, D), (Z.litHtmlVersions ?? (Z.litHtmlVersions = [])).push("3.3.2");
 const lt = (o, e, t) => {
   const i = (t == null ? void 0 : t.renderBefore) ?? e;
@@ -520,8 +520,8 @@ const lt = (o, e, t) => {
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const O = globalThis;
-let Y = class extends R {
+const P = globalThis;
+let N = class extends R {
   constructor() {
     super(...arguments), this.renderOptions = { host: this }, this._$Do = void 0;
   }
@@ -543,21 +543,21 @@ let Y = class extends R {
     super.disconnectedCallback(), (e = this._$Do) == null || e.setConnected(!1);
   }
   render() {
-    return N;
+    return Y;
   }
 };
 var et;
-Y._$litElement$ = !0, Y.finalized = !0, (et = O.litElementHydrateSupport) == null || et.call(O, { LitElement: Y });
-const se = O.litElementPolyfillSupport;
-se == null || se({ LitElement: Y });
-(O.litElementVersions ?? (O.litElementVersions = [])).push("4.2.2");
+N._$litElement$ = !0, N.finalized = !0, (et = P.litElementHydrateSupport) == null || et.call(P, { LitElement: N });
+const se = P.litElementPolyfillSupport;
+se == null || se({ LitElement: N });
+(P.litElementVersions ?? (P.litElementVersions = [])).push("4.2.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Ot = (o) => (...e) => ({ _$litDirective$: o, values: e });
-let Ht = class {
+const Pt = (o) => (...e) => ({ _$litDirective$: o, values: e });
+let Ot = class {
   constructor(e) {
   }
   get _$AU() {
@@ -578,14 +578,14 @@ let Ht = class {
  * Copyright 2020 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { I: It } = Pt, Pe = (o) => o, Oe = (o, e) => (o == null ? void 0 : o._$litType$) !== void 0, Tt = (o) => {
+const { I: It } = Ht, He = (o) => o, Pe = (o, e) => (o == null ? void 0 : o._$litType$) !== void 0, Tt = (o) => {
   var e;
   return ((e = o == null ? void 0 : o._$litType$) == null ? void 0 : e.h) != null;
-}, He = () => document.createComment(""), Ie = (o, e, t) => {
+}, Oe = () => document.createComment(""), Ie = (o, e, t) => {
   var r;
   const i = o._$AA.parentNode, a = o._$AB;
   if (t === void 0) {
-    const s = i.insertBefore(He(), a), l = i.insertBefore(He(), a);
+    const s = i.insertBefore(Oe(), a), l = i.insertBefore(Oe(), a);
     t = new It(s, l, o, o.options);
   } else {
     const s = t._$AB.nextSibling, l = t._$AM, d = l !== o;
@@ -596,13 +596,13 @@ const { I: It } = Pt, Pe = (o) => o, Oe = (o, e) => (o == null ? void 0 : o._$li
     if (s !== a || d) {
       let c = t._$AA;
       for (; c !== s; ) {
-        const p = Pe(c).nextSibling;
-        Pe(i).insertBefore(c, a), c = p;
+        const p = He(c).nextSibling;
+        He(i).insertBefore(c, a), c = p;
       }
     }
   }
   return t;
-}, Rt = {}, Te = (o, e = Rt) => o._$AH = e, Re = (o) => o._$AH, Yt = (o) => {
+}, Rt = {}, Te = (o, e = Rt) => o._$AH = e, Re = (o) => o._$AH, Nt = (o) => {
   o._$AR();
 };
 /**
@@ -610,7 +610,7 @@ const { I: It } = Pt, Pe = (o) => o, Oe = (o, e) => (o == null ? void 0 : o._$li
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Ye = (o) => Tt(o) ? o._$litType$.h : o.strings, Nt = Ot(class extends Ht {
+const Ne = (o) => Tt(o) ? o._$litType$.h : o.strings, Yt = Pt(class extends Ot {
   constructor(o) {
     super(o), this.et = /* @__PURE__ */ new WeakMap();
   }
@@ -618,7 +618,7 @@ const Ye = (o) => Tt(o) ? o._$litType$.h : o.strings, Nt = Ot(class extends Ht {
     return [o];
   }
   update(o, [e]) {
-    const t = Oe(this.it) ? Ye(this.it) : null, i = Oe(e) ? Ye(e) : null;
+    const t = Pe(this.it) ? Ne(this.it) : null, i = Pe(e) ? Ne(e) : null;
     if (t !== null && (i === null || t !== i)) {
       const a = Re(o).pop();
       let r = this.et.get(t);
@@ -633,7 +633,7 @@ const Ye = (o) => Tt(o) ? o._$litType$.h : o.strings, Nt = Ot(class extends Ht {
         const a = this.et.get(i);
         if (a !== void 0) {
           const r = Re(a).pop();
-          Yt(o), Ie(o, void 0, r), Te(o, [r]);
+          Nt(o), Ie(o, void 0, r), Te(o, [r]);
         }
       }
       this.it = e;
@@ -818,7 +818,7 @@ function Zt(o, e) {
     }
   };
 }
-function Ne(o) {
+function Ye(o) {
   return {
     id: A(o, "export-price"),
     kind: "export_price",
@@ -1103,7 +1103,7 @@ const ci = {
   automation: "automation",
   appliances: "appliances",
   root: "general"
-}, x = "document", g = {
+}, z = "document", g = {
   general: "tab:general",
   power_devices: "tab:power_devices",
   scheduler: "tab:scheduler",
@@ -1130,6 +1130,9 @@ const ci = {
   },
   appliances: {
     configured_appliances: "section:appliances.configured_appliances"
+  },
+  bias_correction: {
+    settings: "section:bias_correction.settings"
   }
 }, _t = [
   "history_buckets",
@@ -1144,7 +1147,7 @@ const ci = {
   "device_label_text"
 ], ui = _t.filter(
   (o) => o !== "device_label_text"
-), z = {}, ce = [], hi = ut(_t), mi = ut(
+), x = {}, ce = [], hi = ut(_t), mi = ut(
   ui
 ), gi = [
   {
@@ -1152,8 +1155,8 @@ const ci = {
     documentPath: ["automation", "enabled"]
   }
 ], he = {
-  [x]: {
-    id: x,
+  [z]: {
+    id: z,
     kind: "document",
     labelKey: "editor.title",
     adapter: di()
@@ -1161,7 +1164,7 @@ const ci = {
   [g.general]: {
     id: g.general,
     kind: "tab",
-    parentId: x,
+    parentId: z,
     tabId: "general",
     labelKey: "editor.tabs.general",
     adapter: de(hi)
@@ -1169,40 +1172,40 @@ const ci = {
   [g.power_devices]: {
     id: g.power_devices,
     kind: "tab",
-    parentId: x,
+    parentId: z,
     tabId: "power_devices",
     labelKey: "editor.tabs.power_devices",
     adapter: w(["power_devices"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
   [g.scheduler]: {
     id: g.scheduler,
     kind: "tab",
-    parentId: x,
+    parentId: z,
     tabId: "scheduler",
     labelKey: "editor.tabs.scheduler",
     adapter: w(["scheduler"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
   [g.automation]: {
     id: g.automation,
     kind: "tab",
-    parentId: x,
+    parentId: z,
     tabId: "automation",
     labelKey: "editor.tabs.automation",
     adapter: w(["automation"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
   [g.appliances]: {
     id: g.appliances,
     kind: "tab",
-    parentId: x,
+    parentId: z,
     tabId: "appliances",
     labelKey: "editor.tabs.appliances",
     adapter: w(["appliances"], {
@@ -1213,13 +1216,13 @@ const ci = {
   [g.bias_correction]: {
     id: g.bias_correction,
     kind: "tab",
-    parentId: x,
+    parentId: z,
     tabId: "bias_correction",
     labelKey: "editor.tabs.bias_correction",
     adapter: w(
       ["power_devices", "solar", "forecast", "bias_correction"],
       {
-        emptyValue: z,
+        emptyValue: x,
         rootKind: "object"
       }
     )
@@ -1239,7 +1242,7 @@ const ci = {
     tabId: "general",
     labelKey: "editor.sections.device_label_text",
     adapter: w(["device_label_text"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
@@ -1250,7 +1253,7 @@ const ci = {
     tabId: "power_devices",
     labelKey: "editor.sections.house",
     adapter: w(["power_devices", "house"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
@@ -1261,7 +1264,7 @@ const ci = {
     tabId: "power_devices",
     labelKey: "editor.sections.solar",
     adapter: w(["power_devices", "solar"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
@@ -1272,7 +1275,7 @@ const ci = {
     tabId: "power_devices",
     labelKey: "editor.sections.battery",
     adapter: w(["power_devices", "battery"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
@@ -1283,7 +1286,7 @@ const ci = {
     tabId: "power_devices",
     labelKey: "editor.sections.grid",
     adapter: w(["power_devices", "grid"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
@@ -1294,7 +1297,7 @@ const ci = {
     tabId: "scheduler",
     labelKey: "editor.sections.schedule_control_mapping",
     adapter: w(["scheduler", "control"], {
-      emptyValue: z,
+      emptyValue: x,
       rootKind: "object"
     })
   },
@@ -1327,6 +1330,20 @@ const ci = {
       emptyValue: ce,
       rootKind: "array"
     })
+  },
+  [h.bias_correction.settings]: {
+    id: h.bias_correction.settings,
+    kind: "section",
+    parentId: g.bias_correction,
+    tabId: "bias_correction",
+    labelKey: "editor.sections.bias_correction_settings",
+    adapter: w(
+      ["power_devices", "solar", "forecast", "bias_correction"],
+      {
+        emptyValue: x,
+        rootKind: "object"
+      }
+    )
   }
 }, We = vi();
 function W(o) {
@@ -1417,7 +1434,9 @@ const ht = {
     projection: "Projekce",
     use_modes: "Režimy použití",
     eco_gears: "Eco gears",
-    vehicles: "Vozidla"
+    vehicles: "Vozidla",
+    bias_correction_settings: "Nastavení korekce zkreslení",
+    bias_correction_status: "Stav a trénování"
   },
   notes: {
     device_label_text: "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
@@ -1520,7 +1539,13 @@ const ht = {
     soc_entity: "Entita SoC",
     charge_limit_entity: "Entita limitu nabíjení",
     battery_capacity_kwh: "Kapacita baterie kWh",
-    entity_id: "ID entity"
+    entity_id: "ID entity",
+    bias_correction_enabled: "Povolit korekci zkreslení",
+    bias_correction_min_history_days: "Min. dní historie",
+    bias_correction_training_time: "Čas trénování (HH:MM)",
+    bias_correction_clamp_min: "Min. zajistění prognózy",
+    bias_correction_clamp_max: "Max. zajistění prognózy",
+    bias_correction_total_energy_entity: "Entita celkové energie"
   },
   helpers: {
     history_buckets: "Kolik bucketů historie Helman drží pro UI historii.",
@@ -1539,7 +1564,9 @@ const ht = {
     surplus_appliance_climate_mode_single: "Tento klimatický spotřebič aktuálně nabízí jen jeden zapisovatelný režim, proto je pole jen pro čtení.",
     surplus_appliance_climate_mode_unknown: "Uložený klimatický režim už zvolený spotřebič nepodporuje. Vyberte některý z živě podporovaných režimů a opravte ho.",
     appliance_icon: "Volitelné. Když pole necháte prázdné, metadata spotřebiče použijí výchozí energetickou ikonu.",
-    history_energy_entity: "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče."
+    history_energy_entity: "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče.",
+    bias_correction_min_history_days: "Minimální počet dní historických dat (1-365) před zahájením trénování.",
+    bias_correction_training_time: "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování."
   },
   messages: {
     reloaded_config: "Uložená konfigurace Helman byla znovu načtena z backendu.",
@@ -1677,7 +1704,13 @@ const ht = {
     vehicle_soc_entity: "Senzor hlásící aktuální stav nabití baterie vozidla v procentech (0–100). Vyžadováno pro plánování nabíjení s ohledem na vozidlo — Helman ho používá k určení, kolik nabíjení je potřeba.",
     vehicle_charge_limit_entity: "Číselná entita hlásící nakonfigurovaný limit nabíjení vozidla v procentech (0–100). Pokud je nastavena, Helman ji používá jako cílový SoC místo předpokladu 100 %. Volitelné.",
     vehicle_battery_capacity_kwh: "Celková využitelná kapacita baterie vozidla v kWh. Vyžadováno pro přesné výpočty cíle nabíjení a délky nabíjení.",
-    vehicle_max_charging_power_kw: "Maximální výkon AC nabíjení tohoto vozidla v kW. Slouží k modelování rychlosti nabíjení vozidla a plánování délky oken nabíjení."
+    vehicle_max_charging_power_kw: "Maximální výkon AC nabíjení tohoto vozidla v kW. Slouží k modelování rychlosti nabíjení vozidla a plánování délky oken nabíjení.",
+    bias_correction_enabled: "Povolit trénování korekce zkreslení solární prognózy. Pokud je povoleno, Helman automaticky trénuje model opravy prognózy na základě vaší skutečné solární výroby.",
+    bias_correction_min_history_days: "Minimální počet dní zaznamenaných solárních dat před tím, než lze model trénovat (1-365). Vyšší hodnota zajišťuje stabilnější trénování, ale zpožďuje opravy. Výchozí hodnota je 7 dní.",
+    bias_correction_training_time: "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování, obvykle během hodin s nízkou aktivitou. Trénování zpracovává historická data za účelem nepřetržitého zlepšování přesnosti prognózy.",
+    bias_correction_clamp_min: "Dolní mez (0,0-1,0) pro opravené hodnoty prognózy. Zabraňuje nerealistickým negativním opravám v příliš agresivním potlačování normálních prognóz solární výroby.",
+    bias_correction_clamp_max: "Horní mez (0,0-1,0) pro opravené hodnoty prognózy. Zabraňuje nerealistickým pozitivním opravám v příliš vysokém zvýšení prognózovaných hodnot.",
+    bias_correction_total_energy_entity: "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce."
   }
 }, yi = {
   editor: ht
@@ -1748,7 +1781,9 @@ const ht = {
     projection: "Projection",
     use_modes: "Use modes",
     eco_gears: "Eco gears",
-    vehicles: "Vehicles"
+    vehicles: "Vehicles",
+    bias_correction_settings: "Bias correction settings",
+    bias_correction_status: "Status and training"
   },
   notes: {
     device_label_text: "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
@@ -1851,7 +1886,13 @@ const ht = {
     soc_entity: "SoC entity",
     charge_limit_entity: "Charge limit entity",
     battery_capacity_kwh: "Battery capacity kWh",
-    entity_id: "Entity id"
+    entity_id: "Entity id",
+    bias_correction_enabled: "Enable bias correction",
+    bias_correction_min_history_days: "Min history days",
+    bias_correction_training_time: "Training time (HH:MM)",
+    bias_correction_clamp_min: "Min forecast clamp",
+    bias_correction_clamp_max: "Max forecast clamp",
+    bias_correction_total_energy_entity: "Total energy entity"
   },
   helpers: {
     history_buckets: "How many history buckets Helman keeps for UI history.",
@@ -1870,7 +1911,9 @@ const ht = {
     surplus_appliance_climate_mode_single: "This climate appliance currently exposes only one authorable mode, so the field is read-only.",
     surplus_appliance_climate_mode_unknown: "The stored climate mode is no longer supported by the selected appliance. Pick one of the live supported modes to repair it.",
     appliance_icon: "Optional. Leave empty to use the default energy icon in appliance metadata.",
-    history_energy_entity: "Use a cumulative energy sensor that tracks the appliance energy consumption."
+    history_energy_entity: "Use a cumulative energy sensor that tracks the appliance energy consumption.",
+    bias_correction_min_history_days: "Minimum days of historical data (1-365) before training begins.",
+    bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs."
   },
   messages: {
     reloaded_config: "Reloaded the stored Helman config from the backend.",
@@ -2008,7 +2051,13 @@ const ht = {
     vehicle_soc_entity: "Sensor reporting the vehicle's current battery state of charge as a percentage (0–100). Required for vehicle-aware charging scheduling — Helman uses it to determine how much charging is needed.",
     vehicle_charge_limit_entity: "Number entity reporting the vehicle's configured charge limit as a percentage (0–100). When provided, Helman uses it as the target SoC instead of assuming 100%. Optional.",
     vehicle_battery_capacity_kwh: "Total usable battery capacity of the vehicle in kWh. Required for accurate charge target and duration calculations.",
-    vehicle_max_charging_power_kw: "Maximum AC charging power for this vehicle in kW. Used to model how quickly the vehicle charges and to plan charging window durations."
+    vehicle_max_charging_power_kw: "Maximum AC charging power for this vehicle in kW. Used to model how quickly the vehicle charges and to plan charging window durations.",
+    bias_correction_enabled: "Enable solar bias correction training. When enabled, Helman automatically trains a forecast correction model based on your actual solar production.",
+    bias_correction_min_history_days: "Minimum number of days of recorded solar data before the model can be trained (1-365). A higher value ensures more stable training but delays corrections. Defaults to 7 days.",
+    bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs, typically during low-activity hours. Training processes historical data to continuously improve forecast accuracy.",
+    bias_correction_clamp_min: "Lower bound (0.0-1.0) for corrected forecast values. Prevents unrealistic negative corrections from suppressing normal solar generation forecasts too aggressively.",
+    bias_correction_clamp_max: "Upper bound (0.0-1.0) for corrected forecast values. Prevents unrealistic positive corrections from over-inflating forecast values.",
+    bias_correction_total_energy_entity: "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model."
   }
 }, fi = {
   editor: mt
@@ -2102,7 +2151,7 @@ const xi = async () => {
       throw B = null, o;
     }
   }
-}, $e = class $e extends Y {
+}, $e = class $e extends N {
   constructor() {
     super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "";
   }
@@ -2110,16 +2159,18 @@ const xi = async () => {
     super.connectedCallback(), this._loadStatus();
   }
   async _loadStatus() {
-    if (this.hass) {
-      this._loading = !0;
-      try {
-        const e = await this.hass.callWS({ type: "helman/solar_bias/status" });
-        this._status = e, (e == null ? void 0 : e.status) === "profile_trained" && await this._loadProfile();
-      } catch (e) {
-        this._message = (e == null ? void 0 : e.message) ?? "Failed to load status", console.error("Error loading bias correction status:", e);
-      } finally {
-        this._loading = !1;
-      }
+    if (!this.hass) {
+      this._message = "Home Assistant not available", this._loading = !1;
+      return;
+    }
+    this._loading = !0;
+    try {
+      const e = await this.hass.callWS({ type: "helman/solar_bias/status" });
+      this._status = e, (e == null ? void 0 : e.status) === "profile_trained" && await this._loadProfile();
+    } catch (e) {
+      this._message = (e == null ? void 0 : e.message) ?? "Failed to load status", console.error("Error loading bias correction status:", e);
+    } finally {
+      this._loading = !1, this.requestUpdate();
     }
   }
   async _loadProfile() {
@@ -2129,6 +2180,8 @@ const xi = async () => {
         this._profile = e;
       } catch (e) {
         console.debug("No profile available:", e == null ? void 0 : e.message);
+      } finally {
+        this.requestUpdate();
       }
   }
   async _trainNow() {
@@ -2140,7 +2193,7 @@ const xi = async () => {
       } catch (e) {
         this._message = `Training failed: ${(e == null ? void 0 : e.message) ?? "Unknown error"}`, console.error("Training failed:", e);
       } finally {
-        this._trainInProgress = !1;
+        this._trainInProgress = !1, this.requestUpdate();
       }
     }
   }
@@ -2171,103 +2224,107 @@ const xi = async () => {
     }
   }
   render() {
-    var t;
+    var e;
     if (this._loading)
       return n`<div class="container"><p>Loading status…</p></div>`;
     if (!this._status)
       return n`<div class="container"><div class="info-box">Unable to load bias correction status</div></div>`;
-    const e = this._getStatusBadge();
-    return n`
-      <div class="container">
-        <div class="section">
-          <div class="section-title">Status</div>
-          <div class="status-grid">
-            <div class="status-row">
-              <span class="status-label">Enabled</span>
-              <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">Current Status</span>
-              <span class="badge ${e.class}">${e.text}</span>
-            </div>
-            ${this._status.trainedAt ? n`
-                  <div class="status-row">
-                    <span class="status-label">Trained At</span>
-                    <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
-                  </div>
-                ` : ""}
-            ${this._status.nextScheduledTrainingAt ? n`
-                  <div class="status-row">
-                    <span class="status-label">Next Training</span>
-                    <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
-                  </div>
-                ` : ""}
-            <div class="status-row">
-              <span class="status-label">Effective Variant</span>
-              <span class="status-value">${this._status.effectiveVariant}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">Data Available</span>
-              <span class="status-value">${this._status.usableDays} days</span>
-            </div>
-            ${this._status.status === "insufficient_history" ? n`
-                  <div class="info-box" style="margin-top: 8px;">
-                    Not enough historical data yet. Need at least 7 days of data for training.
-                  </div>
-                ` : ""}
-            ${this._status.errorReason ? n`
-                  <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
-                    <span class="status-label">Error</span>
-                    <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
-                  </div>
-                ` : ""}
-          </div>
-        </div>
-
-        ${this._status.droppedDays && this._status.droppedDays.length > 0 ? n`
-              <div class="section">
-                <div class="section-title">Dropped Days</div>
-                <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
-                  ${this._status.droppedDays.map((i) => n`
-                    <div style="padding: 4px 0;">
-                      <strong>${i.date}:</strong> ${i.reason}
+    try {
+      const t = this._getStatusBadge();
+      return n`
+        <div class="container">
+          <div class="section">
+            <div class="section-title">Status</div>
+            <div class="status-grid">
+              <div class="status-row">
+                <span class="status-label">Enabled</span>
+                <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Current Status</span>
+                <span class="badge ${t.class}">${t.text}</span>
+              </div>
+              ${this._status.trainedAt ? n`
+                    <div class="status-row">
+                      <span class="status-label">Trained At</span>
+                      <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
                     </div>
-                  `)}
-                </div>
+                  ` : ""}
+              ${this._status.nextScheduledTrainingAt ? n`
+                    <div class="status-row">
+                      <span class="status-label">Next Training</span>
+                      <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
+                    </div>
+                  ` : ""}
+              <div class="status-row">
+                <span class="status-label">Effective Variant</span>
+                <span class="status-value">${this._status.effectiveVariant}</span>
               </div>
-            ` : ""}
+              <div class="status-row">
+                <span class="status-label">Data Available</span>
+                <span class="status-value">${this._status.usableDays} days</span>
+              </div>
+              ${this._status.status === "insufficient_history" ? n`
+                    <div class="info-box" style="margin-top: 8px;">
+                      Not enough historical data yet. Need at least 7 days of data for training.
+                    </div>
+                  ` : ""}
+              ${this._status.errorReason ? n`
+                    <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
+                      <span class="status-label">Error</span>
+                      <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
+                    </div>
+                  ` : ""}
+            </div>
+          </div>
 
-        <div class="section">
-          <div class="section-title">Actions</div>
-          <div class="controls">
-            <button
-              class="primary"
-              @click=${this._trainNow}
-              ?disabled=${this._trainInProgress || ((t = this._status) == null ? void 0 : t.enabled) === !1}
-            >
-              ${this._trainInProgress ? n`<span class="spinner"></span> Training…` : "Train Now"}
-            </button>
-            <button
-              @click=${this._loadStatus}
-              ?disabled=${this._loading}
-            >
-              Refresh Status
-            </button>
+          ${this._status.droppedDays && this._status.droppedDays.length > 0 ? n`
+                <div class="section">
+                  <div class="section-title">Dropped Days</div>
+                  <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
+                    ${this._status.droppedDays.map((i) => n`
+                      <div style="padding: 4px 0;">
+                        <strong>${i.date}:</strong> ${i.reason}
+                      </div>
+                    `)}
+                  </div>
+                </div>
+              ` : ""}
+
+          <div class="section">
+            <div class="section-title">Actions</div>
+            <div class="controls">
+              <button
+                class="primary"
+                @click=${this._trainNow}
+                ?disabled=${this._trainInProgress || ((e = this._status) == null ? void 0 : e.enabled) === !1}
+              >
+                ${this._trainInProgress ? n`<span class="spinner"></span> Training…` : "Train Now"}
+              </button>
+              <button
+                @click=${this._loadStatus}
+                ?disabled=${this._loading}
+              >
+                Refresh Status
+              </button>
+            </div>
+          </div>
+
+          ${this._message ? n`
+                <div class="message ${this._message.startsWith("Training failed") ? "error" : "success"}">
+                  ${this._message}
+                </div>
+              ` : ""}
+
+          <div class="info-box">
+            Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics.
+            Enable training to automatically improve predictions over time.
           </div>
         </div>
-
-        ${this._message ? n`
-              <div class="message ${this._message.startsWith("Training failed") ? "error" : "success"}">
-                ${this._message}
-              </div>
-            ` : ""}
-
-        <div class="info-box">
-          Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics.
-          Enable training to automatically improve predictions over time.
-        </div>
-      </div>
-    `;
+      `;
+    } catch (t) {
+      return console.error("Render error:", t), n`<div class="container"><div class="info-box" style="color: red;">Render error: ${t == null ? void 0 : t.message}</div></div>`;
+    }
   }
 };
 $e.styles = it`
@@ -2478,9 +2535,9 @@ const zi = [
 ], Ai = [
   { value: "fixed", labelKey: "editor.values.fixed" },
   { value: "history_average", labelKey: "editor.values.history_average" }
-], Ei = "export_price", Si = "stop_export", Qe = "surplus_appliance", ji = "on", Vi = {
+], Ei = "export_price", Si = "stop_export", Qe = "surplus_appliance", ji = "on", Mi = {
   icon: {}
-}, te = class te extends Y {
+}, te = class te extends N {
   constructor() {
     super(...arguments), this._fallbackLocalize = Be(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._liveApplianceMetadata = null, this._helpDialog = null, this._preventSummaryToggle = (e) => {
       e.preventDefault(), e.stopPropagation();
@@ -2540,14 +2597,14 @@ const zi = [
         if (!y(f(t, ["automation"]))) {
           v(t, ["automation"], {
             enabled: !0,
-            optimizers: [Ne(e)]
+            optimizers: [Ye(e)]
           });
           return;
         }
         E(
           t,
           ["automation", "optimizers"],
-          Ne(e)
+          Ye(e)
         );
       });
     }, this._handleAddSurplusApplianceOptimizer = () => {
@@ -2657,7 +2714,7 @@ const zi = [
             </p>
           </div>
           <div class="actions">
-            ${this._renderModeToggle(x)}
+            ${this._renderModeToggle(z)}
             <button
               type="button"
               ?disabled=${this._loading || this._saving || this._validating}
@@ -2701,7 +2758,7 @@ const zi = [
     `;
   }
   _renderDocumentBody(e) {
-    return this._isScopeYaml(x) ? n`<div class="list-card">${this._renderYamlEditor(x)}</div>` : n`
+    return this._isScopeYaml(z) ? n`<div class="list-card">${this._renderYamlEditor(z)}</div>` : n`
       <div class="tabs">
         ${_i.map((t) => {
       const i = e[t.id];
@@ -2721,7 +2778,7 @@ const zi = [
     })}
       </div>
 
-      ${Nt(this._renderActiveTab())}
+      ${Yt(this._renderActiveTab())}
     `;
   }
   _renderActiveTab() {
@@ -3645,10 +3702,54 @@ const zi = [
   }
   _renderBiasCorrectionTab() {
     return n`
+      ${this._renderSectionScope(
+      h.bias_correction.settings,
+      n`
+          <div class="field-grid">
+            ${this._renderBooleanField(
+        ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
+        "editor.fields.bias_correction_enabled",
+        !1
+      )}
+            ${this._renderOptionalNumberField(
+        ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+        "editor.fields.bias_correction_min_history_days",
+        "editor.helpers.bias_correction_min_history_days",
+        "editor.help.bias_correction_min_history_days"
+      )}
+            ${this._renderOptionalTextField(
+        ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
+        "editor.fields.bias_correction_training_time",
+        "editor.helpers.bias_correction_training_time",
+        "editor.help.bias_correction_training_time"
+      )}
+            ${this._renderOptionalNumberField(
+        ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
+        "editor.fields.bias_correction_clamp_min",
+        void 0,
+        "editor.help.bias_correction_clamp_min"
+      )}
+            ${this._renderOptionalNumberField(
+        ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
+        "editor.fields.bias_correction_clamp_max",
+        void 0,
+        "editor.help.bias_correction_clamp_max"
+      )}
+            ${this._renderOptionalEntityField(
+        ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
+        "editor.fields.bias_correction_total_energy_entity",
+        ["sensor"],
+        void 0,
+        "editor.help.bias_correction_total_energy_entity"
+      )}
+          </div>
+        `
+    )}
+
       <div class="list-card">
         <div class="card-title" style="margin-bottom: 16px;">
-          <strong>${this._t("editor.tabs.bias_correction")}</strong>
-          <span class="card-subtitle">Solar bias correction configuration and status</span>
+          <strong>${this._t("editor.sections.bias_correction_status")}</strong>
+          <span class="card-subtitle">Current bias correction status and training controls</span>
         </div>
         <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
       </div>
@@ -4488,7 +4589,7 @@ const zi = [
         <ha-selector
           .hass=${this.hass}
           .narrow=${this.narrow ?? !1}
-          .selector=${Vi}
+          .selector=${Mi}
           .label=${this._t(t)}
           .helper=${i ? this._t(i) : void 0}
           .required=${!1}
