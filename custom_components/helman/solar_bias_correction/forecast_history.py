@@ -130,7 +130,7 @@ def _select_first_state_for_window(states: list[Any], *, after: datetime) -> Any
         if _state_sort_key(state) < after:
             continue
         return state
-    return states[0] if states else None
+    return None
 
 
 async def _read_history_for_entities_with_attributes(
