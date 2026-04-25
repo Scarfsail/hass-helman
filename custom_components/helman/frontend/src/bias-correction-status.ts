@@ -1,5 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { property, state } from "lit/decorators.js";
+import "./bias-correction-inspector";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
 
 export class HelmanBiasCorrectionStatus extends LitElement {
@@ -416,6 +417,8 @@ export class HelmanBiasCorrectionStatus extends LitElement {
                 </div>
               `
             : ""}
+
+          <helman-bias-correction-inspector .hass=${this.hass}></helman-bias-correction-inspector>
 
           <div class="info-box">
             ${this._t("bias_correction.status_panel.info")}

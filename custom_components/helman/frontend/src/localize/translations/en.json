@@ -399,6 +399,23 @@
       "no_profile": "No solar bias profile is available.",
       "not_loaded": "The Helman solar bias correction service is not available.",
       "unauthorized": "Admin access is required."
+    },
+    "inspector": {
+      "title": "Visual inspector",
+      "loading": "Loading inspector data...",
+      "load_failed": "Failed to load inspector data.",
+      "previous_day": "Previous day",
+      "next_day": "Next day",
+      "today": "Today",
+      "forecast_only": "Forecast only",
+      "raw_forecast": "Raw forecast",
+      "corrected_forecast": "Corrected forecast",
+      "actual_production": "Actual production",
+      "correction_factor": "Correction factor",
+      "daily_totals": "Daily totals",
+      "actual_not_available": "not available",
+      "no_profile": "No trained profile is available yet. Raw forecast and actual history can still be shown when available.",
+      "no_data": "No data is available for {date}. Try a newer day or refresh after the next forecast update."
     }
   }
 }

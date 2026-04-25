@@ -399,6 +399,23 @@
       "no_profile": "Profil solární korekce není k dispozici.",
       "not_loaded": "Služba korekce solární prognózy Helman není k dispozici.",
       "unauthorized": "Je vyžadován administrátorský přístup."
+    },
+    "inspector": {
+      "title": "Vizuální inspektor",
+      "loading": "Načítám data inspektoru...",
+      "load_failed": "Nepodařilo se načíst data inspektoru.",
+      "previous_day": "Předchozí den",
+      "next_day": "Další den",
+      "today": "Dnes",
+      "forecast_only": "Pouze prognóza",
+      "raw_forecast": "Surová prognóza",
+      "corrected_forecast": "Opravená prognóza",
+      "actual_production": "Skutečná výroba",
+      "correction_factor": "Korekční faktor",
+      "daily_totals": "Denní součty",
+      "actual_not_available": "není k dispozici",
+      "no_profile": "Natrénovaný profil zatím není k dispozici. Surová prognóza a skutečná historie se stále mohou zobrazit, pokud jsou dostupné.",
+      "no_data": "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy."
     }
   }
 }
