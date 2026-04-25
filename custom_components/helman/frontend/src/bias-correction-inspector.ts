@@ -238,7 +238,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
           class="summary-button"
           type="button"
           aria-expanded=${this._expanded ? "true" : "false"}
-          @click=${this._handleSummaryClick}
+          @click=${this._toggleExpanded}
         >
           <div class="summary-row">
             <div class="summary-left">
@@ -462,8 +462,9 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     `;
   }
 
-  private _handleSummaryClick(event: Event) {
+  private _toggleExpanded() {
     this._expanded = !this._expanded;
+    this.requestUpdate();
     if (!this._expanded) {
       return;
     }

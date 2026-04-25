@@ -286,7 +286,7 @@ q.elementStyles = [], q.shadowRootOptions = { mode: "open" }, q[ie("elementPrope
  */
 const ae = globalThis, De = (r) => r, ce = ae.trustedTypes, Ne = ce ? ce.createPolicy("lit-html", { createHTML: (r) => r }) : void 0, ht = "$lit$", H = `lit$${Math.random().toFixed(9).slice(2)}$`, mt = "?" + H, Nt = `<${mt}>`, Y = document, oe = () => Y.createComment(""), se = (r) => r === null || typeof r != "object" && typeof r != "function", Ce = Array.isArray, Ft = (r) => Ce(r) || typeof (r == null ? void 0 : r[Symbol.iterator]) == "function", he = `[ 	
 \f\r]`, Q = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, Fe = /-->/g, Re = />/g, I = RegExp(`>|${he}(?:([^\\s"'>=/]+)(${he}*=${he}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Ye = /'/g, Ue = /"/g, gt = /^(?:script|style|textarea|title)$/i, vt = (r) => (e, ...t) => ({ _$litType$: r, strings: e, values: t }), n = vt(1), E = vt(2), K = Symbol.for("lit-noChange"), u = Symbol.for("lit-nothing"), We = /* @__PURE__ */ new WeakMap(), N = Y.createTreeWalker(Y, 129);
+\f\r"'\`<>=]|("|')|))|$)`, "g"), Ye = /'/g, Ue = /"/g, gt = /^(?:script|style|textarea|title)$/i, vt = (r) => (e, ...t) => ({ _$litType$: r, strings: e, values: t }), n = vt(1), S = vt(2), K = Symbol.for("lit-noChange"), u = Symbol.for("lit-nothing"), We = /* @__PURE__ */ new WeakMap(), N = Y.createTreeWalker(Y, 129);
 function yt(r, e) {
   if (!Ce(r) || !r.hasOwnProperty("raw")) throw Error("invalid template strings array");
   return Ne !== void 0 ? Ne.createHTML(e) : e;
@@ -1141,10 +1141,10 @@ const xi = {
   "show_empty_groups",
   "show_others_group",
   "device_label_text"
-], Si = wt.filter(
+], Ei = wt.filter(
   (r) => r !== "device_label_text"
-), j = {}, fe = [], Ei = xt(wt), ji = xt(
-  Si
+), j = {}, fe = [], Si = xt(wt), ji = xt(
+  Ei
 ), Mi = [
   {
     yamlKey: "enabled",
@@ -1163,7 +1163,7 @@ const xi = {
     parentId: M,
     tabId: "general",
     labelKey: "editor.tabs.general",
-    adapter: be(Ei)
+    adapter: be(Si)
   },
   [y.power_devices]: {
     id: y.power_devices,
@@ -1699,7 +1699,7 @@ const zt = {
   no: "Ne",
   unknown: "Neznámé",
   not_available: "Není k dispozici"
-}, St = {
+}, Et = {
   status_panel: {
     subtitle: "Aktuální stav korekce zkreslení a ovládání trénování",
     loading_status: "Načítám stav...",
@@ -1772,14 +1772,14 @@ const zt = {
 }, Ci = {
   editor: zt,
   common: At,
-  bias_correction: St
+  bias_correction: Et
 }, Li = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  bias_correction: St,
+  bias_correction: Et,
   common: At,
   default: Ci,
   editor: zt
-}, Symbol.toStringTag, { value: "Module" })), Et = {
+}, Symbol.toStringTag, { value: "Module" })), St = {
   title: "Helman config editor",
   description: "Edit the stored Helman integration config, validate it in the backend, and save it without losing unsupported keys or future config branches.",
   tabs: {
@@ -2196,7 +2196,7 @@ const zt = {
     no_data: "No data is available for {date}. Try a newer day or refresh after the next forecast update."
   }
 }, Pi = {
-  editor: Et,
+  editor: St,
   common: jt,
   bias_correction: Mt
 }, Hi = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
@@ -2204,7 +2204,7 @@ const zt = {
   bias_correction: Mt,
   common: jt,
   default: Pi,
-  editor: Et
+  editor: St
 }, Symbol.toStringTag, { value: "Module" })), ke = {
   cs: Li,
   en: Hi
@@ -2305,7 +2305,7 @@ const Ii = async () => {
           class="summary-button"
           type="button"
           aria-expanded=${this._expanded ? "true" : "false"}
-          @click=${this._handleSummaryClick}
+          @click=${this._toggleExpanded}
         >
           <div class="summary-row">
             <div class="summary-left">
@@ -2376,29 +2376,29 @@ const Ii = async () => {
       ...c.map((v) => v.point.valueWh),
       ...p.map((v) => v.point.valueWh),
       ..._.map((v) => v.point.valueWh)
-    ], b = Math.max(1e3, ...h), A = Math.ceil(b / 1e3), S = this._buildYTicks(A), U = (v) => a.left + v / 1440 * o, T = (v) => a.top + s - v / (A * 1e3) * s, le = (v) => v.map((k, W) => `${W === 0 ? "M" : "L"}${U(k.minutes).toFixed(1)},${T(k.point.valueWh).toFixed(1)}`).join(" ");
-    return E`
+    ], b = Math.max(1e3, ...h), A = Math.ceil(b / 1e3), E = this._buildYTicks(A), U = (v) => a.left + v / 1440 * o, T = (v) => a.top + s - v / (A * 1e3) * s, le = (v) => v.map((k, W) => `${W === 0 ? "M" : "L"}${U(k.minutes).toFixed(1)},${T(k.point.valueWh).toFixed(1)}`).join(" ");
+    return S`
       <svg viewBox="0 0 ${720} ${260}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
         <rect x="0" y="0" width=${720} height=${260} fill="var(--card-background-color)"></rect>
         ${this._renderFactorBands(e.series.factors, a.left, a.top, o, s)}
-        ${S.map((v) => {
+        ${E.map((v) => {
       const k = T(v * 1e3);
-      return E`
+      return S`
             <line x1=${a.left} y1=${k} x2=${720 - a.right} y2=${k} stroke="var(--divider-color)" stroke-width="1"></line>
             <text x=${a.left - 8} y=${k + 4} text-anchor="end" fill="var(--secondary-text-color)" font-size="11">${v.toFixed(1)}</text>
           `;
     })}
         ${[0, 3, 6, 9, 12, 15, 18, 21, 24].map((v) => {
       const k = a.left + v / 24 * o;
-      return E`
+      return S`
             <line x1=${k} y1=${a.top} x2=${k} y2=${260 - a.bottom} stroke="var(--divider-color)" stroke-width="1" opacity="0.55"></line>
             <text x=${k} y=${250} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(v).padStart(2, "0")}</text>
           `;
     })}
         <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">kWh</text>
-        ${c.length > 1 ? E`<path d=${le(c)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>` : c.length === 1 ? E`<circle cx=${U(c[0].minutes)} cy=${T(c[0].point.valueWh)} r="3.5" fill="#1565c0"></circle>` : ""}
-        ${p.length > 1 ? E`<path d=${le(p)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>` : p.length === 1 ? E`<circle cx=${U(p[0].minutes)} cy=${T(p[0].point.valueWh)} r="3.5" fill="#2e7d32"></circle>` : ""}
-        ${_.map((v) => E`
+        ${c.length > 1 ? S`<path d=${le(c)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>` : c.length === 1 ? S`<circle cx=${U(c[0].minutes)} cy=${T(c[0].point.valueWh)} r="3.5" fill="#1565c0"></circle>` : ""}
+        ${p.length > 1 ? S`<path d=${le(p)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>` : p.length === 1 ? S`<circle cx=${U(p[0].minutes)} cy=${T(p[0].point.valueWh)} r="3.5" fill="#2e7d32"></circle>` : ""}
+        ${_.map((v) => S`
           <circle cx=${U(v.minutes)} cy=${T(v.point.valueWh)} r="3.5" fill="#c62828"></circle>
         `)}
       </svg>
@@ -2416,8 +2416,8 @@ const Ii = async () => {
       const h = Number(_[1]), b = Number(_[2]);
       if (!Number.isFinite(h) || !Number.isFinite(b) || h < 0 || h > 23 || b < 0 || b > 59)
         return "";
-      const A = h * 60 + b, S = t + A / 1440 * a, U = Math.max(2, a / 96), T = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), le = Math.min(0.34, 0.06 + T * 0.28), v = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
-      return E`<rect x=${S} y=${i} width=${U} height=${o} fill="rgba(${v}, ${le})"></rect>`;
+      const A = h * 60 + b, E = t + A / 1440 * a, U = Math.max(2, a / 96), T = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), le = Math.min(0.34, 0.06 + T * 0.28), v = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
+      return S`<rect x=${E} y=${i} width=${U} height=${o} fill="rgba(${v}, ${le})"></rect>`;
     });
   }
   _buildYTicks(e) {
@@ -2436,11 +2436,11 @@ const Ii = async () => {
       </div>
     `;
   }
-  _handleSummaryClick(e) {
-    this._expanded = !this._expanded, this._expanded && (this._selectedDate || (this._selectedDate = this._todayIso()), this._payload || this._load());
+  _toggleExpanded() {
+    this._expanded = !this._expanded, this.requestUpdate(), this._expanded && (this._selectedDate || (this._selectedDate = this._todayIso()), this._payload || this._load());
   }
   _renderChevron() {
-    return E`<svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d=${re._CHEVRON_PATH}></path></svg>`;
+    return S`<svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d=${re._CHEVRON_PATH}></path></svg>`;
   }
   async _load() {
     if (!this.hass) return;
@@ -3101,13 +3101,13 @@ function lt(r) {
   try {
     return {
       ok: !0,
-      value: Se(r)
+      value: Ee(r)
     };
   } catch {
     return { ok: !1, code: "non_json_value" };
   }
 }
-function Se(r) {
+function Ee(r) {
   if (r === null)
     return null;
   if (typeof r == "string" || typeof r == "boolean")
@@ -3118,14 +3118,14 @@ function Se(r) {
     return r;
   }
   if (Array.isArray(r))
-    return r.map((e) => Se(e));
+    return r.map((e) => Ee(e));
   if (typeof r == "object") {
     const e = Object.getPrototypeOf(r);
     if (e !== Object.prototype && e !== null)
       throw new Error($e);
     const t = {};
     for (const [i, a] of Object.entries(r))
-      t[i] = Se(a);
+      t[i] = Ee(a);
     return t;
   }
   throw new Error($e);
@@ -4210,9 +4210,9 @@ const Di = [
                 ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
               </div>
               <select
-                @change=${(S) => this._handleSurplusApplianceIdChange(
+                @change=${(E) => this._handleSurplusApplianceIdChange(
       t,
-      S.currentTarget.value
+      E.currentTarget.value
     )}
               >
                 <option value="" ?selected=${h.selectedId.length === 0}>
@@ -4229,13 +4229,13 @@ const Di = [
                       </option>
                     ` : u}
                 ${h.options.map(
-      (S) => n`
+      (E) => n`
                     <option
-                      value=${S.id}
-                      ?disabled=${S.selectionDisabled}
-                      ?selected=${S.id === h.selectedId}
+                      value=${E.id}
+                      ?disabled=${E.selectionDisabled}
+                      ?selected=${E.id === h.selectedId}
                     >
-                      ${this._formatSurplusApplianceOptionLabel(S)}
+                      ${this._formatSurplusApplianceOptionLabel(E)}
                     </option>
                   `
     )}
@@ -6625,6 +6625,6 @@ pe.properties = {
       font-size: 0.93rem;
     }
   `;
-let Ee = pe;
+let Se = pe;
 const ct = "helman-config-editor-panel";
-customElements.get(ct) || customElements.define(ct, Ee);
+customElements.get(ct) || customElements.define(ct, Se);
