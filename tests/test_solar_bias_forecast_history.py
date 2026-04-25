@@ -168,5 +168,100 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(samples[0].forecast_wh, 2000.0)
 
 
+class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_slot_keyed_wh_for_past_day(self):
+        from datetime import date as date_cls
+
+        cfg = BiasConfig(
+            enabled=True,
+            min_history_days=10,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=["sensor.energy_production_today"],
+            total_energy_entity_id=None,
+        )
+
+        target_date = date_cls(2026, 4, 15)
+        local_now = datetime(2026, 4, 25, 10, 0, tzinfo=TZ)
+
+        wh_period = {
+            "2026-04-15T11:00:00+00:00": 7000.0,
+            "2026-04-15T12:00:00+00:00": 9000.0,
+            "2026-04-15T13:00:00+00:00": 8500.0,
+        }
+        historical_state = SimpleNamespace(
+            state="24500",
+            attributes={"wh_period": wh_period},
+            last_updated=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
+            last_changed=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
+        )
+
+        async def fake_history(*args, **kwargs):
+            return {"sensor.energy_production_today": [historical_state]}
+
+        with patch.object(
+            forecast_history, "_read_history_for_entities_with_attributes", new=AsyncMock(side_effect=fake_history)
+        ):
+            result = await forecast_history.load_historical_per_slot_forecast(
+                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
+                cfg=cfg,
+                target_date=target_date,
+                local_now=local_now,
+            )
+
+        assert result == {"11:00": 7000.0, "12:00": 9000.0, "13:00": 8500.0}
+
+    async def test_returns_none_when_state_missing(self):
+        from datetime import date as date_cls
+
+        cfg = BiasConfig(
+            enabled=True,
+            min_history_days=10,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=["sensor.energy_production_today"],
+            total_energy_entity_id=None,
+        )
+
+        async def fake_history(*args, **kwargs):
+            return {"sensor.energy_production_today": []}
+
+        with patch.object(
+            forecast_history, "_read_history_for_entities_with_attributes", new=AsyncMock(side_effect=fake_history)
+        ):
+            result = await forecast_history.load_historical_per_slot_forecast(
+                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
+                cfg=cfg,
+                target_date=date_cls(2026, 4, 15),
+                local_now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+            )
+
+        assert result is None
+
+    async def test_returns_none_when_no_entity_configured(self):
+        from datetime import date as date_cls
+
+        cfg = BiasConfig(
+            enabled=True,
+            min_history_days=10,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=[],
+            total_energy_entity_id=None,
+        )
+
+        result = await forecast_history.load_historical_per_slot_forecast(
+            hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
+            cfg=cfg,
+            target_date=date_cls(2026, 4, 15),
+            local_now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+        )
+
+        assert result is None
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -63,6 +63,127 @@ async def load_forecast_points_for_day(
     ]
 
 
+async def load_historical_per_slot_forecast(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    target_date: date,
+    *,
+    local_now: datetime,
+) -> dict[str, float] | None:
+    """Return slot_key -> Wh for the forecast as published at the start of target_date.
+
+    Reads the `wh_period` attribute from the recorder history of
+    daily_energy_entity_ids[0] (the "today" entity) as captured at start of
+    target_date (local midnight). Returns None if no usable state is available.
+
+    Slot keys are HH:MM in the configured local timezone.
+
+    NOTE: requires recorder to retain attribute history >= min_history_days.
+    """
+    entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=1)
+    if not entity_ids:
+        return None
+
+    local_tz = ZoneInfo(str(hass.config.time_zone))
+    local_start = datetime.combine(target_date, time.min, tzinfo=local_tz)
+    local_end = local_start + timedelta(days=1)
+
+    states_by_entity = await _read_history_for_entities_with_attributes(
+        hass,
+        entity_ids,
+        local_start,
+        local_end,
+    )
+
+    states = states_by_entity.get(entity_ids[0]) or states_by_entity.get(
+        entity_ids[0].lower()
+    )
+    if not states:
+        return None
+
+    state = _select_first_state_for_window(states, after=dt_util.as_utc(local_start))
+    if state is None:
+        return None
+
+    attributes = getattr(state, "attributes", {})
+    if not isinstance(attributes, dict):
+        return None
+    wh_period = attributes.get("wh_period")
+    if not isinstance(wh_period, dict):
+        return None
+
+    result: dict[str, float] = {}
+    for raw_key, raw_value in wh_period.items():
+        wh = _parse_attribute_wh(raw_value)
+        ts = _parse_attribute_timestamp(raw_key, local_tz)
+        if wh is None or ts is None:
+            continue
+        local_ts = dt_util.as_local(ts)
+        slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
+        result[slot_key] = wh
+
+    return result if result else None
+
+
+def _select_first_state_for_window(states: list[Any], *, after: datetime) -> Any | None:
+    for state in sorted(states, key=_state_sort_key):
+        if _state_sort_key(state) < after:
+            continue
+        return state
+    return states[0] if states else None
+
+
+async def _read_history_for_entities_with_attributes(
+    hass: HomeAssistant,
+    entity_ids: list[str],
+    local_start: datetime,
+    local_end: datetime,
+) -> dict[str, list[Any]]:
+    utc_start = dt_util.as_utc(local_start)
+    utc_end = dt_util.as_utc(local_end)
+
+    if get_significant_states is None:
+        return {}
+
+    try:
+        from homeassistant.components.recorder import get_instance
+
+        recorder = get_instance(hass)
+        if recorder is not None:
+            history = await recorder.async_add_executor_job(
+                lambda: get_significant_states(
+                    hass,
+                    utc_start,
+                    utc_end,
+                    entity_ids=entity_ids,
+                    include_start_time_state=True,
+                    minimal_response=False,
+                    no_attributes=False,
+                    significant_changes_only=False,
+                )
+            )
+        else:
+            history = get_significant_states(
+                hass,
+                utc_start,
+                utc_end,
+                entity_ids=entity_ids,
+                include_start_time_state=True,
+                minimal_response=False,
+                no_attributes=False,
+                significant_changes_only=False,
+            )
+
+        if inspect.isawaitable(history):
+            history = await history
+        if isinstance(history, dict):
+            return history
+    except (TypeError, AttributeError):
+        pass
+
+    return {}
+
+
 async def load_trainer_samples(
     hass: HomeAssistant, cfg: BiasConfig, now: datetime
 ) -> list[TrainerSample]:
