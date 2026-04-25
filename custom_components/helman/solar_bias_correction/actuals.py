@@ -1,24 +1,12 @@
 from __future__ import annotations
 
-import inspect
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .models import BiasConfig, SolarActualsWindow
-from ..recorder_hourly_series import get_local_current_slot_start
-
-try:
-    from homeassistant.components.recorder.history import get_significant_states
-except Exception:  # pragma: no cover - Home Assistant API compatibility
-    get_significant_states = None  # type: ignore[assignment]
-
-try:
-    from homeassistant.components.recorder.history import state_changes_during_period
-except Exception:  # pragma: no cover - Home Assistant API compatibility
-    state_changes_during_period = None  # type: ignore[assignment]
+from ..recorder_hourly_series import query_cumulative_slot_energy_changes
 
 
 async def load_actuals_for_day(
@@ -70,144 +58,17 @@ async def _read_day_slot_actuals(
 ) -> dict[str, float]:
     local_start = datetime.combine(target_date, time.min, tzinfo=local_now.tzinfo)
     local_end = local_start + timedelta(days=1)
-    states = await _read_history_for_entity(hass, entity_id, local_start, local_end)
-    if not states:
-        return {}
-
-    readings: list[tuple[datetime, float]] = []
-    for state in sorted(states, key=_state_sort_key):
-        timestamp = _state_timestamp(state)
-        value_kwh = _parse_cumulative_kwh(getattr(state, "state", None))
-        if timestamp is None or value_kwh is None:
-            continue
-        readings.append((dt_util.as_utc(timestamp), value_kwh))
-
-    if len(readings) < 2:
-        return {}
-
-    slot_actuals: dict[str, float] = {}
-    previous_value = readings[0][1]
-    reset_pending = False
-    for timestamp, value_kwh in readings[1:]:
-        delta_kwh = value_kwh - previous_value
-        if delta_kwh < 0:
-            previous_value = value_kwh
-            reset_pending = True
-            continue
-        if reset_pending:
-            previous_value = value_kwh
-            reset_pending = False
-            continue
-
-        delta_wh = delta_kwh * 1000.0
-        slot_start = get_local_current_slot_start(
-            dt_util.as_local(timestamp),
-            interval_minutes=15,
-        )
-        slot_key = slot_start.strftime("%H:%M")
-        slot_actuals[slot_key] = slot_actuals.get(slot_key, 0.0) + delta_wh
-        previous_value = value_kwh
-
-    return slot_actuals
-
-
-async def _read_history_for_entity(
-    hass: HomeAssistant,
-    entity_id: str,
-    local_start: datetime,
-    local_end: datetime,
-) -> list[Any]:
-    utc_start = dt_util.as_utc(local_start)
-    utc_end = dt_util.as_utc(local_end)
-
-    if get_significant_states is not None:
-        try:
-            from homeassistant.components.recorder import get_instance
-            
-            recorder = get_instance(hass)
-            if recorder is not None:
-                # Use executor to prevent blocking event loop during DB access
-                history = await recorder.async_add_executor_job(
-                    lambda: get_significant_states(
-                        hass,
-                        utc_start,
-                        utc_end,
-                        entity_ids=[entity_id],
-                        include_start_time_state=True,
-                        minimal_response=False,
-                        no_attributes=True,
-                        significant_changes_only=False,
-                    )
-                )
-            else:
-                # In tests/early setup when recorder is not available
-                history = get_significant_states(
-                    hass,
-                    utc_start,
-                    utc_end,
-                    entity_ids=[entity_id],
-                    include_start_time_state=True,
-                    minimal_response=False,
-                    no_attributes=True,
-                    significant_changes_only=False,
-                )
-            
-            if inspect.isawaitable(history):
-                history = await history
-            if isinstance(history, dict):
-                return history.get(entity_id) or history.get(entity_id.lower()) or []
-        except TypeError:
-            pass
-
-    if state_changes_during_period is None:
-        return []
-
-    from homeassistant.components.recorder import get_instance
-
-    recorder = get_instance(hass)
-    history = await recorder.async_add_executor_job(
-        lambda: state_changes_during_period(
-            hass,
-            utc_start,
-            utc_end,
-            entity_id,
-            False,
-            False,
-            None,
-            True,
-        )
+    values_by_slot = await query_cumulative_slot_energy_changes(
+        hass,
+        entity_id,
+        local_start=local_start,
+        local_end=local_end,
+        interval_minutes=15,
     )
-    return history.get(entity_id) or history.get(entity_id.lower()) or []
-
-
-def _state_sort_key(state: Any) -> datetime:
-    timestamp = _state_timestamp(state)
-    if timestamp is None:
-        return datetime.min.replace(tzinfo=timezone.utc)
-    return dt_util.as_utc(timestamp)
-
-
-def _state_timestamp(state: Any) -> datetime | None:
-    return getattr(state, "last_updated", None) or getattr(state, "last_changed", None)
-
-
-def _parse_cumulative_kwh(raw_value: Any) -> float | None:
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-            return None
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-
-    return None
+    return {
+        dt_util.as_local(slot_start).strftime("%H:%M"): round(value_kwh * 1000.0, 4)
+        for slot_start, value_kwh in sorted(values_by_slot.items())
+    }
 
 
 def _read_entity_id(raw_value: Any) -> str | None:

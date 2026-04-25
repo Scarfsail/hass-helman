@@ -41,7 +41,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   @property({ attribute: false }) hass: any;
 
   @state() private _expanded = false;
-  @state() private _selectedDate = this._todayIso();
+  @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
   @state() private _loading = false;
   @state() private _error = "";
@@ -203,6 +203,9 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   `;
 
   protected updated(changed: Map<string, unknown>) {
+    if (changed.has("hass") && this.hass && !this._selectedDate) {
+      this._selectedDate = this._todayIso();
+    }
     if (changed.has("hass") && this.hass && this._expanded && !this._payload) {
       this._load();
     }
@@ -435,6 +438,9 @@ export class HelmanBiasCorrectionInspector extends LitElement {
 
   private _toggle() {
     this._expanded = !this._expanded;
+    if (this._expanded && !this._selectedDate) {
+      this._selectedDate = this._todayIso();
+    }
     if (this._expanded && !this._payload) {
       this._load();
     }
@@ -442,6 +448,9 @@ export class HelmanBiasCorrectionInspector extends LitElement {
 
   private async _load() {
     if (!this.hass) return;
+    if (!this._selectedDate) {
+      this._selectedDate = this._todayIso();
+    }
     const requestedDate = this._selectedDate;
     if (this._loading && this._activeRequestDate === requestedDate) return;
     const requestId = ++this._activeRequestId;
@@ -470,30 +479,80 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   }
 
   private _moveDay(delta: number) {
-    const next = new Date(`${this._selectedDate}T12:00:00`);
-    next.setDate(next.getDate() + delta);
-    this._selectedDate = this._formatLocalDate(next);
+    const current = this._parseIsoDate(this._selectedDate || this._todayIso());
+    const next = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
+    this._selectedDate = this._formatDateParts(
+      next.getUTCFullYear(),
+      next.getUTCMonth() + 1,
+      next.getUTCDate(),
+    );
     this._load();
   }
 
   private _todayIso() {
-    return this._formatLocalDate(new Date());
+    return this._formatDateInTimeZone(new Date(), this._haTimeZone());
   }
 
-  private _formatLocalDate(value: Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, "0");
-    const day = String(value.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+  private _formatDateInTimeZone(value: Date, timeZone: string | undefined) {
+    if (!timeZone) {
+      return this._formatDateParts(
+        value.getFullYear(),
+        value.getMonth() + 1,
+        value.getDate(),
+      );
+    }
+
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(value);
+    const year = Number(parts.find((part) => part.type === "year")?.value);
+    const month = Number(parts.find((part) => part.type === "month")?.value);
+    const day = Number(parts.find((part) => part.type === "day")?.value);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+      return this._formatDateParts(
+        value.getFullYear(),
+        value.getMonth() + 1,
+        value.getDate(),
+      );
+    }
+    return this._formatDateParts(year, month, day);
+  }
+
+  private _formatDateParts(year: number, month: number, day: number) {
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  private _parseIsoDate(value: string) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) {
+      const today = this._todayIso();
+      return this._parseIsoDate(today);
+    }
+    return {
+      year: Number(match[1]),
+      month: Number(match[2]),
+      day: Number(match[3]),
+    };
   }
 
   private _formatDay(value: string) {
-    return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, {
+    const parsed = this._parseIsoDate(value);
+    return new Date(
+      Date.UTC(parsed.year, parsed.month - 1, parsed.day, 12),
+    ).toLocaleDateString(undefined, {
+      timeZone: "UTC",
       weekday: "short",
       year: "numeric",
       month: "short",
       day: "numeric",
     });
+  }
+
+  private _haTimeZone(): string | undefined {
+    return this._payload?.timezone ?? this.hass?.config?.time_zone;
   }
 
   private _formatWh(value: number | null) {

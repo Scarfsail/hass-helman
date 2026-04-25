@@ -721,21 +721,27 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_inspector_rejects_invalid_date(self) -> None:
-        service = SimpleNamespace(async_get_inspector_day=AsyncMock())
-        coordinator = SimpleNamespace(_solar_bias_service=service)
-        connection = FakeConnection()
+        for raw_date in ("04/25/2026", "20260425", "2026-W17-6"):
+            with self.subTest(raw_date=raw_date):
+                service = SimpleNamespace(async_get_inspector_day=AsyncMock())
+                coordinator = SimpleNamespace(_solar_bias_service=service)
+                connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_get_solar_bias_inspector(
-            FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/solar_bias/inspector", "date": "04/25/2026"},
-        )
+                await self.solar_bias_ws.ws_get_solar_bias_inspector(
+                    FakeHass(coordinator),
+                    connection,
+                    {
+                        "id": 1,
+                        "type": "helman/solar_bias/inspector",
+                        "date": raw_date,
+                    },
+                )
 
-        service.async_get_inspector_day.assert_not_awaited()
-        self.assertEqual(
-            connection.errors,
-            [(1, "invalid_date", "Date must use YYYY-MM-DD format")],
-        )
+                service.async_get_inspector_day.assert_not_awaited()
+                self.assertEqual(
+                    connection.errors,
+                    [(1, "invalid_date", "Date must use YYYY-MM-DD format")],
+                )
 
     def test_registration_wiring_includes_solar_bias_handlers(self) -> None:
         registered: list[object] = []

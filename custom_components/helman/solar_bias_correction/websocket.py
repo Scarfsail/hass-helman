@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 
 import voluptuous as vol
@@ -10,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from ..const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+_DASHED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @websocket_api.websocket_command(
@@ -123,8 +125,10 @@ async def ws_get_solar_bias_inspector(
 
     raw_date = msg.get("date")
     try:
+        if not isinstance(raw_date, str) or _DASHED_DATE_RE.fullmatch(raw_date) is None:
+            raise ValueError
         date.fromisoformat(raw_date)
-    except (TypeError, ValueError):
+    except ValueError:
         connection.send_error(
             msg["id"],
             "invalid_date",

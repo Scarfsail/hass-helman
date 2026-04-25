@@ -45,10 +45,10 @@ const Vt = (o) => new _t(typeof o == "string" ? o : o + "", void 0, je), Me = (o
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: Lt, defineProperty: Pt, getOwnPropertyDescriptor: Ht, getOwnPropertyNames: Ot, getOwnPropertySymbols: It, getPrototypeOf: Tt } = Object, O = globalThis, Ie = O.trustedTypes, Nt = Ie ? Ie.emptyScript : "", _e = O.reactiveElementPolyfillSupport, ie = (o, e) => o, $e = { toAttribute(o, e) {
+const { is: Lt, defineProperty: Pt, getOwnPropertyDescriptor: Ht, getOwnPropertyNames: Ot, getOwnPropertySymbols: It, getPrototypeOf: Tt } = Object, O = globalThis, Ie = O.trustedTypes, Dt = Ie ? Ie.emptyScript : "", _e = O.reactiveElementPolyfillSupport, ie = (o, e) => o, $e = { toAttribute(o, e) {
   switch (e) {
     case Boolean:
-      o = o ? Nt : null;
+      o = o ? Dt : null;
       break;
     case Object:
     case Array:
@@ -284,12 +284,12 @@ q.elementStyles = [], q.shadowRootOptions = { mode: "open" }, q[ie("elementPrope
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const ae = globalThis, Ne = (o) => o, de = ae.trustedTypes, De = de ? de.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ht = "$lit$", H = `lit$${Math.random().toFixed(9).slice(2)}$`, mt = "?" + H, Dt = `<${mt}>`, Y = document, oe = () => Y.createComment(""), re = (o) => o === null || typeof o != "object" && typeof o != "function", Ve = Array.isArray, Ft = (o) => Ve(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", ue = `[ 	
+const ae = globalThis, De = (o) => o, de = ae.trustedTypes, Ne = de ? de.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ht = "$lit$", H = `lit$${Math.random().toFixed(9).slice(2)}$`, mt = "?" + H, Nt = `<${mt}>`, Y = document, oe = () => Y.createComment(""), re = (o) => o === null || typeof o != "object" && typeof o != "function", Ve = Array.isArray, Ft = (o) => Ve(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", ue = `[ 	
 \f\r]`, Q = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, Fe = /-->/g, Re = />/g, T = RegExp(`>|${ue}(?:([^\\s"'>=/]+)(${ue}*=${ue}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Ye = /'/g, Ue = /"/g, gt = /^(?:script|style|textarea|title)$/i, vt = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = vt(1), V = vt(2), K = Symbol.for("lit-noChange"), u = Symbol.for("lit-nothing"), We = /* @__PURE__ */ new WeakMap(), D = Y.createTreeWalker(Y, 129);
+\f\r"'\`<>=]|("|')|))|$)`, "g"), Ye = /'/g, Ue = /"/g, gt = /^(?:script|style|textarea|title)$/i, vt = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = vt(1), V = vt(2), K = Symbol.for("lit-noChange"), u = Symbol.for("lit-nothing"), We = /* @__PURE__ */ new WeakMap(), N = Y.createTreeWalker(Y, 129);
 function yt(o, e) {
   if (!Ve(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
-  return De !== void 0 ? De.createHTML(e) : e;
+  return Ne !== void 0 ? Ne.createHTML(e) : e;
 }
 const Rt = (o, e) => {
   const t = o.length - 1, i = [];
@@ -299,7 +299,7 @@ const Rt = (o, e) => {
     let c, p, _ = -1, h = 0;
     for (; h < d.length && (s.lastIndex = h, p = s.exec(d), p !== null); ) h = s.lastIndex, s === Q ? p[1] === "!--" ? s = Fe : p[1] !== void 0 ? s = Re : p[2] !== void 0 ? (gt.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = T) : p[3] !== void 0 && (s = T) : s === T ? p[0] === ">" ? (s = a ?? Q, _ = -1) : p[1] === void 0 ? _ = -2 : (_ = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? T : p[3] === '"' ? Ue : Ye) : s === Ue || s === Ye ? s = T : s === Fe || s === Re ? s = Q : (s = T, a = void 0);
     const b = s === T && o[l + 1].startsWith("/>") ? " " : "";
-    r += s === Q ? d + Dt : _ >= 0 ? (i.push(c), d.slice(0, _) + ht + d.slice(_) + H + b) : d + H + (_ === -2 ? l : b);
+    r += s === Q ? d + Nt : _ >= 0 ? (i.push(c), d.slice(0, _) + ht + d.slice(_) + H + b) : d + H + (_ === -2 ? l : b);
   }
   return [yt(o, r + (o[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
@@ -309,11 +309,11 @@ class se {
     this.parts = [];
     let r = 0, s = 0;
     const l = e.length - 1, d = this.parts, [c, p] = Rt(e, t);
-    if (this.el = se.createElement(c, i), D.currentNode = this.el.content, t === 2 || t === 3) {
+    if (this.el = se.createElement(c, i), N.currentNode = this.el.content, t === 2 || t === 3) {
       const _ = this.el.content.firstChild;
       _.replaceWith(..._.childNodes);
     }
-    for (; (a = D.nextNode()) !== null && d.length < l; ) {
+    for (; (a = N.nextNode()) !== null && d.length < l; ) {
       if (a.nodeType === 1) {
         if (a.hasAttributes()) for (const _ of a.getAttributeNames()) if (_.endsWith(ht)) {
           const h = p[s++], b = a.getAttribute(_).split(H), A = /([.?@])?(.*)/.exec(h);
@@ -323,7 +323,7 @@ class se {
           const _ = a.textContent.split(H), h = _.length - 1;
           if (h > 0) {
             a.textContent = de ? de.emptyScript : "";
-            for (let b = 0; b < h; b++) a.append(_[b], oe()), D.nextNode(), d.push({ type: 2, index: ++r });
+            for (let b = 0; b < h; b++) a.append(_[b], oe()), N.nextNode(), d.push({ type: 2, index: ++r });
             a.append(_[h], oe());
           }
         }
@@ -359,16 +359,16 @@ class Yt {
   }
   u(e) {
     const { el: { content: t }, parts: i } = this._$AD, a = ((e == null ? void 0 : e.creationScope) ?? Y).importNode(t, !0);
-    D.currentNode = a;
-    let r = D.nextNode(), s = 0, l = 0, d = i[0];
+    N.currentNode = a;
+    let r = N.nextNode(), s = 0, l = 0, d = i[0];
     for (; d !== void 0; ) {
       if (s === d.index) {
         let c;
         d.type === 2 ? c = new G(r, r.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(r, d.name, d.strings, this, e) : d.type === 6 && (c = new Kt(r, this, e)), this._$AV.push(c), d = i[++l];
       }
-      s !== (d == null ? void 0 : d.index) && (r = D.nextNode(), s++);
+      s !== (d == null ? void 0 : d.index) && (r = N.nextNode(), s++);
     }
-    return D.currentNode = Y, a;
+    return N.currentNode = Y, a;
   }
   p(e) {
     let t = 0;
@@ -429,8 +429,8 @@ class G {
   _$AR(e = this._$AA.nextSibling, t) {
     var i;
     for ((i = this._$AP) == null ? void 0 : i.call(this, !1, !0, t); e !== this._$AB; ) {
-      const a = Ne(e).nextSibling;
-      Ne(e).remove(), e = a;
+      const a = De(e).nextSibling;
+      De(e).remove(), e = a;
     }
   }
   setConnected(e) {
@@ -697,7 +697,7 @@ function g(o, e, t) {
   }
   i[a] = t;
 }
-function N(o, e) {
+function D(o, e) {
   e.length !== 0 && (kt(o, e), vi(o, e.slice(0, -1)));
 }
 function C(o, e, t) {
@@ -710,7 +710,7 @@ function ii(o, e, t) {
     return;
   const a = i.filter((r, s) => s !== t);
   if (a.length === 0) {
-    N(o, e);
+    D(o, e);
     return;
   }
   g(o, e, a);
@@ -1048,7 +1048,7 @@ function ye(o) {
     apply(t, i) {
       const a = w(t), r = i;
       for (const s of o)
-        N(a, s.documentPath);
+        D(a, s.documentPath);
       for (const s of o) {
         const l = r[s.yamlKey];
         l !== void 0 && g(a, s.documentPath, w(l));
@@ -2293,10 +2293,10 @@ const Ti = async () => {
   }
 }, Le = class Le extends R {
   constructor() {
-    super(...arguments), this._expanded = !1, this._selectedDate = this._todayIso(), this._payload = null, this._loading = !1, this._error = "", this._fallbackLocalize = Z(), this._activeRequestId = 0, this._activeRequestDate = null;
+    super(...arguments), this._expanded = !1, this._selectedDate = "", this._payload = null, this._loading = !1, this._error = "", this._fallbackLocalize = Z(), this._activeRequestId = 0, this._activeRequestDate = null;
   }
   updated(e) {
-    e.has("hass") && this.hass && this._expanded && !this._payload && this._load();
+    e.has("hass") && this.hass && !this._selectedDate && (this._selectedDate = this._todayIso()), e.has("hass") && this.hass && this._expanded && !this._payload && this._load();
   }
   render() {
     return n`
@@ -2431,10 +2431,11 @@ const Ti = async () => {
     `;
   }
   _toggle() {
-    this._expanded = !this._expanded, this._expanded && !this._payload && this._load();
+    this._expanded = !this._expanded, this._expanded && !this._selectedDate && (this._selectedDate = this._todayIso()), this._expanded && !this._payload && this._load();
   }
   async _load() {
     if (!this.hass) return;
+    this._selectedDate || (this._selectedDate = this._todayIso());
     const e = this._selectedDate;
     if (this._loading && this._activeRequestDate === e) return;
     const t = ++this._activeRequestId;
@@ -2452,23 +2453,66 @@ const Ti = async () => {
     }
   }
   _moveDay(e) {
-    const t = /* @__PURE__ */ new Date(`${this._selectedDate}T12:00:00`);
-    t.setDate(t.getDate() + e), this._selectedDate = this._formatLocalDate(t), this._load();
+    const t = this._parseIsoDate(this._selectedDate || this._todayIso()), i = new Date(Date.UTC(t.year, t.month - 1, t.day + e));
+    this._selectedDate = this._formatDateParts(
+      i.getUTCFullYear(),
+      i.getUTCMonth() + 1,
+      i.getUTCDate()
+    ), this._load();
   }
   _todayIso() {
-    return this._formatLocalDate(/* @__PURE__ */ new Date());
+    return this._formatDateInTimeZone(/* @__PURE__ */ new Date(), this._haTimeZone());
   }
-  _formatLocalDate(e) {
-    const t = e.getFullYear(), i = String(e.getMonth() + 1).padStart(2, "0"), a = String(e.getDate()).padStart(2, "0");
-    return `${t}-${i}-${a}`;
+  _formatDateInTimeZone(e, t) {
+    var l, d, c;
+    if (!t)
+      return this._formatDateParts(
+        e.getFullYear(),
+        e.getMonth() + 1,
+        e.getDate()
+      );
+    const i = new Intl.DateTimeFormat("en-US", {
+      timeZone: t,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(e), a = Number((l = i.find((p) => p.type === "year")) == null ? void 0 : l.value), r = Number((d = i.find((p) => p.type === "month")) == null ? void 0 : d.value), s = Number((c = i.find((p) => p.type === "day")) == null ? void 0 : c.value);
+    return !Number.isFinite(a) || !Number.isFinite(r) || !Number.isFinite(s) ? this._formatDateParts(
+      e.getFullYear(),
+      e.getMonth() + 1,
+      e.getDate()
+    ) : this._formatDateParts(a, r, s);
+  }
+  _formatDateParts(e, t, i) {
+    return `${e}-${String(t).padStart(2, "0")}-${String(i).padStart(2, "0")}`;
+  }
+  _parseIsoDate(e) {
+    const t = /^(\d{4})-(\d{2})-(\d{2})$/.exec(e);
+    if (!t) {
+      const i = this._todayIso();
+      return this._parseIsoDate(i);
+    }
+    return {
+      year: Number(t[1]),
+      month: Number(t[2]),
+      day: Number(t[3])
+    };
   }
   _formatDay(e) {
-    return (/* @__PURE__ */ new Date(`${e}T12:00:00`)).toLocaleDateString(void 0, {
+    const t = this._parseIsoDate(e);
+    return new Date(
+      Date.UTC(t.year, t.month - 1, t.day, 12)
+    ).toLocaleDateString(void 0, {
+      timeZone: "UTC",
       weekday: "short",
       year: "numeric",
       month: "short",
       day: "numeric"
     });
+  }
+  _haTimeZone() {
+    var e, t, i;
+    return ((e = this._payload) == null ? void 0 : e.timezone) ?? ((i = (t = this.hass) == null ? void 0 : t.config) == null ? void 0 : i.time_zone);
   }
   _formatWh(e) {
     return e === null ? this._t("bias_correction.inspector.actual_not_available") : `${(e / 1e3).toFixed(1)} kWh`;
@@ -3055,10 +3099,10 @@ function Ae(o) {
   }
   throw new Error(ke);
 }
-const Ni = [
+const Di = [
   { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
   { value: "surplus_aware", labelKey: "editor.values.surplus_aware" }
-], Di = [
+], Ni = [
   { value: "fixed", labelKey: "editor.values.fixed" },
   { value: "history_average", labelKey: "editor.values.history_average" }
 ], Fi = "export_price", Ri = "stop_export", dt = "surplus_appliance", Yi = "on", Ui = {
@@ -4833,7 +4877,7 @@ const Ni = [
               .value=${t}
               @change=${(s) => r(s.currentTarget.value)}
             >
-              ${Di.map(
+              ${Ni.map(
       (s) => n`
                   <option value=${s.value}>${this._t(s.labelKey)}</option>
                 `
@@ -4913,7 +4957,7 @@ const Ni = [
       s.currentTarget.value
     )}
             >
-              ${Ni.map(
+              ${Di.map(
       (s) => n`
                   <option value=${s.value}>${this._t(s.labelKey)}</option>
                 `
@@ -5504,7 +5548,7 @@ const Ni = [
         this._stringValue($(r, [...a, "climate_mode"]))
       );
       if (!l.visible || l.unavailable) {
-        N(r, [...a, "climate_mode"]);
+        D(r, [...a, "climate_mode"]);
         return;
       }
       g(r, [...a, "climate_mode"], l.value);
@@ -5587,14 +5631,14 @@ const Ni = [
   }
   _removePath(e) {
     this._applyMutation((t) => {
-      N(t, e);
+      D(t, e);
     });
   }
   _setOptionalString(e, t) {
     const i = t.trim();
     this._applyMutation((a) => {
       if (!i) {
-        N(a, e);
+        D(a, e);
         return;
       }
       g(a, e, i);
@@ -5609,7 +5653,7 @@ const Ni = [
     const i = t.trim();
     this._applyMutation((a) => {
       if (!i) {
-        N(a, e);
+        D(a, e);
         return;
       }
       const r = Number(i);
@@ -5668,7 +5712,7 @@ const Ni = [
         c
       );
       if (((h = p.selectedOption) == null ? void 0 : h.kind) === "generic" && c.length > 0) {
-        N(e, [...l, "climate_mode"]), i = !0;
+        D(e, [...l, "climate_mode"]), i = !0;
         return;
       }
       _.visible && !_.unavailable && c.length === 0 && _.value.length > 0 && (g(e, [...l, "climate_mode"], _.value), i = !0);

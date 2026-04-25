@@ -79,26 +79,17 @@ _install_import_stubs()
 from custom_components.helman.solar_bias_correction import actuals  # noqa: E402
 
 
-class _FakeState:
-    def __init__(self, state: str, last_updated: datetime) -> None:
-        self.state = state
-        self.last_updated = last_updated
-
-
 class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
-    async def test_ignores_recovery_after_cumulative_sensor_glitch_to_zero(self) -> None:
-        states = [
-            _FakeState("42026.4", datetime(2026, 4, 15, 0, 0, tzinfo=TZ)),
-            _FakeState("42027.0", datetime(2026, 4, 15, 8, 0, tzinfo=TZ)),
-            _FakeState("0.0", datetime(2026, 4, 15, 10, 29, tzinfo=TZ)),
-            _FakeState("42029.7", datetime(2026, 4, 15, 10, 30, tzinfo=TZ)),
-            _FakeState("42030.1", datetime(2026, 4, 15, 10, 45, tzinfo=TZ)),
-        ]
-
+    async def test_reads_boundary_sampled_slot_actuals_as_wh(self) -> None:
         with patch.object(
             actuals,
-            "_read_history_for_entity",
-            AsyncMock(return_value=states),
+            "query_cumulative_slot_energy_changes",
+            AsyncMock(
+                return_value={
+                    datetime(2026, 4, 15, 8, 0, tzinfo=TZ): 0.6,
+                    datetime(2026, 4, 15, 10, 30, tzinfo=TZ): 0.4,
+                }
+            ),
         ):
             slot_actuals = await actuals._read_day_slot_actuals(
                 SimpleNamespace(),
@@ -108,6 +99,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertAlmostEqual(sum(slot_actuals.values()), 1000.0)
+        self.assertEqual(slot_actuals["08:00"], 600.0)
+        self.assertEqual(slot_actuals["10:30"], 400.0)
 
 
 if __name__ == "__main__":
