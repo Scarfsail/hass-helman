@@ -49,41 +49,65 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   private _fallbackLocalize: LocalizeFunction = getLocalizeFunction();
   private _activeRequestId = 0;
   private _activeRequestDate: string | null = null;
+  private static readonly _CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
   static styles = css`
     .inspector {
-      display: grid;
-      gap: 12px;
-      border-top: 1px solid var(--divider-color);
-      padding-top: 12px;
+      border: 1px solid var(--divider-color);
+      border-radius: 12px;
+      background: var(--card-background-color);
+      overflow: hidden;
     }
 
-    .summary {
-      width: 100%;
+    .inspector > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+      user-select: none;
+    }
+
+    .inspector > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .summary-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: 8px 0;
-      border: 0;
-      background: transparent;
+      gap: 12px;
       color: var(--primary-text-color);
       font-weight: 600;
-      cursor: pointer;
     }
 
-    .summary::before {
-      content: ">";
-      width: 16px;
+    .summary-left {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    .summary[aria-expanded="true"]::before {
-      content: "v";
+    .summary-label {
+      min-width: 0;
+    }
+
+    .summary-chevron {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      fill: var(--secondary-text-color);
+      transition: transform 0.2s ease;
+      transform: rotate(0deg);
+    }
+
+    .inspector[open] .summary-chevron {
+      transform: rotate(90deg);
     }
 
     .body {
       display: grid;
       gap: 12px;
+      padding: 0 16px 16px;
+      border-top: 1px solid var(--divider-color);
     }
 
     .nav {
@@ -213,16 +237,17 @@ export class HelmanBiasCorrectionInspector extends LitElement {
 
   render() {
     return html`
-      <div class="inspector">
-        <button
-          class="summary"
-          aria-expanded=${this._expanded ? "true" : "false"}
-          @click=${this._toggle}
-        >
-          <span>${this._t("bias_correction.inspector.title")}</span>
-        </button>
+      <details class="inspector" ?open=${this._expanded} @toggle=${this._handleToggle}>
+        <summary>
+          <div class="summary-row">
+            <div class="summary-left">
+              <span class="summary-label">${this._t("bias_correction.inspector.title")}</span>
+            </div>
+            ${this._renderChevron()}
+          </div>
+        </summary>
         ${this._expanded ? this._renderBody() : ""}
-      </div>
+      </details>
     `;
   }
 
@@ -436,14 +461,19 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     `;
   }
 
-  private _toggle() {
-    this._expanded = !this._expanded;
+  private _handleToggle(event: Event) {
+    const details = event.currentTarget as HTMLDetailsElement | null;
+    this._expanded = Boolean(details?.open);
     if (this._expanded && !this._selectedDate) {
       this._selectedDate = this._todayIso();
     }
     if (this._expanded && !this._payload) {
       this._load();
     }
+  }
+
+  private _renderChevron() {
+    return svg`<svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d=${HelmanBiasCorrectionInspector._CHEVRON_PATH}></path></svg>`;
   }
 
   private async _load() {
