@@ -412,6 +412,7 @@
       "corrected_forecast": "Corrected forecast",
       "actual_production": "Actual production",
       "correction_factor": "Correction factor",
+      "power_axis_label": "kW (avg)",
       "daily_totals": "Daily totals",
       "actual_not_available": "not available",
       "no_profile": "No trained profile is available yet. Raw forecast and actual history can still be shown when available.",

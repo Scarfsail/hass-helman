@@ -316,6 +316,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     const margin = { top: 18, right: 24, bottom: 34, left: 48 };
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;
+
     const pointMinutes = (timestamp: string) => {
       const match = timestamp.match(/T(\d{2}):(\d{2})/);
       if (!match) return null;
@@ -333,34 +334,57 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       }
       return hour * 60 + minute;
     };
-    const chartPoints = (points: InspectorPoint[]) =>
-      points
+
+    type ChartEntry = { point: InspectorPoint; minutes: number; powerW: number };
+
+    const toAveragePower = (points: InspectorPoint[]): ChartEntry[] => {
+      const parsed = points
         .map((point) => ({ point, minutes: pointMinutes(point.timestamp) }))
         .filter(
           (entry): entry is { point: InspectorPoint; minutes: number } =>
             entry.minutes !== null && Number.isFinite(entry.point.valueWh),
-        );
-    const rawPoints = chartPoints(payload.series.raw);
-    const correctedPoints = chartPoints(payload.series.corrected);
-    const actualPoints = chartPoints(payload.series.actual);
-    const allEnergy = [
-      ...rawPoints.map((entry) => entry.point.valueWh),
-      ...correctedPoints.map((entry) => entry.point.valueWh),
-      ...actualPoints.map((entry) => entry.point.valueWh),
+        )
+        .sort((a, b) => a.minutes - b.minutes);
+
+      if (parsed.length === 0) return [];
+
+      // Estimate bucket size in minutes per point. Use the gap to the next point;
+      // for the last point reuse the previous gap. If only one point, default to 60.
+      const gaps: number[] = [];
+      for (let i = 0; i < parsed.length - 1; i++) {
+        gaps.push(parsed[i + 1].minutes - parsed[i].minutes);
+      }
+      const fallbackGap = parsed.length === 1 ? 60 : gaps[gaps.length - 1] ?? 60;
+
+      return parsed.map((entry, index) => {
+        const gap = index < gaps.length ? gaps[index] : fallbackGap;
+        const hours = gap / 60;
+        const powerW = hours > 0 ? entry.point.valueWh / hours : 0;
+        return { point: entry.point, minutes: entry.minutes, powerW };
+      });
+    };
+
+    const rawPoints = toAveragePower(payload.series.raw);
+    const correctedPoints = toAveragePower(payload.series.corrected);
+    const actualPoints = toAveragePower(payload.series.actual);
+    const allPower = [
+      ...rawPoints.map((entry) => entry.powerW),
+      ...correctedPoints.map((entry) => entry.powerW),
+      ...actualPoints.map((entry) => entry.powerW),
     ];
-    const maxWh = Math.max(1000, ...allEnergy);
-    const maxKwh = Math.ceil(maxWh / 1000);
-    const yTicks = this._buildYTicks(maxKwh);
+    const maxW = Math.max(1000, ...allPower);
+    const maxKw = Math.ceil(maxW / 1000);
+    const yTicks = this._buildYTicks(maxKw);
 
     const xForMinutes = (minutes: number) => margin.left + (minutes / 1440) * plotWidth;
-    const yForWh = (valueWh: number) =>
-      margin.top + plotHeight - (valueWh / (maxKwh * 1000)) * plotHeight;
+    const yForW = (powerW: number) =>
+      margin.top + plotHeight - (powerW / (maxKw * 1000)) * plotHeight;
 
-    const linePath = (points: { point: InspectorPoint; minutes: number }[]) =>
+    const linePath = (points: ChartEntry[]) =>
       points
         .map((entry, index) => {
           const command = index === 0 ? "M" : "L";
-          return `${command}${xForMinutes(entry.minutes).toFixed(1)},${yForWh(entry.point.valueWh).toFixed(1)}`;
+          return `${command}${xForMinutes(entry.minutes).toFixed(1)},${yForW(entry.powerW).toFixed(1)}`;
         })
         .join(" ");
 
@@ -369,7 +393,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
         <rect x="0" y="0" width=${width} height=${height} fill="var(--card-background-color)"></rect>
         ${this._renderFactorBands(payload.series.factors, margin.left, margin.top, plotWidth, plotHeight)}
         ${yTicks.map((tick) => {
-          const y = yForWh(tick * 1000);
+          const y = yForW(tick * 1000);
           return svg`
             <line x1=${margin.left} y1=${y} x2=${width - margin.right} y2=${y} stroke="var(--divider-color)" stroke-width="1"></line>
             <text x=${margin.left - 8} y=${y + 4} text-anchor="end" fill="var(--secondary-text-color)" font-size="11">${tick.toFixed(1)}</text>
@@ -382,19 +406,19 @@ export class HelmanBiasCorrectionInspector extends LitElement {
             <text x=${x} y=${height - 10} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(hour).padStart(2, "0")}</text>
           `;
         })}
-        <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">kWh</text>
+        <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">${this._t("bias_correction.inspector.power_axis_label")}</text>
         ${rawPoints.length > 1
           ? svg`<path d=${linePath(rawPoints)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>`
           : rawPoints.length === 1
-            ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForWh(rawPoints[0].point.valueWh)} r="3.5" fill="#1565c0"></circle>`
+            ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForW(rawPoints[0].powerW)} r="3.5" fill="#1565c0"></circle>`
             : ""}
         ${correctedPoints.length > 1
           ? svg`<path d=${linePath(correctedPoints)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>`
           : correctedPoints.length === 1
-            ? svg`<circle cx=${xForMinutes(correctedPoints[0].minutes)} cy=${yForWh(correctedPoints[0].point.valueWh)} r="3.5" fill="#2e7d32"></circle>`
+            ? svg`<circle cx=${xForMinutes(correctedPoints[0].minutes)} cy=${yForW(correctedPoints[0].powerW)} r="3.5" fill="#2e7d32"></circle>`
           : ""}
         ${actualPoints.map((entry) => svg`
-          <circle cx=${xForMinutes(entry.minutes)} cy=${yForWh(entry.point.valueWh)} r="3.5" fill="#c62828"></circle>
+          <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="#c62828"></circle>
         `)}
       </svg>
     `;
