@@ -174,17 +174,19 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     }
 
     .chart-wrap {
-      min-height: 260px;
       border: 1px solid var(--divider-color);
       border-radius: 6px;
-      overflow: hidden;
+      overflow-x: auto;
+      overflow-y: hidden;
       background: var(--card-background-color);
     }
 
-    svg {
+    .chart-wrap svg {
       display: block;
-      width: 100%;
-      height: auto;
+      width: 720px;
+      min-width: 720px;
+      max-width: none;
+      height: 260px;
     }
 
     .totals {
@@ -279,16 +281,145 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     `;
   }
 
-  private _renderChart(_payload: InspectorPayload) {
+  private _renderChart(payload: InspectorPayload) {
+    const width = 720;
+    const height = 260;
+    const margin = { top: 18, right: 24, bottom: 34, left: 48 };
+    const plotWidth = width - margin.left - margin.right;
+    const plotHeight = height - margin.top - margin.bottom;
+    const pointMinutes = (timestamp: string) => {
+      const match = timestamp.match(/T(\d{2}):(\d{2})/);
+      if (!match) return null;
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      if (
+        !Number.isFinite(hour) ||
+        !Number.isFinite(minute) ||
+        hour < 0 ||
+        hour > 23 ||
+        minute < 0 ||
+        minute > 59
+      ) {
+        return null;
+      }
+      return hour * 60 + minute;
+    };
+    const chartPoints = (points: InspectorPoint[]) =>
+      points
+        .map((point) => ({ point, minutes: pointMinutes(point.timestamp) }))
+        .filter(
+          (entry): entry is { point: InspectorPoint; minutes: number } =>
+            entry.minutes !== null && Number.isFinite(entry.point.valueWh),
+        );
+    const rawPoints = chartPoints(payload.series.raw);
+    const correctedPoints = chartPoints(payload.series.corrected);
+    const actualPoints = chartPoints(payload.series.actual);
+    const allEnergy = [
+      ...rawPoints.map((entry) => entry.point.valueWh),
+      ...correctedPoints.map((entry) => entry.point.valueWh),
+      ...actualPoints.map((entry) => entry.point.valueWh),
+    ];
+    const maxWh = Math.max(1000, ...allEnergy);
+    const maxKwh = Math.ceil(maxWh / 1000);
+    const yTicks = this._buildYTicks(maxKwh);
+
+    const xForMinutes = (minutes: number) => margin.left + (minutes / 1440) * plotWidth;
+    const yForWh = (valueWh: number) =>
+      margin.top + plotHeight - (valueWh / (maxKwh * 1000)) * plotHeight;
+
+    const linePath = (points: { point: InspectorPoint; minutes: number }[]) =>
+      points
+        .map((entry, index) => {
+          const command = index === 0 ? "M" : "L";
+          return `${command}${xForMinutes(entry.minutes).toFixed(1)},${yForWh(entry.point.valueWh).toFixed(1)}`;
+        })
+        .join(" ");
+
     return svg`
-      <svg viewBox="0 0 720 260" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
-        <rect x="0" y="0" width="720" height="260" fill="var(--card-background-color)" />
-        <line x1="56" y1="206" x2="680" y2="206" stroke="var(--divider-color)" stroke-width="1" />
-        <line x1="56" y1="34" x2="56" y2="206" stroke="var(--divider-color)" stroke-width="1" />
-        <path d="M80 178 C170 132 250 142 340 96 S520 68 656 120" fill="none" stroke="#1565c0" stroke-width="3" opacity="0.45" />
-        <path d="M80 186 C170 118 250 126 340 84 S520 76 656 112" fill="none" stroke="#2e7d32" stroke-width="3" opacity="0.45" />
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
+        <rect x="0" y="0" width=${width} height=${height} fill="var(--card-background-color)"></rect>
+        ${this._renderFactorBands(payload.series.factors, margin.left, margin.top, plotWidth, plotHeight)}
+        ${yTicks.map((tick) => {
+          const y = yForWh(tick * 1000);
+          return svg`
+            <line x1=${margin.left} y1=${y} x2=${width - margin.right} y2=${y} stroke="var(--divider-color)" stroke-width="1"></line>
+            <text x=${margin.left - 8} y=${y + 4} text-anchor="end" fill="var(--secondary-text-color)" font-size="11">${tick.toFixed(1)}</text>
+          `;
+        })}
+        ${[0, 3, 6, 9, 12, 15, 18, 21, 24].map((hour) => {
+          const x = margin.left + (hour / 24) * plotWidth;
+          return svg`
+            <line x1=${x} y1=${margin.top} x2=${x} y2=${height - margin.bottom} stroke="var(--divider-color)" stroke-width="1" opacity="0.55"></line>
+            <text x=${x} y=${height - 10} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(hour).padStart(2, "0")}</text>
+          `;
+        })}
+        <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">kWh</text>
+        ${rawPoints.length > 1
+          ? svg`<path d=${linePath(rawPoints)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>`
+          : rawPoints.length === 1
+            ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForWh(rawPoints[0].point.valueWh)} r="3.5" fill="#1565c0"></circle>`
+            : ""}
+        ${correctedPoints.length > 1
+          ? svg`<path d=${linePath(correctedPoints)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>`
+          : correctedPoints.length === 1
+            ? svg`<circle cx=${xForMinutes(correctedPoints[0].minutes)} cy=${yForWh(correctedPoints[0].point.valueWh)} r="3.5" fill="#2e7d32"></circle>`
+          : ""}
+        ${actualPoints.map((entry) => svg`
+          <circle cx=${xForMinutes(entry.minutes)} cy=${yForWh(entry.point.valueWh)} r="3.5" fill="#c62828"></circle>
+        `)}
       </svg>
     `;
+  }
+
+  private _renderFactorBands(
+    factors: FactorPoint[],
+    plotLeft: number,
+    plotTop: number,
+    plotWidth: number,
+    plotHeight: number,
+  ) {
+    if (!factors.length) return "";
+    const values = factors.map((point) => point.factor).filter((value) => Number.isFinite(value));
+    if (!values.length) return "";
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = Math.max(max - min, 0.01);
+    return factors.map((point) => {
+      if (!Number.isFinite(point.factor)) return "";
+      const match = point.slot.match(/^(\d{2}):(\d{2})$/);
+      if (!match) return "";
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      if (
+        !Number.isFinite(hour) ||
+        !Number.isFinite(minute) ||
+        hour < 0 ||
+        hour > 23 ||
+        minute < 0 ||
+        minute > 59
+      ) {
+        return "";
+      }
+      const startMinutes = hour * 60 + minute;
+      const x = plotLeft + (startMinutes / 1440) * plotWidth;
+      const bandWidth = Math.max(2, plotWidth / 96);
+      const intensity = Math.abs(point.factor - 1) / Math.max(Math.abs(max - 1), Math.abs(min - 1), span);
+      const opacity = Math.min(0.34, 0.06 + intensity * 0.28);
+      const fill = point.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
+      return svg`<rect x=${x} y=${plotTop} width=${bandWidth} height=${plotHeight} fill="rgba(${fill}, ${opacity})"></rect>`;
+    });
+  }
+
+  private _buildYTicks(maxKwh: number) {
+    const step = maxKwh <= 4 ? 1 : Math.ceil(maxKwh / 4);
+    const ticks: number[] = [];
+    for (let value = 0; value <= maxKwh; value += step) {
+      ticks.push(value);
+    }
+    if (ticks[ticks.length - 1] !== maxKwh) {
+      ticks.push(maxKwh);
+    }
+    return ticks;
   }
 
   private _renderTotals(payload: InspectorPayload) {
