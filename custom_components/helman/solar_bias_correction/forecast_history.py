@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -18,6 +19,48 @@ try:
     from homeassistant.components.recorder.history import state_changes_during_period
 except Exception:  # pragma: no cover - Home Assistant API compatibility
     state_changes_during_period = None  # type: ignore[assignment]
+
+
+async def load_forecast_points_for_day(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    target_date: date,
+    *,
+    local_now: datetime,
+) -> list[dict[str, Any]]:
+    entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=None)
+    if not entity_ids:
+        return []
+
+    local_tz = ZoneInfo(str(hass.config.time_zone))
+    today = dt_util.as_local(local_now).date()
+    offset = (target_date - today).days
+    if offset < 0 or offset >= len(entity_ids):
+        return []
+
+    state = hass.states.get(entity_ids[offset])
+    if state is None:
+        return []
+
+    attributes = getattr(state, "attributes", {})
+    wh_period = attributes.get("wh_period") if isinstance(attributes, dict) else None
+    if not isinstance(wh_period, dict):
+        return []
+
+    parsed_points: list[tuple[datetime, float]] = []
+    for raw_key, raw_value in wh_period.items():
+        parsed_value = _parse_attribute_wh(raw_value)
+        parsed_timestamp = _parse_attribute_timestamp(raw_key, local_tz)
+        if parsed_value is None or parsed_timestamp is None:
+            continue
+        parsed_points.append((parsed_timestamp, parsed_value))
+
+    parsed_points.sort(key=lambda item: dt_util.as_utc(item[0]))
+    expected_slots = _build_local_hour_slots_for_date(target_date, local_tz)
+    return [
+        {"timestamp": slot_start.isoformat(), "value": value}
+        for slot_start, (_, value) in zip(expected_slots, parsed_points)
+    ]
 
 
 async def load_trainer_samples(
@@ -215,7 +258,7 @@ def _parse_state_wh(raw_value: Any) -> float | None:
     return None
 
 
-def _read_entity_ids(raw_value: Any) -> list[str]:
+def _read_entity_ids(raw_value: Any, *, limit: int | None = 1) -> list[str]:
     if not isinstance(raw_value, list):
         return []
 
@@ -225,4 +268,59 @@ def _read_entity_ids(raw_value: Any) -> list[str]:
             entity_id = item.strip()
             if entity_id:
                 entity_ids.append(entity_id)
-    return entity_ids[:1]
+    if limit is None:
+        return entity_ids
+    return entity_ids[:limit]
+
+
+def _parse_attribute_wh(raw_value: Any) -> float | None:
+    if isinstance(raw_value, bool) or raw_value is None:
+        return None
+
+    if isinstance(raw_value, (int, float)):
+        return float(raw_value)
+
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+
+    return None
+
+
+def _build_local_hour_slots_for_date(
+    target_date: date,
+    local_tz: ZoneInfo,
+) -> list[datetime]:
+    local_start = datetime.combine(target_date, time.min, tzinfo=local_tz)
+    local_end = datetime.combine(
+        target_date + timedelta(days=1),
+        time.min,
+        tzinfo=local_tz,
+    )
+
+    slots: list[datetime] = []
+    cursor_utc = dt_util.as_utc(local_start)
+    end_utc = dt_util.as_utc(local_end)
+    while cursor_utc < end_utc:
+        slots.append(cursor_utc.astimezone(local_tz))
+        cursor_utc += timedelta(hours=1)
+    return slots
+
+
+def _parse_attribute_timestamp(raw_key: Any, local_tz: ZoneInfo) -> datetime | None:
+    if not isinstance(raw_key, str):
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(raw_key.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=local_tz)
+    return parsed

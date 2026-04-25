@@ -21,6 +21,24 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
     state_changes_during_period = None  # type: ignore[assignment]
 
 
+async def load_actuals_for_day(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    target_date: date,
+    *,
+    local_now: datetime,
+) -> dict[str, float]:
+    entity_id = _read_entity_id(cfg.total_energy_entity_id)
+    if entity_id is None:
+        return {}
+    return await _read_day_slot_actuals(
+        hass,
+        entity_id,
+        target_date,
+        local_now=local_now,
+    )
+
+
 async def load_actuals_window(
     hass: HomeAssistant, cfg: BiasConfig, days: int
 ) -> SolarActualsWindow:
