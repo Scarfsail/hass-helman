@@ -27,6 +27,7 @@ class BiasConfig:
 class TrainerSample:
     date: str
     forecast_wh: float
+    slot_forecast_wh: dict[str, float]
 
 
 @dataclass

@@ -92,3 +92,15 @@ def test_reads_total_energy_entity_from_bias_correction_config():
     bias = read_bias_config(config)
 
     assert bias.total_energy_entity_id == "sensor.bias_total"
+
+
+def test_trainer_sample_has_slot_forecast_wh_field():
+    from custom_components.helman.solar_bias_correction.models import TrainerSample
+
+    sample = TrainerSample(
+        date="2026-04-15",
+        forecast_wh=60000.0,
+        slot_forecast_wh={"12:00": 9000.0, "13:00": 9100.0},
+    )
+    assert sample.slot_forecast_wh == {"12:00": 9000.0, "13:00": 9100.0}
+    assert sample.forecast_wh == 60000.0
