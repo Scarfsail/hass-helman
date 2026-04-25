@@ -206,10 +206,21 @@ async def load_trainer_samples(
         if forecast_wh is None:
             continue
 
+        slot_forecast_wh = await load_historical_per_slot_forecast(
+            hass,
+            cfg,
+            target_date,
+            local_now=local_now,
+        )
+        if not slot_forecast_wh:
+            # Recorder retention exhausted or attribute missing — cannot train this day.
+            continue
+
         samples.append(
             TrainerSample(
                 date=str(target_date),
                 forecast_wh=forecast_wh,
+                slot_forecast_wh=slot_forecast_wh,
             )
         )
 
