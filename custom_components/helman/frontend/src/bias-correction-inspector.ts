@@ -56,18 +56,17 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       border: 1px solid var(--divider-color);
       border-radius: 12px;
       background: var(--card-background-color);
-      overflow: hidden;
     }
 
-    .inspector > summary {
-      list-style: none;
+    .summary-button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
       cursor: pointer;
       padding: 14px 16px;
-      user-select: none;
-    }
-
-    .inspector > summary::-webkit-details-marker {
-      display: none;
     }
 
     .summary-row {
@@ -99,7 +98,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       transform: rotate(0deg);
     }
 
-    .inspector[open] .summary-chevron {
+    .summary-button[aria-expanded="true"] .summary-chevron {
       transform: rotate(90deg);
     }
 
@@ -234,17 +233,22 @@ export class HelmanBiasCorrectionInspector extends LitElement {
 
   render() {
     return html`
-      <details class="inspector" ?open=${this._expanded}>
-        <summary @click=${this._handleSummaryClick}>
+      <div class="inspector">
+        <button
+          class="summary-button"
+          type="button"
+          aria-expanded=${this._expanded ? "true" : "false"}
+          @click=${this._handleSummaryClick}
+        >
           <div class="summary-row">
             <div class="summary-left">
               <span class="summary-label">${this._t("bias_correction.inspector.title")}</span>
             </div>
             ${this._renderChevron()}
           </div>
-        </summary>
+        </button>
         ${this._expanded ? this._renderBody() : ""}
-      </details>
+      </div>
     `;
   }
 
@@ -459,7 +463,6 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   }
 
   private _handleSummaryClick(event: Event) {
-    event.preventDefault();
     this._expanded = !this._expanded;
     if (!this._expanded) {
       return;

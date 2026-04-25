@@ -2300,17 +2300,22 @@ const Ii = async () => {
   }
   render() {
     return n`
-      <details class="inspector" ?open=${this._expanded}>
-        <summary @click=${this._handleSummaryClick}>
+      <div class="inspector">
+        <button
+          class="summary-button"
+          type="button"
+          aria-expanded=${this._expanded ? "true" : "false"}
+          @click=${this._handleSummaryClick}
+        >
           <div class="summary-row">
             <div class="summary-left">
               <span class="summary-label">${this._t("bias_correction.inspector.title")}</span>
             </div>
             ${this._renderChevron()}
           </div>
-        </summary>
+        </button>
         ${this._expanded ? this._renderBody() : ""}
-      </details>
+      </div>
     `;
   }
   _renderBody() {
@@ -2432,7 +2437,7 @@ const Ii = async () => {
     `;
   }
   _handleSummaryClick(e) {
-    e.preventDefault(), this._expanded = !this._expanded, this._expanded && (this._selectedDate || (this._selectedDate = this._todayIso()), this._payload || this._load());
+    this._expanded = !this._expanded, this._expanded && (this._selectedDate || (this._selectedDate = this._todayIso()), this._payload || this._load());
   }
   _renderChevron() {
     return E`<svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d=${re._CHEVRON_PATH}></path></svg>`;
@@ -2536,18 +2541,17 @@ re._CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"
       border: 1px solid var(--divider-color);
       border-radius: 12px;
       background: var(--card-background-color);
-      overflow: hidden;
     }
 
-    .inspector > summary {
-      list-style: none;
+    .summary-button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
       cursor: pointer;
       padding: 14px 16px;
-      user-select: none;
-    }
-
-    .inspector > summary::-webkit-details-marker {
-      display: none;
     }
 
     .summary-row {
@@ -2579,7 +2583,7 @@ re._CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"
       transform: rotate(0deg);
     }
 
-    .inspector[open] .summary-chevron {
+    .summary-button[aria-expanded="true"] .summary-chevron {
       transform: rotate(90deg);
     }
 
