@@ -2266,7 +2266,7 @@ const xi = async () => {
               </div>
               ${this._status.status === "insufficient_history" ? n`
                     <div class="info-box" style="margin-top: 8px;">
-                      Not enough historical data yet. Need at least 7 days of data for training.
+                      Not enough historical data yet. Have ${this._status.usableDays} days, need at least ${this._status.minHistoryDays} days for training.
                     </div>
                   ` : ""}
               ${this._status.errorReason ? n`

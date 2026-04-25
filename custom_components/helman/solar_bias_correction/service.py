@@ -184,6 +184,7 @@ class SolarBiasCorrectionService:
         status, effective_variant, fallback_reason = self._resolve_status()
         return {
             "enabled": self._cfg.enabled,
+            "minHistoryDays": self._cfg.min_history_days,
             "status": status,
             "effectiveVariant": effective_variant,
             "trainedAt": self._trained_at,
