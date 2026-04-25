@@ -6,7 +6,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .models import BiasConfig, SolarActualsWindow
-from ..recorder_hourly_series import query_cumulative_slot_energy_changes
+from ..recorder_hourly_series import (
+    get_local_current_slot_start,
+    query_cumulative_slot_energy_changes,
+)
 
 
 async def load_actuals_for_day(
@@ -58,6 +61,11 @@ async def _read_day_slot_actuals(
 ) -> dict[str, float]:
     local_start = datetime.combine(target_date, time.min, tzinfo=local_now.tzinfo)
     local_end = local_start + timedelta(days=1)
+    if target_date == local_now.date():
+        local_end = min(
+            local_end,
+            get_local_current_slot_start(local_now, interval_minutes=15),
+        )
     values_by_slot = await query_cumulative_slot_energy_changes(
         hass,
         entity_id,

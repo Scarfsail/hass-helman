@@ -102,6 +102,41 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(slot_actuals["08:00"], 600.0)
         self.assertEqual(slot_actuals["10:30"], 400.0)
 
+    async def test_today_actuals_stop_at_current_completed_slot(self) -> None:
+        captured = {}
+
+        async def _query(hass, entity_id, *, local_start, local_end, interval_minutes):
+            captured["args"] = {
+                "entity_id": entity_id,
+                "local_start": local_start,
+                "local_end": local_end,
+                "interval_minutes": interval_minutes,
+            }
+            return {}
+
+        with patch.object(
+            actuals,
+            "query_cumulative_slot_energy_changes",
+            AsyncMock(side_effect=_query),
+        ):
+            await actuals._read_day_slot_actuals(
+                SimpleNamespace(),
+                "sensor.solax_total_solar_energy",
+                date(2026, 4, 15),
+                local_now=datetime(2026, 4, 15, 10, 7, tzinfo=TZ),
+            )
+
+        self.assertEqual(captured["args"]["entity_id"], "sensor.solax_total_solar_energy")
+        self.assertEqual(
+            captured["args"]["local_start"],
+            datetime(2026, 4, 15, 0, 0, tzinfo=TZ),
+        )
+        self.assertEqual(
+            captured["args"]["local_end"],
+            datetime(2026, 4, 15, 10, 0, tzinfo=TZ),
+        )
+        self.assertEqual(captured["args"]["interval_minutes"], 15)
+
 
 if __name__ == "__main__":
     unittest.main()

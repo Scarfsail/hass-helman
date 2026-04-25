@@ -2458,7 +2458,7 @@ const Ii = async () => {
     } catch (i) {
       t === this._activeRequestId && e === this._selectedDate && (this._error = (i == null ? void 0 : i.message) || this._t("bias_correction.inspector.load_failed"));
     } finally {
-      t === this._activeRequestId && e === this._selectedDate && (this._loading = !1, this._activeRequestDate = null);
+      t === this._activeRequestId && e === this._selectedDate && (this._loading = !1, this._activeRequestDate = null), this.requestUpdate();
     }
   }
   _moveDay(e) {

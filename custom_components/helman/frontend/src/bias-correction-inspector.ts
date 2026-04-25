@@ -509,6 +509,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
         this._loading = false;
         this._activeRequestDate = null;
       }
+      this.requestUpdate();
     }
   }
 

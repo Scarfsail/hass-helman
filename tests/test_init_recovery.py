@@ -33,6 +33,7 @@ def _load_helman_init_with_stubs():
 
     core_mod = types.ModuleType("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
+    core_mod.callback = lambda func: func
     sys.modules["homeassistant.core"] = core_mod
 
     panel_mod = types.ModuleType("custom_components.helman.panel")
@@ -127,6 +128,7 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.storage_mod.HelmanStorage.load_calls = 0
         self.coordinator_mod.HelmanCoordinator.fail_setup = False
         self.coordinator_mod.HelmanCoordinator.unload_calls = 0
+        self.panel_mod.register_calls = 0
 
     async def test_async_setup_initializes_storage_and_panel(self) -> None:
         hass = FakeHass()
