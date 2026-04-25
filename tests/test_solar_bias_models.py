@@ -73,3 +73,22 @@ def test_read_nested_config():
     assert bias.clamp_max == 1.5
     assert bias.daily_energy_entity_ids == ["sensor.daily1", "sensor.daily2"]
     assert bias.total_energy_entity_id == "sensor.total"
+
+
+def test_reads_total_energy_entity_from_bias_correction_config():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "bias_correction": {
+                        "total_energy_entity_id": "sensor.bias_total",
+                    },
+                    "daily_energy_entity_ids": ["sensor.daily1"],
+                }
+            }
+        }
+    }
+
+    bias = read_bias_config(config)
+
+    assert bias.total_energy_entity_id == "sensor.bias_total"

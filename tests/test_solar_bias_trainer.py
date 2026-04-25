@@ -151,7 +151,14 @@ def test_day_ratio_out_of_band_is_dropped():
 
     assert outcome.metadata.last_outcome == "profile_trained"
     dropped = outcome.metadata.dropped_days
-    assert any(d["date"] == "2023-01-01" and d["reason"] == "day_ratio_out_of_band" for d in dropped)
+    assert any(
+        d["date"] == "2023-01-01"
+        and d["reason"] == "day_ratio_out_of_band"
+        and d["forecast_wh"] == "1000.000"
+        and d["actual_wh"] == "96000.000"
+        and d["ratio"] == "96.000000"
+        for d in dropped
+    )
 
 
 def test_factor_clamps_to_clamp_max():

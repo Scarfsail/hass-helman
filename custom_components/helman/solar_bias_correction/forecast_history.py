@@ -225,4 +225,4 @@ def _read_entity_ids(raw_value: Any) -> list[str]:
             entity_id = item.strip()
             if entity_id:
                 entity_ids.append(entity_id)
-    return entity_ids
+    return entity_ids[:1]

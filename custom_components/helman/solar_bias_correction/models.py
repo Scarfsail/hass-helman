@@ -96,7 +96,9 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
 
     daily_energy_entity_ids = forecast.get("daily_energy_entity_ids") or []
-    total_energy_entity_id = forecast.get("total_energy_entity_id")
+    total_energy_entity_id = bias.get("total_energy_entity_id") or forecast.get(
+        "total_energy_entity_id"
+    )
 
     return BiasConfig(
         enabled=enabled,

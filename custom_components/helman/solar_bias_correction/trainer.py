@@ -64,7 +64,15 @@ def train(
         # Avoid division by zero - forecast_wh already > 0 due to previous check
         ratio = sum_actual / s.forecast_wh if s.forecast_wh else 0.0
         if ratio < _DAY_RATIO_MIN or ratio > _DAY_RATIO_MAX:
-            dropped_days.append({"date": s.date, "reason": "day_ratio_out_of_band"})
+            dropped_days.append(
+                {
+                    "date": s.date,
+                    "reason": "day_ratio_out_of_band",
+                    "forecast_wh": f"{s.forecast_wh:.3f}",
+                    "actual_wh": f"{sum_actual:.3f}",
+                    "ratio": f"{ratio:.6f}",
+                }
+            )
             continue
 
         usable_samples.append(s)

@@ -69,8 +69,19 @@ async def _read_day_slot_actuals(
 
     slot_actuals: dict[str, float] = {}
     previous_value = readings[0][1]
+    reset_pending = False
     for timestamp, value_kwh in readings[1:]:
-        delta_wh = max(0.0, (value_kwh - previous_value) * 1000.0)
+        delta_kwh = value_kwh - previous_value
+        if delta_kwh < 0:
+            previous_value = value_kwh
+            reset_pending = True
+            continue
+        if reset_pending:
+            previous_value = value_kwh
+            reset_pending = False
+            continue
+
+        delta_wh = delta_kwh * 1000.0
         slot_start = get_local_current_slot_start(
             dt_util.as_local(timestamp),
             interval_minutes=15,

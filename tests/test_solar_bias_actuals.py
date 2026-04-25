@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -76,8 +76,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman.solar_bias_correction import forecast_history  # noqa: E402
-from custom_components.helman.solar_bias_correction.models import BiasConfig  # noqa: E402
+from custom_components.helman.solar_bias_correction import actuals  # noqa: E402
 
 
 class _FakeState:
@@ -86,86 +85,29 @@ class _FakeState:
         self.last_updated = last_updated
 
 
-class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_uses_only_today_forecast_entity_for_historical_day(self) -> None:
-        hass = SimpleNamespace()
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=[
-                "sensor.energy_production_today",
-                "sensor.energy_production_tomorrow",
-                "sensor.energy_production_d2",
-            ],
-            total_energy_entity_id=None,
-        )
-        later = datetime(2026, 3, 20, 0, 5, tzinfo=TZ)
-        history = {
-            "sensor.energy_production_today": [_FakeState("30.0", later)],
-            "sensor.energy_production_tomorrow": [_FakeState("40.0", later)],
-            "sensor.energy_production_d2": [_FakeState("50.0", later)],
-        }
-
-        async def _get_significant_states(hass_arg, start_time, end_time, **kwargs):
-            if start_time.date() == datetime(2026, 3, 20, tzinfo=TZ).date():
-                return history
-            return {}
+class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ignores_recovery_after_cumulative_sensor_glitch_to_zero(self) -> None:
+        states = [
+            _FakeState("42026.4", datetime(2026, 4, 15, 0, 0, tzinfo=TZ)),
+            _FakeState("42027.0", datetime(2026, 4, 15, 8, 0, tzinfo=TZ)),
+            _FakeState("0.0", datetime(2026, 4, 15, 10, 29, tzinfo=TZ)),
+            _FakeState("42029.7", datetime(2026, 4, 15, 10, 30, tzinfo=TZ)),
+            _FakeState("42030.1", datetime(2026, 4, 15, 10, 45, tzinfo=TZ)),
+        ]
 
         with patch.object(
-            forecast_history,
-            "get_significant_states",
-            AsyncMock(side_effect=_get_significant_states),
+            actuals,
+            "_read_history_for_entity",
+            AsyncMock(return_value=states),
         ):
-            samples = await forecast_history.load_trainer_samples(
-                hass,
-                cfg,
-                datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
+            slot_actuals = await actuals._read_day_slot_actuals(
+                SimpleNamespace(),
+                "sensor.solax_total_solar_energy",
+                date(2026, 4, 15),
+                local_now=datetime(2026, 4, 16, 12, 0, tzinfo=TZ),
             )
 
-        self.assertEqual(len(samples), 1)
-        self.assertEqual(samples[0].forecast_wh, 30000.0)
-
-    async def test_ignores_midnight_boundary_state(self) -> None:
-        hass = SimpleNamespace()
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-        )
-        midnight = datetime(2026, 3, 20, 0, 0, tzinfo=TZ)
-        later = datetime(2026, 3, 20, 0, 5, tzinfo=TZ)
-        history = {
-            "sensor.energy_production_today": [
-                _FakeState("1.0", midnight),
-                _FakeState("2.0", later),
-            ]
-        }
-
-        async def _get_significant_states(hass_arg, start_time, end_time, **kwargs):
-            if start_time.date() == datetime(2026, 3, 20, tzinfo=TZ).date():
-                return history
-            return {}
-
-        with patch.object(
-            forecast_history,
-            "get_significant_states",
-            AsyncMock(side_effect=_get_significant_states),
-        ):
-            samples = await forecast_history.load_trainer_samples(
-                hass,
-                cfg,
-                datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
-            )
-
-        self.assertEqual(len(samples), 1)
-        self.assertEqual(samples[0].forecast_wh, 2000.0)
+        self.assertAlmostEqual(sum(slot_actuals.values()), 1000.0)
 
 
 if __name__ == "__main__":
