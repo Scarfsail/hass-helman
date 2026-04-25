@@ -1116,7 +1116,7 @@ const ci = {
   power_devices: {
     house: "section:power_devices.house",
     solar: "section:power_devices.solar",
-    bias_correction: "section:power_devices.solar.bias_correction",
+    solar_bias_correction: "section:power_devices.solar.bias_correction",
     battery: "section:power_devices.battery",
     grid: "section:power_devices.grid"
   },
@@ -1250,10 +1250,10 @@ const ci = {
       rootKind: "object"
     })
   },
-  [h.power_devices.bias_correction]: {
-    id: h.power_devices.bias_correction,
+  [h.power_devices.solar_bias_correction]: {
+    id: h.power_devices.solar_bias_correction,
     kind: "section",
-    parentId: v.power_devices,
+    parentId: h.power_devices.solar,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction",
     adapter: w(
@@ -3177,59 +3177,59 @@ const zi = [
               ${this._t("editor.actions.add_daily_energy_entity")}
             </button>
           </div>
-        `,
-      { initialOpen: !1 }
-    )}
 
-      ${this._renderSectionScope(
-      h.power_devices.bias_correction,
-      n`
-          <div class="field-grid">
-            ${this._renderBooleanField(
-        ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
-        "editor.fields.bias_correction_enabled",
-        !1
-      )}
-            ${this._renderOptionalNumberField(
-        ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-        "editor.fields.bias_correction_min_history_days",
-        "editor.helpers.bias_correction_min_history_days",
-        "editor.help.bias_correction_min_history_days"
-      )}
-            ${this._renderOptionalTextField(
-        ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
-        "editor.fields.bias_correction_training_time",
-        "editor.helpers.bias_correction_training_time",
-        "editor.help.bias_correction_training_time"
-      )}
-            ${this._renderOptionalNumberField(
-        ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
-        "editor.fields.bias_correction_clamp_min",
-        void 0,
-        "editor.help.bias_correction_clamp_min"
-      )}
-            ${this._renderOptionalNumberField(
-        ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
-        "editor.fields.bias_correction_clamp_max",
-        void 0,
-        "editor.help.bias_correction_clamp_max"
-      )}
-            ${this._renderOptionalEntityField(
-        ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
-        "editor.fields.bias_correction_total_energy_entity",
-        ["sensor"],
-        void 0,
-        "editor.help.bias_correction_total_energy_entity"
-      )}
-          </div>
+          ${this._renderSectionScope(
+        h.power_devices.solar_bias_correction,
+        n`
+              <div class="field-grid">
+                ${this._renderBooleanField(
+          ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
+          "editor.fields.bias_correction_enabled",
+          !1
+        )}
+                ${this._renderOptionalNumberField(
+          ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+          "editor.fields.bias_correction_min_history_days",
+          "editor.helpers.bias_correction_min_history_days",
+          "editor.help.bias_correction_min_history_days"
+        )}
+                ${this._renderOptionalTextField(
+          ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
+          "editor.fields.bias_correction_training_time",
+          "editor.helpers.bias_correction_training_time",
+          "editor.help.bias_correction_training_time"
+        )}
+                ${this._renderOptionalNumberField(
+          ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
+          "editor.fields.bias_correction_clamp_min",
+          void 0,
+          "editor.help.bias_correction_clamp_min"
+        )}
+                ${this._renderOptionalNumberField(
+          ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
+          "editor.fields.bias_correction_clamp_max",
+          void 0,
+          "editor.help.bias_correction_clamp_max"
+        )}
+                ${this._renderOptionalEntityField(
+          ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
+          "editor.fields.bias_correction_total_energy_entity",
+          ["sensor"],
+          void 0,
+          "editor.help.bias_correction_total_energy_entity"
+        )}
+              </div>
 
-          <div class="list-card">
-            <div class="card-title" style="margin-bottom: 16px;">
-              <strong>${this._t("editor.sections.bias_correction_status")}</strong>
-              <span class="card-subtitle">Current bias correction status and training controls</span>
-            </div>
-            <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
-          </div>
+              <div class="list-card">
+                <div class="card-title" style="margin-bottom: 16px;">
+                  <strong>${this._t("editor.sections.bias_correction_status")}</strong>
+                  <span class="card-subtitle">Current bias correction status and training controls</span>
+                </div>
+                <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
+              </div>
+            `,
+        { initialOpen: !1 }
+      )}
         `,
       { initialOpen: !1 }
     )}

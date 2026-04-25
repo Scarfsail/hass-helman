@@ -100,7 +100,7 @@ export const SECTION_SCOPE_IDS = {
   power_devices: {
     house: "section:power_devices.house",
     solar: "section:power_devices.solar",
-    bias_correction: "section:power_devices.solar.bias_correction",
+    solar_bias_correction: "section:power_devices.solar.bias_correction",
     battery: "section:power_devices.battery",
     grid: "section:power_devices.grid",
   },
@@ -248,10 +248,10 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.power_devices.bias_correction]: {
-    id: SECTION_SCOPE_IDS.power_devices.bias_correction,
+  [SECTION_SCOPE_IDS.power_devices.solar_bias_correction]: {
+    id: SECTION_SCOPE_IDS.power_devices.solar_bias_correction,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.power_devices,
+    parentId: SECTION_SCOPE_IDS.power_devices.solar,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction",
     adapter: createPathScopeAdapter(
