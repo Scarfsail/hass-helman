@@ -45,7 +45,7 @@ const gt = (o) => new tt(typeof o == "string" ? o : o + "", void 0, be), it = (o
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: yt, defineProperty: bt, getOwnPropertyDescriptor: ft, getOwnPropertyNames: kt, getOwnPropertySymbols: $t, getPrototypeOf: wt } = Object, V = globalThis, ze = V.trustedTypes, xt = ze ? ze.emptyScript : "", ae = V.reactiveElementPolyfillSupport, q = (o, e) => o, ue = { toAttribute(o, e) {
+const { is: yt, defineProperty: bt, getOwnPropertyDescriptor: ft, getOwnPropertyNames: kt, getOwnPropertySymbols: $t, getPrototypeOf: wt } = Object, V = globalThis, ze = V.trustedTypes, xt = ze ? ze.emptyScript : "", ae = V.reactiveElementPolyfillSupport, B = (o, e) => o, ue = { toAttribute(o, e) {
   switch (e) {
     case Boolean:
       o = o ? xt : null;
@@ -103,13 +103,13 @@ let R = class extends HTMLElement {
     return this.elementProperties.get(e) ?? Ae;
   }
   static _$Ei() {
-    if (this.hasOwnProperty(q("elementProperties"))) return;
+    if (this.hasOwnProperty(B("elementProperties"))) return;
     const e = wt(this);
     e.finalize(), e.l !== void 0 && (this.l = [...e.l]), this.elementProperties = new Map(e.elementProperties);
   }
   static finalize() {
-    if (this.hasOwnProperty(q("finalized"))) return;
-    if (this.finalized = !0, this._$Ei(), this.hasOwnProperty(q("properties"))) {
+    if (this.hasOwnProperty(B("finalized"))) return;
+    if (this.finalized = !0, this._$Ei(), this.hasOwnProperty(B("properties"))) {
       const t = this.properties, i = [...kt(t), ...$t(t)];
       for (const a of i) this.createProperty(a, t[a]);
     }
@@ -278,7 +278,7 @@ let R = class extends HTMLElement {
   firstUpdated(e) {
   }
 };
-R.elementStyles = [], R.shadowRootOptions = { mode: "open" }, R[q("elementProperties")] = /* @__PURE__ */ new Map(), R[q("finalized")] = /* @__PURE__ */ new Map(), ae == null || ae({ ReactiveElement: R }), (V.reactiveElementVersions ?? (V.reactiveElementVersions = [])).push("2.1.2");
+R.elementStyles = [], R.shadowRootOptions = { mode: "open" }, R[B("elementProperties")] = /* @__PURE__ */ new Map(), R[B("finalized")] = /* @__PURE__ */ new Map(), ae == null || ae({ ReactiveElement: R }), (V.reactiveElementVersions ?? (V.reactiveElementVersions = [])).push("2.1.2");
 /**
  * @license
  * Copyright 2017 Google LLC
@@ -751,7 +751,7 @@ function Wt(o) {
 function Kt(o) {
   return A(o, "label");
 }
-function Bt(o, e, t) {
+function qt(o, e, t) {
   return {
     kind: "ev_charger",
     id: A(o, "ev-charger"),
@@ -786,7 +786,7 @@ function Bt(o, e, t) {
     vehicles: [dt([], t)]
   };
 }
-function qt(o, e) {
+function Bt(o, e) {
   return {
     kind: "generic",
     id: A(o, "generic-appliance"),
@@ -1076,13 +1076,13 @@ const ci = {
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   scheduler: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
-  appliances: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
-  bias_correction: "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z"
+  appliances: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z"
 }, pi = {
   "section:general.core_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
   "section:general.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
   "section:power_devices.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
   "section:power_devices.solar": "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.5,14.77 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.5,9.23 18.06,8.5C17.64,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.63,16.22 18.05,15.5C18.5,14.75 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
+  "section:power_devices.solar.bias_correction": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
   "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
   "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
   "section:scheduler.schedule_control_mapping": "M16.53,11.06L15.47,10L10.59,14.88L8.47,12.76L7.41,13.82L10.59,17L16.53,11.06M19,3H18V1H16V3H8V1H6V3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M19,19H5V9H19V19M19,7H5V5H19V7Z",
@@ -1094,8 +1094,7 @@ const ci = {
   { id: "power_devices", labelKey: "editor.tabs.power_devices" },
   { id: "scheduler", labelKey: "editor.tabs.scheduler" },
   { id: "automation", labelKey: "editor.tabs.automation" },
-  { id: "appliances", labelKey: "editor.tabs.appliances" },
-  { id: "bias_correction", labelKey: "editor.tabs.bias_correction" }
+  { id: "appliances", labelKey: "editor.tabs.appliances" }
 ], Ue = {
   general: "general",
   power_devices: "power_devices",
@@ -1108,8 +1107,7 @@ const ci = {
   power_devices: "tab:power_devices",
   scheduler: "tab:scheduler",
   automation: "tab:automation",
-  appliances: "tab:appliances",
-  bias_correction: "tab:bias_correction"
+  appliances: "tab:appliances"
 }, h = {
   general: {
     core_labels_and_history: "section:general.core_labels_and_history",
@@ -1118,6 +1116,7 @@ const ci = {
   power_devices: {
     house: "section:power_devices.house",
     solar: "section:power_devices.solar",
+    bias_correction: "section:power_devices.solar.bias_correction",
     battery: "section:power_devices.battery",
     grid: "section:power_devices.grid"
   },
@@ -1130,9 +1129,6 @@ const ci = {
   },
   appliances: {
     configured_appliances: "section:appliances.configured_appliances"
-  },
-  bias_correction: {
-    settings: "section:bias_correction.settings"
   }
 }, _t = [
   "history_buckets",
@@ -1213,20 +1209,6 @@ const ci = {
       rootKind: "array"
     })
   },
-  [g.bias_correction]: {
-    id: g.bias_correction,
-    kind: "tab",
-    parentId: z,
-    tabId: "bias_correction",
-    labelKey: "editor.tabs.bias_correction",
-    adapter: w(
-      ["power_devices", "solar", "forecast", "bias_correction"],
-      {
-        emptyValue: x,
-        rootKind: "object"
-      }
-    )
-  },
   [h.general.core_labels_and_history]: {
     id: h.general.core_labels_and_history,
     kind: "section",
@@ -1267,6 +1249,20 @@ const ci = {
       emptyValue: x,
       rootKind: "object"
     })
+  },
+  [h.power_devices.bias_correction]: {
+    id: h.power_devices.bias_correction,
+    kind: "section",
+    parentId: g.power_devices,
+    tabId: "power_devices",
+    labelKey: "editor.sections.bias_correction",
+    adapter: w(
+      ["power_devices", "solar", "forecast", "bias_correction"],
+      {
+        emptyValue: x,
+        rootKind: "object"
+      }
+    )
   },
   [h.power_devices.battery]: {
     id: h.power_devices.battery,
@@ -2069,7 +2065,7 @@ const ht = {
   cs: bi,
   en: ki
 };
-function Be(o) {
+function qe(o) {
   var t;
   const e = wi((o == null ? void 0 : o.language) || ((t = o == null ? void 0 : o.locale) == null ? void 0 : t.language) || "cs");
   return (i) => $i(i, e);
@@ -2097,15 +2093,15 @@ function $i(o, e = "cs") {
 function wi(o) {
   return o ? o.substring(0, 2) : "cs";
 }
-const qe = [
+const Be = [
   "ha-entity-picker",
   "ha-form",
   "ha-formfield",
   "ha-switch"
 ], Ze = "ha-yaml-editor";
-let K = null, B = null;
+let K = null, q = null;
 const xi = async () => {
-  if (!qe.every((o) => customElements.get(o))) {
+  if (!Be.every((o) => customElements.get(o))) {
     if (K)
       return K;
     K = (async () => {
@@ -2120,7 +2116,7 @@ const xi = async () => {
             component_name: "config"
           }
         ]
-      }, o._updateRoutes(), await o.routerOptions.routes.tmp.load(), await customElements.whenDefined("ha-panel-config"), await document.createElement("ha-panel-config").routerOptions.routes.automation.load(), await Promise.all(qe.map((t) => customElements.whenDefined(t)));
+      }, o._updateRoutes(), await o.routerOptions.routes.tmp.load(), await customElements.whenDefined("ha-panel-config"), await document.createElement("ha-panel-config").routerOptions.routes.automation.load(), await Promise.all(Be.map((t) => customElements.whenDefined(t)));
     })();
     try {
       await K;
@@ -2130,9 +2126,9 @@ const xi = async () => {
   }
 }, Ge = async () => {
   if (!customElements.get(Ze)) {
-    if (B)
-      return B;
-    B = (async () => {
+    if (q)
+      return q;
+    q = (async () => {
       var i, a, r, s, l, d, c;
       await customElements.whenDefined("partial-panel-resolver"), await ((r = (a = (i = document.createElement(
         "partial-panel-resolver"
@@ -2146,9 +2142,9 @@ const xi = async () => {
       ).routerOptions) == null ? void 0 : s.routes) == null ? void 0 : l.service) == null ? void 0 : d.load) == null ? void 0 : c.call(d)), await customElements.whenDefined(Ze);
     })();
     try {
-      await B;
+      await q;
     } catch (o) {
-      throw B = null, o;
+      throw q = null, o;
     }
   }
 }, $e = class $e extends N {
@@ -2539,7 +2535,7 @@ const zi = [
   icon: {}
 }, te = class te extends N {
   constructor() {
-    super(...arguments), this._fallbackLocalize = Be(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._liveApplianceMetadata = null, this._helpDialog = null, this._preventSummaryToggle = (e) => {
+    super(...arguments), this._fallbackLocalize = qe(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._liveApplianceMetadata = null, this._helpDialog = null, this._preventSummaryToggle = (e) => {
       e.preventDefault(), e.stopPropagation();
     }, this._stopSummaryToggle = (e) => {
       e.stopPropagation();
@@ -2635,7 +2631,7 @@ const zi = [
         E(
           t,
           ["appliances"],
-          Bt(
+          qt(
             e,
             this._tFormat("editor.dynamic.ev_charger", { index: e.length + 1 }),
             this._tFormat("editor.dynamic.vehicle", { index: 1 })
@@ -2668,7 +2664,7 @@ const zi = [
         E(
           t,
           ["appliances"],
-          qt(
+          Bt(
             e,
             this._tFormat("editor.dynamic.generic_appliance", {
               index: e.length + 1
@@ -2683,7 +2679,7 @@ const zi = [
   }
   set hass(e) {
     const t = this._hass;
-    this._hass = e, e && !this._localize && (this._localize = Be(e)), this.requestUpdate("hass", t);
+    this._hass = e, e && !this._localize && (this._localize = qe(e)), this.requestUpdate("hass", t);
   }
   connectedCallback() {
     super.connectedCallback(), xi().then(() => {
@@ -2801,11 +2797,6 @@ const zi = [
         return this._renderTabScope(
           g.appliances,
           this._renderAppliancesTab()
-        );
-      case "bias_correction":
-        return this._renderTabScope(
-          g.bias_correction,
-          this._renderBiasCorrectionTab()
         );
       default:
         return n``;
@@ -3199,6 +3190,59 @@ const zi = [
             <button type="button" class="add-button" @click=${this._handleAddDailyEnergyEntity}>
               ${this._t("editor.actions.add_daily_energy_entity")}
             </button>
+          </div>
+        `,
+      { initialOpen: !1 }
+    )}
+
+      ${this._renderSectionScope(
+      h.power_devices.bias_correction,
+      n`
+          <div class="field-grid">
+            ${this._renderBooleanField(
+        ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
+        "editor.fields.bias_correction_enabled",
+        !1
+      )}
+            ${this._renderOptionalNumberField(
+        ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+        "editor.fields.bias_correction_min_history_days",
+        "editor.helpers.bias_correction_min_history_days",
+        "editor.help.bias_correction_min_history_days"
+      )}
+            ${this._renderOptionalTextField(
+        ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
+        "editor.fields.bias_correction_training_time",
+        "editor.helpers.bias_correction_training_time",
+        "editor.help.bias_correction_training_time"
+      )}
+            ${this._renderOptionalNumberField(
+        ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
+        "editor.fields.bias_correction_clamp_min",
+        void 0,
+        "editor.help.bias_correction_clamp_min"
+      )}
+            ${this._renderOptionalNumberField(
+        ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
+        "editor.fields.bias_correction_clamp_max",
+        void 0,
+        "editor.help.bias_correction_clamp_max"
+      )}
+            ${this._renderOptionalEntityField(
+        ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
+        "editor.fields.bias_correction_total_energy_entity",
+        ["sensor"],
+        void 0,
+        "editor.help.bias_correction_total_energy_entity"
+      )}
+          </div>
+
+          <div class="list-card">
+            <div class="card-title" style="margin-bottom: 16px;">
+              <strong>${this._t("editor.sections.bias_correction_status")}</strong>
+              <span class="card-subtitle">Current bias correction status and training controls</span>
+            </div>
+            <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
           </div>
         `,
       { initialOpen: !1 }
@@ -3698,61 +3742,6 @@ const zi = [
           </div>
         `
     )}
-    `;
-  }
-  _renderBiasCorrectionTab() {
-    return n`
-      ${this._renderSectionScope(
-      h.bias_correction.settings,
-      n`
-          <div class="field-grid">
-            ${this._renderBooleanField(
-        ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
-        "editor.fields.bias_correction_enabled",
-        !1
-      )}
-            ${this._renderOptionalNumberField(
-        ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-        "editor.fields.bias_correction_min_history_days",
-        "editor.helpers.bias_correction_min_history_days",
-        "editor.help.bias_correction_min_history_days"
-      )}
-            ${this._renderOptionalTextField(
-        ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
-        "editor.fields.bias_correction_training_time",
-        "editor.helpers.bias_correction_training_time",
-        "editor.help.bias_correction_training_time"
-      )}
-            ${this._renderOptionalNumberField(
-        ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
-        "editor.fields.bias_correction_clamp_min",
-        void 0,
-        "editor.help.bias_correction_clamp_min"
-      )}
-            ${this._renderOptionalNumberField(
-        ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
-        "editor.fields.bias_correction_clamp_max",
-        void 0,
-        "editor.help.bias_correction_clamp_max"
-      )}
-            ${this._renderOptionalEntityField(
-        ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
-        "editor.fields.bias_correction_total_energy_entity",
-        ["sensor"],
-        void 0,
-        "editor.help.bias_correction_total_energy_entity"
-      )}
-          </div>
-        `
-    )}
-
-      <div class="list-card">
-        <div class="card-title" style="margin-bottom: 16px;">
-          <strong>${this._t("editor.sections.bias_correction_status")}</strong>
-          <span class="card-subtitle">Current bias correction status and training controls</span>
-        </div>
-        <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
-      </div>
     `;
   }
   _renderDeviceLabelCategories() {
@@ -4730,8 +4719,7 @@ const zi = [
       power_devices: { errors: 0, warnings: 0 },
       scheduler: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
-      appliances: { errors: 0, warnings: 0 },
-      bias_correction: { errors: 0, warnings: 0 }
+      appliances: { errors: 0, warnings: 0 }
     };
     if (this._validation) {
       for (const t of this._validation.errors) {
