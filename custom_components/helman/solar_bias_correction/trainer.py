@@ -42,6 +42,35 @@ def _median(values: List[float]) -> float | None:
     return (s[mid - 1] + s[mid]) / 2.0
 
 
+def _slot_to_minutes(slot: str) -> int:
+    h, m = slot.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _aggregate_actuals_into_forecast_slot(
+    day_actuals: dict[str, float],
+    *,
+    forecast_slot: str,
+    forecast_slot_keys: list[str],
+) -> float:
+    """Sum every actual whose slot start falls in [forecast_slot, next_forecast_slot)."""
+    start = _slot_to_minutes(forecast_slot)
+    idx = forecast_slot_keys.index(forecast_slot)
+    if idx + 1 < len(forecast_slot_keys):
+        end = _slot_to_minutes(forecast_slot_keys[idx + 1])
+    else:
+        end = 24 * 60  # last forecast slot of day extends to end of day
+    total = 0.0
+    for actual_slot, value in day_actuals.items():
+        try:
+            minutes = _slot_to_minutes(actual_slot)
+        except (ValueError, AttributeError):
+            continue
+        if start <= minutes < end:
+            total += value
+    return total
+
+
 def train(
     samples: list[TrainerSample],
     actuals: SolarActualsWindow,
@@ -97,21 +126,30 @@ def train(
         )
         return TrainingOutcome(profile=profile, metadata=metadata)
 
-    # Accumulate per-slot forecast and actual sums
-    slot_forecast_sums: Dict[str, float] = {slot: 0.0 for slot in _ALL_SLOTS}
-    slot_actual_sums: Dict[str, float] = {slot: 0.0 for slot in _ALL_SLOTS}
-
+    # Determine the union of forecast slot keys across usable days.
+    forecast_slot_keys: set[str] = set()
     for s in usable_samples:
-        per_slot_forecast = s.forecast_wh / len(_ALL_SLOTS)
+        forecast_slot_keys.update(s.slot_forecast_wh.keys())
+
+    # Accumulate per-slot forecast and actual sums at the forecast's native granularity.
+    slot_forecast_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
+    slot_actual_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
+
+    sorted_forecast_slots = sorted(forecast_slot_keys, key=_slot_to_minutes)
+    for s in usable_samples:
         day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
-        for slot in _ALL_SLOTS:
-            slot_forecast_sums[slot] += per_slot_forecast
-            slot_actual_sums[slot] += day_actuals.get(slot, 0.0)
+        for slot in sorted_forecast_slots:
+            slot_forecast_sums[slot] += s.slot_forecast_wh.get(slot, 0.0)
+            slot_actual_sums[slot] += _aggregate_actuals_into_forecast_slot(
+                day_actuals,
+                forecast_slot=slot,
+                forecast_slot_keys=sorted_forecast_slots,
+            )
 
     factors: Dict[str, float] = {}
     omitted_slots: List[str] = []
 
-    for slot in _ALL_SLOTS:
+    for slot in sorted_forecast_slots:
         fcast = slot_forecast_sums[slot]
         if fcast < _SLOT_FORECAST_SUM_FLOOR_WH:
             omitted_slots.append(slot)
