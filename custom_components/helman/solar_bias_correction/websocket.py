@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -103,6 +104,50 @@ def ws_get_solar_bias_profile(
         return
 
     connection.send_result(msg["id"], profile_payload)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "helman/solar_bias/inspector",
+        vol.Required("date"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_get_solar_bias_inspector(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    if not _require_admin(connection, msg):
+        return
+
+    raw_date = msg.get("date")
+    try:
+        date.fromisoformat(raw_date)
+    except (TypeError, ValueError):
+        connection.send_error(
+            msg["id"],
+            "invalid_date",
+            "Date must use YYYY-MM-DD format",
+        )
+        return
+
+    service = _get_solar_bias_service(hass, connection, msg)
+    if service is None:
+        return
+
+    try:
+        payload = await service.async_get_inspector_day(raw_date)
+    except Exception:
+        _LOGGER.exception("Unexpected solar bias inspector failure")
+        connection.send_error(
+            msg["id"],
+            "internal_error",
+            "Unexpected solar bias inspector failure",
+        )
+        return
+
+    connection.send_result(msg["id"], payload)
 
 
 def _get_solar_bias_service(

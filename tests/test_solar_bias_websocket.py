@@ -681,6 +681,62 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(connection.results, [])
                 self.assertEqual(connection.errors, expected_error)
 
+    async def test_inspector_returns_service_payload_for_date(self) -> None:
+        payload = {
+            "date": "2026-04-25",
+            "timezone": "Europe/Prague",
+            "series": {"raw": [], "corrected": [], "actual": [], "factors": []},
+        }
+        service = SimpleNamespace(
+            async_get_inspector_day=AsyncMock(return_value=payload)
+        )
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        await self.solar_bias_ws.ws_get_solar_bias_inspector(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/solar_bias/inspector", "date": "2026-04-25"},
+        )
+
+        service.async_get_inspector_day.assert_awaited_once_with("2026-04-25")
+        self.assertEqual(connection.results, [(1, payload)])
+        self.assertEqual(connection.errors, [])
+
+    async def test_inspector_requires_admin(self) -> None:
+        service = SimpleNamespace(async_get_inspector_day=AsyncMock())
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection(is_admin=False)
+
+        await self.solar_bias_ws.ws_get_solar_bias_inspector(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/solar_bias/inspector", "date": "2026-04-25"},
+        )
+
+        service.async_get_inspector_day.assert_not_awaited()
+        self.assertEqual(
+            connection.errors,
+            [(1, "unauthorized", "Admin access required")],
+        )
+
+    async def test_inspector_rejects_invalid_date(self) -> None:
+        service = SimpleNamespace(async_get_inspector_day=AsyncMock())
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        await self.solar_bias_ws.ws_get_solar_bias_inspector(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/solar_bias/inspector", "date": "04/25/2026"},
+        )
+
+        service.async_get_inspector_day.assert_not_awaited()
+        self.assertEqual(
+            connection.errors,
+            [(1, "invalid_date", "Date must use YYYY-MM-DD format")],
+        )
+
     def test_registration_wiring_includes_solar_bias_handlers(self) -> None:
         registered: list[object] = []
         self.websockets_mod.async_register_command = lambda hass, command: registered.append(
@@ -692,6 +748,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(self.solar_bias_ws.ws_get_solar_bias_status, registered)
         self.assertIn(self.solar_bias_ws.ws_train_solar_bias_now, registered)
         self.assertIn(self.solar_bias_ws.ws_get_solar_bias_profile, registered)
+        self.assertIn(self.solar_bias_ws.ws_get_solar_bias_inspector, registered)
 
 
 if __name__ == "__main__":

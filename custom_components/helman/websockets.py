@@ -17,6 +17,7 @@ from .forecast_request import (
     ensure_supported_forecast_request,
 )
 from .solar_bias_correction.websocket import (
+    ws_get_solar_bias_inspector,
     ws_get_solar_bias_profile,
     ws_get_solar_bias_status,
     ws_train_solar_bias_now,
@@ -90,6 +91,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_solar_bias_status)
     async_register_command(hass, ws_train_solar_bias_now)
     async_register_command(hass, ws_get_solar_bias_profile)
+    async_register_command(hass, ws_get_solar_bias_inspector)
     async_register_command(hass, ws_get_history)
     async_register_command(hass, ws_run_automation)
     async_register_command(hass, ws_get_last_automation_run)
