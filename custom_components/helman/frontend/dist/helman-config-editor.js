@@ -3,18 +3,18 @@
  * Copyright 2019 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const X = globalThis, ye = X.ShadowRoot && (X.ShadyCSS === void 0 || X.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, be = Symbol(), we = /* @__PURE__ */ new WeakMap();
+const X = globalThis, be = X.ShadowRoot && (X.ShadyCSS === void 0 || X.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, fe = Symbol(), xe = /* @__PURE__ */ new WeakMap();
 let tt = class {
   constructor(e, t, i) {
-    if (this._$cssResult$ = !0, i !== be) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
+    if (this._$cssResult$ = !0, i !== fe) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
     this.cssText = e, this.t = t;
   }
   get styleSheet() {
     let e = this.o;
     const t = this.t;
-    if (ye && e === void 0) {
+    if (be && e === void 0) {
       const i = t !== void 0 && t.length === 1;
-      i && (e = we.get(t)), e === void 0 && ((this.o = e = new CSSStyleSheet()).replaceSync(this.cssText), i && we.set(t, e));
+      i && (e = xe.get(t)), e === void 0 && ((this.o = e = new CSSStyleSheet()).replaceSync(this.cssText), i && xe.set(t, e));
     }
     return e;
   }
@@ -22,33 +22,33 @@ let tt = class {
     return this.cssText;
   }
 };
-const gt = (o) => new tt(typeof o == "string" ? o : o + "", void 0, be), it = (o, ...e) => {
+const ft = (o) => new tt(typeof o == "string" ? o : o + "", void 0, fe), it = (o, ...e) => {
   const t = o.length === 1 ? o[0] : e.reduce((i, a, r) => i + ((s) => {
     if (s._$cssResult$ === !0) return s.cssText;
     if (typeof s == "number") return s;
     throw Error("Value passed to 'css' function must be a 'css' function result: " + s + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
   })(a) + o[r + 1], o[0]);
-  return new tt(t, o, be);
-}, vt = (o, e) => {
-  if (ye) o.adoptedStyleSheets = e.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
+  return new tt(t, o, fe);
+}, kt = (o, e) => {
+  if (be) o.adoptedStyleSheets = e.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
   else for (const t of e) {
     const i = document.createElement("style"), a = X.litNonce;
     a !== void 0 && i.setAttribute("nonce", a), i.textContent = t.cssText, o.appendChild(i);
   }
-}, xe = ye ? (o) => o : (o) => o instanceof CSSStyleSheet ? ((e) => {
+}, ze = be ? (o) => o : (o) => o instanceof CSSStyleSheet ? ((e) => {
   let t = "";
   for (const i of e.cssRules) t += i.cssText;
-  return gt(t);
+  return ft(t);
 })(o) : o;
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: yt, defineProperty: bt, getOwnPropertyDescriptor: ft, getOwnPropertyNames: kt, getOwnPropertySymbols: $t, getPrototypeOf: wt } = Object, V = globalThis, ze = V.trustedTypes, xt = ze ? ze.emptyScript : "", ae = V.reactiveElementPolyfillSupport, B = (o, e) => o, ue = { toAttribute(o, e) {
+const { is: $t, defineProperty: wt, getOwnPropertyDescriptor: xt, getOwnPropertyNames: zt, getOwnPropertySymbols: At, getPrototypeOf: Et } = Object, V = globalThis, Ae = V.trustedTypes, St = Ae ? Ae.emptyScript : "", oe = V.reactiveElementPolyfillSupport, B = (o, e) => o, he = { toAttribute(o, e) {
   switch (e) {
     case Boolean:
-      o = o ? xt : null;
+      o = o ? St : null;
       break;
     case Object:
     case Array:
@@ -73,23 +73,23 @@ const { is: yt, defineProperty: bt, getOwnPropertyDescriptor: ft, getOwnProperty
       }
   }
   return t;
-} }, at = (o, e) => !yt(o, e), Ae = { attribute: !0, type: String, converter: ue, reflect: !1, useDefault: !1, hasChanged: at };
+} }, at = (o, e) => !$t(o, e), Ee = { attribute: !0, type: String, converter: he, reflect: !1, useDefault: !1, hasChanged: at };
 Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), V.litPropertyMetadata ?? (V.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
-let R = class extends HTMLElement {
+let N = class extends HTMLElement {
   static addInitializer(e) {
     this._$Ei(), (this.l ?? (this.l = [])).push(e);
   }
   static get observedAttributes() {
     return this.finalize(), this._$Eh && [...this._$Eh.keys()];
   }
-  static createProperty(e, t = Ae) {
+  static createProperty(e, t = Ee) {
     if (t.state && (t.attribute = !1), this._$Ei(), this.prototype.hasOwnProperty(e) && ((t = Object.create(t)).wrapped = !0), this.elementProperties.set(e, t), !t.noAccessor) {
       const i = Symbol(), a = this.getPropertyDescriptor(e, i, t);
-      a !== void 0 && bt(this.prototype, e, a);
+      a !== void 0 && wt(this.prototype, e, a);
     }
   }
   static getPropertyDescriptor(e, t, i) {
-    const { get: a, set: r } = ft(this.prototype, e) ?? { get() {
+    const { get: a, set: r } = xt(this.prototype, e) ?? { get() {
       return this[t];
     }, set(s) {
       this[t] = s;
@@ -100,17 +100,17 @@ let R = class extends HTMLElement {
     }, configurable: !0, enumerable: !0 };
   }
   static getPropertyOptions(e) {
-    return this.elementProperties.get(e) ?? Ae;
+    return this.elementProperties.get(e) ?? Ee;
   }
   static _$Ei() {
     if (this.hasOwnProperty(B("elementProperties"))) return;
-    const e = wt(this);
+    const e = Et(this);
     e.finalize(), e.l !== void 0 && (this.l = [...e.l]), this.elementProperties = new Map(e.elementProperties);
   }
   static finalize() {
     if (this.hasOwnProperty(B("finalized"))) return;
     if (this.finalized = !0, this._$Ei(), this.hasOwnProperty(B("properties"))) {
-      const t = this.properties, i = [...kt(t), ...$t(t)];
+      const t = this.properties, i = [...zt(t), ...At(t)];
       for (const a of i) this.createProperty(a, t[a]);
     }
     const e = this[Symbol.metadata];
@@ -129,8 +129,8 @@ let R = class extends HTMLElement {
     const t = [];
     if (Array.isArray(e)) {
       const i = new Set(e.flat(1 / 0).reverse());
-      for (const a of i) t.unshift(xe(a));
-    } else e !== void 0 && t.push(xe(e));
+      for (const a of i) t.unshift(ze(a));
+    } else e !== void 0 && t.push(ze(e));
     return t;
   }
   static _$Eu(e, t) {
@@ -159,7 +159,7 @@ let R = class extends HTMLElement {
   }
   createRenderRoot() {
     const e = this.shadowRoot ?? this.attachShadow(this.constructor.shadowRootOptions);
-    return vt(e, this.constructor.elementStyles), e;
+    return kt(e, this.constructor.elementStyles), e;
   }
   connectedCallback() {
     var e;
@@ -184,7 +184,7 @@ let R = class extends HTMLElement {
     var r;
     const i = this.constructor.elementProperties.get(e), a = this.constructor._$Eu(e, i);
     if (a !== void 0 && i.reflect === !0) {
-      const s = (((r = i.converter) == null ? void 0 : r.toAttribute) !== void 0 ? i.converter : ue).toAttribute(t, i.type);
+      const s = (((r = i.converter) == null ? void 0 : r.toAttribute) !== void 0 ? i.converter : he).toAttribute(t, i.type);
       this._$Em = e, s == null ? this.removeAttribute(a) : this.setAttribute(a, s), this._$Em = null;
     }
   }
@@ -192,7 +192,7 @@ let R = class extends HTMLElement {
     var r, s;
     const i = this.constructor, a = i._$Eh.get(e);
     if (a !== void 0 && this._$Em !== a) {
-      const l = i.getPropertyOptions(a), d = typeof l.converter == "function" ? { fromAttribute: l.converter } : ((r = l.converter) == null ? void 0 : r.fromAttribute) !== void 0 ? l.converter : ue;
+      const l = i.getPropertyOptions(a), d = typeof l.converter == "function" ? { fromAttribute: l.converter } : ((r = l.converter) == null ? void 0 : r.fromAttribute) !== void 0 ? l.converter : he;
       this._$Em = a;
       const c = d.fromAttribute(t, l.type);
       this[a] = c ?? ((s = this._$Ej) == null ? void 0 : s.get(a)) ?? c, this._$Em = null;
@@ -278,28 +278,28 @@ let R = class extends HTMLElement {
   firstUpdated(e) {
   }
 };
-R.elementStyles = [], R.shadowRootOptions = { mode: "open" }, R[B("elementProperties")] = /* @__PURE__ */ new Map(), R[B("finalized")] = /* @__PURE__ */ new Map(), ae == null || ae({ ReactiveElement: R }), (V.reactiveElementVersions ?? (V.reactiveElementVersions = [])).push("2.1.2");
+N.elementStyles = [], N.shadowRootOptions = { mode: "open" }, N[B("elementProperties")] = /* @__PURE__ */ new Map(), N[B("finalized")] = /* @__PURE__ */ new Map(), oe == null || oe({ ReactiveElement: N }), (V.reactiveElementVersions ?? (V.reactiveElementVersions = [])).push("2.1.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Z = globalThis, Ee = (o) => o, ee = Z.trustedTypes, Se = ee ? ee.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ot = "$lit$", M = `lit$${Math.random().toFixed(9).slice(2)}$`, rt = "?" + M, zt = `<${rt}>`, O = document, G = () => O.createComment(""), J = (o) => o === null || typeof o != "object" && typeof o != "function", fe = Array.isArray, At = (o) => fe(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", oe = `[ 	
-\f\r]`, U = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, je = /-->/g, Me = />/g, C = RegExp(`>|${oe}(?:([^\\s"'>=/]+)(${oe}*=${oe}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Ve = /'/g, Ce = /"/g, st = /^(?:script|style|textarea|title)$/i, Et = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = Et(1), Y = Symbol.for("lit-noChange"), _ = Symbol.for("lit-nothing"), Le = /* @__PURE__ */ new WeakMap(), H = O.createTreeWalker(O, 129);
+const Z = globalThis, Se = (o) => o, ee = Z.trustedTypes, je = ee ? ee.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ot = "$lit$", M = `lit$${Math.random().toFixed(9).slice(2)}$`, rt = "?" + M, jt = `<${rt}>`, O = document, G = () => O.createComment(""), J = (o) => o === null || typeof o != "object" && typeof o != "function", ke = Array.isArray, Mt = (o) => ke(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", re = `[ 	
+\f\r]`, U = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, Me = /-->/g, Ve = />/g, C = RegExp(`>|${re}(?:([^\\s"'>=/]+)(${re}*=${re}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`, "g"), Ce = /'/g, Le = /"/g, st = /^(?:script|style|textarea|title)$/i, Vt = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = Vt(1), F = Symbol.for("lit-noChange"), _ = Symbol.for("lit-nothing"), He = /* @__PURE__ */ new WeakMap(), H = O.createTreeWalker(O, 129);
 function nt(o, e) {
-  if (!fe(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
-  return Se !== void 0 ? Se.createHTML(e) : e;
+  if (!ke(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
+  return je !== void 0 ? je.createHTML(e) : e;
 }
-const St = (o, e) => {
+const Ct = (o, e) => {
   const t = o.length - 1, i = [];
   let a, r = e === 2 ? "<svg>" : e === 3 ? "<math>" : "", s = U;
   for (let l = 0; l < t; l++) {
     const d = o[l];
     let c, p, u = -1, m = 0;
-    for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === U ? p[1] === "!--" ? s = je : p[1] !== void 0 ? s = Me : p[2] !== void 0 ? (st.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = C) : p[3] !== void 0 && (s = C) : s === C ? p[0] === ">" ? (s = a ?? U, u = -1) : p[1] === void 0 ? u = -2 : (u = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? C : p[3] === '"' ? Ce : Ve) : s === Ce || s === Ve ? s = C : s === je || s === Me ? s = U : (s = C, a = void 0);
+    for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === U ? p[1] === "!--" ? s = Me : p[1] !== void 0 ? s = Ve : p[2] !== void 0 ? (st.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = C) : p[3] !== void 0 && (s = C) : s === C ? p[0] === ">" ? (s = a ?? U, u = -1) : p[1] === void 0 ? u = -2 : (u = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? C : p[3] === '"' ? Le : Ce) : s === Le || s === Ce ? s = C : s === Me || s === Ve ? s = U : (s = C, a = void 0);
     const b = s === C && o[l + 1].startsWith("/>") ? " " : "";
-    r += s === U ? d + zt : u >= 0 ? (i.push(c), d.slice(0, u) + ot + d.slice(u) + M + b) : d + M + (u === -2 ? l : b);
+    r += s === U ? d + jt : u >= 0 ? (i.push(c), d.slice(0, u) + ot + d.slice(u) + M + b) : d + M + (u === -2 ? l : b);
   }
   return [nt(o, r + (o[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
@@ -308,7 +308,7 @@ class Q {
     let a;
     this.parts = [];
     let r = 0, s = 0;
-    const l = e.length - 1, d = this.parts, [c, p] = St(e, t);
+    const l = e.length - 1, d = this.parts, [c, p] = Ct(e, t);
     if (this.el = Q.createElement(c, i), H.currentNode = this.el.content, t === 2 || t === 3) {
       const u = this.el.content.firstChild;
       u.replaceWith(...u.childNodes);
@@ -317,7 +317,7 @@ class Q {
       if (a.nodeType === 1) {
         if (a.hasAttributes()) for (const u of a.getAttributeNames()) if (u.endsWith(ot)) {
           const m = p[s++], b = a.getAttribute(u).split(M), I = /([.?@])?(.*)/.exec(m);
-          d.push({ type: 1, index: r, name: I[2], strings: b, ctor: I[1] === "." ? Mt : I[1] === "?" ? Vt : I[1] === "@" ? Ct : ie }), a.removeAttribute(u);
+          d.push({ type: 1, index: r, name: I[2], strings: b, ctor: I[1] === "." ? Ht : I[1] === "?" ? Pt : I[1] === "@" ? Ot : ae }), a.removeAttribute(u);
         } else u.startsWith(M) && (d.push({ type: 6, index: r }), a.removeAttribute(u));
         if (st.test(a.tagName)) {
           const u = a.textContent.split(M), m = u.length - 1;
@@ -340,14 +340,14 @@ class Q {
     return i.innerHTML = e, i;
   }
 }
-function F(o, e, t = o, i) {
+function Y(o, e, t = o, i) {
   var s, l;
-  if (e === Y) return e;
+  if (e === F) return e;
   let a = i !== void 0 ? (s = t._$Co) == null ? void 0 : s[i] : t._$Cl;
   const r = J(e) ? void 0 : e._$litDirective$;
-  return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = F(o, a._$AS(o, e.values), a, i)), e;
+  return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = Y(o, a._$AS(o, e.values), a, i)), e;
 }
-class jt {
+class Lt {
   constructor(e, t) {
     this._$AV = [], this._$AN = void 0, this._$AD = e, this._$AM = t;
   }
@@ -364,7 +364,7 @@ class jt {
     for (; d !== void 0; ) {
       if (s === d.index) {
         let c;
-        d.type === 2 ? c = new D(r, r.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(r, d.name, d.strings, this, e) : d.type === 6 && (c = new Lt(r, this, e)), this._$AV.push(c), d = i[++l];
+        d.type === 2 ? c = new D(r, r.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(r, d.name, d.strings, this, e) : d.type === 6 && (c = new It(r, this, e)), this._$AV.push(c), d = i[++l];
       }
       s !== (d == null ? void 0 : d.index) && (r = H.nextNode(), s++);
     }
@@ -395,7 +395,7 @@ class D {
     return this._$AB;
   }
   _$AI(e, t = this) {
-    e = F(this, e, t), J(e) ? e === _ || e == null || e === "" ? (this._$AH !== _ && this._$AR(), this._$AH = _) : e !== this._$AH && e !== Y && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : At(e) ? this.k(e) : this._(e);
+    e = Y(this, e, t), J(e) ? e === _ || e == null || e === "" ? (this._$AH !== _ && this._$AR(), this._$AH = _) : e !== this._$AH && e !== F && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : Mt(e) ? this.k(e) : this._(e);
   }
   O(e) {
     return this._$AA.parentNode.insertBefore(e, this._$AB);
@@ -411,16 +411,16 @@ class D {
     const { values: t, _$litType$: i } = e, a = typeof i == "number" ? this._$AC(e) : (i.el === void 0 && (i.el = Q.createElement(nt(i.h, i.h[0]), this.options)), i);
     if (((r = this._$AH) == null ? void 0 : r._$AD) === a) this._$AH.p(t);
     else {
-      const s = new jt(a, this), l = s.u(this.options);
+      const s = new Lt(a, this), l = s.u(this.options);
       s.p(t), this.T(l), this._$AH = s;
     }
   }
   _$AC(e) {
-    let t = Le.get(e.strings);
-    return t === void 0 && Le.set(e.strings, t = new Q(e)), t;
+    let t = He.get(e.strings);
+    return t === void 0 && He.set(e.strings, t = new Q(e)), t;
   }
   k(e) {
-    fe(this._$AH) || (this._$AH = [], this._$AR());
+    ke(this._$AH) || (this._$AH = [], this._$AR());
     const t = this._$AH;
     let i, a = 0;
     for (const r of e) a === t.length ? t.push(i = new D(this.O(G()), this.O(G()), this, this.options)) : i = t[a], i._$AI(r), a++;
@@ -429,8 +429,8 @@ class D {
   _$AR(e = this._$AA.nextSibling, t) {
     var i;
     for ((i = this._$AP) == null ? void 0 : i.call(this, !1, !0, t); e !== this._$AB; ) {
-      const a = Ee(e).nextSibling;
-      Ee(e).remove(), e = a;
+      const a = Se(e).nextSibling;
+      Se(e).remove(), e = a;
     }
   }
   setConnected(e) {
@@ -438,7 +438,7 @@ class D {
     this._$AM === void 0 && (this._$Cv = e, (t = this._$AP) == null || t.call(this, e));
   }
 }
-class ie {
+class ae {
   get tagName() {
     return this.element.tagName;
   }
@@ -451,11 +451,11 @@ class ie {
   _$AI(e, t = this, i, a) {
     const r = this.strings;
     let s = !1;
-    if (r === void 0) e = F(this, e, t, 0), s = !J(e) || e !== this._$AH && e !== Y, s && (this._$AH = e);
+    if (r === void 0) e = Y(this, e, t, 0), s = !J(e) || e !== this._$AH && e !== F, s && (this._$AH = e);
     else {
       const l = e;
       let d, c;
-      for (e = r[0], d = 0; d < r.length - 1; d++) c = F(this, l[i + d], t, d), c === Y && (c = this._$AH[d]), s || (s = !J(c) || c !== this._$AH[d]), c === _ ? e = _ : e !== _ && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
+      for (e = r[0], d = 0; d < r.length - 1; d++) c = Y(this, l[i + d], t, d), c === F && (c = this._$AH[d]), s || (s = !J(c) || c !== this._$AH[d]), c === _ ? e = _ : e !== _ && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
     }
     s && !a && this.j(e);
   }
@@ -463,7 +463,7 @@ class ie {
     e === _ ? this.element.removeAttribute(this.name) : this.element.setAttribute(this.name, e ?? "");
   }
 }
-class Mt extends ie {
+class Ht extends ae {
   constructor() {
     super(...arguments), this.type = 3;
   }
@@ -471,7 +471,7 @@ class Mt extends ie {
     this.element[this.name] = e === _ ? void 0 : e;
   }
 }
-class Vt extends ie {
+class Pt extends ae {
   constructor() {
     super(...arguments), this.type = 4;
   }
@@ -479,12 +479,12 @@ class Vt extends ie {
     this.element.toggleAttribute(this.name, !!e && e !== _);
   }
 }
-class Ct extends ie {
+class Ot extends ae {
   constructor(e, t, i, a, r) {
     super(e, t, i, a, r), this.type = 5;
   }
   _$AI(e, t = this) {
-    if ((e = F(this, e, t, 0) ?? _) === Y) return;
+    if ((e = Y(this, e, t, 0) ?? _) === F) return;
     const i = this._$AH, a = e === _ && i !== _ || e.capture !== i.capture || e.once !== i.once || e.passive !== i.passive, r = e !== _ && (i === _ || a);
     a && this.element.removeEventListener(this.name, this, i), r && this.element.addEventListener(this.name, this, e), this._$AH = e;
   }
@@ -493,7 +493,7 @@ class Ct extends ie {
     typeof this._$AH == "function" ? this._$AH.call(((t = this.options) == null ? void 0 : t.host) ?? this.element, e) : this._$AH.handleEvent(e);
   }
 }
-class Lt {
+class It {
   constructor(e, t, i) {
     this.element = e, this.type = 6, this._$AN = void 0, this._$AM = t, this.options = i;
   }
@@ -501,11 +501,11 @@ class Lt {
     return this._$AM._$AU;
   }
   _$AI(e) {
-    F(this, e);
+    Y(this, e);
   }
 }
-const Ht = { I: D }, re = Z.litHtmlPolyfillSupport;
-re == null || re(Q, D), (Z.litHtmlVersions ?? (Z.litHtmlVersions = [])).push("3.3.2");
+const Tt = { I: D }, se = Z.litHtmlPolyfillSupport;
+se == null || se(Q, D), (Z.litHtmlVersions ?? (Z.litHtmlVersions = [])).push("3.3.2");
 const lt = (o, e, t) => {
   const i = (t == null ? void 0 : t.renderBefore) ?? e;
   let a = i._$litPart$;
@@ -521,7 +521,7 @@ const lt = (o, e, t) => {
  * SPDX-License-Identifier: BSD-3-Clause
  */
 const P = globalThis;
-let N = class extends R {
+let R = class extends N {
   constructor() {
     super(...arguments), this.renderOptions = { host: this }, this._$Do = void 0;
   }
@@ -543,21 +543,21 @@ let N = class extends R {
     super.disconnectedCallback(), (e = this._$Do) == null || e.setConnected(!1);
   }
   render() {
-    return Y;
+    return F;
   }
 };
 var et;
-N._$litElement$ = !0, N.finalized = !0, (et = P.litElementHydrateSupport) == null || et.call(P, { LitElement: N });
-const se = P.litElementPolyfillSupport;
-se == null || se({ LitElement: N });
+R._$litElement$ = !0, R.finalized = !0, (et = P.litElementHydrateSupport) == null || et.call(P, { LitElement: R });
+const ne = P.litElementPolyfillSupport;
+ne == null || ne({ LitElement: R });
 (P.litElementVersions ?? (P.litElementVersions = [])).push("4.2.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Pt = (o) => (...e) => ({ _$litDirective$: o, values: e });
-let Ot = class {
+const Nt = (o) => (...e) => ({ _$litDirective$: o, values: e });
+let Rt = class {
   constructor(e) {
   }
   get _$AU() {
@@ -578,15 +578,15 @@ let Ot = class {
  * Copyright 2020 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { I: It } = Ht, He = (o) => o, Pe = (o, e) => (o == null ? void 0 : o._$litType$) !== void 0, Tt = (o) => {
+const { I: Ft } = Tt, Pe = (o) => o, Oe = (o, e) => (o == null ? void 0 : o._$litType$) !== void 0, Yt = (o) => {
   var e;
   return ((e = o == null ? void 0 : o._$litType$) == null ? void 0 : e.h) != null;
-}, Oe = () => document.createComment(""), Ie = (o, e, t) => {
+}, Ie = () => document.createComment(""), Te = (o, e, t) => {
   var r;
   const i = o._$AA.parentNode, a = o._$AB;
   if (t === void 0) {
-    const s = i.insertBefore(Oe(), a), l = i.insertBefore(Oe(), a);
-    t = new It(s, l, o, o.options);
+    const s = i.insertBefore(Ie(), a), l = i.insertBefore(Ie(), a);
+    t = new Ft(s, l, o, o.options);
   } else {
     const s = t._$AB.nextSibling, l = t._$AM, d = l !== o;
     if (d) {
@@ -596,13 +596,13 @@ const { I: It } = Ht, He = (o) => o, Pe = (o, e) => (o == null ? void 0 : o._$li
     if (s !== a || d) {
       let c = t._$AA;
       for (; c !== s; ) {
-        const p = He(c).nextSibling;
-        He(i).insertBefore(c, a), c = p;
+        const p = Pe(c).nextSibling;
+        Pe(i).insertBefore(c, a), c = p;
       }
     }
   }
   return t;
-}, Rt = {}, Te = (o, e = Rt) => o._$AH = e, Re = (o) => o._$AH, Nt = (o) => {
+}, Dt = {}, Ne = (o, e = Dt) => o._$AH = e, Re = (o) => o._$AH, Ut = (o) => {
   o._$AR();
 };
 /**
@@ -610,7 +610,7 @@ const { I: It } = Ht, He = (o) => o, Pe = (o, e) => (o == null ? void 0 : o._$li
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Ne = (o) => Tt(o) ? o._$litType$.h : o.strings, Yt = Pt(class extends Ot {
+const Fe = (o) => Yt(o) ? o._$litType$.h : o.strings, Wt = Nt(class extends Rt {
   constructor(o) {
     super(o), this.et = /* @__PURE__ */ new WeakMap();
   }
@@ -618,7 +618,7 @@ const Ne = (o) => Tt(o) ? o._$litType$.h : o.strings, Yt = Pt(class extends Ot {
     return [o];
   }
   update(o, [e]) {
-    const t = Pe(this.it) ? Ne(this.it) : null, i = Pe(e) ? Ne(e) : null;
+    const t = Oe(this.it) ? Fe(this.it) : null, i = Oe(e) ? Fe(e) : null;
     if (t !== null && (i === null || t !== i)) {
       const a = Re(o).pop();
       let r = this.et.get(t);
@@ -626,14 +626,14 @@ const Ne = (o) => Tt(o) ? o._$litType$.h : o.strings, Yt = Pt(class extends Ot {
         const s = document.createDocumentFragment();
         r = lt(_, s), r.setConnected(!1), this.et.set(t, r);
       }
-      Te(r, [a]), Ie(r, void 0, a);
+      Ne(r, [a]), Te(r, void 0, a);
     }
     if (i !== null) {
       if (t === null || t !== i) {
         const a = this.et.get(i);
         if (a !== void 0) {
           const r = Re(a).pop();
-          Nt(o), Ie(o, void 0, r), Te(o, [r]);
+          Ut(o), Te(o, void 0, r), Ne(o, [r]);
         }
       }
       this.it = e;
@@ -698,13 +698,13 @@ function g(o, e, t) {
   i[a] = t;
 }
 function L(o, e) {
-  e.length !== 0 && (ct(o, e), ai(o, e.slice(0, -1)));
+  e.length !== 0 && (ct(o, e), ni(o, e.slice(0, -1)));
 }
 function E(o, e, t) {
   const i = f(o, e), r = [...Array.isArray(i) ? i : [], t];
   g(o, e, r);
 }
-function Ft(o, e, t) {
+function Kt(o, e, t) {
   const i = f(o, e);
   if (!Array.isArray(i) || t < 0 || t >= i.length)
     return;
@@ -715,14 +715,14 @@ function Ft(o, e, t) {
   }
   g(o, e, a);
 }
-function Dt(o, e, t, i) {
+function qt(o, e, t, i) {
   const a = f(o, e);
   if (!Array.isArray(a) || t < 0 || i < 0 || t >= a.length || i >= a.length || t === i)
     return;
   const r = [...a], [s] = r.splice(t, 1);
   r.splice(i, 0, s), g(o, e, r);
 }
-function Ut(o, e, t, i) {
+function Bt(o, e, t, i) {
   const a = f(o, e);
   if (!S(a))
     return { ok: !1, reason: "target_not_available" };
@@ -745,13 +745,13 @@ function Ut(o, e, t, i) {
   }
   return g(o, e, l), { ok: !0 };
 }
-function Wt(o) {
+function Zt(o) {
   return A(o, "category");
 }
-function Kt(o) {
+function Gt(o) {
   return A(o, "label");
 }
-function qt(o, e, t) {
+function Jt(o, e, t) {
   return {
     kind: "ev_charger",
     id: A(o, "ev-charger"),
@@ -786,7 +786,7 @@ function qt(o, e, t) {
     vehicles: [dt([], t)]
   };
 }
-function Bt(o, e) {
+function Qt(o, e) {
   return {
     kind: "generic",
     id: A(o, "generic-appliance"),
@@ -802,7 +802,7 @@ function Bt(o, e) {
     }
   };
 }
-function Zt(o, e) {
+function Xt(o, e) {
   return {
     kind: "climate",
     id: A(o, "climate-appliance"),
@@ -829,7 +829,7 @@ function Ye(o) {
     }
   };
 }
-function Fe(o, e = "") {
+function De(o, e = "") {
   return {
     id: A(o, "surplus-appliance"),
     kind: "surplus_appliance",
@@ -854,36 +854,36 @@ function dt(o, e) {
     }
   };
 }
-function Gt() {
+function ei() {
   return {
     behavior: "fixed_max_power"
   };
 }
-function Jt() {
+function ti() {
   return {
     min_power_kw: 1.4
   };
 }
-function Qt(o) {
+function ii(o) {
   return {
     energy_entity_id: "",
     label: o
   };
 }
-function Xt() {
+function ai() {
   return {
     start: "00:00",
     end: "06:00",
     price: 1
   };
 }
-function ei() {
+function oi() {
   return "";
 }
-function ti(o) {
+function ri(o) {
   return A(o, "mode");
 }
-function ii(o) {
+function si(o) {
   return A(o, "gear");
 }
 function ct(o, e) {
@@ -899,7 +899,7 @@ function ct(o, e) {
   }
   !S(i) || !(a in i) || delete i[a];
 }
-function ai(o, e) {
+function ni(o, e) {
   for (let t = e.length; t > 0; t -= 1) {
     const i = e.slice(0, t), a = f(o, i), r = S(a) && Object.keys(a).length === 0, s = Array.isArray(a) && a.length === 0;
     if (!r && !s)
@@ -916,8 +916,8 @@ function A(o, e) {
     i += 1;
   return `${e}-${i}`;
 }
-function ne(o, e, t) {
-  const i = t.trim(), a = ri(e), r = oi(o, a), s = i.length === 0 ? null : r.find((l) => l.id === i) ?? null;
+function le(o, e, t) {
+  const i = t.trim(), a = di(e), r = li(o, a), s = i.length === 0 ? null : r.find((l) => l.id === i) ?? null;
   return {
     options: r,
     selectedId: i,
@@ -925,7 +925,7 @@ function ne(o, e, t) {
     selectedMissingFromDraft: i.length > 0 && s === null
   };
 }
-function le(o, e) {
+function de(o, e) {
   var r, s, l;
   const t = e.trim();
   if (((r = o.selectedOption) == null ? void 0 : r.kind) !== "climate")
@@ -957,7 +957,7 @@ function le(o, e) {
     options: a
   };
 }
-function oi(o, e) {
+function li(o, e) {
   if (!o)
     return [];
   const t = $(o.appliances) ?? [], i = [];
@@ -965,24 +965,24 @@ function oi(o, e) {
     const r = y(a);
     if (!r)
       continue;
-    const s = De(r.id), l = ni(r.kind);
+    const s = Ue(r.id), l = pi(r.kind);
     if (!s || !l)
       continue;
     const d = e[s];
     i.push({
       id: s,
-      name: De(r.name) || s,
+      name: Ue(r.name) || s,
       kind: l,
       liveClimateModes: l === "climate" ? pt(d, l) : null,
-      selectionDisabled: l === "climate" ? !si(d, l) : !1
+      selectionDisabled: l === "climate" ? !ci(d, l) : !1
     });
   }
   return i;
 }
-function ri(o) {
+function di(o) {
   const e = Array.isArray(o == null ? void 0 : o.appliances) ? o.appliances : [], t = {};
   for (const i of e)
-    li(i) && (t[i.id] = i);
+    _i(i) && (t[i.id] = i);
   return t;
 }
 function pt(o, e) {
@@ -992,19 +992,19 @@ function pt(o, e) {
   const t = (a = (i = o.metadata) == null ? void 0 : i.scheduleCapabilities) == null ? void 0 : a.modes;
   return Array.isArray(t) ? t.filter((r) => typeof r == "string" && r.length > 0) : null;
 }
-function si(o, e) {
+function ci(o, e) {
   return (pt(o, e) ?? []).length > 0;
 }
-function De(o) {
+function Ue(o) {
   return typeof o == "string" && o.trim().length > 0 ? o.trim() : "";
 }
-function ni(o) {
+function pi(o) {
   return o === "generic" || o === "climate" ? o : null;
 }
-function li(o) {
+function _i(o) {
   return !!(o && typeof o == "object" && typeof o.id == "string" && typeof o.name == "string" && typeof o.kind == "string");
 }
-function di() {
+function ui() {
   return {
     read(o) {
       return k(o);
@@ -1013,7 +1013,7 @@ function di() {
       return k(e);
     },
     validate(o) {
-      return ke(o, "object");
+      return $e(o, "object");
     }
   };
 }
@@ -1030,11 +1030,11 @@ function w(o, e) {
       return g(a, o, k(i)), a;
     },
     validate(t) {
-      return ke(t, e.rootKind);
+      return $e(t, e.rootKind);
     }
   };
 }
-function de(o) {
+function ce(o) {
   const e = new Map(o.map((t) => [t.yamlKey, t]));
   return {
     read(t) {
@@ -1056,7 +1056,7 @@ function de(o) {
       return a;
     },
     validate(t) {
-      const i = ke(t, "object");
+      const i = $e(t, "object");
       if (i)
         return i;
       if (!S(t))
@@ -1068,16 +1068,16 @@ function de(o) {
     }
   };
 }
-function ke(o, e) {
+function $e(o, e) {
   return e === "array" ? Array.isArray(o) ? null : { code: "expected_array" } : S(o) ? null : { code: "expected_object" };
 }
-const ci = {
+const hi = {
   general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   scheduler: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   appliances: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z"
-}, pi = {
+}, mi = {
   "section:general.core_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
   "section:general.device_label_text": "M5.5,7A1.5,1.5 0 0,1 4,5.5A1.5,1.5 0 0,1 5.5,4A1.5,1.5 0 0,1 7,5.5A1.5,1.5 0 0,1 5.5,7M21.41,11.58L12.41,2.58C12.05,2.22 11.55,2 11,2H4C2.89,2 2,2.89 2,4V11C2,11.55 2.22,12.05 2.59,12.41L11.58,21.41C11.95,21.77 12.45,22 13,22C13.55,22 14.05,21.77 14.41,21.41L21.41,14.41C21.77,14.05 22,13.55 22,13C22,12.44 21.77,11.94 21.41,11.58Z",
   "section:power_devices.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
@@ -1089,13 +1089,13 @@ const ci = {
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:automation.optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:appliances.configured_appliances": "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H12V11H7Z"
-}, _i = [
+}, gi = [
   { id: "general", labelKey: "editor.tabs.general" },
   { id: "power_devices", labelKey: "editor.tabs.power_devices" },
   { id: "scheduler", labelKey: "editor.tabs.scheduler" },
   { id: "automation", labelKey: "editor.tabs.automation" },
   { id: "appliances", labelKey: "editor.tabs.appliances" }
-], Ue = {
+], We = {
   general: "general",
   power_devices: "power_devices",
   scheduler_control: "scheduler",
@@ -1141,21 +1141,21 @@ const ci = {
   "show_empty_groups",
   "show_others_group",
   "device_label_text"
-], ui = _t.filter(
+], vi = _t.filter(
   (o) => o !== "device_label_text"
-), x = {}, ce = [], hi = ut(_t), mi = ut(
-  ui
-), gi = [
+), x = {}, pe = [], yi = ut(_t), bi = ut(
+  vi
+), fi = [
   {
     yamlKey: "enabled",
     documentPath: ["automation", "enabled"]
   }
-], he = {
+], me = {
   [z]: {
     id: z,
     kind: "document",
     labelKey: "editor.title",
-    adapter: di()
+    adapter: ui()
   },
   [v.general]: {
     id: v.general,
@@ -1163,7 +1163,7 @@ const ci = {
     parentId: z,
     tabId: "general",
     labelKey: "editor.tabs.general",
-    adapter: de(hi)
+    adapter: ce(yi)
   },
   [v.power_devices]: {
     id: v.power_devices,
@@ -1205,7 +1205,7 @@ const ci = {
     tabId: "appliances",
     labelKey: "editor.tabs.appliances",
     adapter: w(["appliances"], {
-      emptyValue: ce,
+      emptyValue: pe,
       rootKind: "array"
     })
   },
@@ -1215,7 +1215,7 @@ const ci = {
     parentId: v.general,
     tabId: "general",
     labelKey: "editor.sections.core_labels_and_history",
-    adapter: de(mi)
+    adapter: ce(bi)
   },
   [h.general.device_label_text]: {
     id: h.general.device_label_text,
@@ -1303,7 +1303,7 @@ const ci = {
     parentId: v.automation,
     tabId: "automation",
     labelKey: "editor.sections.automation_settings",
-    adapter: de(gi)
+    adapter: ce(fi)
   },
   [h.automation.optimizer_pipeline]: {
     id: h.automation.optimizer_pipeline,
@@ -1312,7 +1312,7 @@ const ci = {
     tabId: "automation",
     labelKey: "editor.sections.optimizer_pipeline",
     adapter: w(["automation", "optimizers"], {
-      emptyValue: ce,
+      emptyValue: pe,
       rootKind: "array"
     })
   },
@@ -1323,19 +1323,19 @@ const ci = {
     tabId: "appliances",
     labelKey: "editor.sections.configured_appliances",
     adapter: w(["appliances"], {
-      emptyValue: ce,
+      emptyValue: pe,
       rootKind: "array"
     })
   }
-}, We = vi();
+}, Ke = ki();
 function W(o) {
-  return he[o];
+  return me[o];
 }
-function Ke(o) {
-  const e = [], t = [...We[o]];
+function qe(o) {
+  const e = [], t = [...Ke[o]];
   for (; t.length > 0; ) {
     const i = t.pop();
-    i && (e.push(i), t.push(...We[i]));
+    i && (e.push(i), t.push(...Ke[i]));
   }
   return e;
 }
@@ -1345,11 +1345,11 @@ function ut(o) {
     documentPath: [e]
   }));
 }
-function vi() {
+function ki() {
   const o = Object.fromEntries(
-    Object.keys(he).map((e) => [e, []])
+    Object.keys(me).map((e) => [e, []])
   );
-  for (const e of Object.values(he))
+  for (const e of Object.values(me))
     e.parentId && o[e.parentId].push(e.id);
   return o;
 }
@@ -1694,13 +1694,75 @@ const ht = {
     bias_correction_clamp_max: "Horní mez (0,0-1,0) pro opravené hodnoty prognózy. Zabraňuje nerealistickým pozitivním opravám v příliš vysokém zvýšení prognózovaných hodnot.",
     bias_correction_total_energy_entity: "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce."
   }
-}, yi = {
-  editor: ht
-}, bi = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+}, mt = {
+  yes: "Ano",
+  no: "Ne",
+  unknown: "Neznámé",
+  not_available: "Není k dispozici"
+}, gt = {
+  status_panel: {
+    subtitle: "Aktuální stav korekce zkreslení a ovládání trénování",
+    loading_status: "Načítám stav...",
+    unable_to_load_status: "Nepodařilo se načíst stav korekce zkreslení",
+    home_assistant_not_available: "Home Assistant není k dispozici.",
+    failed_to_load_status: "Nepodařilo se načíst stav.",
+    training_completed: "Trénování bylo úspěšně dokončeno.",
+    training_failed: "Trénování selhalo: {error}",
+    unknown_error: "Neznámá chyba",
+    section_status: "Stav",
+    enabled: "Povoleno",
+    current_status: "Aktuální stav",
+    trained_at: "Natrénováno",
+    next_training: "Další trénování",
+    effective_variant: "Použitá varianta",
+    training_days_used: "Použité dny trénování",
+    training_days_required: "{used} / {required} požadováno",
+    insufficient_history_text: "Zatím není k dispozici dostatek historických dat. K dispozici je {used} dní, pro trénování je potřeba alespoň {required} dní.",
+    error: "Chyba",
+    dropped_days: "Vynechané dny",
+    actions: "Akce",
+    training: "Trénuji...",
+    train_now: "Trénovat teď",
+    refresh_status: "Obnovit stav",
+    info: "Korekce zkreslení solární prognózy upravuje přesnost solární prognózy podle vlastností vašeho systému. Zapnutím trénování se budou predikce postupně automaticky zlepšovat.",
+    render_error: "Chyba vykreslení: {error}"
+  },
+  statuses: {
+    applied: "Použito",
+    profile_trained: "Profil natrénován",
+    insufficient_history: "Nedostatek historie",
+    config_changed_pending_retrain: "Konfigurace změněna, čeká na přetrénování",
+    training_failed: "Trénování selhalo",
+    not_configured: "Nenakonfigurováno",
+    no_training_yet: "Zatím netrénováno"
+  },
+  effective_variants: {
+    raw: "Surová",
+    adjusted: "Upravená"
+  },
+  dropped_reasons: {
+    day_forecast_too_low: "Denní prognóza je příliš nízká",
+    day_ratio_out_of_band: "Denní poměr je mimo povolený rozsah"
+  },
+  error_codes: {
+    training_in_progress: "Trénování už probíhá.",
+    bias_correction_not_configured: "Korekce zkreslení není nakonfigurovaná.",
+    internal_error: "Neočekávané selhání trénování solární korekce.",
+    no_profile: "Profil solární korekce není k dispozici.",
+    not_loaded: "Služba korekce solární prognózy Helman není k dispozici.",
+    unauthorized: "Je vyžadován administrátorský přístup."
+  }
+}, $i = {
+  editor: ht,
+  common: mt,
+  bias_correction: gt
+}, wi = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  default: yi,
+  bias_correction: gt,
+  common: mt,
+  default: $i,
   editor: ht
-}, Symbol.toStringTag, { value: "Module" })), mt = {
+}, Symbol.toStringTag, { value: "Module" })), vt = {
   title: "Helman config editor",
   description: "Edit the stored Helman integration config, validate it in the backend, and save it without losing unsupported keys or future config branches.",
   tabs: {
@@ -2041,42 +2103,104 @@ const ht = {
     bias_correction_clamp_max: "Upper bound (0.0-1.0) for corrected forecast values. Prevents unrealistic positive corrections from over-inflating forecast values.",
     bias_correction_total_energy_entity: "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model."
   }
-}, fi = {
-  editor: mt
-}, ki = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+}, yt = {
+  yes: "Yes",
+  no: "No",
+  unknown: "Unknown",
+  not_available: "N/A"
+}, bt = {
+  status_panel: {
+    subtitle: "Current bias correction status and training controls",
+    loading_status: "Loading status...",
+    unable_to_load_status: "Unable to load bias correction status",
+    home_assistant_not_available: "Home Assistant is not available.",
+    failed_to_load_status: "Failed to load status.",
+    training_completed: "Training completed successfully.",
+    training_failed: "Training failed: {error}",
+    unknown_error: "Unknown error",
+    section_status: "Status",
+    enabled: "Enabled",
+    current_status: "Current status",
+    trained_at: "Trained at",
+    next_training: "Next training",
+    effective_variant: "Effective variant",
+    training_days_used: "Training days used",
+    training_days_required: "{used} / {required} required",
+    insufficient_history_text: "Not enough historical data yet. Have {used} days, need at least {required} days for training.",
+    error: "Error",
+    dropped_days: "Dropped days",
+    actions: "Actions",
+    training: "Training...",
+    train_now: "Train now",
+    refresh_status: "Refresh status",
+    info: "Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics. Enable training to automatically improve predictions over time.",
+    render_error: "Render error: {error}"
+  },
+  statuses: {
+    applied: "Applied",
+    profile_trained: "Profile trained",
+    insufficient_history: "Insufficient history",
+    config_changed_pending_retrain: "Config changed, retrain pending",
+    training_failed: "Training failed",
+    not_configured: "Not configured",
+    no_training_yet: "No training yet"
+  },
+  effective_variants: {
+    raw: "Raw",
+    adjusted: "Adjusted"
+  },
+  dropped_reasons: {
+    day_forecast_too_low: "Day forecast too low",
+    day_ratio_out_of_band: "Day ratio out of band"
+  },
+  error_codes: {
+    training_in_progress: "Training is already in progress.",
+    bias_correction_not_configured: "Bias correction is not configured.",
+    internal_error: "Unexpected solar bias training failure.",
+    no_profile: "No solar bias profile is available.",
+    not_loaded: "The Helman solar bias correction service is not available.",
+    unauthorized: "Admin access is required."
+  }
+}, xi = {
+  editor: vt,
+  common: yt,
+  bias_correction: bt
+}, zi = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  default: fi,
-  editor: mt
-}, Symbol.toStringTag, { value: "Module" })), pe = {
-  cs: bi,
-  en: ki
+  bias_correction: bt,
+  common: yt,
+  default: xi,
+  editor: vt
+}, Symbol.toStringTag, { value: "Module" })), _e = {
+  cs: wi,
+  en: zi
 };
-function qe(o) {
+function te(o) {
   var t;
-  const e = wi((o == null ? void 0 : o.language) || ((t = o == null ? void 0 : o.locale) == null ? void 0 : t.language) || "cs");
-  return (i) => $i(i, e);
+  const e = Ei((o == null ? void 0 : o.language) || ((t = o == null ? void 0 : o.locale) == null ? void 0 : t.language) || "cs");
+  return (i) => Ai(i, e);
 }
-function $i(o, e = "cs") {
+function Ai(o, e = "cs") {
   const t = e.replace(/['"]+/g, "").replace("_", "-");
   let i;
   try {
-    i = o.split(".").reduce((a, r) => a[r], pe[t]);
+    i = o.split(".").reduce((a, r) => a[r], _e[t]);
   } catch {
     try {
-      i = o.split(".").reduce((r, s) => r[s], pe.cs);
+      i = o.split(".").reduce((r, s) => r[s], _e.cs);
     } catch {
       i = o;
     }
   }
   if (i === void 0)
     try {
-      i = o.split(".").reduce((a, r) => a[r], pe.cs);
+      i = o.split(".").reduce((a, r) => a[r], _e.cs);
     } catch {
       i = o;
     }
   return i;
 }
-function wi(o) {
+function Ei(o) {
   return o ? o.substring(0, 2) : "cs";
 }
 const Be = [
@@ -2086,7 +2210,7 @@ const Be = [
   "ha-switch"
 ], Ze = "ha-yaml-editor";
 let K = null, q = null;
-const xi = async () => {
+const Si = async () => {
   if (!Be.every((o) => customElements.get(o))) {
     if (K)
       return K;
@@ -2133,16 +2257,16 @@ const xi = async () => {
       throw q = null, o;
     }
   }
-}, $e = class $e extends N {
+}, we = class we extends R {
   constructor() {
-    super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "";
+    super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "", this._messageKind = "success", this._fallbackLocalize = te();
   }
   connectedCallback() {
     super.connectedCallback(), this._loadStatus();
   }
   async _loadStatus() {
     if (!this.hass) {
-      this._message = "Home Assistant not available", this._loading = !1;
+      this._message = this._t("bias_correction.status_panel.home_assistant_not_available"), this._messageKind = "error", this._loading = !1;
       return;
     }
     this._loading = !0;
@@ -2150,7 +2274,7 @@ const xi = async () => {
       const e = await this.hass.callWS({ type: "helman/solar_bias/status" });
       this._status = e, (e == null ? void 0 : e.status) === "profile_trained" && await this._loadProfile();
     } catch (e) {
-      this._message = (e == null ? void 0 : e.message) ?? "Failed to load status", console.error("Error loading bias correction status:", e);
+      this._message = this._formatError(e, "bias_correction.status_panel.failed_to_load_status"), this._messageKind = "error", console.error("Error loading bias correction status:", e);
     } finally {
       this._loading = !1, this.requestUpdate();
     }
@@ -2171,9 +2295,11 @@ const xi = async () => {
       this._trainInProgress = !0, this._message = "";
       try {
         const e = await this.hass.callWS({ type: "helman/solar_bias/train_now" });
-        this._status = e, this._message = "Training completed successfully", (e == null ? void 0 : e.status) === "profile_trained" && await this._loadProfile();
+        this._status = e, this._message = this._t("bias_correction.status_panel.training_completed"), this._messageKind = "success", (e == null ? void 0 : e.status) === "profile_trained" && await this._loadProfile();
       } catch (e) {
-        this._message = `Training failed: ${(e == null ? void 0 : e.message) ?? "Unknown error"}`, console.error("Training failed:", e);
+        this._message = this._tFormat("bias_correction.status_panel.training_failed", {
+          error: this._formatError(e, "bias_correction.status_panel.unknown_error")
+        }), this._messageKind = "error", console.error("Training failed:", e);
       } finally {
         this._trainInProgress = !1, this.requestUpdate();
       }
@@ -2185,75 +2311,98 @@ const xi = async () => {
     switch (e) {
       case "profile_trained":
       case "applied":
-        return { text: e, class: "badge-success" };
+        return { text: this._formatStatus(e), class: "badge-success" };
       case "insufficient_history":
       case "config_changed_pending_retrain":
       case "training_failed":
-        return { text: e, class: "badge-warning" };
+        return { text: this._formatStatus(e), class: "badge-warning" };
       case "not_configured":
       case "no_training_yet":
-        return { text: e, class: "badge-info" };
+        return { text: this._formatStatus(e), class: "badge-info" };
       default:
-        return { text: e || "Unknown", class: "badge-info" };
+        return { text: this._formatStatus(e), class: "badge-info" };
     }
   }
   _formatDate(e) {
-    if (!e) return "N/A";
+    if (!e) return this._t("common.not_available");
     try {
       return new Date(e).toLocaleString();
     } catch {
       return e;
     }
   }
+  _formatStatus(e) {
+    return e ? this._tValue(`bias_correction.statuses.${e}`, e) : this._t("common.unknown");
+  }
+  _formatEffectiveVariant(e) {
+    return e ? this._tValue(`bias_correction.effective_variants.${e}`, e) : this._t("common.unknown");
+  }
+  _formatDroppedReason(e) {
+    return e ? this._tValue(`bias_correction.dropped_reasons.${e}`, e) : this._t("common.unknown");
+  }
+  _formatError(e, t) {
+    const i = typeof (e == null ? void 0 : e.code) == "string" ? e.code : void 0;
+    if (i) {
+      const a = this._tValue(`bias_correction.error_codes.${i}`, "");
+      if (a) return a;
+    }
+    return typeof (e == null ? void 0 : e.message) == "string" && e.message ? e.message : this._t(t);
+  }
   render() {
     var e;
     if (this._loading)
-      return n`<div class="container"><p>Loading status…</p></div>`;
+      return n`<div class="container"><p>${this._t("bias_correction.status_panel.loading_status")}</p></div>`;
     if (!this._status)
-      return n`<div class="container"><div class="info-box">Unable to load bias correction status</div></div>`;
+      return n`<div class="container"><div class="info-box">${this._t("bias_correction.status_panel.unable_to_load_status")}</div></div>`;
     try {
       const t = this._getStatusBadge();
       return n`
         <div class="container">
           <div class="section">
-            <div class="section-title">Status</div>
+            <div class="section-title">${this._t("bias_correction.status_panel.section_status")}</div>
             <div class="status-grid">
               <div class="status-row">
-                <span class="status-label">Enabled</span>
-                <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.enabled")}</span>
+                <span class="status-value">${this._status.enabled ? this._t("common.yes") : this._t("common.no")}</span>
               </div>
               <div class="status-row">
-                <span class="status-label">Current Status</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.current_status")}</span>
                 <span class="badge ${t.class}">${t.text}</span>
               </div>
               ${this._status.trainedAt ? n`
                     <div class="status-row">
-                      <span class="status-label">Trained At</span>
+                      <span class="status-label">${this._t("bias_correction.status_panel.trained_at")}</span>
                       <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
                     </div>
                   ` : ""}
               ${this._status.nextScheduledTrainingAt ? n`
                     <div class="status-row">
-                      <span class="status-label">Next Training</span>
+                      <span class="status-label">${this._t("bias_correction.status_panel.next_training")}</span>
                       <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
                     </div>
                   ` : ""}
               <div class="status-row">
-                <span class="status-label">Effective Variant</span>
-                <span class="status-value">${this._status.effectiveVariant}</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.effective_variant")}</span>
+                <span class="status-value">${this._formatEffectiveVariant(this._status.effectiveVariant)}</span>
               </div>
               <div class="status-row">
-                <span class="status-label">Training Days Used</span>
-                <span class="status-value">${this._status.usableDays} / ${this._status.minHistoryDays} required</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.training_days_used")}</span>
+                <span class="status-value">${this._tFormat("bias_correction.status_panel.training_days_required", {
+        used: this._status.usableDays,
+        required: this._status.minHistoryDays
+      })}</span>
               </div>
               ${this._status.status === "insufficient_history" ? n`
                     <div class="info-box" style="margin-top: 8px;">
-                      Not enough historical data yet. Have ${this._status.usableDays} days, need at least ${this._status.minHistoryDays} days for training.
+                      ${this._tFormat("bias_correction.status_panel.insufficient_history_text", {
+        used: this._status.usableDays,
+        required: this._status.minHistoryDays
+      })}
                     </div>
                   ` : ""}
               ${this._status.errorReason ? n`
                     <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
-                      <span class="status-label">Error</span>
+                      <span class="status-label">${this._t("bias_correction.status_panel.error")}</span>
                       <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
                     </div>
                   ` : ""}
@@ -2262,11 +2411,11 @@ const xi = async () => {
 
           ${this._status.droppedDays && this._status.droppedDays.length > 0 ? n`
                 <div class="section">
-                  <div class="section-title">Dropped Days</div>
+                  <div class="section-title">${this._t("bias_correction.status_panel.dropped_days")}</div>
                   <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
                     ${this._status.droppedDays.map((i) => n`
                       <div style="padding: 4px 0;">
-                        <strong>${i.date}:</strong> ${i.reason}
+                        <strong>${i.date}:</strong> ${this._formatDroppedReason(i.reason)}
                       </div>
                     `)}
                   </div>
@@ -2274,42 +2423,56 @@ const xi = async () => {
               ` : ""}
 
           <div class="section">
-            <div class="section-title">Actions</div>
+            <div class="section-title">${this._t("bias_correction.status_panel.actions")}</div>
             <div class="controls">
               <button
                 class="primary"
                 @click=${this._trainNow}
                 ?disabled=${this._trainInProgress || ((e = this._status) == null ? void 0 : e.enabled) === !1}
               >
-                ${this._trainInProgress ? n`<span class="spinner"></span> Training…` : "Train Now"}
+                ${this._trainInProgress ? n`<span class="spinner"></span> ${this._t("bias_correction.status_panel.training")}` : this._t("bias_correction.status_panel.train_now")}
               </button>
               <button
                 @click=${this._loadStatus}
                 ?disabled=${this._loading}
               >
-                Refresh Status
+                ${this._t("bias_correction.status_panel.refresh_status")}
               </button>
             </div>
           </div>
 
           ${this._message ? n`
-                <div class="message ${this._message.startsWith("Training failed") ? "error" : "success"}">
+                <div class="message ${this._messageKind}">
                   ${this._message}
                 </div>
               ` : ""}
 
           <div class="info-box">
-            Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics.
-            Enable training to automatically improve predictions over time.
+            ${this._t("bias_correction.status_panel.info")}
           </div>
         </div>
       `;
     } catch (t) {
-      return console.error("Render error:", t), n`<div class="container"><div class="info-box" style="color: red;">Render error: ${t == null ? void 0 : t.message}</div></div>`;
+      return console.error("Render error:", t), n`<div class="container"><div class="info-box" style="color: red;">${this._tFormat("bias_correction.status_panel.render_error", {
+        error: (t == null ? void 0 : t.message) ?? this._t("common.unknown")
+      })}</div></div>`;
     }
   }
+  _t(e) {
+    return te(this.hass ?? void 0)(e) ?? this._fallbackLocalize(e);
+  }
+  _tValue(e, t) {
+    const i = this._t(e);
+    return i === e ? t : i;
+  }
+  _tFormat(e, t) {
+    let i = this._t(e);
+    for (const [a, r] of Object.entries(t))
+      i = i.replaceAll(`{${a}}`, String(r));
+    return i;
+  }
 };
-$e.styles = it`
+we.styles = it`
     .container {
       padding: 16px;
       display: grid;
@@ -2475,53 +2638,53 @@ $e.styles = it`
       font-size: 0.9rem;
     }
   `;
-let me = $e;
-customElements.define("helman-bias-correction-status", me);
-const _e = "YAML must resolve to JSON-compatible scalars, arrays, and objects.";
+let ge = we;
+customElements.define("helman-bias-correction-status", ge);
+const ue = "YAML must resolve to JSON-compatible scalars, arrays, and objects.";
 function Je(o) {
   try {
     return {
       ok: !0,
-      value: ge(o)
+      value: ve(o)
     };
   } catch {
     return { ok: !1, code: "non_json_value" };
   }
 }
-function ge(o) {
+function ve(o) {
   if (o === null)
     return null;
   if (typeof o == "string" || typeof o == "boolean")
     return o;
   if (typeof o == "number") {
     if (!Number.isFinite(o))
-      throw new Error(_e);
+      throw new Error(ue);
     return o;
   }
   if (Array.isArray(o))
-    return o.map((e) => ge(e));
+    return o.map((e) => ve(e));
   if (typeof o == "object") {
     const e = Object.getPrototypeOf(o);
     if (e !== Object.prototype && e !== null)
-      throw new Error(_e);
+      throw new Error(ue);
     const t = {};
     for (const [i, a] of Object.entries(o))
-      t[i] = ge(a);
+      t[i] = ve(a);
     return t;
   }
-  throw new Error(_e);
+  throw new Error(ue);
 }
-const zi = [
+const ji = [
   { value: "fixed_max_power", labelKey: "editor.values.fixed_max_power" },
   { value: "surplus_aware", labelKey: "editor.values.surplus_aware" }
-], Ai = [
+], Mi = [
   { value: "fixed", labelKey: "editor.values.fixed" },
   { value: "history_average", labelKey: "editor.values.history_average" }
-], Ei = "export_price", Si = "stop_export", Qe = "surplus_appliance", ji = "on", Mi = {
+], Vi = "export_price", Ci = "stop_export", Qe = "surplus_appliance", Li = "on", Hi = {
   icon: {}
-}, te = class te extends N {
+}, ie = class ie extends R {
   constructor() {
-    super(...arguments), this._fallbackLocalize = qe(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._liveApplianceMetadata = null, this._helpDialog = null, this._preventSummaryToggle = (e) => {
+    super(...arguments), this._fallbackLocalize = te(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._liveApplianceMetadata = null, this._helpDialog = null, this._preventSummaryToggle = (e) => {
       e.preventDefault(), e.stopPropagation();
     }, this._stopSummaryToggle = (e) => {
       e.stopPropagation();
@@ -2536,7 +2699,7 @@ const zi = [
     }, this._handleAddDeviceLabelCategory = () => {
       const e = j(this._getValue(["device_label_text"])).map(
         ([i]) => i
-      ), t = Wt(e);
+      ), t = Zt(e);
       this._applyMutation((i) => {
         g(i, ["device_label_text", t], {});
       });
@@ -2549,7 +2712,7 @@ const zi = [
         E(
           i,
           ["power_devices", "house", "forecast", "deferrable_consumers"],
-          Qt(
+          ii(
             this._tFormat("editor.dynamic.consumer", { index: e + 1 })
           )
         );
@@ -2559,7 +2722,7 @@ const zi = [
         E(
           e,
           ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-          ei()
+          oi()
         );
       });
     }, this._handleAddImportPriceWindow = () => {
@@ -2567,7 +2730,7 @@ const zi = [
         E(
           e,
           ["power_devices", "grid", "forecast", "import_price_windows"],
-          Xt()
+          ai()
         );
       });
     }, this._handleAddExportPriceOptimizer = () => {
@@ -2598,14 +2761,14 @@ const zi = [
         if (!y(f(t, ["automation"]))) {
           g(t, ["automation"], {
             enabled: !0,
-            optimizers: [Fe(e)]
+            optimizers: [De(e)]
           });
           return;
         }
         E(
           t,
           ["automation", "optimizers"],
-          Fe(e)
+          De(e)
         );
       });
     }, this._handleAddEvCharger = () => {
@@ -2617,7 +2780,7 @@ const zi = [
         E(
           t,
           ["appliances"],
-          qt(
+          Jt(
             e,
             this._tFormat("editor.dynamic.ev_charger", { index: e.length + 1 }),
             this._tFormat("editor.dynamic.vehicle", { index: 1 })
@@ -2633,7 +2796,7 @@ const zi = [
         E(
           t,
           ["appliances"],
-          Zt(
+          Xt(
             e,
             this._tFormat("editor.dynamic.climate_appliance", {
               index: e.length + 1
@@ -2650,7 +2813,7 @@ const zi = [
         E(
           t,
           ["appliances"],
-          Bt(
+          Qt(
             e,
             this._tFormat("editor.dynamic.generic_appliance", {
               index: e.length + 1
@@ -2665,10 +2828,10 @@ const zi = [
   }
   set hass(e) {
     const t = this._hass;
-    this._hass = e, e && !this._localize && (this._localize = qe(e)), this.requestUpdate("hass", t);
+    this._hass = e, e && !this._localize && (this._localize = te(e)), this.requestUpdate("hass", t);
   }
   connectedCallback() {
-    super.connectedCallback(), xi().then(() => {
+    super.connectedCallback(), Si().then(() => {
       this.requestUpdate();
     }).catch((e) => {
       this._message = {
@@ -2742,7 +2905,7 @@ const zi = [
   _renderDocumentBody(e) {
     return this._isScopeYaml(z) ? n`<div class="list-card">${this._renderYamlEditor(z)}</div>` : n`
       <div class="tabs">
-        ${_i.map((t) => {
+        ${gi.map((t) => {
       const i = e[t.id];
       return n`
             <button
@@ -2752,7 +2915,7 @@ const zi = [
         this._activeTab = t.id;
       }}
             >
-              ${this._renderSvgIcon(ci[t.id], "tab-icon")}
+              ${this._renderSvgIcon(hi[t.id], "tab-icon")}
               <span>${this._t(t.labelKey)}</span>
               ${i.errors > 0 ? n`<span class="tab-count errors">${i.errors}</span>` : i.warnings > 0 ? n`<span class="tab-count warnings">${i.warnings}</span>` : _}
             </button>
@@ -2760,7 +2923,7 @@ const zi = [
     })}
       </div>
 
-      ${Yt(this._renderActiveTab())}
+      ${Wt(this._renderActiveTab())}
     `;
   }
   _renderActiveTab() {
@@ -2799,7 +2962,7 @@ const zi = [
     `;
   }
   _renderSectionScope(e, t, i = {}) {
-    const a = W(e), { initialOpen: r = !0 } = i, s = pi[e];
+    const a = W(e), { initialOpen: r = !0 } = i, s = mi[e];
     return n`
       <details class="section-card" ?open=${r}>
         <summary>
@@ -3223,7 +3386,7 @@ const zi = [
               <div class="list-card">
                 <div class="card-title" style="margin-bottom: 16px;">
                   <strong>${this._t("editor.sections.bias_correction_status")}</strong>
-                  <span class="card-subtitle">Current bias correction status and training controls</span>
+                  <span class="card-subtitle">${this._t("bias_correction.status_panel.subtitle")}</span>
                 </div>
                 <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
               </div>
@@ -3455,7 +3618,7 @@ const zi = [
   }
   _renderAutomationOptimizerCard(e, t, i) {
     const a = y(e) ?? {}, r = this._stringValue(a.kind);
-    return r === Ei ? this._renderExportPriceOptimizerCard(a, t, i) : r === Qe ? this._renderSurplusApplianceOptimizerCard(a, t, i) : this._renderUnsupportedAutomationOptimizerCard(a, t, i);
+    return r === Vi ? this._renderExportPriceOptimizerCard(a, t, i) : r === Qe ? this._renderSurplusApplianceOptimizerCard(a, t, i) : this._renderUnsupportedAutomationOptimizerCard(a, t, i);
   }
   _renderAutomationEnabledField() {
     const e = this._getAutomationEnabled();
@@ -3474,7 +3637,7 @@ const zi = [
     `;
   }
   _renderExportPriceOptimizerCard(e, t, i) {
-    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "action"])) || Si, p = this._getValue([...r, "when_price_below"]) ?? 0;
+    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "action"])) || Ci, p = this._getValue([...r, "when_price_below"]) ?? 0;
     return n`
       <details class=${`list-card optimizer-card optimizer-card--${s ? "enabled" : "disabled"}`}>
         <summary>
@@ -3538,11 +3701,11 @@ const zi = [
     `;
   }
   _renderSurplusApplianceOptimizerCard(e, t, i) {
-    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), p = this._stringValue(this._getValue([...r, "action"])) || ji, u = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, m = ne(
+    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), p = this._stringValue(this._getValue([...r, "action"])) || Li, u = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, m = le(
       this._config,
       this._liveApplianceMetadata,
       c
-    ), b = le(
+    ), b = de(
       m,
       this._stringValue(this._getValue([...r, "climate_mode"]))
     ), I = this._getSurplusApplianceOptimizerTitle(m, l);
@@ -4289,7 +4452,7 @@ const zi = [
               .value=${t}
               @change=${(s) => r(s.currentTarget.value)}
             >
-              ${Ai.map(
+              ${Mi.map(
       (s) => n`
                   <option value=${s.value}>${this._t(s.labelKey)}</option>
                 `
@@ -4369,7 +4532,7 @@ const zi = [
       s.currentTarget.value
     )}
             >
-              ${zi.map(
+              ${ji.map(
       (s) => n`
                   <option value=${s.value}>${this._t(s.labelKey)}</option>
                 `
@@ -4564,7 +4727,7 @@ const zi = [
         <ha-selector
           .hass=${this.hass}
           .narrow=${this.narrow ?? !1}
-          .selector=${Mi}
+          .selector=${Hi}
           .label=${this._t(t)}
           .helper=${i ? this._t(i) : void 0}
           .required=${!1}
@@ -4709,11 +4872,11 @@ const zi = [
     };
     if (this._validation) {
       for (const t of this._validation.errors) {
-        const i = Ue[t.section] ?? "general";
+        const i = We[t.section] ?? "general";
         e[i].errors += 1;
       }
       for (const t of this._validation.warnings) {
-        const i = Ue[t.section] ?? "general";
+        const i = We[t.section] ?? "general";
         e[i].warnings += 1;
       }
     }
@@ -4831,7 +4994,7 @@ const zi = [
       };
       return;
     }
-    const t = Ke(e);
+    const t = qe(e);
     try {
       if (await Ge(), !this._config || this._isScopeYaml(e))
         return;
@@ -4914,7 +5077,7 @@ const zi = [
     );
   }
   _hasBlockingDescendantYamlErrors(e) {
-    return Ke(e).some(
+    return qe(e).some(
       (t) => {
         const i = this._scopeYamlErrors[t];
         return typeof i == "string" && i.length > 0;
@@ -4942,7 +5105,7 @@ const zi = [
   _handleAddDeviceLabel(e) {
     const t = j(this._getValue(["device_label_text", e])).map(
       ([a]) => a
-    ), i = Kt(t);
+    ), i = Gt(t);
     this._applyMutation((a) => {
       g(a, ["device_label_text", e, i], "");
     });
@@ -4951,11 +5114,11 @@ const zi = [
     const i = t.trim(), a = ["automation", "optimizers", e, "params"];
     this._applyMutation((r) => {
       g(r, [...a, "appliance_id"], i);
-      const s = ne(
+      const s = le(
         r,
         this._liveApplianceMetadata,
         i
-      ), l = le(
+      ), l = de(
         s,
         this._stringValue(f(r, [...a, "climate_mode"]))
       );
@@ -4989,9 +5152,9 @@ const zi = [
       "controls",
       "use_mode",
       "values"
-    ], i = ti(j(this._getValue(t)).map(([a]) => a));
+    ], i = ri(j(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
-      g(a, [...t, i], Gt());
+      g(a, [...t, i], ei());
     });
   }
   _handleAddEcoGear(e) {
@@ -5001,9 +5164,9 @@ const zi = [
       "controls",
       "eco_gear",
       "values"
-    ], i = ii(j(this._getValue(t)).map(([a]) => a));
+    ], i = si(j(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
-      g(a, [...t, i], Jt());
+      g(a, [...t, i], ti());
     });
   }
   _handleProjectedApplianceProjectionStrategyChange(e, t) {
@@ -5024,7 +5187,7 @@ const zi = [
     const a = i.trim();
     if (!a || a === t || !this._config)
       return;
-    const r = k(this._config), s = Ut(r, e, t, a);
+    const r = k(this._config), s = Bt(r, e, t, a);
     if (!s.ok) {
       this._message = { kind: "error", text: this._formatRenameObjectKeyError(s) };
       return;
@@ -5033,12 +5196,12 @@ const zi = [
   }
   _moveListItem(e, t, i) {
     this._applyMutation((a) => {
-      Dt(a, e, t, i);
+      qt(a, e, t, i);
     });
   }
   _removeListItem(e, t) {
     this._applyMutation((i) => {
-      Ft(i, e, t);
+      Kt(i, e, t);
     });
   }
   _removePath(e) {
@@ -5115,11 +5278,11 @@ const zi = [
         return;
       const l = ["automation", "optimizers", r, "params"], d = this._stringValue(f(e, [...l, "appliance_id"])), c = this._stringValue(
         f(e, [...l, "climate_mode"])
-      ), p = ne(
+      ), p = le(
         e,
         this._liveApplianceMetadata,
         d
-      ), u = le(
+      ), u = de(
         p,
         c
       );
@@ -5279,7 +5442,7 @@ const zi = [
     return t;
   }
 };
-te.properties = {
+ie.properties = {
   hass: { attribute: !1 },
   narrow: { type: Boolean },
   route: { attribute: !1 },
@@ -5301,7 +5464,7 @@ te.properties = {
   _applianceYamlErrors: { state: !0 },
   _liveApplianceMetadata: { state: !0 },
   _helpDialog: { state: !0 }
-}, te.styles = it`
+}, ie.styles = it`
     :host {
       display: block;
       min-height: 100%;
@@ -6006,6 +6169,6 @@ te.properties = {
       font-size: 0.93rem;
     }
   `;
-let ve = te;
+let ye = ie;
 const Xe = "helman-config-editor-panel";
-customElements.get(Xe) || customElements.define(Xe, ve);
+customElements.get(Xe) || customElements.define(Xe, ye);

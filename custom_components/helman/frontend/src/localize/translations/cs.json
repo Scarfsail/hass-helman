@@ -340,5 +340,65 @@
       "bias_correction_clamp_max": "Horní mez (0,0-1,0) pro opravené hodnoty prognózy. Zabraňuje nerealistickým pozitivním opravám v příliš vysokém zvýšení prognózovaných hodnot.",
       "bias_correction_total_energy_entity": "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce."
     }
+  },
+  "common": {
+    "yes": "Ano",
+    "no": "Ne",
+    "unknown": "Neznámé",
+    "not_available": "Není k dispozici"
+  },
+  "bias_correction": {
+    "status_panel": {
+      "subtitle": "Aktuální stav korekce zkreslení a ovládání trénování",
+      "loading_status": "Načítám stav...",
+      "unable_to_load_status": "Nepodařilo se načíst stav korekce zkreslení",
+      "home_assistant_not_available": "Home Assistant není k dispozici.",
+      "failed_to_load_status": "Nepodařilo se načíst stav.",
+      "training_completed": "Trénování bylo úspěšně dokončeno.",
+      "training_failed": "Trénování selhalo: {error}",
+      "unknown_error": "Neznámá chyba",
+      "section_status": "Stav",
+      "enabled": "Povoleno",
+      "current_status": "Aktuální stav",
+      "trained_at": "Natrénováno",
+      "next_training": "Další trénování",
+      "effective_variant": "Použitá varianta",
+      "training_days_used": "Použité dny trénování",
+      "training_days_required": "{used} / {required} požadováno",
+      "insufficient_history_text": "Zatím není k dispozici dostatek historických dat. K dispozici je {used} dní, pro trénování je potřeba alespoň {required} dní.",
+      "error": "Chyba",
+      "dropped_days": "Vynechané dny",
+      "actions": "Akce",
+      "training": "Trénuji...",
+      "train_now": "Trénovat teď",
+      "refresh_status": "Obnovit stav",
+      "info": "Korekce zkreslení solární prognózy upravuje přesnost solární prognózy podle vlastností vašeho systému. Zapnutím trénování se budou predikce postupně automaticky zlepšovat.",
+      "render_error": "Chyba vykreslení: {error}"
+    },
+    "statuses": {
+      "applied": "Použito",
+      "profile_trained": "Profil natrénován",
+      "insufficient_history": "Nedostatek historie",
+      "config_changed_pending_retrain": "Konfigurace změněna, čeká na přetrénování",
+      "training_failed": "Trénování selhalo",
+      "not_configured": "Nenakonfigurováno",
+      "no_training_yet": "Zatím netrénováno"
+    },
+    "effective_variants": {
+      "raw": "Surová",
+      "adjusted": "Upravená"
+    },
+    "dropped_reasons": {
+      "day_forecast_too_low": "Denní prognóza je příliš nízká",
+      "day_ratio_out_of_band": "Denní poměr je mimo povolený rozsah"
+    },
+    "error_codes": {
+      "training_in_progress": "Trénování už probíhá.",
+      "bias_correction_not_configured": "Korekce zkreslení není nakonfigurovaná.",
+      "internal_error": "Neočekávané selhání trénování solární korekce.",
+      "no_profile": "Profil solární korekce není k dispozici.",
+      "not_loaded": "Služba korekce solární prognózy Helman není k dispozici.",
+      "unauthorized": "Je vyžadován administrátorský přístup."
+    }
   }
 }

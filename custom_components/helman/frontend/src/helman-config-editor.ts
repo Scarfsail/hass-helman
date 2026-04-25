@@ -1572,7 +1572,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               <div class="list-card">
                 <div class="card-title" style="margin-bottom: 16px;">
                   <strong>${this._t("editor.sections.bias_correction_status")}</strong>
-                  <span class="card-subtitle">Current bias correction status and training controls</span>
+                  <span class="card-subtitle">${this._t("bias_correction.status_panel.subtitle")}</span>
                 </div>
                 <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
               </div>

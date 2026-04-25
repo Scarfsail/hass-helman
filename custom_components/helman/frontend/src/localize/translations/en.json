@@ -340,5 +340,65 @@
       "bias_correction_clamp_max": "Upper bound (0.0-1.0) for corrected forecast values. Prevents unrealistic positive corrections from over-inflating forecast values.",
       "bias_correction_total_energy_entity": "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model."
     }
+  },
+  "common": {
+    "yes": "Yes",
+    "no": "No",
+    "unknown": "Unknown",
+    "not_available": "N/A"
+  },
+  "bias_correction": {
+    "status_panel": {
+      "subtitle": "Current bias correction status and training controls",
+      "loading_status": "Loading status...",
+      "unable_to_load_status": "Unable to load bias correction status",
+      "home_assistant_not_available": "Home Assistant is not available.",
+      "failed_to_load_status": "Failed to load status.",
+      "training_completed": "Training completed successfully.",
+      "training_failed": "Training failed: {error}",
+      "unknown_error": "Unknown error",
+      "section_status": "Status",
+      "enabled": "Enabled",
+      "current_status": "Current status",
+      "trained_at": "Trained at",
+      "next_training": "Next training",
+      "effective_variant": "Effective variant",
+      "training_days_used": "Training days used",
+      "training_days_required": "{used} / {required} required",
+      "insufficient_history_text": "Not enough historical data yet. Have {used} days, need at least {required} days for training.",
+      "error": "Error",
+      "dropped_days": "Dropped days",
+      "actions": "Actions",
+      "training": "Training...",
+      "train_now": "Train now",
+      "refresh_status": "Refresh status",
+      "info": "Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics. Enable training to automatically improve predictions over time.",
+      "render_error": "Render error: {error}"
+    },
+    "statuses": {
+      "applied": "Applied",
+      "profile_trained": "Profile trained",
+      "insufficient_history": "Insufficient history",
+      "config_changed_pending_retrain": "Config changed, retrain pending",
+      "training_failed": "Training failed",
+      "not_configured": "Not configured",
+      "no_training_yet": "No training yet"
+    },
+    "effective_variants": {
+      "raw": "Raw",
+      "adjusted": "Adjusted"
+    },
+    "dropped_reasons": {
+      "day_forecast_too_low": "Day forecast too low",
+      "day_ratio_out_of_band": "Day ratio out of band"
+    },
+    "error_codes": {
+      "training_in_progress": "Training is already in progress.",
+      "bias_correction_not_configured": "Bias correction is not configured.",
+      "internal_error": "Unexpected solar bias training failure.",
+      "no_profile": "No solar bias profile is available.",
+      "not_loaded": "The Helman solar bias correction service is not available.",
+      "unauthorized": "Admin access is required."
+    }
   }
 }

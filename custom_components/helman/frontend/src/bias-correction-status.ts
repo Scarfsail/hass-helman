@@ -1,5 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { property, state } from "lit/decorators.js";
+import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
 
 export class HelmanBiasCorrectionStatus extends LitElement {
   @property({ attribute: false }) hass: any;
@@ -9,6 +10,9 @@ export class HelmanBiasCorrectionStatus extends LitElement {
   @state() private _loading = false;
   @state() private _trainInProgress = false;
   @state() private _message: string = "";
+  @state() private _messageKind: "success" | "error" = "success";
+
+  private _fallbackLocalize: LocalizeFunction = getLocalizeFunction();
 
   static styles = css`
     .container {
@@ -184,7 +188,8 @@ export class HelmanBiasCorrectionStatus extends LitElement {
 
   private async _loadStatus() {
     if (!this.hass) {
-      this._message = "Home Assistant not available";
+      this._message = this._t("bias_correction.status_panel.home_assistant_not_available");
+      this._messageKind = "error";
       this._loading = false;
       return;
     }
@@ -196,7 +201,8 @@ export class HelmanBiasCorrectionStatus extends LitElement {
         await this._loadProfile();
       }
     } catch (e: any) {
-      this._message = e?.message ?? "Failed to load status";
+      this._message = this._formatError(e, "bias_correction.status_panel.failed_to_load_status");
+      this._messageKind = "error";
       console.error("Error loading bias correction status:", e);
     } finally {
       this._loading = false;
@@ -224,12 +230,16 @@ export class HelmanBiasCorrectionStatus extends LitElement {
     try {
       const result = await this.hass.callWS({ type: "helman/solar_bias/train_now" });
       this._status = result;
-      this._message = "Training completed successfully";
+      this._message = this._t("bias_correction.status_panel.training_completed");
+      this._messageKind = "success";
       if (result?.status === "profile_trained") {
         await this._loadProfile();
       }
     } catch (e: any) {
-      this._message = `Training failed: ${e?.message ?? "Unknown error"}`;
+      this._message = this._tFormat("bias_correction.status_panel.training_failed", {
+        error: this._formatError(e, "bias_correction.status_panel.unknown_error"),
+      });
+      this._messageKind = "error";
       console.error("Training failed:", e);
     } finally {
       this._trainInProgress = false;
@@ -242,21 +252,21 @@ export class HelmanBiasCorrectionStatus extends LitElement {
     switch (status) {
       case "profile_trained":
       case "applied":
-        return { text: status, class: "badge-success" };
+        return { text: this._formatStatus(status), class: "badge-success" };
       case "insufficient_history":
       case "config_changed_pending_retrain":
       case "training_failed":
-        return { text: status, class: "badge-warning" };
+        return { text: this._formatStatus(status), class: "badge-warning" };
       case "not_configured":
       case "no_training_yet":
-        return { text: status, class: "badge-info" };
+        return { text: this._formatStatus(status), class: "badge-info" };
       default:
-        return { text: status || "Unknown", class: "badge-info" };
+        return { text: this._formatStatus(status), class: "badge-info" };
     }
   }
 
   private _formatDate(dateStr: string | null): string {
-    if (!dateStr) return "N/A";
+    if (!dateStr) return this._t("common.not_available");
     try {
       return new Date(dateStr).toLocaleString();
     } catch {
@@ -264,13 +274,39 @@ export class HelmanBiasCorrectionStatus extends LitElement {
     }
   }
 
+  private _formatStatus(status: string | undefined): string {
+    if (!status) return this._t("common.unknown");
+    return this._tValue(`bias_correction.statuses.${status}`, status);
+  }
+
+  private _formatEffectiveVariant(variant: string | undefined): string {
+    if (!variant) return this._t("common.unknown");
+    return this._tValue(`bias_correction.effective_variants.${variant}`, variant);
+  }
+
+  private _formatDroppedReason(reason: string | undefined): string {
+    if (!reason) return this._t("common.unknown");
+    return this._tValue(`bias_correction.dropped_reasons.${reason}`, reason);
+  }
+
+  private _formatError(error: any, fallbackKey: string): string {
+    const code = typeof error?.code === "string" ? error.code : undefined;
+    if (code) {
+      const translated = this._tValue(`bias_correction.error_codes.${code}`, "");
+      if (translated) return translated;
+    }
+    return typeof error?.message === "string" && error.message
+      ? error.message
+      : this._t(fallbackKey);
+  }
+
   render() {
     if (this._loading) {
-      return html`<div class="container"><p>Loading status…</p></div>`;
+      return html`<div class="container"><p>${this._t("bias_correction.status_panel.loading_status")}</p></div>`;
     }
 
     if (!this._status) {
-      return html`<div class="container"><div class="info-box">Unable to load bias correction status</div></div>`;
+      return html`<div class="container"><div class="info-box">${this._t("bias_correction.status_panel.unable_to_load_status")}</div></div>`;
     }
 
     try {
@@ -279,20 +315,20 @@ export class HelmanBiasCorrectionStatus extends LitElement {
       return html`
         <div class="container">
           <div class="section">
-            <div class="section-title">Status</div>
+            <div class="section-title">${this._t("bias_correction.status_panel.section_status")}</div>
             <div class="status-grid">
               <div class="status-row">
-                <span class="status-label">Enabled</span>
-                <span class="status-value">${this._status.enabled ? "Yes" : "No"}</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.enabled")}</span>
+                <span class="status-value">${this._status.enabled ? this._t("common.yes") : this._t("common.no")}</span>
               </div>
               <div class="status-row">
-                <span class="status-label">Current Status</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.current_status")}</span>
                 <span class="badge ${statusBadge.class}">${statusBadge.text}</span>
               </div>
               ${this._status.trainedAt
                 ? html`
                     <div class="status-row">
-                      <span class="status-label">Trained At</span>
+                      <span class="status-label">${this._t("bias_correction.status_panel.trained_at")}</span>
                       <span class="status-value">${this._formatDate(this._status.trainedAt)}</span>
                     </div>
                   `
@@ -300,30 +336,36 @@ export class HelmanBiasCorrectionStatus extends LitElement {
               ${this._status.nextScheduledTrainingAt
                 ? html`
                     <div class="status-row">
-                      <span class="status-label">Next Training</span>
+                      <span class="status-label">${this._t("bias_correction.status_panel.next_training")}</span>
                       <span class="status-value">${this._formatDate(this._status.nextScheduledTrainingAt)}</span>
                     </div>
                   `
                 : ""}
               <div class="status-row">
-                <span class="status-label">Effective Variant</span>
-                <span class="status-value">${this._status.effectiveVariant}</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.effective_variant")}</span>
+                <span class="status-value">${this._formatEffectiveVariant(this._status.effectiveVariant)}</span>
               </div>
               <div class="status-row">
-                <span class="status-label">Training Days Used</span>
-                <span class="status-value">${this._status.usableDays} / ${this._status.minHistoryDays} required</span>
+                <span class="status-label">${this._t("bias_correction.status_panel.training_days_used")}</span>
+                <span class="status-value">${this._tFormat("bias_correction.status_panel.training_days_required", {
+                  used: this._status.usableDays,
+                  required: this._status.minHistoryDays,
+                })}</span>
               </div>
               ${this._status.status === "insufficient_history"
                 ? html`
                     <div class="info-box" style="margin-top: 8px;">
-                      Not enough historical data yet. Have ${this._status.usableDays} days, need at least ${this._status.minHistoryDays} days for training.
+                      ${this._tFormat("bias_correction.status_panel.insufficient_history_text", {
+                        used: this._status.usableDays,
+                        required: this._status.minHistoryDays,
+                      })}
                     </div>
                   `
                 : ""}
               ${this._status.errorReason
                 ? html`
                     <div class="status-row" style="background: rgba(198, 40, 40, 0.1);">
-                      <span class="status-label">Error</span>
+                      <span class="status-label">${this._t("bias_correction.status_panel.error")}</span>
                       <span class="status-value" style="color: #c62828;">${this._status.errorReason}</span>
                     </div>
                   `
@@ -334,11 +376,11 @@ export class HelmanBiasCorrectionStatus extends LitElement {
           ${this._status.droppedDays && this._status.droppedDays.length > 0
             ? html`
                 <div class="section">
-                  <div class="section-title">Dropped Days</div>
+                  <div class="section-title">${this._t("bias_correction.status_panel.dropped_days")}</div>
                   <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
                     ${this._status.droppedDays.map((day: any) => html`
                       <div style="padding: 4px 0;">
-                        <strong>${day.date}:</strong> ${day.reason}
+                        <strong>${day.date}:</strong> ${this._formatDroppedReason(day.reason)}
                       </div>
                     `)}
                   </div>
@@ -347,42 +389,62 @@ export class HelmanBiasCorrectionStatus extends LitElement {
             : ""}
 
           <div class="section">
-            <div class="section-title">Actions</div>
+            <div class="section-title">${this._t("bias_correction.status_panel.actions")}</div>
             <div class="controls">
               <button
                 class="primary"
                 @click=${this._trainNow}
                 ?disabled=${this._trainInProgress || this._status?.enabled === false}
               >
-                ${this._trainInProgress ? html`<span class="spinner"></span> Training…` : "Train Now"}
+                ${this._trainInProgress
+                  ? html`<span class="spinner"></span> ${this._t("bias_correction.status_panel.training")}`
+                  : this._t("bias_correction.status_panel.train_now")}
               </button>
               <button
                 @click=${this._loadStatus}
                 ?disabled=${this._loading}
               >
-                Refresh Status
+                ${this._t("bias_correction.status_panel.refresh_status")}
               </button>
             </div>
           </div>
 
           ${this._message
             ? html`
-                <div class="message ${this._message.startsWith("Training failed") ? "error" : "success"}">
+                <div class="message ${this._messageKind}">
                   ${this._message}
                 </div>
               `
             : ""}
 
           <div class="info-box">
-            Solar bias correction helps adjust solar forecast accuracy based on your system's characteristics.
-            Enable training to automatically improve predictions over time.
+            ${this._t("bias_correction.status_panel.info")}
           </div>
         </div>
       `;
     } catch (e: any) {
       console.error("Render error:", e);
-      return html`<div class="container"><div class="info-box" style="color: red;">Render error: ${e?.message}</div></div>`;
+      return html`<div class="container"><div class="info-box" style="color: red;">${this._tFormat("bias_correction.status_panel.render_error", {
+        error: e?.message ?? this._t("common.unknown"),
+      })}</div></div>`;
     }
+  }
+
+  private _t(key: string): string {
+    return getLocalizeFunction(this.hass ?? undefined)(key) ?? this._fallbackLocalize(key);
+  }
+
+  private _tValue(key: string, fallback: string): string {
+    const translated = this._t(key);
+    return translated === key ? fallback : translated;
+  }
+
+  private _tFormat(key: string, values: Record<string, string | number>): string {
+    let text = this._t(key);
+    for (const [name, value] of Object.entries(values)) {
+      text = text.replaceAll(`{${name}}`, String(value));
+    }
+    return text;
   }
 }
 
