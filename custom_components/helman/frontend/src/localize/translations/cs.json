@@ -7,8 +7,7 @@
       "power_devices": "Výkonová zařízení",
       "scheduler": "Plánování",
       "automation": "Automatizace",
-      "appliances": "Spotřebiče",
-      "bias_correction": "Korekce zkreslení"
+      "appliances": "Spotřebiče"
     },
     "actions": {
       "reload_config": "Načíst uloženou konfiguraci znovu",
@@ -51,6 +50,7 @@
       "device_label_text": "Texty štítků zařízení",
       "house": "Dům",
       "solar": "Solár",
+      "bias_correction": "Korekce zkreslení",
       "battery": "Baterie",
       "grid": "Síť",
       "schedule_control_mapping": "Mapování ovládání plánování",

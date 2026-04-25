@@ -1361,8 +1361,7 @@ const ht = {
     power_devices: "Výkonová zařízení",
     scheduler: "Plánování",
     automation: "Automatizace",
-    appliances: "Spotřebiče",
-    bias_correction: "Korekce zkreslení"
+    appliances: "Spotřebiče"
   },
   actions: {
     reload_config: "Načíst uloženou konfiguraci znovu",
@@ -1405,6 +1404,7 @@ const ht = {
     device_label_text: "Texty štítků zařízení",
     house: "Dům",
     solar: "Solár",
+    bias_correction: "Korekce zkreslení",
     battery: "Baterie",
     grid: "Síť",
     schedule_control_mapping: "Mapování ovládání plánování",
@@ -1708,8 +1708,7 @@ const ht = {
     power_devices: "Power devices",
     scheduler: "Scheduler",
     automation: "Automation",
-    appliances: "Appliances",
-    bias_correction: "Bias Correction"
+    appliances: "Appliances"
   },
   actions: {
     reload_config: "Reload stored config",
@@ -1752,6 +1751,7 @@ const ht = {
     device_label_text: "Device label text",
     house: "House",
     solar: "Solar",
+    bias_correction: "Bias Correction",
     battery: "Battery",
     grid: "Grid",
     schedule_control_mapping: "Schedule control mapping",
