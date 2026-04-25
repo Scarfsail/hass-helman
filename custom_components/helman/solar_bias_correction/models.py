@@ -81,6 +81,101 @@ class SolarBiasAdjustmentResult:
     explainability: SolarBiasExplainability | None
 
 
+@dataclass
+class SolarBiasInspectorPoint:
+    timestamp: str
+    value_wh: float
+
+
+@dataclass
+class SolarBiasFactorPoint:
+    slot: str
+    factor: float
+
+
+@dataclass
+class SolarBiasInspectorSeries:
+    raw: list[SolarBiasInspectorPoint]
+    corrected: list[SolarBiasInspectorPoint]
+    actual: list[SolarBiasInspectorPoint]
+    factors: list[SolarBiasFactorPoint]
+
+
+@dataclass
+class SolarBiasInspectorTotals:
+    raw_wh: float | None
+    corrected_wh: float | None
+    actual_wh: float | None
+
+
+@dataclass
+class SolarBiasInspectorAvailability:
+    has_raw_forecast: bool
+    has_corrected_forecast: bool
+    has_actuals: bool
+    has_profile: bool
+
+
+@dataclass
+class SolarBiasInspectorDay:
+    date: str
+    timezone: str
+    status: str
+    effective_variant: str | None
+    trained_at: str | None
+    min_date: str
+    max_date: str
+    series: SolarBiasInspectorSeries
+    totals: SolarBiasInspectorTotals
+    availability: SolarBiasInspectorAvailability
+    is_today: bool
+    is_future: bool
+
+
+def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
+    return {
+        "date": day.date,
+        "timezone": day.timezone,
+        "status": day.status,
+        "effectiveVariant": day.effective_variant,
+        "trainedAt": day.trained_at,
+        "range": {
+            "minDate": day.min_date,
+            "maxDate": day.max_date,
+            "canGoPrevious": day.date > day.min_date,
+            "canGoNext": day.date < day.max_date,
+            "isToday": day.is_today,
+            "isFuture": day.is_future,
+        },
+        "series": {
+            "raw": [_inspector_point_payload(point) for point in day.series.raw],
+            "corrected": [
+                _inspector_point_payload(point) for point in day.series.corrected
+            ],
+            "actual": [_inspector_point_payload(point) for point in day.series.actual],
+            "factors": [
+                {"slot": point.slot, "factor": point.factor}
+                for point in day.series.factors
+            ],
+        },
+        "totals": {
+            "rawWh": day.totals.raw_wh,
+            "correctedWh": day.totals.corrected_wh,
+            "actualWh": day.totals.actual_wh,
+        },
+        "availability": {
+            "hasRawForecast": day.availability.has_raw_forecast,
+            "hasCorrectedForecast": day.availability.has_corrected_forecast,
+            "hasActuals": day.availability.has_actuals,
+            "hasProfile": day.availability.has_profile,
+        },
+    }
+
+
+def _inspector_point_payload(point: SolarBiasInspectorPoint) -> dict[str, Any]:
+    return {"timestamp": point.timestamp, "valueWh": point.value_wh}
+
+
 def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     forecast = (
         config.get("power_devices", {}).get("solar", {}).get("forecast", {})
