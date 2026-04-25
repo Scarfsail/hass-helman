@@ -40,6 +40,7 @@ type InspectorPayload = {
 export class HelmanBiasCorrectionInspector extends LitElement {
   @property({ attribute: false }) hass: any;
 
+  @state() private _expanded = false;
   @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
   @state() private _loading = false;
@@ -233,7 +234,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
 
   render() {
     return html`
-      <details class="inspector" @toggle=${this._handleToggle}>
+      <details class="inspector" ?open=${this._expanded}>
         <summary @click=${this._handleSummaryClick}>
           <div class="summary-row">
             <div class="summary-left">
@@ -242,7 +243,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
             ${this._renderChevron()}
           </div>
         </summary>
-        ${this._renderBody()}
+        ${this._expanded ? this._renderBody() : ""}
       </details>
     `;
   }
@@ -457,9 +458,10 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     `;
   }
 
-  private _handleToggle(event: Event) {
-    const details = event.currentTarget as HTMLDetailsElement | null;
-    if (!details?.open) {
+  private _handleSummaryClick(event: Event) {
+    event.preventDefault();
+    this._expanded = !this._expanded;
+    if (!this._expanded) {
       return;
     }
     if (!this._selectedDate) {
@@ -468,22 +470,6 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     if (!this._payload) {
       this._load();
     }
-  }
-
-  private _handleSummaryClick(event: Event) {
-    const summary = event.currentTarget as HTMLElement | null;
-    const details = summary?.parentElement as HTMLDetailsElement | null;
-    queueMicrotask(() => {
-      if (!details?.open) {
-        return;
-      }
-      if (!this._selectedDate) {
-        this._selectedDate = this._todayIso();
-      }
-      if (!this._payload) {
-        this._load();
-      }
-    });
   }
 
   private _renderChevron() {
