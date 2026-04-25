@@ -2243,8 +2243,8 @@ const xi = async () => {
                 <span class="status-value">${this._status.effectiveVariant}</span>
               </div>
               <div class="status-row">
-                <span class="status-label">Data Available</span>
-                <span class="status-value">${this._status.usableDays} days</span>
+                <span class="status-label">Training Days Used</span>
+                <span class="status-value">${this._status.usableDays} / ${this._status.minHistoryDays} required</span>
               </div>
               ${this._status.status === "insufficient_history" ? n`
                     <div class="info-box" style="margin-top: 8px;">
