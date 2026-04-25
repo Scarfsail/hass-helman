@@ -325,20 +325,6 @@ export const EDITOR_SCOPES = {
       rootKind: "array",
     }),
   },
-  [SECTION_SCOPE_IDS.bias_correction.settings]: {
-    id: SECTION_SCOPE_IDS.bias_correction.settings,
-    kind: "section",
-    parentId: TAB_SCOPE_IDS.bias_correction,
-    tabId: "bias_correction",
-    labelKey: "editor.sections.bias_correction_settings",
-    adapter: createPathScopeAdapter(
-      ["power_devices", "solar", "forecast", "bias_correction"],
-      {
-        emptyValue: EMPTY_OBJECT,
-        rootKind: "object",
-      },
-    ),
-  },
 } as const satisfies Record<ScopeId, EditorScope>;
 
 const CHILD_SCOPE_IDS = buildChildScopeIds();

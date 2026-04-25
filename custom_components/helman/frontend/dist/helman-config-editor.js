@@ -672,7 +672,7 @@ function f(o, e) {
   }
   return t;
 }
-function v(o, e, t) {
+function g(o, e, t) {
   if (e.length === 0)
     return;
   let i = o;
@@ -702,7 +702,7 @@ function L(o, e) {
 }
 function E(o, e, t) {
   const i = f(o, e), r = [...Array.isArray(i) ? i : [], t];
-  v(o, e, r);
+  g(o, e, r);
 }
 function Ft(o, e, t) {
   const i = f(o, e);
@@ -713,14 +713,14 @@ function Ft(o, e, t) {
     L(o, e);
     return;
   }
-  v(o, e, a);
+  g(o, e, a);
 }
 function Dt(o, e, t, i) {
   const a = f(o, e);
   if (!Array.isArray(a) || t < 0 || i < 0 || t >= a.length || i >= a.length || t === i)
     return;
   const r = [...a], [s] = r.splice(t, 1);
-  r.splice(i, 0, s), v(o, e, r);
+  r.splice(i, 0, s), g(o, e, r);
 }
 function Ut(o, e, t, i) {
   const a = f(o, e);
@@ -743,7 +743,7 @@ function Ut(o, e, t, i) {
     }
     l[d] = c;
   }
-  return v(o, e, l), { ok: !0 };
+  return g(o, e, l), { ok: !0 };
 }
 function Wt(o) {
   return A(o, "category");
@@ -1027,7 +1027,7 @@ function w(o, e) {
       if (o.length === 0)
         return k(i);
       const a = k(t);
-      return v(a, o, k(i)), a;
+      return g(a, o, k(i)), a;
     },
     validate(t) {
       return ke(t, e.rootKind);
@@ -1051,7 +1051,7 @@ function de(o) {
         L(a, s.documentPath);
       for (const s of o) {
         const l = r[s.yamlKey];
-        l !== void 0 && v(a, s.documentPath, k(l));
+        l !== void 0 && g(a, s.documentPath, k(l));
       }
       return a;
     },
@@ -1102,7 +1102,7 @@ const ci = {
   automation: "automation",
   appliances: "appliances",
   root: "general"
-}, z = "document", g = {
+}, z = "document", v = {
   general: "tab:general",
   power_devices: "tab:power_devices",
   scheduler: "tab:scheduler",
@@ -1157,16 +1157,16 @@ const ci = {
     labelKey: "editor.title",
     adapter: di()
   },
-  [g.general]: {
-    id: g.general,
+  [v.general]: {
+    id: v.general,
     kind: "tab",
     parentId: z,
     tabId: "general",
     labelKey: "editor.tabs.general",
     adapter: de(hi)
   },
-  [g.power_devices]: {
-    id: g.power_devices,
+  [v.power_devices]: {
+    id: v.power_devices,
     kind: "tab",
     parentId: z,
     tabId: "power_devices",
@@ -1176,8 +1176,8 @@ const ci = {
       rootKind: "object"
     })
   },
-  [g.scheduler]: {
-    id: g.scheduler,
+  [v.scheduler]: {
+    id: v.scheduler,
     kind: "tab",
     parentId: z,
     tabId: "scheduler",
@@ -1187,8 +1187,8 @@ const ci = {
       rootKind: "object"
     })
   },
-  [g.automation]: {
-    id: g.automation,
+  [v.automation]: {
+    id: v.automation,
     kind: "tab",
     parentId: z,
     tabId: "automation",
@@ -1198,8 +1198,8 @@ const ci = {
       rootKind: "object"
     })
   },
-  [g.appliances]: {
-    id: g.appliances,
+  [v.appliances]: {
+    id: v.appliances,
     kind: "tab",
     parentId: z,
     tabId: "appliances",
@@ -1212,7 +1212,7 @@ const ci = {
   [h.general.core_labels_and_history]: {
     id: h.general.core_labels_and_history,
     kind: "section",
-    parentId: g.general,
+    parentId: v.general,
     tabId: "general",
     labelKey: "editor.sections.core_labels_and_history",
     adapter: de(mi)
@@ -1220,7 +1220,7 @@ const ci = {
   [h.general.device_label_text]: {
     id: h.general.device_label_text,
     kind: "section",
-    parentId: g.general,
+    parentId: v.general,
     tabId: "general",
     labelKey: "editor.sections.device_label_text",
     adapter: w(["device_label_text"], {
@@ -1231,7 +1231,7 @@ const ci = {
   [h.power_devices.house]: {
     id: h.power_devices.house,
     kind: "section",
-    parentId: g.power_devices,
+    parentId: v.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.house",
     adapter: w(["power_devices", "house"], {
@@ -1242,7 +1242,7 @@ const ci = {
   [h.power_devices.solar]: {
     id: h.power_devices.solar,
     kind: "section",
-    parentId: g.power_devices,
+    parentId: v.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.solar",
     adapter: w(["power_devices", "solar"], {
@@ -1253,7 +1253,7 @@ const ci = {
   [h.power_devices.bias_correction]: {
     id: h.power_devices.bias_correction,
     kind: "section",
-    parentId: g.power_devices,
+    parentId: v.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction",
     adapter: w(
@@ -1267,7 +1267,7 @@ const ci = {
   [h.power_devices.battery]: {
     id: h.power_devices.battery,
     kind: "section",
-    parentId: g.power_devices,
+    parentId: v.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.battery",
     adapter: w(["power_devices", "battery"], {
@@ -1278,7 +1278,7 @@ const ci = {
   [h.power_devices.grid]: {
     id: h.power_devices.grid,
     kind: "section",
-    parentId: g.power_devices,
+    parentId: v.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.grid",
     adapter: w(["power_devices", "grid"], {
@@ -1289,7 +1289,7 @@ const ci = {
   [h.scheduler.schedule_control_mapping]: {
     id: h.scheduler.schedule_control_mapping,
     kind: "section",
-    parentId: g.scheduler,
+    parentId: v.scheduler,
     tabId: "scheduler",
     labelKey: "editor.sections.schedule_control_mapping",
     adapter: w(["scheduler", "control"], {
@@ -1300,7 +1300,7 @@ const ci = {
   [h.automation.settings]: {
     id: h.automation.settings,
     kind: "section",
-    parentId: g.automation,
+    parentId: v.automation,
     tabId: "automation",
     labelKey: "editor.sections.automation_settings",
     adapter: de(gi)
@@ -1308,7 +1308,7 @@ const ci = {
   [h.automation.optimizer_pipeline]: {
     id: h.automation.optimizer_pipeline,
     kind: "section",
-    parentId: g.automation,
+    parentId: v.automation,
     tabId: "automation",
     labelKey: "editor.sections.optimizer_pipeline",
     adapter: w(["automation", "optimizers"], {
@@ -1319,27 +1319,13 @@ const ci = {
   [h.appliances.configured_appliances]: {
     id: h.appliances.configured_appliances,
     kind: "section",
-    parentId: g.appliances,
+    parentId: v.appliances,
     tabId: "appliances",
     labelKey: "editor.sections.configured_appliances",
     adapter: w(["appliances"], {
       emptyValue: ce,
       rootKind: "array"
     })
-  },
-  [h.bias_correction.settings]: {
-    id: h.bias_correction.settings,
-    kind: "section",
-    parentId: g.bias_correction,
-    tabId: "bias_correction",
-    labelKey: "editor.sections.bias_correction_settings",
-    adapter: w(
-      ["power_devices", "solar", "forecast", "bias_correction"],
-      {
-        emptyValue: x,
-        rootKind: "object"
-      }
-    )
   }
 }, We = vi();
 function W(o) {
@@ -2552,7 +2538,7 @@ const zi = [
         ([i]) => i
       ), t = Wt(e);
       this._applyMutation((i) => {
-        v(i, ["device_label_text", t], {});
+        g(i, ["device_label_text", t], {});
       });
     }, this._handleAddDeferrableConsumer = () => {
       var t;
@@ -2591,7 +2577,7 @@ const zi = [
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
         if (!y(f(t, ["automation"]))) {
-          v(t, ["automation"], {
+          g(t, ["automation"], {
             enabled: !0,
             optimizers: [Ye(e)]
           });
@@ -2610,7 +2596,7 @@ const zi = [
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
         if (!y(f(t, ["automation"]))) {
-          v(t, ["automation"], {
+          g(t, ["automation"], {
             enabled: !0,
             optimizers: [Fe(e)]
           });
@@ -2780,22 +2766,22 @@ const zi = [
   _renderActiveTab() {
     switch (this._activeTab) {
       case "general":
-        return this._renderTabScope(g.general, this._renderGeneralTab());
+        return this._renderTabScope(v.general, this._renderGeneralTab());
       case "power_devices":
         return this._renderTabScope(
-          g.power_devices,
+          v.power_devices,
           this._renderPowerDevicesTab()
         );
       case "scheduler":
-        return this._renderTabScope(g.scheduler, this._renderSchedulerTab());
+        return this._renderTabScope(v.scheduler, this._renderSchedulerTab());
       case "automation":
         return this._renderTabScope(
-          g.automation,
+          v.automation,
           this._renderAutomationTab()
         );
       case "appliances":
         return this._renderTabScope(
-          g.appliances,
+          v.appliances,
           this._renderAppliancesTab()
         );
       default:
@@ -2931,7 +2917,7 @@ const zi = [
     }
     try {
       const a = k(this._config ?? {});
-      v(a, ["appliances", e], k(i.value)), this._config = a, this._dirty = !0, this._validation = null, this._message = null, this._applianceYamlValues = { ...this._applianceYamlValues, [e]: i.value };
+      g(a, ["appliances", e], k(i.value)), this._config = a, this._dirty = !0, this._validation = null, this._message = null, this._applianceYamlValues = { ...this._applianceYamlValues, [e]: i.value };
       const r = { ...this._applianceYamlErrors };
       delete r[e], this._applianceYamlErrors = r;
     } catch (a) {
@@ -4958,13 +4944,13 @@ const zi = [
       ([a]) => a
     ), i = Kt(t);
     this._applyMutation((a) => {
-      v(a, ["device_label_text", e, i], "");
+      g(a, ["device_label_text", e, i], "");
     });
   }
   _handleSurplusApplianceIdChange(e, t) {
     const i = t.trim(), a = ["automation", "optimizers", e, "params"];
     this._applyMutation((r) => {
-      v(r, [...a, "appliance_id"], i);
+      g(r, [...a, "appliance_id"], i);
       const s = ne(
         r,
         this._liveApplianceMetadata,
@@ -4977,7 +4963,7 @@ const zi = [
         L(r, [...a, "climate_mode"]);
         return;
       }
-      v(r, [...a, "climate_mode"], l.value);
+      g(r, [...a, "climate_mode"], l.value);
     });
   }
   _handleAddVehicle(e) {
@@ -5005,7 +4991,7 @@ const zi = [
       "values"
     ], i = ti(j(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
-      v(a, [...t, i], Gt());
+      g(a, [...t, i], Gt());
     });
   }
   _handleAddEcoGear(e) {
@@ -5017,18 +5003,18 @@ const zi = [
       "values"
     ], i = ii(j(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
-      v(a, [...t, i], Jt());
+      g(a, [...t, i], Jt());
     });
   }
   _handleProjectedApplianceProjectionStrategyChange(e, t) {
     ["fixed", "history_average"].includes(t) && this._applyMutation((i) => {
       const a = ["appliances", e, "projection"];
-      if (v(i, [...a, "strategy"], t), t !== "history_average")
+      if (g(i, [...a, "strategy"], t), t !== "history_average")
         return;
       const r = y(
         f(i, [...a, "history_average"])
       ), s = r == null ? void 0 : r.lookback_days;
-      v(i, [...a, "history_average"], {
+      g(i, [...a, "history_average"], {
         energy_entity_id: this._stringValue(r == null ? void 0 : r.energy_entity_id),
         lookback_days: typeof s == "number" && Number.isFinite(s) ? s : 30
       });
@@ -5067,12 +5053,12 @@ const zi = [
         L(a, e);
         return;
       }
-      v(a, e, i);
+      g(a, e, i);
     });
   }
   _setRequiredString(e, t) {
     this._applyMutation((i) => {
-      v(i, e, t.trim());
+      g(i, e, t.trim());
     });
   }
   _setOptionalNumber(e, t) {
@@ -5083,18 +5069,18 @@ const zi = [
         return;
       }
       const r = Number(i);
-      v(a, e, Number.isFinite(r) ? r : i);
+      g(a, e, Number.isFinite(r) ? r : i);
     });
   }
   _setRequiredNumber(e, t) {
     const i = t.trim();
     this._applyMutation((a) => {
       if (!i) {
-        v(a, e, null);
+        g(a, e, null);
         return;
       }
       const r = Number(i);
-      v(a, e, Number.isFinite(r) ? r : i);
+      g(a, e, Number.isFinite(r) ? r : i);
     });
   }
   _getAutomationEnabled() {
@@ -5105,10 +5091,10 @@ const zi = [
     !e && this._getValue(["automation"]) === void 0 || this._applyMutation((t) => {
       const i = f(t, ["automation"]), a = y(i);
       if (a) {
-        v(t, ["automation", "enabled"], e), Array.isArray(a.optimizers) || v(t, ["automation", "optimizers"], []);
+        g(t, ["automation", "enabled"], e), Array.isArray(a.optimizers) || g(t, ["automation", "optimizers"], []);
         return;
       }
-      v(t, ["automation"], {
+      g(t, ["automation"], {
         enabled: e,
         optimizers: []
       });
@@ -5116,7 +5102,7 @@ const zi = [
   }
   _setBoolean(e, t) {
     this._applyMutation((i) => {
-      v(i, e, t);
+      g(i, e, t);
     });
   }
   _normalizeSurplusApplianceOptimizerParams(e) {
@@ -5141,7 +5127,7 @@ const zi = [
         L(e, [...l, "climate_mode"]), i = !0;
         return;
       }
-      u.visible && !u.unavailable && c.length === 0 && u.value.length > 0 && (v(e, [...l, "climate_mode"], u.value), i = !0);
+      u.visible && !u.unavailable && c.length === 0 && u.value.length > 0 && (g(e, [...l, "climate_mode"], u.value), i = !0);
     }), i;
   }
   _applyMutation(e) {
