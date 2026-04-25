@@ -306,3 +306,212 @@ def test_load_actuals_for_day_uses_existing_slot_actual_reader():
     assert captured["args"][0] == "sensor.solar_total"
     assert captured["args"][1] == date.fromisoformat("2026-04-24")
     assert result == {"08:00": 120.0, "08:15": 80.0}
+
+
+service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
+
+
+class _DummyStore:
+    profile = None
+
+    async def async_save(self, payload):
+        self.saved = payload
+
+
+def _make_service():
+    hass = SimpleNamespace(
+        config=SimpleNamespace(time_zone="Europe/Prague"),
+        bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
+    )
+    return service_mod.SolarBiasCorrectionService(hass, _DummyStore(), _make_cfg())
+
+
+def test_inspector_day_applies_current_profile_and_totals():
+    service = _make_service()
+    service._profile = models.SolarBiasProfile(
+        factors={"08:00": 1.5, "09:00": 0.5},
+        omitted_slots=[],
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=0.5,
+        factor_max=1.5,
+        factor_median=1.0,
+        omitted_slot_count=0,
+        last_outcome="profile_trained",
+        error_reason=None,
+    )
+
+    async def fake_forecast_points(*args, **kwargs):
+        return [
+            {"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0},
+            {"timestamp": "2026-04-25T09:00:00+02:00", "value": 200.0},
+        ]
+
+    async def fake_actuals(*args, **kwargs):
+        return {"08:00": 90.0}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["status"] == "applied"
+    assert payload["effectiveVariant"] == "adjusted"
+    assert payload["availability"] == {
+        "hasRawForecast": True,
+        "hasCorrectedForecast": True,
+        "hasActuals": True,
+        "hasProfile": True,
+    }
+    assert payload["series"]["raw"] == [
+        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 100.0},
+        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 200.0},
+    ]
+    assert payload["series"]["corrected"] == [
+        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 150.0},
+        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 100.0},
+    ]
+    assert payload["series"]["actual"] == [
+        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 90.0}
+    ]
+    assert payload["series"]["factors"] == [
+        {"slot": "08:00", "factor": 1.5},
+        {"slot": "09:00", "factor": 0.5},
+    ]
+    assert payload["totals"] == {"rawWh": 300.0, "correctedWh": 250.0, "actualWh": 90.0}
+    assert payload["range"]["minDate"] == "2026-04-18"
+    assert payload["range"]["isToday"] is True
+
+
+def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():
+    service = _make_service()
+
+    async def fake_forecast_points(*args, **kwargs):
+        return [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["effectiveVariant"] == "raw"
+    assert payload["availability"]["hasProfile"] is False
+    assert payload["availability"]["hasCorrectedForecast"] is True
+    assert payload["series"]["corrected"] == payload["series"]["raw"]
+    assert payload["series"]["factors"] == []
+
+
+def test_inspector_day_stale_profile_shows_factors_but_uses_raw_variant():
+    service = _make_service()
+    service._profile = models.SolarBiasProfile(
+        factors={"08:00": 2.0},
+        omitted_slots=[],
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=2.0,
+        factor_max=2.0,
+        factor_median=2.0,
+        omitted_slot_count=0,
+        last_outcome="profile_trained",
+        error_reason=None,
+    )
+    service._is_stale = True
+
+    async def fake_forecast_points(*args, **kwargs):
+        return [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["status"] == "config_changed_pending_retrain"
+    assert payload["effectiveVariant"] == "raw"
+    assert payload["availability"]["hasProfile"] is True
+    assert payload["series"]["factors"] == [{"slot": "08:00", "factor": 2.0}]
+    assert payload["series"]["corrected"] == payload["series"]["raw"]
+
+
+def test_inspector_day_training_failed_preserved_profile_remains_adjusted():
+    service = _make_service()
+    service._profile = models.SolarBiasProfile(
+        factors={"08:00": 2.0},
+        omitted_slots=[],
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=2.0,
+        factor_max=2.0,
+        factor_median=2.0,
+        omitted_slot_count=0,
+        last_outcome="training_failed",
+        error_reason="boom",
+    )
+
+    async def fake_forecast_points(*args, **kwargs):
+        return [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["status"] == "training_failed"
+    assert payload["effectiveVariant"] == "adjusted"
+    assert payload["availability"]["hasProfile"] is True
+    assert payload["series"]["factors"] == [{"slot": "08:00", "factor": 2.0}]
+    assert payload["series"]["corrected"] == [
+        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 200.0}
+    ]

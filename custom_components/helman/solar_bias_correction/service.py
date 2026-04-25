@@ -3,21 +3,29 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .actuals import load_actuals_window
+from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
-from .forecast_history import load_trainer_samples
+from .forecast_history import load_forecast_points_for_day, load_trainer_samples
 from .models import (
     BiasConfig,
     SolarBiasAdjustmentResult,
     SolarBiasExplainability,
+    SolarBiasFactorPoint,
+    SolarBiasInspectorAvailability,
+    SolarBiasInspectorDay,
+    SolarBiasInspectorPoint,
+    SolarBiasInspectorSeries,
+    SolarBiasInspectorTotals,
     SolarBiasMetadata,
     SolarBiasProfile,
+    inspector_day_to_payload,
 )
 from .trainer import compute_fingerprint, train
 
@@ -214,6 +222,74 @@ class SolarBiasCorrectionService:
             "omittedSlots": list(self._profile.omitted_slots),
         }
 
+    async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
+        target_date = date.fromisoformat(raw_date)
+        local_now = dt_util.as_local(dt_util.now())
+        today = local_now.date()
+        min_date = today - timedelta(days=7)
+        max_date = today + timedelta(
+            days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
+        )
+
+        raw_points = await load_forecast_points_for_day(
+            self._hass,
+            self._cfg,
+            target_date,
+            local_now=local_now,
+        )
+        actuals_by_slot = {}
+        if target_date <= today:
+            actuals_by_slot = await load_actuals_for_day(
+                self._hass,
+                self._cfg,
+                target_date,
+                local_now=local_now,
+            )
+
+        status, effective_variant, _fallback_reason = self._resolve_status()
+        corrected_points = _copy_points(raw_points)
+        has_profile = self._has_usable_profile()
+        if effective_variant == "adjusted" and self._profile is not None:
+            corrected_points = adjust(raw_points, self._profile)
+
+        factors = _factor_points_for_profile(self._profile if has_profile else None)
+        actual_points = _actual_points_for_date(
+            actuals_by_slot,
+            target_date,
+            ZoneInfo(str(self._hass.config.time_zone)),
+        )
+        day = SolarBiasInspectorDay(
+            date=target_date.isoformat(),
+            timezone=str(self._hass.config.time_zone),
+            status=status,
+            effective_variant=effective_variant,
+            trained_at=self._trained_at,
+            min_date=min_date.isoformat(),
+            max_date=max_date.isoformat(),
+            series=SolarBiasInspectorSeries(
+                raw=_inspector_points(raw_points),
+                corrected=_inspector_points(corrected_points),
+                actual=actual_points,
+                factors=factors,
+            ),
+            totals=SolarBiasInspectorTotals(
+                raw_wh=_sum_point_values(raw_points) if raw_points else None,
+                corrected_wh=(
+                    _sum_point_values(corrected_points) if corrected_points else None
+                ),
+                actual_wh=sum(actuals_by_slot.values()) if actuals_by_slot else None,
+            ),
+            availability=SolarBiasInspectorAvailability(
+                has_raw_forecast=bool(raw_points),
+                has_corrected_forecast=bool(corrected_points),
+                has_actuals=bool(actuals_by_slot),
+                has_profile=has_profile,
+            ),
+            is_today=target_date == today,
+            is_future=target_date > today,
+        )
+        return inspector_day_to_payload(day)
+
     @property
     def _current_fingerprint(self) -> str:
         return compute_fingerprint(self._cfg)
@@ -397,3 +473,64 @@ def _optional_float(raw_value: Any) -> float | None:
 
 def _copy_points(raw_points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(point) for point in raw_points]
+
+
+def _inspector_points(raw_points: list[dict[str, Any]]) -> list[SolarBiasInspectorPoint]:
+    points: list[SolarBiasInspectorPoint] = []
+    for point in raw_points:
+        timestamp = point.get("timestamp")
+        value = point.get("value")
+        if not isinstance(timestamp, str):
+            continue
+        try:
+            value_wh = float(value)
+        except (TypeError, ValueError):
+            continue
+        points.append(SolarBiasInspectorPoint(timestamp=timestamp, value_wh=value_wh))
+    return points
+
+
+def _sum_point_values(raw_points: list[dict[str, Any]]) -> float:
+    total = 0.0
+    for point in raw_points:
+        try:
+            total += float(point.get("value"))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _factor_points_for_profile(
+    profile: SolarBiasProfile | None,
+) -> list[SolarBiasFactorPoint]:
+    if profile is None:
+        return []
+    return [
+        SolarBiasFactorPoint(slot=slot, factor=float(factor))
+        for slot, factor in sorted(profile.factors.items())
+    ]
+
+
+def _actual_points_for_date(
+    actuals_by_slot: dict[str, float],
+    target_date: date,
+    local_tz: ZoneInfo,
+) -> list[SolarBiasInspectorPoint]:
+    points: list[SolarBiasInspectorPoint] = []
+    for slot, value in sorted(actuals_by_slot.items()):
+        try:
+            hour, minute = [int(part) for part in slot.split(":", 1)]
+            timestamp = datetime.combine(
+                target_date,
+                time(hour=hour, minute=minute),
+                tzinfo=local_tz,
+            )
+            points.append(
+                SolarBiasInspectorPoint(
+                    timestamp=timestamp.isoformat(),
+                    value_wh=float(value),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return points
