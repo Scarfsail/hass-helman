@@ -42,7 +42,7 @@ type InspectorPayload = {
 export class HelmanBiasCorrectionInspector extends LitElement {
   @property({ attribute: false }) hass: any;
 
-  @state() private _expanded = true;
+  @state() private _expanded = false;
   @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
   @state() private _loading = false;

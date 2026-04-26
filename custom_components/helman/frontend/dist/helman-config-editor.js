@@ -2411,7 +2411,7 @@ const Wi = async () => {
   }
 }, se = class se extends K {
   constructor() {
-    super(...arguments), this._expanded = !0, this._selectedDate = "", this._payload = null, this._loading = !1, this._error = "", this._fallbackLocalize = J(), this._activeRequestId = 0, this._activeRequestDate = null;
+    super(...arguments), this._expanded = !1, this._selectedDate = "", this._payload = null, this._loading = !1, this._error = "", this._fallbackLocalize = J(), this._activeRequestId = 0, this._activeRequestDate = null;
   }
   updated(e) {
     e.has("hass") && this.hass && !this._selectedDate && (this._selectedDate = this._todayIso());
