@@ -118,6 +118,48 @@ def test_legacy_training_window_days_is_still_accepted_as_fallback():
     assert bias.max_training_window_days == 30
 
 
+def test_slot_invalidation_fields_default_to_none_when_absent():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "bias_correction": {},
+                }
+            }
+        }
+    }
+
+    bias = read_bias_config(config)
+
+    assert bias.slot_invalidation_max_battery_soc_percent is None
+    assert bias.slot_invalidation_export_enabled_entity_id is None
+
+
+def test_slot_invalidation_fields_are_parsed_when_present():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "bias_correction": {
+                        "slot_invalidation": {
+                            "max_battery_soc_percent": 87,
+                            "export_enabled_entity_id": "  switch.export_enabled  ",
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+    bias = read_bias_config(config)
+
+    assert bias.slot_invalidation_max_battery_soc_percent == 87.0
+    assert (
+        bias.slot_invalidation_export_enabled_entity_id
+        == "switch.export_enabled"
+    )
+
+
 def test_trainer_sample_has_slot_forecast_wh_field():
     from custom_components.helman.solar_bias_correction.models import TrainerSample
 

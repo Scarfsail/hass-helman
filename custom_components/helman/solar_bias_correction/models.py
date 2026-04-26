@@ -22,6 +22,8 @@ class BiasConfig:
     clamp_max: float
     daily_energy_entity_ids: list[str]
     total_energy_entity_id: str | None
+    slot_invalidation_max_battery_soc_percent: float | None = None
+    slot_invalidation_export_enabled_entity_id: str | None = None
     max_training_window_days: int = SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
 
 
@@ -207,11 +209,25 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     training_time = bias.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
     clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
     clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
+    slot_invalidation = bias.get("slot_invalidation") or {}
 
     daily_energy_entity_ids = forecast.get("daily_energy_entity_ids") or []
     total_energy_entity_id = bias.get("total_energy_entity_id") or forecast.get(
         "total_energy_entity_id"
     )
+    max_battery_soc_percent = slot_invalidation.get("max_battery_soc_percent")
+    slot_invalidation_max_battery_soc_percent = None
+    if isinstance(max_battery_soc_percent, (int, float)) and not isinstance(
+        max_battery_soc_percent, bool
+    ):
+        slot_invalidation_max_battery_soc_percent = float(max_battery_soc_percent)
+
+    export_enabled_entity_id = slot_invalidation.get("export_enabled_entity_id")
+    slot_invalidation_export_enabled_entity_id = None
+    if isinstance(export_enabled_entity_id, str):
+        export_enabled_entity_id = export_enabled_entity_id.strip()
+        if export_enabled_entity_id:
+            slot_invalidation_export_enabled_entity_id = export_enabled_entity_id
 
     return BiasConfig(
         enabled=enabled,
@@ -221,5 +237,11 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         clamp_max=clamp_max,
         daily_energy_entity_ids=daily_energy_entity_ids,
         total_energy_entity_id=total_energy_entity_id,
+        slot_invalidation_max_battery_soc_percent=(
+            slot_invalidation_max_battery_soc_percent
+        ),
+        slot_invalidation_export_enabled_entity_id=(
+            slot_invalidation_export_enabled_entity_id
+        ),
         max_training_window_days=max_training_window_days,
     )
