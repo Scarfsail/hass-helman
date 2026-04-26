@@ -128,3 +128,98 @@ def test_trainer_sample_has_slot_forecast_wh_field():
     )
     assert sample.slot_forecast_wh == {"12:00": 9000.0, "13:00": 9100.0}
     assert sample.forecast_wh == 60000.0
+
+
+def test_solar_actuals_window_has_invalidated_slots_by_date_field():
+    from custom_components.helman.solar_bias_correction.models import SolarActualsWindow
+
+    window = SolarActualsWindow(
+        slot_actuals_by_date={"2026-04-15": {"12:00": 1000.0}},
+        invalidated_slots_by_date={"2026-04-15": {"12:00", "13:00"}},
+    )
+
+    assert window.invalidated_slots_by_date == {"2026-04-15": {"12:00", "13:00"}}
+
+
+def test_solar_actuals_window_invalidated_slots_by_date_defaults_empty():
+    from custom_components.helman.solar_bias_correction.models import SolarActualsWindow
+
+    window = SolarActualsWindow(slot_actuals_by_date={})
+
+    assert window.invalidated_slots_by_date == {}
+
+
+def test_solar_bias_metadata_has_invalidation_fields_by_default():
+    from custom_components.helman.solar_bias_correction.models import SolarBiasMetadata
+
+    metadata = SolarBiasMetadata(
+        trained_at="2026-04-15T03:00:00+00:00",
+        training_config_fingerprint="abc123",
+        usable_days=5,
+        dropped_days=[],
+        factor_min=0.9,
+        factor_max=1.1,
+        factor_median=1.0,
+        omitted_slot_count=0,
+        last_outcome="success",
+    )
+
+    assert metadata.invalidated_slots_by_date == {}
+    assert metadata.invalidated_slot_count == 0
+
+
+def test_inspector_day_to_payload_includes_invalidated_series():
+    from custom_components.helman.solar_bias_correction.models import (
+        SolarBiasInspectorAvailability,
+        SolarBiasInspectorDay,
+        SolarBiasInspectorPoint,
+        SolarBiasInspectorSeries,
+        SolarBiasInspectorTotals,
+        inspector_day_to_payload,
+    )
+
+    day = SolarBiasInspectorDay(
+        date="2026-04-15",
+        timezone="UTC",
+        status="ready",
+        effective_variant="corrected",
+        trained_at="2026-04-15T03:00:00+00:00",
+        min_date="2026-04-01",
+        max_date="2026-04-30",
+        series=SolarBiasInspectorSeries(
+            raw=[],
+            corrected=[],
+            actual=[],
+            invalidated=[
+                SolarBiasInspectorPoint(
+                    timestamp="2026-04-15T12:00:00+00:00",
+                    value_wh=1200.0,
+                )
+            ],
+            factors=[],
+        ),
+        totals=SolarBiasInspectorTotals(
+            raw_wh=10000.0,
+            corrected_wh=9000.0,
+            actual_wh=9500.0,
+        ),
+        availability=SolarBiasInspectorAvailability(
+            has_raw_forecast=True,
+            has_corrected_forecast=True,
+            has_actuals=True,
+            has_profile=True,
+            has_invalidated=True,
+        ),
+        is_today=False,
+        is_future=False,
+    )
+
+    payload = inspector_day_to_payload(day)
+
+    assert payload["series"]["invalidated"] == [
+        {
+            "timestamp": "2026-04-15T12:00:00+00:00",
+            "valueWh": 1200.0,
+        }
+    ]
+    assert payload["availability"]["hasInvalidated"] is True

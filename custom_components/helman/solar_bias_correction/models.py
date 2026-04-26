@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..const import (
@@ -35,6 +35,7 @@ class TrainerSample:
 @dataclass
 class SolarActualsWindow:
     slot_actuals_by_date: dict[str, dict[str, float]]
+    invalidated_slots_by_date: dict[str, set[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -54,6 +55,8 @@ class SolarBiasMetadata:
     factor_median: float | None
     omitted_slot_count: int
     last_outcome: str
+    invalidated_slots_by_date: dict[str, list[str]] = field(default_factory=dict)
+    invalidated_slot_count: int = 0
     error_reason: str | None = None
 
 
@@ -102,6 +105,7 @@ class SolarBiasInspectorSeries:
     corrected: list[SolarBiasInspectorPoint]
     actual: list[SolarBiasInspectorPoint]
     factors: list[SolarBiasFactorPoint]
+    invalidated: list[SolarBiasInspectorPoint] = field(default_factory=list)
 
 
 @dataclass
@@ -117,6 +121,7 @@ class SolarBiasInspectorAvailability:
     has_corrected_forecast: bool
     has_actuals: bool
     has_profile: bool
+    has_invalidated: bool = False
 
 
 @dataclass
@@ -156,6 +161,9 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
                 _inspector_point_payload(point) for point in day.series.corrected
             ],
             "actual": [_inspector_point_payload(point) for point in day.series.actual],
+            "invalidated": [
+                _inspector_point_payload(point) for point in day.series.invalidated
+            ],
             "factors": [
                 {"slot": point.slot, "factor": point.factor}
                 for point in day.series.factors
@@ -171,6 +179,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasCorrectedForecast": day.availability.has_corrected_forecast,
             "hasActuals": day.availability.has_actuals,
             "hasProfile": day.availability.has_profile,
+            "hasInvalidated": day.availability.has_invalidated,
         },
     }
 
