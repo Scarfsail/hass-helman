@@ -63,23 +63,11 @@ async def load_forecast_points_for_day(
     ]
 
 
-async def load_historical_per_slot_forecast(
+async def _read_historical_forecast_state(
     hass: HomeAssistant,
     cfg: BiasConfig,
     target_date: date,
-    *,
-    local_now: datetime,
-) -> dict[str, float] | None:
-    """Return slot_key -> Wh for the forecast as published at the start of target_date.
-
-    Reads the `wh_period` attribute from the recorder history of
-    daily_energy_entity_ids[0] (the "today" entity) as captured at start of
-    target_date (local midnight). Returns None if no usable state is available.
-
-    Slot keys are HH:MM in the configured local timezone.
-
-    NOTE: requires recorder to retain attribute history >= min_history_days.
-    """
+) -> Any | None:
     entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=1)
     if not entity_ids:
         return None
@@ -101,10 +89,31 @@ async def load_historical_per_slot_forecast(
     if not states:
         return None
 
-    state = _select_first_state_for_window(states, after=dt_util.as_utc(local_start))
+    return _select_first_state_for_window(states, after=dt_util.as_utc(local_start))
+
+
+async def load_historical_per_slot_forecast(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    target_date: date,
+    *,
+    local_now: datetime,
+) -> dict[str, float] | None:
+    """Return slot_key -> Wh for the forecast as published at the start of target_date.
+
+    Reads the `wh_period` attribute from the recorder history of
+    daily_energy_entity_ids[0] (the "today" entity) as captured at start of
+    target_date (local midnight). Returns None if no usable state is available.
+
+    Slot keys are HH:MM in the configured local timezone.
+
+    NOTE: requires recorder to retain attribute history >= min_history_days.
+    """
+    state = await _read_historical_forecast_state(hass, cfg, target_date)
     if state is None:
         return None
 
+    local_tz = ZoneInfo(str(hass.config.time_zone))
     attributes = getattr(state, "attributes", {})
     if not isinstance(attributes, dict):
         return None
