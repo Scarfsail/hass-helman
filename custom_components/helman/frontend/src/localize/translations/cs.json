@@ -64,6 +64,7 @@
         "eco_gears": "Eco gears",
         "vehicles": "Vozidla",
         "bias_correction_settings": "Nastavení korekce zkreslení",
+        "bias_correction_slot_invalidation": "Vyřazení slotů z trénovacích dat",
         "bias_correction_status": "Stav a trénování"
       },
       "notes": {
@@ -174,7 +175,9 @@
       "bias_correction_training_time": "Čas trénování (HH:MM)",
       "bias_correction_clamp_min": "Min. zajistění prognózy",
       "bias_correction_clamp_max": "Max. zajistění prognózy",
-      "bias_correction_total_energy_entity": "Entita celkové energie"
+      "bias_correction_total_energy_entity": "Entita celkové energie",
+      "bias_correction_slot_invalidation_max_battery_soc_percent": "Max. SoC baterie %",
+      "bias_correction_slot_invalidation_export_enabled_entity_id": "Entita povolení exportu"
     },
     "helpers": {
       "history_buckets": "Kolik bucketů historie Helman drží pro UI historii.",
@@ -196,7 +199,9 @@
         "history_energy_entity": "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče.",
         "bias_correction_min_history_days": "Minimální počet dní historických dat (1-365) před zahájením trénování.",
         "bias_correction_max_training_window_days": "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy.",
-        "bias_correction_training_time": "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování."
+        "bias_correction_training_time": "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování.",
+        "bias_correction_slot_invalidation_max_battery_soc_percent": "0-100 %. Vyřadí sloty, kdy SoC baterie dosáhne této hranice a zároveň je export zakázaný.",
+        "bias_correction_slot_invalidation_export_enabled_entity_id": "Booleovská entita, která říká Helmanu, zda je aktuálně povolen export do sítě."
       },
     "messages": {
       "reloaded_config": "Uložená konfigurace Helman byla znovu načtena z backendu.",
