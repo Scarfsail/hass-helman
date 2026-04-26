@@ -64,6 +64,7 @@
         "eco_gears": "Eco gears",
         "vehicles": "Vehicles",
         "bias_correction_settings": "Bias correction settings",
+        "bias_correction_slot_invalidation": "Slot invalidation",
         "bias_correction_status": "Status and training"
       },
       "notes": {
@@ -174,7 +175,9 @@
       "bias_correction_training_time": "Training time (HH:MM)",
       "bias_correction_clamp_min": "Min forecast clamp",
       "bias_correction_clamp_max": "Max forecast clamp",
-      "bias_correction_total_energy_entity": "Total energy entity"
+      "bias_correction_total_energy_entity": "Total energy entity",
+      "bias_correction_slot_invalidation_max_battery_soc_percent": "Max battery SoC %",
+      "bias_correction_slot_invalidation_export_enabled_entity_id": "Export enabled entity"
     },
     "helpers": {
       "history_buckets": "How many history buckets Helman keeps for UI history.",
@@ -196,7 +199,9 @@
         "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption.",
         "bias_correction_min_history_days": "Minimum days of historical data (1-365) before training begins.",
         "bias_correction_max_training_window_days": "Maximum number of past days Helman may use to train the solar bias correction model.",
-        "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs."
+        "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs.",
+        "bias_correction_slot_invalidation_max_battery_soc_percent": "Exclude slots when battery SoC reaches this threshold and export is disabled.",
+        "bias_correction_slot_invalidation_export_enabled_entity_id": "Boolean entity that tells Helman whether grid export is currently allowed."
       },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -341,7 +346,9 @@
       "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs, typically during low-activity hours. Training processes historical data to continuously improve forecast accuracy.",
       "bias_correction_clamp_min": "Lower bound (0.0-1.0) for corrected forecast values. Prevents unrealistic negative corrections from suppressing normal solar generation forecasts too aggressively.",
       "bias_correction_clamp_max": "Upper bound (0.0-1.0) for corrected forecast values. Prevents unrealistic positive corrections from over-inflating forecast values.",
-      "bias_correction_total_energy_entity": "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model."
+      "bias_correction_total_energy_entity": "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model.",
+      "bias_correction_slot_invalidation_max_battery_soc_percent": "Battery state-of-charge threshold as a percentage. When the battery reaches or exceeds this value during a forecast slot and export is disabled in the same slot, Helman excludes that slot from solar bias correction actuals to avoid training on curtailed production.",
+      "bias_correction_slot_invalidation_export_enabled_entity_id": "Boolean entity that reports whether grid export is currently enabled. Helman combines this with the max battery SoC threshold to invalidate slots where solar production was likely clipped because export was disabled while the battery was effectively full."
     }
   },
   "common": {
