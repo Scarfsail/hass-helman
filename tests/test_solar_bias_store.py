@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 import asyncio
+from datetime import datetime
 
 import pytest
 
@@ -79,6 +80,55 @@ def _make_fake_store_backend():
     return FakeStore
 
 
+def _install_service_import_stubs() -> None:
+    util_mod = sys.modules.get("homeassistant.util")
+    if util_mod is None:
+        util_mod = types.ModuleType("homeassistant.util")
+        sys.modules["homeassistant.util"] = util_mod
+
+    dt_mod = sys.modules.get("homeassistant.util.dt")
+    if dt_mod is None:
+        dt_mod = types.ModuleType("homeassistant.util.dt")
+        sys.modules["homeassistant.util.dt"] = dt_mod
+    dt_mod.now = lambda: None
+    dt_mod.as_local = lambda value: value
+    util_mod.dt = dt_mod
+
+    actuals_mod = types.ModuleType(
+        "custom_components.helman.solar_bias_correction.actuals"
+    )
+
+    async def _load_actuals_window(*args, **kwargs):
+        return None
+
+    async def _load_actuals_for_day(*args, **kwargs):
+        return {}
+
+    actuals_mod.load_actuals_window = _load_actuals_window
+    actuals_mod.load_actuals_for_day = _load_actuals_for_day
+    sys.modules[actuals_mod.__name__] = actuals_mod
+
+    forecast_history_mod = types.ModuleType(
+        "custom_components.helman.solar_bias_correction.forecast_history"
+    )
+
+    async def _load_forecast_points_for_day(*args, **kwargs):
+        return []
+
+    async def _load_trainer_samples(*args, **kwargs):
+        return []
+
+    forecast_history_mod.load_forecast_points_for_day = _load_forecast_points_for_day
+    forecast_history_mod.load_trainer_samples = _load_trainer_samples
+    sys.modules[forecast_history_mod.__name__] = forecast_history_mod
+
+
+def _load_service_module():
+    _install_service_import_stubs()
+    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
+    return importlib.import_module("custom_components.helman.solar_bias_correction.service")
+
+
 def test_initial_profile_is_none_after_load():
     async def _inner():
         # Import module under test and monkeypatch the underlying HA storage.Store
@@ -129,6 +179,37 @@ def test_save_and_reload_roundtrip():
     asyncio.run(_inner())
 
 
+def test_load_accepts_v1_payload():
+    async def _inner():
+        storage_mod = importlib.import_module("custom_components.helman.storage")
+        importlib.reload(storage_mod)
+        FakeStore = _make_fake_store_backend()
+        sys.modules["homeassistant.helpers.storage"].Store = FakeStore
+
+        v1_payload = {
+            "version": 1,
+            "profile": {"08:00": 1.12},
+            "metadata": {
+                "trained_at": "2026-04-24T03:00:04+02:00",
+                "training_config_fingerprint": "sha256:deadbeef",
+                "usable_days": 12,
+                "dropped_days": [],
+                "omitted_slot_count": 0,
+                "last_outcome": "profile_trained",
+            },
+        }
+
+        store = storage_mod.SolarBiasCorrectionStore(object())
+        await store._store.async_save(v1_payload)
+
+        reloaded = storage_mod.SolarBiasCorrectionStore(object())
+        await reloaded.async_load()
+
+        assert reloaded.profile == v1_payload
+
+    asyncio.run(_inner())
+
+
 def test_unsupported_version_is_treated_as_no_profile():
     async def _inner():
         storage_mod = importlib.import_module("custom_components.helman.storage")
@@ -153,5 +234,192 @@ def test_unsupported_version_is_treated_as_no_profile():
         await store2.async_load()
 
         assert store2.profile is None
+
+    asyncio.run(_inner())
+
+
+def test_metadata_from_dict_defaults_missing_invalidation_fields():
+    service_mod = _load_service_module()
+
+    metadata = service_mod._metadata_from_dict(
+        {
+            "trained_at": "2026-04-24T03:00:04+02:00",
+            "training_config_fingerprint": "sha256:deadbeef",
+            "usable_days": 12,
+            "dropped_days": [],
+            "factor_min": 0.8,
+            "factor_max": 1.2,
+            "factor_median": 1.0,
+            "omitted_slot_count": 3,
+            "last_outcome": "profile_trained",
+            "error_reason": None,
+        }
+    )
+
+    assert metadata is not None
+    assert metadata.invalidated_slots_by_date == {}
+    assert metadata.invalidated_slot_count == 0
+
+
+def test_metadata_from_dict_reads_invalidation_fields():
+    service_mod = _load_service_module()
+
+    metadata = service_mod._metadata_from_dict(
+        {
+            "trained_at": "2026-04-24T03:00:04+02:00",
+            "training_config_fingerprint": "sha256:deadbeef",
+            "usable_days": 12,
+            "dropped_days": [],
+            "factor_min": 0.8,
+            "factor_max": 1.2,
+            "factor_median": 1.0,
+            "omitted_slot_count": 3,
+            "last_outcome": "profile_trained",
+            "invalidated_slots_by_date": {
+                "2026-04-20": ["10:00", "10:15"],
+                "2026-04-21": ["11:30"],
+            },
+            "invalidated_slot_count": 3,
+            "error_reason": None,
+        }
+    )
+
+    assert metadata is not None
+    assert metadata.invalidated_slots_by_date == {
+        "2026-04-20": ["10:00", "10:15"],
+        "2026-04-21": ["11:30"],
+    }
+    assert metadata.invalidated_slot_count == 3
+
+
+def test_serialize_state_writes_version_2():
+    service_mod = _load_service_module()
+    models_mod = importlib.import_module(
+        "custom_components.helman.solar_bias_correction.models"
+    )
+
+    class _DummyStore:
+        profile = None
+
+        async def async_save(self, payload):
+            self.saved = payload
+
+    cfg = models_mod.BiasConfig(
+        enabled=True,
+        min_history_days=2,
+        training_time="03:00",
+        clamp_min=0.3,
+        clamp_max=2.0,
+        daily_energy_entity_ids=[],
+        total_energy_entity_id=None,
+        max_training_window_days=90,
+    )
+    service = service_mod.SolarBiasCorrectionService(
+        type("Hass", (), {"bus": type("Bus", (), {"async_fire": lambda *args, **kwargs: None})()})(),
+        _DummyStore(),
+        cfg,
+    )
+    service._profile = models_mod.SolarBiasProfile(
+        factors={"08:00": 1.12},
+        omitted_slots=["08:15"],
+    )
+    service._metadata = models_mod.SolarBiasMetadata(
+        trained_at="2026-04-24T03:00:04+02:00",
+        training_config_fingerprint="sha256:deadbeef",
+        usable_days=12,
+        dropped_days=[],
+        factor_min=0.8,
+        factor_max=1.2,
+        factor_median=1.0,
+        omitted_slot_count=1,
+        last_outcome="profile_trained",
+        invalidated_slots_by_date={"2026-04-20": ["08:00"]},
+        invalidated_slot_count=1,
+        error_reason=None,
+    )
+
+    payload = service._serialize_state()
+
+    assert payload["version"] == 2
+
+
+def test_async_train_saves_version_2_payload():
+    async def _inner():
+        service_mod = _load_service_module()
+        models_mod = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.models"
+        )
+
+        class _DummyStore:
+            profile = None
+
+            def __init__(self):
+                self.saved_payloads = []
+
+            async def async_save(self, payload):
+                self.saved_payloads.append(payload)
+
+        cfg = models_mod.BiasConfig(
+            enabled=True,
+            min_history_days=2,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=[],
+            total_energy_entity_id=None,
+            max_training_window_days=90,
+        )
+        store = _DummyStore()
+        hass = type(
+            "Hass",
+            (),
+            {"bus": type("Bus", (), {"async_fire": lambda *args, **kwargs: None})()},
+        )()
+        service = service_mod.SolarBiasCorrectionService(hass, store, cfg)
+
+        async def _samples(*args, **kwargs):
+            return ["sample"]
+
+        async def _actuals(*args, **kwargs):
+            return object()
+
+        old_samples = service_mod.load_trainer_samples
+        old_actuals = service_mod.load_actuals_window
+        old_train = service_mod.train
+        old_now = service_mod.dt_util.now
+        service_mod.load_trainer_samples = _samples
+        service_mod.load_actuals_window = _actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat(
+            "2026-04-24T03:00:04+02:00"
+        )
+        service_mod.train = lambda *args, **kwargs: models_mod.TrainingOutcome(
+            profile=models_mod.SolarBiasProfile(
+                factors={"08:00": 1.12},
+                omitted_slots=["08:15"],
+            ),
+            metadata=models_mod.SolarBiasMetadata(
+                trained_at="2026-04-24T03:00:04+02:00",
+                training_config_fingerprint="sha256:deadbeef",
+                usable_days=12,
+                dropped_days=[],
+                factor_min=0.8,
+                factor_max=1.2,
+                factor_median=1.0,
+                omitted_slot_count=1,
+                last_outcome="profile_trained",
+                invalidated_slots_by_date={"2026-04-20": ["08:00"]},
+                invalidated_slot_count=1,
+                error_reason=None,
+            ),
+        )
+        try:
+            await service.async_train()
+        finally:
+            service_mod.load_trainer_samples = old_samples
+            service_mod.load_actuals_window = old_actuals
+            service_mod.train = old_train
+            service_mod.dt_util.now = old_now
+
+        assert store.saved_payloads[-1]["version"] == 2
 
     asyncio.run(_inner())

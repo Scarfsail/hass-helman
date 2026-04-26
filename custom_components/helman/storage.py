@@ -73,8 +73,8 @@ class HelmanStorage:
 class SolarBiasCorrectionStore:
     """Persistence for solar bias correction profiles.
 
-    Persisted payload shape (v1):
-      {"version": 1, "profile": {...}, "metadata": {...}}
+    Persisted payload shape (v1/v2):
+      {"version": 1|2, "profile": {...}, "metadata": {...}}
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -86,7 +86,7 @@ class SolarBiasCorrectionStore:
 
         self._store = storage.Store(hass, SOLAR_BIAS_STORAGE_VERSION, SOLAR_BIAS_STORAGE_KEY)
         self._profile: dict[str, Any] | None = None
-        self._supported_version = SOLAR_BIAS_SUPPORTED_STORE_VERSION
+        self._supported_versions = {1, SOLAR_BIAS_SUPPORTED_STORE_VERSION}
 
     async def async_load(self) -> None:
         stored = await self._store.async_load()
@@ -96,7 +96,7 @@ class SolarBiasCorrectionStore:
 
         # Version gating: unsupported versions are treated as no profile
         version = stored.get("version")
-        if version != self._supported_version:
+        if version not in self._supported_versions:
             self._profile = None
             return
 

@@ -117,7 +117,7 @@ class SolarBiasCorrectionService:
             )
             outcome = train(samples, actuals, self._cfg, now=now)
             payload = {
-                "version": 1,
+                "version": 2,
                 "profile": asdict(outcome.profile),
                 "metadata": asdict(outcome.metadata),
             }
@@ -393,7 +393,7 @@ class SolarBiasCorrectionService:
 
     def _serialize_state(self) -> dict[str, Any]:
         return {
-            "version": 1,
+            "version": 2,
             "profile": None if self._profile is None else asdict(self._profile),
             "metadata": asdict(self._metadata),
         }
@@ -445,6 +445,23 @@ def _metadata_from_dict(raw_value: Any) -> SolarBiasMetadata | None:
     if not isinstance(last_outcome, str):
         return None
 
+    raw_invalidated_slots_by_date = raw_value.get("invalidated_slots_by_date", {})
+    invalidated_slots_by_date: dict[str, list[str]] = {}
+    if isinstance(raw_invalidated_slots_by_date, dict):
+        for day, slots in raw_invalidated_slots_by_date.items():
+            if not isinstance(day, str) or not isinstance(slots, list):
+                continue
+            invalidated_slots_by_date[day] = [
+                slot for slot in slots if isinstance(slot, str)
+            ]
+
+    raw_invalidated_slot_count = raw_value.get("invalidated_slot_count", 0)
+    invalidated_slot_count = (
+        raw_invalidated_slot_count
+        if isinstance(raw_invalidated_slot_count, int)
+        else 0
+    )
+
     return SolarBiasMetadata(
         trained_at=trained_at,
         training_config_fingerprint=training_config_fingerprint,
@@ -455,6 +472,8 @@ def _metadata_from_dict(raw_value: Any) -> SolarBiasMetadata | None:
         factor_median=_optional_float(raw_value.get("factor_median")),
         omitted_slot_count=omitted_slot_count,
         last_outcome=last_outcome,
+        invalidated_slots_by_date=invalidated_slots_by_date,
+        invalidated_slot_count=invalidated_slot_count,
         error_reason=raw_value.get("error_reason") if isinstance(raw_value.get("error_reason"), str) else None,
     )
 
