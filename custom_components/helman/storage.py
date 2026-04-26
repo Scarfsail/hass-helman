@@ -88,8 +88,8 @@ class SolarBiasCorrectionStore:
             hass,
             SOLAR_BIAS_STORAGE_VERSION,
             SOLAR_BIAS_STORAGE_KEY,
-            async_migrate_func=self._async_migrate_store,
         )
+        self._store._async_migrate_func = self._async_migrate_store
         self._profile: dict[str, Any] | None = None
         self._supported_versions = {1, SOLAR_BIAS_SUPPORTED_STORE_VERSION}
 

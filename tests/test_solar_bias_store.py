@@ -45,16 +45,20 @@ sys.modules["homeassistant.helpers"] = helpers_mod
 storage_stub = types.ModuleType("homeassistant.helpers.storage")
 
 class _DummyStore:
-    def __init__(self, hass, version, key, *args, **kwargs):
+    def __init__(self, hass, version, key):
         self.hass = hass
         self.version = version
         self.key = key
+        self._async_migrate_func = self._default_async_migrate_func
 
     async def async_load(self):
         return None
 
     async def async_save(self, data):
         return None
+
+    async def _default_async_migrate_func(self, old_major_version, old_minor_version, old_data):
+        raise NotImplementedError
 
 storage_stub.Store = _DummyStore
 sys.modules["homeassistant.helpers.storage"] = storage_stub
@@ -65,11 +69,11 @@ def _make_fake_store_backend():
     storage_data: dict[str, dict] = {}
 
     class FakeStore:
-        def __init__(self, hass, version, key, *args, **kwargs):
+        def __init__(self, hass, version, key):
             self.hass = hass
             self.version = version
             self.key = key
-            self.async_migrate_func = kwargs.get("async_migrate_func")
+            self._async_migrate_func = self._default_async_migrate_func
 
         async def async_load(self):
             # return stored document or None
@@ -78,6 +82,11 @@ def _make_fake_store_backend():
         async def async_save(self, data):
             storage_data[self.key] = data
 
+        async def _default_async_migrate_func(
+            self, old_major_version, old_minor_version, old_data
+        ):
+            raise NotImplementedError
+
     return FakeStore
 
 
@@ -85,11 +94,11 @@ def _make_versioned_fake_store_backend():
     storage_data: dict[str, dict] = {}
 
     class FakeStore:
-        def __init__(self, hass, version, key, *args, **kwargs):
+        def __init__(self, hass, version, key):
             self.hass = hass
             self.version = version
             self.key = key
-            self.async_migrate_func = kwargs.get("async_migrate_func")
+            self._async_migrate_func = self._default_async_migrate_func
 
         async def async_load(self):
             stored = storage_data.get(self.key)
@@ -101,9 +110,7 @@ def _make_versioned_fake_store_backend():
             payload = stored["data"]
 
             if stored_version != self.version:
-                if self.async_migrate_func is None:
-                    raise NotImplementedError
-                migrated = await self.async_migrate_func(
+                migrated = await self._async_migrate_func(
                     stored_version,
                     stored_minor_version,
                     payload,
@@ -123,6 +130,11 @@ def _make_versioned_fake_store_backend():
                 "minor_version": 1,
                 "data": data,
             }
+
+        async def _default_async_migrate_func(
+            self, old_major_version, old_minor_version, old_data
+        ):
+            raise NotImplementedError
 
     return FakeStore, storage_data
 
@@ -286,6 +298,38 @@ def test_load_migrates_outer_store_version_1_to_2():
 
         assert store.profile == storage_data["helman.solar_bias_correction"]["data"]
         assert storage_data["helman.solar_bias_correction"]["version"] == 2
+
+    asyncio.run(_inner())
+
+
+def test_store_init_uses_constructor_supported_by_home_assistant_core():
+    async def _inner():
+        storage_mod = importlib.import_module("custom_components.helman.storage")
+        importlib.reload(storage_mod)
+
+        class StrictStore:
+            def __init__(self, hass, version, key):
+                self.hass = hass
+                self.version = version
+                self.key = key
+                self._async_migrate_func = self._default_async_migrate_func
+
+            async def async_load(self):
+                return None
+
+            async def async_save(self, data):
+                return None
+
+            async def _default_async_migrate_func(
+                self, old_major_version, old_minor_version, old_data
+            ):
+                raise NotImplementedError
+
+        sys.modules["homeassistant.helpers.storage"].Store = StrictStore
+
+        store = storage_mod.SolarBiasCorrectionStore(object())
+
+        assert store._store._async_migrate_func == store._async_migrate_store
 
     asyncio.run(_inner())
 
