@@ -168,7 +168,7 @@ def _validate_power_devices_config(
         return
 
     _validate_house_config(raw_power_devices.get("house"), report)
-    _validate_solar_config(raw_power_devices.get("solar"), report)
+    _validate_solar_config(config, raw_power_devices.get("solar"), report)
     _validate_battery_config(config, raw_power_devices.get("battery"), report)
     _validate_grid_config(config, raw_power_devices.get("grid"), report)
 
@@ -251,7 +251,11 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
     )
 
 
-def _validate_solar_config(raw_solar: object, report: ValidationReport) -> None:
+def _validate_solar_config(
+    config: Mapping[str, Any],
+    raw_solar: object,
+    report: ValidationReport,
+) -> None:
     section = "power_devices"
     if raw_solar is None:
         return
@@ -438,6 +442,80 @@ def _validate_solar_config(raw_solar: object, report: ValidationReport) -> None:
                     path=f"{base_path}.clamp_max",
                     code="invalid_range",
                     message=f"{base_path}.clamp_max must be between 1 and 10",
+                )
+
+    slot_invalidation = bias_map.get("slot_invalidation")
+    if slot_invalidation is not None:
+        slot_invalidation_map = _require_mapping(
+            slot_invalidation,
+            f"{base_path}.slot_invalidation",
+            section,
+            report,
+        )
+        if slot_invalidation_map is not None:
+            slot_invalidation_path = f"{base_path}.slot_invalidation"
+            max_battery_soc_percent = slot_invalidation_map.get(
+                "max_battery_soc_percent"
+            )
+            export_enabled_entity_id = slot_invalidation_map.get(
+                "export_enabled_entity_id"
+            )
+            max_battery_soc_present = _has_value(max_battery_soc_percent)
+            export_enabled_entity_present = _has_value(export_enabled_entity_id)
+
+            if max_battery_soc_present != export_enabled_entity_present:
+                report.add_error(
+                    section=section,
+                    path=slot_invalidation_path,
+                    code="incomplete_slot_invalidation",
+                    message=(
+                        f"{slot_invalidation_path}.max_battery_soc_percent and "
+                        f"{slot_invalidation_path}.export_enabled_entity_id must be "
+                        "configured together"
+                    ),
+                )
+
+            if max_battery_soc_present:
+                if isinstance(max_battery_soc_percent, bool) or not isinstance(
+                    max_battery_soc_percent, (int, float)
+                ):
+                    report.add_error(
+                        section=section,
+                        path=f"{slot_invalidation_path}.max_battery_soc_percent",
+                        code="invalid_type",
+                        message=(
+                            f"{slot_invalidation_path}.max_battery_soc_percent must "
+                            "be a number"
+                        ),
+                    )
+                elif not (0 < max_battery_soc_percent <= 100):
+                    report.add_error(
+                        section=section,
+                        path=f"{slot_invalidation_path}.max_battery_soc_percent",
+                        code="invalid_range",
+                        message=(
+                            f"{slot_invalidation_path}.max_battery_soc_percent must "
+                            "be greater than 0 and at most 100"
+                        ),
+                    )
+
+            if export_enabled_entity_present:
+                _validate_optional_entity_id(
+                    report,
+                    section,
+                    f"{slot_invalidation_path}.export_enabled_entity_id",
+                    export_enabled_entity_id,
+                )
+
+            if not _has_battery_capacity_entity(config):
+                report.add_error(
+                    section=section,
+                    path=slot_invalidation_path,
+                    code="missing_prerequisite",
+                    message=(
+                        f"{slot_invalidation_path} requires "
+                        "power_devices.battery.entities.capacity"
+                    ),
                 )
 
     # cross-field validation: clamp_min < clamp_max
@@ -1107,3 +1185,19 @@ def _has_value(value: object) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     return True
+
+
+def _has_battery_capacity_entity(config: Mapping[str, Any]) -> bool:
+    power_devices = config.get("power_devices")
+    if not isinstance(power_devices, Mapping):
+        return False
+
+    battery = power_devices.get("battery")
+    if not isinstance(battery, Mapping):
+        return False
+
+    entities = battery.get("entities")
+    if not isinstance(entities, Mapping):
+        return False
+
+    return _has_value(entities.get("capacity"))
