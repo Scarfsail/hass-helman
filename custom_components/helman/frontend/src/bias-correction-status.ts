@@ -445,7 +445,11 @@ export class HelmanBiasCorrectionStatus extends LitElement {
   }
 
   private _t(key: string): string {
-    return getLocalizeFunction(this.hass ?? undefined)(key) ?? this._fallbackLocalize(key);
+    return (
+      getLocalizeFunction(this.hass ?? undefined)(key)
+      ?? this._fallbackLocalize(key)
+      ?? key
+    );
   }
 
   private _tValue(key: string, fallback: string): string {
@@ -454,7 +458,7 @@ export class HelmanBiasCorrectionStatus extends LitElement {
   }
 
   private _tFormat(key: string, values: Record<string, string | number>): string {
-    let text = this._t(key);
+    let text = this._t(key) || key;
     for (const [name, value] of Object.entries(values)) {
       text = text.replaceAll(`{${name}}`, String(value));
     }

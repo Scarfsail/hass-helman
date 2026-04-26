@@ -2986,14 +2986,14 @@ const Ie = class Ie extends q {
     }
   }
   _t(e) {
-    return J(this.hass ?? void 0)(e) ?? this._fallbackLocalize(e);
+    return J(this.hass ?? void 0)(e) ?? this._fallbackLocalize(e) ?? e;
   }
   _tValue(e, t) {
     const i = this._t(e);
     return i === e ? t : i;
   }
   _tFormat(e, t) {
-    let i = this._t(e);
+    let i = this._t(e) || e;
     for (const [a, r] of Object.entries(t))
       i = i.replaceAll(`{${a}}`, String(r));
     return i;
