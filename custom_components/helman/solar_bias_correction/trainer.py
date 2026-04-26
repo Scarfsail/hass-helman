@@ -71,6 +71,17 @@ def _aggregate_actuals_into_forecast_slot(
     return total
 
 
+def _serialize_invalidated_slots_by_date(
+    invalidated_slots_by_date: dict[str, set[str]],
+) -> dict[str, list[str]]:
+    serialized: dict[str, list[str]] = {}
+    for date, slots in invalidated_slots_by_date.items():
+        if not slots:
+            continue
+        serialized[date] = sorted(slots, key=_slot_to_minutes)
+    return serialized
+
+
 def train(
     samples: list[TrainerSample],
     actuals: SolarActualsWindow,
@@ -78,6 +89,12 @@ def train(
     now: datetime,
 ) -> TrainingOutcome:
     fingerprint = compute_fingerprint(cfg)
+    invalidated_slots_by_date = _serialize_invalidated_slots_by_date(
+        actuals.invalidated_slots_by_date
+    )
+    invalidated_slot_count = sum(
+        len(slots) for slots in invalidated_slots_by_date.values()
+    )
 
     usable_samples: List[TrainerSample] = []
     dropped_days: List[Dict[str, str]] = []
@@ -122,6 +139,8 @@ def train(
             factor_median=None,
             omitted_slot_count=len(_ALL_SLOTS),
             last_outcome="insufficient_history",
+            invalidated_slots_by_date={},
+            invalidated_slot_count=0,
             error_reason=None,
         )
         return TrainingOutcome(profile=profile, metadata=metadata)
@@ -138,7 +157,10 @@ def train(
     sorted_forecast_slots = sorted(forecast_slot_keys, key=_slot_to_minutes)
     for s in usable_samples:
         day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
+        invalidated_slots = actuals.invalidated_slots_by_date.get(s.date, set())
         for slot in sorted_forecast_slots:
+            if slot in invalidated_slots:
+                continue
             slot_forecast_sums[slot] += s.slot_forecast_wh.get(slot, 0.0)
             slot_actual_sums[slot] += _aggregate_actuals_into_forecast_slot(
                 day_actuals,
@@ -175,6 +197,8 @@ def train(
         factor_median=factor_median,
         omitted_slot_count=len(omitted_slots),
         last_outcome="profile_trained",
+        invalidated_slots_by_date=invalidated_slots_by_date,
+        invalidated_slot_count=invalidated_slot_count,
         error_reason=None,
     )
 

@@ -304,3 +304,144 @@ def test_factors_not_pinned_to_clamps_when_forecast_is_realistic():
     vals = list(outcome.profile.factors.values())
     assert min(vals) > cfg.clamp_min + 1e-6
     assert max(vals) < cfg.clamp_max - 1e-6
+
+
+def test_invalidated_slot_is_skipped_for_both_forecast_and_actual():
+    cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0)
+
+    slot_forecast = {"12:00": 500.0, "13:00": 500.0}
+    samples = [
+        models.TrainerSample(
+            date="2023-01-01",
+            forecast_wh=1000.0,
+            slot_forecast_wh=dict(slot_forecast),
+        ),
+        models.TrainerSample(
+            date="2023-01-02",
+            forecast_wh=1000.0,
+            slot_forecast_wh=dict(slot_forecast),
+        ),
+    ]
+
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2023-01-01": {
+                "12:00": 500.0,
+                "12:15": 500.0,
+                "12:30": 500.0,
+                "12:45": 500.0,
+                "13:00": 125.0,
+                "13:15": 125.0,
+                "13:30": 125.0,
+                "13:45": 125.0,
+            },
+            "2023-01-02": {
+                "12:00": 125.0,
+                "12:15": 125.0,
+                "12:30": 125.0,
+                "12:45": 125.0,
+                "13:00": 125.0,
+                "13:15": 125.0,
+                "13:30": 125.0,
+                "13:45": 125.0,
+            },
+        },
+        invalidated_slots_by_date={"2023-01-01": {"12:00"}},
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert outcome.metadata.last_outcome == "profile_trained"
+    assert outcome.profile.factors["12:00"] == 1.0
+    assert outcome.profile.factors["13:00"] == 1.0
+    assert outcome.metadata.invalidated_slots_by_date == {"2023-01-01": ["12:00"]}
+    assert outcome.metadata.invalidated_slot_count == 1
+
+
+def test_no_invalidation_preserves_behavior_and_default_metadata():
+    cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0)
+
+    samples = [
+        models.TrainerSample(
+            date="2023-01-01",
+            forecast_wh=5000.0,
+            slot_forecast_wh=make_uniform_slot_forecast(5000.0),
+        ),
+        models.TrainerSample(
+            date="2023-01-02",
+            forecast_wh=5000.0,
+            slot_forecast_wh=make_uniform_slot_forecast(5000.0),
+        ),
+    ]
+
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            s.date: make_uniform_actuals(s.forecast_wh) for s in samples
+        }
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert outcome.metadata.last_outcome == "profile_trained"
+    assert all(abs(v - 1.0) < 1e-6 for v in outcome.profile.factors.values())
+    assert outcome.metadata.invalidated_slots_by_date == {}
+    assert outcome.metadata.invalidated_slot_count == 0
+
+
+def test_fully_invalidated_slot_is_omitted_via_forecast_floor():
+    cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0)
+
+    slot_forecast = {"12:00": 30.0, "13:00": 100.0}
+    samples = [
+        models.TrainerSample(
+            date="2023-01-01",
+            forecast_wh=130.0,
+            slot_forecast_wh=dict(slot_forecast),
+        ),
+        models.TrainerSample(
+            date="2023-01-02",
+            forecast_wh=130.0,
+            slot_forecast_wh=dict(slot_forecast),
+        ),
+    ]
+
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2023-01-01": {
+                "12:00": 7.5,
+                "12:15": 7.5,
+                "12:30": 7.5,
+                "12:45": 7.5,
+                "13:00": 25.0,
+                "13:15": 25.0,
+                "13:30": 25.0,
+                "13:45": 25.0,
+            },
+            "2023-01-02": {
+                "12:00": 7.5,
+                "12:15": 7.5,
+                "12:30": 7.5,
+                "12:45": 7.5,
+                "13:00": 25.0,
+                "13:15": 25.0,
+                "13:30": 25.0,
+                "13:45": 25.0,
+            },
+        },
+        invalidated_slots_by_date={
+            "2023-01-01": {"12:00"},
+            "2023-01-02": {"12:00"},
+        },
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert outcome.metadata.last_outcome == "profile_trained"
+    assert "12:00" in outcome.profile.omitted_slots
+    assert "12:00" not in outcome.profile.factors
+    assert outcome.profile.factors["13:00"] == 1.0
+    assert outcome.metadata.invalidated_slots_by_date == {
+        "2023-01-01": ["12:00"],
+        "2023-01-02": ["12:00"],
+    }
+    assert outcome.metadata.invalidated_slot_count == 2
