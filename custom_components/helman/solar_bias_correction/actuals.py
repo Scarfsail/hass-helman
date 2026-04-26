@@ -10,9 +10,9 @@ from homeassistant.components.recorder.history import state_changes_during_perio
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..battery_state import read_battery_soc_bounds_config
 from ..const import DOMAIN
 from .models import BiasConfig, SolarActualsWindow
+from .forecast_history import load_historical_per_slot_forecast
 from .slot_invalidation import (
     InvalidationInputs,
     StateSample,
@@ -68,6 +68,7 @@ async def load_actuals_window(
         hass,
         cfg,
         slot_actuals_by_date,
+        local_now=local_now,
     )
     return SolarActualsWindow(
         slot_actuals_by_date=slot_actuals_by_date,
@@ -114,6 +115,8 @@ async def _load_invalidated_slots_for_window(
     hass: HomeAssistant,
     cfg: BiasConfig,
     slot_actuals_by_date: dict[str, dict[str, float]],
+    *,
+    local_now: datetime,
 ) -> dict[str, set[str]]:
     max_battery_soc_percent = cfg.slot_invalidation_max_battery_soc_percent
     export_entity_id = _read_entity_id(cfg.slot_invalidation_export_enabled_entity_id)
@@ -126,7 +129,12 @@ async def _load_invalidated_slots_for_window(
 
     forecast_slot_starts_by_date, slot_keys_by_date = _build_slot_invalidation_inputs(
         hass,
-        slot_actuals_by_date,
+        await _load_forecast_slot_maps_for_window(
+            hass,
+            cfg,
+            slot_actuals_by_date,
+            local_now=local_now,
+        ),
     )
     if not forecast_slot_starts_by_date:
         return {}
@@ -174,10 +182,6 @@ def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str 
     if not isinstance(runtime_config, dict):
         return None
 
-    soc_bounds_config = read_battery_soc_bounds_config(runtime_config)
-    if soc_bounds_config is None:
-        return None
-
     battery_config = runtime_config.get("power_devices", {}).get("battery", {})
     entities = battery_config.get("entities", {})
     if not isinstance(entities, dict):
@@ -185,17 +189,41 @@ def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str 
     return _read_entity_id(entities.get("capacity"))
 
 
+async def _load_forecast_slot_maps_for_window(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    slot_actuals_by_date: dict[str, dict[str, float]],
+    *,
+    local_now: datetime,
+) -> dict[str, dict[str, float]]:
+    forecast_slots_by_date: dict[str, dict[str, float]] = {}
+    for day in sorted(slot_actuals_by_date):
+        try:
+            target_date = date.fromisoformat(day)
+        except ValueError:
+            continue
+        day_forecast_slots = await load_historical_per_slot_forecast(
+            hass,
+            cfg,
+            target_date,
+            local_now=local_now,
+        )
+        if day_forecast_slots:
+            forecast_slots_by_date[day] = day_forecast_slots
+    return forecast_slots_by_date
+
+
 def _build_slot_invalidation_inputs(
     hass: HomeAssistant,
-    slot_actuals_by_date: dict[str, dict[str, float]],
+    forecast_slots_by_date: dict[str, dict[str, float]],
 ) -> tuple[dict[str, list[datetime]], dict[str, list[str]]]:
     local_tz = ZoneInfo(str(hass.config.time_zone))
     forecast_slot_starts_by_date: dict[str, list[datetime]] = {}
     slot_keys_by_date: dict[str, list[str]] = {}
 
-    for day in sorted(slot_actuals_by_date):
-        day_actuals = slot_actuals_by_date.get(day, {})
-        slot_keys = sorted(day_actuals, key=_slot_sort_key)
+    for day in sorted(forecast_slots_by_date):
+        day_forecast_slots = forecast_slots_by_date.get(day, {})
+        slot_keys = sorted(day_forecast_slots, key=_slot_sort_key)
         if not slot_keys:
             continue
 

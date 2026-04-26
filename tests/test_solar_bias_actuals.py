@@ -187,8 +187,6 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
                                 "battery": {
                                     "entities": {
                                         "capacity": "sensor.battery_soc",
-                                        "min_soc": "sensor.battery_min_soc",
-                                        "max_soc": "sensor.battery_max_soc",
                                     }
                                 }
                             }
@@ -211,6 +209,10 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(side_effect=[{"12:00": 600.0, "12:15": 400.0}, {"23:45": 50.0}]),
         ), patch.object(
             actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(side_effect=[{"12:00": 1000.0}, {"23:00": 500.0}]),
+        ), patch.object(
+            actuals,
             "_load_state_samples_for_entity",
             AsyncMock(side_effect=[[SimpleNamespace()], [SimpleNamespace()]]),
         ) as load_state_samples, patch.object(
@@ -227,18 +229,15 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             inputs.forecast_slot_starts_by_date,
             {
-                "2026-04-15": [
-                    datetime(2026, 4, 15, 12, 0, tzinfo=TZ),
-                    datetime(2026, 4, 15, 12, 15, tzinfo=TZ),
-                ],
-                "2026-04-16": [datetime(2026, 4, 16, 23, 45, tzinfo=TZ)],
+                "2026-04-15": [datetime(2026, 4, 15, 12, 0, tzinfo=TZ)],
+                "2026-04-16": [datetime(2026, 4, 16, 23, 0, tzinfo=TZ)],
             },
         )
         self.assertEqual(
             inputs.slot_keys_by_date,
             {
-                "2026-04-15": ["12:00", "12:15"],
-                "2026-04-16": ["23:45"],
+                "2026-04-15": ["12:00"],
+                "2026-04-16": ["23:00"],
             },
         )
 
@@ -270,6 +269,54 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(window.invalidated_slots_by_date, {})
         load_state_samples.assert_not_awaited()
         compute_invalidated.assert_not_called()
+
+    async def test_load_actuals_window_uses_capacity_entity_without_soc_bounds(self) -> None:
+        hass = SimpleNamespace(
+            data={
+                "helman": {
+                    "coordinator": SimpleNamespace(
+                        config={
+                            "power_devices": {
+                                "battery": {
+                                    "entities": {
+                                        "capacity": "sensor.battery_soc",
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            },
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=87.0,
+            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+        )
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(return_value={"12:00": 600.0}),
+        ), patch.object(
+            actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(return_value={"12:00": 1000.0}),
+        ), patch.object(
+            actuals,
+            "_load_state_samples_for_entity",
+            AsyncMock(side_effect=[[SimpleNamespace()], [SimpleNamespace()]]),
+        ) as load_state_samples, patch.object(
+            actuals,
+            "compute_invalidated_slots_for_window",
+            return_value={"2026-04-16": {"12:00"}},
+        ) as compute_invalidated:
+            window = await actuals.load_actuals_window(hass, cfg, days=1)
+
+        self.assertEqual(window.invalidated_slots_by_date, {"2026-04-16": {"12:00"}})
+        self.assertEqual(load_state_samples.await_args_list[0].args[1], "sensor.battery_soc")
+        self.assertEqual(compute_invalidated.call_args.args[0].slot_keys_by_date, {"2026-04-16": ["12:00"]})
 
 
 if __name__ == "__main__":
