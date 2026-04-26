@@ -201,6 +201,7 @@ class SolarBiasCorrectionService:
             "usableDays": self._metadata.usable_days,
             "droppedDays": deepcopy(self._metadata.dropped_days),
             "omittedSlotCount": self._metadata.omitted_slot_count,
+            "invalidatedSlotCount": self._metadata.invalidated_slot_count,
             "factorSummary": {
                 "min": self._metadata.factor_min,
                 "max": self._metadata.factor_max,

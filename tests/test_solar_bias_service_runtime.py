@@ -227,6 +227,38 @@ def test_get_profile_payload_returns_runtime_profile():
     }
 
 
+def test_get_status_payload_includes_invalidated_slot_count():
+    service = service_mod.SolarBiasCorrectionService(
+        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _DummyStore(),
+        _make_cfg(),
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-24T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=2.0,
+        factor_max=2.0,
+        factor_median=2.0,
+        omitted_slot_count=1,
+        last_outcome="profile_trained",
+        invalidated_slot_count=4,
+        error_reason=None,
+    )
+
+    old_now = service_mod.dt_util.now
+    try:
+        from datetime import datetime
+
+        service_mod.dt_util.now = lambda: datetime.fromisoformat(
+            "2026-04-24T03:00:00+02:00"
+        )
+        assert service.get_status_payload()["invalidatedSlotCount"] == 4
+    finally:
+        service_mod.dt_util.now = old_now
+
+
 def test_reloaded_insufficient_history_payload_keeps_profile_unavailable():
     async def _inner():
         store = _DummyStore()
