@@ -195,7 +195,7 @@ async def load_trainer_samples(
     today = local_now.date()
     samples: list[TrainerSample] = []
 
-    for offset in range(90, 0, -1):
+    for offset in range(cfg.max_training_window_days, 0, -1):
         target_date = today - timedelta(days=offset)
         forecast_wh = await _read_day_forecast_wh(
             hass,

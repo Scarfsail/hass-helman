@@ -1542,6 +1542,12 @@ export class HelmanConfigEditorPanel extends LitElement {
                   "editor.helpers.bias_correction_min_history_days",
                   "editor.help.bias_correction_min_history_days",
                 )}
+                ${this._renderOptionalNumberField(
+                  ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
+                  "editor.fields.max_training_window_days",
+                  "editor.helpers.bias_correction_max_training_window_days",
+                  "editor.help.bias_correction_max_training_window_days",
+                )}
                 ${this._renderOptionalTextField(
                   ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
                   "editor.fields.bias_correction_training_time",

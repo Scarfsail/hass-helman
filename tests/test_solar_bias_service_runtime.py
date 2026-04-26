@@ -85,6 +85,7 @@ def _make_cfg() -> models.BiasConfig:
         clamp_max=2.0,
         daily_energy_entity_ids=[],
         total_energy_entity_id=None,
+        max_training_window_days=90,
     )
 
 
@@ -570,6 +571,72 @@ def test_failed_stale_retrain_preserves_previous_fingerprint_after_reload():
         assert reloaded_status["status"] == "config_changed_pending_retrain"
         assert reloaded_status["effectiveVariant"] == "raw"
         assert reloaded_status["isStale"] is True
+
+    asyncio.run(_inner())
+
+
+def test_async_train_uses_configured_max_training_window_days_for_actuals():
+    class _SavingStore:
+        profile = None
+
+        async def async_save(self, payload):
+            self.profile = payload
+
+    async def _inner():
+        cfg = _make_cfg()
+        cfg.max_training_window_days = 12
+        service = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+            _SavingStore(),
+            cfg,
+        )
+
+        old_now = service_mod.dt_util.now
+        old_samples = service_mod.load_trainer_samples
+        old_actuals = service_mod.load_actuals_window
+        old_train = service_mod.train
+        try:
+            from datetime import datetime
+
+            now = datetime.fromisoformat("2026-04-24T03:00:00+02:00")
+            service_mod.dt_util.now = lambda: now
+
+            async def _samples(*args, **kwargs):
+                return []
+
+            async def _actuals(hass, cfg_arg, days):
+                assert days == 12
+                return models.SolarActualsWindow(slot_actuals_by_date={})
+
+            def _train(samples, actuals, cfg_arg, now):
+                return models.TrainingOutcome(
+                    profile=models.SolarBiasProfile(factors={}, omitted_slots=[]),
+                    metadata=models.SolarBiasMetadata(
+                        trained_at=now.isoformat(),
+                        training_config_fingerprint=service_mod.compute_fingerprint(cfg_arg),
+                        usable_days=cfg_arg.max_training_window_days,
+                        dropped_days=[],
+                        factor_min=None,
+                        factor_max=None,
+                        factor_median=None,
+                        omitted_slot_count=0,
+                        last_outcome="profile_trained",
+                        error_reason=None,
+                    ),
+                )
+
+            service_mod.load_trainer_samples = _samples
+            service_mod.load_actuals_window = _actuals
+            service_mod.train = _train
+
+            payload = await service.async_train()
+        finally:
+            service_mod.dt_util.now = old_now
+            service_mod.load_trainer_samples = old_samples
+            service_mod.load_actuals_window = old_actuals
+            service_mod.train = old_train
+
+        assert payload["usableDays"] == 12
 
     asyncio.run(_inner())
 

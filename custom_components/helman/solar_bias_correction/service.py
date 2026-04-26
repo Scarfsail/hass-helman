@@ -32,9 +32,6 @@ from .trainer import compute_fingerprint, train
 if TYPE_CHECKING:
     from ..storage import SolarBiasCorrectionStore
 
-_TRAINING_LOOKBACK_DAYS = 90
-
-
 class TrainingInProgressError(RuntimeError):
     pass
 
@@ -116,7 +113,7 @@ class SolarBiasCorrectionService:
             actuals = await load_actuals_window(
                 self._hass,
                 self._cfg,
-                days=_TRAINING_LOOKBACK_DAYS,
+                days=self._cfg.max_training_window_days,
             )
             outcome = train(samples, actuals, self._cfg, now=now)
             payload = {

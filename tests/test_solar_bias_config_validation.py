@@ -18,6 +18,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         )["bias_correction"] = {
             "enabled": True,
             "min_history_days": 10,
+            "max_training_window_days": 90,
             "training_time": "03:00",
             "clamp_min": 0.1,
             "clamp_max": 5.0,
@@ -82,6 +83,51 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path == "power_devices.solar.forecast.bias_correction.training_time"
+                for issue in report.errors
+            )
+        )
+
+    def test_max_training_window_days_invalid_when_zero(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "max_training_window_days": 0,
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.bias_correction.max_training_window_days"
+                for issue in report.errors
+            )
+        )
+
+    def test_max_training_window_days_invalid_when_too_large(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "max_training_window_days": 366,
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.bias_correction.max_training_window_days"
+                for issue in report.errors
+            )
+        )
+
+    def test_legacy_training_window_days_invalid_when_zero(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "training_window_days": 0,
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.bias_correction.training_window_days"
                 for issue in report.errors
             )
         )

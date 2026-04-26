@@ -175,6 +175,40 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(samples), 1)
         self.assertEqual(samples[0].forecast_wh, 2000.0)
 
+    async def test_load_trainer_samples_uses_configured_max_training_window_days(self) -> None:
+        hass = SimpleNamespace()
+        cfg = BiasConfig(
+            enabled=True,
+            min_history_days=2,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=["sensor.energy_production_today"],
+            total_energy_entity_id=None,
+            max_training_window_days=2,
+        )
+
+        with patch.object(
+            forecast_history,
+            "_read_day_forecast_wh",
+            new=AsyncMock(side_effect=[1000.0, 2000.0]),
+        ) as read_day_forecast_wh, patch.object(
+            forecast_history,
+            "load_historical_per_slot_forecast",
+            new=AsyncMock(side_effect=[{"12:00": 1.0}, {"12:00": 2.0}]),
+        ):
+            samples = await forecast_history.load_trainer_samples(
+                hass,
+                cfg,
+                datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
+            )
+
+        self.assertEqual(
+            [sample.date for sample in samples],
+            ["2026-03-19", "2026-03-20"],
+        )
+        self.assertEqual(read_day_forecast_wh.await_count, 2)
+
 
 class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_slot_keyed_wh_for_past_day(self):

@@ -112,6 +112,7 @@
       "forecast_total_energy_entity": "Forecast total energy entity",
       "min_history_days": "Min history days",
       "training_window_days": "Training window days",
+      "max_training_window_days": "Max training window days",
       "energy_entity": "Energy entity",
       "label": "Label",
       "power_entity": "Power entity",
@@ -194,6 +195,7 @@
         "appliance_icon": "Optional. Leave empty to use the default energy icon in appliance metadata.",
         "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption.",
         "bias_correction_min_history_days": "Minimum days of historical data (1-365) before training begins.",
+        "bias_correction_max_training_window_days": "Maximum number of past days Helman may use to train the solar bias correction model.",
         "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs."
       },
     "messages": {
@@ -335,6 +337,7 @@
       "vehicle_max_charging_power_kw": "Maximum AC charging power for this vehicle in kW. Used to model how quickly the vehicle charges and to plan charging window durations.",
       "bias_correction_enabled": "Enable solar bias correction training. When enabled, Helman automatically trains a forecast correction model based on your actual solar production.",
       "bias_correction_min_history_days": "Minimum number of days of recorded solar data before the model can be trained (1-365). A higher value ensures more stable training but delays corrections. Defaults to 7 days.",
+      "bias_correction_max_training_window_days": "Maximum number of past days Helman may use to train the solar bias correction model. If less history is available, Helman uses what it has; if more is available, Helman caps the training window at this value. A larger maximum produces more stable correction factors but reacts more slowly to seasonal or system changes. Defaults to 90 days.",
       "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs, typically during low-activity hours. Training processes historical data to continuously improve forecast accuracy.",
       "bias_correction_clamp_min": "Lower bound (0.0-1.0) for corrected forecast values. Prevents unrealistic negative corrections from suppressing normal solar generation forecasts too aggressively.",
       "bias_correction_clamp_max": "Upper bound (0.0-1.0) for corrected forecast values. Prevents unrealistic positive corrections from over-inflating forecast values.",

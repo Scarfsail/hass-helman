@@ -6,6 +6,7 @@ from typing import Any
 from ..const import (
     SOLAR_BIAS_DEFAULT_ENABLED,
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+    SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS,
     SOLAR_BIAS_DEFAULT_TRAINING_TIME,
     SOLAR_BIAS_DEFAULT_CLAMP_MIN,
     SOLAR_BIAS_DEFAULT_CLAMP_MAX,
@@ -21,6 +22,7 @@ class BiasConfig:
     clamp_max: float
     daily_energy_entity_ids: list[str]
     total_energy_entity_id: str | None
+    max_training_window_days: int = SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
 
 
 @dataclass
@@ -187,6 +189,12 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     min_history_days = bias.get(
         "min_history_days", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
     )
+    max_training_window_days = bias.get(
+        "max_training_window_days",
+        bias.get(
+            "training_window_days", SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
+        ),
+    )
     training_time = bias.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
     clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
     clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
@@ -204,4 +212,5 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         clamp_max=clamp_max,
         daily_energy_entity_ids=daily_energy_entity_ids,
         total_energy_entity_id=total_energy_entity_id,
+        max_training_window_days=max_training_window_days,
     )

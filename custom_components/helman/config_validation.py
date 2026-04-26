@@ -345,6 +345,32 @@ def _validate_solar_config(raw_solar: object, report: ValidationReport) -> None:
                 message=f"{base_path}.min_history_days must be an integer between 1 and 365",
             )
 
+    # max_training_window_days: int in [1, 365]
+    max_training_window_days = bias_map.get("max_training_window_days")
+    if max_training_window_days is not None:
+        if isinstance(max_training_window_days, bool) or not isinstance(
+            max_training_window_days, int
+        ) or not (1 <= max_training_window_days <= 365):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.max_training_window_days",
+                code="invalid_range",
+                message=f"{base_path}.max_training_window_days must be an integer between 1 and 365",
+            )
+
+    # legacy training_window_days: int in [1, 365]
+    training_window_days = bias_map.get("training_window_days")
+    if training_window_days is not None:
+        if isinstance(training_window_days, bool) or not isinstance(
+            training_window_days, int
+        ) or not (1 <= training_window_days <= 365):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.training_window_days",
+                code="invalid_range",
+                message=f"{base_path}.training_window_days must be an integer between 1 and 365",
+            )
+
     # training_time: HH:MM local-time string
     training_time = bias_map.get("training_time")
     if training_time is not None:

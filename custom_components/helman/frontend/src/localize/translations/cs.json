@@ -112,6 +112,7 @@
       "forecast_total_energy_entity": "Entita celkové energie pro predikci",
       "min_history_days": "Minimální počet dní historie",
       "training_window_days": "Počet dní trénovacího okna",
+      "max_training_window_days": "Max. počet dní trénovacího okna",
       "energy_entity": "Entita energie",
       "label": "Popisek",
       "power_entity": "Entita výkonu",
@@ -194,6 +195,7 @@
         "appliance_icon": "Volitelné. Když pole necháte prázdné, metadata spotřebiče použijí výchozí energetickou ikonu.",
         "history_energy_entity": "Použijte kumulativní senzor energie, který sleduje spotřebu spotřebiče.",
         "bias_correction_min_history_days": "Minimální počet dní historických dat (1-365) před zahájením trénování.",
+        "bias_correction_max_training_window_days": "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy.",
         "bias_correction_training_time": "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování."
       },
     "messages": {
@@ -335,6 +337,7 @@
       "vehicle_max_charging_power_kw": "Maximální výkon AC nabíjení tohoto vozidla v kW. Slouží k modelování rychlosti nabíjení vozidla a plánování délky oken nabíjení.",
       "bias_correction_enabled": "Povolit trénování korekce zkreslení solární prognózy. Pokud je povoleno, Helman automaticky trénuje model opravy prognózy na základě vaší skutečné solární výroby.",
       "bias_correction_min_history_days": "Minimální počet dní zaznamenaných solárních dat před tím, než lze model trénovat (1-365). Vyšší hodnota zajišťuje stabilnější trénování, ale zpožďuje opravy. Výchozí hodnota je 7 dní.",
+      "bias_correction_max_training_window_days": "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy. Pokud je historie kratší, Helman použije dostupná data; pokud je delší, trénovací okno omezí na tuto hodnotu. Vyšší maximum vytváří stabilnější korekční faktory, ale reaguje pomaleji na sezónní nebo systémové změny. Výchozí hodnota je 90 dní.",
       "bias_correction_training_time": "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování, obvykle během hodin s nízkou aktivitou. Trénování zpracovává historická data za účelem nepřetržitého zlepšování přesnosti prognózy.",
       "bias_correction_clamp_min": "Dolní mez (0,0-1,0) pro opravené hodnoty prognózy. Zabraňuje nerealistickým negativním opravám v příliš agresivním potlačování normálních prognóz solární výroby.",
       "bias_correction_clamp_max": "Horní mez (0,0-1,0) pro opravené hodnoty prognózy. Zabraňuje nerealistickým pozitivním opravám v příliš vysokém zvýšení prognózovaných hodnot.",

@@ -39,6 +39,10 @@ def test_defaults_empty_config():
     assert isinstance(bias, BiasConfig)
     assert bias.enabled == const.SOLAR_BIAS_DEFAULT_ENABLED
     assert bias.min_history_days == const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
+    assert (
+        bias.max_training_window_days
+        == const.SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
+    )
     assert bias.training_time == const.SOLAR_BIAS_DEFAULT_TRAINING_TIME
     assert bias.clamp_min == const.SOLAR_BIAS_DEFAULT_CLAMP_MIN
     assert bias.clamp_max == const.SOLAR_BIAS_DEFAULT_CLAMP_MAX
@@ -54,6 +58,7 @@ def test_read_nested_config():
                     "bias_correction": {
                         "enabled": False,
                         "min_history_days": 5,
+                        "max_training_window_days": 45,
                         "training_time": "04:00",
                         "clamp_min": 0.5,
                         "clamp_max": 1.5,
@@ -68,6 +73,7 @@ def test_read_nested_config():
     bias = read_bias_config(config)
     assert bias.enabled is False
     assert bias.min_history_days == 5
+    assert bias.max_training_window_days == 45
     assert bias.training_time == "04:00"
     assert bias.clamp_min == 0.5
     assert bias.clamp_max == 1.5
@@ -92,6 +98,24 @@ def test_reads_total_energy_entity_from_bias_correction_config():
     bias = read_bias_config(config)
 
     assert bias.total_energy_entity_id == "sensor.bias_total"
+
+
+def test_legacy_training_window_days_is_still_accepted_as_fallback():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "bias_correction": {
+                        "training_window_days": 30,
+                    },
+                }
+            }
+        }
+    }
+
+    bias = read_bias_config(config)
+
+    assert bias.max_training_window_days == 30
 
 
 def test_trainer_sample_has_slot_forecast_wh_field():
