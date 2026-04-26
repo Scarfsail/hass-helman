@@ -296,6 +296,9 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       ${!payload.availability.hasProfile
         ? html`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`
         : ""}
+      ${payload.range.isToday
+        ? html`<div class="note">${this._t("bias_correction.inspector.today_training_note")}</div>`
+        : ""}
       ${hasAnySeries
         ? html`
             ${this._renderLegend(payload)}

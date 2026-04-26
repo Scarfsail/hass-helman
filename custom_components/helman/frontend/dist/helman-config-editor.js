@@ -1797,6 +1797,7 @@ const jt = {
     power_axis_label: "kW (prům.)",
     daily_totals: "Denní součty",
     actual_not_available: "není k dispozici",
+    today_training_note: "Dnešek se zatím nepoužívá pro trénování a vyřazené body se v dnešním zobrazení skutečné výroby nepromítají.",
     no_profile: "Natrénovaný profil zatím není k dispozici. Surová prognóza a skutečná historie se stále mohou zobrazit, pokud jsou dostupné.",
     no_data: "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy."
   }
@@ -2237,6 +2238,7 @@ const jt = {
     power_axis_label: "kW (avg)",
     daily_totals: "Daily totals",
     actual_not_available: "not available",
+    today_training_note: "Today is not used for training yet, and invalidated points are not reflected in today's actual production view.",
     no_profile: "No trained profile is available yet. Raw forecast and actual history can still be shown when available.",
     no_data: "No data is available for {date}. Try a newer day or refresh after the next forecast update."
   }
@@ -2392,6 +2394,7 @@ const Yi = async () => {
     const t = e.availability.hasRawForecast || e.availability.hasCorrectedForecast || e.availability.hasActuals || e.availability.hasInvalidated;
     return n`
       ${e.availability.hasProfile ? "" : n`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`}
+      ${e.range.isToday ? n`<div class="note">${this._t("bias_correction.inspector.today_training_note")}</div>` : ""}
       ${t ? n`
             ${this._renderLegend(e)}
             <div class="chart-wrap">${this._renderChart(e)}</div>

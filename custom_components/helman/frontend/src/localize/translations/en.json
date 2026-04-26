@@ -428,6 +428,7 @@
       "power_axis_label": "kW (avg)",
       "daily_totals": "Daily totals",
       "actual_not_available": "not available",
+      "today_training_note": "Today is not used for training yet, and invalidated points are not reflected in today's actual production view.",
       "no_profile": "No trained profile is available yet. Raw forecast and actual history can still be shown when available.",
       "no_data": "No data is available for {date}. Try a newer day or refresh after the next forecast update."
     }

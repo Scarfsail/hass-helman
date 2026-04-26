@@ -107,6 +107,11 @@ This branch is also where forecast-related setup already lives, for example:
 - `power_devices.house.forecast`
 - `power_devices.battery.forecast`
 
+Current solar bias correction behavior to document in the UI/help text:
+
+- slot invalidation is applied only to historical training data; `today` is not included in the training window
+- the visual inspector shows invalidated actual production in gray only for past days; `today` is shown as normal actual production even if invalidation conditions are currently met
+
 ### 3. `scheduler`
 
 The editor should expose schedule-control config such as:

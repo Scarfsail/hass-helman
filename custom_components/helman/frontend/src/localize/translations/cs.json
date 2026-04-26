@@ -423,6 +423,7 @@
       "power_axis_label": "kW (prům.)",
       "daily_totals": "Denní součty",
       "actual_not_available": "není k dispozici",
+      "today_training_note": "Dnešek se zatím nepoužívá pro trénování a vyřazené body se v dnešním zobrazení skutečné výroby nepromítají.",
       "no_profile": "Natrénovaný profil zatím není k dispozici. Surová prognóza a skutečná historie se stále mohou zobrazit, pokud jsou dostupné.",
       "no_data": "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy."
     }
