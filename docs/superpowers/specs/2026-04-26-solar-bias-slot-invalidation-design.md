@@ -73,7 +73,7 @@ class SolarActualsWindow:
 ```
 
 - Empty for every date when the feature is off.
-- Slot keys use the same `"HH:MM"` format already used for `slot_actuals_by_date`. Granularity matches the *forecast slot* granularity used downstream by `_aggregate_actuals_into_forecast_slot`.
+- Slot keys use the `"HH:MM"` format. **Granularity is the forecast slot granularity** (whatever cadence the forecast uses — typically 15-min or hourly). This is the granularity the trainer loops over in `sorted_forecast_slots`. Note: this can differ from the 15-min cadence used by `slot_actuals_by_date`; when forecast slots are coarser, a single forecast slot covers several 15-min actual sub-slots, and invalidation flags the whole forecast slot together.
 
 `SolarBiasMetadata` gains two fields:
 
@@ -152,10 +152,10 @@ series.invalidated: list[SolarBiasInspectorPoint]
 
 Behaviour:
 
-- The day's actual data points are **partitioned** between two arrays based on the trainer's `invalidated_slots_by_date[date]`:
-  - Slots **not** in the invalidated set → `series.actual` (today's behaviour).
-  - Slots **in** the invalidated set → `series.invalidated`, **and removed from `series.actual`**.
-- Every actual measurement appears in exactly one of the two arrays — never both, never missing.
+- The day's actual data points are **partitioned** between two arrays. Each actual point is mapped to its *containing forecast slot* (via the same `forecast_slot_keys` boundaries the trainer uses) and then routed:
+  - Containing forecast slot **not** in `invalidated_slots_by_date[date]` → `series.actual` (today's behaviour).
+  - Containing forecast slot **in** `invalidated_slots_by_date[date]` → `series.invalidated`, **and removed from `series.actual`**.
+- Every actual measurement appears in exactly one of the two arrays — never both, never missing. When forecast slots are coarser than the actuals' cadence, all actual sub-points belonging to an invalidated forecast slot are gray together.
 - For "today" or future days where the trainer has not seen them yet, `series.invalidated` is `[]`.
 
 `SolarBiasInspectorAvailability` gains:
