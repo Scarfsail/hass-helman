@@ -261,8 +261,8 @@ class SolarBiasCorrectionService:
         )
         if target_date < today and actual_points and invalidated_slots:
             forecast_slot_keys = _forecast_slot_keys_for_partition(
-                self._profile,
                 raw_points,
+                self._profile,
             )
             actual_points, invalidated_points = _partition_actual_points(
                 actual_points,
@@ -538,12 +538,9 @@ def _slot_to_minutes(slot: str) -> int:
 
 
 def _forecast_slot_keys_for_partition(
-    profile: SolarBiasProfile | None,
     raw_points: list[dict[str, Any]],
+    profile: SolarBiasProfile | None,
 ) -> list[str]:
-    if profile is not None and profile.factors:
-        return sorted(profile.factors, key=_slot_to_minutes)
-
     slot_keys: set[str] = set()
     for point in raw_points:
         timestamp = point.get("timestamp")
@@ -554,18 +551,28 @@ def _forecast_slot_keys_for_partition(
         except ValueError:
             continue
         slot_keys.add(f"{parsed.hour:02d}:{parsed.minute:02d}")
+    if slot_keys:
+        return sorted(slot_keys, key=_slot_to_minutes)
+
+    if profile is not None and profile.factors:
+        return sorted(profile.factors, key=_slot_to_minutes)
+
     return sorted(slot_keys, key=_slot_to_minutes)
 
 
 def _actual_point_slot_key(
     point: SolarBiasInspectorPoint,
     forecast_slot_keys: list[str],
-) -> str:
+) -> str | None:
     if not forecast_slot_keys:
         parsed = datetime.fromisoformat(point.timestamp)
         return f"{parsed.hour:02d}:{parsed.minute:02d}"
 
     point_minutes = _slot_to_minutes(point.timestamp[11:16])
+    first_slot_minutes = _slot_to_minutes(forecast_slot_keys[0])
+    if point_minutes < first_slot_minutes:
+        return None
+
     containing_slot = forecast_slot_keys[0]
     for slot in forecast_slot_keys:
         if _slot_to_minutes(slot) > point_minutes:
@@ -583,7 +590,8 @@ def _partition_actual_points(
     actual: list[SolarBiasInspectorPoint] = []
     invalidated: list[SolarBiasInspectorPoint] = []
     for point in actual_points:
-        if _actual_point_slot_key(point, forecast_slot_keys) in invalidated_slots:
+        point_slot = _actual_point_slot_key(point, forecast_slot_keys)
+        if point_slot in invalidated_slots:
             invalidated.append(point)
             continue
         actual.append(point)
