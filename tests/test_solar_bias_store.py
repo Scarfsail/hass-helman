@@ -45,7 +45,7 @@ sys.modules["homeassistant.helpers"] = helpers_mod
 storage_stub = types.ModuleType("homeassistant.helpers.storage")
 
 class _DummyStore:
-    def __init__(self, hass, version, key):
+    def __init__(self, hass, version, key, *args, **kwargs):
         self.hass = hass
         self.version = version
         self.key = key
@@ -65,10 +65,11 @@ def _make_fake_store_backend():
     storage_data: dict[str, dict] = {}
 
     class FakeStore:
-        def __init__(self, hass, version, key):
+        def __init__(self, hass, version, key, *args, **kwargs):
             self.hass = hass
             self.version = version
             self.key = key
+            self.async_migrate_func = kwargs.get("async_migrate_func")
 
         async def async_load(self):
             # return stored document or None
@@ -78,6 +79,52 @@ def _make_fake_store_backend():
             storage_data[self.key] = data
 
     return FakeStore
+
+
+def _make_versioned_fake_store_backend():
+    storage_data: dict[str, dict] = {}
+
+    class FakeStore:
+        def __init__(self, hass, version, key, *args, **kwargs):
+            self.hass = hass
+            self.version = version
+            self.key = key
+            self.async_migrate_func = kwargs.get("async_migrate_func")
+
+        async def async_load(self):
+            stored = storage_data.get(self.key)
+            if stored is None:
+                return None
+
+            stored_version = stored["version"]
+            stored_minor_version = stored.get("minor_version", 1)
+            payload = stored["data"]
+
+            if stored_version != self.version:
+                if self.async_migrate_func is None:
+                    raise NotImplementedError
+                migrated = await self.async_migrate_func(
+                    stored_version,
+                    stored_minor_version,
+                    payload,
+                )
+                storage_data[self.key] = {
+                    "version": self.version,
+                    "minor_version": 1,
+                    "data": migrated,
+                }
+                return migrated
+
+            return payload
+
+        async def async_save(self, data):
+            storage_data[self.key] = {
+                "version": self.version,
+                "minor_version": 1,
+                "data": data,
+            }
+
+    return FakeStore, storage_data
 
 
 def _install_service_import_stubs() -> None:
@@ -206,6 +253,39 @@ def test_load_accepts_v1_payload():
         await reloaded.async_load()
 
         assert reloaded.profile == v1_payload
+
+    asyncio.run(_inner())
+
+
+def test_load_migrates_outer_store_version_1_to_2():
+    async def _inner():
+        storage_mod = importlib.import_module("custom_components.helman.storage")
+        importlib.reload(storage_mod)
+        FakeStore, storage_data = _make_versioned_fake_store_backend()
+        sys.modules["homeassistant.helpers.storage"].Store = FakeStore
+
+        storage_data["helman.solar_bias_correction"] = {
+            "version": 1,
+            "minor_version": 1,
+            "data": {
+                "version": 1,
+                "profile": {"08:00": 1.12},
+                "metadata": {
+                    "trained_at": "2026-04-24T03:00:04+02:00",
+                    "training_config_fingerprint": "sha256:deadbeef",
+                    "usable_days": 12,
+                    "dropped_days": [],
+                    "omitted_slot_count": 0,
+                    "last_outcome": "profile_trained",
+                },
+            },
+        }
+
+        store = storage_mod.SolarBiasCorrectionStore(object())
+        await store.async_load()
+
+        assert store.profile == storage_data["helman.solar_bias_correction"]["data"]
+        assert storage_data["helman.solar_bias_correction"]["version"] == 2
 
     asyncio.run(_inner())
 

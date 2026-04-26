@@ -84,9 +84,25 @@ class SolarBiasCorrectionStore:
             SOLAR_BIAS_SUPPORTED_STORE_VERSION,
         )
 
-        self._store = storage.Store(hass, SOLAR_BIAS_STORAGE_VERSION, SOLAR_BIAS_STORAGE_KEY)
+        self._store = storage.Store(
+            hass,
+            SOLAR_BIAS_STORAGE_VERSION,
+            SOLAR_BIAS_STORAGE_KEY,
+            async_migrate_func=self._async_migrate_store,
+        )
         self._profile: dict[str, Any] | None = None
         self._supported_versions = {1, SOLAR_BIAS_SUPPORTED_STORE_VERSION}
+
+    async def _async_migrate_store(
+        self,
+        old_major_version: int,
+        _old_minor_version: int,
+        old_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if old_major_version == 1:
+            return old_data
+
+        raise NotImplementedError
 
     async def async_load(self) -> None:
         stored = await self._store.async_load()
