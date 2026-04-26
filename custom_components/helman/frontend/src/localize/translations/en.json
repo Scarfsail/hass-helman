@@ -65,7 +65,11 @@
         "vehicles": "Vehicles",
         "bias_correction_settings": "Bias correction settings",
         "bias_correction_slot_invalidation": "Invalidate training slot data",
-        "bias_correction_status": "Status and training"
+        "bias_correction_status": "Status and training",
+        "solar_general": "General",
+        "solar_forecast": "Forecast",
+        "solar_forecast_general": "General",
+        "bias_correction_config": "Configuration"
       },
       "notes": {
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",

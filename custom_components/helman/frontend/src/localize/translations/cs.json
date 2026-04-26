@@ -65,7 +65,11 @@
         "vehicles": "Vozidla",
         "bias_correction_settings": "Nastavení korekce zkreslení",
         "bias_correction_slot_invalidation": "Vyřazení slotů z trénovacích dat",
-        "bias_correction_status": "Stav a trénování"
+        "bias_correction_status": "Stav a trénování",
+        "solar_general": "Obecné",
+        "solar_forecast": "Předpověď",
+        "solar_forecast_general": "Obecné",
+        "bias_correction_config": "Konfigurace"
       },
       "notes": {
       "device_label_text": "Nakonfigurujte mapy textů štítků, například místnosti nebo vlastní skupiny štítků. Neznámé kategorie a položky se zachovají.",
