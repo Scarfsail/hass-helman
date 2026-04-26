@@ -35,12 +35,17 @@ async def load_forecast_points_for_day(
     local_tz = ZoneInfo(str(hass.config.time_zone))
     today = dt_util.as_local(local_now).date()
     offset = (target_date - today).days
-    if offset < 0 or offset >= len(entity_ids):
-        return []
 
-    state = hass.states.get(entity_ids[offset])
-    if state is None:
+    if offset < 0:
+        state = await _read_historical_forecast_state(hass, cfg, target_date, local_tz)
+        if state is None:
+            return []
+    elif offset >= len(entity_ids):
         return []
+    else:
+        state = hass.states.get(entity_ids[offset])
+        if state is None:
+            return []
 
     attributes = getattr(state, "attributes", {})
     wh_period = attributes.get("wh_period") if isinstance(attributes, dict) else None
