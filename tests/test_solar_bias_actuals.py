@@ -79,6 +79,12 @@ _install_import_stubs()
 from custom_components.helman.solar_bias_correction import actuals  # noqa: E402
 
 
+class _FixedDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 4, 17, 12, 0, tzinfo=tz or TZ)
+
+
 class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
     async def test_reads_boundary_sampled_slot_actuals_as_wh(self) -> None:
         with patch.object(
@@ -136,6 +142,134 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             datetime(2026, 4, 15, 10, 0, tzinfo=TZ),
         )
         self.assertEqual(captured["args"]["interval_minutes"], 15)
+
+    async def test_load_actuals_window_feature_off_returns_empty_invalidation_map(self) -> None:
+        hass = SimpleNamespace(
+            data={"helman": {"coordinator": SimpleNamespace(config={})}},
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=None,
+            slot_invalidation_export_enabled_entity_id=None,
+        )
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(return_value={"12:00": 600.0}),
+        ) as read_day_slot_actuals, patch.object(
+            actuals,
+            "_load_state_samples_for_entity",
+            AsyncMock(),
+        ) as load_state_samples, patch.object(
+            actuals,
+            "compute_invalidated_slots_for_window",
+        ) as compute_invalidated:
+            window = await actuals.load_actuals_window(hass, cfg, days=1)
+
+        self.assertEqual(
+            window.slot_actuals_by_date,
+            {"2026-04-16": {"12:00": 600.0}},
+        )
+        self.assertEqual(window.invalidated_slots_by_date, {})
+        self.assertEqual(read_day_slot_actuals.await_count, 1)
+        load_state_samples.assert_not_awaited()
+        compute_invalidated.assert_not_called()
+
+    async def test_load_actuals_window_feature_on_calls_evaluator_with_utc_slots(self) -> None:
+        hass = SimpleNamespace(
+            data={
+                "helman": {
+                    "coordinator": SimpleNamespace(
+                        config={
+                            "power_devices": {
+                                "battery": {
+                                    "entities": {
+                                        "capacity": "sensor.battery_soc",
+                                        "min_soc": "sensor.battery_min_soc",
+                                        "max_soc": "sensor.battery_max_soc",
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            },
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=87.0,
+            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+        )
+        invalidated = {"2026-04-15": {"12:00"}, "2026-04-16": {"23:45"}}
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(side_effect=[{"12:00": 600.0, "12:15": 400.0}, {"23:45": 50.0}]),
+        ), patch.object(
+            actuals,
+            "_load_state_samples_for_entity",
+            AsyncMock(side_effect=[[SimpleNamespace()], [SimpleNamespace()]]),
+        ) as load_state_samples, patch.object(
+            actuals,
+            "compute_invalidated_slots_for_window",
+            return_value=invalidated,
+        ) as compute_invalidated:
+            window = await actuals.load_actuals_window(hass, cfg, days=2)
+
+        self.assertEqual(window.invalidated_slots_by_date, invalidated)
+        self.assertEqual(load_state_samples.await_count, 2)
+        inputs = compute_invalidated.call_args.args[0]
+        self.assertEqual(inputs.max_battery_soc_percent, 87.0)
+        self.assertEqual(
+            inputs.forecast_slot_starts_by_date,
+            {
+                "2026-04-15": [
+                    datetime(2026, 4, 15, 12, 0, tzinfo=TZ),
+                    datetime(2026, 4, 15, 12, 15, tzinfo=TZ),
+                ],
+                "2026-04-16": [datetime(2026, 4, 16, 23, 45, tzinfo=TZ)],
+            },
+        )
+        self.assertEqual(
+            inputs.slot_keys_by_date,
+            {
+                "2026-04-15": ["12:00", "12:15"],
+                "2026-04-16": ["23:45"],
+            },
+        )
+
+    async def test_load_actuals_window_skips_invalidation_when_battery_soc_entity_is_missing(self) -> None:
+        hass = SimpleNamespace(
+            data={"helman": {"coordinator": SimpleNamespace(config={})}},
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=87.0,
+            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+        )
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(return_value={"12:00": 600.0}),
+        ), patch.object(
+            actuals,
+            "_load_state_samples_for_entity",
+            AsyncMock(),
+        ) as load_state_samples, patch.object(
+            actuals,
+            "compute_invalidated_slots_for_window",
+        ) as compute_invalidated:
+            window = await actuals.load_actuals_window(hass, cfg, days=1)
+
+        self.assertEqual(window.invalidated_slots_by_date, {})
+        load_state_samples.assert_not_awaited()
+        compute_invalidated.assert_not_called()
 
 
 if __name__ == "__main__":
