@@ -7,6 +7,7 @@ import types
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch, AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -285,33 +286,21 @@ def test_load_forecast_points_for_day_returns_empty_outside_configured_horizon()
 
 
 def test_load_forecast_points_for_day_reads_history_for_past_days():
-    async def mock_read_historical(hass, cfg, target_date, local_tz):
-        # Create 24 hourly entries with 100 at 06:00 and 200 at 07:00, 0 for all others
-        wh_period = {}
-        for hour in range(24):
-            timestamp = f"2026-04-24T{hour:02d}:00:00+02:00"
-            if hour == 6:
-                wh_period[timestamp] = 100
-            elif hour == 7:
-                wh_period[timestamp] = 200
-            else:
-                wh_period[timestamp] = 0
+    wh_period = {
+        f"2026-04-24T{h:02d}:00:00+02:00": (100 if h == 6 else 200 if h == 7 else 0)
+        for h in range(24)
+    }
+    mock_state = SimpleNamespace(attributes={"wh_period": wh_period})
 
-        return SimpleNamespace(
-            attributes={
-                "wh_period": wh_period
-            }
-        )
-
-    original = forecast_history._read_historical_forecast_state
-    forecast_history._read_historical_forecast_state = mock_read_historical
-
-    try:
+    with patch.object(
+        forecast_history,
+        "_read_historical_forecast_state",
+        new=AsyncMock(return_value=mock_state),
+    ):
         hass = SimpleNamespace(
             states=SimpleNamespace(get=lambda entity_id: None),
             config=SimpleNamespace(time_zone="Europe/Prague"),
         )
-
         cfg = _make_cfg()
         cfg.daily_energy_entity_ids = ["sensor.today", "sensor.tomorrow"]
 
@@ -324,15 +313,11 @@ def test_load_forecast_points_for_day_reads_history_for_past_days():
             )
         )
 
-        assert len(result) == 24
-        # 6:00 is slot 6
-        assert result[6]["timestamp"] == "2026-04-24T06:00:00+02:00"
-        assert result[6]["value"] == 100.0
-        # 7:00 is slot 7
-        assert result[7]["timestamp"] == "2026-04-24T07:00:00+02:00"
-        assert result[7]["value"] == 200.0
-    finally:
-        forecast_history._read_historical_forecast_state = original
+    assert len(result) == 24
+    assert result[6]["timestamp"] == "2026-04-24T06:00:00+02:00"
+    assert result[6]["value"] == 100.0
+    assert result[7]["timestamp"] == "2026-04-24T07:00:00+02:00"
+    assert result[7]["value"] == 200.0
 
 
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():

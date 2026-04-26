@@ -375,5 +375,23 @@ class LoadTrainerSamplesTests(unittest.IsolatedAsyncioTestCase):
         assert samples == []
 
 
+def test_select_first_state_for_window_includes_midnight_boundary():
+    from datetime import timedelta, timezone
+    midnight_utc = datetime(2026, 4, 24, 22, 0, 0, tzinfo=timezone.utc)  # midnight Prague (UTC+2)
+
+    class _State:
+        def __init__(self, ts):
+            self.last_updated = ts
+
+    before = _State(midnight_utc - timedelta(seconds=1))
+    at_midnight = _State(midnight_utc)
+    after = _State(midnight_utc + timedelta(seconds=1))
+
+    result = forecast_history._select_first_state_for_window(
+        [before, at_midnight, after], after=midnight_utc
+    )
+    assert result is at_midnight
+
+
 if __name__ == "__main__":
     unittest.main()
