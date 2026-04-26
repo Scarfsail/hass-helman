@@ -1505,145 +1505,172 @@ export class HelmanConfigEditorPanel extends LitElement {
       ${this._renderSectionScope(
         SECTION_SCOPE_IDS.power_devices.solar,
         html`
-          <div class="field-grid field-grid--roomy">
-            ${this._renderOptionalEntityField(
-              ["power_devices", "solar", "entities", "power"],
-              "editor.fields.power_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.solar_power_entity",
-            )}
-            ${this._renderOptionalEntityField(
-              ["power_devices", "solar", "entities", "today_energy"],
-              "editor.fields.today_energy_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.solar_today_energy_entity",
-            )}
-            ${this._renderOptionalEntityField(
-              [
-                "power_devices",
-                "solar",
-                "entities",
-                "remaining_today_energy_forecast",
-              ],
-              "editor.fields.remaining_today_energy_forecast",
-              ["sensor"],
-              undefined,
-              "editor.help.solar_remaining_today_energy_forecast",
-            )}
-            ${this._renderOptionalEntityField(
-              ["power_devices", "solar", "forecast", "total_energy_entity_id"],
-              "editor.fields.forecast_total_energy_entity",
-              ["sensor"],
-              undefined,
-              "editor.help.solar_forecast_total_energy_entity",
-            )}
-          </div>
-
-          <div class="list-stack">
-            ${dailyEnergyEntityIds.map((value, index) =>
-              this._renderDailyEnergyEntity(value, index, dailyEnergyEntityIds.length),
-            )}
-          </div>
-          <div class="section-footer">
-            <button type="button" class="add-button" @click=${this._handleAddDailyEnergyEntity}>
-              ${this._t("editor.actions.add_daily_energy_entity")}
-            </button>
-          </div>
-
           ${this._renderSectionScope(
-            SECTION_SCOPE_IDS.power_devices.solar_bias_correction,
+            SECTION_SCOPE_IDS.power_devices.solar_general,
             html`
-              <div class="field-grid">
-                ${this._renderBooleanField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
-                  "editor.fields.bias_correction_enabled",
-                  false,
-                )}
-                ${this._renderOptionalNumberField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
-                  "editor.fields.bias_correction_min_history_days",
-                  "editor.helpers.bias_correction_min_history_days",
-                  "editor.help.bias_correction_min_history_days",
-                )}
-                ${this._renderOptionalNumberField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
-                  "editor.fields.max_training_window_days",
-                  "editor.helpers.bias_correction_max_training_window_days",
-                  "editor.help.bias_correction_max_training_window_days",
-                )}
-                ${this._renderOptionalTextField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
-                  "editor.fields.bias_correction_training_time",
-                  "editor.helpers.bias_correction_training_time",
-                  "editor.help.bias_correction_training_time",
-                )}
-                ${this._renderOptionalNumberField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
-                  "editor.fields.bias_correction_clamp_min",
-                  undefined,
-                  "editor.help.bias_correction_clamp_min",
-                )}
-                ${this._renderOptionalNumberField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
-                  "editor.fields.bias_correction_clamp_max",
-                  undefined,
-                  "editor.help.bias_correction_clamp_max",
-                )}
+              <div class="field-grid field-grid--roomy">
                 ${this._renderOptionalEntityField(
-                  ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
-                  "editor.fields.bias_correction_total_energy_entity",
+                  ["power_devices", "solar", "entities", "power"],
+                  "editor.fields.power_entity",
                   ["sensor"],
                   undefined,
-                  "editor.help.bias_correction_total_energy_entity",
+                  "editor.help.solar_power_entity",
+                )}
+                ${this._renderOptionalEntityField(
+                  ["power_devices", "solar", "entities", "today_energy"],
+                  "editor.fields.today_energy_entity",
+                  ["sensor"],
+                  undefined,
+                  "editor.help.solar_today_energy_entity",
+                )}
+                ${this._renderOptionalEntityField(
+                  [
+                    "power_devices",
+                    "solar",
+                    "entities",
+                    "remaining_today_energy_forecast",
+                  ],
+                  "editor.fields.remaining_today_energy_forecast",
+                  ["sensor"],
+                  undefined,
+                  "editor.help.solar_remaining_today_energy_forecast",
                 )}
               </div>
+            `,
+            { initialOpen: false },
+          )}
 
+          ${this._renderSectionScope(
+            SECTION_SCOPE_IDS.power_devices.solar_forecast,
+            html`
               ${this._renderSectionScope(
-                SECTION_SCOPE_IDS.power_devices.slot_invalidation,
+                SECTION_SCOPE_IDS.power_devices.solar_forecast_general,
                 html`
-                  <div class="field-grid">
-                    ${this._renderOptionalNumberField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "max_battery_soc_percent",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
-                      "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
-                      "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
-                      { min: 0, max: 100, suffix: "%" },
-                    )}
+                  <div class="field-grid field-grid--roomy">
                     ${this._renderOptionalEntityField(
-                      [
-                        "power_devices",
-                        "solar",
-                        "forecast",
-                        "bias_correction",
-                        "slot_invalidation",
-                        "export_enabled_entity_id",
-                      ],
-                      "editor.fields.bias_correction_slot_invalidation_export_enabled_entity_id",
-                      ["binary_sensor", "input_boolean", "switch"],
+                      ["power_devices", "solar", "forecast", "total_energy_entity_id"],
+                      "editor.fields.forecast_total_energy_entity",
+                      ["sensor"],
                       undefined,
-                      "editor.help.bias_correction_slot_invalidation_export_enabled_entity_id",
+                      "editor.help.solar_forecast_total_energy_entity",
                     )}
+                  </div>
+
+                  <div class="list-stack">
+                    ${dailyEnergyEntityIds.map((value, index) =>
+                      this._renderDailyEnergyEntity(value, index, dailyEnergyEntityIds.length),
+                    )}
+                  </div>
+                  <div class="section-footer">
+                    <button type="button" class="add-button" @click=${this._handleAddDailyEnergyEntity}>
+                      ${this._t("editor.actions.add_daily_energy_entity")}
+                    </button>
                   </div>
                 `,
                 { initialOpen: false },
               )}
 
-              <div class="list-card">
-                <div class="card-title" style="margin-bottom: 16px;">
-                  <strong>${this._t("editor.sections.bias_correction_status")}</strong>
-                  <span class="card-subtitle">${this._t("bias_correction.status_panel.subtitle")}</span>
-                </div>
-                <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
-              </div>
+              ${this._renderSectionScope(
+                SECTION_SCOPE_IDS.power_devices.solar_bias_correction,
+                html`
+                  ${this._renderSectionScope(
+                    SECTION_SCOPE_IDS.power_devices.solar_bias_correction_config,
+                    html`
+                      <div class="field-grid">
+                        ${this._renderBooleanField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "enabled"],
+                          "editor.fields.bias_correction_enabled",
+                          false,
+                        )}
+                        ${this._renderOptionalNumberField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"],
+                          "editor.fields.bias_correction_min_history_days",
+                          "editor.helpers.bias_correction_min_history_days",
+                          "editor.help.bias_correction_min_history_days",
+                        )}
+                        ${this._renderOptionalNumberField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"],
+                          "editor.fields.max_training_window_days",
+                          "editor.helpers.bias_correction_max_training_window_days",
+                          "editor.help.bias_correction_max_training_window_days",
+                        )}
+                        ${this._renderOptionalTextField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
+                          "editor.fields.bias_correction_training_time",
+                          "editor.helpers.bias_correction_training_time",
+                          "editor.help.bias_correction_training_time",
+                        )}
+                        ${this._renderOptionalNumberField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
+                          "editor.fields.bias_correction_clamp_min",
+                          undefined,
+                          "editor.help.bias_correction_clamp_min",
+                        )}
+                        ${this._renderOptionalNumberField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"],
+                          "editor.fields.bias_correction_clamp_max",
+                          undefined,
+                          "editor.help.bias_correction_clamp_max",
+                        )}
+                        ${this._renderOptionalEntityField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
+                          "editor.fields.bias_correction_total_energy_entity",
+                          ["sensor"],
+                          undefined,
+                          "editor.help.bias_correction_total_energy_entity",
+                        )}
+                      </div>
+
+                      ${this._renderSectionScope(
+                        SECTION_SCOPE_IDS.power_devices.slot_invalidation,
+                        html`
+                          <div class="field-grid">
+                            ${this._renderOptionalNumberField(
+                              [
+                                "power_devices",
+                                "solar",
+                                "forecast",
+                                "bias_correction",
+                                "slot_invalidation",
+                                "max_battery_soc_percent",
+                              ],
+                              "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
+                              "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
+                              "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
+                              { min: 0, max: 100, suffix: "%" },
+                            )}
+                            ${this._renderOptionalEntityField(
+                              [
+                                "power_devices",
+                                "solar",
+                                "forecast",
+                                "bias_correction",
+                                "slot_invalidation",
+                                "export_enabled_entity_id",
+                              ],
+                              "editor.fields.bias_correction_slot_invalidation_export_enabled_entity_id",
+                              ["binary_sensor", "input_boolean", "switch"],
+                              undefined,
+                              "editor.help.bias_correction_slot_invalidation_export_enabled_entity_id",
+                            )}
+                          </div>
+                        `,
+                        { initialOpen: false },
+                      )}
+                    `,
+                    { initialOpen: false },
+                  )}
+
+                  <div class="list-card">
+                    <div class="card-title" style="margin-bottom: 16px;">
+                      <strong>${this._t("editor.sections.bias_correction_status")}</strong>
+                      <span class="card-subtitle">${this._t("bias_correction.status_panel.subtitle")}</span>
+                    </div>
+                    <helman-bias-correction-status .hass=${this.hass}></helman-bias-correction-status>
+                  </div>
+                `,
+                { initialOpen: false },
+              )}
             `,
             { initialOpen: false },
           )}
