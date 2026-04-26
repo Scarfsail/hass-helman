@@ -284,6 +284,49 @@ def test_load_forecast_points_for_day_returns_empty_outside_configured_horizon()
     assert result == []
 
 
+def test_load_forecast_points_for_day_reads_history_for_past_days():
+    async def mock_read_historical(hass, cfg, target_date, local_tz):
+        return SimpleNamespace(
+            attributes={
+                "wh_period": {
+                    "2026-04-24T06:00:00+02:00": 100,
+                    "2026-04-24T07:00:00+02:00": 200,
+                }
+            }
+        )
+
+    original = forecast_history._read_historical_forecast_state
+    forecast_history._read_historical_forecast_state = mock_read_historical
+
+    try:
+        hass = SimpleNamespace(
+            states=SimpleNamespace(get=lambda entity_id: None),
+            config=SimpleNamespace(time_zone="Europe/Prague"),
+        )
+
+        cfg = _make_cfg()
+        cfg.daily_energy_entity_ids = ["sensor.today", "sensor.tomorrow"]
+
+        result = asyncio.run(
+            forecast_history.load_forecast_points_for_day(
+                hass,
+                cfg,
+                date.fromisoformat("2026-04-24"),
+                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+            )
+        )
+
+        assert len(result) == 2
+        # First slot is 00:00 from expected_slots, paired with first data point (06:00)
+        assert result[0]["timestamp"] == "2026-04-24T00:00:00+02:00"
+        assert result[0]["value"] == 100.0
+        # Second slot is 01:00 from expected_slots, paired with second data point (07:00)
+        assert result[1]["timestamp"] == "2026-04-24T01:00:00+02:00"
+        assert result[1]["value"] == 200.0
+    finally:
+        forecast_history._read_historical_forecast_state = original
+
+
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():
     captured = {}
 
