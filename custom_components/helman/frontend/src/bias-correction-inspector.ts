@@ -22,6 +22,7 @@ type InspectorPayload = {
     raw: InspectorPoint[];
     corrected: InspectorPoint[];
     actual: InspectorPoint[];
+    invalidated: InspectorPoint[];
     factors: FactorPoint[];
   };
   totals: {
@@ -33,6 +34,7 @@ type InspectorPayload = {
     hasRawForecast: boolean;
     hasCorrectedForecast: boolean;
     hasActuals: boolean;
+    hasInvalidated: boolean;
     hasProfile: boolean;
   };
 };
@@ -189,6 +191,10 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       background: #c62828;
     }
 
+    .dot.invalidated {
+      background: #9aa0a6;
+    }
+
     .shade {
       width: 18px;
       height: 10px;
@@ -283,7 +289,8 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     const hasAnySeries =
       payload.availability.hasRawForecast ||
       payload.availability.hasCorrectedForecast ||
-      payload.availability.hasActuals;
+      payload.availability.hasActuals ||
+      payload.availability.hasInvalidated;
 
     return html`
       ${!payload.availability.hasProfile
@@ -305,6 +312,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
         ${payload.availability.hasRawForecast ? html`<span class="legend-item"><span class="swatch raw"></span>${this._t("bias_correction.inspector.raw_forecast")}</span>` : ""}
         ${payload.availability.hasCorrectedForecast ? html`<span class="legend-item"><span class="swatch corrected"></span>${this._t("bias_correction.inspector.corrected_forecast")}</span>` : ""}
         ${payload.availability.hasActuals ? html`<span class="legend-item"><span class="dot"></span>${this._t("bias_correction.inspector.actual_production")}</span>` : ""}
+        ${payload.availability.hasInvalidated ? html`<span class="legend-item"><span class="dot invalidated"></span>excluded from training: battery full + export disabled</span>` : ""}
         ${payload.availability.hasProfile ? html`<span class="legend-item"><span class="shade"></span>${this._t("bias_correction.inspector.correction_factor")}</span>` : ""}
       </div>
     `;
@@ -367,10 +375,12 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     const rawPoints = toAveragePower(payload.series.raw);
     const correctedPoints = toAveragePower(payload.series.corrected);
     const actualPoints = toAveragePower(payload.series.actual);
+    const invalidatedPoints = toAveragePower(payload.series.invalidated);
     const allPower = [
       ...rawPoints.map((entry) => entry.powerW),
       ...correctedPoints.map((entry) => entry.powerW),
       ...actualPoints.map((entry) => entry.powerW),
+      ...invalidatedPoints.map((entry) => entry.powerW),
     ];
     const maxW = Math.max(1000, ...allPower);
     const maxKw = Math.ceil(maxW / 1000);
@@ -419,6 +429,11 @@ export class HelmanBiasCorrectionInspector extends LitElement {
           : ""}
         ${actualPoints.map((entry) => svg`
           <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="#c62828"></circle>
+        `)}
+        ${invalidatedPoints.map((entry) => svg`
+          <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="#9aa0a6">
+            <title>excluded from training: battery full + export disabled</title>
+          </circle>
         `)}
       </svg>
     `;
