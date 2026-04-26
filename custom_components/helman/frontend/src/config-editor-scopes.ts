@@ -27,6 +27,10 @@ export type ScopeId =
   | "section:power_devices.solar"
   | "section:power_devices.solar.bias_correction"
   | "section:power_devices.solar.bias_correction.slot_invalidation"
+  | "section:power_devices.solar.general"
+  | "section:power_devices.solar.forecast"
+  | "section:power_devices.solar.forecast.general"
+  | "section:power_devices.solar.bias_correction.config"
   | "section:power_devices.battery"
   | "section:power_devices.grid"
   | "section:scheduler.schedule_control_mapping"
@@ -59,6 +63,10 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:power_devices.solar": "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.5,14.77 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.5,9.23 18.06,8.5C17.64,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.63,16.22 18.05,15.5C18.5,14.75 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
   "section:power_devices.solar.bias_correction": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
   "section:power_devices.solar.bias_correction.slot_invalidation": "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
+  "section:power_devices.solar.general": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
+  "section:power_devices.solar.forecast": "M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.27L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z",
+  "section:power_devices.solar.forecast.general": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
+  "section:power_devices.solar.bias_correction.config": "M5,14V3H3V14H5M5,21V16H3V21H5M11,21V10H9V21H11M11,8V3H9V8H11M17,21V14H15V21H17M17,12V3H15V12H17Z",
   "section:power_devices.battery": "M15.67,4H14V2H10V4H8.33C7.6,4 7,4.6 7,5.33V20.67C7,21.4 7.6,22 8.33,22H15.67C16.4,22 17,21.4 17,20.67V5.33C17,4.6 16.4,4 15.67,4M13,18H11V16H13V18M13,14H11V9H13V14Z",
   "section:power_devices.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
   "section:scheduler.schedule_control_mapping": "M16.53,11.06L15.47,10L10.59,14.88L8.47,12.76L7.41,13.82L10.59,17L16.53,11.06M19,3H18V1H16V3H8V1H6V3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M19,19H5V9H19V19M19,7H5V5H19V7Z",
@@ -105,6 +113,10 @@ export const SECTION_SCOPE_IDS = {
     solar_bias_correction: "section:power_devices.solar.bias_correction",
     slot_invalidation:
       "section:power_devices.solar.bias_correction.slot_invalidation",
+    solar_general: "section:power_devices.solar.general",
+    solar_forecast: "section:power_devices.solar.forecast",
+    solar_forecast_general: "section:power_devices.solar.forecast.general",
+    solar_bias_correction_config: "section:power_devices.solar.bias_correction.config",
     battery: "section:power_devices.battery",
     grid: "section:power_devices.grid",
   },
@@ -150,6 +162,27 @@ const AUTOMATION_SETTINGS_MEMBERS = [
     yamlKey: "enabled",
     documentPath: ["automation", "enabled"],
   },
+] satisfies ScopeProjectionMember[];
+
+const SOLAR_FORECAST_GENERAL_PROJECTION_MEMBERS = [
+  {
+    yamlKey: "total_energy_entity_id",
+    documentPath: ["power_devices", "solar", "forecast", "total_energy_entity_id"],
+  },
+  {
+    yamlKey: "daily_energy_entity_ids",
+    documentPath: ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
+  },
+] satisfies ScopeProjectionMember[];
+
+const SOLAR_BIAS_CORRECTION_CONFIG_PROJECTION_MEMBERS = [
+  { yamlKey: "enabled", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "enabled"] },
+  { yamlKey: "min_history_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"] },
+  { yamlKey: "max_training_window_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"] },
+  { yamlKey: "training_time", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "training_time"] },
+  { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
+  { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },
+  { yamlKey: "total_energy_entity_id", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"] },
 ] satisfies ScopeProjectionMember[];
 
 export const EDITOR_SCOPES = {
@@ -255,7 +288,7 @@ export const EDITOR_SCOPES = {
   [SECTION_SCOPE_IDS.power_devices.solar_bias_correction]: {
     id: SECTION_SCOPE_IDS.power_devices.solar_bias_correction,
     kind: "section",
-    parentId: SECTION_SCOPE_IDS.power_devices.solar,
+    parentId: SECTION_SCOPE_IDS.power_devices.solar_forecast,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction",
     adapter: createPathScopeAdapter(
@@ -265,6 +298,44 @@ export const EDITOR_SCOPES = {
         rootKind: "object",
       },
     ),
+  },
+  [SECTION_SCOPE_IDS.power_devices.solar_general]: {
+    id: SECTION_SCOPE_IDS.power_devices.solar_general,
+    kind: "section",
+    parentId: SECTION_SCOPE_IDS.power_devices.solar,
+    tabId: "power_devices",
+    labelKey: "editor.sections.solar_general",
+    adapter: createPathScopeAdapter(["power_devices", "solar", "entities"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [SECTION_SCOPE_IDS.power_devices.solar_forecast]: {
+    id: SECTION_SCOPE_IDS.power_devices.solar_forecast,
+    kind: "section",
+    parentId: SECTION_SCOPE_IDS.power_devices.solar,
+    tabId: "power_devices",
+    labelKey: "editor.sections.solar_forecast",
+    adapter: createPathScopeAdapter(["power_devices", "solar", "forecast"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [SECTION_SCOPE_IDS.power_devices.solar_forecast_general]: {
+    id: SECTION_SCOPE_IDS.power_devices.solar_forecast_general,
+    kind: "section",
+    parentId: SECTION_SCOPE_IDS.power_devices.solar_forecast,
+    tabId: "power_devices",
+    labelKey: "editor.sections.solar_forecast_general",
+    adapter: createProjectionScopeAdapter(SOLAR_FORECAST_GENERAL_PROJECTION_MEMBERS),
+  },
+  [SECTION_SCOPE_IDS.power_devices.solar_bias_correction_config]: {
+    id: SECTION_SCOPE_IDS.power_devices.solar_bias_correction_config,
+    kind: "section",
+    parentId: SECTION_SCOPE_IDS.power_devices.solar_bias_correction,
+    tabId: "power_devices",
+    labelKey: "editor.sections.bias_correction_config",
+    adapter: createProjectionScopeAdapter(SOLAR_BIAS_CORRECTION_CONFIG_PROJECTION_MEMBERS),
   },
   [SECTION_SCOPE_IDS.power_devices.slot_invalidation]: {
     id: SECTION_SCOPE_IDS.power_devices.slot_invalidation,
