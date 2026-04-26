@@ -286,12 +286,20 @@ def test_load_forecast_points_for_day_returns_empty_outside_configured_horizon()
 
 def test_load_forecast_points_for_day_reads_history_for_past_days():
     async def mock_read_historical(hass, cfg, target_date, local_tz):
+        # Create 24 hourly entries with 100 at 06:00 and 200 at 07:00, 0 for all others
+        wh_period = {}
+        for hour in range(24):
+            timestamp = f"2026-04-24T{hour:02d}:00:00+02:00"
+            if hour == 6:
+                wh_period[timestamp] = 100
+            elif hour == 7:
+                wh_period[timestamp] = 200
+            else:
+                wh_period[timestamp] = 0
+
         return SimpleNamespace(
             attributes={
-                "wh_period": {
-                    "2026-04-24T06:00:00+02:00": 100,
-                    "2026-04-24T07:00:00+02:00": 200,
-                }
+                "wh_period": wh_period
             }
         )
 
@@ -316,13 +324,13 @@ def test_load_forecast_points_for_day_reads_history_for_past_days():
             )
         )
 
-        assert len(result) == 2
-        # First slot is 00:00 from expected_slots, paired with first data point (06:00)
-        assert result[0]["timestamp"] == "2026-04-24T00:00:00+02:00"
-        assert result[0]["value"] == 100.0
-        # Second slot is 01:00 from expected_slots, paired with second data point (07:00)
-        assert result[1]["timestamp"] == "2026-04-24T01:00:00+02:00"
-        assert result[1]["value"] == 200.0
+        assert len(result) == 24
+        # 6:00 is slot 6
+        assert result[6]["timestamp"] == "2026-04-24T06:00:00+02:00"
+        assert result[6]["value"] == 100.0
+        # 7:00 is slot 7
+        assert result[7]["timestamp"] == "2026-04-24T07:00:00+02:00"
+        assert result[7]["value"] == 200.0
     finally:
         forecast_history._read_historical_forecast_state = original
 
