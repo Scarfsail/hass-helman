@@ -21,6 +21,7 @@ env/
 .vscode/
 .idea/
 .worktrees/
+.codex
 
 # Home Assistant
 .storage/
