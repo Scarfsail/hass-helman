@@ -255,6 +255,20 @@ class SolarBiasCorrectionService:
             target_date,
             ZoneInfo(str(self._hass.config.time_zone)),
         )
+        invalidated_points: list[SolarBiasInspectorPoint] = []
+        invalidated_slots = set(
+            self._metadata.invalidated_slots_by_date.get(target_date.isoformat(), [])
+        )
+        if target_date < today and actual_points and invalidated_slots:
+            forecast_slot_keys = _forecast_slot_keys_for_partition(
+                self._profile,
+                raw_points,
+            )
+            actual_points, invalidated_points = _partition_actual_points(
+                actual_points,
+                invalidated_slots=invalidated_slots,
+                forecast_slot_keys=forecast_slot_keys,
+            )
         day = SolarBiasInspectorDay(
             date=target_date.isoformat(),
             timezone=str(self._hass.config.time_zone),
@@ -267,6 +281,7 @@ class SolarBiasCorrectionService:
                 raw=_inspector_points(raw_points),
                 corrected=_inspector_points(corrected_points),
                 actual=actual_points,
+                invalidated=invalidated_points,
                 factors=factors,
             ),
             totals=SolarBiasInspectorTotals(
@@ -281,6 +296,7 @@ class SolarBiasCorrectionService:
                 has_corrected_forecast=bool(corrected_points),
                 has_actuals=bool(actuals_by_slot),
                 has_profile=has_profile,
+                has_invalidated=bool(invalidated_points),
             ),
             is_today=target_date == today,
             is_future=target_date > today,
@@ -514,6 +530,64 @@ def _sum_point_values(raw_points: list[dict[str, Any]]) -> float:
         except (TypeError, ValueError):
             continue
     return total
+
+
+def _slot_to_minutes(slot: str) -> int:
+    hour_text, minute_text = slot.split(":", 1)
+    return (int(hour_text) * 60) + int(minute_text)
+
+
+def _forecast_slot_keys_for_partition(
+    profile: SolarBiasProfile | None,
+    raw_points: list[dict[str, Any]],
+) -> list[str]:
+    if profile is not None and profile.factors:
+        return sorted(profile.factors, key=_slot_to_minutes)
+
+    slot_keys: set[str] = set()
+    for point in raw_points:
+        timestamp = point.get("timestamp")
+        if not isinstance(timestamp, str):
+            continue
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+        except ValueError:
+            continue
+        slot_keys.add(f"{parsed.hour:02d}:{parsed.minute:02d}")
+    return sorted(slot_keys, key=_slot_to_minutes)
+
+
+def _actual_point_slot_key(
+    point: SolarBiasInspectorPoint,
+    forecast_slot_keys: list[str],
+) -> str:
+    if not forecast_slot_keys:
+        parsed = datetime.fromisoformat(point.timestamp)
+        return f"{parsed.hour:02d}:{parsed.minute:02d}"
+
+    point_minutes = _slot_to_minutes(point.timestamp[11:16])
+    containing_slot = forecast_slot_keys[0]
+    for slot in forecast_slot_keys:
+        if _slot_to_minutes(slot) > point_minutes:
+            break
+        containing_slot = slot
+    return containing_slot
+
+
+def _partition_actual_points(
+    actual_points: list[SolarBiasInspectorPoint],
+    *,
+    invalidated_slots: set[str],
+    forecast_slot_keys: list[str],
+) -> tuple[list[SolarBiasInspectorPoint], list[SolarBiasInspectorPoint]]:
+    actual: list[SolarBiasInspectorPoint] = []
+    invalidated: list[SolarBiasInspectorPoint] = []
+    for point in actual_points:
+        if _actual_point_slot_key(point, forecast_slot_keys) in invalidated_slots:
+            invalidated.append(point)
+            continue
+        actual.append(point)
+    return actual, invalidated
 
 
 def _factor_points_for_profile(
