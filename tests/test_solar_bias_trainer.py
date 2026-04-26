@@ -91,6 +91,27 @@ def test_profile_trains_with_sufficient_history():
     assert outcome.metadata.factor_median == 1.0
 
 
+def test_train_logs_invalidated_slot_count(caplog):
+    cfg = make_cfg(min_history_days=1)
+    samples = [
+        models.TrainerSample(
+            date="2023-01-01",
+            forecast_wh=5000.0,
+            slot_forecast_wh=make_uniform_slot_forecast(5000.0),
+        )
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={"2023-01-01": make_uniform_actuals(5000.0)},
+        invalidated_slots_by_date={"2023-01-01": {"12:00", "13:00"}},
+    )
+
+    with caplog.at_level("INFO"):
+        trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert "invalidated" in caplog.text
+    assert "2" in caplog.text
+
+
 def test_insufficient_history_returns_fallback():
     cfg = make_cfg(min_history_days=3)
 

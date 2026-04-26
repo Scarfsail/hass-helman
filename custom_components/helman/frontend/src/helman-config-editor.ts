@@ -597,6 +597,31 @@ export class HelmanConfigEditorPanel extends LitElement {
       font: inherit;
     }
 
+    .number-input-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+    }
+
+    .number-input-wrap input {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+
+    .number-input-suffix {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 12px;
+      border: 1px solid var(--divider-color);
+      border-left: 0;
+      border-top-right-radius: 12px;
+      border-bottom-right-radius: 12px;
+      background: var(--secondary-background-color);
+      color: var(--secondary-text-color);
+      font-size: 0.9rem;
+      white-space: nowrap;
+    }
+
     .field textarea {
       min-height: 120px;
       resize: vertical;
@@ -1589,8 +1614,9 @@ export class HelmanConfigEditorPanel extends LitElement {
                         "max_battery_soc_percent",
                       ],
                       "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
-                      undefined,
+                      "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
                       "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
+                      { min: 0, max: 100, suffix: "%" },
                     )}
                     ${this._renderOptionalEntityField(
                       [
@@ -3155,6 +3181,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     labelKey: string,
     helperKey?: string,
     helpKey?: string,
+    options: { min?: number; max?: number; suffix?: string } = {},
   ): TemplateResult {
     return html`
       <div class="field">
@@ -3162,13 +3189,20 @@ export class HelmanConfigEditorPanel extends LitElement {
           <label>${this._t(labelKey)}</label>
           ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
         </div>
-        <input
-          type="number"
-          step="any"
-          .value=${this._stringValue(this._getValue(path))}
-          @change=${(event: Event) =>
-            this._setOptionalNumber(path, (event.currentTarget as HTMLInputElement).value)}
-        />
+        <div class="number-input-wrap">
+          <input
+            type="number"
+            step="any"
+            min=${options.min ?? nothing}
+            max=${options.max ?? nothing}
+            .value=${this._stringValue(this._getValue(path))}
+            @change=${(event: Event) =>
+              this._setOptionalNumber(path, (event.currentTarget as HTMLInputElement).value)}
+          />
+          ${options.suffix
+            ? html`<span class="number-input-suffix">${options.suffix}</span>`
+            : nothing}
+        </div>
         ${helperKey ? html`<div class="helper">${this._t(helperKey)}</div>` : nothing}
       </div>
     `;

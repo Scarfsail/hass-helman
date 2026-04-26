@@ -200,7 +200,7 @@
         "bias_correction_min_history_days": "Minimum days of historical data (1-365) before training begins.",
         "bias_correction_max_training_window_days": "Maximum number of past days Helman may use to train the solar bias correction model.",
         "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs.",
-        "bias_correction_slot_invalidation_max_battery_soc_percent": "Exclude slots when battery SoC reaches this threshold and export is disabled.",
+        "bias_correction_slot_invalidation_max_battery_soc_percent": "0-100%. Exclude slots when battery SoC reaches this threshold and export is disabled.",
         "bias_correction_slot_invalidation_export_enabled_entity_id": "Boolean entity that tells Helman whether grid export is currently allowed."
       },
     "messages": {
@@ -375,6 +375,8 @@
       "effective_variant": "Effective variant",
       "training_days_used": "Training days used",
       "training_days_required": "{used} / {required} required",
+      "invalidated_training_slots": "Invalidated training slots",
+      "invalidated_training_slots_value": "{count} (last training: {trainedAt})",
       "insufficient_history_text": "Not enough historical data yet. Have {used} days, need at least {required} days for training.",
       "error": "Error",
       "dropped_days": "Dropped days",

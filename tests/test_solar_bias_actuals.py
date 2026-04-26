@@ -270,6 +270,28 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         load_state_samples.assert_not_awaited()
         compute_invalidated.assert_not_called()
 
+    async def test_load_actuals_window_logs_warning_when_battery_soc_entity_is_missing(self) -> None:
+        hass = SimpleNamespace(
+            data={"helman": {"coordinator": SimpleNamespace(config={})}},
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=87.0,
+            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+        )
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(return_value={"12:00": 600.0}),
+        ), self.assertLogs(actuals.__name__, level="WARNING") as captured_logs:
+            await actuals.load_actuals_window(hass, cfg, days=1)
+
+        self.assertTrue(
+            any("battery" in message and "slot invalidation" in message for message in captured_logs.output)
+        )
+
     async def test_load_actuals_window_uses_capacity_entity_without_soc_bounds(self) -> None:
         hass = SimpleNamespace(
             data={

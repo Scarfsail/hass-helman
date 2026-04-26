@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
+import logging
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -52,6 +53,9 @@ except Exception:  # pragma: no cover - test stub compatibility
     ) -> dict[datetime, float]:
         del hass, entity_id, local_start, local_end, interval_minutes
         return {}
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def load_actuals_for_day(
@@ -155,6 +159,9 @@ async def _load_invalidated_slots_for_window(
 
     soc_entity_id = _read_battery_soc_entity_id_from_runtime_config(hass)
     if soc_entity_id is None:
+        _LOGGER.warning(
+            "Solar bias slot invalidation is configured, but power_devices.battery.entities.capacity is unavailable at runtime; skipping invalidation for this training window"
+        )
         return {}
 
     forecast_slot_starts_by_date, slot_keys_by_date = _build_slot_invalidation_inputs(

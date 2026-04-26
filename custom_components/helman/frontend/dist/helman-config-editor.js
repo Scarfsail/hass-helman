@@ -2006,7 +2006,7 @@ const jt = {
     bias_correction_min_history_days: "Minimum days of historical data (1-365) before training begins.",
     bias_correction_max_training_window_days: "Maximum number of past days Helman may use to train the solar bias correction model.",
     bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs.",
-    bias_correction_slot_invalidation_max_battery_soc_percent: "Exclude slots when battery SoC reaches this threshold and export is disabled.",
+    bias_correction_slot_invalidation_max_battery_soc_percent: "0-100%. Exclude slots when battery SoC reaches this threshold and export is disabled.",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that tells Helman whether grid export is currently allowed."
   },
   messages: {
@@ -2179,6 +2179,8 @@ const jt = {
     effective_variant: "Effective variant",
     training_days_used: "Training days used",
     training_days_required: "{used} / {required} required",
+    invalidated_training_slots: "Invalidated training slots",
+    invalidated_training_slots_value: "{count} (last training: {trainedAt})",
     insufficient_history_text: "Not enough historical data yet. Have {used} days, need at least {required} days for training.",
     error: "Error",
     dropped_days: "Dropped days",
@@ -2906,6 +2908,15 @@ const Ie = class Ie extends q {
         required: this._status.minHistoryDays
       })}</span>
               </div>
+              ${this._status.slotInvalidationEnabled || this._status.invalidatedSlotCount > 0 ? n`
+                    <div class="status-row">
+                      <span class="status-label">${this._t("bias_correction.status_panel.invalidated_training_slots")}</span>
+                      <span class="status-value">${this._tFormat("bias_correction.status_panel.invalidated_training_slots_value", {
+        count: this._status.invalidatedSlotCount ?? 0,
+        trainedAt: this._formatDate(this._status.trainedAt)
+      })}</span>
+                    </div>
+                  ` : ""}
               ${this._status.status === "insufficient_history" ? n`
                     <div class="info-box" style="margin-top: 8px;">
                       ${this._tFormat("bias_correction.status_panel.insufficient_history_text", {
@@ -3919,8 +3930,9 @@ const Ui = [
               "max_battery_soc_percent"
             ],
             "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
-            void 0,
-            "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent"
+            "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
+            "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
+            { min: 0, max: 100, suffix: "%" }
           )}
                     ${this._renderOptionalEntityField(
             [
@@ -5245,19 +5257,24 @@ const Ui = [
       </div>
     `;
   }
-  _renderOptionalNumberField(e, t, i, a) {
+  _renderOptionalNumberField(e, t, i, a, r = {}) {
     return n`
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
           ${a ? this._renderHelpIcon(t, a) : u}
         </div>
-        <input
-          type="number"
-          step="any"
-          .value=${this._stringValue(this._getValue(e))}
-          @change=${(r) => this._setOptionalNumber(e, r.currentTarget.value)}
-        />
+        <div class="number-input-wrap">
+          <input
+            type="number"
+            step="any"
+            min=${r.min ?? u}
+            max=${r.max ?? u}
+            .value=${this._stringValue(this._getValue(e))}
+            @change=${(s) => this._setOptionalNumber(e, s.currentTarget.value)}
+          />
+          ${r.suffix ? n`<span class="number-input-suffix">${r.suffix}</span>` : u}
+        </div>
         ${i ? n`<div class="helper">${this._t(i)}</div>` : u}
       </div>
     `;
@@ -6498,6 +6515,31 @@ ue.properties = {
       color: var(--primary-text-color);
       padding: 12px 14px;
       font: inherit;
+    }
+
+    .number-input-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+    }
+
+    .number-input-wrap input {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+
+    .number-input-suffix {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 12px;
+      border: 1px solid var(--divider-color);
+      border-left: 0;
+      border-top-right-radius: 12px;
+      border-bottom-right-radius: 12px;
+      background: var(--secondary-background-color);
+      color: var(--secondary-text-color);
+      font-size: 0.9rem;
+      white-space: nowrap;
     }
 
     .field textarea {

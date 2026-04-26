@@ -76,7 +76,11 @@ class _DummyStore:
         self.saved = payload
 
 
-def _make_cfg() -> models.BiasConfig:
+def _make_cfg(
+    *,
+    slot_invalidation_max_battery_soc_percent: float | None = None,
+    slot_invalidation_export_enabled_entity_id: str | None = None,
+) -> models.BiasConfig:
     return models.BiasConfig(
         enabled=True,
         min_history_days=2,
@@ -85,6 +89,12 @@ def _make_cfg() -> models.BiasConfig:
         clamp_max=2.0,
         daily_energy_entity_ids=[],
         total_energy_entity_id=None,
+        slot_invalidation_max_battery_soc_percent=(
+            slot_invalidation_max_battery_soc_percent
+        ),
+        slot_invalidation_export_enabled_entity_id=(
+            slot_invalidation_export_enabled_entity_id
+        ),
         max_training_window_days=90,
     )
 
@@ -257,6 +267,30 @@ def test_get_status_payload_includes_invalidated_slot_count():
         assert service.get_status_payload()["invalidatedSlotCount"] == 4
     finally:
         service_mod.dt_util.now = old_now
+
+
+def test_get_status_payload_reports_slot_invalidation_enabled():
+    service = service_mod.SolarBiasCorrectionService(
+        SimpleNamespace(bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None)),
+        _DummyStore(),
+        _make_cfg(
+            slot_invalidation_max_battery_soc_percent=97.0,
+            slot_invalidation_export_enabled_entity_id="binary_sensor.export_enabled",
+        ),
+    )
+
+    old_now = service_mod.dt_util.now
+    try:
+        from datetime import datetime
+
+        service_mod.dt_util.now = lambda: datetime.fromisoformat(
+            "2026-04-24T03:00:00+02:00"
+        )
+        payload = service.get_status_payload()
+    finally:
+        service_mod.dt_util.now = old_now
+
+    assert payload["slotInvalidationEnabled"] is True
 
 
 def test_reloaded_insufficient_history_payload_keeps_profile_unavailable():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import hashlib
+import logging
 from typing import Dict, List
 
 from .models import (
@@ -18,6 +19,7 @@ _DAY_RATIO_MIN = 0.05
 _DAY_RATIO_MAX = 5.0
 _SLOT_FORECAST_SUM_FLOOR_WH = 50.0
 _ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+_LOGGER = logging.getLogger(__name__)
 
 
 def compute_fingerprint(cfg: BiasConfig) -> str:
@@ -94,6 +96,10 @@ def train(
     )
     invalidated_slot_count = sum(
         len(slots) for slots in invalidated_slots_by_date.values()
+    )
+    _LOGGER.info(
+        "Solar bias training run includes %s invalidated training slots",
+        invalidated_slot_count,
     )
 
     usable_samples: List[TrainerSample] = []

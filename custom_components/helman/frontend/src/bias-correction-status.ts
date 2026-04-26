@@ -353,6 +353,17 @@ export class HelmanBiasCorrectionStatus extends LitElement {
                   required: this._status.minHistoryDays,
                 })}</span>
               </div>
+              ${this._status.slotInvalidationEnabled || this._status.invalidatedSlotCount > 0
+                ? html`
+                    <div class="status-row">
+                      <span class="status-label">${this._t("bias_correction.status_panel.invalidated_training_slots")}</span>
+                      <span class="status-value">${this._tFormat("bias_correction.status_panel.invalidated_training_slots_value", {
+                        count: this._status.invalidatedSlotCount ?? 0,
+                        trainedAt: this._formatDate(this._status.trainedAt),
+                      })}</span>
+                    </div>
+                  `
+                : ""}
               ${this._status.status === "insufficient_history"
                 ? html`
                     <div class="info-box" style="margin-top: 8px;">
