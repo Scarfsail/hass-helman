@@ -64,7 +64,7 @@
         "eco_gears": "Eco gears",
         "vehicles": "Vehicles",
         "bias_correction_settings": "Bias correction settings",
-        "bias_correction_slot_invalidation": "Slot invalidation",
+        "bias_correction_slot_invalidation": "Invalidate training slot data",
         "bias_correction_status": "Status and training"
       },
       "notes": {
@@ -421,6 +421,7 @@
       "raw_forecast": "Raw forecast",
       "corrected_forecast": "Corrected forecast",
       "actual_production": "Actual production",
+      "invalidated_production": "excluded from training: battery full + export disabled",
       "correction_factor": "Correction factor",
       "power_axis_label": "kW (avg)",
       "daily_totals": "Daily totals",

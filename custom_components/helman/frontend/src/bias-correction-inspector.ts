@@ -312,7 +312,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
         ${payload.availability.hasRawForecast ? html`<span class="legend-item"><span class="swatch raw"></span>${this._t("bias_correction.inspector.raw_forecast")}</span>` : ""}
         ${payload.availability.hasCorrectedForecast ? html`<span class="legend-item"><span class="swatch corrected"></span>${this._t("bias_correction.inspector.corrected_forecast")}</span>` : ""}
         ${payload.availability.hasActuals ? html`<span class="legend-item"><span class="dot"></span>${this._t("bias_correction.inspector.actual_production")}</span>` : ""}
-        ${payload.availability.hasInvalidated ? html`<span class="legend-item"><span class="dot invalidated"></span>excluded from training: battery full + export disabled</span>` : ""}
+        ${payload.availability.hasInvalidated ? html`<span class="legend-item"><span class="dot invalidated"></span>${this._t("bias_correction.inspector.invalidated_production")}</span>` : ""}
         ${payload.availability.hasProfile ? html`<span class="legend-item"><span class="shade"></span>${this._t("bias_correction.inspector.correction_factor")}</span>` : ""}
       </div>
     `;
@@ -432,7 +432,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
         `)}
         ${invalidatedPoints.map((entry) => svg`
           <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="#9aa0a6">
-            <title>excluded from training: battery full + export disabled</title>
+            <title>${this._t("bias_correction.inspector.invalidated_production")}</title>
           </circle>
         `)}
       </svg>
