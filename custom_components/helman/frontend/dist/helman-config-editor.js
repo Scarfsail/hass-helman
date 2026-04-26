@@ -296,8 +296,8 @@ const Kt = (o, e) => {
   let a, r = e === 2 ? "<svg>" : e === 3 ? "<math>" : "", s = X;
   for (let l = 0; l < t; l++) {
     const d = o[l];
-    let c, p, _ = -1, h = 0;
-    for (; h < d.length && (s.lastIndex = h, p = s.exec(d), p !== null); ) h = s.lastIndex, s === X ? p[1] === "!--" ? s = We : p[1] !== void 0 ? s = qe : p[2] !== void 0 ? (ft.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = R) : p[3] !== void 0 && (s = R) : s === R ? p[0] === ">" ? (s = a ?? X, _ = -1) : p[1] === void 0 ? _ = -2 : (_ = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? R : p[3] === '"' ? Be : Ke) : s === Be || s === Ke ? s = R : s === We || s === qe ? s = X : (s = R, a = void 0);
+    let c, p, _ = -1, m = 0;
+    for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === X ? p[1] === "!--" ? s = We : p[1] !== void 0 ? s = qe : p[2] !== void 0 ? (ft.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = R) : p[3] !== void 0 && (s = R) : s === R ? p[0] === ">" ? (s = a ?? X, _ = -1) : p[1] === void 0 ? _ = -2 : (_ = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? R : p[3] === '"' ? Be : Ke) : s === Be || s === Ke ? s = R : s === We || s === qe ? s = X : (s = R, a = void 0);
     const b = s === R && o[l + 1].startsWith("/>") ? " " : "";
     r += s === X ? d + Wt : _ >= 0 ? (i.push(c), d.slice(0, _) + yt + d.slice(_) + T + b) : d + T + (_ === -2 ? l : b);
   }
@@ -316,15 +316,15 @@ class le {
     for (; (a = U.nextNode()) !== null && d.length < l; ) {
       if (a.nodeType === 1) {
         if (a.hasAttributes()) for (const _ of a.getAttributeNames()) if (_.endsWith(yt)) {
-          const h = p[s++], b = a.getAttribute(_).split(T), V = /([.?@])?(.*)/.exec(h);
+          const m = p[s++], b = a.getAttribute(_).split(T), V = /([.?@])?(.*)/.exec(m);
           d.push({ type: 1, index: r, name: V[2], strings: b, ctor: V[1] === "." ? Zt : V[1] === "?" ? Gt : V[1] === "@" ? Jt : he }), a.removeAttribute(_);
         } else _.startsWith(T) && (d.push({ type: 6, index: r }), a.removeAttribute(_));
         if (ft.test(a.tagName)) {
-          const _ = a.textContent.split(T), h = _.length - 1;
-          if (h > 0) {
+          const _ = a.textContent.split(T), m = _.length - 1;
+          if (m > 0) {
             a.textContent = _e ? _e.emptyScript : "";
-            for (let b = 0; b < h; b++) a.append(_[b], se()), U.nextNode(), d.push({ type: 2, index: ++r });
-            a.append(_[h], se());
+            for (let b = 0; b < m; b++) a.append(_[b], se()), U.nextNode(), d.push({ type: 2, index: ++r });
+            a.append(_[m], se());
           }
         }
       } else if (a.nodeType === 8) if (a.data === bt) d.push({ type: 2, index: r });
@@ -982,7 +982,7 @@ function $i(o, e) {
 function xi(o) {
   const e = Array.isArray(o == null ? void 0 : o.appliances) ? o.appliances : [], t = {};
   for (const i of e)
-    Ei(i) && (t[i.id] = i);
+    Si(i) && (t[i.id] = i);
   return t;
 }
 function At(o, e) {
@@ -1001,10 +1001,10 @@ function rt(o) {
 function Ai(o) {
   return o === "generic" || o === "climate" ? o : null;
 }
-function Ei(o) {
+function Si(o) {
   return !!(o && typeof o == "object" && typeof o.id == "string" && typeof o.name == "string" && typeof o.kind == "string");
 }
-function Si() {
+function Ei() {
   return {
     read(o) {
       return x(o);
@@ -1109,7 +1109,7 @@ const ji = {
   scheduler: "tab:scheduler",
   automation: "tab:automation",
   appliances: "tab:appliances"
-}, m = {
+}, h = {
   general: {
     core_labels_and_history: "section:general.core_labels_and_history",
     device_label_text: "section:general.device_label_text"
@@ -1132,7 +1132,7 @@ const ji = {
   appliances: {
     configured_appliances: "section:appliances.configured_appliances"
   }
-}, Et = [
+}, St = [
   "history_buckets",
   "history_bucket_duration",
   "sources_title",
@@ -1143,21 +1143,21 @@ const ji = {
   "show_empty_groups",
   "show_others_group",
   "device_label_text"
-], Ci = Et.filter(
+], Ci = St.filter(
   (o) => o !== "device_label_text"
-), M = {}, $e = [], Li = St(Et), Pi = St(
+), M = {}, $e = [], Li = Et(St), Pi = Et(
   Ci
 ), Hi = [
   {
     yamlKey: "enabled",
     documentPath: ["automation", "enabled"]
   }
-], Ee = {
+], Se = {
   [C]: {
     id: C,
     kind: "document",
     labelKey: "editor.title",
-    adapter: Si()
+    adapter: Ei()
   },
   [y.general]: {
     id: y.general,
@@ -1211,16 +1211,16 @@ const ji = {
       rootKind: "array"
     })
   },
-  [m.general.core_labels_and_history]: {
-    id: m.general.core_labels_and_history,
+  [h.general.core_labels_and_history]: {
+    id: h.general.core_labels_and_history,
     kind: "section",
     parentId: y.general,
     tabId: "general",
     labelKey: "editor.sections.core_labels_and_history",
     adapter: we(Pi)
   },
-  [m.general.device_label_text]: {
-    id: m.general.device_label_text,
+  [h.general.device_label_text]: {
+    id: h.general.device_label_text,
     kind: "section",
     parentId: y.general,
     tabId: "general",
@@ -1230,8 +1230,8 @@ const ji = {
       rootKind: "object"
     })
   },
-  [m.power_devices.house]: {
-    id: m.power_devices.house,
+  [h.power_devices.house]: {
+    id: h.power_devices.house,
     kind: "section",
     parentId: y.power_devices,
     tabId: "power_devices",
@@ -1241,8 +1241,8 @@ const ji = {
       rootKind: "object"
     })
   },
-  [m.power_devices.solar]: {
-    id: m.power_devices.solar,
+  [h.power_devices.solar]: {
+    id: h.power_devices.solar,
     kind: "section",
     parentId: y.power_devices,
     tabId: "power_devices",
@@ -1252,10 +1252,10 @@ const ji = {
       rootKind: "object"
     })
   },
-  [m.power_devices.solar_bias_correction]: {
-    id: m.power_devices.solar_bias_correction,
+  [h.power_devices.solar_bias_correction]: {
+    id: h.power_devices.solar_bias_correction,
     kind: "section",
-    parentId: m.power_devices.solar,
+    parentId: h.power_devices.solar,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction",
     adapter: A(
@@ -1266,10 +1266,10 @@ const ji = {
       }
     )
   },
-  [m.power_devices.slot_invalidation]: {
-    id: m.power_devices.slot_invalidation,
+  [h.power_devices.slot_invalidation]: {
+    id: h.power_devices.slot_invalidation,
     kind: "section",
-    parentId: m.power_devices.solar_bias_correction,
+    parentId: h.power_devices.solar_bias_correction,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction_slot_invalidation",
     adapter: A(
@@ -1286,8 +1286,8 @@ const ji = {
       }
     )
   },
-  [m.power_devices.battery]: {
-    id: m.power_devices.battery,
+  [h.power_devices.battery]: {
+    id: h.power_devices.battery,
     kind: "section",
     parentId: y.power_devices,
     tabId: "power_devices",
@@ -1297,8 +1297,8 @@ const ji = {
       rootKind: "object"
     })
   },
-  [m.power_devices.grid]: {
-    id: m.power_devices.grid,
+  [h.power_devices.grid]: {
+    id: h.power_devices.grid,
     kind: "section",
     parentId: y.power_devices,
     tabId: "power_devices",
@@ -1308,8 +1308,8 @@ const ji = {
       rootKind: "object"
     })
   },
-  [m.scheduler.schedule_control_mapping]: {
-    id: m.scheduler.schedule_control_mapping,
+  [h.scheduler.schedule_control_mapping]: {
+    id: h.scheduler.schedule_control_mapping,
     kind: "section",
     parentId: y.scheduler,
     tabId: "scheduler",
@@ -1319,16 +1319,16 @@ const ji = {
       rootKind: "object"
     })
   },
-  [m.automation.settings]: {
-    id: m.automation.settings,
+  [h.automation.settings]: {
+    id: h.automation.settings,
     kind: "section",
     parentId: y.automation,
     tabId: "automation",
     labelKey: "editor.sections.automation_settings",
     adapter: we(Hi)
   },
-  [m.automation.optimizer_pipeline]: {
-    id: m.automation.optimizer_pipeline,
+  [h.automation.optimizer_pipeline]: {
+    id: h.automation.optimizer_pipeline,
     kind: "section",
     parentId: y.automation,
     tabId: "automation",
@@ -1338,8 +1338,8 @@ const ji = {
       rootKind: "array"
     })
   },
-  [m.appliances.configured_appliances]: {
-    id: m.appliances.configured_appliances,
+  [h.appliances.configured_appliances]: {
+    id: h.appliances.configured_appliances,
     kind: "section",
     parentId: y.appliances,
     tabId: "appliances",
@@ -1351,7 +1351,7 @@ const ji = {
   }
 }, nt = Oi();
 function ee(o) {
-  return Ee[o];
+  return Se[o];
 }
 function lt(o) {
   const e = [], t = [...nt[o]];
@@ -1361,7 +1361,7 @@ function lt(o) {
   }
   return e;
 }
-function St(o) {
+function Et(o) {
   return o.map((e) => ({
     yamlKey: e,
     documentPath: [e]
@@ -1369,9 +1369,9 @@ function St(o) {
 }
 function Oi() {
   const o = Object.fromEntries(
-    Object.keys(Ee).map((e) => [e, []])
+    Object.keys(Se).map((e) => [e, []])
   );
-  for (const e of Object.values(Ee))
+  for (const e of Object.values(Se))
     e.parentId && o[e.parentId].push(e.id);
   return o;
 }
@@ -2407,27 +2407,27 @@ const Yi = async () => {
     const a = { top: 18, right: 24, bottom: 34, left: 48 }, r = 720 - a.left - a.right, s = 260 - a.top - a.bottom, l = (g) => {
       const k = g.match(/T(\d{2}):(\d{2})/);
       if (!k) return null;
-      const E = Number(k[1]), F = Number(k[2]);
-      return !Number.isFinite(E) || !Number.isFinite(F) || E < 0 || E > 23 || F < 0 || F > 59 ? null : E * 60 + F;
+      const S = Number(k[1]), F = Number(k[2]);
+      return !Number.isFinite(S) || !Number.isFinite(F) || S < 0 || S > 23 || F < 0 || F > 59 ? null : S * 60 + F;
     }, d = (g) => {
       const k = g.map(($) => ({ point: $, minutes: l($.timestamp) })).filter(
         ($) => $.minutes !== null && Number.isFinite($.point.valueWh)
       ).sort(($, ce) => $.minutes - ce.minutes);
       if (k.length === 0) return [];
-      const E = [];
+      const S = [];
       for (let $ = 0; $ < k.length - 1; $++)
-        E.push(k[$ + 1].minutes - k[$].minutes);
-      const F = k.length === 1 ? 60 : E[E.length - 1] ?? 60;
+        S.push(k[$ + 1].minutes - k[$].minutes);
+      const F = k.length === 1 ? 60 : S[S.length - 1] ?? 60;
       return k.map(($, ce) => {
-        const Te = (ce < E.length ? E[ce] : F) / 60, Ht = Te > 0 ? $.point.valueWh / Te : 0;
+        const Te = (ce < S.length ? S[ce] : F) / 60, Ht = Te > 0 ? $.point.valueWh / Te : 0;
         return { point: $.point, minutes: $.minutes, powerW: Ht };
       });
-    }, c = d(e.series.raw), p = d(e.series.corrected), _ = d(e.series.actual), h = d(e.series.invalidated), b = [
+    }, c = d(e.series.raw), p = d(e.series.corrected), _ = d(e.series.actual), m = d(e.series.invalidated), b = [
       ...c.map((g) => g.powerW),
       ...p.map((g) => g.powerW),
       ..._.map((g) => g.powerW),
-      ...h.map((g) => g.powerW)
-    ], V = Math.max(1e3, ...b), S = Math.ceil(V / 1e3), me = this._buildYTicks(S), N = (g) => a.left + g / 1440 * r, O = (g) => a.top + s - g / (S * 1e3) * s, de = (g) => g.map((k, E) => `${E === 0 ? "M" : "L"}${N(k.minutes).toFixed(1)},${O(k.powerW).toFixed(1)}`).join(" ");
+      ...m.map((g) => g.powerW)
+    ], V = Math.max(1e3, ...b), E = Math.ceil(V / 1e3), me = this._buildYTicks(E), N = (g) => a.left + g / 1440 * r, O = (g) => a.top + s - g / (E * 1e3) * s, de = (g) => g.map((k, S) => `${S === 0 ? "M" : "L"}${N(k.minutes).toFixed(1)},${O(k.powerW).toFixed(1)}`).join(" ");
     return j`
       <svg viewBox="0 0 ${720} ${260}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
         <rect x="0" y="0" width=${720} height=${260} fill="var(--card-background-color)"></rect>
@@ -2452,7 +2452,7 @@ const Yi = async () => {
         ${_.map((g) => j`
           <circle cx=${N(g.minutes)} cy=${O(g.powerW)} r="3.5" fill="#c62828"></circle>
         `)}
-        ${h.map((g) => j`
+        ${m.map((g) => j`
           <circle cx=${N(g.minutes)} cy=${O(g.powerW)} r="3.5" fill="#9aa0a6">
             <title>${this._t("bias_correction.inspector.invalidated_production")}</title>
           </circle>
@@ -2469,11 +2469,11 @@ const Yi = async () => {
       if (!Number.isFinite(p.factor)) return "";
       const _ = p.slot.match(/^(\d{2}):(\d{2})$/);
       if (!_) return "";
-      const h = Number(_[1]), b = Number(_[2]);
-      if (!Number.isFinite(h) || !Number.isFinite(b) || h < 0 || h > 23 || b < 0 || b > 59)
+      const m = Number(_[1]), b = Number(_[2]);
+      if (!Number.isFinite(m) || !Number.isFinite(b) || m < 0 || m > 23 || b < 0 || b > 59)
         return "";
-      const V = h * 60 + b, S = t + V / 1440 * a, me = Math.max(2, a / 96), N = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), O = Math.min(0.34, 0.06 + N * 0.28), de = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
-      return j`<rect x=${S} y=${i} width=${me} height=${r} fill="rgba(${de}, ${O})"></rect>`;
+      const V = m * 60 + b, E = t + V / 1440 * a, me = Math.max(2, a / 96), N = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), O = Math.min(0.34, 0.06 + N * 0.28), de = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
+      return j`<rect x=${E} y=${i} width=${me} height=${r} fill="rgba(${de}, ${O})"></rect>`;
     });
   }
   _buildYTicks(e) {
@@ -2769,8 +2769,8 @@ re._CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"
       gap: 12px;
     }
   `;
-let Se = re;
-customElements.get("helman-bias-correction-inspector") || customElements.define("helman-bias-correction-inspector", Se);
+let Ee = re;
+customElements.get("helman-bias-correction-inspector") || customElements.define("helman-bias-correction-inspector", Ee);
 const Ie = class Ie extends q {
   constructor() {
     super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "", this._messageKind = "success", this._fallbackLocalize = J();
@@ -3686,7 +3686,7 @@ const Ui = [
   _renderGeneralTab() {
     return n`
       ${this._renderSectionScope(
-      m.general.core_labels_and_history,
+      h.general.core_labels_and_history,
       n`
           <div class="field-grid">
             ${this._renderOptionalNumberField(
@@ -3726,7 +3726,7 @@ const Ui = [
     )}
 
       ${this._renderSectionScope(
-      m.general.device_label_text,
+      h.general.device_label_text,
       n`
           <p class="inline-note">
             ${this._t("editor.notes.device_label_text")}
@@ -3749,7 +3749,7 @@ const Ui = [
     ) ?? [], i = z(this._getValue(["power_devices", "grid", "forecast", "import_price_windows"])) ?? [];
     return n`
       ${this._renderSectionScope(
-      m.power_devices.house,
+      h.power_devices.house,
       n`
           <div class="field-grid">
             ${this._renderRequiredEntityField(
@@ -3808,7 +3808,7 @@ const Ui = [
     )}
 
       ${this._renderSectionScope(
-      m.power_devices.solar,
+      h.power_devices.solar,
       n`
           <div class="field-grid field-grid--roomy">
             ${this._renderOptionalEntityField(
@@ -3858,7 +3858,7 @@ const Ui = [
           </div>
 
           ${this._renderSectionScope(
-        m.power_devices.solar_bias_correction,
+        h.power_devices.solar_bias_correction,
         n`
               <div class="field-grid">
                 ${this._renderBooleanField(
@@ -3905,6 +3905,42 @@ const Ui = [
         )}
               </div>
 
+              ${this._renderSectionScope(
+          h.power_devices.slot_invalidation,
+          n`
+                  <div class="field-grid">
+                    ${this._renderOptionalNumberField(
+            [
+              "power_devices",
+              "solar",
+              "forecast",
+              "bias_correction",
+              "slot_invalidation",
+              "max_battery_soc_percent"
+            ],
+            "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
+            void 0,
+            "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent"
+          )}
+                    ${this._renderOptionalEntityField(
+            [
+              "power_devices",
+              "solar",
+              "forecast",
+              "bias_correction",
+              "slot_invalidation",
+              "export_enabled_entity_id"
+            ],
+            "editor.fields.bias_correction_slot_invalidation_export_enabled_entity_id",
+            ["binary_sensor", "input_boolean", "switch"],
+            void 0,
+            "editor.help.bias_correction_slot_invalidation_export_enabled_entity_id"
+          )}
+                  </div>
+                `,
+          { initialOpen: !1 }
+        )}
+
               <div class="list-card">
                 <div class="card-title" style="margin-bottom: 16px;">
                   <strong>${this._t("editor.sections.bias_correction_status")}</strong>
@@ -3920,7 +3956,7 @@ const Ui = [
     )}
 
       ${this._renderSectionScope(
-      m.power_devices.battery,
+      h.power_devices.battery,
       n`
           <p class="inline-note">
             ${this._t("editor.notes.battery_entities")}
@@ -3993,7 +4029,7 @@ const Ui = [
     )}
 
       ${this._renderSectionScope(
-      m.power_devices.grid,
+      h.power_devices.grid,
       n`
           <div class="field-grid">
             ${this._renderOptionalEntityField(
@@ -4039,7 +4075,7 @@ const Ui = [
   _renderSchedulerTab() {
     return n`
       ${this._renderSectionScope(
-      m.scheduler.schedule_control_mapping,
+      h.scheduler.schedule_control_mapping,
       n`
           <div class="field-grid">
             ${this._renderRequiredEntityField(
@@ -4095,7 +4131,7 @@ const Ui = [
     const e = z(this._getValue(["automation", "optimizers"])) ?? [];
     return n`
       ${this._renderSectionScope(
-      m.automation.settings,
+      h.automation.settings,
       n`
           <p class="inline-note">
             ${this._t("editor.notes.automation")}
@@ -4107,7 +4143,7 @@ const Ui = [
     )}
 
       ${this._renderSectionScope(
-      m.automation.optimizer_pipeline,
+      h.automation.optimizer_pipeline,
       n`
           <p class="inline-note">
             ${this._t("editor.notes.optimizer_pipeline")}
@@ -4223,14 +4259,14 @@ const Ui = [
     `;
   }
   _renderSurplusApplianceOptimizerCard(e, t, i) {
-    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), p = this._stringValue(this._getValue([...r, "action"])) || Bi, _ = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, h = fe(
+    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), p = this._stringValue(this._getValue([...r, "action"])) || Bi, _ = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, m = fe(
       this._config,
       this._liveApplianceMetadata,
       c
     ), b = ke(
-      h,
+      m,
       this._stringValue(this._getValue([...r, "climate_mode"]))
-    ), V = this._getSurplusApplianceOptimizerTitle(h, l);
+    ), V = this._getSurplusApplianceOptimizerTitle(m, l);
     return n`
       <details class=${`list-card optimizer-card optimizer-card--${s ? "enabled" : "disabled"}`}>
         <summary>
@@ -4276,38 +4312,38 @@ const Ui = [
                 ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
               </div>
               <select
-                @change=${(S) => this._handleSurplusApplianceIdChange(
+                @change=${(E) => this._handleSurplusApplianceIdChange(
       t,
-      S.currentTarget.value
+      E.currentTarget.value
     )}
               >
-                <option value="" ?selected=${h.selectedId.length === 0}>
+                <option value="" ?selected=${m.selectedId.length === 0}>
                   ${this._t("editor.values.select_appliance")}
                 </option>
-                ${h.selectedMissingFromDraft && h.selectedId.length > 0 ? n`
+                ${m.selectedMissingFromDraft && m.selectedId.length > 0 ? n`
                       <option
-                        value=${h.selectedId}
+                        value=${m.selectedId}
                         ?selected=${!0}
                       >
                         ${this._tFormat("editor.dynamic.stale_appliance", {
-      id: h.selectedId
+      id: m.selectedId
     })}
                       </option>
                     ` : u}
-                ${h.options.map(
-      (S) => n`
+                ${m.options.map(
+      (E) => n`
                     <option
-                      value=${S.id}
-                      ?disabled=${S.selectionDisabled}
-                      ?selected=${S.id === h.selectedId}
+                      value=${E.id}
+                      ?disabled=${E.selectionDisabled}
+                      ?selected=${E.id === m.selectedId}
                     >
-                      ${this._formatSurplusApplianceOptionLabel(S)}
+                      ${this._formatSurplusApplianceOptionLabel(E)}
                     </option>
                   `
     )}
               </select>
               <div class="helper">
-                ${this._renderSurplusApplianceIdHelper(h)}
+                ${this._renderSurplusApplianceIdHelper(m)}
               </div>
             </div>
             ${this._renderRequiredNumberField(
@@ -4382,7 +4418,7 @@ const Ui = [
     const e = z(this._getValue(["appliances"])) ?? [];
     return n`
       ${this._renderSectionScope(
-      m.appliances.configured_appliances,
+      h.appliances.configured_appliances,
       n`
           <p class="inline-note">
             ${this._t("editor.notes.appliances")}
@@ -4811,7 +4847,7 @@ const Ui = [
               ${this._renderSimpleSection(
       this._t("editor.sections.use_modes"),
       n`<div class="list-stack">
-                  ${r.map(([h, b]) => this._renderUseMode(a, h, b))}
+                  ${r.map(([m, b]) => this._renderUseMode(a, m, b))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddUseMode(t)}>${this._t("editor.actions.add_use_mode")}</button>
@@ -4820,7 +4856,7 @@ const Ui = [
               ${this._renderSimpleSection(
       this._t("editor.sections.eco_gears"),
       n`<div class="list-stack">
-                  ${s.map(([h, b]) => this._renderEcoGear(a, h, b))}
+                  ${s.map(([m, b]) => this._renderEcoGear(a, m, b))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(t)}>${this._t("editor.actions.add_eco_gear")}</button>
@@ -4829,7 +4865,7 @@ const Ui = [
               ${this._renderSimpleSection(
       this._t("editor.sections.vehicles"),
       n`<div class="list-stack">
-                  ${l.map((h, b) => this._renderVehicle(a, h, b, l.length))}
+                  ${l.map((m, b) => this._renderVehicle(a, m, b, l.length))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddVehicle(t)}>${this._t("editor.actions.add_vehicle")}</button>
@@ -5794,7 +5830,7 @@ const Ui = [
     const t = z(w(e, ["automation", "optimizers"])) ?? [];
     let i = !1;
     return t.forEach((a, r) => {
-      var h;
+      var m;
       const s = f(a);
       if (!s || this._stringValue(s.kind) !== ut)
         return;
@@ -5808,7 +5844,7 @@ const Ui = [
         p,
         c
       );
-      if (((h = p.selectedOption) == null ? void 0 : h.kind) === "generic" && c.length > 0) {
+      if (((m = p.selectedOption) == null ? void 0 : m.kind) === "generic" && c.length > 0) {
         Y(e, [...l, "climate_mode"]), i = !0;
         return;
       }

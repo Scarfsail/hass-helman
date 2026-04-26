@@ -1575,6 +1575,42 @@ export class HelmanConfigEditorPanel extends LitElement {
                 )}
               </div>
 
+              ${this._renderSectionScope(
+                SECTION_SCOPE_IDS.power_devices.slot_invalidation,
+                html`
+                  <div class="field-grid">
+                    ${this._renderOptionalNumberField(
+                      [
+                        "power_devices",
+                        "solar",
+                        "forecast",
+                        "bias_correction",
+                        "slot_invalidation",
+                        "max_battery_soc_percent",
+                      ],
+                      "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
+                      undefined,
+                      "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
+                    )}
+                    ${this._renderOptionalEntityField(
+                      [
+                        "power_devices",
+                        "solar",
+                        "forecast",
+                        "bias_correction",
+                        "slot_invalidation",
+                        "export_enabled_entity_id",
+                      ],
+                      "editor.fields.bias_correction_slot_invalidation_export_enabled_entity_id",
+                      ["binary_sensor", "input_boolean", "switch"],
+                      undefined,
+                      "editor.help.bias_correction_slot_invalidation_export_enabled_entity_id",
+                    )}
+                  </div>
+                `,
+                { initialOpen: false },
+              )}
+
               <div class="list-card">
                 <div class="card-title" style="margin-bottom: 16px;">
                   <strong>${this._t("editor.sections.bias_correction_status")}</strong>
