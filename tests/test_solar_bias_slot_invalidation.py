@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,27 +46,29 @@ def _dt(hour: int, minute: int) -> datetime:
 
 def _inputs(
     *,
-    slot_actuals_by_date: dict[str, dict[str, float]] | None = None,
-    max_battery_soc_percent: float | None = 85.0,
-    battery_soc_samples: list[StateSample] | None = None,
-    export_enabled_samples: list[StateSample] | None = None,
+    max_battery_soc_percent: float = 85.0,
+    soc_samples_utc: list[StateSample] | None = None,
+    export_samples_utc: list[StateSample] | None = None,
+    forecast_slot_starts_by_date: dict[str, list[datetime]] | None = None,
+    slot_keys_by_date: dict[str, list[str]] | None = None,
 ) -> InvalidationInputs:
     return InvalidationInputs(
-        slot_actuals_by_date=slot_actuals_by_date or {"2026-04-15": {"12:00": 100.0}},
         max_battery_soc_percent=max_battery_soc_percent,
-        battery_soc_samples=battery_soc_samples or [],
-        export_enabled_samples=export_enabled_samples or [],
-        slot_duration=timedelta(minutes=15),
+        soc_samples_utc=soc_samples_utc or [],
+        export_samples_utc=export_samples_utc or [],
+        forecast_slot_starts_by_date=forecast_slot_starts_by_date
+        or {"2026-04-15": [_dt(12, 0)]},
+        slot_keys_by_date=slot_keys_by_date or {"2026-04-15": ["12:00"]},
     )
 
 
 def test_returns_empty_when_no_inputs_are_available() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
-            slot_actuals_by_date={},
-            max_battery_soc_percent=None,
-            battery_soc_samples=[],
-            export_enabled_samples=[],
+            forecast_slot_starts_by_date={},
+            slot_keys_by_date={},
+            soc_samples_utc=[],
+            export_samples_utc=[],
         )
     )
 
@@ -76,11 +78,11 @@ def test_returns_empty_when_no_inputs_are_available() -> None:
 def test_invalidates_when_soc_reaches_threshold_and_export_turns_off() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
-            battery_soc_samples=[
+            soc_samples_utc=[
                 StateSample(timestamp=_dt(12, 0), value=84.0),
                 StateSample(timestamp=_dt(12, 10), value=88.0),
             ],
-            export_enabled_samples=[
+            export_samples_utc=[
                 StateSample(timestamp=_dt(12, 0), value=True),
                 StateSample(timestamp=_dt(12, 5), value=False),
             ],
@@ -93,8 +95,8 @@ def test_invalidates_when_soc_reaches_threshold_and_export_turns_off() -> None:
 def test_does_not_invalidate_when_export_stays_on() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
-            battery_soc_samples=[StateSample(timestamp=_dt(12, 0), value=90.0)],
-            export_enabled_samples=[StateSample(timestamp=_dt(12, 0), value=True)],
+            soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
+            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=True)],
         )
     )
 
@@ -104,8 +106,8 @@ def test_does_not_invalidate_when_export_stays_on() -> None:
 def test_does_not_invalidate_when_soc_is_missing() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
-            battery_soc_samples=[],
-            export_enabled_samples=[StateSample(timestamp=_dt(12, 0), value=False)],
+            soc_samples_utc=[],
+            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=False)],
         )
     )
 
@@ -115,8 +117,8 @@ def test_does_not_invalidate_when_soc_is_missing() -> None:
 def test_does_not_invalidate_when_export_state_is_unknown() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
-            battery_soc_samples=[StateSample(timestamp=_dt(12, 0), value=90.0)],
-            export_enabled_samples=[StateSample(timestamp=_dt(12, 0), value=None)],
+            soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
+            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=None)],
         )
     )
 
@@ -126,9 +128,59 @@ def test_does_not_invalidate_when_export_state_is_unknown() -> None:
 def test_uses_left_edge_inheritance_for_soc_and_export_state() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
-            battery_soc_samples=[StateSample(timestamp=_dt(11, 55), value=91.0)],
-            export_enabled_samples=[StateSample(timestamp=_dt(11, 59), value=False)],
+            soc_samples_utc=[StateSample(timestamp=_dt(11, 55), value=91.0)],
+            export_samples_utc=[StateSample(timestamp=_dt(11, 59), value=False)],
         )
     )
 
     assert invalidated == {"2026-04-15": {"12:00"}}
+
+
+def test_sample_at_slot_end_applies_to_next_slot_only() -> None:
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[
+                StateSample(timestamp=_dt(12, 0), value=90.0),
+                StateSample(timestamp=_dt(12, 15), value=90.0),
+            ],
+            export_samples_utc=[
+                StateSample(timestamp=_dt(12, 0), value=True),
+                StateSample(timestamp=_dt(12, 15), value=False),
+            ],
+            forecast_slot_starts_by_date={"2026-04-15": [_dt(12, 0), _dt(12, 15)]},
+            slot_keys_by_date={"2026-04-15": ["12:00", "12:15"]},
+        )
+    )
+
+    assert invalidated == {"2026-04-15": {"12:15"}}
+
+
+def test_sample_at_slot_start_applies_to_current_slot() -> None:
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
+            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=False)],
+        )
+    )
+
+    assert invalidated == {"2026-04-15": {"12:00"}}
+
+
+def test_final_slot_uses_next_day_boundary_for_slot_end() -> None:
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 23, 45, tzinfo=TZ), value=90.0)
+            ],
+            export_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 23, 45, tzinfo=TZ), value=True),
+                StateSample(timestamp=datetime(2026, 4, 15, 23, 59, tzinfo=TZ), value=False),
+            ],
+            forecast_slot_starts_by_date={
+                "2026-04-15": [datetime(2026, 4, 15, 23, 45, tzinfo=TZ)]
+            },
+            slot_keys_by_date={"2026-04-15": ["23:45"]},
+        )
+    )
+
+    assert invalidated == {"2026-04-15": {"23:45"}}

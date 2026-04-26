@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 
 @dataclass(frozen=True)
@@ -12,34 +12,35 @@ class StateSample:
 
 @dataclass(frozen=True)
 class InvalidationInputs:
-    slot_actuals_by_date: dict[str, dict[str, float]]
-    max_battery_soc_percent: float | None
-    battery_soc_samples: list[StateSample]
-    export_enabled_samples: list[StateSample]
-    slot_duration: timedelta
+    max_battery_soc_percent: float
+    soc_samples_utc: list[StateSample]
+    export_samples_utc: list[StateSample]
+    forecast_slot_starts_by_date: dict[str, list[datetime]]
+    slot_keys_by_date: dict[str, list[str]]
 
 
 def compute_invalidated_slots_for_window(
     inputs: InvalidationInputs,
 ) -> dict[str, set[str]]:
-    if not inputs.slot_actuals_by_date or inputs.max_battery_soc_percent is None:
+    if not inputs.forecast_slot_starts_by_date:
         return {}
 
-    battery_soc_samples = sorted(inputs.battery_soc_samples, key=lambda sample: sample.timestamp)
-    export_enabled_samples = sorted(
-        inputs.export_enabled_samples, key=lambda sample: sample.timestamp
-    )
-    tzinfo = _resolve_tzinfo(battery_soc_samples, export_enabled_samples)
+    soc_samples = sorted(inputs.soc_samples_utc, key=lambda sample: sample.timestamp)
+    export_samples = sorted(inputs.export_samples_utc, key=lambda sample: sample.timestamp)
     invalidated_slots_by_date: dict[str, set[str]] = {}
 
-    for day in sorted(inputs.slot_actuals_by_date):
+    for day in sorted(inputs.forecast_slot_starts_by_date):
+        slot_starts = inputs.forecast_slot_starts_by_date.get(day, [])
+        slot_keys = inputs.slot_keys_by_date.get(day, [])
+        if len(slot_starts) != len(slot_keys):
+            continue
+
         invalidated_slots: set[str] = set()
-        for slot in sorted(inputs.slot_actuals_by_date[day]):
-            slot_start = _parse_slot_start(day, slot, tzinfo)
-            slot_end = slot_start + inputs.slot_duration
+        for index, (slot_start, slot_key) in enumerate(zip(slot_starts, slot_keys)):
+            slot_end = _resolve_slot_end(day, slot_starts, index)
 
             peak_soc = _peak_numeric_value(
-                battery_soc_samples,
+                soc_samples,
                 slot_start=slot_start,
                 slot_end=slot_end,
             )
@@ -47,14 +48,14 @@ def compute_invalidated_slots_for_window(
                 continue
 
             export_values = _segment_values(
-                export_enabled_samples,
+                export_samples,
                 slot_start=slot_start,
                 slot_end=slot_end,
             )
             if not export_values or any(value is None for value in export_values):
                 continue
             if any(value is False for value in export_values):
-                invalidated_slots.add(slot)
+                invalidated_slots.add(slot_key)
 
         if invalidated_slots:
             invalidated_slots_by_date[day] = invalidated_slots
@@ -62,21 +63,19 @@ def compute_invalidated_slots_for_window(
     return invalidated_slots_by_date
 
 
-def _parse_slot_start(day: str, slot: str, tzinfo) -> datetime:
-    slot_start = datetime.combine(date.fromisoformat(day), time.fromisoformat(slot))
-    if tzinfo is not None:
-        slot_start = slot_start.replace(tzinfo=tzinfo)
-    return slot_start
-
-
-def _resolve_tzinfo(
-    battery_soc_samples: list[StateSample],
-    export_enabled_samples: list[StateSample],
-):
-    for sample in [*battery_soc_samples, *export_enabled_samples]:
-        if sample.timestamp.tzinfo is not None:
-            return sample.timestamp.tzinfo
-    return None
+def _resolve_slot_end(
+    day: str,
+    slot_starts: list[datetime],
+    index: int,
+) -> datetime:
+    if index + 1 < len(slot_starts):
+        return slot_starts[index + 1]
+    next_midnight = datetime.combine(
+        date.fromisoformat(day) + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    )
+    return next_midnight
 
 
 def _peak_numeric_value(
