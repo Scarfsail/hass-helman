@@ -67,12 +67,12 @@ async def _read_historical_forecast_state(
     hass: HomeAssistant,
     cfg: BiasConfig,
     target_date: date,
-) -> Any | None:
+    local_tz: ZoneInfo,
+) -> Any:
     entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=1)
     if not entity_ids:
         return None
 
-    local_tz = ZoneInfo(str(hass.config.time_zone))
     local_start = datetime.combine(target_date, time.min, tzinfo=local_tz)
     local_end = local_start + timedelta(days=1)
 
@@ -109,11 +109,10 @@ async def load_historical_per_slot_forecast(
 
     NOTE: requires recorder to retain attribute history >= min_history_days.
     """
-    state = await _read_historical_forecast_state(hass, cfg, target_date)
+    local_tz = ZoneInfo(str(hass.config.time_zone))
+    state = await _read_historical_forecast_state(hass, cfg, target_date, local_tz)
     if state is None:
         return None
-
-    local_tz = ZoneInfo(str(hass.config.time_zone))
     attributes = getattr(state, "attributes", {})
     if not isinstance(attributes, dict):
         return None
