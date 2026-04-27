@@ -10,6 +10,7 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_TRAINING_TIME,
     SOLAR_BIAS_DEFAULT_CLAMP_MIN,
     SOLAR_BIAS_DEFAULT_CLAMP_MAX,
+    SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD,
 )
 
 
@@ -22,6 +23,7 @@ class BiasConfig:
     clamp_max: float
     daily_energy_entity_ids: list[str]
     total_energy_entity_id: str | None
+    aggregation_method: str = SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
     slot_invalidation_max_battery_soc_percent: float | None = None
     slot_invalidation_export_enabled_entity_id: str | None = None
     max_training_window_days: int = SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
@@ -209,6 +211,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     training_time = bias.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
     clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
     clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
+    aggregation_method = bias.get("aggregation_method", SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD)
     slot_invalidation = bias.get("slot_invalidation") or {}
 
     daily_energy_entity_ids = forecast.get("daily_energy_entity_ids") or []
@@ -235,6 +238,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         training_time=training_time,
         clamp_min=clamp_min,
         clamp_max=clamp_max,
+        aggregation_method=aggregation_method,
         daily_energy_entity_ids=daily_energy_entity_ids,
         total_energy_entity_id=total_energy_entity_id,
         slot_invalidation_max_battery_soc_percent=(

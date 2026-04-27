@@ -1004,7 +1004,7 @@ function Ai(o) {
 function Si(o) {
   return !!(o && typeof o == "object" && typeof o.id == "string" && typeof o.name == "string" && typeof o.kind == "string");
 }
-function Ei() {
+function ji() {
   return {
     read(o) {
       return z(o);
@@ -1071,7 +1071,7 @@ function ee(o) {
 function Oe(o, e) {
   return e === "array" ? Array.isArray(o) ? null : { code: "expected_array" } : P(o) ? null : { code: "expected_object" };
 }
-const ji = {
+const Ei = {
   general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   power_devices: "M7,2V13H10V22L17,11H13L17,2H7Z",
   scheduler: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z",
@@ -1153,7 +1153,7 @@ const ji = {
   "device_label_text"
 ], Ci = St.filter(
   (o) => o !== "device_label_text"
-), S = {}, $e = [], Hi = Et(St), Li = Et(
+), S = {}, $e = [], Hi = jt(St), Li = jt(
   Ci
 ), Pi = [
   {
@@ -1176,13 +1176,14 @@ const ji = {
   { yamlKey: "training_time", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "training_time"] },
   { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
   { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },
+  { yamlKey: "aggregation_method", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"] },
   { yamlKey: "total_energy_entity_id", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"] }
 ], Se = {
   [C]: {
     id: C,
     kind: "document",
     labelKey: "editor.title",
-    adapter: Ei()
+    adapter: ji()
   },
   [y.general]: {
     id: y.general,
@@ -1424,7 +1425,7 @@ function lt(o) {
   }
   return e;
 }
-function Et(o) {
+function jt(o) {
   return o.map((e) => ({
     yamlKey: e,
     documentPath: [e]
@@ -1438,7 +1439,7 @@ function Ti() {
     e.parentId && o[e.parentId].push(e.id);
   return o;
 }
-const jt = {
+const Et = {
   title: "Editor konfigurace Helman",
   description: "Upravte uloženou konfiguraci integrace Helman, validujte ji v backendu a uložte ji bez ztráty nepodporovaných klíčů nebo budoucích konfiguračních větví.",
   tabs: {
@@ -1618,6 +1619,9 @@ const jt = {
     bias_correction_training_time: "Čas trénování (HH:MM)",
     bias_correction_clamp_min: "Min. zajistění prognózy",
     bias_correction_clamp_max: "Max. zajistění prognózy",
+    bias_correction_aggregation_method: "Metoda agregace",
+    bias_correction_aggregation_method_ratio_of_sums: "Poměr součtů (Ratio of Sums)",
+    bias_correction_aggregation_method_trimmed_mean: "Oříznutý průměr (Trimmed Mean)",
     bias_correction_total_energy_entity: "Entita celkové energie",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Max. SoC baterie %",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Entita povolení exportu"
@@ -1787,8 +1791,9 @@ const jt = {
     bias_correction_min_history_days: "Minimální počet dní zaznamenaných solárních dat před tím, než lze model trénovat (1-365). Vyšší hodnota zajišťuje stabilnější trénování, ale zpožďuje opravy. Výchozí hodnota je 10 dní.",
     bias_correction_max_training_window_days: "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy. Pokud je historie kratší, Helman použije dostupná data; pokud je delší, trénovací okno omezí na tuto hodnotu. Vyšší maximum vytváří stabilnější korekční faktory, ale reaguje pomaleji na sezónní nebo systémové změny. Výchozí hodnota je 90 dní.",
     bias_correction_training_time: "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování, obvykle během hodin s nízkou aktivitou. Trénování zpracovává historická data za účelem nepřetržitého zlepšování přesnosti prognózy.",
-    bias_correction_clamp_min: "Dolní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem nižší než prognóza. Například hodnota 0,3 zajistí, že opravená prognóza bude činit alespoň 30 % původní hodnoty. Vyšší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 0,3.",
-    bias_correction_clamp_max: "Horní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem vyšší než prognóza. Například hodnota 2,0 zajistí, že opravená prognóza bude činit maximálně 200 % původní hodnoty. Nižší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 2,0.",
+    bias_correction_clamp_min: "Dolní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem nižší než prognóza. Například hodnota 0,0 umožní, aby opravená prognóza klesla až na nulu během fyzického zastínění panelů. Vyšší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 0,0.",
+    bias_correction_clamp_max: "Horní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem vyšší než prognóza. Například hodnota 3,0 zajistí, že opravená prognóza bude činit maximálně 300 % původní hodnoty. Nižší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 3,0.",
+    bias_correction_aggregation_method: "Metoda použitá k agregaci historických dat. 'Poměr součtů' správně váží jasné slunečné dny oproti menším oblačným dnům a přirozeně filtruje šum z kvantizace senzoru energie (doporučeno). 'Oříznutý průměr' počítá faktor pro každý den nezávisle a průměruje je po vynechání nejvyšších a nejnižších extrémů, což poskytuje robustnost proti jednodenním anomáliím, ale může příliš korigovat velké slunečné dny kvůli nedostatku vážení objemu. Výchozí hodnota je 'Poměr součtů'.",
     bias_correction_total_energy_entity: "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce."
   }
 }, Mt = {
@@ -1869,7 +1874,7 @@ const jt = {
     no_data: "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy."
   }
 }, Ni = {
-  editor: jt,
+  editor: Et,
   common: Mt,
   bias_correction: Vt
 }, Di = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
@@ -1877,7 +1882,7 @@ const jt = {
   bias_correction: Vt,
   common: Mt,
   default: Ni,
-  editor: jt
+  editor: Et
 }, Symbol.toStringTag, { value: "Module" })), Ct = {
   title: "Helman config editor",
   description: "Edit the stored Helman integration config, validate it in the backend, and save it without losing unsupported keys or future config branches.",
@@ -2058,6 +2063,9 @@ const jt = {
     bias_correction_training_time: "Training time (HH:MM)",
     bias_correction_clamp_min: "Min forecast clamp",
     bias_correction_clamp_max: "Max forecast clamp",
+    bias_correction_aggregation_method: "Aggregation method",
+    bias_correction_aggregation_method_ratio_of_sums: "Ratio of Sums",
+    bias_correction_aggregation_method_trimmed_mean: "Trimmed Mean",
     bias_correction_total_energy_entity: "Total energy entity",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Max battery SoC %",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Export enabled entity"
@@ -2227,8 +2235,9 @@ const jt = {
     bias_correction_min_history_days: "Minimum number of days of recorded solar data before the model can be trained (1-365). A higher value ensures more stable training but delays corrections. Defaults to 10 days.",
     bias_correction_max_training_window_days: "Maximum number of past days Helman may use to train the solar bias correction model. If less history is available, Helman uses what it has; if more is available, Helman caps the training window at this value. A larger maximum produces more stable correction factors but reacts more slowly to seasonal or system changes. Defaults to 90 days.",
     bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs, typically during low-activity hours. Training processes historical data to continuously improve forecast accuracy.",
-    bias_correction_clamp_min: "Lower bound for the correction factor. Prevents over-correction when the actual production is much lower than the forecast. For example, 0.3 ensures the corrected forecast is at least 30% of the original value. A higher value (closer to 1.0) reduces the correction intensity. Defaults to 0.3.",
-    bias_correction_clamp_max: "Upper bound for the correction factor. Prevents over-correction when the actual production is much higher than the forecast. For example, 2.0 ensures the corrected forecast is at most 200% of the original value. A lower value (closer to 1.0) reduces the correction intensity. Defaults to 2.0.",
+    bias_correction_clamp_min: "Lower bound for the correction factor. Prevents over-correction when the actual production is much lower than the forecast. For example, 0.0 allows the corrected forecast to drop all the way to zero during physically blocked periods. A higher value (closer to 1.0) reduces the correction intensity. Defaults to 0.0.",
+    bias_correction_clamp_max: "Upper bound for the correction factor. Prevents over-correction when the actual production is much higher than the forecast. For example, 3.0 ensures the corrected forecast is at most 300% of the original value. A lower value (closer to 1.0) reduces the correction intensity. Defaults to 3.0.",
+    bias_correction_aggregation_method: "Method used to aggregate historical data. 'Ratio of Sums' correctly weights clear, sunny days over small, cloudy days and inherently filters out energy sensor quantization noise (recommended). 'Trimmed Mean' calculates the factor for each day independently and averages them after dropping the highest and lowest extremes, providing robustness to single-day anomalies but over-correcting large sunny days due to lack of volume weighting. Defaults to 'Ratio of Sums'.",
     bias_correction_total_energy_entity: "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Battery state-of-charge threshold as a percentage. When the battery reaches or exceeds this value during a forecast slot and export is disabled in the same slot, Helman excludes that slot from solar bias correction actuals to avoid training on curtailed production.",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that reports whether grid export is currently enabled. Helman combines this with the max battery SoC threshold to invalidate slots where solar production was likely clipped because export was disabled while the battery was effectively full."
@@ -2488,19 +2497,19 @@ const Wi = async () => {
     const a = { top: 18, right: 24, bottom: 34, left: 48 }, r = 720 - a.left - a.right, s = 260 - a.top - a.bottom, l = (g) => {
       const k = g.match(/T(\d{2}):(\d{2})/);
       if (!k) return null;
-      const E = Number(k[1]), F = Number(k[2]);
-      return !Number.isFinite(E) || !Number.isFinite(F) || E < 0 || E > 23 || F < 0 || F > 59 ? null : E * 60 + F;
+      const j = Number(k[1]), F = Number(k[2]);
+      return !Number.isFinite(j) || !Number.isFinite(F) || j < 0 || j > 23 || F < 0 || F > 59 ? null : j * 60 + F;
     }, d = (g) => {
       const k = g.map(($) => ({ point: $, minutes: l($.timestamp) })).filter(
         ($) => $.minutes !== null && Number.isFinite($.point.valueWh)
       ).sort(($, pe) => $.minutes - pe.minutes);
       if (k.length === 0) return [];
-      const E = [];
+      const j = [];
       for (let $ = 0; $ < k.length - 1; $++)
-        E.push(k[$ + 1].minutes - k[$].minutes);
-      const F = k.length === 1 ? 60 : E[E.length - 1] ?? 60;
+        j.push(k[$ + 1].minutes - k[$].minutes);
+      const F = k.length === 1 ? 60 : j[j.length - 1] ?? 60;
       return k.map(($, pe) => {
-        const Te = (pe < E.length ? E[pe] : F) / 60, Pt = Te > 0 ? $.point.valueWh / Te : 0;
+        const Te = (pe < j.length ? j[pe] : F) / 60, Pt = Te > 0 ? $.point.valueWh / Te : 0;
         return { point: $.point, minutes: $.minutes, powerW: Pt };
       });
     }, c = d(e.series.raw), p = d(e.series.corrected), u = d(e.series.actual), m = d(e.series.invalidated), b = [
@@ -2508,7 +2517,7 @@ const Wi = async () => {
       ...p.map((g) => g.powerW),
       ...u.map((g) => g.powerW),
       ...m.map((g) => g.powerW)
-    ], V = Math.max(1e3, ...b), j = Math.ceil(V / 1e3), ge = this._buildYTicks(j), D = (g) => a.left + g / 1440 * r, O = (g) => a.top + s - g / (j * 1e3) * s, ce = (g) => g.map((k, E) => `${E === 0 ? "M" : "L"}${D(k.minutes).toFixed(1)},${O(k.powerW).toFixed(1)}`).join(" ");
+    ], V = Math.max(1e3, ...b), E = Math.ceil(V / 1e3), ge = this._buildYTicks(E), D = (g) => a.left + g / 1440 * r, O = (g) => a.top + s - g / (E * 1e3) * s, ce = (g) => g.map((k, j) => `${j === 0 ? "M" : "L"}${D(k.minutes).toFixed(1)},${O(k.powerW).toFixed(1)}`).join(" ");
     return M`
       <svg viewBox="0 0 ${720} ${260}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
         <rect x="0" y="0" width=${720} height=${260} fill="var(--card-background-color)"></rect>
@@ -2553,8 +2562,8 @@ const Wi = async () => {
       const m = Number(u[1]), b = Number(u[2]);
       if (!Number.isFinite(m) || !Number.isFinite(b) || m < 0 || m > 23 || b < 0 || b > 59)
         return "";
-      const V = m * 60 + b, j = t + V / 1440 * a, ge = Math.max(2, a / 96), D = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), O = Math.min(0.34, 0.06 + D * 0.28), ce = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
-      return M`<rect x=${j} y=${i} width=${ge} height=${r} fill="rgba(${ce}, ${O})"></rect>`;
+      const V = m * 60 + b, E = t + V / 1440 * a, ge = Math.max(2, a / 96), D = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), O = Math.min(0.34, 0.06 + D * 0.28), ce = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
+      return M`<rect x=${E} y=${i} width=${ge} height=${r} fill="rgba(${ce}, ${O})"></rect>`;
     });
   }
   _buildYTicks(e) {
@@ -2850,8 +2859,8 @@ se._CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"
       gap: 12px;
     }
   `;
-let Ee = se;
-customElements.get("helman-bias-correction-inspector") || customElements.define("helman-bias-correction-inspector", Ee);
+let je = se;
+customElements.get("helman-bias-correction-inspector") || customElements.define("helman-bias-correction-inspector", je);
 const Ie = class Ie extends K {
   constructor() {
     super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "", this._messageKind = "success", this._fallbackLocalize = J();
@@ -3244,8 +3253,8 @@ Ie.styles = Le`
       font-size: 0.9rem;
     }
   `;
-let je = Ie;
-customElements.define("helman-bias-correction-status", je);
+let Ee = Ie;
+customElements.define("helman-bias-correction-status", Ee);
 const ze = "YAML must resolve to JSON-compatible scalars, arrays, and objects.";
 function _t(o) {
   try {
@@ -3521,7 +3530,7 @@ const Ki = [
         this._activeTab = t.id;
       }}
             >
-              ${this._renderSvgIcon(ji[t.id], "tab-icon")}
+              ${this._renderSvgIcon(Ei[t.id], "tab-icon")}
               <span>${this._t(t.labelKey)}</span>
               ${i.errors > 0 ? n`<span class="tab-count errors">${i.errors}</span>` : i.warnings > 0 ? n`<span class="tab-count warnings">${i.warnings}</span>` : h}
             </button>
@@ -4007,6 +4016,15 @@ const Ki = [
               void 0,
               "editor.help.bias_correction_clamp_max"
             )}
+                        ${this._renderOptionalSelectField(
+              ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"],
+              "editor.fields.bias_correction_aggregation_method",
+              [
+                { value: "ratio_of_sums", label: this.hass.localize("component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums") || "Ratio of Sums" },
+                { value: "trimmed_mean", label: this.hass.localize("component.helman.editor.fields.bias_correction_aggregation_method_trimmed_mean") || "Trimmed Mean" }
+              ],
+              "editor.help.bias_correction_aggregation_method"
+            )}
                         ${this._renderOptionalEntityField(
               ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
               "editor.fields.bias_correction_total_energy_entity",
@@ -4430,9 +4448,9 @@ const Ki = [
                 ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
               </div>
               <select
-                @change=${(j) => this._handleSurplusApplianceIdChange(
+                @change=${(E) => this._handleSurplusApplianceIdChange(
       t,
-      j.currentTarget.value
+      E.currentTarget.value
     )}
               >
                 <option value="" ?selected=${m.selectedId.length === 0}>
@@ -4449,13 +4467,13 @@ const Ki = [
                       </option>
                     ` : h}
                 ${m.options.map(
-      (j) => n`
+      (E) => n`
                     <option
-                      value=${j.id}
-                      ?disabled=${j.selectionDisabled}
-                      ?selected=${j.id === m.selectedId}
+                      value=${E.id}
+                      ?disabled=${E.selectionDisabled}
+                      ?selected=${E.id === m.selectedId}
                     >
-                      ${this._formatSurplusApplianceOptionLabel(j)}
+                      ${this._formatSurplusApplianceOptionLabel(E)}
                     </option>
                   `
     )}
@@ -5399,6 +5417,28 @@ const Ki = [
           .value=${this._stringValue(s)}
           @change=${(l) => this._setRequiredNumber(e, l.currentTarget.value)}
         />
+      </div>
+    `;
+  }
+  _renderOptionalSelectField(e, t, i, a) {
+    const r = this._stringValue(this._getValue(e));
+    return n`
+      <div class="field">
+        <div class="field-label-row">
+          <label>${this._t(t)}</label>
+          ${a ? this._renderHelpIcon(t, a) : h}
+        </div>
+        <select
+          .value=${r}
+          @change=${(s) => this._setOptionalString(e, s.currentTarget.value)}
+        >
+          <option value=""></option>
+          ${i.map(
+      (s) => n`
+              <option value=${s.value} ?selected=${s.value === r}>${s.label}</option>
+            `
+    )}
+        </select>
       </div>
     `;
   }

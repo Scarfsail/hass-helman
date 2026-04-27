@@ -52,13 +52,14 @@ def make_uniform_slot_forecast(forecast_wh: float, slots: list[str] | None = Non
     return {k: per for k in keys}
 
 
-def make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0, training_time="00:00") -> models.BiasConfig:
+def make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0, training_time="00:00", aggregation_method="ratio_of_sums") -> models.BiasConfig:
     return models.BiasConfig(
         enabled=True,
         min_history_days=min_history_days,
         training_time=training_time,
         clamp_min=clamp_min,
         clamp_max=clamp_max,
+        aggregation_method=aggregation_method,
         daily_energy_entity_ids=[],
         total_energy_entity_id=None,
     )
@@ -268,10 +269,11 @@ def test_compute_fingerprint_includes_algorithm_version():
     fp = trainer.compute_fingerprint(cfg)
     assert fp.startswith("sha256:")
     expected_payload = (
-        "algo=trimmed_mean_of_daily_ratios_v1+15min_v1;"
+        "algo=configurable_aggregation_v1+15min_v1;"
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
-        f"clamp_max={cfg.clamp_max}"
+        f"clamp_max={cfg.clamp_max};"
+        f"aggregation_method={cfg.aggregation_method}"
     )
     import hashlib
 
@@ -280,7 +282,7 @@ def test_compute_fingerprint_includes_algorithm_version():
 
 
 def test_slot_factor_uses_trimmed_mean_of_daily_ratios():
-    cfg = make_cfg(min_history_days=8, clamp_min=0.0, clamp_max=3.0)
+    cfg = make_cfg(min_history_days=8, clamp_min=0.0, clamp_max=3.0, aggregation_method="trimmed_mean")
     slot = "06:00"
     filler_slot = "12:00"
 
@@ -542,3 +544,36 @@ def test_fully_invalidated_slot_is_omitted_via_forecast_floor():
         "2023-01-02": ["12:00"],
     }
     assert outcome.metadata.invalidated_slot_count == 2
+
+
+def test_fingerprint_differs_for_different_aggregation_methods():
+    cfg_ros = make_cfg(aggregation_method="ratio_of_sums")
+    cfg_tm = make_cfg(aggregation_method="trimmed_mean")
+    assert trainer.compute_fingerprint(cfg_ros) != trainer.compute_fingerprint(cfg_tm)
+
+
+def test_ratio_of_sums_weights_by_volume_not_by_day_count():
+    """Sunny days (high volume) should dominate the ratio, not be averaged equally with cloudy days."""
+    slot = "12:00"
+    # Day A: overcast — forecast 500 Wh, actual 1000 Wh (ratio 2.0)
+    # Day B: clear sky — forecast 5000 Wh, actual 5000 Wh (ratio 1.0)
+    # ratio_of_sums = (1000 + 5000) / (500 + 5000) = 6000/5500 ≈ 1.0909
+    # trimmed_mean would give (1.0 + 2.0) / 2 = 1.5
+    cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0, aggregation_method="ratio_of_sums")
+
+    samples = [
+        models.TrainerSample(date="2026-04-15", forecast_wh=500.0, slot_forecast_wh={slot: 500.0}),
+        models.TrainerSample(date="2026-04-16", forecast_wh=5000.0, slot_forecast_wh={slot: 5000.0}),
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2026-04-15": {slot: 1000.0},
+            "2026-04-16": {slot: 5000.0},
+        }
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime(2026, 4, 17, 3, 0))
+
+    assert slot in outcome.profile.factors
+    expected = 6000.0 / 5500.0
+    assert abs(outcome.profile.factors[slot] - expected) < 1e-6

@@ -1612,6 +1612,15 @@ export class HelmanConfigEditorPanel extends LitElement {
                           undefined,
                           "editor.help.bias_correction_clamp_max",
                         )}
+                        ${this._renderOptionalSelectField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"],
+                          "editor.fields.bias_correction_aggregation_method",
+                          [
+                            { value: "ratio_of_sums", label: this.hass.localize("component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums") || "Ratio of Sums" },
+                            { value: "trimmed_mean", label: this.hass.localize("component.helman.editor.fields.bias_correction_aggregation_method_trimmed_mean") || "Trimmed Mean" }
+                          ],
+                          "editor.help.bias_correction_aggregation_method",
+                        )}
                         ${this._renderOptionalEntityField(
                           ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
                           "editor.fields.bias_correction_total_energy_entity",
@@ -3256,6 +3265,35 @@ export class HelmanConfigEditorPanel extends LitElement {
           @change=${(event: Event) =>
             this._setRequiredNumber(path, (event.currentTarget as HTMLInputElement).value)}
         />
+      </div>
+    `;
+  }
+
+  private _renderOptionalSelectField(
+    path: PathSegment[],
+    labelKey: string,
+    options: { value: string; label: string }[],
+    helpKey?: string,
+  ): TemplateResult {
+    const value = this._stringValue(this._getValue(path));
+    return html`
+      <div class="field">
+        <div class="field-label-row">
+          <label>${this._t(labelKey)}</label>
+          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
+        </div>
+        <select
+          .value=${value}
+          @change=${(event: Event) =>
+            this._setOptionalString(path, (event.currentTarget as HTMLSelectElement).value)}
+        >
+          <option value=""></option>
+          ${options.map(
+            (option) => html`
+              <option value=${option.value} ?selected=${option.value === value}>${option.label}</option>
+            `,
+          )}
+        </select>
       </div>
     `;
   }

@@ -182,6 +182,7 @@ const SOLAR_BIAS_CORRECTION_CONFIG_PROJECTION_MEMBERS = [
   { yamlKey: "training_time", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "training_time"] },
   { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
   { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },
+  { yamlKey: "aggregation_method", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"] },
   { yamlKey: "total_energy_entity_id", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"] },
 ] satisfies ScopeProjectionMember[];
 

@@ -336,5 +336,49 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         )
 
 
+    def test_aggregation_method_invalid_type_rejected(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "aggregation_method": 42,
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.bias_correction.aggregation_method"
+                and issue.code == "invalid_type"
+                for issue in report.errors
+            )
+        )
+
+    def test_aggregation_method_unknown_value_rejected(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "aggregation_method": "mean_of_ratios",
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.bias_correction.aggregation_method"
+                and issue.code == "invalid_choice"
+                for issue in report.errors
+            )
+        )
+
+    def test_aggregation_method_valid_values_accepted(self) -> None:
+        for method in ("ratio_of_sums", "trimmed_mean"):
+            with self.subTest(method=method):
+                config = _valid_config()
+                config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+                    "aggregation_method": method,
+                }
+
+                report = validate_config_document(config)
+                self.assertTrue(report.valid)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -179,6 +179,9 @@
       "bias_correction_training_time": "Training time (HH:MM)",
       "bias_correction_clamp_min": "Min forecast clamp",
       "bias_correction_clamp_max": "Max forecast clamp",
+      "bias_correction_aggregation_method": "Aggregation method",
+      "bias_correction_aggregation_method_ratio_of_sums": "Ratio of Sums",
+      "bias_correction_aggregation_method_trimmed_mean": "Trimmed Mean",
       "bias_correction_total_energy_entity": "Total energy entity",
       "bias_correction_slot_invalidation_max_battery_soc_percent": "Max battery SoC %",
       "bias_correction_slot_invalidation_export_enabled_entity_id": "Export enabled entity"
@@ -350,6 +353,7 @@
       "bias_correction_training_time": "Time of day (HH:MM in local time) when automatic training runs, typically during low-activity hours. Training processes historical data to continuously improve forecast accuracy.",
       "bias_correction_clamp_min": "Lower bound for the correction factor. Prevents over-correction when the actual production is much lower than the forecast. For example, 0.0 allows the corrected forecast to drop all the way to zero during physically blocked periods. A higher value (closer to 1.0) reduces the correction intensity. Defaults to 0.0.",
       "bias_correction_clamp_max": "Upper bound for the correction factor. Prevents over-correction when the actual production is much higher than the forecast. For example, 3.0 ensures the corrected forecast is at most 300% of the original value. A lower value (closer to 1.0) reduces the correction intensity. Defaults to 3.0.",
+      "bias_correction_aggregation_method": "Method used to aggregate historical data. 'Ratio of Sums' correctly weights clear, sunny days over small, cloudy days and inherently filters out energy sensor quantization noise (recommended). 'Trimmed Mean' calculates the factor for each day independently and averages them after dropping the highest and lowest extremes, providing robustness to single-day anomalies but over-correcting large sunny days due to lack of volume weighting. Defaults to 'Ratio of Sums'.",
       "bias_correction_total_energy_entity": "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model.",
       "bias_correction_slot_invalidation_max_battery_soc_percent": "Battery state-of-charge threshold as a percentage. When the battery reaches or exceeds this value during a forecast slot and export is disabled in the same slot, Helman excludes that slot from solar bias correction actuals to avoid training on curtailed production.",
       "bias_correction_slot_invalidation_export_enabled_entity_id": "Boolean entity that reports whether grid export is currently enabled. Helman combines this with the max battery SoC threshold to invalidate slots where solar production was likely clipped because export was disabled while the battery was effectively full."

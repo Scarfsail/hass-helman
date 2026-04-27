@@ -46,6 +46,7 @@ def test_defaults_empty_config():
     assert bias.training_time == const.SOLAR_BIAS_DEFAULT_TRAINING_TIME
     assert bias.clamp_min == const.SOLAR_BIAS_DEFAULT_CLAMP_MIN
     assert bias.clamp_max == const.SOLAR_BIAS_DEFAULT_CLAMP_MAX
+    assert bias.aggregation_method == const.SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
     assert bias.daily_energy_entity_ids == []
     assert bias.total_energy_entity_id is None
 
@@ -265,3 +266,21 @@ def test_inspector_day_to_payload_includes_invalidated_series():
         }
     ]
     assert payload["availability"]["hasInvalidated"] is True
+
+
+def test_read_bias_config_passes_explicit_aggregation_method():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "bias_correction": {
+                        "aggregation_method": "trimmed_mean",
+                    },
+                }
+            }
+        }
+    }
+
+    bias = read_bias_config(config)
+
+    assert bias.aggregation_method == "trimmed_mean"

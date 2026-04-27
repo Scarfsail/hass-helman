@@ -26,6 +26,7 @@ from .grid_price_forecast_builder import (
     read_grid_import_price_config,
 )
 from .scheduling.schedule import describe_schedule_control_config_issue
+from .const import SOLAR_BIAS_AGGREGATION_METHODS
 
 SUPPORTED_EDITABLE_APPLIANCE_KINDS = ("climate", "ev_charger", "generic")
 
@@ -443,6 +444,24 @@ def _validate_solar_config(
                     code="invalid_range",
                     message=f"{base_path}.clamp_max must be between 1 and 10",
                 )
+
+    # aggregation_method: "ratio_of_sums" or "trimmed_mean"
+    aggregation_method = bias_map.get("aggregation_method")
+    if aggregation_method is not None:
+        if not isinstance(aggregation_method, str):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.aggregation_method",
+                code="invalid_type",
+                message=f"{base_path}.aggregation_method must be a string",
+            )
+        elif aggregation_method not in SOLAR_BIAS_AGGREGATION_METHODS:
+            report.add_error(
+                section=section,
+                path=f"{base_path}.aggregation_method",
+                code="invalid_choice",
+                message=f"{base_path}.aggregation_method must be one of {', '.join(SOLAR_BIAS_AGGREGATION_METHODS)}",
+            )
 
     slot_invalidation = bias_map.get("slot_invalidation")
     if slot_invalidation is not None:

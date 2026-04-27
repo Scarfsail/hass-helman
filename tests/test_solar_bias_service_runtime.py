@@ -87,6 +87,7 @@ def _make_cfg(
         training_time="03:00",
         clamp_min=0.3,
         clamp_max=2.0,
+        aggregation_method="ratio_of_sums",
         daily_energy_entity_ids=[],
         total_energy_entity_id=None,
         slot_invalidation_max_battery_soc_percent=(

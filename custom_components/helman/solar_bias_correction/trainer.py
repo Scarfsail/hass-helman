@@ -19,7 +19,7 @@ _DAY_RATIO_MIN = 0.05
 _DAY_RATIO_MAX = 5.0
 _SLOT_FORECAST_SUM_FLOOR_WH = 50.0
 _ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
-_ALGORITHM_VERSION = "trimmed_mean_of_daily_ratios_v1+15min_v1"
+_ALGORITHM_VERSION = "configurable_aggregation_v1+15min_v1"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -33,7 +33,8 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
         f"algo={_ALGORITHM_VERSION};"
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
-        f"clamp_max={cfg.clamp_max}"
+        f"clamp_max={cfg.clamp_max};"
+        f"aggregation_method={cfg.aggregation_method}"
     )
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{h}"
@@ -176,9 +177,11 @@ def train(
 
     # Collect per-slot daily ratios while retaining the existing summed-forecast floor gate.
     slot_forecast_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
-    slot_daily_ratios: Dict[str, List[float]] = {
-        slot: [] for slot in forecast_slot_keys
-    }
+    slot_actual_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
+    if cfg.aggregation_method == "trimmed_mean":
+        slot_daily_ratios: Dict[str, List[float]] = {
+            slot: [] for slot in forecast_slot_keys
+        }
 
     sorted_forecast_slots = sorted(forecast_slot_keys, key=_slot_to_minutes)
     for s in usable_samples:
@@ -196,7 +199,9 @@ def train(
                 forecast_slot=slot,
                 forecast_slot_keys=sorted_forecast_slots,
             )
-            slot_daily_ratios[slot].append(day_actual / day_forecast)
+            slot_actual_sums[slot] += day_actual
+            if cfg.aggregation_method == "trimmed_mean":
+                slot_daily_ratios[slot].append(day_actual / day_forecast)
 
     factors: Dict[str, float] = {}
     omitted_slots: List[str] = []
@@ -207,7 +212,12 @@ def train(
             omitted_slots.append(slot)
             continue
 
-        raw = _trimmed_mean(slot_daily_ratios[slot])
+        raw = None
+        if cfg.aggregation_method == "ratio_of_sums":
+            raw = slot_actual_sums[slot] / fcast
+        elif cfg.aggregation_method == "trimmed_mean":
+            raw = _trimmed_mean(slot_daily_ratios[slot])
+
         if raw is None:
             omitted_slots.append(slot)
             continue

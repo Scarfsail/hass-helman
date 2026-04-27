@@ -245,8 +245,12 @@ def _install_import_stubs() -> None:
     class BiasNotConfiguredError(RuntimeError):
         pass
 
+    class SolarBiasCorrectionService:
+        pass
+
     service_mod.TrainingInProgressError = TrainingInProgressError
     service_mod.BiasNotConfiguredError = BiasNotConfiguredError
+    service_mod.SolarBiasCorrectionService = SolarBiasCorrectionService
     sys.modules[service_mod.__name__] = service_mod
 
 
