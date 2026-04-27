@@ -244,6 +244,82 @@ def test_fingerprint_format():
     assert re.match(r"^sha256:[0-9a-f]{64}$", f)
 
 
+def test_trimmed_mean_returns_none_for_empty():
+    assert trainer._trimmed_mean([]) is None
+
+
+def test_trimmed_mean_plain_mean_for_small_n():
+    assert trainer._trimmed_mean([1.0]) == 1.0
+    assert trainer._trimmed_mean([1.0, 3.0]) == 2.0
+
+
+def test_trimmed_mean_drops_one_high_one_low():
+    assert trainer._trimmed_mean([0.0, 1.0, 5.0]) == 1.0
+
+
+def test_trimmed_mean_eight_values():
+    values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.958, 1.297, 2.057]
+    expected = (0.0 + 0.0 + 0.0 + 0.0 + 0.958 + 1.297) / 6
+    assert abs(trainer._trimmed_mean(values) - expected) < 1e-9
+
+
+def test_compute_fingerprint_includes_algorithm_version():
+    cfg = make_cfg()
+    fp = trainer.compute_fingerprint(cfg)
+    assert fp.startswith("sha256:")
+    expected_payload = (
+        "algo=trimmed_mean_of_daily_ratios_v1+15min_v1;"
+        f"min_history_days={cfg.min_history_days};"
+        f"clamp_min={cfg.clamp_min};"
+        f"clamp_max={cfg.clamp_max}"
+    )
+    import hashlib
+
+    expected = "sha256:" + hashlib.sha256(expected_payload.encode("utf-8")).hexdigest()
+    assert fp == expected
+
+
+def test_slot_factor_uses_trimmed_mean_of_daily_ratios():
+    cfg = make_cfg(min_history_days=8, clamp_min=0.0, clamp_max=3.0)
+    slot = "06:00"
+    filler_slot = "12:00"
+
+    per_day = [
+        ("2026-04-15", 97.2, 200.0),
+        ("2026-04-16", 198.8, 0.0),
+        ("2026-04-17", 231.2, 300.0),
+        ("2026-04-21", 115.0, 0.0),
+        ("2026-04-22", 313.2, 300.0),
+        ("2026-04-23", 370.5, 0.0),
+        ("2026-04-25", 364.0, 0.0),
+        ("2026-04-26", 385.8, 0.0),
+    ]
+
+    samples = [
+        models.TrainerSample(
+            date=day,
+            forecast_wh=2400.0,
+            slot_forecast_wh={slot: forecast, filler_slot: 1200.0},
+        )
+        for day, forecast, _ in per_day
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            day: {
+                slot: actual,
+                filler_slot: 1000.0,
+            }
+            for day, _, actual in per_day
+        }
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, datetime(2026, 4, 27, 3, 0))
+
+    assert slot in outcome.profile.factors
+    expected = (0.0 + 0.0 + 0.0 + 0.0 + 0.958 + 1.297) / 6
+    assert abs(outcome.profile.factors[slot] - expected) < 0.002
+
+
 def test_factors_match_per_slot_actual_over_forecast():
     """factor[slot] = sum(actual_in_slot) / sum(forecast_in_slot), regardless of day total."""
     cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0)

@@ -20,6 +20,42 @@ try:
 except Exception:  # pragma: no cover - Home Assistant API compatibility
     state_changes_during_period = None  # type: ignore[assignment]
 
+_SUB_SLOT_OFFSETS_MIN = (0, 15, 30, 45)
+
+
+def _expand_hourly_to_15min(
+    hourly_wh: dict[str, float],
+    watts: dict[str, float],
+) -> dict[str, float]:
+    """Split hourly Wh into 15-minute slots using upstream watts weighting."""
+    result: dict[str, float] = {}
+    for hour_key, hour_wh in hourly_wh.items():
+        hour_text, _, minute_text = hour_key.partition(":")
+        try:
+            hour = int(hour_text)
+            minute = int(minute_text)
+        except ValueError:
+            continue
+        if minute != 0:
+            continue
+
+        sub_keys = [f"{hour:02d}:{offset:02d}" for offset in _SUB_SLOT_OFFSETS_MIN]
+        if not all(key in watts for key in sub_keys):
+            continue
+
+        sub_watts = [float(watts[key]) for key in sub_keys]
+        total_watts = sum(sub_watts)
+        if total_watts <= 0.0:
+            share = hour_wh / len(sub_keys)
+            for key in sub_keys:
+                result[key] = share
+            continue
+
+        for key, sub_watt in zip(sub_keys, sub_watts):
+            result[key] = hour_wh * sub_watt / total_watts
+
+    return result
+
 
 async def load_forecast_points_for_day(
     hass: HomeAssistant,
@@ -124,8 +160,11 @@ async def load_historical_per_slot_forecast(
     wh_period = attributes.get("wh_period")
     if not isinstance(wh_period, dict):
         return None
+    watts = attributes.get("watts")
+    if not isinstance(watts, dict):
+        return None
 
-    result: dict[str, float] = {}
+    hourly_result: dict[str, float] = {}
     for raw_key, raw_value in wh_period.items():
         wh = _parse_attribute_wh(raw_value)
         ts = _parse_attribute_timestamp(raw_key, local_tz)
@@ -133,8 +172,19 @@ async def load_historical_per_slot_forecast(
             continue
         local_ts = dt_util.as_local(ts)
         slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
-        result[slot_key] = wh
+        hourly_result[slot_key] = wh
 
+    parsed_watts: dict[str, float] = {}
+    for raw_key, raw_value in watts.items():
+        watt = _parse_attribute_wh(raw_value)
+        ts = _parse_attribute_timestamp(raw_key, local_tz)
+        if watt is None or ts is None:
+            continue
+        local_ts = dt_util.as_local(ts)
+        slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
+        parsed_watts[slot_key] = watt
+
+    result = _expand_hourly_to_15min(hourly_result, parsed_watts)
     return result if result else None
 
 
