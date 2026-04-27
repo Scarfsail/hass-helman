@@ -19,16 +19,22 @@ _DAY_RATIO_MIN = 0.05
 _DAY_RATIO_MAX = 5.0
 _SLOT_FORECAST_SUM_FLOOR_WH = 50.0
 _ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+_ALGORITHM_VERSION = "trimmed_mean_of_daily_ratios_v1+15min_v1"
 _LOGGER = logging.getLogger(__name__)
 
 
 def compute_fingerprint(cfg: BiasConfig) -> str:
     """Compute a deterministic fingerprint of the training-relevant parts of BiasConfig.
 
-    Only min_history_days, clamp_min and clamp_max are included. training_time and enabled
-    must NOT affect the fingerprint.
+    Includes the algorithm version so training changes force a re-train. training_time
+    and enabled must NOT affect the fingerprint.
     """
-    payload = f"min_history_days={cfg.min_history_days};clamp_min={cfg.clamp_min};clamp_max={cfg.clamp_max}"
+    payload = (
+        f"algo={_ALGORITHM_VERSION};"
+        f"min_history_days={cfg.min_history_days};"
+        f"clamp_min={cfg.clamp_min};"
+        f"clamp_max={cfg.clamp_max}"
+    )
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{h}"
 
@@ -42,6 +48,18 @@ def _median(values: List[float]) -> float | None:
     if n % 2 == 1:
         return s[mid]
     return (s[mid - 1] + s[mid]) / 2.0
+
+
+def _trimmed_mean(values: List[float]) -> float | None:
+    """Drop one min and max value when enough samples exist; otherwise use plain mean."""
+    n = len(values)
+    if n == 0:
+        return None
+    if n < 3:
+        return sum(values) / n
+    sorted_values = sorted(values)
+    trimmed = sorted_values[1:-1]
+    return sum(trimmed) / len(trimmed)
 
 
 def _slot_to_minutes(slot: str) -> int:
@@ -156,9 +174,11 @@ def train(
     for s in usable_samples:
         forecast_slot_keys.update(s.slot_forecast_wh.keys())
 
-    # Accumulate per-slot forecast and actual sums at the forecast's native granularity.
+    # Collect per-slot daily ratios while retaining the existing summed-forecast floor gate.
     slot_forecast_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
-    slot_actual_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
+    slot_daily_ratios: Dict[str, List[float]] = {
+        slot: [] for slot in forecast_slot_keys
+    }
 
     sorted_forecast_slots = sorted(forecast_slot_keys, key=_slot_to_minutes)
     for s in usable_samples:
@@ -167,12 +187,16 @@ def train(
         for slot in sorted_forecast_slots:
             if slot in invalidated_slots:
                 continue
-            slot_forecast_sums[slot] += s.slot_forecast_wh.get(slot, 0.0)
-            slot_actual_sums[slot] += _aggregate_actuals_into_forecast_slot(
+            day_forecast = s.slot_forecast_wh.get(slot, 0.0)
+            slot_forecast_sums[slot] += day_forecast
+            if day_forecast <= 0.0:
+                continue
+            day_actual = _aggregate_actuals_into_forecast_slot(
                 day_actuals,
                 forecast_slot=slot,
                 forecast_slot_keys=sorted_forecast_slots,
             )
+            slot_daily_ratios[slot].append(day_actual / day_forecast)
 
     factors: Dict[str, float] = {}
     omitted_slots: List[str] = []
@@ -183,7 +207,10 @@ def train(
             omitted_slots.append(slot)
             continue
 
-        raw = slot_actual_sums[slot] / fcast if fcast else 0.0
+        raw = _trimmed_mean(slot_daily_ratios[slot])
+        if raw is None:
+            omitted_slots.append(slot)
+            continue
         clamped = max(cfg.clamp_min, min(raw, cfg.clamp_max))
         factors[slot] = clamped
 

@@ -80,6 +80,56 @@ from custom_components.helman.solar_bias_correction import forecast_history  # n
 from custom_components.helman.solar_bias_correction.models import BiasConfig  # noqa: E402
 
 
+def test_expand_to_15min_uses_watts_weighting():
+    hourly = {"07:00": 1000.0}
+    watts = {"07:00": 0.0, "07:15": 600.0, "07:30": 200.0, "07:45": 200.0}
+
+    result = forecast_history._expand_hourly_to_15min(hourly, watts)
+
+    assert set(result) == {"07:00", "07:15", "07:30", "07:45"}
+    assert result["07:00"] == 0.0
+    assert result["07:15"] == 600.0
+    assert result["07:30"] == 200.0
+    assert result["07:45"] == 200.0
+    assert abs(sum(result.values()) - 1000.0) < 1e-9
+
+
+def test_expand_to_15min_falls_back_to_equal_split_when_watts_sum_zero():
+    hourly = {"00:00": 0.0, "12:00": 800.0}
+    watts = {
+        "00:00": 0.0,
+        "00:15": 0.0,
+        "00:30": 0.0,
+        "00:45": 0.0,
+        "12:00": 0.0,
+        "12:15": 0.0,
+        "12:30": 0.0,
+        "12:45": 0.0,
+    }
+
+    result = forecast_history._expand_hourly_to_15min(hourly, watts)
+
+    assert result["00:00"] == 0.0
+    assert result["00:15"] == 0.0
+    assert result["12:00"] == 200.0
+    assert result["12:15"] == 200.0
+    assert result["12:30"] == 200.0
+    assert result["12:45"] == 200.0
+
+
+def test_expand_to_15min_skips_hours_missing_from_watts():
+    hourly = {"07:00": 400.0, "08:00": 800.0}
+    watts = {"07:00": 100.0, "07:15": 100.0, "07:30": 100.0, "07:45": 100.0}
+
+    result = forecast_history._expand_hourly_to_15min(hourly, watts)
+
+    assert set(result) == {"07:00", "07:15", "07:30", "07:45"}
+    assert result["07:00"] == 100.0
+    assert result["07:15"] == 100.0
+    assert result["07:30"] == 100.0
+    assert result["07:45"] == 100.0
+
+
 class _FakeState:
     def __init__(self, state: str, last_updated: datetime) -> None:
         self.state = state
@@ -211,7 +261,71 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
-    async def test_returns_slot_keyed_wh_for_past_day(self):
+    async def test_returns_15min_keys_when_watts_attribute_present(self):
+        from datetime import date as date_cls
+
+        cfg = BiasConfig(
+            enabled=True,
+            min_history_days=10,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=["sensor.energy_production_today"],
+            total_energy_entity_id=None,
+        )
+
+        target_date = date_cls(2026, 4, 15)
+        local_now = datetime(2026, 4, 25, 10, 0, tzinfo=TZ)
+
+        wh_period = {
+            "2026-04-15T07:00:00+00:00": 1000.0,
+            "2026-04-15T08:00:00+00:00": 2400.0,
+        }
+        watts = {
+            "2026-04-15T07:00:00+00:00": 0.0,
+            "2026-04-15T07:15:00+00:00": 600.0,
+            "2026-04-15T07:30:00+00:00": 200.0,
+            "2026-04-15T07:45:00+00:00": 200.0,
+            "2026-04-15T08:00:00+00:00": 300.0,
+            "2026-04-15T08:15:00+00:00": 400.0,
+            "2026-04-15T08:30:00+00:00": 800.0,
+            "2026-04-15T08:45:00+00:00": 900.0,
+        }
+
+        historical_state = SimpleNamespace(
+            state="3400",
+            attributes={"wh_period": wh_period, "watts": watts},
+            last_updated=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
+            last_changed=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
+        )
+
+        async def fake_history(*args, **kwargs):
+            return {"sensor.energy_production_today": [historical_state]}
+
+        with patch.object(
+            forecast_history,
+            "_read_history_for_entities_with_attributes",
+            new=AsyncMock(side_effect=fake_history),
+        ):
+            result = await forecast_history.load_historical_per_slot_forecast(
+                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
+                cfg=cfg,
+                target_date=target_date,
+                local_now=local_now,
+            )
+
+        assert result == {
+            "07:00": 0.0,
+            "07:15": 600.0,
+            "07:30": 200.0,
+            "07:45": 200.0,
+            "08:00": 300.0,
+            "08:15": 400.0,
+            "08:30": 800.0,
+            "08:45": 900.0,
+        }
+
+    async def test_returns_none_when_watts_attribute_missing(self):
         from datetime import date as date_cls
 
         cfg = BiasConfig(
@@ -252,7 +366,7 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
                 local_now=local_now,
             )
 
-        assert result == {"11:00": 7000.0, "12:00": 9000.0, "13:00": 8500.0}
+        assert result is None
 
     async def test_returns_none_when_state_missing(self):
         from datetime import date as date_cls
