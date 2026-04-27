@@ -125,6 +125,21 @@ def test_does_not_invalidate_when_export_state_is_unknown() -> None:
     assert invalidated == {}
 
 
+def test_invalidates_when_export_turns_off_even_with_unknown_sample() -> None:
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
+            export_samples_utc=[
+                StateSample(timestamp=_dt(12, 0), value=False),
+                StateSample(timestamp=_dt(12, 5), value=None),
+                StateSample(timestamp=_dt(12, 10), value=False),
+            ],
+        )
+    )
+
+    assert invalidated == {"2026-04-15": {"12:00"}}
+
+
 def test_uses_left_edge_inheritance_for_soc_and_export_state() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(

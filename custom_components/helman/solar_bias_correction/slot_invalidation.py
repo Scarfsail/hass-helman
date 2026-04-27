@@ -52,8 +52,6 @@ def compute_invalidated_slots_for_window(
                 slot_start=slot_start,
                 slot_end=slot_end,
             )
-            if not export_values or any(value is None for value in export_values):
-                continue
             if any(value is False for value in export_values):
                 invalidated_slots.add(slot_key)
 
