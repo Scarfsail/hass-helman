@@ -239,6 +239,19 @@ def test_fingerprint_depends_on_training_config_but_excludes_training_time():
     assert f1 != f3
 
 
+def test_fingerprint_depends_on_slot_invalidation_config():
+    cfg1 = make_cfg()
+    cfg2 = make_cfg()
+    cfg2.slot_invalidation_max_battery_soc_percent = 97.0
+    cfg2.slot_invalidation_export_enabled_entity_id = "binary_sensor.export_enabled"
+    cfg3 = make_cfg()
+    cfg3.slot_invalidation_max_battery_soc_percent = 95.0
+    cfg3.slot_invalidation_export_enabled_entity_id = "binary_sensor.export_enabled"
+
+    assert trainer.compute_fingerprint(cfg1) != trainer.compute_fingerprint(cfg2)
+    assert trainer.compute_fingerprint(cfg2) != trainer.compute_fingerprint(cfg3)
+
+
 def test_fingerprint_format():
     cfg = make_cfg()
     f = trainer.compute_fingerprint(cfg)
@@ -273,7 +286,11 @@ def test_compute_fingerprint_includes_algorithm_version():
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
         f"clamp_max={cfg.clamp_max};"
-        f"aggregation_method={cfg.aggregation_method}"
+        f"aggregation_method={cfg.aggregation_method};"
+        "slot_invalidation_max_battery_soc_percent="
+        f"{cfg.slot_invalidation_max_battery_soc_percent};"
+        "slot_invalidation_export_enabled_entity_id="
+        f"{cfg.slot_invalidation_export_enabled_entity_id}"
     )
     import hashlib
 
@@ -455,6 +472,61 @@ def test_invalidated_slot_is_skipped_for_both_forecast_and_actual():
     assert outcome.profile.factors["13:00"] == 1.0
     assert outcome.metadata.invalidated_slots_by_date == {"2023-01-01": ["12:00"]}
     assert outcome.metadata.invalidated_slot_count == 1
+
+
+def test_invalidated_slot_does_not_affect_day_ratio_gate():
+    cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0)
+
+    slot_forecast = {"12:00": 500.0, "13:00": 500.0}
+    samples = [
+        models.TrainerSample(
+            date="2023-01-01",
+            forecast_wh=1000.0,
+            slot_forecast_wh=dict(slot_forecast),
+        ),
+        models.TrainerSample(
+            date="2023-01-02",
+            forecast_wh=1000.0,
+            slot_forecast_wh=dict(slot_forecast),
+        ),
+    ]
+
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2023-01-01": {
+                "12:00": 5000.0,
+                "12:15": 5000.0,
+                "12:30": 5000.0,
+                "12:45": 5000.0,
+                "13:00": 125.0,
+                "13:15": 125.0,
+                "13:30": 125.0,
+                "13:45": 125.0,
+            },
+            "2023-01-02": {
+                "12:00": 125.0,
+                "12:15": 125.0,
+                "12:30": 125.0,
+                "12:45": 125.0,
+                "13:00": 125.0,
+                "13:15": 125.0,
+                "13:30": 125.0,
+                "13:45": 125.0,
+            },
+        },
+        invalidated_slots_by_date={"2023-01-01": {"12:00"}},
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert outcome.metadata.last_outcome == "profile_trained"
+    assert not any(
+        day["date"] == "2023-01-01"
+        and day["reason"] == "day_ratio_out_of_band"
+        for day in outcome.metadata.dropped_days
+    )
+    assert outcome.profile.factors["12:00"] == 1.0
+    assert outcome.profile.factors["13:00"] == 1.0
 
 
 def test_no_invalidation_preserves_behavior_and_default_metadata():

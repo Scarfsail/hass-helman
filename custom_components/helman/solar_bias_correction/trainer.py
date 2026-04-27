@@ -34,7 +34,11 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
         f"clamp_max={cfg.clamp_max};"
-        f"aggregation_method={cfg.aggregation_method}"
+        f"aggregation_method={cfg.aggregation_method};"
+        "slot_invalidation_max_battery_soc_percent="
+        f"{cfg.slot_invalidation_max_battery_soc_percent};"
+        "slot_invalidation_export_enabled_entity_id="
+        f"{cfg.slot_invalidation_export_enabled_entity_id}"
     )
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{h}"
@@ -103,6 +107,29 @@ def _serialize_invalidated_slots_by_date(
     return serialized
 
 
+def _training_day_totals(
+    sample: TrainerSample,
+    day_actuals: dict[str, float],
+    invalidated_slots: set[str],
+) -> tuple[float, float]:
+    forecast_slot_keys = sorted(sample.slot_forecast_wh, key=_slot_to_minutes)
+    if not forecast_slot_keys:
+        return sample.forecast_wh, sum(day_actuals.values())
+
+    forecast_total = 0.0
+    actual_total = 0.0
+    for slot in forecast_slot_keys:
+        if slot in invalidated_slots:
+            continue
+        forecast_total += sample.slot_forecast_wh.get(slot, 0.0)
+        actual_total += _aggregate_actuals_into_forecast_slot(
+            day_actuals,
+            forecast_slot=slot,
+            forecast_slot_keys=forecast_slot_keys,
+        )
+    return forecast_total, actual_total
+
+
 def train(
     samples: list[TrainerSample],
     actuals: SolarActualsWindow,
@@ -125,21 +152,26 @@ def train(
     dropped_days: List[Dict[str, str]] = []
 
     for s in samples:
-        if s.forecast_wh < _DAY_FORECAST_FLOOR_WH:
+        day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
+        invalidated_slots = actuals.invalidated_slots_by_date.get(s.date, set())
+        day_forecast, sum_actual = _training_day_totals(
+            s,
+            day_actuals,
+            invalidated_slots,
+        )
+
+        if day_forecast < _DAY_FORECAST_FLOOR_WH:
             dropped_days.append({"date": s.date, "reason": "day_forecast_too_low"})
             continue
 
-        day_actuals = actuals.slot_actuals_by_date.get(s.date, {})
-        sum_actual = sum(day_actuals.values())
-
-        # Avoid division by zero - forecast_wh already > 0 due to previous check
-        ratio = sum_actual / s.forecast_wh if s.forecast_wh else 0.0
+        # Avoid division by zero - day_forecast already passed the floor gate.
+        ratio = sum_actual / day_forecast if day_forecast else 0.0
         if ratio < _DAY_RATIO_MIN or ratio > _DAY_RATIO_MAX:
             dropped_days.append(
                 {
                     "date": s.date,
                     "reason": "day_ratio_out_of_band",
-                    "forecast_wh": f"{s.forecast_wh:.3f}",
+                    "forecast_wh": f"{day_forecast:.3f}",
                     "actual_wh": f"{sum_actual:.3f}",
                     "ratio": f"{ratio:.6f}",
                 }
