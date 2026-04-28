@@ -20,7 +20,6 @@ from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
 from .models import BiasConfig, SolarActualsWindow
-from .forecast_history import load_historical_per_slot_forecast
 from .slot_invalidation import (
     InvalidationInputs,
     StateSample,
@@ -164,14 +163,9 @@ async def _load_invalidated_slots_for_window(
         )
         return {}
 
-    forecast_slot_starts_by_date, slot_keys_by_date = _build_slot_invalidation_inputs(
+    forecast_slot_starts_by_date, slot_keys_by_date = _build_day_grid_slot_inputs(
         hass,
-        await _load_forecast_slot_maps_for_window(
-            hass,
-            cfg,
-            slot_actuals_by_date,
-            local_now=local_now,
-        ),
+        slot_actuals_by_date,
     )
     if not forecast_slot_starts_by_date:
         return {}
@@ -226,58 +220,42 @@ def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str 
     return _read_entity_id(entities.get("capacity"))
 
 
-async def _load_forecast_slot_maps_for_window(
+def _build_day_grid_slot_inputs(
     hass: HomeAssistant,
-    cfg: BiasConfig,
     slot_actuals_by_date: dict[str, dict[str, float]],
-    *,
-    local_now: datetime,
-) -> dict[str, dict[str, float]]:
-    forecast_slots_by_date: dict[str, dict[str, float]] = {}
-    for day in sorted(slot_actuals_by_date):
-        try:
-            target_date = date.fromisoformat(day)
-        except ValueError:
-            continue
-        day_forecast_slots = await load_historical_per_slot_forecast(
-            hass,
-            cfg,
-            target_date,
-            local_now=local_now,
-        )
-        if day_forecast_slots:
-            forecast_slots_by_date[day] = day_forecast_slots
-    return forecast_slots_by_date
-
-
-def _build_slot_invalidation_inputs(
-    hass: HomeAssistant,
-    forecast_slots_by_date: dict[str, dict[str, float]],
 ) -> tuple[dict[str, list[datetime]], dict[str, list[str]]]:
+    """Produce the full 15-minute slot grid for every day in the window.
+
+    Slot invalidation is a property of physical state (battery SoC + export
+    switch); it must be evaluated on every slot of the day, independent of
+    whether the historical forecast happens to publish that slot.
+    """
     local_tz = ZoneInfo(str(hass.config.time_zone))
-    forecast_slot_starts_by_date: dict[str, list[datetime]] = {}
+    slot_starts_by_date: dict[str, list[datetime]] = {}
     slot_keys_by_date: dict[str, list[str]] = {}
 
-    for day in sorted(forecast_slots_by_date):
-        day_forecast_slots = forecast_slots_by_date.get(day, {})
-        slot_keys = sorted(day_forecast_slots, key=_slot_sort_key)
-        if not slot_keys:
+    for day in sorted(slot_actuals_by_date):
+        try:
+            date.fromisoformat(day)
+        except ValueError:
             continue
 
         day_slot_starts: list[datetime] = []
         day_slot_keys: list[str] = []
-        for slot_key in slot_keys:
-            slot_start = _build_utc_slot_start(day, slot_key, local_tz)
-            if slot_start is None:
-                continue
-            day_slot_starts.append(slot_start)
-            day_slot_keys.append(slot_key)
+        for hour in range(24):
+            for minute in (0, 15, 30, 45):
+                slot_key = f"{hour:02d}:{minute:02d}"
+                slot_start = _build_utc_slot_start(day, slot_key, local_tz)
+                if slot_start is None:
+                    continue
+                day_slot_starts.append(slot_start)
+                day_slot_keys.append(slot_key)
 
         if day_slot_starts:
-            forecast_slot_starts_by_date[day] = day_slot_starts
+            slot_starts_by_date[day] = day_slot_starts
             slot_keys_by_date[day] = day_slot_keys
 
-    return forecast_slot_starts_by_date, slot_keys_by_date
+    return slot_starts_by_date, slot_keys_by_date
 
 
 def _build_utc_slot_start(
@@ -383,9 +361,3 @@ def _parse_bool_state_value(raw_value: Any) -> bool | None:
     return None
 
 
-def _slot_sort_key(slot_key: str) -> tuple[int, int]:
-    try:
-        hour_text, minute_text = slot_key.split(":", 1)
-        return int(hour_text), int(minute_text)
-    except (AttributeError, ValueError):
-        return (99, 99)

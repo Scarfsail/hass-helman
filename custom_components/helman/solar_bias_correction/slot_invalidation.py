@@ -99,12 +99,22 @@ def _segment_values(
     slot_start: datetime,
     slot_end: datetime,
 ) -> list[float | bool | None]:
+    """Return the values that describe the slot's state.
+
+    Slot half-open as [slot_start, slot_end). A sample exactly at slot_start
+    is treated as the first in-window sample (the new state takes effect at
+    that instant), not as the carry from the previous slot. The carry is the
+    most recent KNOWN sample with timestamp < slot_start; transient
+    None values (HA `unknown`/`unavailable`) before slot_start are ignored
+    so a sub-second blip cannot wipe out the last known state.
+    """
     values: list[float | bool | None] = []
     current_value: float | bool | None = None
 
     for sample in samples:
-        if sample.timestamp <= slot_start:
-            current_value = sample.value
+        if sample.timestamp < slot_start:
+            if sample.value is not None:
+                current_value = sample.value
             continue
         if sample.timestamp >= slot_end:
             break

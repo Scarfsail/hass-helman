@@ -209,10 +209,6 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(side_effect=[{"12:00": 600.0, "12:15": 400.0}, {"23:45": 50.0}]),
         ), patch.object(
             actuals,
-            "load_historical_per_slot_forecast",
-            AsyncMock(side_effect=[{"12:00": 1000.0}, {"23:00": 500.0}]),
-        ), patch.object(
-            actuals,
             "_load_state_samples_for_entity",
             AsyncMock(side_effect=[[SimpleNamespace()], [SimpleNamespace()]]),
         ) as load_state_samples, patch.object(
@@ -226,19 +222,15 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(load_state_samples.await_count, 2)
         inputs = compute_invalidated.call_args.args[0]
         self.assertEqual(inputs.max_battery_soc_percent, 87.0)
+        self.assertEqual(set(inputs.slot_keys_by_date), {"2026-04-15", "2026-04-16"})
+        for day in ("2026-04-15", "2026-04-16"):
+            self.assertEqual(len(inputs.slot_keys_by_date[day]), 96)
+            self.assertEqual(inputs.slot_keys_by_date[day][0], "00:00")
+            self.assertEqual(inputs.slot_keys_by_date[day][-1], "23:45")
+            self.assertEqual(len(inputs.forecast_slot_starts_by_date[day]), 96)
         self.assertEqual(
-            inputs.forecast_slot_starts_by_date,
-            {
-                "2026-04-15": [datetime(2026, 4, 15, 12, 0, tzinfo=TZ)],
-                "2026-04-16": [datetime(2026, 4, 16, 23, 0, tzinfo=TZ)],
-            },
-        )
-        self.assertEqual(
-            inputs.slot_keys_by_date,
-            {
-                "2026-04-15": ["12:00"],
-                "2026-04-16": ["23:00"],
-            },
+            inputs.forecast_slot_starts_by_date["2026-04-15"][48],
+            datetime(2026, 4, 15, 12, 0, tzinfo=TZ),
         )
 
     async def test_load_actuals_window_skips_invalidation_when_battery_soc_entity_is_missing(self) -> None:
@@ -323,10 +315,6 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(return_value={"12:00": 600.0}),
         ), patch.object(
             actuals,
-            "load_historical_per_slot_forecast",
-            AsyncMock(return_value={"12:00": 1000.0}),
-        ), patch.object(
-            actuals,
             "_load_state_samples_for_entity",
             AsyncMock(side_effect=[[SimpleNamespace()], [SimpleNamespace()]]),
         ) as load_state_samples, patch.object(
@@ -338,7 +326,10 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(window.invalidated_slots_by_date, {"2026-04-16": {"12:00"}})
         self.assertEqual(load_state_samples.await_args_list[0].args[1], "sensor.battery_soc")
-        self.assertEqual(compute_invalidated.call_args.args[0].slot_keys_by_date, {"2026-04-16": ["12:00"]})
+        slot_keys = compute_invalidated.call_args.args[0].slot_keys_by_date
+        self.assertEqual(set(slot_keys), {"2026-04-16"})
+        self.assertEqual(len(slot_keys["2026-04-16"]), 96)
+        self.assertIn("12:00", slot_keys["2026-04-16"])
 
 
 if __name__ == "__main__":

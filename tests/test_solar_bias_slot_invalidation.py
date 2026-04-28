@@ -181,6 +181,65 @@ def test_sample_at_slot_start_applies_to_current_slot() -> None:
     assert invalidated == {"2026-04-15": {"12:00"}}
 
 
+def test_unknown_blip_does_not_overwrite_known_export_carry() -> None:
+    """Regression: in live recorder data the export switch sometimes flickers
+    `off → unknown → off` within tens of milliseconds. The carry into a later
+    slot must remain `False`, so the slot still invalidates when SoC peaks
+    above the threshold."""
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 11, 0, tzinfo=TZ), value=100.0),
+            ],
+            export_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 9, 0, tzinfo=TZ), value=False),
+                StateSample(
+                    timestamp=datetime(2026, 4, 15, 11, 38, 15, tzinfo=TZ),
+                    value=None,  # unknown blip
+                ),
+                StateSample(
+                    timestamp=datetime(2026, 4, 15, 11, 39, 24, tzinfo=TZ),
+                    value=False,
+                ),
+            ],
+        )
+    )
+
+    assert invalidated == {"2026-04-15": {"12:00"}}
+
+
+def test_sub_second_transition_at_slot_boundary_starts_new_state() -> None:
+    """Regression: a transition timestamped a few hundred milliseconds after
+    the slot start (e.g. `14:00:00.220215`) should be treated as the new
+    state for that slot, not as an in-window addition stacked on top of the
+    previous-slot carry. Otherwise a slot whose actual export was `on`
+    throughout invalidates spuriously because of the carried `False`."""
+    slot_start = datetime(2026, 4, 15, 14, 0, tzinfo=TZ)
+    slot_start_plus = datetime(2026, 4, 15, 14, 0, 0, 220215, tzinfo=TZ)
+    next_slot_start = datetime(2026, 4, 15, 14, 15, tzinfo=TZ)
+
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 12, 0, tzinfo=TZ), value=100.0),
+            ],
+            export_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 9, 0, tzinfo=TZ), value=False),
+                StateSample(timestamp=slot_start_plus, value=True),
+            ],
+            forecast_slot_starts_by_date={
+                "2026-04-15": [slot_start, next_slot_start],
+            },
+            slot_keys_by_date={"2026-04-15": ["14:00", "14:15"]},
+        )
+    )
+
+    # 14:00 still has a carried `False` followed by a same-slot `True`, so it
+    # invalidates (one False is enough). The 14:15 slot must NOT invalidate:
+    # by the time it starts the export switch has been `on` for 14m 59s.
+    assert invalidated == {"2026-04-15": {"14:00"}}
+
+
 def test_final_slot_uses_next_day_boundary_for_slot_end() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
