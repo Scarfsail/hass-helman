@@ -189,11 +189,14 @@ async def load_historical_per_slot_forecast(
 
 
 def _select_first_state_for_window(states: list[Any], *, after: datetime) -> Any | None:
+    boundary: Any | None = None
     for state in sorted(states, key=_state_sort_key):
-        if _state_sort_key(state) < after:
+        key = _state_sort_key(state)
+        if key <= after:
+            boundary = state
             continue
-        return state
-    return None
+        return boundary if boundary is not None else state
+    return boundary
 
 
 async def _read_history_for_entities_with_attributes(

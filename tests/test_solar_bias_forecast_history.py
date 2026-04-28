@@ -507,5 +507,45 @@ def test_select_first_state_for_window_includes_midnight_boundary():
     assert result is at_midnight
 
 
+def test_select_first_state_for_window_returns_boundary_when_no_state_at_midnight():
+    """Regression: recorder synthesizes the start-of-window boundary state with
+    its original last_updated (before midnight). The selector must return that
+    boundary state, not the first state-change inside the window — otherwise
+    `load_historical_per_slot_forecast` returns a mid-day forecast refresh
+    whose wh_period/watts may be trimmed to a subset of the day's hours."""
+    from datetime import timedelta, timezone
+    midnight_utc = datetime(2026, 4, 26, 22, 0, 0, tzinfo=timezone.utc)
+
+    class _State:
+        def __init__(self, ts, label):
+            self.last_updated = ts
+            self.label = label
+
+    boundary = _State(midnight_utc - timedelta(hours=4), "boundary")
+    midday_change = _State(midnight_utc + timedelta(hours=16), "midday")
+
+    result = forecast_history._select_first_state_for_window(
+        [boundary, midday_change], after=midnight_utc
+    )
+    assert result is boundary
+
+
+def test_select_first_state_for_window_falls_back_to_first_in_window_when_no_boundary():
+    from datetime import timedelta, timezone
+    midnight_utc = datetime(2026, 4, 26, 22, 0, 0, tzinfo=timezone.utc)
+
+    class _State:
+        def __init__(self, ts):
+            self.last_updated = ts
+
+    first_in_window = _State(midnight_utc + timedelta(hours=2))
+    later_in_window = _State(midnight_utc + timedelta(hours=10))
+
+    result = forecast_history._select_first_state_for_window(
+        [first_in_window, later_in_window], after=midnight_utc
+    )
+    assert result is first_in_window
+
+
 if __name__ == "__main__":
     unittest.main()
