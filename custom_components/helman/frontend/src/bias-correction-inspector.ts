@@ -1,5 +1,6 @@
 import { LitElement, css, html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
+import { toAveragePower, type ChartEntry } from "./chart-power";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
 
 type InspectorPoint = { timestamp: string; valueWh: number };
@@ -328,57 +329,10 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;
 
-    const pointMinutes = (timestamp: string) => {
-      const match = timestamp.match(/T(\d{2}):(\d{2})/);
-      if (!match) return null;
-      const hour = Number(match[1]);
-      const minute = Number(match[2]);
-      if (
-        !Number.isFinite(hour) ||
-        !Number.isFinite(minute) ||
-        hour < 0 ||
-        hour > 23 ||
-        minute < 0 ||
-        minute > 59
-      ) {
-        return null;
-      }
-      return hour * 60 + minute;
-    };
-
-    type ChartEntry = { point: InspectorPoint; minutes: number; powerW: number };
-
-    const toAveragePower = (points: InspectorPoint[]): ChartEntry[] => {
-      const parsed = points
-        .map((point) => ({ point, minutes: pointMinutes(point.timestamp) }))
-        .filter(
-          (entry): entry is { point: InspectorPoint; minutes: number } =>
-            entry.minutes !== null && Number.isFinite(entry.point.valueWh),
-        )
-        .sort((a, b) => a.minutes - b.minutes);
-
-      if (parsed.length === 0) return [];
-
-      // Estimate bucket size in minutes per point. Use the gap to the next point;
-      // for the last point reuse the previous gap. If only one point, default to 60.
-      const gaps: number[] = [];
-      for (let i = 0; i < parsed.length - 1; i++) {
-        gaps.push(parsed[i + 1].minutes - parsed[i].minutes);
-      }
-      const fallbackGap = parsed.length === 1 ? 60 : gaps[gaps.length - 1] ?? 60;
-
-      return parsed.map((entry, index) => {
-        const gap = index < gaps.length ? gaps[index] : fallbackGap;
-        const hours = gap / 60;
-        const powerW = hours > 0 ? entry.point.valueWh / hours : 0;
-        return { point: entry.point, minutes: entry.minutes, powerW };
-      });
-    };
-
     const rawPoints = toAveragePower(payload.series.raw);
     const correctedPoints = toAveragePower(payload.series.corrected);
-    const actualPoints = toAveragePower(payload.series.actual);
-    const invalidatedPoints = toAveragePower(payload.series.invalidated);
+    const actualPoints = toAveragePower(payload.series.actual, { bucketMinutes: 15 });
+    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: 15 });
     const allPower = [
       ...rawPoints.map((entry) => entry.powerW),
       ...correctedPoints.map((entry) => entry.powerW),
