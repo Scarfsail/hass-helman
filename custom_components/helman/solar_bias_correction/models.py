@@ -26,6 +26,9 @@ class BiasConfig:
     aggregation_method: str = SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
     slot_invalidation_max_battery_soc_percent: float | None = None
     slot_invalidation_export_enabled_entity_id: str | None = None
+    slot_invalidation_data_glitch_max_slot_wh: float | None = None
+    slot_invalidation_data_glitch_min_neighbour_forecast_wh: float = 200.0
+    slot_invalidation_data_glitch_backfill_max_minutes: int = 120
     max_training_window_days: int = SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
 
 
@@ -232,6 +235,31 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         if export_enabled_entity_id:
             slot_invalidation_export_enabled_entity_id = export_enabled_entity_id
 
+    glitch_max_slot_wh = slot_invalidation.get("data_glitch_max_slot_wh")
+    slot_invalidation_data_glitch_max_slot_wh: float | None = None
+    if isinstance(glitch_max_slot_wh, (int, float)) and not isinstance(
+        glitch_max_slot_wh, bool
+    ):
+        slot_invalidation_data_glitch_max_slot_wh = float(glitch_max_slot_wh)
+
+    glitch_min_neighbour = slot_invalidation.get(
+        "data_glitch_min_neighbour_forecast_wh", 200.0
+    )
+    slot_invalidation_data_glitch_min_neighbour_forecast_wh = 200.0
+    if isinstance(glitch_min_neighbour, (int, float)) and not isinstance(
+        glitch_min_neighbour, bool
+    ):
+        slot_invalidation_data_glitch_min_neighbour_forecast_wh = float(
+            glitch_min_neighbour
+        )
+
+    glitch_backfill = slot_invalidation.get("data_glitch_backfill_max_minutes", 120)
+    slot_invalidation_data_glitch_backfill_max_minutes = 120
+    if isinstance(glitch_backfill, (int, float)) and not isinstance(
+        glitch_backfill, bool
+    ):
+        slot_invalidation_data_glitch_backfill_max_minutes = int(glitch_backfill)
+
     return BiasConfig(
         enabled=enabled,
         min_history_days=min_history_days,
@@ -246,6 +274,15 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         ),
         slot_invalidation_export_enabled_entity_id=(
             slot_invalidation_export_enabled_entity_id
+        ),
+        slot_invalidation_data_glitch_max_slot_wh=(
+            slot_invalidation_data_glitch_max_slot_wh
+        ),
+        slot_invalidation_data_glitch_min_neighbour_forecast_wh=(
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh
+        ),
+        slot_invalidation_data_glitch_backfill_max_minutes=(
+            slot_invalidation_data_glitch_backfill_max_minutes
         ),
         max_training_window_days=max_training_window_days,
     )

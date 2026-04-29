@@ -3,7 +3,7 @@
  * Copyright 2019 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const _e = globalThis, Ce = _e.ShadowRoot && (_e.ShadyCSS === void 0 || _e.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, He = Symbol(), Ne = /* @__PURE__ */ new WeakMap();
+const _e = globalThis, Ce = _e.ShadowRoot && (_e.ShadyCSS === void 0 || _e.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, He = Symbol(), De = /* @__PURE__ */ new WeakMap();
 let gt = class {
   constructor(e, t, i) {
     if (this._$cssResult$ = !0, i !== He) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
@@ -14,7 +14,7 @@ let gt = class {
     const t = this.t;
     if (Ce && e === void 0) {
       const i = t !== void 0 && t.length === 1;
-      i && (e = Ne.get(t)), e === void 0 && ((this.o = e = new CSSStyleSheet()).replaceSync(this.cssText), i && Ne.set(t, e));
+      i && (e = De.get(t)), e === void 0 && ((this.o = e = new CSSStyleSheet()).replaceSync(this.cssText), i && De.set(t, e));
     }
     return e;
   }
@@ -35,7 +35,7 @@ const Ot = (o) => new gt(typeof o == "string" ? o : o + "", void 0, He), Le = (o
     const i = document.createElement("style"), a = _e.litNonce;
     a !== void 0 && i.setAttribute("nonce", a), i.textContent = t.cssText, o.appendChild(i);
   }
-}, De = Ce ? (o) => o : (o) => o instanceof CSSStyleSheet ? ((e) => {
+}, Ne = Ce ? (o) => o : (o) => o instanceof CSSStyleSheet ? ((e) => {
   let t = "";
   for (const i of e.cssRules) t += i.cssText;
   return Ot(t);
@@ -45,7 +45,7 @@ const Ot = (o) => new gt(typeof o == "string" ? o : o + "", void 0, He), Le = (o
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: Tt, defineProperty: Nt, getOwnPropertyDescriptor: Dt, getOwnPropertyNames: Ft, getOwnPropertySymbols: Rt, getPrototypeOf: Yt } = Object, N = globalThis, Fe = N.trustedTypes, Ut = Fe ? Fe.emptyScript : "", ve = N.reactiveElementPolyfillSupport, oe = (o, e) => o, Ae = { toAttribute(o, e) {
+const { is: Tt, defineProperty: Dt, getOwnPropertyDescriptor: Nt, getOwnPropertyNames: Ft, getOwnPropertySymbols: Rt, getPrototypeOf: Yt } = Object, D = globalThis, Fe = D.trustedTypes, Ut = Fe ? Fe.emptyScript : "", ve = D.reactiveElementPolyfillSupport, oe = (o, e) => o, Ae = { toAttribute(o, e) {
   switch (e) {
     case Boolean:
       o = o ? Ut : null;
@@ -74,7 +74,7 @@ const { is: Tt, defineProperty: Nt, getOwnPropertyDescriptor: Dt, getOwnProperty
   }
   return t;
 } }, vt = (o, e) => !Tt(o, e), Re = { attribute: !0, type: String, converter: Ae, reflect: !1, useDefault: !1, hasChanged: vt };
-Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), N.litPropertyMetadata ?? (N.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
+Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), D.litPropertyMetadata ?? (D.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
 let B = class extends HTMLElement {
   static addInitializer(e) {
     this._$Ei(), (this.l ?? (this.l = [])).push(e);
@@ -85,11 +85,11 @@ let B = class extends HTMLElement {
   static createProperty(e, t = Re) {
     if (t.state && (t.attribute = !1), this._$Ei(), this.prototype.hasOwnProperty(e) && ((t = Object.create(t)).wrapped = !0), this.elementProperties.set(e, t), !t.noAccessor) {
       const i = Symbol(), a = this.getPropertyDescriptor(e, i, t);
-      a !== void 0 && Nt(this.prototype, e, a);
+      a !== void 0 && Dt(this.prototype, e, a);
     }
   }
   static getPropertyDescriptor(e, t, i) {
-    const { get: a, set: r } = Dt(this.prototype, e) ?? { get() {
+    const { get: a, set: r } = Nt(this.prototype, e) ?? { get() {
       return this[t];
     }, set(s) {
       this[t] = s;
@@ -129,8 +129,8 @@ let B = class extends HTMLElement {
     const t = [];
     if (Array.isArray(e)) {
       const i = new Set(e.flat(1 / 0).reverse());
-      for (const a of i) t.unshift(De(a));
-    } else e !== void 0 && t.push(De(e));
+      for (const a of i) t.unshift(Ne(a));
+    } else e !== void 0 && t.push(Ne(e));
     return t;
   }
   static _$Eu(e, t) {
@@ -278,14 +278,14 @@ let B = class extends HTMLElement {
   firstUpdated(e) {
   }
 };
-B.elementStyles = [], B.shadowRootOptions = { mode: "open" }, B[oe("elementProperties")] = /* @__PURE__ */ new Map(), B[oe("finalized")] = /* @__PURE__ */ new Map(), ve == null || ve({ ReactiveElement: B }), (N.reactiveElementVersions ?? (N.reactiveElementVersions = [])).push("2.1.2");
+B.elementStyles = [], B.shadowRootOptions = { mode: "open" }, B[oe("elementProperties")] = /* @__PURE__ */ new Map(), B[oe("finalized")] = /* @__PURE__ */ new Map(), ve == null || ve({ ReactiveElement: B }), (D.reactiveElementVersions ?? (D.reactiveElementVersions = [])).push("2.1.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const re = globalThis, Ye = (o) => o, ue = re.trustedTypes, Ue = ue ? ue.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, yt = "$lit$", T = `lit$${Math.random().toFixed(9).slice(2)}$`, bt = "?" + T, Wt = `<${bt}>`, q = document, ne = () => q.createComment(""), le = (o) => o === null || typeof o != "object" && typeof o != "function", Pe = Array.isArray, Kt = (o) => Pe(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", ye = `[ 	
-\f\r]`, X = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, We = /-->/g, Ke = />/g, R = RegExp(`>|${ye}(?:([^\\s"'>=/]+)(${ye}*=${ye}*(?:[^ 	
+const re = globalThis, Ye = (o) => o, ue = re.trustedTypes, Ue = ue ? ue.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, bt = "$lit$", T = `lit$${Math.random().toFixed(9).slice(2)}$`, yt = "?" + T, Wt = `<${yt}>`, q = document, ne = () => q.createComment(""), le = (o) => o === null || typeof o != "object" && typeof o != "function", Pe = Array.isArray, Kt = (o) => Pe(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", be = `[ 	
+\f\r]`, X = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, We = /-->/g, Ke = />/g, R = RegExp(`>|${be}(?:([^\\s"'>=/]+)(${be}*=${be}*(?:[^ 	
 \f\r"'\`<>=]|("|')|))|$)`, "g"), qe = /'/g, Be = /"/g, ft = /^(?:script|style|textarea|title)$/i, kt = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = kt(1), M = kt(2), Z = Symbol.for("lit-noChange"), h = Symbol.for("lit-nothing"), Ze = /* @__PURE__ */ new WeakMap(), U = q.createTreeWalker(q, 129);
 function wt(o, e) {
   if (!Pe(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
@@ -298,8 +298,8 @@ const qt = (o, e) => {
     const d = o[l];
     let c, p, u = -1, m = 0;
     for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === X ? p[1] === "!--" ? s = We : p[1] !== void 0 ? s = Ke : p[2] !== void 0 ? (ft.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = R) : p[3] !== void 0 && (s = R) : s === R ? p[0] === ">" ? (s = a ?? X, u = -1) : p[1] === void 0 ? u = -2 : (u = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? R : p[3] === '"' ? Be : qe) : s === Be || s === qe ? s = R : s === We || s === Ke ? s = X : (s = R, a = void 0);
-    const b = s === R && o[l + 1].startsWith("/>") ? " " : "";
-    r += s === X ? d + Wt : u >= 0 ? (i.push(c), d.slice(0, u) + yt + d.slice(u) + T + b) : d + T + (u === -2 ? l : b);
+    const y = s === R && o[l + 1].startsWith("/>") ? " " : "";
+    r += s === X ? d + Wt : u >= 0 ? (i.push(c), d.slice(0, u) + bt + d.slice(u) + T + y) : d + T + (u === -2 ? l : y);
   }
   return [wt(o, r + (o[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
@@ -315,19 +315,19 @@ class de {
     }
     for (; (a = U.nextNode()) !== null && d.length < l; ) {
       if (a.nodeType === 1) {
-        if (a.hasAttributes()) for (const u of a.getAttributeNames()) if (u.endsWith(yt)) {
-          const m = p[s++], b = a.getAttribute(u).split(T), V = /([.?@])?(.*)/.exec(m);
-          d.push({ type: 1, index: r, name: V[2], strings: b, ctor: V[1] === "." ? Zt : V[1] === "?" ? Gt : V[1] === "@" ? Jt : me }), a.removeAttribute(u);
+        if (a.hasAttributes()) for (const u of a.getAttributeNames()) if (u.endsWith(bt)) {
+          const m = p[s++], y = a.getAttribute(u).split(T), V = /([.?@])?(.*)/.exec(m);
+          d.push({ type: 1, index: r, name: V[2], strings: y, ctor: V[1] === "." ? Zt : V[1] === "?" ? Gt : V[1] === "@" ? Jt : me }), a.removeAttribute(u);
         } else u.startsWith(T) && (d.push({ type: 6, index: r }), a.removeAttribute(u));
         if (ft.test(a.tagName)) {
           const u = a.textContent.split(T), m = u.length - 1;
           if (m > 0) {
             a.textContent = ue ? ue.emptyScript : "";
-            for (let b = 0; b < m; b++) a.append(u[b], ne()), U.nextNode(), d.push({ type: 2, index: ++r });
+            for (let y = 0; y < m; y++) a.append(u[y], ne()), U.nextNode(), d.push({ type: 2, index: ++r });
             a.append(u[m], ne());
           }
         }
-      } else if (a.nodeType === 8) if (a.data === bt) d.push({ type: 2, index: r });
+      } else if (a.nodeType === 8) if (a.data === yt) d.push({ type: 2, index: r });
       else {
         let u = -1;
         for (; (u = a.data.indexOf(T, u + 1)) !== -1; ) d.push({ type: 7, index: r }), u += T.length - 1;
@@ -504,8 +504,8 @@ class Qt {
     G(this, e);
   }
 }
-const Xt = { I: Q }, be = re.litHtmlPolyfillSupport;
-be == null || be(de, Q), (re.litHtmlVersions ?? (re.litHtmlVersions = [])).push("3.3.2");
+const Xt = { I: Q }, ye = re.litHtmlPolyfillSupport;
+ye == null || ye(de, Q), (re.litHtmlVersions ?? (re.litHtmlVersions = [])).push("3.3.2");
 const $t = (o, e, t) => {
   const i = (t == null ? void 0 : t.renderBefore) ?? e;
   let a = i._$litPart$;
@@ -870,14 +870,14 @@ function vi(o) {
     label: o
   };
 }
-function yi() {
+function bi() {
   return {
     start: "00:00",
     end: "06:00",
     price: 1
   };
 }
-function bi() {
+function yi() {
   return "";
 }
 function fi(o) {
@@ -1107,7 +1107,7 @@ const Ei = {
   automation: "automation",
   appliances: "appliances",
   root: "general"
-}, C = "document", y = {
+}, C = "document", b = {
   general: "tab:general",
   power_devices: "tab:power_devices",
   scheduler: "tab:scheduler",
@@ -1185,16 +1185,16 @@ const Ei = {
     labelKey: "editor.title",
     adapter: ji()
   },
-  [y.general]: {
-    id: y.general,
+  [b.general]: {
+    id: b.general,
     kind: "tab",
     parentId: C,
     tabId: "general",
     labelKey: "editor.tabs.general",
     adapter: ee(Hi)
   },
-  [y.power_devices]: {
-    id: y.power_devices,
+  [b.power_devices]: {
+    id: b.power_devices,
     kind: "tab",
     parentId: C,
     tabId: "power_devices",
@@ -1204,8 +1204,8 @@ const Ei = {
       rootKind: "object"
     })
   },
-  [y.scheduler]: {
-    id: y.scheduler,
+  [b.scheduler]: {
+    id: b.scheduler,
     kind: "tab",
     parentId: C,
     tabId: "scheduler",
@@ -1215,8 +1215,8 @@ const Ei = {
       rootKind: "object"
     })
   },
-  [y.automation]: {
-    id: y.automation,
+  [b.automation]: {
+    id: b.automation,
     kind: "tab",
     parentId: C,
     tabId: "automation",
@@ -1226,8 +1226,8 @@ const Ei = {
       rootKind: "object"
     })
   },
-  [y.appliances]: {
-    id: y.appliances,
+  [b.appliances]: {
+    id: b.appliances,
     kind: "tab",
     parentId: C,
     tabId: "appliances",
@@ -1240,7 +1240,7 @@ const Ei = {
   [_.general.core_labels_and_history]: {
     id: _.general.core_labels_and_history,
     kind: "section",
-    parentId: y.general,
+    parentId: b.general,
     tabId: "general",
     labelKey: "editor.sections.core_labels_and_history",
     adapter: ee(Li)
@@ -1248,7 +1248,7 @@ const Ei = {
   [_.general.device_label_text]: {
     id: _.general.device_label_text,
     kind: "section",
-    parentId: y.general,
+    parentId: b.general,
     tabId: "general",
     labelKey: "editor.sections.device_label_text",
     adapter: x(["device_label_text"], {
@@ -1259,7 +1259,7 @@ const Ei = {
   [_.power_devices.house]: {
     id: _.power_devices.house,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.house",
     adapter: x(["power_devices", "house"], {
@@ -1270,7 +1270,7 @@ const Ei = {
   [_.power_devices.solar]: {
     id: _.power_devices.solar,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.solar",
     adapter: x(["power_devices", "solar"], {
@@ -1353,7 +1353,7 @@ const Ei = {
   [_.power_devices.battery]: {
     id: _.power_devices.battery,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.battery",
     adapter: x(["power_devices", "battery"], {
@@ -1364,7 +1364,7 @@ const Ei = {
   [_.power_devices.grid]: {
     id: _.power_devices.grid,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.grid",
     adapter: x(["power_devices", "grid"], {
@@ -1375,7 +1375,7 @@ const Ei = {
   [_.scheduler.schedule_control_mapping]: {
     id: _.scheduler.schedule_control_mapping,
     kind: "section",
-    parentId: y.scheduler,
+    parentId: b.scheduler,
     tabId: "scheduler",
     labelKey: "editor.sections.schedule_control_mapping",
     adapter: x(["scheduler", "control"], {
@@ -1386,7 +1386,7 @@ const Ei = {
   [_.automation.settings]: {
     id: _.automation.settings,
     kind: "section",
-    parentId: y.automation,
+    parentId: b.automation,
     tabId: "automation",
     labelKey: "editor.sections.automation_settings",
     adapter: ee(Pi)
@@ -1394,7 +1394,7 @@ const Ei = {
   [_.automation.optimizer_pipeline]: {
     id: _.automation.optimizer_pipeline,
     kind: "section",
-    parentId: y.automation,
+    parentId: b.automation,
     tabId: "automation",
     labelKey: "editor.sections.optimizer_pipeline",
     adapter: x(["automation", "optimizers"], {
@@ -1405,7 +1405,7 @@ const Ei = {
   [_.appliances.configured_appliances]: {
     id: _.appliances.configured_appliances,
     kind: "section",
-    parentId: y.appliances,
+    parentId: b.appliances,
     tabId: "appliances",
     labelKey: "editor.sections.configured_appliances",
     adapter: x(["appliances"], {
@@ -1624,7 +1624,10 @@ const Et = {
     bias_correction_aggregation_method_trimmed_mean: "Oříznutý průměr (Trimmed Mean)",
     bias_correction_total_energy_entity: "Entita celkové energie",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Max. SoC baterie %",
-    bias_correction_slot_invalidation_export_enabled_entity_id: "Entita povolení exportu"
+    bias_correction_slot_invalidation_export_enabled_entity_id: "Entita povolení exportu",
+    bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Maximum slotu při výpadku dat (Wh / 15 min)",
+    bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh: "Minimální prognóza pro nulový slot (Wh)",
+    bias_correction_slot_invalidation_data_glitch_backfill_max_minutes: "Okno doplňování při výpadku (min)"
   },
   helpers: {
     history_buckets: "Kolik bucketů historie Helman drží pro UI historii.",
@@ -1648,7 +1651,10 @@ const Et = {
     bias_correction_max_training_window_days: "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy.",
     bias_correction_training_time: "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "0-100 %. Vyřadí sloty, kdy SoC baterie dosáhne této hranice a zároveň je export zakázaný.",
-    bias_correction_slot_invalidation_export_enabled_entity_id: "Booleovská entita, která říká Helmanu, zda je aktuálně povolen export do sítě."
+    bias_correction_slot_invalidation_export_enabled_entity_id: "Booleovská entita, která říká Helmanu, zda je aktuálně povolen export do sítě.",
+    bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Volitelné. Energie ve slotu nad tento strop je považována za chybu rekordéru. Pokud zůstane prázdné, odvodí se ze solar.max_power × 0.25 × 1.05.",
+    bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh: "Minimální prognóza Wh pro pravidlo nulového slotu se sousedem. Výchozí 200 Wh; 0 vypne pravidlo (3).",
+    bias_correction_slot_invalidation_data_glitch_backfill_max_minutes: "Jak daleko zpět smí jít doplňovací okno z výkyvu. Výchozí 120 minut."
   },
   messages: {
     reloaded_config: "Uložená konfigurace Helman byla znovu načtena z backendu.",
@@ -1873,15 +1879,15 @@ const Et = {
     no_profile: "Natrénovaný profil zatím není k dispozici. Surová prognóza a skutečná historie se stále mohou zobrazit, pokud jsou dostupné.",
     no_data: "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy."
   }
-}, Ni = {
+}, Di = {
   editor: Et,
   common: Mt,
   bias_correction: Vt
-}, Di = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+}, Ni = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
   bias_correction: Vt,
   common: Mt,
-  default: Ni,
+  default: Di,
   editor: Et
 }, Symbol.toStringTag, { value: "Module" })), Ct = {
   title: "Helman config editor",
@@ -2068,7 +2074,10 @@ const Et = {
     bias_correction_aggregation_method_trimmed_mean: "Trimmed Mean",
     bias_correction_total_energy_entity: "Total energy entity",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Max battery SoC %",
-    bias_correction_slot_invalidation_export_enabled_entity_id: "Export enabled entity"
+    bias_correction_slot_invalidation_export_enabled_entity_id: "Export enabled entity",
+    bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Data-glitch spike cap (Wh / 15 min)",
+    bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh: "Data-glitch zero forecast floor (Wh)",
+    bias_correction_slot_invalidation_data_glitch_backfill_max_minutes: "Data-glitch backfill window (min)"
   },
   helpers: {
     history_buckets: "How many history buckets Helman keeps for UI history.",
@@ -2092,7 +2101,10 @@ const Et = {
     bias_correction_max_training_window_days: "Maximum number of past days Helman may use to train the solar bias correction model.",
     bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "0-100%. Exclude slots when battery SoC reaches this threshold and export is disabled.",
-    bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that tells Helman whether grid export is currently allowed."
+    bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that tells Helman whether grid export is currently allowed.",
+    bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Optional. Energy in a single 15-minute slot above this cap is treated as a recorder glitch. Defaults to solar.max_power × 0.25 × 1.05 when left blank.",
+    bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh: "Forecast Wh floor for the zero-with-neighbour rule. Default 200 Wh. Set to 0 to disable rule (3).",
+    bias_correction_slot_invalidation_data_glitch_backfill_max_minutes: "How far back the spike-backfill walk may invalidate consecutive zero slots. Default 120 minutes."
   },
   messages: {
     reloaded_config: "Reloaded the stored Helman config from the backend.",
@@ -2240,7 +2252,10 @@ const Et = {
     bias_correction_aggregation_method: "Method used to aggregate historical data. 'Ratio of Sums' correctly weights clear, sunny days over small, cloudy days and inherently filters out energy sensor quantization noise (recommended). 'Trimmed Mean' calculates the factor for each day independently and averages them after dropping the highest and lowest extremes, providing robustness to single-day anomalies but over-correcting large sunny days due to lack of volume weighting. Defaults to 'Ratio of Sums'.",
     bias_correction_total_energy_entity: "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Battery state-of-charge threshold as a percentage. When the battery reaches or exceeds this value during a forecast slot and export is disabled in the same slot, Helman excludes that slot from solar bias correction actuals to avoid training on curtailed production.",
-    bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that reports whether grid export is currently enabled. Helman combines this with the max battery SoC threshold to invalidate slots where solar production was likely clipped because export was disabled while the battery was effectively full."
+    bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that reports whether grid export is currently enabled. Helman combines this with the max battery SoC threshold to invalidate slots where solar production was likely clipped because export was disabled while the battery was effectively full.",
+    bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Maximum plausible energy for a single 15-minute slot. A solar inverter cannot exceed its rated power × 0.25 hours; any slot above this cap is a recorder glitch (typically a cumulative-meter dump). Helman invalidates the spike slot and walks backwards through consecutive zero slots to invalidate the matching backfilled energy. Leave empty to derive from power_devices.solar.max_power × 0.25 × 1.05.",
+    bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh: "Forecast Wh floor for the zero-with-known-production rule. When a slot's actual is 0 Wh, its forecast was at least this many Wh, and a neighbouring slot within ±60 minutes has non-zero actuals, the slot is treated as a recorder gap and invalidated. Default 200 Wh; set to 0 to disable.",
+    bias_correction_slot_invalidation_data_glitch_backfill_max_minutes: "Maximum minutes the backfill walk may extend backwards from a spike. The walk stops at the first non-zero actual or once this window is reached. Default 120 minutes."
   }
 }, Ht = {
   yes: "Yes",
@@ -2333,7 +2348,7 @@ const Et = {
   default: Fi,
   editor: Ct
 }, Symbol.toStringTag, { value: "Module" })), xe = {
-  cs: Di,
+  cs: Ni,
   en: Ri
 };
 function J(o) {
@@ -2512,12 +2527,12 @@ const Wi = async () => {
         const Te = (pe < j.length ? j[pe] : F) / 60, Pt = Te > 0 ? $.point.valueWh / Te : 0;
         return { point: $.point, minutes: $.minutes, powerW: Pt };
       });
-    }, c = d(e.series.raw), p = d(e.series.corrected), u = d(e.series.actual), m = d(e.series.invalidated), b = [
+    }, c = d(e.series.raw), p = d(e.series.corrected), u = d(e.series.actual), m = d(e.series.invalidated), y = [
       ...c.map((g) => g.powerW),
       ...p.map((g) => g.powerW),
       ...u.map((g) => g.powerW),
       ...m.map((g) => g.powerW)
-    ], V = Math.max(1e3, ...b), E = Math.ceil(V / 1e3), ge = this._buildYTicks(E), D = (g) => a.left + g / 1440 * r, O = (g) => a.top + s - g / (E * 1e3) * s, ce = (g) => g.map((k, j) => `${j === 0 ? "M" : "L"}${D(k.minutes).toFixed(1)},${O(k.powerW).toFixed(1)}`).join(" ");
+    ], V = Math.max(1e3, ...y), E = Math.ceil(V / 1e3), ge = this._buildYTicks(E), N = (g) => a.left + g / 1440 * r, O = (g) => a.top + s - g / (E * 1e3) * s, ce = (g) => g.map((k, j) => `${j === 0 ? "M" : "L"}${N(k.minutes).toFixed(1)},${O(k.powerW).toFixed(1)}`).join(" ");
     return M`
       <svg viewBox="0 0 ${720} ${260}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
         <rect x="0" y="0" width=${720} height=${260} fill="var(--card-background-color)"></rect>
@@ -2537,13 +2552,13 @@ const Wi = async () => {
           `;
     })}
         <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">${this._t("bias_correction.inspector.power_axis_label")}</text>
-        ${c.length > 1 ? M`<path d=${ce(c)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>` : c.length === 1 ? M`<circle cx=${D(c[0].minutes)} cy=${O(c[0].powerW)} r="3.5" fill="#1565c0"></circle>` : ""}
-        ${p.length > 1 ? M`<path d=${ce(p)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>` : p.length === 1 ? M`<circle cx=${D(p[0].minutes)} cy=${O(p[0].powerW)} r="3.5" fill="#2e7d32"></circle>` : ""}
+        ${c.length > 1 ? M`<path d=${ce(c)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>` : c.length === 1 ? M`<circle cx=${N(c[0].minutes)} cy=${O(c[0].powerW)} r="3.5" fill="#1565c0"></circle>` : ""}
+        ${p.length > 1 ? M`<path d=${ce(p)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>` : p.length === 1 ? M`<circle cx=${N(p[0].minutes)} cy=${O(p[0].powerW)} r="3.5" fill="#2e7d32"></circle>` : ""}
         ${u.map((g) => M`
-          <circle cx=${D(g.minutes)} cy=${O(g.powerW)} r="3.5" fill="#c62828"></circle>
+          <circle cx=${N(g.minutes)} cy=${O(g.powerW)} r="3.5" fill="#c62828"></circle>
         `)}
         ${m.map((g) => M`
-          <circle cx=${D(g.minutes)} cy=${O(g.powerW)} r="3.5" fill="#9aa0a6">
+          <circle cx=${N(g.minutes)} cy=${O(g.powerW)} r="3.5" fill="#9aa0a6">
             <title>${this._t("bias_correction.inspector.invalidated_production")}</title>
           </circle>
         `)}
@@ -2559,10 +2574,10 @@ const Wi = async () => {
       if (!Number.isFinite(p.factor)) return "";
       const u = p.slot.match(/^(\d{2}):(\d{2})$/);
       if (!u) return "";
-      const m = Number(u[1]), b = Number(u[2]);
-      if (!Number.isFinite(m) || !Number.isFinite(b) || m < 0 || m > 23 || b < 0 || b > 59)
+      const m = Number(u[1]), y = Number(u[2]);
+      if (!Number.isFinite(m) || !Number.isFinite(y) || m < 0 || m > 23 || y < 0 || y > 59)
         return "";
-      const V = m * 60 + b, E = t + V / 1440 * a, ge = Math.max(2, a / 96), D = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), O = Math.min(0.34, 0.06 + D * 0.28), ce = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
+      const V = m * 60 + y, E = t + V / 1440 * a, ge = Math.max(2, a / 96), N = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), O = Math.min(0.34, 0.06 + N * 0.28), ce = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
       return M`<rect x=${E} y=${i} width=${ge} height=${r} fill="rgba(${ce}, ${O})"></rect>`;
     });
   }
@@ -3337,7 +3352,7 @@ const Ki = [
         L(
           e,
           ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-          bi()
+          yi()
         );
       });
     }, this._handleAddImportPriceWindow = () => {
@@ -3345,7 +3360,7 @@ const Ki = [
         L(
           e,
           ["power_devices", "grid", "forecast", "import_price_windows"],
-          yi()
+          bi()
         );
       });
     }, this._handleAddExportPriceOptimizer = () => {
@@ -3544,22 +3559,22 @@ const Ki = [
   _renderActiveTab() {
     switch (this._activeTab) {
       case "general":
-        return this._renderTabScope(y.general, this._renderGeneralTab());
+        return this._renderTabScope(b.general, this._renderGeneralTab());
       case "power_devices":
         return this._renderTabScope(
-          y.power_devices,
+          b.power_devices,
           this._renderPowerDevicesTab()
         );
       case "scheduler":
-        return this._renderTabScope(y.scheduler, this._renderSchedulerTab());
+        return this._renderTabScope(b.scheduler, this._renderSchedulerTab());
       case "automation":
         return this._renderTabScope(
-          y.automation,
+          b.automation,
           this._renderAutomationTab()
         );
       case "appliances":
         return this._renderTabScope(
-          y.appliances,
+          b.appliances,
           this._renderAppliancesTab()
         );
       default:
@@ -4066,6 +4081,48 @@ const Ki = [
                 void 0,
                 "editor.help.bias_correction_slot_invalidation_export_enabled_entity_id"
               )}
+                            ${this._renderOptionalNumberField(
+                [
+                  "power_devices",
+                  "solar",
+                  "forecast",
+                  "bias_correction",
+                  "slot_invalidation",
+                  "data_glitch_max_slot_wh"
+                ],
+                "editor.fields.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                "editor.helpers.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                "editor.help.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                { min: 0, suffix: "Wh" }
+              )}
+                            ${this._renderOptionalNumberField(
+                [
+                  "power_devices",
+                  "solar",
+                  "forecast",
+                  "bias_correction",
+                  "slot_invalidation",
+                  "data_glitch_min_neighbour_forecast_wh"
+                ],
+                "editor.fields.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                "editor.helpers.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                "editor.help.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                { min: 0, suffix: "Wh" }
+              )}
+                            ${this._renderOptionalNumberField(
+                [
+                  "power_devices",
+                  "solar",
+                  "forecast",
+                  "bias_correction",
+                  "slot_invalidation",
+                  "data_glitch_backfill_max_minutes"
+                ],
+                "editor.fields.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                "editor.helpers.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                "editor.help.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                { min: 0, suffix: "min" }
+              )}
                           </div>
                         `,
               { initialOpen: !1 }
@@ -4399,7 +4456,7 @@ const Ki = [
       this._config,
       this._liveApplianceMetadata,
       c
-    ), b = we(
+    ), y = we(
       m,
       this._stringValue(this._getValue([...r, "climate_mode"]))
     ), V = this._getSurplusApplianceOptimizerTitle(m, l);
@@ -4489,7 +4546,7 @@ const Ki = [
       "1",
       "editor.help.surplus_appliance_min_surplus_buffer_pct"
     )}
-            ${b.visible ? this._renderSurplusClimateModeField(r, b) : this._renderSurplusApplianceActionField(p)}
+            ${y.visible ? this._renderSurplusClimateModeField(r, y) : this._renderSurplusApplianceActionField(p)}
           </div>
         </div>
       </details>
@@ -4983,7 +5040,7 @@ const Ki = [
               ${this._renderSimpleSection(
       this._t("editor.sections.use_modes"),
       n`<div class="list-stack">
-                  ${r.map(([m, b]) => this._renderUseMode(a, m, b))}
+                  ${r.map(([m, y]) => this._renderUseMode(a, m, y))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddUseMode(t)}>${this._t("editor.actions.add_use_mode")}</button>
@@ -4992,7 +5049,7 @@ const Ki = [
               ${this._renderSimpleSection(
       this._t("editor.sections.eco_gears"),
       n`<div class="list-stack">
-                  ${s.map(([m, b]) => this._renderEcoGear(a, m, b))}
+                  ${s.map(([m, y]) => this._renderEcoGear(a, m, y))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(t)}>${this._t("editor.actions.add_eco_gear")}</button>
@@ -5001,7 +5058,7 @@ const Ki = [
               ${this._renderSimpleSection(
       this._t("editor.sections.vehicles"),
       n`<div class="list-stack">
-                  ${l.map((m, b) => this._renderVehicle(a, m, b, l.length))}
+                  ${l.map((m, y) => this._renderVehicle(a, m, y, l.length))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddVehicle(t)}>${this._t("editor.actions.add_vehicle")}</button>

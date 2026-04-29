@@ -537,6 +537,61 @@ def _validate_solar_config(
                     ),
                 )
 
+            for key in (
+                "data_glitch_max_slot_wh",
+                "data_glitch_min_neighbour_forecast_wh",
+            ):
+                value = slot_invalidation_map.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, bool) or not isinstance(
+                    value, (int, float)
+                ):
+                    report.add_error(
+                        section=section,
+                        path=f"{slot_invalidation_path}.{key}",
+                        code="invalid_type",
+                        message=(
+                            f"{slot_invalidation_path}.{key} must be a number"
+                        ),
+                    )
+                elif value < 0:
+                    report.add_error(
+                        section=section,
+                        path=f"{slot_invalidation_path}.{key}",
+                        code="invalid_range",
+                        message=(
+                            f"{slot_invalidation_path}.{key} must be >= 0"
+                        ),
+                    )
+
+            backfill_value = slot_invalidation_map.get(
+                "data_glitch_backfill_max_minutes"
+            )
+            if backfill_value is not None:
+                if isinstance(backfill_value, bool) or not isinstance(
+                    backfill_value, (int, float)
+                ):
+                    report.add_error(
+                        section=section,
+                        path=f"{slot_invalidation_path}.data_glitch_backfill_max_minutes",
+                        code="invalid_type",
+                        message=(
+                            f"{slot_invalidation_path}.data_glitch_backfill_max_minutes "
+                            "must be a number"
+                        ),
+                    )
+                elif backfill_value < 0:
+                    report.add_error(
+                        section=section,
+                        path=f"{slot_invalidation_path}.data_glitch_backfill_max_minutes",
+                        code="invalid_range",
+                        message=(
+                            f"{slot_invalidation_path}.data_glitch_backfill_max_minutes "
+                            "must be >= 0"
+                        ),
+                    )
+
     # cross-field validation: clamp_min < clamp_max
     if (
         clamp_min is not None

@@ -20,9 +20,11 @@ from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
 from .models import BiasConfig, SolarActualsWindow
+from .forecast_history import load_historical_per_slot_forecast
 from .slot_invalidation import (
     InvalidationInputs,
     StateSample,
+    compute_data_glitch_invalidations,
     compute_invalidated_slots_for_window,
 )
 try:
@@ -151,6 +153,46 @@ async def _load_invalidated_slots_for_window(
     *,
     local_now: datetime,
 ) -> dict[str, set[str]]:
+    forecast_slot_starts_by_date, slot_keys_by_date = _build_day_grid_slot_inputs(
+        hass,
+        slot_actuals_by_date,
+    )
+    if not forecast_slot_starts_by_date:
+        return {}
+
+    curtailment = await _load_curtailment_invalidations(
+        hass,
+        cfg,
+        forecast_slot_starts_by_date,
+        slot_keys_by_date,
+    )
+    data_glitch = await _load_data_glitch_invalidations(
+        hass,
+        cfg,
+        slot_actuals_by_date,
+        local_now=local_now,
+    )
+    return _union_invalidations(curtailment, data_glitch)
+
+
+def _union_invalidations(
+    *layers: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    merged: dict[str, set[str]] = {}
+    for layer in layers:
+        for day, slots in layer.items():
+            if not slots:
+                continue
+            merged.setdefault(day, set()).update(slots)
+    return merged
+
+
+async def _load_curtailment_invalidations(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    forecast_slot_starts_by_date: dict[str, list[datetime]],
+    slot_keys_by_date: dict[str, list[str]],
+) -> dict[str, set[str]]:
     max_battery_soc_percent = cfg.slot_invalidation_max_battery_soc_percent
     export_entity_id = _read_entity_id(cfg.slot_invalidation_export_enabled_entity_id)
     if max_battery_soc_percent is None or export_entity_id is None:
@@ -159,15 +201,8 @@ async def _load_invalidated_slots_for_window(
     soc_entity_id = _read_battery_soc_entity_id_from_runtime_config(hass)
     if soc_entity_id is None:
         _LOGGER.warning(
-            "Solar bias slot invalidation is configured, but power_devices.battery.entities.capacity is unavailable at runtime; skipping invalidation for this training window"
+            "Solar bias slot invalidation is configured, but power_devices.battery.entities.capacity is unavailable at runtime; skipping curtailment invalidation for this training window"
         )
-        return {}
-
-    forecast_slot_starts_by_date, slot_keys_by_date = _build_day_grid_slot_inputs(
-        hass,
-        slot_actuals_by_date,
-    )
-    if not forecast_slot_starts_by_date:
         return {}
 
     window_start_utc = min(
@@ -202,6 +237,82 @@ async def _load_invalidated_slots_for_window(
             slot_keys_by_date=slot_keys_by_date,
         )
     )
+
+
+async def _load_data_glitch_invalidations(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    slot_actuals_by_date: dict[str, dict[str, float]],
+    *,
+    local_now: datetime,
+) -> dict[str, set[str]]:
+    max_slot_wh = _resolve_data_glitch_max_slot_wh(hass, cfg)
+    min_neighbour_forecast_wh = (
+        cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh
+    )
+    backfill_max_minutes = cfg.slot_invalidation_data_glitch_backfill_max_minutes
+
+    if max_slot_wh is None and min_neighbour_forecast_wh <= 0:
+        return {}
+
+    forecast_slot_wh_by_date: dict[str, dict[str, float]] = {}
+    if min_neighbour_forecast_wh > 0:
+        for day in sorted(slot_actuals_by_date):
+            try:
+                target_date = date.fromisoformat(day)
+            except ValueError:
+                continue
+            day_forecast = await load_historical_per_slot_forecast(
+                hass,
+                cfg,
+                target_date,
+                local_now=local_now,
+            )
+            if day_forecast:
+                forecast_slot_wh_by_date[day] = day_forecast
+
+    return compute_data_glitch_invalidations(
+        slot_actuals_by_date=slot_actuals_by_date,
+        forecast_slot_wh_by_date=forecast_slot_wh_by_date,
+        max_slot_wh=max_slot_wh,
+        min_neighbour_forecast_wh=min_neighbour_forecast_wh,
+        backfill_max_minutes=backfill_max_minutes,
+    )
+
+
+def _resolve_data_glitch_max_slot_wh(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+) -> float | None:
+    if cfg.slot_invalidation_data_glitch_max_slot_wh is not None:
+        return cfg.slot_invalidation_data_glitch_max_slot_wh
+    solar_max_power_w = _read_solar_max_power_from_runtime_config(hass)
+    if solar_max_power_w is None or solar_max_power_w <= 0:
+        return None
+    # 15-minute slot at full inverter output, with 5% headroom.
+    return solar_max_power_w * 0.25 * 1.05
+
+
+def _read_solar_max_power_from_runtime_config(hass: HomeAssistant) -> float | None:
+    runtime_config = getattr(
+        hass.data.get(DOMAIN, {}).get("coordinator"),
+        "config",
+        None,
+    )
+    if not isinstance(runtime_config, dict):
+        return None
+    solar_config = runtime_config.get("power_devices", {}).get("solar", {})
+    raw_value = solar_config.get("max_power")
+    if isinstance(raw_value, bool) or raw_value is None:
+        return None
+    if isinstance(raw_value, (int, float)):
+        return float(raw_value)
+    if isinstance(raw_value, str):
+        try:
+            return float(raw_value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str | None:

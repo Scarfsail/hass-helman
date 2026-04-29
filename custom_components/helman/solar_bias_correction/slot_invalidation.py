@@ -126,3 +126,123 @@ def _segment_values(
         values.append(current_value)
 
     return values
+
+
+_SLOT_MINUTES = 15
+
+
+def _slot_to_minutes(slot_key: str) -> int:
+    hour_text, minute_text = slot_key.split(":", 1)
+    return int(hour_text) * 60 + int(minute_text)
+
+
+def _has_nonzero_neighbour_within_minutes(
+    slot_key: str,
+    day_actuals: dict[str, float],
+    *,
+    radius_minutes: int,
+) -> bool:
+    target = _slot_to_minutes(slot_key)
+    for other_key, other_value in day_actuals.items():
+        if other_key == slot_key:
+            continue
+        try:
+            other_minutes = _slot_to_minutes(other_key)
+        except (AttributeError, ValueError):
+            continue
+        if abs(other_minutes - target) > radius_minutes:
+            continue
+        if other_value > 0:
+            return True
+    return False
+
+
+def compute_data_glitch_invalidations(
+    *,
+    slot_actuals_by_date: dict[str, dict[str, float]],
+    forecast_slot_wh_by_date: dict[str, dict[str, float]],
+    max_slot_wh: float | None,
+    min_neighbour_forecast_wh: float,
+    backfill_max_minutes: int,
+) -> dict[str, set[str]]:
+    """Detect implausible cumulative-energy artefacts in the actuals window.
+
+    Three rules, all per-day:
+
+    1. **Spike rule.** Any slot whose actual exceeds `max_slot_wh` is bogus
+       (a 15-min slot cannot exceed PV inverter max output by definition).
+       Invalidated unconditionally.
+
+    2. **Backfill rule.** Whenever rule (1) flags a spike, walk backwards
+       through earlier slots that day. As long as the actual is `0` and the
+       backfill walk has not exceeded `backfill_max_minutes`, invalidate
+       those zero slots too — they almost certainly hold the energy that the
+       cumulative meter dumped at the spike.
+
+    3. **Sanity floor for zero-with-known-production days.** Independently
+       of rule (2), invalidate any slot whose actual is `0` and whose
+       historical-forecast Wh is `>= min_neighbour_forecast_wh` *and* which
+       has a non-zero neighbour within ±60 minutes the same day. Catches
+       isolated recorder gaps during sunny periods, including the case
+       where the missing energy never reappears as a single backfill spike.
+
+    `max_slot_wh` of None disables rule (1) and (2). Rule (3) is independent
+    and runs whenever forecast data is provided.
+
+    Returns a date-string → set-of-slot-keys map ready to be unioned with
+    the curtailment-based invalidation set.
+    """
+    invalidated_by_date: dict[str, set[str]] = {}
+    radius = 60  # minutes; rule (3) neighbour window
+
+    for day in sorted(slot_actuals_by_date):
+        day_actuals = slot_actuals_by_date.get(day, {})
+        if not day_actuals:
+            continue
+        day_forecast = forecast_slot_wh_by_date.get(day, {})
+        invalidated_for_day: set[str] = set()
+
+        sorted_slots = sorted(day_actuals, key=_slot_to_minutes)
+
+        # Rule 1 + 2: spike + backfill
+        if max_slot_wh is not None and max_slot_wh > 0:
+            for index, slot_key in enumerate(sorted_slots):
+                actual = day_actuals.get(slot_key, 0.0)
+                if actual <= max_slot_wh:
+                    continue
+                invalidated_for_day.add(slot_key)
+                # Walk backwards while preceding slots are zero, within the
+                # configured backfill window.
+                spike_minutes = _slot_to_minutes(slot_key)
+                for back_index in range(index - 1, -1, -1):
+                    back_key = sorted_slots[back_index]
+                    back_actual = day_actuals.get(back_key, 0.0)
+                    if back_actual != 0:
+                        break
+                    if (
+                        spike_minutes - _slot_to_minutes(back_key)
+                        > backfill_max_minutes
+                    ):
+                        break
+                    invalidated_for_day.add(back_key)
+
+        # Rule 3: zero + non-zero neighbour + substantial forecast
+        if day_forecast and min_neighbour_forecast_wh > 0:
+            for slot_key in sorted_slots:
+                actual = day_actuals.get(slot_key, 0.0)
+                if actual != 0:
+                    continue
+                forecast_wh = day_forecast.get(slot_key, 0.0)
+                if forecast_wh < min_neighbour_forecast_wh:
+                    continue
+                if _has_nonzero_neighbour_within_minutes(
+                    slot_key,
+                    day_actuals,
+                    radius_minutes=radius,
+                ):
+                    invalidated_for_day.add(slot_key)
+
+        if invalidated_for_day:
+            invalidated_by_date[day] = invalidated_for_day
+
+    return invalidated_by_date

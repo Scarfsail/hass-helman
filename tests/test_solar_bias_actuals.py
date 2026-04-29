@@ -152,6 +152,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=None,
             slot_invalidation_export_enabled_entity_id=None,
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
@@ -200,6 +203,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
         invalidated = {"2026-04-15": {"12:00"}, "2026-04-16": {"23:45"}}
 
@@ -242,6 +248,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
@@ -271,6 +280,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
@@ -307,6 +319,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
         )
 
         with patch.object(actuals, "datetime", _FixedDateTime), patch.object(

@@ -38,7 +38,13 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
         "slot_invalidation_max_battery_soc_percent="
         f"{cfg.slot_invalidation_max_battery_soc_percent};"
         "slot_invalidation_export_enabled_entity_id="
-        f"{cfg.slot_invalidation_export_enabled_entity_id}"
+        f"{cfg.slot_invalidation_export_enabled_entity_id};"
+        "slot_invalidation_data_glitch_max_slot_wh="
+        f"{cfg.slot_invalidation_data_glitch_max_slot_wh};"
+        "slot_invalidation_data_glitch_min_neighbour_forecast_wh="
+        f"{cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh};"
+        "slot_invalidation_data_glitch_backfill_max_minutes="
+        f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes}"
     )
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{h}"

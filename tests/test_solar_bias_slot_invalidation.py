@@ -36,6 +36,7 @@ _install_import_stubs()
 from custom_components.helman.solar_bias_correction.slot_invalidation import (  # noqa: E402
     InvalidationInputs,
     StateSample,
+    compute_data_glitch_invalidations,
     compute_invalidated_slots_for_window,
 )
 
@@ -258,3 +259,160 @@ def test_final_slot_uses_next_day_boundary_for_slot_end() -> None:
     )
 
     assert invalidated == {"2026-04-15": {"23:45"}}
+
+
+def test_data_glitch_spike_invalidates_above_max_slot_wh() -> None:
+    actuals = {
+        "2026-04-20": {
+            "14:00": 1500.0,
+            "14:15": 1400.0,
+            "14:30": 8200.0,  # spike — above 3150
+            "14:45": 1300.0,
+        }
+    }
+    result = compute_data_glitch_invalidations(
+        slot_actuals_by_date=actuals,
+        forecast_slot_wh_by_date={},
+        max_slot_wh=3150.0,
+        min_neighbour_forecast_wh=0.0,
+        backfill_max_minutes=120,
+    )
+    assert result == {"2026-04-20": {"14:30"}}
+
+
+def test_data_glitch_backfill_walks_back_through_zeros() -> None:
+    """A spike at 15:15 with five preceding zero slots: the trio likely holds
+    the energy that the cumulative meter dumped into 15:15, so all of them
+    invalidate together."""
+    actuals = {
+        "2026-04-20": {
+            "13:45": 2500.0,
+            "14:00": 0.0,
+            "14:15": 0.0,
+            "14:30": 0.0,
+            "14:45": 0.0,
+            "15:00": 0.0,
+            "15:15": 20400.0,  # massive spike
+            "15:30": 800.0,
+        }
+    }
+    result = compute_data_glitch_invalidations(
+        slot_actuals_by_date=actuals,
+        forecast_slot_wh_by_date={},
+        max_slot_wh=3150.0,
+        min_neighbour_forecast_wh=0.0,
+        backfill_max_minutes=120,
+    )
+    assert result == {
+        "2026-04-20": {"14:00", "14:15", "14:30", "14:45", "15:00", "15:15"}
+    }
+
+
+def test_data_glitch_backfill_stops_at_first_nonzero() -> None:
+    actuals = {
+        "2026-04-20": {
+            "14:00": 0.0,
+            "14:15": 1200.0,  # boundary — backfill stops here
+            "14:30": 0.0,
+            "14:45": 0.0,
+            "15:00": 20400.0,  # spike
+        }
+    }
+    result = compute_data_glitch_invalidations(
+        slot_actuals_by_date=actuals,
+        forecast_slot_wh_by_date={},
+        max_slot_wh=3150.0,
+        min_neighbour_forecast_wh=0.0,
+        backfill_max_minutes=120,
+    )
+    # 14:30 and 14:45 are zeros adjacent to the spike; 14:15 is non-zero so
+    # backfill stops there. 14:00 must NOT invalidate.
+    assert result == {"2026-04-20": {"14:30", "14:45", "15:00"}}
+
+
+def test_data_glitch_backfill_stops_at_max_minutes() -> None:
+    actuals = {
+        "2026-04-20": {
+            "12:00": 0.0,
+            "12:15": 0.0,
+            "12:30": 0.0,
+            "12:45": 0.0,
+            "13:00": 0.0,
+            "13:15": 0.0,
+            "13:30": 0.0,
+            "13:45": 0.0,
+            "14:00": 0.0,
+            "14:15": 0.0,
+            "14:30": 20400.0,  # spike
+        }
+    }
+    result = compute_data_glitch_invalidations(
+        slot_actuals_by_date=actuals,
+        forecast_slot_wh_by_date={},
+        max_slot_wh=3150.0,
+        min_neighbour_forecast_wh=0.0,
+        backfill_max_minutes=60,
+    )
+    # backfill_max_minutes=60 limits the walk to 14:30 minus 60 minutes = 13:30
+    # exclusive. So 13:30, 13:45, 14:00, 14:15 invalidate alongside the spike.
+    assert result == {
+        "2026-04-20": {"13:30", "13:45", "14:00", "14:15", "14:30"}
+    }
+
+
+def test_data_glitch_zero_with_neighbour_and_substantial_forecast_invalidates() -> None:
+    """Independent of any spike: a zero actual in a slot whose forecast was
+    substantial AND whose neighbours within ±60 min show production must be
+    treated as a recorder gap."""
+    actuals = {
+        "2026-04-19": {
+            "13:00": 1200.0,
+            "13:15": 0.0,  # gap with substantial forecast and live neighbour
+            "13:30": 1100.0,
+            "14:00": 1300.0,
+        }
+    }
+    forecast = {
+        "2026-04-19": {"13:00": 1500.0, "13:15": 1400.0, "13:30": 1300.0, "14:00": 1100.0}
+    }
+    result = compute_data_glitch_invalidations(
+        slot_actuals_by_date=actuals,
+        forecast_slot_wh_by_date=forecast,
+        max_slot_wh=None,  # spike rule disabled, prove rule 3 fires alone
+        min_neighbour_forecast_wh=200.0,
+        backfill_max_minutes=120,
+    )
+    assert result == {"2026-04-19": {"13:15"}}
+
+
+def test_data_glitch_zero_without_substantial_forecast_keeps_slot() -> None:
+    """A zero actual with a *low* forecast for that slot is treated as a real
+    weather drop, not a recorder gap — even if neighbours produce."""
+    actuals = {
+        "2026-04-19": {"13:00": 1200.0, "13:15": 0.0, "13:30": 1100.0}
+    }
+    forecast = {
+        "2026-04-19": {"13:00": 1500.0, "13:15": 80.0, "13:30": 1300.0}
+    }
+    result = compute_data_glitch_invalidations(
+        slot_actuals_by_date=actuals,
+        forecast_slot_wh_by_date=forecast,
+        max_slot_wh=None,
+        min_neighbour_forecast_wh=200.0,
+        backfill_max_minutes=120,
+    )
+    assert result == {}
+
+
+def test_data_glitch_disabled_when_max_slot_wh_none_and_no_forecast() -> None:
+    actuals = {
+        "2026-04-20": {"14:00": 0.0, "14:15": 20400.0}
+    }
+    result = compute_data_glitch_invalidations(
+        slot_actuals_by_date=actuals,
+        forecast_slot_wh_by_date={},
+        max_slot_wh=None,
+        min_neighbour_forecast_wh=200.0,
+        backfill_max_minutes=120,
+    )
+    assert result == {}

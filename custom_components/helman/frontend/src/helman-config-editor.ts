@@ -1662,6 +1662,48 @@ export class HelmanConfigEditorPanel extends LitElement {
                               undefined,
                               "editor.help.bias_correction_slot_invalidation_export_enabled_entity_id",
                             )}
+                            ${this._renderOptionalNumberField(
+                              [
+                                "power_devices",
+                                "solar",
+                                "forecast",
+                                "bias_correction",
+                                "slot_invalidation",
+                                "data_glitch_max_slot_wh",
+                              ],
+                              "editor.fields.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                              "editor.helpers.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                              "editor.help.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
+                              { min: 0, suffix: "Wh" },
+                            )}
+                            ${this._renderOptionalNumberField(
+                              [
+                                "power_devices",
+                                "solar",
+                                "forecast",
+                                "bias_correction",
+                                "slot_invalidation",
+                                "data_glitch_min_neighbour_forecast_wh",
+                              ],
+                              "editor.fields.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                              "editor.helpers.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                              "editor.help.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
+                              { min: 0, suffix: "Wh" },
+                            )}
+                            ${this._renderOptionalNumberField(
+                              [
+                                "power_devices",
+                                "solar",
+                                "forecast",
+                                "bias_correction",
+                                "slot_invalidation",
+                                "data_glitch_backfill_max_minutes",
+                              ],
+                              "editor.fields.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                              "editor.helpers.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                              "editor.help.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
+                              { min: 0, suffix: "min" },
+                            )}
                           </div>
                         `,
                         { initialOpen: false },
