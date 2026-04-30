@@ -231,7 +231,8 @@ class SolarBiasCorrectionService:
         target_date = date.fromisoformat(raw_date)
         local_now = dt_util.as_local(dt_util.now())
         today = local_now.date()
-        min_date = today - timedelta(days=7)
+        previous_days = max(self._metadata.usable_days, 0)
+        min_date = today - timedelta(days=previous_days)
         max_date = today + timedelta(
             days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
         )

@@ -431,8 +431,47 @@ def test_inspector_day_applies_current_profile_and_totals():
         {"slot": "09:00", "factor": 0.5},
     ]
     assert payload["totals"] == {"rawWh": 300.0, "correctedWh": 250.0, "actualWh": 90.0}
-    assert payload["range"]["minDate"] == "2026-04-18"
+    assert payload["range"]["minDate"] == "2026-04-13"
     assert payload["range"]["isToday"] is True
+
+
+def test_inspector_day_uses_trained_usable_days_for_previous_range():
+    service = _make_service()
+    service._cfg.max_training_window_days = 20
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(service._cfg),
+        usable_days=15,
+        dropped_days=[],
+        factor_min=None,
+        factor_max=None,
+        factor_median=None,
+        omitted_slot_count=0,
+        last_outcome="profile_trained",
+        error_reason=None,
+    )
+
+    async def fake_forecast_points(*args, **kwargs):
+        return []
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["range"]["minDate"] == "2026-04-10"
+    assert payload["range"]["canGoPrevious"] is True
 
 
 def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():

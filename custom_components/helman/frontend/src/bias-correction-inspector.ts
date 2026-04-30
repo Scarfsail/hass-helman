@@ -274,12 +274,17 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   private _renderNavigation(payload: InspectorPayload | null) {
     const canGoPrevious = payload?.range.canGoPrevious ?? true;
     const canGoNext = payload?.range.canGoNext ?? true;
+    const dayState = [
+      this._formatRelativeDayOffset(this._selectedDate),
+      payload?.range.isToday ? this._t("bias_correction.inspector.today") : "",
+      payload?.range.isFuture ? this._t("bias_correction.inspector.forecast_only") : "",
+    ].filter(Boolean).join(" · ");
     return html`
       <div class="nav">
         <button class="icon-button" title=${this._t("bias_correction.inspector.previous_day")} ?disabled=${!canGoPrevious || this._loading} @click=${() => this._moveDay(-1)}>&lt;</button>
         <div class="day-meta">
           <div class="day-label">${this._formatDay(this._selectedDate)}</div>
-          <div class="day-state">${payload?.range.isToday ? this._t("bias_correction.inspector.today") : payload?.range.isFuture ? this._t("bias_correction.inspector.forecast_only") : ""}</div>
+          <div class="day-state">${dayState}</div>
         </div>
         <button class="icon-button" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
       </div>
@@ -580,6 +585,15 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       month: "short",
       day: "numeric",
     });
+  }
+
+  private _formatRelativeDayOffset(value: string) {
+    const selected = this._parseIsoDate(value);
+    const today = this._parseIsoDate(this._todayIso());
+    const selectedTime = Date.UTC(selected.year, selected.month - 1, selected.day);
+    const todayTime = Date.UTC(today.year, today.month - 1, today.day);
+    const offset = Math.round((selectedTime - todayTime) / 86400000);
+    return offset > 0 ? `+${offset}` : String(offset);
   }
 
   private _haTimeZone(): string | undefined {

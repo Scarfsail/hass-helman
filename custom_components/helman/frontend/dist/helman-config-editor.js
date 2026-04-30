@@ -2503,13 +2503,17 @@ const ie = class ie extends R {
     `;
   }
   _renderNavigation(e) {
-    const t = (e == null ? void 0 : e.range.canGoPrevious) ?? !0, i = (e == null ? void 0 : e.range.canGoNext) ?? !0;
+    const t = (e == null ? void 0 : e.range.canGoPrevious) ?? !0, i = (e == null ? void 0 : e.range.canGoNext) ?? !0, a = [
+      this._formatRelativeDayOffset(this._selectedDate),
+      e != null && e.range.isToday ? this._t("bias_correction.inspector.today") : "",
+      e != null && e.range.isFuture ? this._t("bias_correction.inspector.forecast_only") : ""
+    ].filter(Boolean).join(" · ");
     return n`
       <div class="nav">
         <button class="icon-button" title=${this._t("bias_correction.inspector.previous_day")} ?disabled=${!t || this._loading} @click=${() => this._moveDay(-1)}>&lt;</button>
         <div class="day-meta">
           <div class="day-label">${this._formatDay(this._selectedDate)}</div>
-          <div class="day-state">${e != null && e.range.isToday ? this._t("bias_correction.inspector.today") : e != null && e.range.isFuture ? this._t("bias_correction.inspector.forecast_only") : ""}</div>
+          <div class="day-state">${a}</div>
         </div>
         <button class="icon-button" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!i || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
       </div>
@@ -2691,6 +2695,10 @@ const ie = class ie extends R {
       month: "short",
       day: "numeric"
     });
+  }
+  _formatRelativeDayOffset(e) {
+    const t = this._parseIsoDate(e), i = this._parseIsoDate(this._todayIso()), a = Date.UTC(t.year, t.month - 1, t.day), r = Date.UTC(i.year, i.month - 1, i.day), s = Math.round((a - r) / 864e5);
+    return s > 0 ? `+${s}` : String(s);
   }
   _haTimeZone() {
     var e, t, i;
