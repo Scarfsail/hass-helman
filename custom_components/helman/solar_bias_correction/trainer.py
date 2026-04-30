@@ -12,6 +12,9 @@ from .models import (
     SolarBiasProfile,
     SolarBiasMetadata,
     TrainingOutcome,
+    SolarBiasContributionRow,
+    SolarBiasSlotExplainability,
+    SolarBiasTrainingExplainability,
 )
 
 _DAY_FORECAST_FLOOR_WH = 100.0
@@ -136,6 +139,121 @@ def _training_day_totals(
     return forecast_total, actual_total
 
 
+def _build_training_explainability(
+    *,
+    usable_samples: list[TrainerSample],
+    dropped_days: list[dict[str, str]],
+    actuals: SolarActualsWindow,
+    cfg: BiasConfig,
+    trained_at: str,
+    forecast_slot_keys: list[str],
+    factors: dict[str, float],
+    omitted_slots: list[str],
+    slot_forecast_sums: dict[str, float],
+    slot_actual_sums: dict[str, float],
+    slot_raw_ratios: dict[str, float | None],
+) -> SolarBiasTrainingExplainability:
+    slots: dict[str, SolarBiasSlotExplainability] = {}
+    omitted_slot_set = set(omitted_slots)
+
+    for slot in forecast_slot_keys:
+        rows: list[SolarBiasContributionRow] = []
+        for sample in usable_samples:
+            invalidated = actuals.invalidated_slots_by_date.get(sample.date, set())
+            day_forecast = float(sample.slot_forecast_wh.get(slot, 0.0))
+            if slot in invalidated:
+                rows.append(
+                    SolarBiasContributionRow(
+                        date=sample.date,
+                        forecast_wh=day_forecast,
+                        actual_wh=None,
+                        ratio=None,
+                        status="invalidated",
+                        reason="slot_invalidated",
+                    )
+                )
+                continue
+            if day_forecast <= 0.0:
+                rows.append(
+                    SolarBiasContributionRow(
+                        date=sample.date,
+                        forecast_wh=day_forecast,
+                        actual_wh=None,
+                        ratio=None,
+                        status="forecast_zero",
+                        reason="slot_forecast_zero",
+                    )
+                )
+                continue
+            day_actual = _aggregate_actuals_into_forecast_slot(
+                actuals.slot_actuals_by_date.get(sample.date, {}),
+                forecast_slot=slot,
+                forecast_slot_keys=forecast_slot_keys,
+            )
+            rows.append(
+                SolarBiasContributionRow(
+                    date=sample.date,
+                    forecast_wh=day_forecast,
+                    actual_wh=day_actual,
+                    ratio=day_actual / day_forecast,
+                    status="included",
+                    reason=None,
+                )
+            )
+
+        for dropped in dropped_days:
+            day = dropped.get("date")
+            if not isinstance(day, str):
+                continue
+            rows.append(
+                SolarBiasContributionRow(
+                    date=day,
+                    forecast_wh=None,
+                    actual_wh=None,
+                    ratio=None,
+                    status="dropped_day",
+                    reason=dropped.get("reason"),
+                )
+            )
+
+        forecast_sum = float(slot_forecast_sums.get(slot, 0.0))
+        actual_sum = float(slot_actual_sums.get(slot, 0.0))
+        raw_ratio = slot_raw_ratios.get(slot)
+        factor = factors.get(slot)
+        slots[slot] = SolarBiasSlotExplainability(
+            factor=factor,
+            raw_ratio=raw_ratio,
+            clamped=(
+                raw_ratio is not None
+                and factor is not None
+                and abs(float(factor) - raw_ratio) > 1e-12
+            ),
+            forecast_sum_wh=forecast_sum,
+            actual_sum_wh=actual_sum,
+            rows=rows
+            + (
+                [
+                    SolarBiasContributionRow(
+                        date="",
+                        forecast_wh=None,
+                        actual_wh=None,
+                        ratio=None,
+                        status="omitted_slot",
+                        reason="slot_forecast_sum_too_low",
+                    )
+                ]
+                if slot in omitted_slot_set
+                else []
+            ),
+        )
+
+    return SolarBiasTrainingExplainability(
+        trained_at=trained_at,
+        aggregation_method=cfg.aggregation_method,
+        slots=slots,
+    )
+
+
 def train(
     samples: list[TrainerSample],
     actuals: SolarActualsWindow,
@@ -243,6 +361,7 @@ def train(
 
     factors: Dict[str, float] = {}
     omitted_slots: List[str] = []
+    slot_raw_ratios: Dict[str, float | None] = {}
 
     for slot in sorted_forecast_slots:
         fcast = slot_forecast_sums[slot]
@@ -259,6 +378,7 @@ def train(
         if raw is None:
             omitted_slots.append(slot)
             continue
+        slot_raw_ratios[slot] = raw
         clamped = max(cfg.clamp_min, min(raw, cfg.clamp_max))
         factors[slot] = clamped
 
@@ -283,4 +403,18 @@ def train(
         error_reason=None,
     )
 
-    return TrainingOutcome(profile=profile, metadata=metadata)
+    explainability = _build_training_explainability(
+        usable_samples=usable_samples,
+        dropped_days=dropped_days,
+        actuals=actuals,
+        cfg=cfg,
+        trained_at=trained_at,
+        forecast_slot_keys=sorted_forecast_slots,
+        factors=factors,
+        omitted_slots=omitted_slots,
+        slot_forecast_sums=slot_forecast_sums,
+        slot_actual_sums=slot_actual_sums,
+        slot_raw_ratios=slot_raw_ratios,
+    )
+
+    return TrainingOutcome(profile=profile, metadata=metadata, explainability=explainability)

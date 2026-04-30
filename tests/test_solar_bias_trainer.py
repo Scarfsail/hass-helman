@@ -630,6 +630,80 @@ def test_fingerprint_differs_for_different_aggregation_methods():
     assert trainer.compute_fingerprint(cfg_ros) != trainer.compute_fingerprint(cfg_tm)
 
 
+def test_training_explainability_records_ratio_of_sums_rows():
+    cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0)
+    samples = [
+        models.TrainerSample(
+            date="2026-04-21",
+            forecast_wh=1000.0,
+            slot_forecast_wh={"12:00": 400.0, "13:00": 600.0},
+        ),
+        models.TrainerSample(
+            date="2026-04-22",
+            forecast_wh=1000.0,
+            slot_forecast_wh={"12:00": 600.0, "13:00": 400.0},
+        ),
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2026-04-21": {"12:00": 500.0, "13:00": 600.0},
+            "2026-04-22": {"12:00": 700.0, "13:00": 400.0},
+        }
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime(2026, 4, 23, 3, 0))
+
+    details = outcome.explainability.slots["12:00"]
+    assert details.factor == 1.2
+    assert details.raw_ratio == 1.2
+    assert details.clamped is False
+    assert details.forecast_sum_wh == 1000.0
+    assert details.actual_sum_wh == 1200.0
+    assert [(row.date, row.forecast_wh, row.actual_wh, row.status) for row in details.rows] == [
+        ("2026-04-21", 400.0, 500.0, "included"),
+        ("2026-04-22", 600.0, 700.0, "included"),
+    ]
+    assert abs(details.rows[0].ratio - 1.25) < 1e-9
+    assert abs(details.rows[1].ratio - (700.0 / 600.0)) < 1e-9
+
+
+def test_training_explainability_marks_invalidated_dropped_and_omitted_rows():
+    cfg = make_cfg(min_history_days=1, clamp_min=0.5, clamp_max=2.0)
+    samples = [
+        models.TrainerSample(
+            date="2026-04-20",
+            forecast_wh=50.0,
+            slot_forecast_wh={"12:00": 50.0},
+        ),
+        models.TrainerSample(
+            date="2026-04-21",
+            forecast_wh=1000.0,
+            slot_forecast_wh={"12:00": 40.0, "13:00": 960.0},
+        ),
+        models.TrainerSample(
+            date="2026-04-22",
+            forecast_wh=1000.0,
+            slot_forecast_wh={"12:00": 40.0, "13:00": 960.0},
+        ),
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2026-04-20": {"12:00": 50.0},
+            "2026-04-21": {"12:00": 40.0, "13:00": 960.0},
+            "2026-04-22": {"12:00": 40.0, "13:00": 960.0},
+        },
+        invalidated_slots_by_date={"2026-04-21": {"12:00"}},
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime(2026, 4, 23, 3, 0))
+
+    statuses = [(row.date, row.status, row.reason) for row in outcome.explainability.slots["12:00"].rows]
+    assert ("2026-04-21", "invalidated", "slot_invalidated") in statuses
+    assert ("2026-04-20", "dropped_day", "day_forecast_too_low") in statuses
+    assert ("", "omitted_slot", "slot_forecast_sum_too_low") in statuses
+    assert "12:00" in outcome.profile.omitted_slots
+
+
 def test_ratio_of_sums_weights_by_volume_not_by_day_count():
     """Sunny days (high volume) should dominate the ratio, not be averaged equally with cloudy days."""
     slot = "12:00"

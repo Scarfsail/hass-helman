@@ -71,6 +71,7 @@ class SolarBiasMetadata:
 class TrainingOutcome:
     profile: SolarBiasProfile
     metadata: SolarBiasMetadata
+    explainability: SolarBiasTrainingExplainability | None = None
 
 
 @dataclass
