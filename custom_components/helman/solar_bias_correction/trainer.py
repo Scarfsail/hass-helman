@@ -222,9 +222,8 @@ def _build_training_explainability(
                 if row.status == "included" and row.ratio is not None
             ]
             if len(ratio_rows) >= 3:
-                low = min(ratio_rows, key=lambda row: row.ratio or 0.0)
-                high = max(ratio_rows, key=lambda row: row.ratio or 0.0)
-                trimmed_rows = {id(low): "trimmed_mean_low", id(high): "trimmed_mean_high"}
+                sorted_ratio_rows = sorted(ratio_rows, key=lambda r: r.ratio)
+                trimmed_rows = {id(sorted_ratio_rows[0]): "trimmed_mean_low", id(sorted_ratio_rows[-1]): "trimmed_mean_high"}
                 rows = [
                     SolarBiasContributionRow(
                         date=row.date,
