@@ -3,6 +3,7 @@ import {
   findImpactForSlot,
   findPointForSlot,
   findTrainingSlot,
+  resolveSelectedImpactSlot,
   type InspectorPoint,
   type ImpactPoint,
   type TrainingExplainability,
@@ -20,6 +21,9 @@ const impacts: ImpactPoint[] = [
 ];
 
 assertEqual(chooseDefaultImpactSlot(impacts), "09:00");
+assertEqual(resolveSelectedImpactSlot(impacts, "08:00"), "08:00");
+assertEqual(resolveSelectedImpactSlot(impacts, "10:00"), "09:00");
+assertEqual(resolveSelectedImpactSlot(impacts, null), "09:00");
 assertEqual(findImpactForSlot(impacts, "08:00")?.impactWh, 50);
 assertEqual(findImpactForSlot(impacts, "10:00"), null);
 

@@ -3,10 +3,10 @@ import { property, state } from "lit/decorators.js";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
 import {
-  chooseDefaultImpactSlot,
   findImpactForSlot,
   findPointForSlot,
   findTrainingSlot,
+  resolveSelectedImpactSlot,
   type FactorPoint,
   type ImpactPoint,
   type InspectorPoint,
@@ -506,6 +506,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       .map((point) => Math.abs(point.impactWh ?? 0))
       .filter((value) => Number.isFinite(value));
     const maxImpact = Math.max(1, ...values);
+    const selectedSlot = resolveSelectedImpactSlot(impacts, this._selectedSlot);
     return impacts.map((point) => {
       if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
       const match = point.slot.match(/^(\d{2}):(\d{2})$/);
@@ -517,7 +518,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       const width = Math.max(3, plotWidth / 96);
       const columnHeight = Math.max(2, (Math.abs(point.impactWh) / maxImpact) * plotHeight);
       const y = plotTop + plotHeight - columnHeight;
-      const selected = this._selectedSlot === point.slot;
+      const selected = selectedSlot === point.slot;
       const fill = point.impactWh >= 0 ? "rgba(245, 127, 23, 0.72)" : "rgba(21, 101, 192, 0.62)";
       return svg`
         <rect
@@ -538,7 +539,9 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   }
 
   private _selectSlot(slot: string) {
+    const previous = this._selectedSlot;
     this._selectedSlot = slot;
+    this.requestUpdate("_selectedSlot", previous);
   }
 
   private _buildYTicks(maxKwh: number) {
@@ -565,7 +568,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   }
 
   private _renderSelectedSlotDetails(payload: InspectorPayload) {
-    const selectedSlot = this._selectedSlot ?? chooseDefaultImpactSlot(payload.series.impact);
+    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
     if (!selectedSlot) return "";
     const impact = findImpactForSlot(payload.series.impact, selectedSlot);
     const raw = findPointForSlot(payload.series.raw, selectedSlot);
@@ -686,9 +689,10 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       });
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
-        if (!this._selectedSlot) {
-          this._selectedSlot = chooseDefaultImpactSlot(payload.series.impact);
-        }
+        this._selectedSlot = resolveSelectedImpactSlot(
+          payload.series.impact,
+          this._selectedSlot,
+        );
       }
     } catch (err: any) {
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {

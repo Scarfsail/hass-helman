@@ -43,6 +43,19 @@ export function chooseDefaultImpactSlot(impacts: ImpactPoint[]): string | null {
   return selected?.slot ?? null;
 }
 
+export function resolveSelectedImpactSlot(
+  impacts: ImpactPoint[],
+  selectedSlot: string | null,
+): string | null {
+  if (
+    selectedSlot &&
+    impacts.some((point) => point.slot === selectedSlot)
+  ) {
+    return selectedSlot;
+  }
+  return chooseDefaultImpactSlot(impacts);
+}
+
 export function findImpactForSlot(
   impacts: ImpactPoint[],
   slot: string | null,
