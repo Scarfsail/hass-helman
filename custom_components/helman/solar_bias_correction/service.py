@@ -19,6 +19,7 @@ from .models import (
     SolarBiasContributionRow,
     SolarBiasExplainability,
     SolarBiasFactorPoint,
+    SolarBiasImpactPoint,
     SolarBiasInspectorAvailability,
     SolarBiasInspectorDay,
     SolarBiasInspectorPoint,
@@ -302,6 +303,11 @@ class SolarBiasCorrectionService:
                 actual=actual_points,
                 invalidated=invalidated_points,
                 factors=factors,
+                impact=_impact_points_for_day(
+                    raw_points,
+                    corrected_points,
+                    self._profile if has_profile else None,
+                ),
             ),
             totals=SolarBiasInspectorTotals(
                 raw_wh=_sum_point_values(raw_points) if raw_points else None,
@@ -319,6 +325,7 @@ class SolarBiasCorrectionService:
             ),
             is_today=target_date == today,
             is_future=target_date > today,
+            training_explainability=self._explainability if has_profile else None,
         )
         return inspector_day_to_payload(day)
 
@@ -641,6 +648,47 @@ def _factor_points_for_profile(
         SolarBiasFactorPoint(slot=slot, factor=float(factor))
         for slot, factor in sorted(profile.factors.items())
     ]
+
+
+def _impact_points_for_day(
+    raw_points: list[dict[str, Any]],
+    corrected_points: list[dict[str, Any]],
+    profile: SolarBiasProfile | None,
+) -> list[SolarBiasImpactPoint]:
+    corrected_by_slot: dict[str, float] = {}
+    for point in corrected_points:
+        timestamp = point.get("timestamp")
+        if not isinstance(timestamp, str):
+            continue
+        try:
+            corrected_by_slot[timestamp[11:16]] = float(point.get("value"))
+        except (TypeError, ValueError):
+            continue
+
+    impact: list[SolarBiasImpactPoint] = []
+    for point in raw_points:
+        timestamp = point.get("timestamp")
+        if not isinstance(timestamp, str):
+            continue
+        slot = timestamp[11:16]
+        try:
+            raw_wh = float(point.get("value"))
+        except (TypeError, ValueError):
+            continue
+        corrected_wh = corrected_by_slot.get(slot)
+        if corrected_wh is None:
+            continue
+        factor = profile.factors.get(slot) if profile is not None else None
+        impact.append(
+            SolarBiasImpactPoint(
+                slot=slot,
+                raw_wh=raw_wh,
+                corrected_wh=corrected_wh,
+                impact_wh=corrected_wh - raw_wh,
+                factor=float(factor) if factor is not None else None,
+            )
+        )
+    return impact
 
 
 def _actual_points_for_date(

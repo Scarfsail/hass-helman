@@ -921,6 +921,80 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
     assert future_payload["availability"]["hasInvalidated"] is False
 
 
+def test_inspector_day_returns_selected_day_impact_and_training_explainability():
+    service = _make_service()
+    service._profile = models.SolarBiasProfile(
+        factors={"08:00": 1.5, "09:00": 0.5},
+        omitted_slots=[],
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=0.5,
+        factor_max=1.5,
+        factor_median=1.0,
+        omitted_slot_count=0,
+        last_outcome="profile_trained",
+        error_reason=None,
+    )
+    service._explainability = models.SolarBiasTrainingExplainability(
+        trained_at="2026-04-25T03:00:00+02:00",
+        aggregation_method="ratio_of_sums",
+        slots={
+            "08:00": models.SolarBiasSlotExplainability(
+                factor=1.5,
+                raw_ratio=1.5,
+                clamped=False,
+                forecast_sum_wh=100.0,
+                actual_sum_wh=150.0,
+                rows=[],
+            )
+        },
+    )
+
+    async def fake_forecast_points(*args, **kwargs):
+        return [
+            {"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0},
+            {"timestamp": "2026-04-25T09:00:00+02:00", "value": 200.0},
+        ]
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["series"]["impact"] == [
+        {
+            "slot": "08:00",
+            "rawWh": 100.0,
+            "correctedWh": 150.0,
+            "impactWh": 50.0,
+            "factor": 1.5,
+        },
+        {
+            "slot": "09:00",
+            "rawWh": 200.0,
+            "correctedWh": 100.0,
+            "impactWh": -100.0,
+            "factor": 0.5,
+        },
+    ]
+    assert payload["trainingExplainability"]["slots"]["08:00"]["factor"] == 1.5
+
+
 def test_service_saves_training_explainability_after_training():
     service = _make_service()
     service._cfg.min_history_days = 1
