@@ -467,6 +467,47 @@ def test_serialize_state_writes_version_2():
     assert payload["version"] == 2
 
 
+def test_training_explainability_from_dict_parses_valid_snapshot():
+    service_mod = _load_service_module()
+
+    parsed = service_mod._training_explainability_from_dict(
+        {
+            "trainedAt": "2026-04-25T03:00:00+02:00",
+            "aggregationMethod": "ratio_of_sums",
+            "slots": {
+                "12:00": {
+                    "factor": 1.34,
+                    "rawRatio": 1.34,
+                    "clamped": False,
+                    "forecastSumWh": 1500,
+                    "actualSumWh": 2010,
+                    "rows": [
+                        {
+                            "date": "2026-04-21",
+                            "forecastWh": 520,
+                            "actualWh": 610,
+                            "ratio": 1.1730769231,
+                            "status": "included",
+                            "reason": None,
+                        }
+                    ],
+                }
+            },
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.trained_at == "2026-04-25T03:00:00+02:00"
+    assert parsed.aggregation_method == "ratio_of_sums"
+    assert parsed.slots["12:00"].rows[0].status == "included"
+
+
+def test_training_explainability_from_dict_returns_none_for_missing_snapshot():
+    service_mod = _load_service_module()
+
+    assert service_mod._training_explainability_from_dict(None) is None
+
+
 def test_async_train_saves_version_2_payload():
     async def _inner():
         service_mod = _load_service_module()

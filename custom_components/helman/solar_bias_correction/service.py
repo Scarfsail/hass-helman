@@ -16,6 +16,7 @@ from .forecast_history import load_forecast_points_for_day, load_trainer_samples
 from .models import (
     BiasConfig,
     SolarBiasAdjustmentResult,
+    SolarBiasContributionRow,
     SolarBiasExplainability,
     SolarBiasFactorPoint,
     SolarBiasInspectorAvailability,
@@ -25,7 +26,10 @@ from .models import (
     SolarBiasInspectorTotals,
     SolarBiasMetadata,
     SolarBiasProfile,
+    SolarBiasSlotExplainability,
+    SolarBiasTrainingExplainability,
     inspector_day_to_payload,
+    training_explainability_to_payload,
 )
 from .trainer import compute_fingerprint, train
 
@@ -52,6 +56,7 @@ class SolarBiasCorrectionService:
         self._cfg = cfg
         self._profile: SolarBiasProfile | None = None
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
+        self._explainability: SolarBiasTrainingExplainability | None = None
         self._is_stale = False
         self._training_lock = asyncio.Lock()
         self._training_in_progress = False
@@ -62,6 +67,7 @@ class SolarBiasCorrectionService:
         if not isinstance(stored, dict):
             self._profile = None
             self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
+            self._explainability = None
             self._is_stale = False
             return
 
@@ -73,6 +79,7 @@ class SolarBiasCorrectionService:
             if profile is None:
                 self._profile = None
                 self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
+                self._explainability = None
                 self._is_stale = False
                 return
 
@@ -80,11 +87,15 @@ class SolarBiasCorrectionService:
         if metadata is None:
             self._profile = None
             self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
+            self._explainability = None
             self._is_stale = False
             return
 
         self._profile = profile
         self._metadata = metadata
+        self._explainability = _training_explainability_from_dict(
+            stored.get("trainingExplainability", stored.get("training_explainability"))
+        )
         self._is_stale = metadata.training_config_fingerprint != current_fingerprint
 
     def update_config(self, cfg: BiasConfig) -> None:
@@ -104,6 +115,7 @@ class SolarBiasCorrectionService:
 
         previous_profile = self._profile
         previous_metadata = self._metadata
+        previous_explainability = self._explainability
         previous_is_stale = self._is_stale
         self._training_in_progress = True
         await self._training_lock.acquire()
@@ -120,10 +132,12 @@ class SolarBiasCorrectionService:
                 "version": 2,
                 "profile": asdict(outcome.profile),
                 "metadata": asdict(outcome.metadata),
+                "trainingExplainability": training_explainability_to_payload(outcome.explainability),
             }
             await self._store.async_save(payload)
             self._profile = outcome.profile
             self._metadata = outcome.metadata
+            self._explainability = outcome.explainability
             self._is_stale = False
         except Exception as err:
             preserve_profile = self._should_preserve_profile(
@@ -146,6 +160,7 @@ class SolarBiasCorrectionService:
             )
             self._profile = previous_profile if preserve_profile else None
             self._metadata = failure_metadata
+            self._explainability = previous_explainability if preserve_profile else None
             self._is_stale = previous_is_stale
             await self._store.async_save(self._serialize_state())
         finally:
@@ -416,6 +431,7 @@ class SolarBiasCorrectionService:
             "version": 2,
             "profile": None if self._profile is None else asdict(self._profile),
             "metadata": asdict(self._metadata),
+            "trainingExplainability": training_explainability_to_payload(self._explainability),
         }
 
 
@@ -495,6 +511,63 @@ def _metadata_from_dict(raw_value: Any) -> SolarBiasMetadata | None:
         invalidated_slots_by_date=invalidated_slots_by_date,
         invalidated_slot_count=invalidated_slot_count,
         error_reason=raw_value.get("error_reason") if isinstance(raw_value.get("error_reason"), str) else None,
+    )
+
+
+def _training_explainability_from_dict(
+    raw_value: Any,
+) -> SolarBiasTrainingExplainability | None:
+    if not isinstance(raw_value, dict):
+        return None
+    trained_at = raw_value.get("trainedAt", raw_value.get("trained_at"))
+    aggregation_method = raw_value.get(
+        "aggregationMethod", raw_value.get("aggregation_method")
+    )
+    raw_slots = raw_value.get("slots")
+    if not isinstance(trained_at, str) or not isinstance(aggregation_method, str):
+        return None
+    if not isinstance(raw_slots, dict):
+        return None
+
+    slots: dict[str, SolarBiasSlotExplainability] = {}
+    for slot, raw_slot in raw_slots.items():
+        if not isinstance(slot, str) or not isinstance(raw_slot, dict):
+            continue
+        raw_rows = raw_slot.get("rows")
+        if not isinstance(raw_rows, list):
+            continue
+        rows: list[SolarBiasContributionRow] = []
+        for raw_row in raw_rows:
+            if not isinstance(raw_row, dict):
+                continue
+            date_value = raw_row.get("date")
+            status = raw_row.get("status")
+            if not isinstance(date_value, str) or not isinstance(status, str):
+                continue
+            reason = raw_row.get("reason")
+            rows.append(
+                SolarBiasContributionRow(
+                    date=date_value,
+                    forecast_wh=_optional_float(raw_row.get("forecastWh", raw_row.get("forecast_wh"))),
+                    actual_wh=_optional_float(raw_row.get("actualWh", raw_row.get("actual_wh"))),
+                    ratio=_optional_float(raw_row.get("ratio")),
+                    status=status,
+                    reason=reason if isinstance(reason, str) else None,
+                )
+            )
+        slots[slot] = SolarBiasSlotExplainability(
+            factor=_optional_float(raw_slot.get("factor")),
+            raw_ratio=_optional_float(raw_slot.get("rawRatio", raw_slot.get("raw_ratio"))),
+            clamped=bool(raw_slot.get("clamped", False)),
+            forecast_sum_wh=_optional_float(raw_slot.get("forecastSumWh", raw_slot.get("forecast_sum_wh"))) or 0.0,
+            actual_sum_wh=_optional_float(raw_slot.get("actualSumWh", raw_slot.get("actual_sum_wh"))) or 0.0,
+            rows=rows,
+        )
+
+    return SolarBiasTrainingExplainability(
+        trained_at=trained_at,
+        aggregation_method=aggregation_method,
+        slots=slots,
     )
 
 

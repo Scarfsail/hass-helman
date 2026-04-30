@@ -919,3 +919,38 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
     assert future_payload["series"]["actual"] == []
     assert future_payload["series"]["invalidated"] == []
     assert future_payload["availability"]["hasInvalidated"] is False
+
+
+def test_service_saves_training_explainability_after_training():
+    service = _make_service()
+    service._cfg.min_history_days = 1
+    sample = models.TrainerSample(
+        date="2026-04-24",
+        forecast_wh=1000.0,
+        slot_forecast_wh={"12:00": 1000.0},
+    )
+
+    async def fake_samples(*args, **kwargs):
+        return [sample]
+
+    async def fake_actuals_window(*args, **kwargs):
+        return models.SolarActualsWindow(
+            slot_actuals_by_date={"2026-04-24": {"12:00": 1200.0}}
+        )
+
+    old_samples = service_mod.load_trainer_samples
+    old_actuals_window = service_mod.load_actuals_window
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_trainer_samples = fake_samples
+        service_mod.load_actuals_window = fake_actuals_window
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T03:00:00+02:00")
+        asyncio.run(service.async_train())
+    finally:
+        service_mod.load_trainer_samples = old_samples
+        service_mod.load_actuals_window = old_actuals_window
+        service_mod.dt_util.now = old_now
+
+    saved = service._store.saved
+    assert saved["trainingExplainability"]["aggregationMethod"] == "ratio_of_sums"
+    assert saved["trainingExplainability"]["slots"]["12:00"]["rows"][0]["status"] == "included"
