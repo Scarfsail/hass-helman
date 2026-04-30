@@ -216,6 +216,29 @@ def _build_training_explainability(
                 )
             )
 
+        if cfg.aggregation_method == "trimmed_mean":
+            ratio_rows = [
+                row for row in rows
+                if row.status == "included" and row.ratio is not None
+            ]
+            if len(ratio_rows) >= 3:
+                low = min(ratio_rows, key=lambda row: row.ratio or 0.0)
+                high = max(ratio_rows, key=lambda row: row.ratio or 0.0)
+                trimmed_rows = {id(low): "trimmed_mean_low", id(high): "trimmed_mean_high"}
+                rows = [
+                    SolarBiasContributionRow(
+                        date=row.date,
+                        forecast_wh=row.forecast_wh,
+                        actual_wh=row.actual_wh,
+                        ratio=row.ratio,
+                        status="trimmed",
+                        reason=trimmed_rows[id(row)],
+                    )
+                    if id(row) in trimmed_rows
+                    else row
+                    for row in rows
+                ]
+
         forecast_sum = float(slot_forecast_sums.get(slot, 0.0))
         actual_sum = float(slot_actual_sums.get(slot, 0.0))
         raw_ratio = slot_raw_ratios.get(slot)

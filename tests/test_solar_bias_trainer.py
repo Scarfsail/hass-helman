@@ -704,6 +704,49 @@ def test_training_explainability_marks_invalidated_dropped_and_omitted_rows():
     assert "12:00" in outcome.profile.omitted_slots
 
 
+def test_training_explainability_marks_trimmed_mean_removed_rows():
+    cfg = make_cfg(
+        min_history_days=4,
+        clamp_min=0.0,
+        clamp_max=5.0,
+        aggregation_method="trimmed_mean",
+    )
+    slot = "12:00"
+    per_day = [
+        ("2026-04-20", 100.0, 50.0),
+        ("2026-04-21", 100.0, 100.0),
+        ("2026-04-22", 100.0, 200.0),
+        ("2026-04-23", 100.0, 400.0),
+    ]
+    samples = [
+        models.TrainerSample(
+            date=day,
+            forecast_wh=1000.0,
+            slot_forecast_wh={slot: forecast, "13:00": 900.0},
+        )
+        for day, forecast, _actual in per_day
+    ]
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            day: {slot: actual, "13:00": 900.0}
+            for day, _forecast, actual in per_day
+        }
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime(2026, 4, 24, 3, 0))
+
+    rows = outcome.explainability.slots[slot].rows
+    by_date = {row.date: row for row in rows}
+    assert by_date["2026-04-20"].status == "trimmed"
+    assert by_date["2026-04-20"].reason == "trimmed_mean_low"
+    assert by_date["2026-04-23"].status == "trimmed"
+    assert by_date["2026-04-23"].reason == "trimmed_mean_high"
+    assert by_date["2026-04-21"].status == "included"
+    assert by_date["2026-04-22"].status == "included"
+    assert outcome.explainability.slots[slot].raw_ratio == 1.5
+    assert outcome.profile.factors[slot] == 1.5
+
+
 def test_ratio_of_sums_weights_by_volume_not_by_day_count():
     """Sunny days (high volume) should dominate the ratio, not be averaged equally with cloudy days."""
     slot = "12:00"
