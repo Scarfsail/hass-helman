@@ -22,6 +22,7 @@ env/
 .idea/
 .worktrees/
 .codex
+.superpowers/
 
 # Home Assistant
 .storage/
