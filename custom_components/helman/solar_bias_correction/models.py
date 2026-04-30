@@ -107,12 +107,49 @@ class SolarBiasFactorPoint:
 
 
 @dataclass
+class SolarBiasImpactPoint:
+    slot: str
+    raw_wh: float | None
+    corrected_wh: float | None
+    impact_wh: float | None
+    factor: float | None
+
+
+@dataclass
+class SolarBiasContributionRow:
+    date: str
+    forecast_wh: float | None
+    actual_wh: float | None
+    ratio: float | None
+    status: str
+    reason: str | None = None
+
+
+@dataclass
+class SolarBiasSlotExplainability:
+    factor: float | None
+    raw_ratio: float | None
+    clamped: bool
+    forecast_sum_wh: float
+    actual_sum_wh: float
+    rows: list[SolarBiasContributionRow]
+
+
+@dataclass
+class SolarBiasTrainingExplainability:
+    trained_at: str
+    aggregation_method: str
+    slots: dict[str, SolarBiasSlotExplainability]
+
+
+@dataclass
 class SolarBiasInspectorSeries:
     raw: list[SolarBiasInspectorPoint]
     corrected: list[SolarBiasInspectorPoint]
     actual: list[SolarBiasInspectorPoint]
     factors: list[SolarBiasFactorPoint]
     invalidated: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    impact: list[SolarBiasImpactPoint] = field(default_factory=list)
 
 
 @dataclass
@@ -145,6 +182,7 @@ class SolarBiasInspectorDay:
     availability: SolarBiasInspectorAvailability
     is_today: bool
     is_future: bool
+    training_explainability: SolarBiasTrainingExplainability | None = None
 
 
 def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
@@ -175,6 +213,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
                 {"slot": point.slot, "factor": point.factor}
                 for point in day.series.factors
             ],
+            "impact": [_impact_point_payload(point) for point in day.series.impact],
         },
         "totals": {
             "rawWh": day.totals.raw_wh,
@@ -188,11 +227,56 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasProfile": day.availability.has_profile,
             "hasInvalidated": day.availability.has_invalidated,
         },
+        "trainingExplainability": training_explainability_to_payload(
+            day.training_explainability
+        ),
     }
 
 
 def _inspector_point_payload(point: SolarBiasInspectorPoint) -> dict[str, Any]:
     return {"timestamp": point.timestamp, "valueWh": point.value_wh}
+
+
+def _impact_point_payload(point: SolarBiasImpactPoint) -> dict[str, Any]:
+    return {
+        "slot": point.slot,
+        "rawWh": point.raw_wh,
+        "correctedWh": point.corrected_wh,
+        "impactWh": point.impact_wh,
+        "factor": point.factor,
+    }
+
+
+def training_explainability_to_payload(
+    explainability: SolarBiasTrainingExplainability | None,
+) -> dict[str, Any] | None:
+    if explainability is None:
+        return None
+    return {
+        "trainedAt": explainability.trained_at,
+        "aggregationMethod": explainability.aggregation_method,
+        "slots": {
+            slot: {
+                "factor": details.factor,
+                "rawRatio": details.raw_ratio,
+                "clamped": details.clamped,
+                "forecastSumWh": details.forecast_sum_wh,
+                "actualSumWh": details.actual_sum_wh,
+                "rows": [
+                    {
+                        "date": row.date,
+                        "forecastWh": row.forecast_wh,
+                        "actualWh": row.actual_wh,
+                        "ratio": row.ratio,
+                        "status": row.status,
+                        "reason": row.reason,
+                    }
+                    for row in details.rows
+                ],
+            }
+            for slot, details in sorted(explainability.slots.items())
+        },
+    }
 
 
 def read_bias_config(config: dict[str, Any]) -> BiasConfig:

@@ -129,6 +129,7 @@ def test_inspector_day_serializes_frontend_contract():
             "actual": [{"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 480.0}],
             "invalidated": [],
             "factors": [{"slot": "08:00", "factor": 1.21}],
+            "impact": [],
         },
         "totals": {"rawWh": 420.0, "correctedWh": 510.0, "actualWh": 480.0},
         "availability": {
@@ -137,6 +138,105 @@ def test_inspector_day_serializes_frontend_contract():
             "hasActuals": True,
             "hasProfile": True,
             "hasInvalidated": False,
+        },
+        "trainingExplainability": None,
+    }
+
+
+def test_inspector_day_serializes_impact_and_training_explainability():
+    payload = models.inspector_day_to_payload(
+        models.SolarBiasInspectorDay(
+            date="2026-04-25",
+            timezone="Europe/Prague",
+            status="applied",
+            effective_variant="adjusted",
+            trained_at="2026-04-25T03:00:04+02:00",
+            min_date="2026-04-18",
+            max_date="2026-04-27",
+            series=models.SolarBiasInspectorSeries(
+                raw=[],
+                corrected=[],
+                actual=[],
+                factors=[models.SolarBiasFactorPoint(slot="12:00", factor=1.34)],
+                impact=[
+                    models.SolarBiasImpactPoint(
+                        slot="12:00",
+                        raw_wh=840.0,
+                        corrected_wh=1120.0,
+                        impact_wh=280.0,
+                        factor=1.34,
+                    )
+                ],
+            ),
+            totals=models.SolarBiasInspectorTotals(
+                raw_wh=None,
+                corrected_wh=None,
+                actual_wh=None,
+            ),
+            availability=models.SolarBiasInspectorAvailability(
+                has_raw_forecast=False,
+                has_corrected_forecast=False,
+                has_actuals=False,
+                has_profile=True,
+            ),
+            is_today=True,
+            is_future=False,
+            training_explainability=models.SolarBiasTrainingExplainability(
+                trained_at="2026-04-25T03:00:04+02:00",
+                aggregation_method="ratio_of_sums",
+                slots={
+                    "12:00": models.SolarBiasSlotExplainability(
+                        factor=1.34,
+                        raw_ratio=1.34,
+                        clamped=False,
+                        forecast_sum_wh=1500.0,
+                        actual_sum_wh=2010.0,
+                        rows=[
+                            models.SolarBiasContributionRow(
+                                date="2026-04-21",
+                                forecast_wh=520.0,
+                                actual_wh=610.0,
+                                ratio=1.1730769231,
+                                status="included",
+                                reason=None,
+                            )
+                        ],
+                    )
+                },
+            ),
+        )
+    )
+
+    assert payload["series"]["impact"] == [
+        {
+            "slot": "12:00",
+            "rawWh": 840.0,
+            "correctedWh": 1120.0,
+            "impactWh": 280.0,
+            "factor": 1.34,
+        }
+    ]
+    assert payload["trainingExplainability"] == {
+        "trainedAt": "2026-04-25T03:00:04+02:00",
+        "aggregationMethod": "ratio_of_sums",
+        "slots": {
+            "12:00": {
+                "factor": 1.34,
+                "rawRatio": 1.34,
+                "clamped": False,
+                "forecastSumWh": 1500.0,
+                "actualSumWh": 2010.0,
+                "rows": [
+                    {
+                        "date": "2026-04-21",
+                        "forecastWh": 520.0,
+                        "actualWh": 610.0,
+                        "ratio": 1.1730769231,
+                        "status": "included",
+                        "reason": None,
+                    }
+                ],
+            }
         },
     }
 
