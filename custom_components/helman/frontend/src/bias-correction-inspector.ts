@@ -541,45 +541,6 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     this._selectedSlot = slot;
   }
 
-  private _renderFactorBands(
-    factors: FactorPoint[],
-    plotLeft: number,
-    plotTop: number,
-    plotWidth: number,
-    plotHeight: number,
-  ) {
-    if (!factors.length) return "";
-    const values = factors.map((point) => point.factor).filter((value) => Number.isFinite(value));
-    if (!values.length) return "";
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const span = Math.max(max - min, 0.01);
-    return factors.map((point) => {
-      if (!Number.isFinite(point.factor)) return "";
-      const match = point.slot.match(/^(\d{2}):(\d{2})$/);
-      if (!match) return "";
-      const hour = Number(match[1]);
-      const minute = Number(match[2]);
-      if (
-        !Number.isFinite(hour) ||
-        !Number.isFinite(minute) ||
-        hour < 0 ||
-        hour > 23 ||
-        minute < 0 ||
-        minute > 59
-      ) {
-        return "";
-      }
-      const startMinutes = hour * 60 + minute;
-      const x = plotLeft + (startMinutes / 1440) * plotWidth;
-      const bandWidth = Math.max(2, plotWidth / 96);
-      const intensity = Math.abs(point.factor - 1) / Math.max(Math.abs(max - 1), Math.abs(min - 1), span);
-      const opacity = Math.min(0.34, 0.06 + intensity * 0.28);
-      const fill = point.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
-      return svg`<rect x=${x} y=${plotTop} width=${bandWidth} height=${plotHeight} fill="rgba(${fill}, ${opacity})"></rect>`;
-    });
-  }
-
   private _buildYTicks(maxKwh: number) {
     const step = maxKwh <= 4 ? 1 : Math.ceil(maxKwh / 4);
     const ticks: number[] = [];

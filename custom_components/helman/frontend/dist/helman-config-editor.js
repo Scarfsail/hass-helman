@@ -75,7 +75,7 @@ const { is: Lt, defineProperty: Pt, getOwnPropertyDescriptor: Ot, getOwnProperty
   return t;
 } }, ut = (o, e) => !Lt(o, e), Ie = { attribute: !0, type: String, converter: we, reflect: !1, useDefault: !1, hasChanged: ut };
 Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), I.litPropertyMetadata ?? (I.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
-let U = class extends HTMLElement {
+let Y = class extends HTMLElement {
   static addInitializer(e) {
     this._$Ei(), (this.l ?? (this.l = [])).push(e);
   }
@@ -278,15 +278,15 @@ let U = class extends HTMLElement {
   firstUpdated(e) {
   }
 };
-U.elementStyles = [], U.shadowRootOptions = { mode: "open" }, U[te("elementProperties")] = /* @__PURE__ */ new Map(), U[te("finalized")] = /* @__PURE__ */ new Map(), _e == null || _e({ ReactiveElement: U }), (I.reactiveElementVersions ?? (I.reactiveElementVersions = [])).push("2.1.2");
+Y.elementStyles = [], Y.shadowRootOptions = { mode: "open" }, Y[te("elementProperties")] = /* @__PURE__ */ new Map(), Y[te("finalized")] = /* @__PURE__ */ new Map(), _e == null || _e({ ReactiveElement: Y }), (I.reactiveElementVersions ?? (I.reactiveElementVersions = [])).push("2.1.2");
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const ie = globalThis, Te = (o) => o, de = ie.trustedTypes, De = de ? de.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ht = "$lit$", O = `lit$${Math.random().toFixed(9).slice(2)}$`, mt = "?" + O, Nt = `<${mt}>`, Y = document, oe = () => Y.createComment(""), re = (o) => o === null || typeof o != "object" && typeof o != "function", Ve = Array.isArray, Rt = (o) => Ve(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", ue = `[ 	
-\f\r]`, G = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, Fe = /-->/g, Ne = />/g, D = RegExp(`>|${ue}(?:([^\\s"'>=/]+)(${ue}*=${ue}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Re = /'/g, We = /"/g, gt = /^(?:script|style|textarea|title)$/i, vt = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = vt(1), E = vt(2), K = Symbol.for("lit-noChange"), h = Symbol.for("lit-nothing"), Ye = /* @__PURE__ */ new WeakMap(), N = Y.createTreeWalker(Y, 129);
+const ie = globalThis, Te = (o) => o, de = ie.trustedTypes, De = de ? de.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, ht = "$lit$", O = `lit$${Math.random().toFixed(9).slice(2)}$`, mt = "?" + O, Nt = `<${mt}>`, W = document, oe = () => W.createComment(""), re = (o) => o === null || typeof o != "object" && typeof o != "function", Ve = Array.isArray, Rt = (o) => Ve(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", ue = `[ 	
+\f\r]`, G = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, Fe = /-->/g, Ne = />/g, T = RegExp(`>|${ue}(?:([^\\s"'>=/]+)(${ue}*=${ue}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`, "g"), Re = /'/g, We = /"/g, gt = /^(?:script|style|textarea|title)$/i, vt = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), n = vt(1), S = vt(2), U = Symbol.for("lit-noChange"), u = Symbol.for("lit-nothing"), Ye = /* @__PURE__ */ new WeakMap(), F = W.createTreeWalker(W, 129);
 function bt(o, e) {
   if (!Ve(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
   return De !== void 0 ? De.createHTML(e) : e;
@@ -296,10 +296,10 @@ const Wt = (o, e) => {
   let a, r = e === 2 ? "<svg>" : e === 3 ? "<math>" : "", s = G;
   for (let l = 0; l < t; l++) {
     const d = o[l];
-    let c, p, u = -1, m = 0;
-    for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === G ? p[1] === "!--" ? s = Fe : p[1] !== void 0 ? s = Ne : p[2] !== void 0 ? (gt.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = D) : p[3] !== void 0 && (s = D) : s === D ? p[0] === ">" ? (s = a ?? G, u = -1) : p[1] === void 0 ? u = -2 : (u = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? D : p[3] === '"' ? We : Re) : s === We || s === Re ? s = D : s === Fe || s === Ne ? s = G : (s = D, a = void 0);
-    const v = s === D && o[l + 1].startsWith("/>") ? " " : "";
-    r += s === G ? d + Nt : u >= 0 ? (i.push(c), d.slice(0, u) + ht + d.slice(u) + O + v) : d + O + (u === -2 ? l : v);
+    let c, p, h = -1, m = 0;
+    for (; m < d.length && (s.lastIndex = m, p = s.exec(d), p !== null); ) m = s.lastIndex, s === G ? p[1] === "!--" ? s = Fe : p[1] !== void 0 ? s = Ne : p[2] !== void 0 ? (gt.test(p[2]) && (a = RegExp("</" + p[2], "g")), s = T) : p[3] !== void 0 && (s = T) : s === T ? p[0] === ">" ? (s = a ?? G, h = -1) : p[1] === void 0 ? h = -2 : (h = s.lastIndex - p[2].length, c = p[1], s = p[3] === void 0 ? T : p[3] === '"' ? We : Re) : s === We || s === Re ? s = T : s === Fe || s === Ne ? s = G : (s = T, a = void 0);
+    const y = s === T && o[l + 1].startsWith("/>") ? " " : "";
+    r += s === G ? d + Nt : h >= 0 ? (i.push(c), d.slice(0, h) + ht + d.slice(h) + O + y) : d + O + (h === -2 ? l : y);
   }
   return [bt(o, r + (o[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
@@ -309,43 +309,43 @@ class se {
     this.parts = [];
     let r = 0, s = 0;
     const l = e.length - 1, d = this.parts, [c, p] = Wt(e, t);
-    if (this.el = se.createElement(c, i), N.currentNode = this.el.content, t === 2 || t === 3) {
-      const u = this.el.content.firstChild;
-      u.replaceWith(...u.childNodes);
+    if (this.el = se.createElement(c, i), F.currentNode = this.el.content, t === 2 || t === 3) {
+      const h = this.el.content.firstChild;
+      h.replaceWith(...h.childNodes);
     }
-    for (; (a = N.nextNode()) !== null && d.length < l; ) {
+    for (; (a = F.nextNode()) !== null && d.length < l; ) {
       if (a.nodeType === 1) {
-        if (a.hasAttributes()) for (const u of a.getAttributeNames()) if (u.endsWith(ht)) {
-          const m = p[s++], v = a.getAttribute(u).split(O), S = /([.?@])?(.*)/.exec(m);
-          d.push({ type: 1, index: r, name: S[2], strings: v, ctor: S[1] === "." ? Ut : S[1] === "?" ? Kt : S[1] === "@" ? qt : pe }), a.removeAttribute(u);
-        } else u.startsWith(O) && (d.push({ type: 6, index: r }), a.removeAttribute(u));
+        if (a.hasAttributes()) for (const h of a.getAttributeNames()) if (h.endsWith(ht)) {
+          const m = p[s++], y = a.getAttribute(h).split(O), j = /([.?@])?(.*)/.exec(m);
+          d.push({ type: 1, index: r, name: j[2], strings: y, ctor: j[1] === "." ? Ut : j[1] === "?" ? Kt : j[1] === "@" ? qt : pe }), a.removeAttribute(h);
+        } else h.startsWith(O) && (d.push({ type: 6, index: r }), a.removeAttribute(h));
         if (gt.test(a.tagName)) {
-          const u = a.textContent.split(O), m = u.length - 1;
+          const h = a.textContent.split(O), m = h.length - 1;
           if (m > 0) {
             a.textContent = de ? de.emptyScript : "";
-            for (let v = 0; v < m; v++) a.append(u[v], oe()), N.nextNode(), d.push({ type: 2, index: ++r });
-            a.append(u[m], oe());
+            for (let y = 0; y < m; y++) a.append(h[y], oe()), F.nextNode(), d.push({ type: 2, index: ++r });
+            a.append(h[m], oe());
           }
         }
       } else if (a.nodeType === 8) if (a.data === mt) d.push({ type: 2, index: r });
       else {
-        let u = -1;
-        for (; (u = a.data.indexOf(O, u + 1)) !== -1; ) d.push({ type: 7, index: r }), u += O.length - 1;
+        let h = -1;
+        for (; (h = a.data.indexOf(O, h + 1)) !== -1; ) d.push({ type: 7, index: r }), h += O.length - 1;
       }
       r++;
     }
   }
   static createElement(e, t) {
-    const i = Y.createElement("template");
+    const i = W.createElement("template");
     return i.innerHTML = e, i;
   }
 }
-function q(o, e, t = o, i) {
+function K(o, e, t = o, i) {
   var s, l;
-  if (e === K) return e;
+  if (e === U) return e;
   let a = i !== void 0 ? (s = t._$Co) == null ? void 0 : s[i] : t._$Cl;
   const r = re(e) ? void 0 : e._$litDirective$;
-  return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = q(o, a._$AS(o, e.values), a, i)), e;
+  return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = K(o, a._$AS(o, e.values), a, i)), e;
 }
 class Yt {
   constructor(e, t) {
@@ -358,30 +358,30 @@ class Yt {
     return this._$AM._$AU;
   }
   u(e) {
-    const { el: { content: t }, parts: i } = this._$AD, a = ((e == null ? void 0 : e.creationScope) ?? Y).importNode(t, !0);
-    N.currentNode = a;
-    let r = N.nextNode(), s = 0, l = 0, d = i[0];
+    const { el: { content: t }, parts: i } = this._$AD, a = ((e == null ? void 0 : e.creationScope) ?? W).importNode(t, !0);
+    F.currentNode = a;
+    let r = F.nextNode(), s = 0, l = 0, d = i[0];
     for (; d !== void 0; ) {
       if (s === d.index) {
         let c;
-        d.type === 2 ? c = new Z(r, r.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(r, d.name, d.strings, this, e) : d.type === 6 && (c = new Bt(r, this, e)), this._$AV.push(c), d = i[++l];
+        d.type === 2 ? c = new B(r, r.nextSibling, this, e) : d.type === 1 ? c = new d.ctor(r, d.name, d.strings, this, e) : d.type === 6 && (c = new Bt(r, this, e)), this._$AV.push(c), d = i[++l];
       }
-      s !== (d == null ? void 0 : d.index) && (r = N.nextNode(), s++);
+      s !== (d == null ? void 0 : d.index) && (r = F.nextNode(), s++);
     }
-    return N.currentNode = Y, a;
+    return F.currentNode = W, a;
   }
   p(e) {
     let t = 0;
     for (const i of this._$AV) i !== void 0 && (i.strings !== void 0 ? (i._$AI(e, i, t), t += i.strings.length - 2) : i._$AI(e[t])), t++;
   }
 }
-class Z {
+class B {
   get _$AU() {
     var e;
     return ((e = this._$AM) == null ? void 0 : e._$AU) ?? this._$Cv;
   }
   constructor(e, t, i, a) {
-    this.type = 2, this._$AH = h, this._$AN = void 0, this._$AA = e, this._$AB = t, this._$AM = i, this.options = a, this._$Cv = (a == null ? void 0 : a.isConnected) ?? !0;
+    this.type = 2, this._$AH = u, this._$AN = void 0, this._$AA = e, this._$AB = t, this._$AM = i, this.options = a, this._$Cv = (a == null ? void 0 : a.isConnected) ?? !0;
   }
   get parentNode() {
     let e = this._$AA.parentNode;
@@ -395,7 +395,7 @@ class Z {
     return this._$AB;
   }
   _$AI(e, t = this) {
-    e = q(this, e, t), re(e) ? e === h || e == null || e === "" ? (this._$AH !== h && this._$AR(), this._$AH = h) : e !== this._$AH && e !== K && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : Rt(e) ? this.k(e) : this._(e);
+    e = K(this, e, t), re(e) ? e === u || e == null || e === "" ? (this._$AH !== u && this._$AR(), this._$AH = u) : e !== this._$AH && e !== U && this._(e) : e._$litType$ !== void 0 ? this.$(e) : e.nodeType !== void 0 ? this.T(e) : Rt(e) ? this.k(e) : this._(e);
   }
   O(e) {
     return this._$AA.parentNode.insertBefore(e, this._$AB);
@@ -404,7 +404,7 @@ class Z {
     this._$AH !== e && (this._$AR(), this._$AH = this.O(e));
   }
   _(e) {
-    this._$AH !== h && re(this._$AH) ? this._$AA.nextSibling.data = e : this.T(Y.createTextNode(e)), this._$AH = e;
+    this._$AH !== u && re(this._$AH) ? this._$AA.nextSibling.data = e : this.T(W.createTextNode(e)), this._$AH = e;
   }
   $(e) {
     var r;
@@ -423,7 +423,7 @@ class Z {
     Ve(this._$AH) || (this._$AH = [], this._$AR());
     const t = this._$AH;
     let i, a = 0;
-    for (const r of e) a === t.length ? t.push(i = new Z(this.O(oe()), this.O(oe()), this, this.options)) : i = t[a], i._$AI(r), a++;
+    for (const r of e) a === t.length ? t.push(i = new B(this.O(oe()), this.O(oe()), this, this.options)) : i = t[a], i._$AI(r), a++;
     a < t.length && (this._$AR(i && i._$AB.nextSibling, a), t.length = a);
   }
   _$AR(e = this._$AA.nextSibling, t) {
@@ -446,21 +446,21 @@ class pe {
     return this._$AM._$AU;
   }
   constructor(e, t, i, a, r) {
-    this.type = 1, this._$AH = h, this._$AN = void 0, this.element = e, this.name = t, this._$AM = a, this.options = r, i.length > 2 || i[0] !== "" || i[1] !== "" ? (this._$AH = Array(i.length - 1).fill(new String()), this.strings = i) : this._$AH = h;
+    this.type = 1, this._$AH = u, this._$AN = void 0, this.element = e, this.name = t, this._$AM = a, this.options = r, i.length > 2 || i[0] !== "" || i[1] !== "" ? (this._$AH = Array(i.length - 1).fill(new String()), this.strings = i) : this._$AH = u;
   }
   _$AI(e, t = this, i, a) {
     const r = this.strings;
     let s = !1;
-    if (r === void 0) e = q(this, e, t, 0), s = !re(e) || e !== this._$AH && e !== K, s && (this._$AH = e);
+    if (r === void 0) e = K(this, e, t, 0), s = !re(e) || e !== this._$AH && e !== U, s && (this._$AH = e);
     else {
       const l = e;
       let d, c;
-      for (e = r[0], d = 0; d < r.length - 1; d++) c = q(this, l[i + d], t, d), c === K && (c = this._$AH[d]), s || (s = !re(c) || c !== this._$AH[d]), c === h ? e = h : e !== h && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
+      for (e = r[0], d = 0; d < r.length - 1; d++) c = K(this, l[i + d], t, d), c === U && (c = this._$AH[d]), s || (s = !re(c) || c !== this._$AH[d]), c === u ? e = u : e !== u && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
     }
     s && !a && this.j(e);
   }
   j(e) {
-    e === h ? this.element.removeAttribute(this.name) : this.element.setAttribute(this.name, e ?? "");
+    e === u ? this.element.removeAttribute(this.name) : this.element.setAttribute(this.name, e ?? "");
   }
 }
 class Ut extends pe {
@@ -468,7 +468,7 @@ class Ut extends pe {
     super(...arguments), this.type = 3;
   }
   j(e) {
-    this.element[this.name] = e === h ? void 0 : e;
+    this.element[this.name] = e === u ? void 0 : e;
   }
 }
 class Kt extends pe {
@@ -476,7 +476,7 @@ class Kt extends pe {
     super(...arguments), this.type = 4;
   }
   j(e) {
-    this.element.toggleAttribute(this.name, !!e && e !== h);
+    this.element.toggleAttribute(this.name, !!e && e !== u);
   }
 }
 class qt extends pe {
@@ -484,8 +484,8 @@ class qt extends pe {
     super(e, t, i, a, r), this.type = 5;
   }
   _$AI(e, t = this) {
-    if ((e = q(this, e, t, 0) ?? h) === K) return;
-    const i = this._$AH, a = e === h && i !== h || e.capture !== i.capture || e.once !== i.once || e.passive !== i.passive, r = e !== h && (i === h || a);
+    if ((e = K(this, e, t, 0) ?? u) === U) return;
+    const i = this._$AH, a = e === u && i !== u || e.capture !== i.capture || e.once !== i.once || e.passive !== i.passive, r = e !== u && (i === u || a);
     a && this.element.removeEventListener(this.name, this, i), r && this.element.addEventListener(this.name, this, e), this._$AH = e;
   }
   handleEvent(e) {
@@ -501,17 +501,17 @@ class Bt {
     return this._$AM._$AU;
   }
   _$AI(e) {
-    q(this, e);
+    K(this, e);
   }
 }
-const Zt = { I: Z }, he = ie.litHtmlPolyfillSupport;
-he == null || he(se, Z), (ie.litHtmlVersions ?? (ie.litHtmlVersions = [])).push("3.3.2");
+const Zt = { I: B }, he = ie.litHtmlPolyfillSupport;
+he == null || he(se, B), (ie.litHtmlVersions ?? (ie.litHtmlVersions = [])).push("3.3.2");
 const yt = (o, e, t) => {
   const i = (t == null ? void 0 : t.renderBefore) ?? e;
   let a = i._$litPart$;
   if (a === void 0) {
     const r = (t == null ? void 0 : t.renderBefore) ?? null;
-    i._$litPart$ = a = new Z(e.insertBefore(oe(), r), r, void 0, t ?? {});
+    i._$litPart$ = a = new B(e.insertBefore(oe(), r), r, void 0, t ?? {});
   }
   return a._$AI(o), a;
 };
@@ -520,8 +520,8 @@ const yt = (o, e, t) => {
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const R = globalThis;
-let W = class extends U {
+const N = globalThis;
+let R = class extends Y {
   constructor() {
     super(...arguments), this.renderOptions = { host: this }, this._$Do = void 0;
   }
@@ -543,14 +543,14 @@ let W = class extends U {
     super.disconnectedCallback(), (e = this._$Do) == null || e.setConnected(!1);
   }
   render() {
-    return K;
+    return U;
   }
 };
 var pt;
-W._$litElement$ = !0, W.finalized = !0, (pt = R.litElementHydrateSupport) == null || pt.call(R, { LitElement: W });
-const me = R.litElementPolyfillSupport;
-me == null || me({ LitElement: W });
-(R.litElementVersions ?? (R.litElementVersions = [])).push("4.2.2");
+R._$litElement$ = !0, R.finalized = !0, (pt = N.litElementHydrateSupport) == null || pt.call(N, { LitElement: R });
+const me = N.litElementPolyfillSupport;
+me == null || me({ LitElement: R });
+(N.litElementVersions ?? (N.litElementVersions = [])).push("4.2.2");
 /**
  * @license
  * Copyright 2017 Google LLC
@@ -624,7 +624,7 @@ const Je = (o) => Xt(o) ? o._$litType$.h : o.strings, ii = Gt(class extends Jt {
       let r = this.et.get(t);
       if (r === void 0) {
         const s = document.createDocumentFragment();
-        r = yt(h, s), r.setConnected(!1), this.et.set(t, r);
+        r = yt(u, s), r.setConnected(!1), this.et.set(t, r);
       }
       Ze(r, [a]), Be(r, void 0, a);
     }
@@ -641,14 +641,14 @@ const Je = (o) => Xt(o) ? o._$litType$.h : o.strings, ii = Gt(class extends Jt {
     return this.render(e);
   }
 });
-function x(o) {
+function $(o) {
   return typeof structuredClone == "function" ? structuredClone(o) : JSON.parse(JSON.stringify(o));
 }
-function L(o) {
+function H(o) {
   return typeof o == "object" && o !== null && !Array.isArray(o);
 }
 function f(o) {
-  return L(o) ? o : void 0;
+  return H(o) ? o : void 0;
 }
 function z(o) {
   return Array.isArray(o) ? o : void 0;
@@ -657,7 +657,7 @@ function P(o) {
   const e = f(o);
   return e ? Object.entries(e) : [];
 }
-function w(o, e) {
+function k(o, e) {
   let t = o;
   for (const i of e) {
     if (typeof i == "number") {
@@ -666,13 +666,13 @@ function w(o, e) {
       t = t[i];
       continue;
     }
-    if (!L(t))
+    if (!H(t))
       return;
     t = t[i];
   }
   return t;
 }
-function b(o, e, t) {
+function v(o, e, t) {
   if (e.length === 0)
     return;
   let i = o;
@@ -682,11 +682,11 @@ function b(o, e, t) {
       if (!Array.isArray(i))
         return;
       let p = i[s];
-      d ? Array.isArray(p) || (p = [], i[s] = p) : L(p) || (p = {}, i[s] = p), i = p;
+      d ? Array.isArray(p) || (p = [], i[s] = p) : H(p) || (p = {}, i[s] = p), i = p;
       continue;
     }
     let c = i[s];
-    d ? Array.isArray(c) || (c = [], i[s] = c) : L(c) || (c = {}, i[s] = c), i = c;
+    d ? Array.isArray(c) || (c = [], i[s] = c) : H(c) || (c = {}, i[s] = c), i = c;
   }
   const a = e[e.length - 1];
   if (typeof a == "number") {
@@ -697,34 +697,34 @@ function b(o, e, t) {
   }
   i[a] = t;
 }
-function F(o, e) {
+function D(o, e) {
   e.length !== 0 && (kt(o, e), bi(o, e.slice(0, -1)));
 }
-function H(o, e, t) {
-  const i = w(o, e), r = [...Array.isArray(i) ? i : [], t];
-  b(o, e, r);
+function C(o, e, t) {
+  const i = k(o, e), r = [...Array.isArray(i) ? i : [], t];
+  v(o, e, r);
 }
 function ai(o, e, t) {
-  const i = w(o, e);
+  const i = k(o, e);
   if (!Array.isArray(i) || t < 0 || t >= i.length)
     return;
   const a = i.filter((r, s) => s !== t);
   if (a.length === 0) {
-    F(o, e);
+    D(o, e);
     return;
   }
-  b(o, e, a);
+  v(o, e, a);
 }
 function oi(o, e, t, i) {
-  const a = w(o, e);
+  const a = k(o, e);
   if (!Array.isArray(a) || t < 0 || i < 0 || t >= a.length || i >= a.length || t === i)
     return;
   const r = [...a], [s] = r.splice(t, 1);
-  r.splice(i, 0, s), b(o, e, r);
+  r.splice(i, 0, s), v(o, e, r);
 }
 function ri(o, e, t, i) {
-  const a = w(o, e);
-  if (!L(a))
+  const a = k(o, e);
+  if (!H(a))
     return { ok: !1, reason: "target_not_available" };
   const r = i.trim();
   if (!r)
@@ -743,18 +743,18 @@ function ri(o, e, t, i) {
     }
     l[d] = c;
   }
-  return b(o, e, l), { ok: !0 };
+  return v(o, e, l), { ok: !0 };
 }
 function si(o) {
-  return C(o, "category");
+  return V(o, "category");
 }
 function ni(o) {
-  return C(o, "label");
+  return V(o, "label");
 }
 function li(o, e, t) {
   return {
     kind: "ev_charger",
-    id: C(o, "ev-charger"),
+    id: V(o, "ev-charger"),
     name: e,
     limits: {
       max_charging_power_kw: 11
@@ -789,7 +789,7 @@ function li(o, e, t) {
 function di(o, e) {
   return {
     kind: "generic",
-    id: C(o, "generic-appliance"),
+    id: V(o, "generic-appliance"),
     name: e,
     controls: {
       switch: {
@@ -805,7 +805,7 @@ function di(o, e) {
 function ci(o, e) {
   return {
     kind: "climate",
-    id: C(o, "climate-appliance"),
+    id: V(o, "climate-appliance"),
     name: e,
     controls: {
       climate: {
@@ -820,7 +820,7 @@ function ci(o, e) {
 }
 function Qe(o) {
   return {
-    id: C(o, "export-price"),
+    id: V(o, "export-price"),
     kind: "export_price",
     enabled: !0,
     params: {
@@ -831,7 +831,7 @@ function Qe(o) {
 }
 function Xe(o, e = "") {
   return {
-    id: C(o, "surplus-appliance"),
+    id: V(o, "surplus-appliance"),
     kind: "surplus_appliance",
     enabled: !0,
     params: {
@@ -843,7 +843,7 @@ function Xe(o, e = "") {
 }
 function ft(o, e) {
   return {
-    id: C(o, "vehicle"),
+    id: V(o, "vehicle"),
     name: e,
     telemetry: {
       soc_entity_id: ""
@@ -881,13 +881,13 @@ function mi() {
   return "";
 }
 function gi(o) {
-  return C(o, "mode");
+  return V(o, "mode");
 }
 function vi(o) {
-  return C(o, "gear");
+  return V(o, "gear");
 }
 function kt(o, e) {
-  const t = e.slice(0, -1), i = t.length === 0 ? o : w(o, t);
+  const t = e.slice(0, -1), i = t.length === 0 ? o : k(o, t);
   if (i === void 0)
     return;
   const a = e[e.length - 1];
@@ -897,17 +897,17 @@ function kt(o, e) {
     i.splice(a, 1);
     return;
   }
-  !L(i) || !(a in i) || delete i[a];
+  !H(i) || !(a in i) || delete i[a];
 }
 function bi(o, e) {
   for (let t = e.length; t > 0; t -= 1) {
-    const i = e.slice(0, t), a = w(o, i), r = L(a) && Object.keys(a).length === 0, s = Array.isArray(a) && a.length === 0;
+    const i = e.slice(0, t), a = k(o, i), r = H(a) && Object.keys(a).length === 0, s = Array.isArray(a) && a.length === 0;
     if (!r && !s)
       break;
     kt(o, i);
   }
 }
-function C(o, e) {
+function V(o, e) {
   const t = new Set(o);
   if (!t.has(e))
     return e;
@@ -1007,27 +1007,27 @@ function $i(o) {
 function xi() {
   return {
     read(o) {
-      return x(o);
+      return $(o);
     },
     apply(o, e) {
-      return x(e);
+      return $(e);
     },
     validate(o) {
       return Ce(o, "object");
     }
   };
 }
-function $(o, e) {
+function w(o, e) {
   return {
     read(t) {
-      const i = o.length === 0 ? t : w(t, o);
-      return x(i === void 0 ? e.emptyValue : i);
+      const i = o.length === 0 ? t : k(t, o);
+      return $(i === void 0 ? e.emptyValue : i);
     },
     apply(t, i) {
       if (o.length === 0)
-        return x(i);
-      const a = x(t);
-      return b(a, o, x(i)), a;
+        return $(i);
+      const a = $(t);
+      return v(a, o, $(i)), a;
     },
     validate(t) {
       return Ce(t, e.rootKind);
@@ -1040,18 +1040,18 @@ function J(o) {
     read(t) {
       const i = {};
       for (const a of o) {
-        const r = w(t, a.documentPath);
-        r !== void 0 && (i[a.yamlKey] = x(r));
+        const r = k(t, a.documentPath);
+        r !== void 0 && (i[a.yamlKey] = $(r));
       }
       return i;
     },
     apply(t, i) {
-      const a = x(t), r = i;
+      const a = $(t), r = i;
       for (const s of o)
-        F(a, s.documentPath);
+        D(a, s.documentPath);
       for (const s of o) {
         const l = r[s.yamlKey];
-        l !== void 0 && b(a, s.documentPath, x(l));
+        l !== void 0 && v(a, s.documentPath, $(l));
       }
       return a;
     },
@@ -1059,7 +1059,7 @@ function J(o) {
       const i = Ce(t, "object");
       if (i)
         return i;
-      if (!L(t))
+      if (!H(t))
         return { code: "expected_object" };
       for (const a of Object.keys(t))
         if (!e.has(a))
@@ -1069,7 +1069,7 @@ function J(o) {
   };
 }
 function Ce(o, e) {
-  return e === "array" ? Array.isArray(o) ? null : { code: "expected_array" } : L(o) ? null : { code: "expected_object" };
+  return e === "array" ? Array.isArray(o) ? null : { code: "expected_array" } : H(o) ? null : { code: "expected_object" };
 }
 const zi = {
   general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
@@ -1107,7 +1107,7 @@ const zi = {
   automation: "automation",
   appliances: "appliances",
   root: "general"
-}, V = "document", y = {
+}, M = "document", b = {
   general: "tab:general",
   power_devices: "tab:power_devices",
   scheduler: "tab:scheduler",
@@ -1179,60 +1179,60 @@ const zi = {
   { yamlKey: "aggregation_method", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"] },
   { yamlKey: "total_energy_entity_id", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"] }
 ], $e = {
-  [V]: {
-    id: V,
+  [M]: {
+    id: M,
     kind: "document",
     labelKey: "editor.title",
     adapter: xi()
   },
-  [y.general]: {
-    id: y.general,
+  [b.general]: {
+    id: b.general,
     kind: "tab",
-    parentId: V,
+    parentId: M,
     tabId: "general",
     labelKey: "editor.tabs.general",
     adapter: J(Ei)
   },
-  [y.power_devices]: {
-    id: y.power_devices,
+  [b.power_devices]: {
+    id: b.power_devices,
     kind: "tab",
-    parentId: V,
+    parentId: M,
     tabId: "power_devices",
     labelKey: "editor.tabs.power_devices",
-    adapter: $(["power_devices"], {
+    adapter: w(["power_devices"], {
       emptyValue: A,
       rootKind: "object"
     })
   },
-  [y.scheduler]: {
-    id: y.scheduler,
+  [b.scheduler]: {
+    id: b.scheduler,
     kind: "tab",
-    parentId: V,
+    parentId: M,
     tabId: "scheduler",
     labelKey: "editor.tabs.scheduler",
-    adapter: $(["scheduler"], {
+    adapter: w(["scheduler"], {
       emptyValue: A,
       rootKind: "object"
     })
   },
-  [y.automation]: {
-    id: y.automation,
+  [b.automation]: {
+    id: b.automation,
     kind: "tab",
-    parentId: V,
+    parentId: M,
     tabId: "automation",
     labelKey: "editor.tabs.automation",
-    adapter: $(["automation"], {
+    adapter: w(["automation"], {
       emptyValue: A,
       rootKind: "object"
     })
   },
-  [y.appliances]: {
-    id: y.appliances,
+  [b.appliances]: {
+    id: b.appliances,
     kind: "tab",
-    parentId: V,
+    parentId: M,
     tabId: "appliances",
     labelKey: "editor.tabs.appliances",
-    adapter: $(["appliances"], {
+    adapter: w(["appliances"], {
       emptyValue: be,
       rootKind: "array"
     })
@@ -1240,7 +1240,7 @@ const zi = {
   [_.general.core_labels_and_history]: {
     id: _.general.core_labels_and_history,
     kind: "section",
-    parentId: y.general,
+    parentId: b.general,
     tabId: "general",
     labelKey: "editor.sections.core_labels_and_history",
     adapter: J(Mi)
@@ -1248,10 +1248,10 @@ const zi = {
   [_.general.device_label_text]: {
     id: _.general.device_label_text,
     kind: "section",
-    parentId: y.general,
+    parentId: b.general,
     tabId: "general",
     labelKey: "editor.sections.device_label_text",
-    adapter: $(["device_label_text"], {
+    adapter: w(["device_label_text"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1259,10 +1259,10 @@ const zi = {
   [_.power_devices.house]: {
     id: _.power_devices.house,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.house",
-    adapter: $(["power_devices", "house"], {
+    adapter: w(["power_devices", "house"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1270,10 +1270,10 @@ const zi = {
   [_.power_devices.solar]: {
     id: _.power_devices.solar,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.solar",
-    adapter: $(["power_devices", "solar"], {
+    adapter: w(["power_devices", "solar"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1284,7 +1284,7 @@ const zi = {
     parentId: _.power_devices.solar_forecast,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction",
-    adapter: $(
+    adapter: w(
       ["power_devices", "solar", "forecast", "bias_correction"],
       {
         emptyValue: A,
@@ -1298,7 +1298,7 @@ const zi = {
     parentId: _.power_devices.solar,
     tabId: "power_devices",
     labelKey: "editor.sections.solar_general",
-    adapter: $(["power_devices", "solar", "entities"], {
+    adapter: w(["power_devices", "solar", "entities"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1309,7 +1309,7 @@ const zi = {
     parentId: _.power_devices.solar,
     tabId: "power_devices",
     labelKey: "editor.sections.solar_forecast",
-    adapter: $(["power_devices", "solar", "forecast"], {
+    adapter: w(["power_devices", "solar", "forecast"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1336,7 +1336,7 @@ const zi = {
     parentId: _.power_devices.solar_bias_correction,
     tabId: "power_devices",
     labelKey: "editor.sections.bias_correction_slot_invalidation",
-    adapter: $(
+    adapter: w(
       [
         "power_devices",
         "solar",
@@ -1353,10 +1353,10 @@ const zi = {
   [_.power_devices.battery]: {
     id: _.power_devices.battery,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.battery",
-    adapter: $(["power_devices", "battery"], {
+    adapter: w(["power_devices", "battery"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1364,10 +1364,10 @@ const zi = {
   [_.power_devices.grid]: {
     id: _.power_devices.grid,
     kind: "section",
-    parentId: y.power_devices,
+    parentId: b.power_devices,
     tabId: "power_devices",
     labelKey: "editor.sections.grid",
-    adapter: $(["power_devices", "grid"], {
+    adapter: w(["power_devices", "grid"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1375,10 +1375,10 @@ const zi = {
   [_.scheduler.schedule_control_mapping]: {
     id: _.scheduler.schedule_control_mapping,
     kind: "section",
-    parentId: y.scheduler,
+    parentId: b.scheduler,
     tabId: "scheduler",
     labelKey: "editor.sections.schedule_control_mapping",
-    adapter: $(["scheduler", "control"], {
+    adapter: w(["scheduler", "control"], {
       emptyValue: A,
       rootKind: "object"
     })
@@ -1386,7 +1386,7 @@ const zi = {
   [_.automation.settings]: {
     id: _.automation.settings,
     kind: "section",
-    parentId: y.automation,
+    parentId: b.automation,
     tabId: "automation",
     labelKey: "editor.sections.automation_settings",
     adapter: J(Vi)
@@ -1394,10 +1394,10 @@ const zi = {
   [_.automation.optimizer_pipeline]: {
     id: _.automation.optimizer_pipeline,
     kind: "section",
-    parentId: y.automation,
+    parentId: b.automation,
     tabId: "automation",
     labelKey: "editor.sections.optimizer_pipeline",
-    adapter: $(["automation", "optimizers"], {
+    adapter: w(["automation", "optimizers"], {
       emptyValue: be,
       rootKind: "array"
     })
@@ -1405,10 +1405,10 @@ const zi = {
   [_.appliances.configured_appliances]: {
     id: _.appliances.configured_appliances,
     kind: "section",
-    parentId: y.appliances,
+    parentId: b.appliances,
     tabId: "appliances",
     labelKey: "editor.sections.configured_appliances",
-    adapter: $(["appliances"], {
+    adapter: w(["appliances"], {
       emptyValue: be,
       rootKind: "array"
     })
@@ -2395,7 +2395,7 @@ const zt = {
   cs: Oi,
   en: Ti
 };
-function B(o) {
+function q(o) {
   var t;
   const e = Fi((o == null ? void 0 : o.language) || ((t = o == null ? void 0 : o.locale) == null ? void 0 : t.language) || "cs");
   return (i) => Di(i, e);
@@ -2522,9 +2522,9 @@ function fe(o, e) {
 function Yi(o, e) {
   return !o || !e ? null : o.slots[e] ?? null;
 }
-const ae = class ae extends W {
+const ae = class ae extends R {
   constructor() {
-    super(...arguments), this._expanded = !1, this._selectedDate = "", this._payload = null, this._loading = !1, this._error = "", this._selectedSlot = null, this._fallbackLocalize = B(), this._activeRequestId = 0, this._activeRequestDate = null;
+    super(...arguments), this._expanded = !1, this._selectedDate = "", this._payload = null, this._loading = !1, this._error = "", this._selectedSlot = null, this._fallbackLocalize = q(), this._activeRequestId = 0, this._activeRequestDate = null;
   }
   updated(e) {
     e.has("hass") && this.hass && !this._selectedDate && (this._selectedDate = this._todayIso());
@@ -2612,38 +2612,38 @@ const ae = class ae extends W {
     `;
   }
   _renderChart(e) {
-    const a = { top: 18, right: 24, bottom: 34, left: 48 }, r = 720 - a.left - a.right, s = 260 - a.top - a.bottom, l = ne(e.series.raw), d = ne(e.series.corrected), c = ne(e.series.actual, { bucketMinutes: 15 }), p = ne(e.series.invalidated, { bucketMinutes: 15 }), u = [
+    const a = { top: 18, right: 24, bottom: 34, left: 48 }, r = 720 - a.left - a.right, s = 260 - a.top - a.bottom, l = ne(e.series.raw), d = ne(e.series.corrected), c = ne(e.series.actual, { bucketMinutes: 15 }), p = ne(e.series.invalidated, { bucketMinutes: 15 }), h = [
       ...l.map((g) => g.powerW),
       ...d.map((g) => g.powerW),
       ...c.map((g) => g.powerW),
       ...p.map((g) => g.powerW)
-    ], m = Math.max(1e3, ...u), v = Math.ceil(m / 1e3), S = this._buildYTicks(v), k = (g) => a.left + g / 1440 * r, M = (g) => a.top + s - g / (v * 1e3) * s, T = (g) => g.map((j, Vt) => `${Vt === 0 ? "M" : "L"}${k(j.minutes).toFixed(1)},${M(j.powerW).toFixed(1)}`).join(" ");
-    return E`
+    ], m = Math.max(1e3, ...h), y = Math.ceil(m / 1e3), j = this._buildYTicks(y), x = (g) => a.left + g / 1440 * r, L = (g) => a.top + s - g / (y * 1e3) * s, Z = (g) => g.map((E, Vt) => `${Vt === 0 ? "M" : "L"}${x(E.minutes).toFixed(1)},${L(E.powerW).toFixed(1)}`).join(" ");
+    return S`
       <svg viewBox="0 0 ${720} ${260}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
         <rect x="0" y="0" width=${720} height=${260} fill="var(--card-background-color)"></rect>
-        ${S.map((g) => {
-      const j = M(g * 1e3);
-      return E`
-            <line x1=${a.left} y1=${j} x2=${720 - a.right} y2=${j} stroke="var(--divider-color)" stroke-width="1"></line>
-            <text x=${a.left - 8} y=${j + 4} text-anchor="end" fill="var(--secondary-text-color)" font-size="11">${g.toFixed(1)}</text>
+        ${j.map((g) => {
+      const E = L(g * 1e3);
+      return S`
+            <line x1=${a.left} y1=${E} x2=${720 - a.right} y2=${E} stroke="var(--divider-color)" stroke-width="1"></line>
+            <text x=${a.left - 8} y=${E + 4} text-anchor="end" fill="var(--secondary-text-color)" font-size="11">${g.toFixed(1)}</text>
           `;
     })}
         ${[0, 3, 6, 9, 12, 15, 18, 21, 24].map((g) => {
-      const j = a.left + g / 24 * r;
-      return E`
-            <line x1=${j} y1=${a.top} x2=${j} y2=${260 - a.bottom} stroke="var(--divider-color)" stroke-width="1" opacity="0.55"></line>
-            <text x=${j} y=${250} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(g).padStart(2, "0")}</text>
+      const E = a.left + g / 24 * r;
+      return S`
+            <line x1=${E} y1=${a.top} x2=${E} y2=${260 - a.bottom} stroke="var(--divider-color)" stroke-width="1" opacity="0.55"></line>
+            <text x=${E} y=${250} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(g).padStart(2, "0")}</text>
           `;
     })}
         <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">${this._t("bias_correction.inspector.power_axis_label")}</text>
         ${this._renderImpactColumns(e.series.impact, a.left, a.top, r, s)}
-        ${l.length > 1 ? E`<path d=${T(l)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>` : l.length === 1 ? E`<circle cx=${k(l[0].minutes)} cy=${M(l[0].powerW)} r="3.5" fill="#1565c0"></circle>` : ""}
-        ${d.length > 1 ? E`<path d=${T(d)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>` : d.length === 1 ? E`<circle cx=${k(d[0].minutes)} cy=${M(d[0].powerW)} r="3.5" fill="#2e7d32"></circle>` : ""}
-        ${c.map((g) => E`
-          <circle cx=${k(g.minutes)} cy=${M(g.powerW)} r="3.5" fill="#c62828"></circle>
+        ${l.length > 1 ? S`<path d=${Z(l)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>` : l.length === 1 ? S`<circle cx=${x(l[0].minutes)} cy=${L(l[0].powerW)} r="3.5" fill="#1565c0"></circle>` : ""}
+        ${d.length > 1 ? S`<path d=${Z(d)} fill="none" stroke="#2e7d32" stroke-width="2.4"></path>` : d.length === 1 ? S`<circle cx=${x(d[0].minutes)} cy=${L(d[0].powerW)} r="3.5" fill="#2e7d32"></circle>` : ""}
+        ${c.map((g) => S`
+          <circle cx=${x(g.minutes)} cy=${L(g.powerW)} r="3.5" fill="#c62828"></circle>
         `)}
-        ${p.map((g) => E`
-          <circle cx=${k(g.minutes)} cy=${M(g.powerW)} r="3.5" fill="#9aa0a6">
+        ${p.map((g) => S`
+          <circle cx=${x(g.minutes)} cy=${L(g.powerW)} r="3.5" fill="#9aa0a6">
             <title>${this._t("bias_correction.inspector.invalidated_production")}</title>
           </circle>
         `)}
@@ -2656,16 +2656,16 @@ const ae = class ae extends W {
       if (d.impactWh === null || !Number.isFinite(d.impactWh)) return "";
       const c = d.slot.match(/^(\d{2}):(\d{2})$/);
       if (!c) return "";
-      const p = Number(c[1]), u = Number(c[2]), m = p * 60 + u, v = t + m / 1440 * a, S = Math.max(3, a / 96), k = Math.max(2, Math.abs(d.impactWh) / l * r), M = i + r - k, T = this._selectedSlot === d.slot, g = d.impactWh >= 0 ? "rgba(245, 127, 23, 0.72)" : "rgba(21, 101, 192, 0.62)";
-      return E`
+      const p = Number(c[1]), h = Number(c[2]), m = p * 60 + h, y = t + m / 1440 * a, j = Math.max(3, a / 96), x = Math.max(2, Math.abs(d.impactWh) / l * r), L = i + r - x, Z = this._selectedSlot === d.slot, g = d.impactWh >= 0 ? "rgba(245, 127, 23, 0.72)" : "rgba(21, 101, 192, 0.62)";
+      return S`
         <rect
-          x=${v}
-          y=${M}
-          width=${S}
-          height=${k}
+          x=${y}
+          y=${L}
+          width=${j}
+          height=${x}
           fill=${g}
-          stroke=${T ? "var(--primary-text-color)" : "transparent"}
-          stroke-width=${T ? "2" : "0"}
+          stroke=${Z ? "var(--primary-text-color)" : "transparent"}
+          stroke-width=${Z ? "2" : "0"}
           style="cursor: pointer;"
           @click=${() => this._selectSlot(d.slot)}
         >
@@ -2676,22 +2676,6 @@ const ae = class ae extends W {
   }
   _selectSlot(e) {
     this._selectedSlot = e;
-  }
-  _renderFactorBands(e, t, i, a, r) {
-    if (!e.length) return "";
-    const s = e.map((p) => p.factor).filter((p) => Number.isFinite(p));
-    if (!s.length) return "";
-    const l = Math.min(...s), d = Math.max(...s), c = Math.max(d - l, 0.01);
-    return e.map((p) => {
-      if (!Number.isFinite(p.factor)) return "";
-      const u = p.slot.match(/^(\d{2}):(\d{2})$/);
-      if (!u) return "";
-      const m = Number(u[1]), v = Number(u[2]);
-      if (!Number.isFinite(m) || !Number.isFinite(v) || m < 0 || m > 23 || v < 0 || v > 59)
-        return "";
-      const S = m * 60 + v, k = t + S / 1440 * a, M = Math.max(2, a / 96), T = Math.abs(p.factor - 1) / Math.max(Math.abs(d - 1), Math.abs(l - 1), c), g = Math.min(0.34, 0.06 + T * 0.28), j = p.factor >= 1 ? "245, 127, 23" : "21, 101, 192";
-      return E`<rect x=${k} y=${i} width=${M} height=${r} fill="rgba(${j}, ${g})"></rect>`;
-    });
   }
   _buildYTicks(e) {
     const t = e <= 4 ? 1 : Math.ceil(e / 4), i = [];
@@ -2778,7 +2762,7 @@ const ae = class ae extends W {
     this._expanded = !this._expanded, this.requestUpdate(), this._expanded && (this._selectedDate || (this._selectedDate = this._todayIso()), this._payload || this._load());
   }
   _renderChevron() {
-    return E`<svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d=${ae._CHEVRON_PATH}></path></svg>`;
+    return S`<svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d=${ae._CHEVRON_PATH}></path></svg>`;
   }
   async _load() {
     if (!this.hass) return;
@@ -2879,7 +2863,7 @@ const ae = class ae extends W {
     return t ? `${i} (${t})` : i;
   }
   _t(e) {
-    return B(this.hass ?? void 0)(e) ?? this._fallbackLocalize(e);
+    return q(this.hass ?? void 0)(e) ?? this._fallbackLocalize(e);
   }
   _tFormat(e, t) {
     let i = this._t(e);
@@ -3137,9 +3121,9 @@ ae._CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"
   `;
 let xe = ae;
 customElements.get("helman-bias-correction-inspector") || customElements.define("helman-bias-correction-inspector", xe);
-const He = class He extends W {
+const He = class He extends R {
   constructor() {
-    super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "", this._messageKind = "success", this._fallbackLocalize = B();
+    super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "", this._messageKind = "success", this._fallbackLocalize = q();
   }
   connectedCallback() {
     super.connectedCallback(), this._loadStatus();
@@ -3350,7 +3334,7 @@ const He = class He extends W {
     }
   }
   _t(e) {
-    return B(this.hass ?? void 0)(e) ?? this._fallbackLocalize(e) ?? e;
+    return q(this.hass ?? void 0)(e) ?? this._fallbackLocalize(e) ?? e;
   }
   _tValue(e, t) {
     const i = this._t(e);
@@ -3573,9 +3557,9 @@ const Ui = [
   { value: "history_average", labelKey: "editor.values.history_average" }
 ], qi = "export_price", Bi = "stop_export", dt = "surplus_appliance", Zi = "on", Gi = {
   icon: {}
-}, ce = class ce extends W {
+}, ce = class ce extends R {
   constructor() {
-    super(...arguments), this._fallbackLocalize = B(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._liveApplianceMetadata = null, this._helpDialog = null, this._preventSummaryToggle = (e) => {
+    super(...arguments), this._fallbackLocalize = q(), this._activeTab = "general", this._config = null, this._dirty = !1, this._loading = !1, this._saving = !1, this._validating = !1, this._validation = null, this._message = null, this._hasLoadedOnce = !1, this._scopeModes = {}, this._scopeYamlValues = {}, this._scopeYamlErrors = {}, this._applianceModes = {}, this._applianceYamlValues = {}, this._applianceYamlErrors = {}, this._liveApplianceMetadata = null, this._helpDialog = null, this._preventSummaryToggle = (e) => {
       e.preventDefault(), e.stopPropagation();
     }, this._stopSummaryToggle = (e) => {
       e.stopPropagation();
@@ -3592,7 +3576,7 @@ const Ui = [
         ([i]) => i
       ), t = si(e);
       this._applyMutation((i) => {
-        b(i, ["device_label_text", t], {});
+        v(i, ["device_label_text", t], {});
       });
     }, this._handleAddDeferrableConsumer = () => {
       var t;
@@ -3600,7 +3584,7 @@ const Ui = [
         this._getValue(["power_devices", "house", "forecast", "deferrable_consumers"])
       )) == null ? void 0 : t.length) ?? 0;
       this._applyMutation((i) => {
-        H(
+        C(
           i,
           ["power_devices", "house", "forecast", "deferrable_consumers"],
           ui(
@@ -3610,7 +3594,7 @@ const Ui = [
       });
     }, this._handleAddDailyEnergyEntity = () => {
       this._applyMutation((e) => {
-        H(
+        C(
           e,
           ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
           mi()
@@ -3618,7 +3602,7 @@ const Ui = [
       });
     }, this._handleAddImportPriceWindow = () => {
       this._applyMutation((e) => {
-        H(
+        C(
           e,
           ["power_devices", "grid", "forecast", "import_price_windows"],
           hi()
@@ -3630,14 +3614,14 @@ const Ui = [
         return this._stringValue((i = f(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        if (!f(w(t, ["automation"]))) {
-          b(t, ["automation"], {
+        if (!f(k(t, ["automation"]))) {
+          v(t, ["automation"], {
             enabled: !0,
             optimizers: [Qe(e)]
           });
           return;
         }
-        H(
+        C(
           t,
           ["automation", "optimizers"],
           Qe(e)
@@ -3649,14 +3633,14 @@ const Ui = [
         return this._stringValue((i = f(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        if (!f(w(t, ["automation"]))) {
-          b(t, ["automation"], {
+        if (!f(k(t, ["automation"]))) {
+          v(t, ["automation"], {
             enabled: !0,
             optimizers: [Xe(e)]
           });
           return;
         }
-        H(
+        C(
           t,
           ["automation", "optimizers"],
           Xe(e)
@@ -3668,7 +3652,7 @@ const Ui = [
         return this._stringValue((i = f(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        H(
+        C(
           t,
           ["appliances"],
           li(
@@ -3684,7 +3668,7 @@ const Ui = [
         return this._stringValue((i = f(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        H(
+        C(
           t,
           ["appliances"],
           ci(
@@ -3701,7 +3685,7 @@ const Ui = [
         return this._stringValue((i = f(t)) == null ? void 0 : i.id);
       }).filter((t) => t.length > 0);
       this._applyMutation((t) => {
-        H(
+        C(
           t,
           ["appliances"],
           di(
@@ -3719,7 +3703,7 @@ const Ui = [
   }
   set hass(e) {
     const t = this._hass;
-    this._hass = e, e && !this._localize && (this._localize = B(e)), this.requestUpdate("hass", t);
+    this._hass = e, e && !this._localize && (this._localize = q(e)), this.requestUpdate("hass", t);
   }
   connectedCallback() {
     super.connectedCallback(), Ni().then(() => {
@@ -3750,7 +3734,7 @@ const Ui = [
             </p>
           </div>
           <div class="actions">
-            ${this._renderModeToggle(V)}
+            ${this._renderModeToggle(M)}
             <button
               type="button"
               ?disabled=${this._loading || this._saving || this._validating}
@@ -3777,24 +3761,24 @@ const Ui = [
         </div>
 
         <div class="status-row">
-          ${this._loading ? n`<span class="badge info">${this._t("editor.status.loading_config")}</span>` : h}
+          ${this._loading ? n`<span class="badge info">${this._t("editor.status.loading_config")}</span>` : u}
           ${this._dirty ? n`<span class="badge info">${this._t("editor.status.unsaved_changes")}</span>` : n`<span class="badge info">${this._t("editor.status.stored_config_loaded")}</span>`}
-          ${!this._dirty && ((i = this._validation) != null && i.valid) ? n`<span class="badge info">${this._t("editor.status.last_validation_passed")}</span>` : h}
-          ${this._dirty ? n`<span class="badge info">${this._t("editor.status.validation_stale")}</span>` : h}
-          ${t ? n`<span class="badge info">${this._t("editor.status.fix_yaml_errors")}</span>` : h}
+          ${!this._dirty && ((i = this._validation) != null && i.valid) ? n`<span class="badge info">${this._t("editor.status.last_validation_passed")}</span>` : u}
+          ${this._dirty ? n`<span class="badge info">${this._t("editor.status.validation_stale")}</span>` : u}
+          ${t ? n`<span class="badge info">${this._t("editor.status.fix_yaml_errors")}</span>` : u}
         </div>
 
-        ${this._message ? n`<div class="message ${this._message.kind}">${this._message.text}</div>` : h}
+        ${this._message ? n`<div class="message ${this._message.kind}">${this._message.text}</div>` : u}
 
         ${this._renderIssueBoard()}
 
-        ${this._config ? this._renderDocumentBody(e) : h}
+        ${this._config ? this._renderDocumentBody(e) : u}
       </div>
       ${this._renderHelpDialog()}
     `;
   }
   _renderDocumentBody(e) {
-    return this._isScopeYaml(V) ? n`<div class="list-card">${this._renderYamlEditor(V)}</div>` : n`
+    return this._isScopeYaml(M) ? n`<div class="list-card">${this._renderYamlEditor(M)}</div>` : n`
       <div class="tabs">
         ${Si.map((t) => {
       const i = e[t.id];
@@ -3808,7 +3792,7 @@ const Ui = [
             >
               ${this._renderSvgIcon(zi[t.id], "tab-icon")}
               <span>${this._t(t.labelKey)}</span>
-              ${i.errors > 0 ? n`<span class="tab-count errors">${i.errors}</span>` : i.warnings > 0 ? n`<span class="tab-count warnings">${i.warnings}</span>` : h}
+              ${i.errors > 0 ? n`<span class="tab-count errors">${i.errors}</span>` : i.warnings > 0 ? n`<span class="tab-count warnings">${i.warnings}</span>` : u}
             </button>
           `;
     })}
@@ -3820,22 +3804,22 @@ const Ui = [
   _renderActiveTab() {
     switch (this._activeTab) {
       case "general":
-        return this._renderTabScope(y.general, this._renderGeneralTab());
+        return this._renderTabScope(b.general, this._renderGeneralTab());
       case "power_devices":
         return this._renderTabScope(
-          y.power_devices,
+          b.power_devices,
           this._renderPowerDevicesTab()
         );
       case "scheduler":
-        return this._renderTabScope(y.scheduler, this._renderSchedulerTab());
+        return this._renderTabScope(b.scheduler, this._renderSchedulerTab());
       case "automation":
         return this._renderTabScope(
-          y.automation,
+          b.automation,
           this._renderAutomationTab()
         );
       case "appliances":
         return this._renderTabScope(
-          y.appliances,
+          b.appliances,
           this._renderAppliancesTab()
         );
       default:
@@ -3859,7 +3843,7 @@ const Ui = [
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
-              ${s ? this._renderSvgIcon(s, "section-icon") : h}
+              ${s ? this._renderSvgIcon(s, "section-icon") : u}
               <span class="section-summary-label">${this._t(a.labelKey)}</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;" @click=${this._preventSummaryToggle}>
@@ -3970,8 +3954,8 @@ const Ui = [
       return;
     }
     try {
-      const a = x(this._config ?? {});
-      b(a, ["appliances", e], x(i.value)), this._config = a, this._dirty = !0, this._validation = null, this._message = null, this._applianceYamlValues = { ...this._applianceYamlValues, [e]: i.value };
+      const a = $(this._config ?? {});
+      v(a, ["appliances", e], $(i.value)), this._config = a, this._dirty = !0, this._validation = null, this._message = null, this._applianceYamlValues = { ...this._applianceYamlValues, [e]: i.value };
       const r = { ...this._applianceYamlErrors };
       delete r[e], this._applianceYamlErrors = r;
     } catch (a) {
@@ -3996,7 +3980,7 @@ const Ui = [
             @value-changed=${(d) => this._handleApplianceYamlChanged(e, d)}
           ></ha-yaml-editor>
         </div>
-        ${t ? n`<div id=${r} class="message error">${t}</div>` : h}
+        ${t ? n`<div id=${r} class="message error">${t}</div>` : u}
       </div>
     `;
   }
@@ -4035,7 +4019,7 @@ const Ui = [
       "field",
       "yaml-field",
       t.kind === "document" ? "yaml-field--document" : ""
-    ].filter((u) => u.length > 0).join(" ")}
+    ].filter((h) => h.length > 0).join(" ")}
         >
           <label>${this._t("editor.yaml.field_label")}</label>
           <div id=${l} class="helper">${this._t(a)}</div>
@@ -4046,7 +4030,7 @@ const Ui = [
             aria-label=${this._tFormat("editor.yaml.aria_label", { scope: i })}
             aria-describedby=${c}
             dir="ltr"
-            @value-changed=${(u) => this._handleYamlValueChanged(e, u)}
+            @value-changed=${(h) => this._handleYamlValueChanged(e, h)}
           ></ha-yaml-editor>
         </div>
         ${r ? n`
@@ -4054,7 +4038,7 @@ const Ui = [
                 <div>${r}</div>
                 <div class="helper">${this._t("editor.yaml.errors.fix_before_leaving")}</div>
               </div>
-            ` : h}
+            ` : u}
       </div>
     `;
   }
@@ -4611,7 +4595,7 @@ const Ui = [
                 <div class="message info">
                   ${this._t("editor.empty.no_automation_optimizers")}
                 </div>
-              ` : h}
+              ` : u}
           <div class="section-footer">
             <button type="button" class="add-button" @click=${this._handleAddExportPriceOptimizer}>
               ${this._t("editor.actions.add_export_price_optimizer")}
@@ -4713,14 +4697,14 @@ const Ui = [
     `;
   }
   _renderSurplusApplianceOptimizerCard(e, t, i) {
-    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), p = this._stringValue(this._getValue([...r, "action"])) || Zi, u = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, m = ge(
+    const a = ["automation", "optimizers", t], r = [...a, "params"], s = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), p = this._stringValue(this._getValue([...r, "action"])) || Zi, h = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, m = ge(
       this._config,
       this._liveApplianceMetadata,
       c
-    ), v = ve(
+    ), y = ve(
       m,
       this._stringValue(this._getValue([...r, "climate_mode"]))
-    ), S = this._getSurplusApplianceOptimizerTitle(m, l);
+    ), j = this._getSurplusApplianceOptimizerTitle(m, l);
     return n`
       <details class=${`list-card optimizer-card optimizer-card--${s ? "enabled" : "disabled"}`}>
         <summary>
@@ -4728,7 +4712,7 @@ const Ui = [
             <div class="appliance-summary-left">
               ${this._renderSvgIcon(d, "appliance-chevron")}
               <div class="card-title">
-                <strong>${S}</strong>
+                <strong>${j}</strong>
                 <span class="card-subtitle">${this._t("editor.values.surplus_appliance")}</span>
               </div>
             </div>
@@ -4766,9 +4750,9 @@ const Ui = [
                 ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
               </div>
               <select
-                @change=${(k) => this._handleSurplusApplianceIdChange(
+                @change=${(x) => this._handleSurplusApplianceIdChange(
       t,
-      k.currentTarget.value
+      x.currentTarget.value
     )}
               >
                 <option value="" ?selected=${m.selectedId.length === 0}>
@@ -4783,15 +4767,15 @@ const Ui = [
       id: m.selectedId
     })}
                       </option>
-                    ` : h}
+                    ` : u}
                 ${m.options.map(
-      (k) => n`
+      (x) => n`
                     <option
-                      value=${k.id}
-                      ?disabled=${k.selectionDisabled}
-                      ?selected=${k.id === m.selectedId}
+                      value=${x.id}
+                      ?disabled=${x.selectionDisabled}
+                      ?selected=${x.id === m.selectedId}
                     >
-                      ${this._formatSurplusApplianceOptionLabel(k)}
+                      ${this._formatSurplusApplianceOptionLabel(x)}
                     </option>
                   `
     )}
@@ -4803,11 +4787,11 @@ const Ui = [
             ${this._renderRequiredNumberField(
       [...r, "min_surplus_buffer_pct"],
       "editor.fields.min_surplus_buffer_pct",
-      u,
+      h,
       "1",
       "editor.help.surplus_appliance_min_surplus_buffer_pct"
     )}
-            ${v.visible ? this._renderSurplusClimateModeField(r, v) : this._renderSurplusApplianceActionField(p)}
+            ${y.visible ? this._renderSurplusClimateModeField(r, y) : this._renderSurplusApplianceActionField(p)}
           </div>
         </div>
       </details>
@@ -5252,7 +5236,7 @@ const Ui = [
       this._getValue([...a, "controls", "use_mode", "values"])
     ), s = P(
       this._getValue([...a, "controls", "eco_gear", "values"])
-    ), l = z(this._getValue([...a, "vehicles"])) ?? [], d = this._stringValue(e.name) || this._tFormat("editor.dynamic.ev_charger", { index: t + 1 }), c = this._stringValue(e.id) || this._t("editor.values.missing_id"), p = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", u = this._getApplianceMode(t) === "yaml";
+    ), l = z(this._getValue([...a, "vehicles"])) ?? [], d = this._stringValue(e.name) || this._tFormat("editor.dynamic.ev_charger", { index: t + 1 }), c = this._stringValue(e.id) || this._t("editor.values.missing_id"), p = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", h = this._getApplianceMode(t) === "yaml";
     return n`
       <details class="list-card">
         <summary>
@@ -5279,7 +5263,7 @@ const Ui = [
           </div>
         </summary>
         <div class="appliance-body">
-          ${u ? this._renderApplianceYamlEditor(t) : n`
+          ${h ? this._renderApplianceYamlEditor(t) : n`
               ${this._renderSimpleSection(
       this._t("editor.sections.identity_and_limits"),
       n`<div class="field-grid">
@@ -5301,7 +5285,7 @@ const Ui = [
               ${this._renderSimpleSection(
       this._t("editor.sections.use_modes"),
       n`<div class="list-stack">
-                  ${r.map(([m, v]) => this._renderUseMode(a, m, v))}
+                  ${r.map(([m, y]) => this._renderUseMode(a, m, y))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddUseMode(t)}>${this._t("editor.actions.add_use_mode")}</button>
@@ -5310,7 +5294,7 @@ const Ui = [
               ${this._renderSimpleSection(
       this._t("editor.sections.eco_gears"),
       n`<div class="list-stack">
-                  ${s.map(([m, v]) => this._renderEcoGear(a, m, v))}
+                  ${s.map(([m, y]) => this._renderEcoGear(a, m, y))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(t)}>${this._t("editor.actions.add_eco_gear")}</button>
@@ -5319,7 +5303,7 @@ const Ui = [
               ${this._renderSimpleSection(
       this._t("editor.sections.vehicles"),
       n`<div class="list-stack">
-                  ${l.map((m, v) => this._renderVehicle(a, m, v, l.length))}
+                  ${l.map((m, y) => this._renderVehicle(a, m, y, l.length))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddVehicle(t)}>${this._t("editor.actions.add_vehicle")}</button>
@@ -5381,7 +5365,7 @@ const Ui = [
         s,
         r,
         "editor.notes.generic_appliance_projection",
-        (u) => this._handleProjectedApplianceProjectionStrategyChange(t, u)
+        (h) => this._handleProjectedApplianceProjectionStrategyChange(t, h)
       )
     )}
             `}
@@ -5440,7 +5424,7 @@ const Ui = [
         s,
         r,
         "editor.notes.climate_appliance_projection",
-        (u) => this._handleProjectedApplianceProjectionStrategyChange(t, u)
+        (h) => this._handleProjectedApplianceProjectionStrategyChange(t, h)
       )
     )}
             `}
@@ -5495,7 +5479,7 @@ const Ui = [
       "editor.help.appliance_history_lookback_days"
     )}
               </div>
-            ` : h}
+            ` : u}
       </div>
     `;
   }
@@ -5674,13 +5658,13 @@ const Ui = [
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : h}
+          ${a ? this._renderHelpIcon(t, a) : u}
         </div>
         <input
           .value=${this._stringValue(this._getValue(e))}
           @change=${(r) => this._setOptionalString(e, r.currentTarget.value)}
         />
-        ${i ? n`<div class="helper">${this._t(i)}</div>` : h}
+        ${i ? n`<div class="helper">${this._t(i)}</div>` : u}
       </div>
     `;
   }
@@ -5690,7 +5674,7 @@ const Ui = [
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : h}
+          ${a ? this._renderHelpIcon(t, a) : u}
         </div>
         <input
           .value=${this._stringValue(r)}
@@ -5704,20 +5688,20 @@ const Ui = [
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : h}
+          ${a ? this._renderHelpIcon(t, a) : u}
         </div>
         <div class="number-input-wrap">
           <input
             type="number"
             step="any"
-            min=${r.min ?? h}
-            max=${r.max ?? h}
+            min=${r.min ?? u}
+            max=${r.max ?? u}
             .value=${this._stringValue(this._getValue(e))}
             @change=${(s) => this._setOptionalNumber(e, s.currentTarget.value)}
           />
-          ${r.suffix ? n`<span class="number-input-suffix">${r.suffix}</span>` : h}
+          ${r.suffix ? n`<span class="number-input-suffix">${r.suffix}</span>` : u}
         </div>
-        ${i ? n`<div class="helper">${this._t(i)}</div>` : h}
+        ${i ? n`<div class="helper">${this._t(i)}</div>` : u}
       </div>
     `;
   }
@@ -5727,7 +5711,7 @@ const Ui = [
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${r ? this._renderHelpIcon(t, r) : h}
+          ${r ? this._renderHelpIcon(t, r) : u}
         </div>
         <input
           type="number"
@@ -5744,7 +5728,7 @@ const Ui = [
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : h}
+          ${a ? this._renderHelpIcon(t, a) : u}
         </div>
         <select
           .value=${r}
@@ -5823,7 +5807,7 @@ const Ui = [
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${l ? this._renderHelpIcon(t, l) : h}
+          ${l ? this._renderHelpIcon(t, l) : u}
         </div>
         <ha-entity-picker
           .hass=${this.hass}
@@ -5835,7 +5819,7 @@ const Ui = [
       r ? this._setRequiredString(e, c) : this._setOptionalString(e, c);
     }}
         ></ha-entity-picker>
-        ${a ? n`<div class="helper">${this._t(a)}</div>` : h}
+        ${a ? n`<div class="helper">${this._t(a)}</div>` : u}
       </div>
     `;
   }
@@ -5853,7 +5837,7 @@ const Ui = [
   }
   _renderHelpDialog() {
     if (!this._helpDialog)
-      return h;
+      return u;
     const { labelKey: e, contentKey: t } = this._helpDialog;
     return n`
       <div class="help-overlay" @click=${this._closeHelp}>
@@ -5874,12 +5858,12 @@ const Ui = [
   }
   _renderIssueBoard() {
     if (!this._validation)
-      return h;
+      return u;
     const e = [
       { title: this._t("editor.issues.errors"), items: this._validation.errors },
       { title: this._t("editor.issues.warnings"), items: this._validation.warnings }
     ].filter((t) => t.items.length > 0);
-    return e.length === 0 ? h : n`
+    return e.length === 0 ? u : n`
       <div class="issue-board">
         ${e.map(
       (t) => n`
@@ -5937,7 +5921,7 @@ const Ui = [
         ]);
         if (t.status !== "fulfilled")
           throw t.reason;
-        this._config = f(t.value) ? x(t.value) : {}, this._liveApplianceMetadata = i.status === "fulfilled" ? i.value : null, this._validation = null, this._dirty = this._config ? this._normalizeSurplusApplianceOptimizerParams(this._config) : !1, this._resetScopeYamlState(), e.showMessage && (this._message = {
+        this._config = f(t.value) ? $(t.value) : {}, this._liveApplianceMetadata = i.status === "fulfilled" ? i.value : null, this._validation = null, this._dirty = this._config ? this._normalizeSurplusApplianceOptimizerParams(this._config) : !1, this._resetScopeYamlState(), e.showMessage && (this._message = {
           kind: "info",
           text: this._t("editor.messages.reloaded_config")
         });
@@ -6094,7 +6078,7 @@ const Ui = [
       return;
     }
     try {
-      const s = x(i.value);
+      const s = $(i.value);
       this._config = a.apply(this._config ?? {}, s), this._dirty = !0, this._validation = null, this._message = null, this._scopeYamlValues = {
         ...this._scopeYamlValues,
         [e]: s
@@ -6146,26 +6130,26 @@ const Ui = [
       ([a]) => a
     ), i = ni(t);
     this._applyMutation((a) => {
-      b(a, ["device_label_text", e, i], "");
+      v(a, ["device_label_text", e, i], "");
     });
   }
   _handleSurplusApplianceIdChange(e, t) {
     const i = t.trim(), a = ["automation", "optimizers", e, "params"];
     this._applyMutation((r) => {
-      b(r, [...a, "appliance_id"], i);
+      v(r, [...a, "appliance_id"], i);
       const s = ge(
         r,
         this._liveApplianceMetadata,
         i
       ), l = ve(
         s,
-        this._stringValue(w(r, [...a, "climate_mode"]))
+        this._stringValue(k(r, [...a, "climate_mode"]))
       );
       if (!l.visible || l.unavailable) {
-        F(r, [...a, "climate_mode"]);
+        D(r, [...a, "climate_mode"]);
         return;
       }
-      b(r, [...a, "climate_mode"], l.value);
+      v(r, [...a, "climate_mode"], l.value);
     });
   }
   _handleAddVehicle(e) {
@@ -6174,7 +6158,7 @@ const Ui = [
       return this._stringValue((r = f(a)) == null ? void 0 : r.id);
     }).filter((a) => a.length > 0);
     this._applyMutation((a) => {
-      H(
+      C(
         a,
         t,
         ft(
@@ -6193,7 +6177,7 @@ const Ui = [
       "values"
     ], i = gi(P(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
-      b(a, [...t, i], pi());
+      v(a, [...t, i], pi());
     });
   }
   _handleAddEcoGear(e) {
@@ -6205,18 +6189,18 @@ const Ui = [
       "values"
     ], i = vi(P(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
-      b(a, [...t, i], _i());
+      v(a, [...t, i], _i());
     });
   }
   _handleProjectedApplianceProjectionStrategyChange(e, t) {
     ["fixed", "history_average"].includes(t) && this._applyMutation((i) => {
       const a = ["appliances", e, "projection"];
-      if (b(i, [...a, "strategy"], t), t !== "history_average")
+      if (v(i, [...a, "strategy"], t), t !== "history_average")
         return;
       const r = f(
-        w(i, [...a, "history_average"])
+        k(i, [...a, "history_average"])
       ), s = r == null ? void 0 : r.lookback_days;
-      b(i, [...a, "history_average"], {
+      v(i, [...a, "history_average"], {
         energy_entity_id: this._stringValue(r == null ? void 0 : r.energy_entity_id),
         lookback_days: typeof s == "number" && Number.isFinite(s) ? s : 30
       });
@@ -6226,7 +6210,7 @@ const Ui = [
     const a = i.trim();
     if (!a || a === t || !this._config)
       return;
-    const r = x(this._config), s = ri(r, e, t, a);
+    const r = $(this._config), s = ri(r, e, t, a);
     if (!s.ok) {
       this._message = { kind: "error", text: this._formatRenameObjectKeyError(s) };
       return;
@@ -6245,44 +6229,44 @@ const Ui = [
   }
   _removePath(e) {
     this._applyMutation((t) => {
-      F(t, e);
+      D(t, e);
     });
   }
   _setOptionalString(e, t) {
     const i = t.trim();
     this._applyMutation((a) => {
       if (!i) {
-        F(a, e);
+        D(a, e);
         return;
       }
-      b(a, e, i);
+      v(a, e, i);
     });
   }
   _setRequiredString(e, t) {
     this._applyMutation((i) => {
-      b(i, e, t.trim());
+      v(i, e, t.trim());
     });
   }
   _setOptionalNumber(e, t) {
     const i = t.trim();
     this._applyMutation((a) => {
       if (!i) {
-        F(a, e);
+        D(a, e);
         return;
       }
       const r = Number(i);
-      b(a, e, Number.isFinite(r) ? r : i);
+      v(a, e, Number.isFinite(r) ? r : i);
     });
   }
   _setRequiredNumber(e, t) {
     const i = t.trim();
     this._applyMutation((a) => {
       if (!i) {
-        b(a, e, null);
+        v(a, e, null);
         return;
       }
       const r = Number(i);
-      b(a, e, Number.isFinite(r) ? r : i);
+      v(a, e, Number.isFinite(r) ? r : i);
     });
   }
   _getAutomationEnabled() {
@@ -6291,12 +6275,12 @@ const Ui = [
   }
   _setAutomationEnabled(e) {
     !e && this._getValue(["automation"]) === void 0 || this._applyMutation((t) => {
-      const i = w(t, ["automation"]), a = f(i);
+      const i = k(t, ["automation"]), a = f(i);
       if (a) {
-        b(t, ["automation", "enabled"], e), Array.isArray(a.optimizers) || b(t, ["automation", "optimizers"], []);
+        v(t, ["automation", "enabled"], e), Array.isArray(a.optimizers) || v(t, ["automation", "optimizers"], []);
         return;
       }
-      b(t, ["automation"], {
+      v(t, ["automation"], {
         enabled: e,
         optimizers: []
       });
@@ -6304,41 +6288,41 @@ const Ui = [
   }
   _setBoolean(e, t) {
     this._applyMutation((i) => {
-      b(i, e, t);
+      v(i, e, t);
     });
   }
   _normalizeSurplusApplianceOptimizerParams(e) {
-    const t = z(w(e, ["automation", "optimizers"])) ?? [];
+    const t = z(k(e, ["automation", "optimizers"])) ?? [];
     let i = !1;
     return t.forEach((a, r) => {
       var m;
       const s = f(a);
       if (!s || this._stringValue(s.kind) !== dt)
         return;
-      const l = ["automation", "optimizers", r, "params"], d = this._stringValue(w(e, [...l, "appliance_id"])), c = this._stringValue(
-        w(e, [...l, "climate_mode"])
+      const l = ["automation", "optimizers", r, "params"], d = this._stringValue(k(e, [...l, "appliance_id"])), c = this._stringValue(
+        k(e, [...l, "climate_mode"])
       ), p = ge(
         e,
         this._liveApplianceMetadata,
         d
-      ), u = ve(
+      ), h = ve(
         p,
         c
       );
       if (((m = p.selectedOption) == null ? void 0 : m.kind) === "generic" && c.length > 0) {
-        F(e, [...l, "climate_mode"]), i = !0;
+        D(e, [...l, "climate_mode"]), i = !0;
         return;
       }
-      u.visible && !u.unavailable && c.length === 0 && u.value.length > 0 && (b(e, [...l, "climate_mode"], u.value), i = !0);
+      h.visible && !h.unavailable && c.length === 0 && h.value.length > 0 && (v(e, [...l, "climate_mode"], h.value), i = !0);
     }), i;
   }
   _applyMutation(e) {
-    const t = x(this._config ?? {});
+    const t = $(this._config ?? {});
     e(t), this._config = t, this._dirty = !0, this._validation = null, this._message = null;
   }
   _getValue(e) {
     if (this._config)
-      return w(this._config, e);
+      return k(this._config, e);
   }
   _stringValue(e) {
     return typeof e == "string" ? e : typeof e == "number" ? String(e) : "";
