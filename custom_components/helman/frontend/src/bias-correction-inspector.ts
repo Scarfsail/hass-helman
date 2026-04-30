@@ -2,9 +2,18 @@ import { LitElement, css, html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
+import {
+  chooseDefaultImpactSlot,
+  findImpactForSlot,
+  findPointForSlot,
+  findTrainingSlot,
+  type FactorPoint,
+  type ImpactPoint,
+  type InspectorPoint,
+  type TrainingExplainability,
+  type TrainingSlotExplainability,
+} from "./bias-correction-inspector-model.js";
 
-type InspectorPoint = { timestamp: string; valueWh: number };
-type FactorPoint = { slot: string; factor: number };
 type InspectorPayload = {
   date: string;
   timezone: string;
@@ -25,6 +34,7 @@ type InspectorPayload = {
     actual: InspectorPoint[];
     invalidated: InspectorPoint[];
     factors: FactorPoint[];
+    impact: ImpactPoint[];
   };
   totals: {
     rawWh: number | null;
@@ -38,6 +48,7 @@ type InspectorPayload = {
     hasInvalidated: boolean;
     hasProfile: boolean;
   };
+  trainingExplainability: TrainingExplainability | null;
 };
 
 export class HelmanBiasCorrectionInspector extends LitElement {
@@ -48,6 +59,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   @state() private _payload: InspectorPayload | null = null;
   @state() private _loading = false;
   @state() private _error = "";
+  @state() private _selectedSlot: string | null = null;
 
   private _fallbackLocalize: LocalizeFunction = getLocalizeFunction();
   private _activeRequestId = 0;
@@ -203,6 +215,16 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       border: 1px solid rgba(245, 127, 23, 0.35);
     }
 
+    .impact-swatch {
+      width: 10px;
+      height: 14px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+
+    .impact-swatch.positive { background: rgba(245, 127, 23, 0.85); }
+    .impact-swatch.negative { background: rgba(21, 101, 192, 0.75); }
+
     .chart-wrap {
       border: 1px solid var(--divider-color);
       border-radius: 6px;
@@ -229,6 +251,66 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       display: flex;
       justify-content: space-between;
       gap: 12px;
+    }
+
+    .slot-details {
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--card-background-color);
+    }
+
+    .slot-summary {
+      padding: 12px;
+      border-bottom: 1px solid var(--divider-color);
+    }
+
+    .slot-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .slot-metric {
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      padding: 8px;
+      min-width: 0;
+    }
+
+    .metric-label {
+      color: var(--secondary-text-color);
+      font-size: 0.78rem;
+    }
+
+    .metric-value {
+      color: var(--primary-text-color);
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .contribution-table-wrap {
+      overflow-x: auto;
+    }
+
+    .contribution-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+    }
+
+    .contribution-table th,
+    .contribution-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--divider-color);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .contribution-table th.numeric,
+    .contribution-table td.numeric {
+      text-align: right;
     }
   `;
 
@@ -310,6 +392,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
             ${this._renderLegend(payload)}
             <div class="chart-wrap">${this._renderChart(payload)}</div>
             ${this._renderTotals(payload)}
+            ${this._renderSelectedSlotDetails(payload)}
           `
         : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(payload.date) })}</div>`}
     `;
@@ -322,7 +405,18 @@ export class HelmanBiasCorrectionInspector extends LitElement {
         ${payload.availability.hasCorrectedForecast ? html`<span class="legend-item"><span class="swatch corrected"></span>${this._t("bias_correction.inspector.corrected_forecast")}</span>` : ""}
         ${payload.availability.hasActuals ? html`<span class="legend-item"><span class="dot"></span>${this._t("bias_correction.inspector.actual_production")}</span>` : ""}
         ${payload.availability.hasInvalidated ? html`<span class="legend-item"><span class="dot invalidated"></span>${this._t("bias_correction.inspector.invalidated_production")}</span>` : ""}
-        ${payload.availability.hasProfile ? html`<span class="legend-item"><span class="shade"></span>${this._t("bias_correction.inspector.correction_factor")}</span>` : ""}
+        ${payload.series.impact.length
+          ? html`
+              <span class="legend-item">
+                <span class="impact-swatch positive"></span>
+                ${this._t("bias_correction.inspector.positive_impact")}
+              </span>
+              <span class="legend-item">
+                <span class="impact-swatch negative"></span>
+                ${this._t("bias_correction.inspector.negative_impact")}
+              </span>
+            `
+          : ""}
       </div>
     `;
   }
@@ -363,7 +457,6 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     return svg`
       <svg viewBox="0 0 ${width} ${height}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
         <rect x="0" y="0" width=${width} height=${height} fill="var(--card-background-color)"></rect>
-        ${this._renderFactorBands(payload.series.factors, margin.left, margin.top, plotWidth, plotHeight)}
         ${yTicks.map((tick) => {
           const y = yForW(tick * 1000);
           return svg`
@@ -379,6 +472,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
           `;
         })}
         <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">${this._t("bias_correction.inspector.power_axis_label")}</text>
+        ${this._renderImpactColumns(payload.series.impact, margin.left, margin.top, plotWidth, plotHeight)}
         ${rawPoints.length > 1
           ? svg`<path d=${linePath(rawPoints)} fill="none" stroke="#1565c0" stroke-width="2.4"></path>`
           : rawPoints.length === 1
@@ -399,6 +493,52 @@ export class HelmanBiasCorrectionInspector extends LitElement {
         `)}
       </svg>
     `;
+  }
+
+  private _renderImpactColumns(
+    impacts: ImpactPoint[],
+    plotLeft: number,
+    plotTop: number,
+    plotWidth: number,
+    plotHeight: number,
+  ) {
+    const values = impacts
+      .map((point) => Math.abs(point.impactWh ?? 0))
+      .filter((value) => Number.isFinite(value));
+    const maxImpact = Math.max(1, ...values);
+    return impacts.map((point) => {
+      if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
+      const match = point.slot.match(/^(\d{2}):(\d{2})$/);
+      if (!match) return "";
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      const startMinutes = hour * 60 + minute;
+      const x = plotLeft + (startMinutes / 1440) * plotWidth;
+      const width = Math.max(3, plotWidth / 96);
+      const columnHeight = Math.max(2, (Math.abs(point.impactWh) / maxImpact) * plotHeight);
+      const y = plotTop + plotHeight - columnHeight;
+      const selected = this._selectedSlot === point.slot;
+      const fill = point.impactWh >= 0 ? "rgba(245, 127, 23, 0.72)" : "rgba(21, 101, 192, 0.62)";
+      return svg`
+        <rect
+          x=${x}
+          y=${y}
+          width=${width}
+          height=${columnHeight}
+          fill=${fill}
+          stroke=${selected ? "var(--primary-text-color)" : "transparent"}
+          stroke-width=${selected ? "2" : "0"}
+          style="cursor: pointer;"
+          @click=${() => this._selectSlot(point.slot)}
+        >
+          <title>${point.slot} ${this._formatSignedWh(point.impactWh)}</title>
+        </rect>
+      `;
+    });
+  }
+
+  private _selectSlot(slot: string) {
+    this._selectedSlot = slot;
   }
 
   private _renderFactorBands(
@@ -463,6 +603,91 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     `;
   }
 
+  private _renderSelectedSlotDetails(payload: InspectorPayload) {
+    const selectedSlot = this._selectedSlot ?? chooseDefaultImpactSlot(payload.series.impact);
+    if (!selectedSlot) return "";
+    const impact = findImpactForSlot(payload.series.impact, selectedSlot);
+    const raw = findPointForSlot(payload.series.raw, selectedSlot);
+    const corrected = findPointForSlot(payload.series.corrected, selectedSlot);
+    const actual = findPointForSlot(payload.series.actual, selectedSlot);
+    const trainingSlot = findTrainingSlot(payload.trainingExplainability, selectedSlot);
+    return html`
+      <div class="slot-details">
+        <div class="slot-summary">
+          <strong>${this._tFormat("bias_correction.inspector.selected_slot", { slot: selectedSlot })}</strong>
+          <div class="slot-metrics">
+            ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(raw?.valueWh ?? impact?.rawWh ?? null))}
+            ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(corrected?.valueWh ?? impact?.correctedWh ?? null))}
+            ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(actual?.valueWh ?? null))}
+            ${this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null))}
+            ${this._renderMetric(this._t("bias_correction.inspector.factor"), this._formatFactor(impact?.factor ?? trainingSlot?.factor ?? null))}
+          </div>
+        </div>
+        ${this._renderContributionTable(payload, selectedSlot, trainingSlot)}
+      </div>
+    `;
+  }
+
+  private _renderMetric(label: string, value: string) {
+    return html`
+      <div class="slot-metric">
+        <div class="metric-label">${label}</div>
+        <div class="metric-value">${value}</div>
+      </div>
+    `;
+  }
+
+  private _renderContributionTable(
+    payload: InspectorPayload,
+    selectedSlot: string,
+    trainingSlot: TrainingSlotExplainability | null,
+  ) {
+    if (!payload.availability.hasProfile) {
+      return html`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`;
+    }
+    if (!payload.trainingExplainability) {
+      return html`<div class="note">${this._t("bias_correction.inspector.no_explainability")}</div>`;
+    }
+    if (!trainingSlot) {
+      return html`<div class="note">${this._tFormat("bias_correction.inspector.no_slot_explainability", { slot: selectedSlot })}</div>`;
+    }
+    return html`
+      <div class="slot-summary">
+        <strong>${this._t("bias_correction.inspector.training_contribution")}</strong>
+        <div class="day-state">
+          ${this._tFormat("bias_correction.inspector.training_contribution_meta", {
+            ratio: this._formatFactor(trainingSlot.rawRatio),
+            factor: this._formatFactor(trainingSlot.factor),
+          })}
+        </div>
+      </div>
+      <div class="contribution-table-wrap">
+        <table class="contribution-table">
+          <thead>
+            <tr>
+              <th>${this._t("bias_correction.inspector.date")}</th>
+              <th class="numeric">${this._t("bias_correction.inspector.forecast_wh")}</th>
+              <th class="numeric">${this._t("bias_correction.inspector.actual_wh")}</th>
+              <th class="numeric">${this._t("bias_correction.inspector.ratio")}</th>
+              <th>${this._t("bias_correction.inspector.status")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${trainingSlot.rows.map((row) => html`
+              <tr>
+                <td>${row.date || "-"}</td>
+                <td class="numeric">${this._formatWh(row.forecastWh)}</td>
+                <td class="numeric">${this._formatWh(row.actualWh)}</td>
+                <td class="numeric">${this._formatFactor(row.ratio)}</td>
+                <td>${this._formatContributionStatus(row.status, row.reason)}</td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
   private _toggleExpanded() {
     this._expanded = !this._expanded;
     this.requestUpdate();
@@ -500,6 +725,9 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       });
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
+        if (!this._selectedSlot) {
+          this._selectedSlot = chooseDefaultImpactSlot(payload.series.impact);
+        }
       }
     } catch (err: any) {
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
@@ -603,6 +831,23 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   private _formatWh(value: number | null) {
     if (value === null) return this._t("bias_correction.inspector.actual_not_available");
     return `${(value / 1000).toFixed(1)} kWh`;
+  }
+
+  private _formatSignedWh(value: number | null) {
+    if (value === null || !Number.isFinite(value)) return this._t("bias_correction.inspector.actual_not_available");
+    const sign = value > 0 ? "+" : "";
+    return `${sign}${value.toFixed(0)} Wh`;
+  }
+
+  private _formatFactor(value: number | null) {
+    if (value === null || !Number.isFinite(value)) return "-";
+    return value.toFixed(3);
+  }
+
+  private _formatContributionStatus(status: string, reason: string | null) {
+    const translated = this._t(`bias_correction.inspector.contribution_status.${status}`);
+    if (!reason) return translated;
+    return `${translated} (${reason})`;
   }
 
   private _t(key: string): string {

@@ -439,7 +439,29 @@
       "actual_not_available": "není k dispozici",
       "today_training_note": "Dnešek se zatím nepoužívá pro trénování a vyřazené body se v dnešním zobrazení skutečné výroby nepromítají.",
       "no_profile": "Natrénovaný profil zatím není k dispozici. Surová prognóza a skutečná historie se stále mohou zobrazit, pokud jsou dostupné.",
-      "no_data": "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy."
+      "no_data": "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy.",
+      "positive_impact": "Added Wh",
+      "negative_impact": "Removed Wh",
+      "selected_slot": "Selected slot: {slot}",
+      "correction_impact": "Correction impact",
+      "factor": "Factor",
+      "no_explainability": "This profile predates stored explainability. Run training again to see contribution rows.",
+      "no_slot_explainability": "No training explainability is available for {slot}.",
+      "training_contribution": "Training contribution",
+      "training_contribution_meta": "Raw ratio {ratio} · factor {factor}",
+      "date": "Date",
+      "forecast_wh": "Forecast Wh",
+      "actual_wh": "Actual Wh",
+      "ratio": "Ratio",
+      "status": "Status",
+      "contribution_status": {
+        "included": "Included",
+        "trimmed": "Trimmed",
+        "invalidated": "Invalidated",
+        "forecast_zero": "Zero forecast",
+        "dropped_day": "Dropped day",
+        "omitted_slot": "Omitted slot"
+      }
     }
   }
 }
