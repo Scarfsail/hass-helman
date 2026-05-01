@@ -62,12 +62,9 @@ class _FakeHass:
 
 
 class _FakeCoordinator:
-    def __init__(self) -> None:
+    def __init__(self, forecast: dict | None = None) -> None:
         self.calls: list[dict[str, int]] = []
-
-    async def get_forecast(self, *, granularity: int, forecast_days: int) -> dict:
-        self.calls.append({"granularity": granularity, "forecast_days": forecast_days})
-        return {
+        self._forecast = forecast or {
             "solar": {
                 "points": [
                     {"timestamp": "2026-04-29T10:00:00+02:00", "value": 1250.25},
@@ -77,6 +74,10 @@ class _FakeCoordinator:
                 ],
             },
         }
+
+    async def get_forecast(self, *, granularity: int, forecast_days: int) -> dict:
+        self.calls.append({"granularity": granularity, "forecast_days": forecast_days})
+        return self._forecast
 
 
 class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
@@ -96,6 +97,35 @@ class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
             {
                 "wh_hours": {
                     "2026-04-29T10:00:00+02:00": 1250.25,
+                    "2026-04-29T11:00:00+02:00": 0,
+                }
+            },
+        )
+
+    async def test_get_solar_forecast_prefers_adjusted_points_when_available(self) -> None:
+        coordinator = _FakeCoordinator(
+            {
+                "solar": {
+                    "points": [
+                        {"timestamp": "2026-04-29T10:00:00+02:00", "value": 1250.25},
+                    ],
+                    "adjustedPoints": [
+                        {"timestamp": "2026-04-29T10:00:00+02:00", "value": 900.5},
+                        {"timestamp": "2026-04-29T11:00:00+02:00", "value": 0},
+                    ],
+                },
+            }
+        )
+        entry = _FakeConfigEntry("entry-1", "helman")
+        hass = _FakeHass(coordinator, {"entry-1": entry})
+
+        result = await self.energy.async_get_solar_forecast(hass, "entry-1")
+
+        self.assertEqual(
+            result,
+            {
+                "wh_hours": {
+                    "2026-04-29T10:00:00+02:00": 900.5,
                     "2026-04-29T11:00:00+02:00": 0,
                 }
             },

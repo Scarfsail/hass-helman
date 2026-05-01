@@ -26,7 +26,11 @@ async def async_get_solar_forecast(
         granularity=60,
         forecast_days=MAX_FORECAST_DAYS,
     )
-    return {"wh_hours": _build_wh_hours(forecast.get("solar", {}).get("points"))}
+    solar_forecast = forecast.get("solar", {})
+    points = solar_forecast.get("adjustedPoints")
+    if not isinstance(points, list):
+        points = solar_forecast.get("points")
+    return {"wh_hours": _build_wh_hours(points)}
 
 
 def _build_wh_hours(points: Any) -> dict[str, float | int]:
