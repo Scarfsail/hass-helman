@@ -10,6 +10,7 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_TRAINING_TIME,
     SOLAR_BIAS_DEFAULT_CLAMP_MIN,
     SOLAR_BIAS_DEFAULT_CLAMP_MAX,
+    SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS,
     SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD,
 )
 
@@ -23,6 +24,7 @@ class BiasConfig:
     clamp_max: float
     daily_energy_entity_ids: list[str]
     total_energy_entity_id: str | None
+    min_valid_slot_days: int = SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
     aggregation_method: str = SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
     slot_invalidation_max_battery_soc_percent: float | None = None
     slot_invalidation_export_enabled_entity_id: str | None = None
@@ -299,6 +301,14 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     training_time = bias.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
     clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
     clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
+    raw_min_valid_slot_days = bias.get(
+        "min_valid_slot_days", SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
+    )
+    min_valid_slot_days = SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
+    if isinstance(raw_min_valid_slot_days, (int, float)) and not isinstance(
+        raw_min_valid_slot_days, bool
+    ):
+        min_valid_slot_days = int(raw_min_valid_slot_days)
     aggregation_method = bias.get("aggregation_method", SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD)
     slot_invalidation = bias.get("slot_invalidation") or {}
 
@@ -351,6 +361,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         training_time=training_time,
         clamp_min=clamp_min,
         clamp_max=clamp_max,
+        min_valid_slot_days=min_valid_slot_days,
         aggregation_method=aggregation_method,
         daily_energy_entity_ids=daily_energy_entity_ids,
         total_energy_entity_id=total_energy_entity_id,

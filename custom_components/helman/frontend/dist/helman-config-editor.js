@@ -22,7 +22,7 @@ let vt = class {
     return this.cssText;
   }
 };
-const It = (o) => new vt(typeof o == "string" ? o : o + "", void 0, Ce), He = (o, ...e) => {
+const Tt = (o) => new vt(typeof o == "string" ? o : o + "", void 0, Ce), He = (o, ...e) => {
   const t = o.length === 1 ? o[0] : e.reduce((i, a, r) => i + ((s) => {
     if (s._$cssResult$ === !0) return s.cssText;
     if (typeof s == "number") return s;
@@ -38,7 +38,7 @@ const It = (o) => new vt(typeof o == "string" ? o : o + "", void 0, Ce), He = (o
 }, Fe = Ve ? (o) => o : (o) => o instanceof CSSStyleSheet ? ((e) => {
   let t = "";
   for (const i of e.cssRules) t += i.cssText;
-  return It(t);
+  return Tt(t);
 })(o) : o;
 /**
  * @license
@@ -653,7 +653,7 @@ function f(o) {
 function x(o) {
   return Array.isArray(o) ? o : void 0;
 }
-function I(o) {
+function T(o) {
   const e = f(o);
   return e ? Object.entries(e) : [];
 }
@@ -1156,12 +1156,12 @@ const Vi = {
   (o) => o !== "device_label_text"
 ), A = {}, xe = [], Li = Mt(St), Oi = Mt(
   Pi
-), Ti = [
+), Ii = [
   {
     yamlKey: "enabled",
     documentPath: ["automation", "enabled"]
   }
-], Ii = [
+], Ti = [
   {
     yamlKey: "total_energy_entity_id",
     documentPath: ["power_devices", "solar", "forecast", "total_energy_entity_id"]
@@ -1175,6 +1175,7 @@ const Vi = {
   { yamlKey: "min_history_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"] },
   { yamlKey: "max_training_window_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"] },
   { yamlKey: "training_time", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "training_time"] },
+  { yamlKey: "min_valid_slot_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"] },
   { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
   { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },
   { yamlKey: "aggregation_method", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"] },
@@ -1321,7 +1322,7 @@ const Vi = {
     parentId: _.power_devices.solar_forecast,
     tabId: "power_devices",
     labelKey: "editor.sections.solar_forecast_general",
-    adapter: ie(Ii)
+    adapter: ie(Ti)
   },
   [_.power_devices.solar_bias_correction_config]: {
     id: _.power_devices.solar_bias_correction_config,
@@ -1390,7 +1391,7 @@ const Vi = {
     parentId: b.automation,
     tabId: "automation",
     labelKey: "editor.sections.automation_settings",
-    adapter: ie(Ti)
+    adapter: ie(Ii)
   },
   [_.automation.optimizer_pipeline]: {
     id: _.automation.optimizer_pipeline,
@@ -1618,6 +1619,7 @@ const Vt = {
     bias_correction_enabled: "Povolit korekci zkreslení",
     bias_correction_min_history_days: "Min. dní historie",
     bias_correction_training_time: "Čas trénování (HH:MM)",
+    bias_correction_min_valid_slot_days: "Min. platných sloto-dní",
     bias_correction_clamp_min: "Min. zajistění prognózy",
     bias_correction_clamp_max: "Max. zajistění prognózy",
     bias_correction_aggregation_method: "Metoda agregace",
@@ -1651,6 +1653,7 @@ const Vt = {
     bias_correction_min_history_days: "Minimální počet dní historických dat (1-365) před zahájením trénování.",
     bias_correction_max_training_window_days: "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy.",
     bias_correction_training_time: "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování.",
+    bias_correction_min_valid_slot_days: "Minimální počet platných historických vzorků den-slot, než může slot přispět do trénování.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "0-100 %. Vyřadí sloty, kdy SoC baterie dosáhne této hranice a zároveň je export zakázaný.",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Booleovská entita, která říká Helmanu, zda je aktuálně povolen export do sítě.",
     bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Volitelné. Energie ve slotu nad tento strop je považována za chybu rekordéru. Pokud zůstane prázdné, odvodí se ze solar.max_power × 0.25 × 1.05.",
@@ -1798,6 +1801,7 @@ const Vt = {
     bias_correction_min_history_days: "Minimální počet dní zaznamenaných solárních dat před tím, než lze model trénovat (1-365). Vyšší hodnota zajišťuje stabilnější trénování, ale zpožďuje opravy. Výchozí hodnota je 10 dní.",
     bias_correction_max_training_window_days: "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy. Pokud je historie kratší, Helman použije dostupná data; pokud je delší, trénovací okno omezí na tuto hodnotu. Vyšší maximum vytváří stabilnější korekční faktory, ale reaguje pomaleji na sezónní nebo systémové změny. Výchozí hodnota je 90 dní.",
     bias_correction_training_time: "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování, obvykle během hodin s nízkou aktivitou. Trénování zpracovává historická data za účelem nepřetržitého zlepšování přesnosti prognózy.",
+    bias_correction_min_valid_slot_days: "Minimální počet platných historických vzorků den-slot, které Helman vyžaduje před natrénováním korekčního faktoru pro konkrétní slot. Neplatné sloto-dny se do tohoto počtu nezapočítávají. Pokud má slot méně platných vzorků než tento práh, Helman slot z profilu vynechá a ponechá pro něj korekci na 0. Výchozí hodnota je 5 dní.",
     bias_correction_clamp_min: "Dolní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem nižší než prognóza. Například hodnota 0,0 umožní, aby opravená prognóza klesla až na nulu během fyzického zastínění panelů. Vyšší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 0,0.",
     bias_correction_clamp_max: "Horní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem vyšší než prognóza. Například hodnota 3,0 zajistí, že opravená prognóza bude činit maximálně 300 % původní hodnoty. Nižší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 3,0.",
     bias_correction_aggregation_method: "Metoda použitá k agregaci historických dat. 'Poměr součtů' správně váží jasné slunečné dny oproti menším oblačným dnům a přirozeně filtruje šum z kvantizace senzoru energie (doporučeno). 'Oříznutý průměr' počítá faktor pro každý den nezávisle a průměruje je po vynechání nejvyšších a nejnižších extrémů, což poskytuje robustnost proti jednodenním anomáliím, ale může příliš korigovat velké slunečné dny kvůli nedostatku vážení objemu. Výchozí hodnota je 'Poměr součtů'.",
@@ -2091,6 +2095,7 @@ const Vt = {
     bias_correction_enabled: "Enable bias correction",
     bias_correction_min_history_days: "Min history days",
     bias_correction_training_time: "Training time (HH:MM)",
+    bias_correction_min_valid_slot_days: "Min valid slot-days",
     bias_correction_clamp_min: "Min forecast clamp",
     bias_correction_clamp_max: "Max forecast clamp",
     bias_correction_aggregation_method: "Aggregation method",
@@ -2124,6 +2129,7 @@ const Vt = {
     bias_correction_min_history_days: "Minimum days of historical data (1-365) before training begins.",
     bias_correction_max_training_window_days: "Maximum number of past days Helman may use to train the solar bias correction model.",
     bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs.",
+    bias_correction_min_valid_slot_days: "Minimum number of valid historical day-slot samples required before a slot can contribute to training.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "0-100%. Exclude slots when battery SoC reaches this threshold and export is disabled.",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that tells Helman whether grid export is currently allowed.",
     bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Optional. Energy in a single 15-minute slot above this cap is treated as a recorder glitch. Defaults to solar.max_power × 0.25 × 1.05 when left blank.",
@@ -2271,6 +2277,7 @@ const Vt = {
     bias_correction_min_history_days: "Minimum number of days of recorded solar data before the model can be trained (1-365). A higher value ensures more stable training but delays corrections. Defaults to 10 days.",
     bias_correction_max_training_window_days: "Maximum number of past days Helman may use to train the solar bias correction model. If less history is available, Helman uses what it has; if more is available, Helman caps the training window at this value. A larger maximum produces more stable correction factors but reacts more slowly to seasonal or system changes. Defaults to 90 days.",
     bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs, typically during low-activity hours. Training processes historical data to continuously improve forecast accuracy.",
+    bias_correction_min_valid_slot_days: "Minimum number of valid historical day-slot samples required before Helman trains a correction factor for a specific slot. Invalidated slot-days do not count. If a slot has fewer valid samples than this threshold, Helman omits the slot from the profile and leaves correction at 0 for that slot. Defaults to 5 days.",
     bias_correction_clamp_min: "Lower bound for the correction factor. Prevents over-correction when the actual production is much lower than the forecast. For example, 0.0 allows the corrected forecast to drop all the way to zero during physically blocked periods. A higher value (closer to 1.0) reduces the correction intensity. Defaults to 0.0.",
     bias_correction_clamp_max: "Upper bound for the correction factor. Prevents over-correction when the actual production is much higher than the forecast. For example, 3.0 ensures the corrected forecast is at most 300% of the original value. A lower value (closer to 1.0) reduces the correction intensity. Defaults to 3.0.",
     bias_correction_aggregation_method: "Method used to aggregate historical data. 'Ratio of Sums' correctly weights clear, sunny days over small, cloudy days and inherently filters out energy sensor quantization noise (recommended). 'Trimmed Mean' calculates the factor for each day independently and averages them after dropping the highest and lowest extremes, providing robustness to single-day anomalies but over-correcting large sunny days due to lack of volume weighting. Defaults to 'Ratio of Sums'.",
@@ -2506,7 +2513,7 @@ const Bi = { attribute: !0, type: String, converter: he, reflect: !1, hasChanged
   }
   throw Error("Unsupported decorator location: " + i);
 };
-function Te(o) {
+function Ie(o) {
   return (e, t) => typeof t == "object" ? Zi(o, e, t) : ((i, a, r) => {
     const s = a.hasOwnProperty(r);
     return a.constructor.createProperty(r, i), s ? Object.getOwnPropertyDescriptor(a, r) : void 0;
@@ -2518,7 +2525,7 @@ function Te(o) {
  * SPDX-License-Identifier: BSD-3-Clause
  */
 function S(o) {
-  return Te({ ...o, state: !0, attribute: !1 });
+  return Ie({ ...o, state: !0, attribute: !1 });
 }
 function _e(o, e = {}) {
   const t = o.map((s) => ({ point: s, minutes: Gi(s.timestamp) })).filter(
@@ -2575,7 +2582,7 @@ var ea = Object.defineProperty, R = (o, e, t, i) => {
     (s = o[r]) && (a = s(e, t, a) || a);
   return a && ea(e, t, a), a;
 }, N;
-const T = (N = class extends q {
+const I = (N = class extends q {
   constructor() {
     super(...arguments), this._expanded = !1, this._selectedDate = "", this._payload = null, this._loading = !1, this._error = "", this._selectedSlot = null, this._selectedTrainingDate = null, this._fallbackLocalize = X(), this._activeRequestId = 0, this._activeRequestDate = null;
   }
@@ -2670,7 +2677,7 @@ const T = (N = class extends q {
       ...d.map((g) => g.powerW),
       ...c.map((g) => g.powerW),
       ...p.map((g) => g.powerW)
-    ], m = Math.max(1e3, ...u), y = Math.ceil(m / 1e3), M = this._buildYTicks(y), z = (g) => a.left + g / 1440 * r, P = (g) => a.top + s - g / (y * 1e3) * s, pe = (g) => g.map((j, Tt) => `${Tt === 0 ? "M" : "L"}${z(j.minutes).toFixed(1)},${P(j.powerW).toFixed(1)}`).join(" ");
+    ], m = Math.max(1e3, ...u), y = Math.ceil(m / 1e3), M = this._buildYTicks(y), z = (g) => a.left + g / 1440 * r, P = (g) => a.top + s - g / (y * 1e3) * s, pe = (g) => g.map((j, It) => `${It === 0 ? "M" : "L"}${z(j.minutes).toFixed(1)},${P(j.powerW).toFixed(1)}`).join(" ");
     return E`
       <svg viewBox="0 0 ${720} ${260}" role="img" aria-label=${this._t("bias_correction.inspector.title")}>
         <rect x="0" y="0" width=${720} height=${260} fill="var(--card-background-color)"></rect>
@@ -3231,37 +3238,37 @@ const T = (N = class extends q {
     }
   `, N);
 R([
-  Te({ attribute: !1 })
-], T.prototype, "hass");
+  Ie({ attribute: !1 })
+], I.prototype, "hass");
 R([
   S()
-], T.prototype, "_expanded");
+], I.prototype, "_expanded");
 R([
   S()
-], T.prototype, "_selectedDate");
+], I.prototype, "_selectedDate");
 R([
   S()
-], T.prototype, "_payload");
+], I.prototype, "_payload");
 R([
   S()
-], T.prototype, "_loading");
+], I.prototype, "_loading");
 R([
   S()
-], T.prototype, "_error");
+], I.prototype, "_error");
 R([
   S()
-], T.prototype, "_selectedSlot");
+], I.prototype, "_selectedSlot");
 R([
   S()
-], T.prototype, "_selectedTrainingDate");
-let ta = T;
+], I.prototype, "_selectedTrainingDate");
+let ta = I;
 customElements.get("helman-bias-correction-inspector") || customElements.define("helman-bias-correction-inspector", ta);
 var ia = Object.defineProperty, Z = (o, e, t, i) => {
   for (var a = void 0, r = o.length - 1, s; r >= 0; r--)
     (s = o[r]) && (a = s(e, t, a) || a);
   return a && ia(e, t, a), a;
 };
-const Ie = class Ie extends q {
+const Te = class Te extends q {
   constructor() {
     super(...arguments), this._status = null, this._profile = null, this._loading = !1, this._trainInProgress = !1, this._message = "", this._messageKind = "success", this._fallbackLocalize = X();
   }
@@ -3487,7 +3494,7 @@ const Ie = class Ie extends q {
     return i;
   }
 };
-Ie.styles = He`
+Te.styles = He`
     .container {
       padding: 16px;
       display: grid;
@@ -3653,9 +3660,9 @@ Ie.styles = He`
       font-size: 0.9rem;
     }
   `;
-let C = Ie;
+let C = Te;
 Z([
-  Te({ attribute: !1 })
+  Ie({ attribute: !1 })
 ], C.prototype, "hass");
 Z([
   S()
@@ -3733,7 +3740,7 @@ const aa = [
     }, this._handleSaveClick = async () => {
       await this._saveConfig();
     }, this._handleAddDeviceLabelCategory = () => {
-      const e = I(this._getValue(["device_label_text"])).map(
+      const e = T(this._getValue(["device_label_text"])).map(
         ([i]) => i
       ), t = _i(e);
       this._applyMutation((i) => {
@@ -4427,6 +4434,12 @@ const aa = [
               "editor.help.bias_correction_training_time"
             )}
                         ${this._renderOptionalNumberField(
+              ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
+              "editor.fields.bias_correction_min_valid_slot_days",
+              "editor.helpers.bias_correction_min_valid_slot_days",
+              "editor.help.bias_correction_min_valid_slot_days"
+            )}
+                        ${this._renderOptionalNumberField(
               ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
               "editor.fields.bias_correction_clamp_min",
               void 0,
@@ -5052,9 +5065,9 @@ const aa = [
     `;
   }
   _renderDeviceLabelCategories() {
-    const e = I(this._getValue(["device_label_text"]));
+    const e = T(this._getValue(["device_label_text"]));
     return e.length === 0 ? [n`<div class="message info">${this._t("editor.empty.no_device_label_categories")}</div>`] : e.map(([t, i]) => {
-      const a = I(i);
+      const a = T(i);
       return n`
         <div class="list-card">
           <div class="card-header">
@@ -5394,9 +5407,9 @@ const aa = [
     `;
   }
   _renderEvChargerAppliance(e, t, i) {
-    const a = ["appliances", t], r = I(
+    const a = ["appliances", t], r = T(
       this._getValue([...a, "controls", "use_mode", "values"])
-    ), s = I(
+    ), s = T(
       this._getValue([...a, "controls", "eco_gear", "values"])
     ), l = x(this._getValue([...a, "vehicles"])) ?? [], d = this._stringValue(e.name) || this._tFormat("editor.dynamic.ev_charger", { index: t + 1 }), c = this._stringValue(e.id) || this._t("editor.values.missing_id"), p = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", u = this._getApplianceMode(t) === "yaml";
     return n`
@@ -6289,7 +6302,7 @@ const aa = [
     return e.replaceAll(":", "-").replaceAll(".", "-");
   }
   _handleAddDeviceLabel(e) {
-    const t = I(this._getValue(["device_label_text", e])).map(
+    const t = T(this._getValue(["device_label_text", e])).map(
       ([a]) => a
     ), i = ui(t);
     this._applyMutation((a) => {
@@ -6338,7 +6351,7 @@ const aa = [
       "controls",
       "use_mode",
       "values"
-    ], i = wi(I(this._getValue(t)).map(([a]) => a));
+    ], i = wi(T(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
       v(a, [...t, i], vi());
     });
@@ -6350,7 +6363,7 @@ const aa = [
       "controls",
       "eco_gear",
       "values"
-    ], i = $i(I(this._getValue(t)).map(([a]) => a));
+    ], i = $i(T(this._getValue(t)).map(([a]) => a));
     this._applyMutation((a) => {
       v(a, [...t, i], bi());
     });

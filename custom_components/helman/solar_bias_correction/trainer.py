@@ -37,6 +37,7 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
         f"clamp_max={cfg.clamp_max};"
+        f"min_valid_slot_days={cfg.min_valid_slot_days};"
         f"aggregation_method={cfg.aggregation_method};"
         "slot_invalidation_max_battery_soc_percent="
         f"{cfg.slot_invalidation_max_battery_soc_percent};"
@@ -149,6 +150,7 @@ def _build_training_explainability(
     forecast_slot_keys: list[str],
     factors: dict[str, float],
     omitted_slots: list[str],
+    omitted_slot_reasons: dict[str, str],
     slot_forecast_sums: dict[str, float],
     slot_actual_sums: dict[str, float],
     slot_raw_ratios: dict[str, float | None],
@@ -261,7 +263,7 @@ def _build_training_explainability(
                         actual_wh=None,
                         ratio=None,
                         status="omitted_slot",
-                        reason="slot_forecast_sum_too_low",
+                        reason=omitted_slot_reasons.get(slot, "slot_forecast_sum_too_low"),
                     )
                 ]
                 if slot in omitted_slot_set
@@ -356,6 +358,7 @@ def train(
     # Collect per-slot daily ratios while retaining the existing summed-forecast floor gate.
     slot_forecast_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
     slot_actual_sums: Dict[str, float] = {slot: 0.0 for slot in forecast_slot_keys}
+    slot_valid_day_counts: Dict[str, int] = {slot: 0 for slot in forecast_slot_keys}
     if cfg.aggregation_method == "trimmed_mean":
         slot_daily_ratios: Dict[str, List[float]] = {
             slot: [] for slot in forecast_slot_keys
@@ -372,6 +375,7 @@ def train(
             slot_forecast_sums[slot] += day_forecast
             if day_forecast <= 0.0:
                 continue
+            slot_valid_day_counts[slot] += 1
             day_actual = _aggregate_actuals_into_forecast_slot(
                 day_actuals,
                 forecast_slot=slot,
@@ -383,12 +387,20 @@ def train(
 
     factors: Dict[str, float] = {}
     omitted_slots: List[str] = []
+    omitted_slot_reasons: Dict[str, str] = {}
     slot_raw_ratios: Dict[str, float | None] = {}
 
     for slot in sorted_forecast_slots:
+        valid_day_count = slot_valid_day_counts[slot]
+        if valid_day_count < cfg.min_valid_slot_days:
+            omitted_slots.append(slot)
+            omitted_slot_reasons[slot] = "slot_insufficient_valid_days"
+            continue
+
         fcast = slot_forecast_sums[slot]
         if fcast < _SLOT_FORECAST_SUM_FLOOR_WH:
             omitted_slots.append(slot)
+            omitted_slot_reasons[slot] = "slot_forecast_sum_too_low"
             continue
 
         raw = None
@@ -399,6 +411,7 @@ def train(
 
         if raw is None:
             omitted_slots.append(slot)
+            omitted_slot_reasons[slot] = "slot_no_ratio"
             continue
         slot_raw_ratios[slot] = raw
         clamped = max(cfg.clamp_min, min(raw, cfg.clamp_max))
@@ -434,6 +447,7 @@ def train(
         forecast_slot_keys=sorted_forecast_slots,
         factors=factors,
         omitted_slots=omitted_slots,
+        omitted_slot_reasons=omitted_slot_reasons,
         slot_forecast_sums=slot_forecast_sums,
         slot_actual_sums=slot_actual_sums,
         slot_raw_ratios=slot_raw_ratios,

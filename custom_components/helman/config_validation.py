@@ -407,6 +407,23 @@ def _validate_solar_config(
                         message=f"{base_path}.training_time must be a valid time",
                     )
 
+    min_valid_slot_days = bias_map.get("min_valid_slot_days")
+    if min_valid_slot_days is not None:
+        if (
+            isinstance(min_valid_slot_days, bool)
+            or not isinstance(min_valid_slot_days, int)
+            or not (1 <= min_valid_slot_days <= 365)
+        ):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.min_valid_slot_days",
+                code="invalid_range",
+                message=(
+                    f"{base_path}.min_valid_slot_days must be an integer "
+                    "between 1 and 365"
+                ),
+            )
+
     # clamp_min: float in (0, 1]
     clamp_min = bias_map.get("clamp_min")
     if clamp_min is not None:

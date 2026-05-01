@@ -181,6 +181,7 @@ const SOLAR_BIAS_CORRECTION_CONFIG_PROJECTION_MEMBERS = [
   { yamlKey: "min_history_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"] },
   { yamlKey: "max_training_window_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"] },
   { yamlKey: "training_time", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "training_time"] },
+  { yamlKey: "min_valid_slot_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"] },
   { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
   { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },
   { yamlKey: "aggregation_method", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"] },

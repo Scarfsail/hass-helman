@@ -52,17 +52,58 @@ def make_uniform_slot_forecast(forecast_wh: float, slots: list[str] | None = Non
     return {k: per for k in keys}
 
 
-def make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0, training_time="00:00", aggregation_method="ratio_of_sums") -> models.BiasConfig:
+def make_cfg(
+    min_history_days=2,
+    clamp_min=0.5,
+    clamp_max=2.0,
+    training_time="00:00",
+    aggregation_method="ratio_of_sums",
+    min_valid_slot_days=1,
+) -> models.BiasConfig:
     return models.BiasConfig(
         enabled=True,
         min_history_days=min_history_days,
         training_time=training_time,
         clamp_min=clamp_min,
         clamp_max=clamp_max,
+        min_valid_slot_days=min_valid_slot_days,
         aggregation_method=aggregation_method,
         daily_energy_entity_ids=[],
         total_energy_entity_id=None,
     )
+
+
+def test_slot_with_too_few_valid_slot_days_is_omitted():
+    cfg = make_cfg(min_history_days=1)
+    cfg.min_valid_slot_days = 2
+
+    samples = [
+        models.TrainerSample(
+            date="2023-01-01",
+            forecast_wh=200.0,
+            slot_forecast_wh={"12:00": 200.0},
+        ),
+        models.TrainerSample(
+            date="2023-01-02",
+            forecast_wh=200.0,
+            slot_forecast_wh={"12:00": 200.0},
+        ),
+    ]
+
+    actuals = models.SolarActualsWindow(
+        slot_actuals_by_date={
+            "2023-01-01": {"12:00": 200.0},
+            "2023-01-02": {"12:00": 200.0},
+        },
+        invalidated_slots_by_date={
+            "2023-01-02": {"12:00"},
+        },
+    )
+
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert "12:00" not in outcome.profile.factors
+    assert "12:00" in outcome.profile.omitted_slots
 
 
 def test_profile_trains_with_sufficient_history():
@@ -230,13 +271,17 @@ def test_fingerprint_depends_on_training_config_but_excludes_training_time():
     cfg1 = make_cfg(min_history_days=2, training_time="00:00")
     cfg2 = make_cfg(min_history_days=2, training_time="12:34")
     cfg3 = make_cfg(min_history_days=3, training_time="00:00")
+    cfg4 = make_cfg(min_history_days=2, training_time="00:00")
+    cfg4.min_valid_slot_days = 6
 
     f1 = trainer.compute_fingerprint(cfg1)
     f2 = trainer.compute_fingerprint(cfg2)
     f3 = trainer.compute_fingerprint(cfg3)
+    f4 = trainer.compute_fingerprint(cfg4)
 
     assert f1 == f2
     assert f1 != f3
+    assert f1 != f4
 
 
 def test_fingerprint_depends_on_slot_invalidation_config():
@@ -286,6 +331,7 @@ def test_compute_fingerprint_includes_algorithm_version():
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
         f"clamp_max={cfg.clamp_max};"
+        f"min_valid_slot_days={cfg.min_valid_slot_days};"
         f"aggregation_method={cfg.aggregation_method};"
         "slot_invalidation_max_battery_soc_percent="
         f"{cfg.slot_invalidation_max_battery_soc_percent};"

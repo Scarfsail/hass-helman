@@ -1601,6 +1601,12 @@ export class HelmanConfigEditorPanel extends LitElement {
                           "editor.help.bias_correction_training_time",
                         )}
                         ${this._renderOptionalNumberField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],
+                          "editor.fields.bias_correction_min_valid_slot_days",
+                          "editor.helpers.bias_correction_min_valid_slot_days",
+                          "editor.help.bias_correction_min_valid_slot_days",
+                        )}
+                        ${this._renderOptionalNumberField(
                           ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"],
                           "editor.fields.bias_correction_clamp_min",
                           undefined,

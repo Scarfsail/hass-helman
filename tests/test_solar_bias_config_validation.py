@@ -141,6 +141,31 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         report = validate_config_document(config)
         self.assertTrue(report.valid)
 
+    def test_min_valid_slot_days_invalid_when_zero(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "min_valid_slot_days": 0,
+        }
+
+        report = validate_config_document(config)
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path
+                == "power_devices.solar.forecast.bias_correction.min_valid_slot_days"
+                for issue in report.errors
+            )
+        )
+
+    def test_min_valid_slot_days_valid_when_positive(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "min_valid_slot_days": 5,
+        }
+
+        report = validate_config_document(config)
+        self.assertTrue(report.valid)
+
     def test_clamp_min_invalid_when_zero(self) -> None:
         config = _valid_config()
         config["power_devices"]["solar"]["forecast"]["bias_correction"] = {

@@ -46,6 +46,7 @@ def test_defaults_empty_config():
     assert bias.training_time == const.SOLAR_BIAS_DEFAULT_TRAINING_TIME
     assert bias.clamp_min == const.SOLAR_BIAS_DEFAULT_CLAMP_MIN
     assert bias.clamp_max == const.SOLAR_BIAS_DEFAULT_CLAMP_MAX
+    assert bias.min_valid_slot_days == const.SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
     assert bias.aggregation_method == const.SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
     assert bias.daily_energy_entity_ids == []
     assert bias.total_energy_entity_id is None
@@ -63,6 +64,7 @@ def test_read_nested_config():
                         "training_time": "04:00",
                         "clamp_min": 0.5,
                         "clamp_max": 1.5,
+                        "min_valid_slot_days": 7,
                     },
                     "daily_energy_entity_ids": ["sensor.daily1", "sensor.daily2"],
                     "total_energy_entity_id": "sensor.total",
@@ -78,6 +80,7 @@ def test_read_nested_config():
     assert bias.training_time == "04:00"
     assert bias.clamp_min == 0.5
     assert bias.clamp_max == 1.5
+    assert bias.min_valid_slot_days == 7
     assert bias.daily_energy_entity_ids == ["sensor.daily1", "sensor.daily2"]
     assert bias.total_energy_entity_id == "sensor.total"
 
