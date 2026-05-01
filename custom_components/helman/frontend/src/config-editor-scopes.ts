@@ -5,6 +5,7 @@ import {
   type ScopeProjectionMember,
   type ScopeYamlAdapter,
 } from "./config-scope-adapters";
+import type { JsonArray, JsonObject } from "./types";
 
 export type EditorMode = "visual" | "yaml";
 export type TabId =
@@ -149,8 +150,8 @@ const CORE_LABELS_AND_HISTORY_KEYS = GENERAL_PROJECTION_KEYS.filter(
   (key) => key !== "device_label_text",
 );
 
-const EMPTY_OBJECT = {};
-const EMPTY_ARRAY = [];
+const EMPTY_OBJECT: JsonObject = {};
+const EMPTY_ARRAY: JsonArray = [];
 
 const GENERAL_PROJECTION_MEMBERS =
   createRootProjectionMembers(GENERAL_PROJECTION_KEYS);
@@ -422,20 +423,21 @@ export const EDITOR_SCOPES = {
     }),
   },
 } as const satisfies Record<ScopeId, EditorScope>;
+const SCOPE_RECORD: Record<ScopeId, EditorScope> = EDITOR_SCOPES;
 
 const CHILD_SCOPE_IDS = buildChildScopeIds();
 
 export function getScope(scopeId: ScopeId): EditorScope {
-  return EDITOR_SCOPES[scopeId];
+  return SCOPE_RECORD[scopeId];
 }
 
 export function getAncestorScopeIds(scopeId: ScopeId): ScopeId[] {
   const ancestors: ScopeId[] = [];
-  let currentScope = EDITOR_SCOPES[scopeId].parentId;
+  let currentScope = SCOPE_RECORD[scopeId].parentId;
 
   while (currentScope) {
     ancestors.push(currentScope);
-    currentScope = EDITOR_SCOPES[currentScope].parentId;
+    currentScope = SCOPE_RECORD[currentScope].parentId;
   }
 
   return ancestors;
@@ -470,9 +472,9 @@ function createRootProjectionMembers(
 function buildChildScopeIds(): Record<ScopeId, ScopeId[]> {
   const children = Object.fromEntries(
     Object.keys(EDITOR_SCOPES).map((scopeId) => [scopeId, []]),
-  ) as Record<ScopeId, ScopeId[]>;
+  ) as unknown as Record<ScopeId, ScopeId[]>;
 
-  for (const scope of Object.values(EDITOR_SCOPES)) {
+  for (const scope of Object.values(SCOPE_RECORD)) {
     if (scope.parentId) {
       children[scope.parentId].push(scope.id);
     }

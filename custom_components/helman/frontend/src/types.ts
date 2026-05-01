@@ -7,6 +7,7 @@ export type PathSegment = string | number;
 export interface HomeAssistantLike {
   callWS<T = unknown>(message: Record<string, unknown>): Promise<T>;
   states: Record<string, unknown>;
+  localize?: (key: string) => string | undefined;
   language?: string;
   locale?: {
     language?: string;

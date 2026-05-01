@@ -1616,8 +1616,8 @@ export class HelmanConfigEditorPanel extends LitElement {
                           ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"],
                           "editor.fields.bias_correction_aggregation_method",
                           [
-                            { value: "ratio_of_sums", label: this.hass.localize("component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums") || "Ratio of Sums" },
-                            { value: "trimmed_mean", label: this.hass.localize("component.helman.editor.fields.bias_correction_aggregation_method_trimmed_mean") || "Trimmed Mean" }
+                            { value: "ratio_of_sums", label: this.hass?.localize?.("component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums") || "Ratio of Sums" },
+                            { value: "trimmed_mean", label: this.hass?.localize?.("component.helman.editor.fields.bias_correction_aggregation_method_trimmed_mean") || "Trimmed Mean" }
                           ],
                           "editor.help.bias_correction_aggregation_method",
                         )}
@@ -3581,7 +3581,8 @@ export class HelmanConfigEditorPanel extends LitElement {
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
       }
-      this._config = asJsonObject(loadedResult.value) ? cloneJson(loadedResult.value) : {};
+      const loadedConfig = asJsonObject(loadedResult.value);
+      this._config = loadedConfig ? cloneJson(loadedConfig) : {};
       this._liveApplianceMetadata =
         liveApplianceMetadataResult.status === "fulfilled"
           ? liveApplianceMetadataResult.value

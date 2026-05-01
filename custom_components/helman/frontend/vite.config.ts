@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -7,7 +6,7 @@ export default defineConfig({
     outDir: "dist",
     sourcemap: false,
     lib: {
-      entry: resolve(__dirname, "src/index.ts"),
+      entry: "src/index.ts",
       formats: ["es"],
       fileName: () => "helman-config-editor.js",
     },

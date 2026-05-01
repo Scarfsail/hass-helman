@@ -816,7 +816,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   }
 
-  private _parseIsoDate(value: string) {
+  private _parseIsoDate(value: string): { year: number; month: number; day: number } {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
     if (!match) {
       const today = this._todayIso();

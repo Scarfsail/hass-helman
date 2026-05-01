@@ -23,7 +23,7 @@ export const loadHaForm = async (): Promise<void> => {
 
     const partialPanelResolver = document.createElement(
       "partial-panel-resolver",
-    ) as {
+    ) as unknown as {
       hass: unknown;
       _updateRoutes: () => void;
       routerOptions: {
@@ -48,7 +48,7 @@ export const loadHaForm = async (): Promise<void> => {
 
     await customElements.whenDefined("ha-panel-config");
 
-    const configPanelResolver = document.createElement("ha-panel-config") as {
+    const configPanelResolver = document.createElement("ha-panel-config") as unknown as {
       routerOptions: {
         routes: {
           automation: {
@@ -83,7 +83,7 @@ export const loadHaYamlEditor = async (): Promise<void> => {
 
     const partialPanelResolver = document.createElement(
       "partial-panel-resolver",
-    ) as {
+    ) as unknown as {
       getRoutes: (panels: Array<{ component_name: string; url_path: string }>) => {
         routes?: Record<string, { load?: () => Promise<void> }>;
       };
@@ -101,7 +101,7 @@ export const loadHaYamlEditor = async (): Promise<void> => {
 
     const developerToolsRouter = document.createElement(
       "developer-tools-router",
-    ) as {
+    ) as unknown as {
       routerOptions?: {
         routes?: {
           service?: {

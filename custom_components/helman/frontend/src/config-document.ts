@@ -90,15 +90,16 @@ export function setValueAtPath(
       continue;
     }
 
-    let nextValue = current[segment];
+    const currentObject = current as JsonObject;
+    let nextValue = currentObject[segment];
     if (shouldCreateArray) {
       if (!Array.isArray(nextValue)) {
         nextValue = [];
-        current[segment] = nextValue;
+        currentObject[segment] = nextValue;
       }
     } else if (!isJsonObject(nextValue)) {
       nextValue = {};
-      current[segment] = nextValue;
+      currentObject[segment] = nextValue;
     }
     current = nextValue as JsonObject | JsonArray;
   }
@@ -112,7 +113,7 @@ export function setValueAtPath(
     return;
   }
 
-  current[lastSegment] = value;
+  (current as JsonObject)[lastSegment] = value;
 }
 
 export function unsetValueAtPath(root: JsonObject, path: PathSegment[]): void {
