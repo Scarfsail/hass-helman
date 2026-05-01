@@ -79,3 +79,23 @@ export function findTrainingSlot(
   if (!explainability || !slot) return null;
   return explainability.slots[slot] ?? null;
 }
+
+export function resolveSelectedTrainingDate(
+  rows: ContributionRow[],
+  preferredDate: string | null,
+  selectedTrainingDate: string | null,
+): string | null {
+  if (
+    preferredDate &&
+    rows.some((row) => row.date === preferredDate)
+  ) {
+    return preferredDate;
+  }
+  if (
+    selectedTrainingDate &&
+    rows.some((row) => row.date === selectedTrainingDate)
+  ) {
+    return selectedTrainingDate;
+  }
+  return null;
+}

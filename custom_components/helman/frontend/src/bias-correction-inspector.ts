@@ -6,6 +6,7 @@ import {
   findImpactForSlot,
   findPointForSlot,
   findTrainingSlot,
+  resolveSelectedTrainingDate,
   resolveSelectedImpactSlot,
   type FactorPoint,
   type ImpactPoint,
@@ -60,6 +61,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   @state() private _loading = false;
   @state() private _error = "";
   @state() private _selectedSlot: string | null = null;
+  @state() private _selectedTrainingDate: string | null = null;
 
   private _fallbackLocalize: LocalizeFunction = getLocalizeFunction();
   private _activeRequestId = 0;
@@ -312,6 +314,19 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     .contribution-table td.numeric {
       text-align: right;
     }
+
+    .contribution-row {
+      cursor: pointer;
+    }
+
+    .contribution-row:hover td,
+    .contribution-row:focus-within td {
+      background: var(--secondary-background-color);
+    }
+
+    .contribution-row.selected td {
+      background: rgba(21, 101, 192, 0.12);
+    }
   `;
 
   protected updated(changed: Map<string, unknown>) {
@@ -541,6 +556,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
   private _selectSlot(slot: string) {
     const previous = this._selectedSlot;
     this._selectedSlot = slot;
+    this._selectedTrainingDate = this._resolveSelectedTrainingDate(slot);
     this.requestUpdate("_selectedSlot", previous);
   }
 
@@ -615,6 +631,7 @@ export class HelmanBiasCorrectionInspector extends LitElement {
     if (!trainingSlot) {
       return html`<div class="note">${this._tFormat("bias_correction.inspector.no_slot_explainability", { slot: selectedSlot })}</div>`;
     }
+    const selectedTrainingDate = this._resolveSelectedTrainingDate(selectedSlot);
     return html`
       <div class="slot-summary">
         <strong>${this._t("bias_correction.inspector.training_contribution")}</strong>
@@ -637,15 +654,23 @@ export class HelmanBiasCorrectionInspector extends LitElement {
             </tr>
           </thead>
           <tbody>
-            ${trainingSlot.rows.map((row) => html`
-              <tr>
+            ${trainingSlot.rows.map((row) => {
+              const selected = row.date === selectedTrainingDate;
+              return html`
+              <tr
+                class=${selected ? "contribution-row selected" : "contribution-row"}
+                aria-selected=${selected ? "true" : "false"}
+                tabindex="0"
+                @click=${() => this._selectTrainingDate(row.date)}
+                @keydown=${(event: KeyboardEvent) => this._handleContributionRowKeydown(event, row.date)}
+              >
                 <td>${row.date || "-"}</td>
                 <td class="numeric">${this._formatWh(row.forecastWh)}</td>
                 <td class="numeric">${this._formatWh(row.actualWh)}</td>
                 <td class="numeric">${this._formatFactor(row.ratio)}</td>
                 <td>${this._formatContributionStatus(row.status, row.reason)}</td>
               </tr>
-            `)}
+            `;})}
           </tbody>
         </table>
       </div>
@@ -689,9 +714,15 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       });
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
-        this._selectedSlot = resolveSelectedImpactSlot(
+        const resolvedSlot = resolveSelectedImpactSlot(
           payload.series.impact,
           this._selectedSlot,
+        );
+        this._selectedSlot = resolvedSlot;
+        this._selectedTrainingDate = this._resolveSelectedTrainingDate(
+          resolvedSlot,
+          payload,
+          requestedDate,
         );
       }
     } catch (err: any) {
@@ -716,6 +747,37 @@ export class HelmanBiasCorrectionInspector extends LitElement {
       next.getUTCDate(),
     );
     this._load();
+  }
+
+  private _selectTrainingDate(date: string) {
+    this._selectedTrainingDate = date;
+    if (date === this._selectedDate) {
+      this.requestUpdate();
+      return;
+    }
+    this._selectedDate = date;
+    this._load();
+  }
+
+  private _handleContributionRowKeydown(event: KeyboardEvent, date: string) {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    this._selectTrainingDate(date);
+  }
+
+  private _resolveSelectedTrainingDate(
+    slot: string | null,
+    payload: InspectorPayload | null = this._payload,
+    preferredDate: string | null = this._selectedDate,
+  ) {
+    const trainingSlot = findTrainingSlot(payload?.trainingExplainability ?? null, slot);
+    return resolveSelectedTrainingDate(
+      trainingSlot?.rows ?? [],
+      preferredDate,
+      this._selectedTrainingDate,
+    );
   }
 
   private _todayIso() {

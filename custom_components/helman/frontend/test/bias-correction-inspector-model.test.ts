@@ -3,7 +3,9 @@ import {
   findImpactForSlot,
   findPointForSlot,
   findTrainingSlot,
+  resolveSelectedTrainingDate,
   resolveSelectedImpactSlot,
+  type ContributionRow,
   type InspectorPoint,
   type ImpactPoint,
   type TrainingExplainability,
@@ -52,3 +54,39 @@ const explainability: TrainingExplainability = {
 assertEqual(findTrainingSlot(explainability, "08:00")?.factor, 1.5);
 assertEqual(findTrainingSlot(explainability, "09:00"), null);
 assertEqual(findTrainingSlot(null, "08:00"), null);
+
+const contributionRows: ContributionRow[] = [
+  {
+    date: "2026-04-24",
+    forecastWh: 90,
+    actualWh: 135,
+    ratio: 1.5,
+    status: "used",
+    reason: null,
+  },
+  {
+    date: "2026-04-25",
+    forecastWh: 100,
+    actualWh: 150,
+    ratio: 1.5,
+    status: "used",
+    reason: null,
+  },
+];
+
+assertEqual(
+  resolveSelectedTrainingDate(contributionRows, "2026-04-25", null),
+  "2026-04-25",
+);
+assertEqual(
+  resolveSelectedTrainingDate(contributionRows, "2026-04-26", "2026-04-24"),
+  "2026-04-24",
+);
+assertEqual(
+  resolveSelectedTrainingDate(contributionRows, "2026-04-26", null),
+  null,
+);
+assertEqual(
+  resolveSelectedTrainingDate([], "2026-04-25", "2026-04-24"),
+  null,
+);
