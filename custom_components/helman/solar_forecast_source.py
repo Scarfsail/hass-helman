@@ -75,6 +75,7 @@ def migrate_legacy_solar_forecast_config(
     config: dict[str, Any],
     *,
     inferred_source_config_entry_id: str | None,
+    preserve_existing_source_config_entry_id: bool = False,
 ) -> dict[str, Any]:
     migrated = deepcopy(config)
     forecast = _get_forecast_section(migrated)
@@ -82,6 +83,9 @@ def migrate_legacy_solar_forecast_config(
         return migrated
 
     forecast.pop("daily_energy_entity_ids", None)
+    if preserve_existing_source_config_entry_id and "source_config_entry_id" in forecast:
+        return migrated
+
     existing_source_config_entry_id = _normalize_source_config_entry_id(
         forecast.get("source_config_entry_id")
     )
@@ -129,10 +133,14 @@ async def async_migrate_legacy_solar_forecast_config(
     helman_entry_id = hass.data.get(DOMAIN, {}).get("entry_id")
 
     forecast = _get_forecast_section(config) or {}
+    if "source_config_entry_id" in forecast:
+        return migrate_legacy_solar_forecast_config(
+            config,
+            inferred_source_config_entry_id=None,
+            preserve_existing_source_config_entry_id=True,
+        )
+
     legacy_ids = forecast.get("daily_energy_entity_ids") or []
-    explicit_source_config_entry_id = _normalize_source_config_entry_id(
-        forecast.get("source_config_entry_id")
-    )
     inferred = infer_source_config_entry_id_from_legacy_entities(
         legacy_ids,
         entity_entries={entity_id: registry.async_get(entity_id) for entity_id in legacy_ids},
@@ -141,5 +149,5 @@ async def async_migrate_legacy_solar_forecast_config(
     )
     return migrate_legacy_solar_forecast_config(
         config,
-        inferred_source_config_entry_id=explicit_source_config_entry_id or inferred,
+        inferred_source_config_entry_id=inferred,
     )
