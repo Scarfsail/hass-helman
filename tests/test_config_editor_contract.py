@@ -416,10 +416,10 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.errors, [])
         self.assertEqual(connection.results, [(1, config)])
 
-    def test_validate_config_returns_structured_report(self) -> None:
+    async def test_validate_config_returns_structured_report(self) -> None:
         connection = FakeConnection(is_admin=True)
 
-        ws_validate_config(
+        await ws_validate_config(
             FakeHass(FakeStorage()),
             connection,
             {"id": 1, "type": "helman/validate_config", "config": _invalid_config()},
@@ -430,10 +430,10 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(connection.results[0][1]["valid"])
         self.assertIn("errors", connection.results[0][1])
 
-    def test_validate_config_reports_unknown_optimizer_kind_for_automation_payload(self) -> None:
+    async def test_validate_config_reports_unknown_optimizer_kind_for_automation_payload(self) -> None:
         connection = FakeConnection(is_admin=True)
 
-        ws_validate_config(
+        await ws_validate_config(
             FakeHass(FakeStorage()),
             connection,
             {
@@ -464,6 +464,46 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             "automation.optimizers[0].kind",
         )
         self.assertIn("does_not_exist", connection.results[0][1]["errors"][0]["message"])
+
+    async def test_validate_and_save_reject_malformed_legacy_daily_energy_entity_ids_consistently(
+        self,
+    ) -> None:
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": 7,
+                    }
+                }
+            }
+        }
+        validate_connection = FakeConnection(is_admin=True)
+        save_connection = FakeConnection(is_admin=True)
+        storage = FakeStorage()
+        hass = FakeHass(storage)
+
+        await ws_validate_config(
+            hass,
+            validate_connection,
+            {"id": 1, "type": "helman/validate_config", "config": config},
+        )
+        await ws_save_config(
+            hass,
+            save_connection,
+            {"id": 2, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertFalse(validate_connection.results[0][1]["valid"])
+        self.assertEqual(
+            validate_connection.results[0][1]["errors"][0]["path"],
+            "power_devices.solar.forecast.daily_energy_entity_ids",
+        )
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertFalse(save_connection.results[0][1]["validation"]["valid"])
+        self.assertEqual(
+            save_connection.results[0][1]["validation"]["errors"][0]["path"],
+            "power_devices.solar.forecast.daily_energy_entity_ids",
+        )
 
     async def test_get_solar_forecast_sources_returns_supported_entries_only(self) -> None:
         connection = FakeConnection(is_admin=True)

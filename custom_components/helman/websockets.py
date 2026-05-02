@@ -162,15 +162,18 @@ async def ws_get_solar_forecast_sources(
     vol.Required("type"): "helman/validate_config",
     vol.Required("config"): dict,
 })
-@callback
-def ws_validate_config(
+@websocket_api.async_response
+async def ws_validate_config(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
     if not _require_admin(connection, msg):
         return
-    connection.send_result(msg["id"], validate_config_document(msg["config"]).to_dict())
+    connection.send_result(
+        msg["id"],
+        (await _validate_config_for_editor(hass, msg["config"])).to_dict(),
+    )
 
 
 @websocket_api.websocket_command({
@@ -191,17 +194,12 @@ async def ws_save_config(
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
 
-    normalized_config = await async_migrate_legacy_solar_forecast_config(
-        hass, msg["config"]
+    normalized_config = await async_migrate_legacy_solar_forecast_config(hass, msg["config"])
+    validation = await _validate_config_for_editor(
+        hass,
+        msg["config"],
+        normalized_config=normalized_config,
     )
-    validation = validate_config_document(normalized_config)
-    if has_invalid_legacy_daily_energy_entity_ids(msg["config"]):
-        validation.add_error(
-            section="power_devices",
-            path="power_devices.solar.forecast.daily_energy_entity_ids",
-            code="invalid_type",
-            message="power_devices.solar.forecast.daily_energy_entity_ids must be a list",
-        )
     if not validation.valid:
         connection.send_result(
             msg["id"],
@@ -424,6 +422,27 @@ async def ws_run_automation(
 
     result = await coordinator.run_automation(reason="websocket")
     connection.send_result(msg["id"], result.to_dict())
+
+
+async def _validate_config_for_editor(
+    hass: HomeAssistant,
+    config: dict,
+    *,
+    normalized_config: dict | None = None,
+):
+    normalized = normalized_config
+    if normalized is None:
+        normalized = await async_migrate_legacy_solar_forecast_config(hass, config)
+
+    validation = validate_config_document(normalized)
+    if has_invalid_legacy_daily_energy_entity_ids(config):
+        validation.add_error(
+            section="power_devices",
+            path="power_devices.solar.forecast.daily_energy_entity_ids",
+            code="invalid_type",
+            message="power_devices.solar.forecast.daily_energy_entity_ids must be a list",
+        )
+    return validation
 
 
 def _require_admin(
