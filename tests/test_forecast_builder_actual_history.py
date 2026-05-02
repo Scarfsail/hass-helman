@@ -224,13 +224,15 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         query_mock.assert_not_awaited()
         self.assertEqual(actual_history, [])
 
-    async def test_build_solar_forecast_uses_canonical_actual_history_interval(self) -> None:
+    async def test_build_solar_forecast_uses_provider_wh_hours_and_canonical_actual_history_interval(
+        self,
+    ) -> None:
         _, builder = self._make_builder()
         builder._config = {
             "power_devices": {
                 "solar": {
                     "forecast": {
-                        "daily_energy_entity_ids": ["sensor.solar_forecast_day_0"],
+                        "source_config_entry_id": "forecast-entry",
                     },
                     "entities": {
                         "remaining_today_energy_forecast": "sensor.remaining_today_energy",
@@ -242,25 +244,39 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                builder,
-                "_extract_hourly_solar_points",
-                return_value=[
-                    (
-                        datetime.fromisoformat("2026-03-20T22:00:00+01:00"),
-                        {
-                            "timestamp": "2026-03-20T22:00:00+01:00",
-                            "value": 250.0,
-                        },
-                    )
-                ],
-            ),
-            patch.object(builder, "_read_first_unit", return_value="Wh"),
+                importlib.import_module("custom_components.helman.forecast_builder"),
+                "async_load_upstream_solar_forecast",
+                AsyncMock(
+                    return_value={
+                        "wh_hours": {
+                            "2026-03-20T23:00:00+01:00": 300.0,
+                            "2026-03-20T22:00:00+01:00": 250.0,
+                        }
+                    }
+                ),
+            ) as load_forecast_mock,
             patch.object(builder, "_build_solar_actual_history", actual_history_mock),
         ):
             payload = await builder._build_solar_forecast(REFERENCE_TIME)
 
         self.assertEqual(payload["status"], "available")
+        self.assertEqual(payload["unit"], "Wh")
+        self.assertEqual(payload["remainingTodayEnergyEntityId"], "sensor.remaining_today_energy")
         self.assertEqual(payload["actualHistory"], [{"timestamp": "history"}])
+        self.assertEqual(
+            payload["points"],
+            [
+                {
+                    "timestamp": "2026-03-20T22:00:00+01:00",
+                    "value": 250.0,
+                },
+                {
+                    "timestamp": "2026-03-20T23:00:00+01:00",
+                    "value": 300.0,
+                },
+            ],
+        )
+        load_forecast_mock.assert_awaited_once_with(builder._hass, "forecast-entry")
         actual_history_mock.assert_awaited_once_with(
             REFERENCE_TIME,
             interval_minutes=15,
