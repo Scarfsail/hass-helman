@@ -16,6 +16,19 @@ def _normalize_source_config_entry_id(value: Any) -> str | None:
     return normalized or None
 
 
+def _get_forecast_section(config: dict[str, Any]) -> dict[str, Any] | None:
+    power_devices = config.get("power_devices")
+    if not isinstance(power_devices, dict):
+        return None
+
+    solar = power_devices.get("solar")
+    if not isinstance(solar, dict):
+        return None
+
+    forecast = solar.get("forecast")
+    return forecast if isinstance(forecast, dict) else None
+
+
 def is_supported_solar_forecast_entry(
     hass,
     config_entry_id: str | None,
@@ -64,16 +77,8 @@ def migrate_legacy_solar_forecast_config(
     inferred_source_config_entry_id: str | None,
 ) -> dict[str, Any]:
     migrated = deepcopy(config)
-    power_devices = migrated.get("power_devices")
-    if not isinstance(power_devices, dict):
-        return migrated
-
-    solar = power_devices.get("solar")
-    if not isinstance(solar, dict):
-        return migrated
-
-    forecast = solar.get("forecast")
-    if not isinstance(forecast, dict):
+    forecast = _get_forecast_section(migrated)
+    if forecast is None:
         return migrated
 
     forecast.pop("daily_energy_entity_ids", None)
@@ -123,8 +128,11 @@ async def async_migrate_legacy_solar_forecast_config(
     supported_entry_ids = {item["entry_id"] for item in supported}
     helman_entry_id = hass.data.get(DOMAIN, {}).get("entry_id")
 
-    forecast = config.get("power_devices", {}).get("solar", {}).get("forecast", {})
+    forecast = _get_forecast_section(config) or {}
     legacy_ids = forecast.get("daily_energy_entity_ids") or []
+    explicit_source_config_entry_id = _normalize_source_config_entry_id(
+        forecast.get("source_config_entry_id")
+    )
     inferred = infer_source_config_entry_id_from_legacy_entities(
         legacy_ids,
         entity_entries={entity_id: registry.async_get(entity_id) for entity_id in legacy_ids},
@@ -133,5 +141,5 @@ async def async_migrate_legacy_solar_forecast_config(
     )
     return migrate_legacy_solar_forecast_config(
         config,
-        inferred_source_config_entry_id=inferred or forecast.get("source_config_entry_id"),
+        inferred_source_config_entry_id=explicit_source_config_entry_id or inferred,
     )

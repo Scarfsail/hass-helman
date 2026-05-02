@@ -481,3 +481,72 @@ def test_async_migrate_legacy_solar_forecast_config_infers_source_from_registry_
             }
         }
     }
+
+
+def test_async_migrate_legacy_solar_forecast_config_keeps_explicit_source_over_inferred():
+    hass = SimpleNamespace(
+        data={"helman": {"entry_id": "helman-entry"}},
+        config_entries=_FakeConfigEntries(
+            {
+                "helman-entry": _FakeConfigEntry("helman-entry", "helman", "Helman"),
+                "forecast-entry-a": _FakeConfigEntry(
+                    "forecast-entry-a", "forecast_solar", "Forecast A"
+                ),
+                "forecast-entry-b": _FakeConfigEntry(
+                    "forecast-entry-b", "forecast_solar", "Forecast B"
+                ),
+            }
+        ),
+    )
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "daily_energy_entity_ids": [
+                        "sensor.energy_production_today",
+                        "sensor.energy_production_tomorrow",
+                    ],
+                    "source_config_entry_id": "forecast-entry-a",
+                    "total_energy_entity_id": "sensor.solar_total",
+                }
+            }
+        }
+    }
+
+    async def _async_get_energy_platforms(_hass):
+        return ["helman", "forecast_solar"]
+
+    original_platforms = solar_forecast_source.async_get_energy_platforms
+    solar_forecast_source.async_get_energy_platforms = _async_get_energy_platforms
+
+    original_registry_get = solar_forecast_source.er.async_get
+    solar_forecast_source.er.async_get = lambda _hass: SimpleNamespace(
+        async_get=lambda entity_id: {
+            "sensor.energy_production_today": SimpleNamespace(
+                config_entry_id="forecast-entry-b"
+            ),
+            "sensor.energy_production_tomorrow": SimpleNamespace(
+                config_entry_id="forecast-entry-b"
+            ),
+        }.get(entity_id)
+    )
+    try:
+        migrated = asyncio.run(
+            solar_forecast_source.async_migrate_legacy_solar_forecast_config(
+                hass, config
+            )
+        )
+    finally:
+        solar_forecast_source.async_get_energy_platforms = original_platforms
+        solar_forecast_source.er.async_get = original_registry_get
+
+    assert migrated == {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "source_config_entry_id": "forecast-entry-a",
+                    "total_energy_entity_id": "sensor.solar_total",
+                }
+            }
+        }
+    }
