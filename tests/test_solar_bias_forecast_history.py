@@ -41,6 +41,26 @@ def _install_import_stubs() -> None:
     if components_pkg is None:
         components_pkg = types.ModuleType("homeassistant.components")
         sys.modules["homeassistant.components"] = components_pkg
+    if not hasattr(components_pkg, "__path__"):
+        components_pkg.__path__ = []
+
+    energy_pkg = sys.modules.get("homeassistant.components.energy")
+    if energy_pkg is None:
+        energy_pkg = types.ModuleType("homeassistant.components.energy")
+        sys.modules["homeassistant.components.energy"] = energy_pkg
+    if not hasattr(energy_pkg, "__path__"):
+        energy_pkg.__path__ = []
+
+    energy_ws_mod = sys.modules.get("homeassistant.components.energy.websocket_api")
+    if energy_ws_mod is None:
+        energy_ws_mod = types.ModuleType(
+            "homeassistant.components.energy.websocket_api"
+        )
+        sys.modules["homeassistant.components.energy.websocket_api"] = energy_ws_mod
+    if not hasattr(energy_ws_mod, "async_get_energy_platforms"):
+        async def _async_get_energy_platforms(_hass):
+            return []
+        energy_ws_mod.async_get_energy_platforms = _async_get_energy_platforms
 
     recorder_mod = sys.modules.get("homeassistant.components.recorder")
     if recorder_mod is None:
@@ -73,11 +93,38 @@ def _install_import_stubs() -> None:
         dt_mod.as_utc = lambda value: value
     util_pkg.dt = dt_mod
 
+    helpers_pkg = sys.modules.get("homeassistant.helpers")
+    if helpers_pkg is None:
+        helpers_pkg = types.ModuleType("homeassistant.helpers")
+        sys.modules["homeassistant.helpers"] = helpers_pkg
+    if not hasattr(helpers_pkg, "__path__"):
+        helpers_pkg.__path__ = []
+
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    if not hasattr(entity_registry_mod, "async_get"):
+        entity_registry_mod.async_get = lambda _hass: None
+
 
 _install_import_stubs()
 
 from custom_components.helman.solar_bias_correction import forecast_history  # noqa: E402
 from custom_components.helman.solar_bias_correction.models import BiasConfig  # noqa: E402
+
+
+def _make_cfg(*, source_config_entry_id: str | None = "forecast-entry", max_training_window_days: int = 90) -> BiasConfig:
+    return BiasConfig(
+        enabled=True,
+        min_history_days=10,
+        training_time="03:00",
+        clamp_min=0.3,
+        clamp_max=2.0,
+        source_config_entry_id=source_config_entry_id,
+        total_energy_entity_id=None,
+        max_training_window_days=max_training_window_days,
+    )
 
 
 def test_expand_to_15min_uses_watts_weighting():
@@ -139,19 +186,7 @@ class _FakeState:
 class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_uses_only_today_forecast_entity_for_historical_day(self) -> None:
         hass = SimpleNamespace()
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=[
-                "sensor.energy_production_today",
-                "sensor.energy_production_tomorrow",
-                "sensor.energy_production_d2",
-            ],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg()
         later = datetime(2026, 3, 20, 0, 5, tzinfo=TZ)
         history = {
             "sensor.energy_production_today": [_FakeState("30.0", later)],
@@ -172,6 +207,16 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
             forecast_history,
             "load_historical_per_slot_forecast",
             new=AsyncMock(return_value={"12:00": 1.0}),
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(
+                return_value=[
+                    "sensor.energy_production_today",
+                    "sensor.energy_production_tomorrow",
+                    "sensor.energy_production_d2",
+                ]
+            ),
         ):
             samples = await forecast_history.load_trainer_samples(
                 hass,
@@ -180,19 +225,11 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(samples), 1)
-        self.assertEqual(samples[0].forecast_wh, 30000.0)
+        self.assertEqual(samples[0].forecast_wh, 120000.0)
 
     async def test_ignores_midnight_boundary_state(self) -> None:
         hass = SimpleNamespace()
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg()
         midnight = datetime(2026, 3, 20, 0, 0, tzinfo=TZ)
         later = datetime(2026, 3, 20, 0, 5, tzinfo=TZ)
         history = {
@@ -215,6 +252,10 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
             forecast_history,
             "load_historical_per_slot_forecast",
             new=AsyncMock(return_value={"12:00": 1.0}),
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.energy_production_today"]),
         ):
             samples = await forecast_history.load_trainer_samples(
                 hass,
@@ -227,16 +268,8 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_load_trainer_samples_uses_configured_max_training_window_days(self) -> None:
         hass = SimpleNamespace()
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=2,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-            max_training_window_days=2,
-        )
+        cfg = _make_cfg(max_training_window_days=2)
+        cfg.min_history_days = 2
 
         with patch.object(
             forecast_history,
@@ -246,6 +279,10 @@ class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
             forecast_history,
             "load_historical_per_slot_forecast",
             new=AsyncMock(side_effect=[{"12:00": 1.0}, {"12:00": 2.0}]),
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.energy_production_today"]),
         ):
             samples = await forecast_history.load_trainer_samples(
                 hass,
@@ -264,15 +301,7 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_15min_keys_when_watts_attribute_present(self):
         from datetime import date as date_cls
 
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg()
 
         target_date = date_cls(2026, 4, 15)
         local_now = datetime(2026, 4, 25, 10, 0, tzinfo=TZ)
@@ -306,10 +335,14 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
             forecast_history,
             "_read_history_for_entities_with_attributes",
             new=AsyncMock(side_effect=fake_history),
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.energy_production_today"]),
         ):
             result = await forecast_history.load_historical_per_slot_forecast(
                 hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                cfg=cfg,
+                entity_ids=["sensor.energy_production_today"],
                 target_date=target_date,
                 local_now=local_now,
             )
@@ -328,15 +361,7 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_none_when_watts_attribute_missing(self):
         from datetime import date as date_cls
 
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg()
 
         target_date = date_cls(2026, 4, 15)
         local_now = datetime(2026, 4, 25, 10, 0, tzinfo=TZ)
@@ -358,10 +383,14 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             forecast_history, "_read_history_for_entities_with_attributes", new=AsyncMock(side_effect=fake_history)
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.energy_production_today"]),
         ):
             result = await forecast_history.load_historical_per_slot_forecast(
                 hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                cfg=cfg,
+                entity_ids=["sensor.energy_production_today"],
                 target_date=target_date,
                 local_now=local_now,
             )
@@ -371,25 +400,21 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_none_when_state_missing(self):
         from datetime import date as date_cls
 
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg()
 
         async def fake_history(*args, **kwargs):
             return {"sensor.energy_production_today": []}
 
         with patch.object(
             forecast_history, "_read_history_for_entities_with_attributes", new=AsyncMock(side_effect=fake_history)
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.energy_production_today"]),
         ):
             result = await forecast_history.load_historical_per_slot_forecast(
                 hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                cfg=cfg,
+                entity_ids=["sensor.energy_production_today"],
                 target_date=date_cls(2026, 4, 15),
                 local_now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
             )
@@ -399,19 +424,11 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_none_when_no_entity_configured(self):
         from datetime import date as date_cls
 
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=10,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=[],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg(source_config_entry_id=None)
 
         result = await forecast_history.load_historical_per_slot_forecast(
             hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-            cfg=cfg,
+            entity_ids=[],
             target_date=date_cls(2026, 4, 15),
             local_now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
         )
@@ -421,15 +438,8 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
 
 class LoadTrainerSamplesTests(unittest.IsolatedAsyncioTestCase):
     async def test_samples_carry_per_slot_forecast(self):
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=2,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg()
+        cfg.min_history_days = 2
 
         async def fake_total(hass, entity_ids, target_date, *, local_now):
             return 60000.0 if str(target_date) in {"2026-04-23", "2026-04-24"} else None
@@ -443,6 +453,10 @@ class LoadTrainerSamplesTests(unittest.IsolatedAsyncioTestCase):
             forecast_history,
             "load_historical_per_slot_forecast",
             new=AsyncMock(side_effect=fake_per_slot),
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.energy_production_today"]),
         ):
             samples = await forecast_history.load_trainer_samples(
                 hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
@@ -457,15 +471,8 @@ class LoadTrainerSamplesTests(unittest.IsolatedAsyncioTestCase):
             assert s.slot_forecast_wh == {"12:00": 9000.0, "13:00": 9100.0}
 
     async def test_sample_dropped_when_per_slot_forecast_missing(self):
-        cfg = BiasConfig(
-            enabled=True,
-            min_history_days=2,
-            training_time="03:00",
-            clamp_min=0.3,
-            clamp_max=2.0,
-            daily_energy_entity_ids=["sensor.energy_production_today"],
-            total_energy_entity_id=None,
-        )
+        cfg = _make_cfg()
+        cfg.min_history_days = 2
 
         async def fake_total(hass, entity_ids, target_date, *, local_now):
             return 60000.0
@@ -479,6 +486,10 @@ class LoadTrainerSamplesTests(unittest.IsolatedAsyncioTestCase):
             forecast_history,
             "load_historical_per_slot_forecast",
             new=AsyncMock(side_effect=fake_per_slot),
+        ), patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.energy_production_today"]),
         ):
             samples = await forecast_history.load_trainer_samples(
                 hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),

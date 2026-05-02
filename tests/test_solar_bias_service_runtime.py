@@ -22,7 +22,23 @@ if "custom_components.helman" not in sys.modules:
     sys.modules["custom_components.helman"] = pkg
 
 if "homeassistant" not in sys.modules:
-    sys.modules["homeassistant"] = types.ModuleType("homeassistant")
+    pkg = types.ModuleType("homeassistant")
+    pkg.__path__ = []
+    sys.modules["homeassistant"] = pkg
+
+components_mod = types.ModuleType("homeassistant.components")
+components_mod.__path__ = []
+sys.modules["homeassistant.components"] = components_mod
+
+energy_pkg = types.ModuleType("homeassistant.components.energy")
+energy_pkg.__path__ = []
+sys.modules["homeassistant.components.energy"] = energy_pkg
+
+energy_ws_mod = types.ModuleType("homeassistant.components.energy.websocket_api")
+async def _async_get_energy_platforms(_hass):
+    return []
+energy_ws_mod.async_get_energy_platforms = _async_get_energy_platforms
+sys.modules["homeassistant.components.energy.websocket_api"] = energy_ws_mod
 
 core_mod = types.ModuleType("homeassistant.core")
 core_mod.HomeAssistant = type("HomeAssistant", (), {})
@@ -38,7 +54,12 @@ dt_mod.as_local = lambda value: value
 sys.modules["homeassistant.util.dt"] = dt_mod
 
 helpers_mod = types.ModuleType("homeassistant.helpers")
+helpers_mod.__path__ = []
 sys.modules["homeassistant.helpers"] = helpers_mod
+
+entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+entity_registry_mod.async_get = lambda _hass: None
+sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
 
 event_mod = types.ModuleType("homeassistant.helpers.event")
 event_mod.async_track_time_change = lambda hass, callback, **kwargs: lambda: None
@@ -88,7 +109,7 @@ def _make_cfg(
         clamp_min=0.3,
         clamp_max=2.0,
         aggregation_method="ratio_of_sums",
-        daily_energy_entity_ids=[],
+        source_config_entry_id=None,
         total_energy_entity_id=None,
         slot_invalidation_max_battery_soc_percent=(
             slot_invalidation_max_battery_soc_percent
@@ -588,7 +609,7 @@ def test_failed_stale_retrain_preserves_previous_fingerprint_after_reload():
             training_time="03:00",
             clamp_min=0.3,
             clamp_max=2.0,
-            daily_energy_entity_ids=[],
+            source_config_entry_id=None,
             total_energy_entity_id=None,
         )
         service.update_config(changed_cfg)
