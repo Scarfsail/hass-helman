@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from homeassistant.components.energy.websocket_api import async_get_energy_platforms
+from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
 
@@ -112,3 +113,25 @@ async def async_list_supported_solar_forecast_entries(hass) -> list[dict[str, st
 
     payload.sort(key=lambda item: (item["title"].lower(), item["entry_id"]))
     return payload
+
+
+async def async_migrate_legacy_solar_forecast_config(
+    hass, config: dict[str, Any]
+) -> dict[str, Any]:
+    registry = er.async_get(hass)
+    supported = await async_list_supported_solar_forecast_entries(hass)
+    supported_entry_ids = {item["entry_id"] for item in supported}
+    helman_entry_id = hass.data.get(DOMAIN, {}).get("entry_id")
+
+    forecast = config.get("power_devices", {}).get("solar", {}).get("forecast", {})
+    legacy_ids = forecast.get("daily_energy_entity_ids") or []
+    inferred = infer_source_config_entry_id_from_legacy_entities(
+        legacy_ids,
+        entity_entries={entity_id: registry.async_get(entity_id) for entity_id in legacy_ids},
+        supported_entry_ids=supported_entry_ids,
+        helman_entry_id=helman_entry_id,
+    )
+    return migrate_legacy_solar_forecast_config(
+        config,
+        inferred_source_config_entry_id=inferred or forecast.get("source_config_entry_id"),
+    )
