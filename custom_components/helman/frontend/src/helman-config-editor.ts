@@ -12,7 +12,6 @@ import {
   createExportPriceOptimizerDraft,
   createGenericApplianceDraft,
   createCategoryKey,
-  createDailyEnergyEntityDraft,
   createDeferrableConsumerDraft,
   createEcoGearEntry,
   createGearKey,
@@ -54,6 +53,7 @@ import {
 } from "./config-editor-scopes";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
 import { loadHaForm, loadHaYamlEditor } from "./load-ha-elements";
+import { buildSolarForecastProviderLabel } from "./solar-forecast-provider-model";
 import "./bias-correction-status";
 import type {
   HomeAssistantLike,
@@ -62,6 +62,7 @@ import type {
   PathSegment,
   ApplianceMetadataResponse,
   SaveConfigResponse,
+  SolarForecastSourceOption,
   StatusMessage,
   ValidationIssue,
   ValidationReport,
@@ -116,6 +117,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     _applianceYamlValues: { state: true },
     _applianceYamlErrors: { state: true },
     _liveApplianceMetadata: { state: true },
+    _solarForecastSourceOptions: { state: true },
     _helpDialog: { state: true },
   };
 
@@ -873,6 +875,7 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _applianceYamlValues: Partial<Record<number, JsonValue>> = {};
   private _applianceYamlErrors: Partial<Record<number, string>> = {};
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
+  private _solarForecastSourceOptions: SolarForecastSourceOption[] = [];
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
 
   get hass(): HomeAssistantLike | undefined {
@@ -1433,8 +1436,6 @@ export class HelmanConfigEditorPanel extends LitElement {
   }
 
   private _renderPowerDevicesTab(): TemplateResult {
-    const dailyEnergyEntityIds =
-      asJsonArray(this._getValue(["power_devices", "solar", "forecast", "daily_energy_entity_ids"])) ?? [];
     const deferrableConsumers =
       asJsonArray(
         this._getValue(["power_devices", "house", "forecast", "deferrable_consumers"]),
@@ -1554,18 +1555,55 @@ export class HelmanConfigEditorPanel extends LitElement {
                       undefined,
                       "editor.help.solar_forecast_total_energy_entity",
                     )}
+                    <div class="field">
+                      <div class="field-label-row">
+                        <label>${this._t("editor.fields.solar_forecast_source")}</label>
+                        ${this._renderHelpIcon(
+                          "editor.fields.solar_forecast_source",
+                          "editor.help.solar_forecast_source",
+                        )}
+                      </div>
+                      <select
+                        .value=${this._stringValue(
+                          this._getValue([
+                            "power_devices",
+                            "solar",
+                            "forecast",
+                            "source_config_entry_id",
+                          ]),
+                        )}
+                        @change=${(event: Event) =>
+                          this._setOptionalString(
+                            [
+                              "power_devices",
+                              "solar",
+                              "forecast",
+                              "source_config_entry_id",
+                            ],
+                            (event.currentTarget as HTMLSelectElement).value,
+                          )}
+                      >
+                        <option value="">
+                          ${this._t("editor.actions.select_option")}
+                        </option>
+                        ${this._solarForecastSourceOptions.map(
+                          (option) => html`
+                            <option value=${option.entry_id}>
+                              ${buildSolarForecastProviderLabel(option)}
+                            </option>
+                          `,
+                        )}
+                      </select>
+                    </div>
                   </div>
 
-                  <div class="list-stack">
-                    ${dailyEnergyEntityIds.map((value, index) =>
-                      this._renderDailyEnergyEntity(value, index, dailyEnergyEntityIds.length),
-                    )}
-                  </div>
-                  <div class="section-footer">
-                    <button type="button" class="add-button" @click=${this._handleAddDailyEnergyEntity}>
-                      ${this._t("editor.actions.add_daily_energy_entity")}
-                    </button>
-                  </div>
+                  ${this._solarForecastSourceOptions.length === 0
+                    ? html`
+                        <p class="inline-note">
+                          ${this._t("editor.notes.solar_forecast_source_empty")}
+                        </p>
+                      `
+                    : nothing}
                 `,
                 { initialOpen: false },
               )}
@@ -2487,67 +2525,6 @@ export class HelmanConfigEditorPanel extends LitElement {
           )}
           ${this._renderOptionalTextField([...basePath, "label"], "editor.fields.label")}
         </div>
-      </div>
-    `;
-  }
-
-  private _renderDailyEnergyEntity(
-    value: unknown,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const path: PathSegment[] = [
-      "power_devices",
-      "solar",
-      "forecast",
-      "daily_energy_entity_ids",
-      index,
-    ];
-    return html`
-      <div class="list-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${this._tFormat("editor.dynamic.daily_energy_entity", { index: index + 1 })}</strong>
-          </div>
-          <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-                  index,
-                  index - 1,
-                )}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-                  index,
-                  index + 1,
-                )}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() =>
-                this._removeListItem(
-                  ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-                  index,
-                )}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
-        </div>
-        ${this._renderRequiredEntityField(path, "editor.fields.entity_id", ["sensor"], undefined, value, "editor.help.solar_daily_energy_entity")}
       </div>
     `;
   }
@@ -3580,9 +3557,14 @@ export class HelmanConfigEditorPanel extends LitElement {
     }
     this._loading = true;
     try {
-      const [loadedResult, liveApplianceMetadataResult] = await Promise.allSettled([
+      const [
+        loadedResult,
+        liveApplianceMetadataResult,
+        solarForecastSourceOptionsResult,
+      ] = await Promise.allSettled([
         this.hass.callWS<unknown>({ type: "helman/get_config" }),
         this._loadLiveApplianceMetadata(),
+        this._loadSolarForecastSourceOptions(),
       ]);
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
@@ -3593,6 +3575,10 @@ export class HelmanConfigEditorPanel extends LitElement {
         liveApplianceMetadataResult.status === "fulfilled"
           ? liveApplianceMetadataResult.value
           : null;
+      this._solarForecastSourceOptions =
+        solarForecastSourceOptionsResult.status === "fulfilled"
+          ? this._solarForecastSourceOptions
+          : [];
       this._validation = null;
       this._dirty = this._config
         ? this._normalizeSurplusApplianceOptimizerParams(this._config)
@@ -3606,6 +3592,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       }
     } catch (error) {
       this._liveApplianceMetadata = null;
+      this._solarForecastSourceOptions = [];
       this._message = {
         kind: "error",
         text: this._formatError(error, this._t("editor.messages.load_config_failed")),
@@ -3940,16 +3927,6 @@ export class HelmanConfigEditorPanel extends LitElement {
         createDeferrableConsumerDraft(
           this._tFormat("editor.dynamic.consumer", { index: count + 1 }),
         ),
-      );
-    });
-  };
-
-  private _handleAddDailyEnergyEntity = (): void => {
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
-        createDailyEnergyEntityDraft(),
       );
     });
   };
@@ -4487,6 +4464,21 @@ export class HelmanConfigEditorPanel extends LitElement {
       return Array.isArray(response?.appliances) ? response : { appliances: [] };
     } catch {
       return null;
+    }
+  }
+
+  private async _loadSolarForecastSourceOptions(): Promise<void> {
+    if (!this.hass) {
+      this._solarForecastSourceOptions = [];
+      return;
+    }
+    try {
+      const response = await this.hass.callWS<SolarForecastSourceOption[]>({
+        type: "helman/get_solar_forecast_sources",
+      });
+      this._solarForecastSourceOptions = Array.isArray(response) ? response : [];
+    } catch {
+      this._solarForecastSourceOptions = [];
     }
   }
 

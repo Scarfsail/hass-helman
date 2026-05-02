@@ -55,3 +55,9 @@ export interface ApplianceMetadataEntry {
 export interface ApplianceMetadataResponse {
   appliances: ApplianceMetadataEntry[];
 }
+
+export interface SolarForecastSourceOption {
+  entry_id: string;
+  title: string;
+  domain: string;
+}
