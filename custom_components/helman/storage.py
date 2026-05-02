@@ -42,10 +42,13 @@ class HelmanStorage:
     async def async_load(self) -> None:
         stored = await self._store.async_load()
         merged = {**DEFAULT_CONFIG, **(stored or {})}
-        self._config = migrate_legacy_solar_forecast_config(
+        normalized = migrate_legacy_solar_forecast_config(
             merged,
             inferred_source_config_entry_id=None,
         )
+        self._config = normalized
+        if normalized != merged:
+            await self._store.async_save(normalized)
         self._snapshot = await self._snapshot_store.async_load()
         self._schedule_document = await self._schedule_store.async_load()
 
