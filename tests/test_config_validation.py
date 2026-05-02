@@ -95,10 +95,7 @@ def _valid_config() -> dict:
                     "remaining_today_energy_forecast": "sensor.solar_remaining",
                 },
                 "forecast": {
-                    "daily_energy_entity_ids": [
-                        "sensor.solar_day_1",
-                        "sensor.solar_day_2",
-                    ],
+                    "source_config_entry_id": "forecast-entry",
                     "total_energy_entity_id": "sensor.solar_total",
                 },
             },
@@ -299,6 +296,35 @@ class ConfigValidationTests(unittest.TestCase):
             any(
                 issue.code == "invalid_import_price_config"
                 and "leave a gap" in issue.message
+                for issue in report.errors
+            )
+        )
+
+    def test_solar_forecast_source_config_entry_id_accepts_non_empty_string(
+        self,
+    ) -> None:
+        config = _valid_config()
+        forecast = config["power_devices"]["solar"]["forecast"]
+        forecast.pop("daily_energy_entity_ids", None)
+        forecast["source_config_entry_id"] = "forecast-entry"
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+
+    def test_solar_forecast_source_config_entry_id_rejects_blank_string(
+        self,
+    ) -> None:
+        config = _valid_config()
+        forecast = config["power_devices"]["solar"]["forecast"]
+        forecast.pop("daily_energy_entity_ids", None)
+        forecast["source_config_entry_id"] = "   "
+
+        report = validate_config_document(config)
+
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.source_config_entry_id"
                 for issue in report.errors
             )
         )
