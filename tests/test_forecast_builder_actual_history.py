@@ -98,17 +98,37 @@ class _FakeStateMachine:
         return self._states.get(entity_id)
 
 
+class _FakeConfigEntry:
+    def __init__(self, entry_id: str, domain: str) -> None:
+        self.entry_id = entry_id
+        self.domain = domain
+
+
+class _FakeConfigEntries:
+    def __init__(self, entries: dict[str, _FakeConfigEntry] | None = None) -> None:
+        self._entries = entries or {}
+
+    def async_get_entry(self, entry_id: str):
+        return self._entries.get(entry_id)
+
+
 _install_import_stubs()
 
 
 class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
-    def _make_builder(self, *, states: dict[str, object] | None = None):
+    def _make_builder(
+        self,
+        *,
+        states: dict[str, object] | None = None,
+        config_entries: dict[str, _FakeConfigEntry] | None = None,
+    ):
         forecast_builder_module = importlib.reload(
             importlib.import_module("custom_components.helman.forecast_builder")
         )
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             states=_FakeStateMachine(states),
+            config_entries=_FakeConfigEntries(config_entries),
         )
         return (
             forecast_builder_module,
@@ -227,7 +247,13 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_solar_forecast_uses_provider_wh_hours_and_canonical_actual_history_interval(
         self,
     ) -> None:
-        _, builder = self._make_builder()
+        forecast_builder_module, builder = self._make_builder(
+            config_entries={
+                "forecast-entry": _FakeConfigEntry(
+                    "forecast-entry", "forecast_solar"
+                )
+            }
+        )
         builder._config = {
             "power_devices": {
                 "solar": {
@@ -241,20 +267,26 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         actual_history_mock = AsyncMock(return_value=[{"timestamp": "history"}])
+        upstream_loader = AsyncMock(
+            return_value={
+                "wh_hours": {
+                    "2026-03-20T23:00:00+01:00": 300.0,
+                    "2026-03-20T22:00:00+01:00": 250.0,
+                }
+            }
+        )
+        fake_provider_module = SimpleNamespace(async_get_solar_forecast=upstream_loader)
 
         with (
             patch.object(
-                importlib.import_module("custom_components.helman.forecast_builder"),
-                "async_load_upstream_solar_forecast",
-                AsyncMock(
-                    return_value={
-                        "wh_hours": {
-                            "2026-03-20T23:00:00+01:00": 300.0,
-                            "2026-03-20T22:00:00+01:00": 250.0,
-                        }
-                    }
+                forecast_builder_module.importlib,
+                "import_module",
+                side_effect=lambda module_name: (
+                    fake_provider_module
+                    if module_name == "custom_components.forecast_solar.energy"
+                    else (_ for _ in ()).throw(ModuleNotFoundError(module_name))
                 ),
-            ) as load_forecast_mock,
+            ) as import_module_mock,
             patch.object(builder, "_build_solar_actual_history", actual_history_mock),
         ):
             payload = await builder._build_solar_forecast(REFERENCE_TIME)
@@ -276,11 +308,33 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                 },
             ],
         )
-        load_forecast_mock.assert_awaited_once_with(builder._hass, "forecast-entry")
+        import_module_mock.assert_called_with("custom_components.forecast_solar.energy")
+        upstream_loader.assert_awaited_once_with(builder._hass, "forecast-entry")
         actual_history_mock.assert_awaited_once_with(
             REFERENCE_TIME,
             interval_minutes=15,
         )
+
+    async def test_build_solar_forecast_rejects_helman_self_entry(self) -> None:
+        _, builder = self._make_builder(
+            config_entries={
+                "helman-entry": _FakeConfigEntry("helman-entry", "helman")
+            }
+        )
+        builder._config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "source_config_entry_id": "helman-entry",
+                    }
+                }
+            }
+        }
+
+        payload = await builder._build_solar_forecast(REFERENCE_TIME)
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["points"], [])
 
     async def test_extract_hourly_solar_points_reanchors_post_dst_stale_offset_day(self) -> None:
         entity_id = "sensor.energy_production_d2"
