@@ -69,8 +69,8 @@ def migrate_legacy_solar_forecast_config(
 
 async def async_list_supported_solar_forecast_entries(hass) -> list[dict[str, str]]:
     supported_domains = set(await async_get_energy_platforms(hass))
-    helman_entries = hass.config_entries.async_entries(DOMAIN)
-    helman_entry_id = helman_entries[0].entry_id if helman_entries else None
+    domain_data = hass.data.get(DOMAIN, {})
+    helman_entry_id = domain_data.get("entry_id")
     payload: list[dict[str, str]] = []
 
     for entry in hass.config_entries.async_entries():

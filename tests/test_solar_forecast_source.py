@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 
@@ -54,11 +55,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman.solar_forecast_source import (
-    infer_source_config_entry_id_from_legacy_entities,
-    is_supported_solar_forecast_entry,
-    migrate_legacy_solar_forecast_config,
-)
+from custom_components.helman import solar_forecast_source
 
 
 class _FakeConfigEntry:
@@ -92,7 +89,7 @@ def test_is_supported_solar_forecast_entry_rejects_helman_self():
     )
 
     assert (
-        is_supported_solar_forecast_entry(
+        solar_forecast_source.is_supported_solar_forecast_entry(
             hass,
             "helman-entry",
             supported_domains={"helman", "forecast_solar"},
@@ -100,6 +97,97 @@ def test_is_supported_solar_forecast_entry_rejects_helman_self():
         )
         is False
     )
+
+
+def test_is_supported_solar_forecast_entry_accepts_supported_forecast_provider():
+    hass = SimpleNamespace(
+        config_entries=_FakeConfigEntries(
+            {
+                "forecast-entry": _FakeConfigEntry(
+                    "forecast-entry", "forecast_solar", "Forecast"
+                ),
+            }
+        )
+    )
+
+    assert (
+        solar_forecast_source.is_supported_solar_forecast_entry(
+            hass,
+            "forecast-entry",
+            supported_domains={"forecast_solar"},
+            helman_entry_id="helman-entry",
+        )
+        is True
+    )
+
+
+def test_is_supported_solar_forecast_entry_rejects_missing_and_unsupported_entries():
+    hass = SimpleNamespace(
+        config_entries=_FakeConfigEntries(
+            {
+                "weather-entry": _FakeConfigEntry("weather-entry", "weather", "Weather"),
+            }
+        )
+    )
+
+    assert (
+        solar_forecast_source.is_supported_solar_forecast_entry(
+            hass,
+            "missing-entry",
+            supported_domains={"forecast_solar"},
+            helman_entry_id="helman-entry",
+        )
+        is False
+    )
+    assert (
+        solar_forecast_source.is_supported_solar_forecast_entry(
+            hass,
+            "weather-entry",
+            supported_domains={"forecast_solar"},
+            helman_entry_id="helman-entry",
+        )
+        is False
+    )
+
+
+def test_async_list_supported_solar_forecast_entries_uses_persisted_helman_entry_id():
+    hass = SimpleNamespace(
+        data={"helman": {"entry_id": "helman-entry-2"}},
+        config_entries=_FakeConfigEntries(
+            {
+                "helman-entry-1": _FakeConfigEntry("helman-entry-1", "helman", "Helman A"),
+                "helman-entry-2": _FakeConfigEntry("helman-entry-2", "helman", "Helman B"),
+                "forecast-entry": _FakeConfigEntry(
+                    "forecast-entry", "forecast_solar", "Forecast"
+                ),
+            }
+        ),
+    )
+
+    async def _async_get_energy_platforms(_hass):
+        return ["helman", "forecast_solar"]
+
+    original = solar_forecast_source.async_get_energy_platforms
+    solar_forecast_source.async_get_energy_platforms = _async_get_energy_platforms
+    try:
+        payload = asyncio.run(
+            solar_forecast_source.async_list_supported_solar_forecast_entries(hass)
+        )
+    finally:
+        solar_forecast_source.async_get_energy_platforms = original
+
+    assert payload == [
+        {
+            "entry_id": "forecast-entry",
+            "title": "Forecast",
+            "domain": "forecast_solar",
+        },
+        {
+            "entry_id": "helman-entry-1",
+            "title": "Helman A",
+            "domain": "helman",
+        },
+    ]
 
 
 def test_infer_source_config_entry_id_from_legacy_entities_returns_single_match():
@@ -112,10 +200,42 @@ def test_infer_source_config_entry_id_from_legacy_entities_returns_single_match(
         ),
     }
 
-    inferred = infer_source_config_entry_id_from_legacy_entities(
+    inferred = solar_forecast_source.infer_source_config_entry_id_from_legacy_entities(
         ["sensor.energy_production_today", "sensor.energy_production_tomorrow"],
         entity_entries=entity_entries,
         supported_entry_ids={"forecast-entry"},
+        helman_entry_id="helman-entry",
+    )
+
+    assert inferred == "forecast-entry"
+
+
+def test_infer_source_config_entry_id_from_legacy_entities_returns_none_for_multiple_candidates():
+    entity_entries = {
+        "sensor.day_1": SimpleNamespace(config_entry_id="forecast-entry-a"),
+        "sensor.day_2": SimpleNamespace(config_entry_id="forecast-entry-b"),
+    }
+
+    inferred = solar_forecast_source.infer_source_config_entry_id_from_legacy_entities(
+        ["sensor.day_1", "sensor.day_2"],
+        entity_entries=entity_entries,
+        supported_entry_ids={"forecast-entry-a", "forecast-entry-b"},
+        helman_entry_id="helman-entry",
+    )
+
+    assert inferred is None
+
+
+def test_infer_source_config_entry_id_from_legacy_entities_ignores_helman_self_entry():
+    entity_entries = {
+        "sensor.day_1": SimpleNamespace(config_entry_id="helman-entry"),
+        "sensor.day_2": SimpleNamespace(config_entry_id="forecast-entry"),
+    }
+
+    inferred = solar_forecast_source.infer_source_config_entry_id_from_legacy_entities(
+        ["sensor.day_1", "sensor.day_2"],
+        entity_entries=entity_entries,
+        supported_entry_ids={"helman-entry", "forecast-entry"},
         helman_entry_id="helman-entry",
     )
 
@@ -134,7 +254,7 @@ def test_migrate_legacy_solar_forecast_config_removes_daily_entities_when_infere
         }
     }
 
-    migrated = migrate_legacy_solar_forecast_config(
+    migrated = solar_forecast_source.migrate_legacy_solar_forecast_config(
         config,
         inferred_source_config_entry_id=None,
     )
@@ -142,3 +262,40 @@ def test_migrate_legacy_solar_forecast_config_removes_daily_entities_when_infere
     forecast = migrated["power_devices"]["solar"]["forecast"]
     assert "daily_energy_entity_ids" not in forecast
     assert forecast.get("source_config_entry_id") is None
+
+
+def test_migrate_legacy_solar_forecast_config_sets_source_id_and_deep_copies():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "daily_energy_entity_ids": ["sensor.day_1", "sensor.day_2"],
+                    "total_energy_entity_id": "sensor.solar_total",
+                    "metadata": {"unit": "Wh"},
+                }
+            }
+        }
+    }
+
+    migrated = solar_forecast_source.migrate_legacy_solar_forecast_config(
+        config,
+        inferred_source_config_entry_id="forecast-entry",
+    )
+
+    migrated["power_devices"]["solar"]["forecast"]["metadata"]["unit"] = "kWh"
+
+    assert (
+        migrated["power_devices"]["solar"]["forecast"]["source_config_entry_id"]
+        == "forecast-entry"
+    )
+    assert (
+        "daily_energy_entity_ids"
+        not in migrated["power_devices"]["solar"]["forecast"]
+    )
+    assert (
+        config["power_devices"]["solar"]["forecast"]["daily_energy_entity_ids"]
+        == ["sensor.day_1", "sensor.day_2"]
+    )
+    assert (
+        config["power_devices"]["solar"]["forecast"]["metadata"]["unit"] == "Wh"
+    )
