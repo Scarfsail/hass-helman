@@ -458,7 +458,7 @@ class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         _FakeStore.reset()
 
-    async def test_async_load_normalizes_legacy_config_and_persists_it(self) -> None:
+    async def test_async_load_normalizes_legacy_config_in_memory_only(self) -> None:
         legacy_config = _valid_config()
         forecast = legacy_config["power_devices"]["solar"]["forecast"]
         forecast.pop("source_config_entry_id", None)
@@ -476,23 +476,7 @@ class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
             store.config["power_devices"]["solar"]["forecast"],
             {"total_energy_entity_id": "sensor.solar_total"},
         )
-        self.assertEqual(
-            _FakeStore.saves_by_key[STORAGE_KEY],
-            [
-                {
-                    **legacy_config,
-                    "power_devices": {
-                        **legacy_config["power_devices"],
-                        "solar": {
-                            **legacy_config["power_devices"]["solar"],
-                            "forecast": {
-                                "total_energy_entity_id": "sensor.solar_total"
-                            },
-                        },
-                    },
-                }
-            ],
-        )
+        self.assertNotIn(STORAGE_KEY, _FakeStore.saves_by_key)
 
     async def test_async_save_persists_normalized_config(self) -> None:
         store = HelmanStorage(object())
