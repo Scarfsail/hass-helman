@@ -45,6 +45,38 @@ def _install_import_stubs() -> None:
     if components_pkg is None:
         components_pkg = types.ModuleType("homeassistant.components")
         sys.modules["homeassistant.components"] = components_pkg
+    if not hasattr(components_pkg, "__path__"):
+        components_pkg.__path__ = []
+
+    energy_pkg = sys.modules.get("homeassistant.components.energy")
+    if energy_pkg is None:
+        energy_pkg = types.ModuleType("homeassistant.components.energy")
+        sys.modules["homeassistant.components.energy"] = energy_pkg
+    if not hasattr(energy_pkg, "__path__"):
+        energy_pkg.__path__ = []
+
+    energy_ws_mod = sys.modules.get("homeassistant.components.energy.websocket_api")
+    if energy_ws_mod is None:
+        energy_ws_mod = types.ModuleType(
+            "homeassistant.components.energy.websocket_api"
+        )
+        sys.modules["homeassistant.components.energy.websocket_api"] = energy_ws_mod
+    if not hasattr(energy_ws_mod, "async_get_energy_platforms"):
+        async def _async_get_energy_platforms(_hass):
+            return []
+        energy_ws_mod.async_get_energy_platforms = _async_get_energy_platforms
+
+    helpers_pkg = sys.modules.get("homeassistant.helpers")
+    if helpers_pkg is None:
+        helpers_pkg = types.ModuleType("homeassistant.helpers")
+        sys.modules["homeassistant.helpers"] = helpers_pkg
+    if not hasattr(helpers_pkg, "__path__"):
+        helpers_pkg.__path__ = []
+
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
 
     recorder_mod = sys.modules.get("homeassistant.components.recorder")
     if recorder_mod is None:
@@ -247,13 +279,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_solar_forecast_uses_provider_wh_hours_and_canonical_actual_history_interval(
         self,
     ) -> None:
-        forecast_builder_module, builder = self._make_builder(
-            config_entries={
-                "forecast-entry": _FakeConfigEntry(
-                    "forecast-entry", "forecast_solar"
-                )
-            }
-        )
+        _, builder = self._make_builder()
         builder._config = {
             "power_devices": {
                 "solar": {
@@ -267,7 +293,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         actual_history_mock = AsyncMock(return_value=[{"timestamp": "history"}])
-        upstream_loader = AsyncMock(
+        load_forecast_mock = AsyncMock(
             return_value={
                 "wh_hours": {
                     "2026-03-20T23:00:00+01:00": 300.0,
@@ -275,18 +301,13 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                 }
             }
         )
-        fake_provider_module = SimpleNamespace(async_get_solar_forecast=upstream_loader)
 
         with (
             patch.object(
-                forecast_builder_module.importlib,
-                "import_module",
-                side_effect=lambda module_name: (
-                    fake_provider_module
-                    if module_name == "custom_components.forecast_solar.energy"
-                    else (_ for _ in ()).throw(ModuleNotFoundError(module_name))
-                ),
-            ) as import_module_mock,
+                importlib.import_module("custom_components.helman.forecast_builder"),
+                "async_load_upstream_solar_forecast",
+                load_forecast_mock,
+            ),
             patch.object(builder, "_build_solar_actual_history", actual_history_mock),
         ):
             payload = await builder._build_solar_forecast(REFERENCE_TIME)
@@ -308,8 +329,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                 },
             ],
         )
-        import_module_mock.assert_called_with("custom_components.forecast_solar.energy")
-        upstream_loader.assert_awaited_once_with(builder._hass, "forecast-entry")
+        load_forecast_mock.assert_awaited_once_with(builder._hass, "forecast-entry")
         actual_history_mock.assert_awaited_once_with(
             REFERENCE_TIME,
             interval_minutes=15,
@@ -334,6 +354,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         payload = await builder._build_solar_forecast(REFERENCE_TIME)
 
         self.assertEqual(payload["status"], "unavailable")
+        self.assertIsNone(payload["unit"])
         self.assertEqual(payload["points"], [])
 
     async def test_extract_hourly_solar_points_reanchors_post_dst_stale_offset_day(self) -> None:

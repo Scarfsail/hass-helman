@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib
+import logging
 from typing import Any
 
 from homeassistant.components.energy.websocket_api import async_get_energy_platforms
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _normalize_source_config_entry_id(value: Any) -> str | None:
@@ -163,3 +167,39 @@ async def async_migrate_legacy_solar_forecast_config(
         config,
         inferred_source_config_entry_id=inferred,
     )
+
+
+async def async_load_upstream_solar_forecast(
+    hass, source_config_entry_id: str
+) -> dict[str, Any] | None:
+    config_entry = hass.config_entries.async_get_entry(source_config_entry_id)
+    if config_entry is None or config_entry.domain == DOMAIN:
+        return None
+
+    loader = _load_energy_platform_loader(config_entry.domain)
+    if loader is None:
+        return None
+
+    return await loader(hass, source_config_entry_id)
+
+
+def _load_energy_platform_loader(domain: str):
+    for module_name in (
+        f"custom_components.{domain}.energy",
+        f"homeassistant.components.{domain}.energy",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as err:
+            if err.name != module_name:
+                _LOGGER.exception(
+                    "Failed importing upstream energy platform module %s", module_name
+                )
+                return None
+            continue
+
+        loader = getattr(module, "async_get_solar_forecast", None)
+        if callable(loader):
+            return loader
+
+    return None

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import logging
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -9,9 +8,10 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, FORECAST_CANONICAL_GRANULARITY_MINUTES
+from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .recorder_hourly_series import query_slot_energy_changes
+from .solar_forecast_source import async_load_upstream_solar_forecast
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +47,8 @@ class HelmanForecastBuilder:
                 "points": [],
             }
 
-        upstream_forecast = await self._async_load_upstream_solar_forecast(
+        upstream_forecast = await async_load_upstream_solar_forecast(
+            self._hass,
             source_config_entry_id
         )
         points = self._build_points_from_wh_hours(
@@ -65,45 +66,11 @@ class HelmanForecastBuilder:
 
         return {
             "status": status,
-            "unit": "Wh",
+            "unit": "Wh" if points else None,
             "remainingTodayEnergyEntityId": remaining_today_entity_id,
             "actualHistory": actual_history,
             "points": points,
         }
-
-    async def _async_load_upstream_solar_forecast(
-        self, source_config_entry_id: str
-    ) -> dict[str, Any] | None:
-        config_entries = getattr(self._hass, "config_entries", None)
-        if config_entries is None:
-            return None
-
-        config_entry = config_entries.async_get_entry(source_config_entry_id)
-        if config_entry is None or config_entry.domain == DOMAIN:
-            return None
-
-        loader = self._load_energy_platform_loader(config_entry.domain)
-        if loader is None:
-            return None
-
-        return await loader(self._hass, source_config_entry_id)
-
-    @staticmethod
-    def _load_energy_platform_loader(domain: str):
-        for module_name in (
-            f"custom_components.{domain}.energy",
-            f"homeassistant.components.{domain}.energy",
-        ):
-            try:
-                module = importlib.import_module(module_name)
-            except ModuleNotFoundError:
-                continue
-
-            loader = getattr(module, "async_get_solar_forecast", None)
-            if callable(loader):
-                return loader
-
-        return None
 
     def _build_points_from_wh_hours(self, raw_wh_hours: Any) -> list[dict[str, Any]]:
         if not isinstance(raw_wh_hours, dict):
