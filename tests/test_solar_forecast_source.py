@@ -668,3 +668,80 @@ def test_async_migrate_legacy_solar_forecast_config_tolerates_non_list_legacy_id
             }
         }
     }
+
+
+def test_async_load_upstream_solar_forecast_falls_back_to_builtin_energy_module():
+    hass = SimpleNamespace(
+        config_entries=_FakeConfigEntries(
+            {
+                "forecast-entry": _FakeConfigEntry(
+                    "forecast-entry", "forecast_solar", "Forecast"
+                ),
+            }
+        )
+    )
+    async def _async_get_solar_forecast(inner_hass, entry_id):
+        return {
+            "hass": inner_hass,
+            "entry_id": entry_id,
+        }
+
+    builtin_loader = SimpleNamespace(async_get_solar_forecast=_async_get_solar_forecast)
+
+    original_import_module = solar_forecast_source.importlib.import_module
+
+    def _import_module(name: str):
+        if name == "custom_components.forecast_solar.energy":
+            raise ModuleNotFoundError(name=name)
+        if name == "homeassistant.components.forecast_solar.energy":
+            return builtin_loader
+        raise AssertionError(name)
+
+    solar_forecast_source.importlib.import_module = _import_module
+    try:
+        result = asyncio.run(
+            solar_forecast_source.async_load_upstream_solar_forecast(
+                hass, "forecast-entry"
+            )
+        )
+    finally:
+        solar_forecast_source.importlib.import_module = original_import_module
+
+    assert result == {
+        "hass": hass,
+        "entry_id": "forecast-entry",
+    }
+
+
+def test_async_load_upstream_solar_forecast_swallows_missing_module_only():
+    hass = SimpleNamespace(
+        config_entries=_FakeConfigEntries(
+            {
+                "forecast-entry": _FakeConfigEntry(
+                    "forecast-entry", "forecast_solar", "Forecast"
+                ),
+            }
+        )
+    )
+
+    original_import_module = solar_forecast_source.importlib.import_module
+
+    def _import_module(name: str):
+        if name == "custom_components.forecast_solar.energy":
+            raise ModuleNotFoundError(
+                "nested dependency missing",
+                name="custom_components.shared_dependency",
+            )
+        raise AssertionError(name)
+
+    solar_forecast_source.importlib.import_module = _import_module
+    try:
+        result = asyncio.run(
+            solar_forecast_source.async_load_upstream_solar_forecast(
+                hass, "forecast-entry"
+            )
+        )
+    finally:
+        solar_forecast_source.importlib.import_module = original_import_module
+
+    assert result is None
