@@ -56,11 +56,18 @@ def migrate_legacy_solar_forecast_config(
     inferred_source_config_entry_id: str | None,
 ) -> dict[str, Any]:
     migrated = deepcopy(config)
-    forecast = (
-        migrated.setdefault("power_devices", {})
-        .setdefault("solar", {})
-        .setdefault("forecast", {})
-    )
+    power_devices = migrated.get("power_devices")
+    if not isinstance(power_devices, dict):
+        return migrated
+
+    solar = power_devices.get("solar")
+    if not isinstance(solar, dict):
+        return migrated
+
+    forecast = solar.get("forecast")
+    if not isinstance(forecast, dict):
+        return migrated
+
     forecast.pop("daily_energy_entity_ids", None)
     if inferred_source_config_entry_id:
         forecast["source_config_entry_id"] = inferred_source_config_entry_id
@@ -74,6 +81,8 @@ async def async_list_supported_solar_forecast_entries(hass) -> list[dict[str, st
     payload: list[dict[str, str]] = []
 
     for entry in hass.config_entries.async_entries():
+        if helman_entry_id is None and entry.domain == DOMAIN:
+            continue
         if not is_supported_solar_forecast_entry(
             hass,
             entry.entry_id,
