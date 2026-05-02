@@ -162,6 +162,7 @@ def _install_import_stubs() -> None:
     if components_pkg is None:
         components_pkg = types.ModuleType("homeassistant.components")
         sys.modules["homeassistant.components"] = components_pkg
+    components_pkg.__path__ = []
 
     websocket_api_mod = sys.modules.get("homeassistant.components.websocket_api")
     if websocket_api_mod is None:
@@ -181,10 +182,38 @@ def _install_import_stubs() -> None:
     websocket_api_mod.websocket_command = websocket_command
     components_pkg.websocket_api = websocket_api_mod
 
+    energy_pkg = sys.modules.get("homeassistant.components.energy")
+    if energy_pkg is None:
+        energy_pkg = types.ModuleType("homeassistant.components.energy")
+        sys.modules["homeassistant.components.energy"] = energy_pkg
+    energy_pkg.__path__ = []
+
+    energy_websocket_mod = sys.modules.get(
+        "homeassistant.components.energy.websocket_api"
+    )
+    if energy_websocket_mod is None:
+        energy_websocket_mod = types.ModuleType(
+            "homeassistant.components.energy.websocket_api"
+        )
+        sys.modules["homeassistant.components.energy.websocket_api"] = (
+            energy_websocket_mod
+        )
+
+    async def _async_get_energy_platforms(_hass):
+        return []
+
+    energy_websocket_mod.async_get_energy_platforms = _async_get_energy_platforms
+
     helpers_pkg = sys.modules.get("homeassistant.helpers")
     if helpers_pkg is None:
         helpers_pkg = types.ModuleType("homeassistant.helpers")
         sys.modules["homeassistant.helpers"] = helpers_pkg
+
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    entity_registry_mod.async_get = lambda hass: None
 
     storage_mod = sys.modules.get("homeassistant.helpers.storage")
     if storage_mod is None:
@@ -227,6 +256,7 @@ from custom_components.helman.automation import config as automation_config_modu
 from custom_components.helman.const import DOMAIN
 from custom_components.helman.websockets import (
     ws_get_config,
+    ws_get_solar_forecast_sources,
     ws_save_config,
     ws_validate_config,
 )
@@ -274,8 +304,15 @@ class FakeConnection:
 
 
 class FakeConfigEntry:
-    def __init__(self, entry_id: str) -> None:
+    def __init__(
+        self,
+        entry_id: str,
+        domain: str = DOMAIN,
+        title: str = "Helman",
+    ) -> None:
         self.entry_id = entry_id
+        self.domain = domain
+        self.title = title
 
 
 class FakeConfigEntries:
@@ -290,8 +327,16 @@ class FakeConfigEntries:
         self.reload_result = reload_result
         self.reload_error = reload_error
 
-    def async_entries(self, domain: str):
-        return list(self.entries)
+    def async_entries(self, domain: str | None = None):
+        if domain is None:
+            return list(self.entries)
+        return [entry for entry in self.entries if entry.domain == domain]
+
+    def async_get_entry(self, entry_id: str):
+        for entry in self.entries:
+            if entry.entry_id == entry_id:
+                return entry
+        return None
 
     async def async_reload(self, entry_id: str) -> bool:
         self.reload_calls.append(entry_id)
@@ -371,10 +416,10 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.errors, [])
         self.assertEqual(connection.results, [(1, config)])
 
-    def test_validate_config_returns_structured_report(self) -> None:
+    async def test_validate_config_returns_structured_report(self) -> None:
         connection = FakeConnection(is_admin=True)
 
-        ws_validate_config(
+        await ws_validate_config(
             FakeHass(FakeStorage()),
             connection,
             {"id": 1, "type": "helman/validate_config", "config": _invalid_config()},
@@ -385,10 +430,10 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(connection.results[0][1]["valid"])
         self.assertIn("errors", connection.results[0][1])
 
-    def test_validate_config_reports_unknown_optimizer_kind_for_automation_payload(self) -> None:
+    async def test_validate_config_reports_unknown_optimizer_kind_for_automation_payload(self) -> None:
         connection = FakeConnection(is_admin=True)
 
-        ws_validate_config(
+        await ws_validate_config(
             FakeHass(FakeStorage()),
             connection,
             {
@@ -419,6 +464,92 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             "automation.optimizers[0].kind",
         )
         self.assertIn("does_not_exist", connection.results[0][1]["errors"][0]["message"])
+
+    async def test_validate_and_save_reject_malformed_legacy_daily_energy_entity_ids_consistently(
+        self,
+    ) -> None:
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": 7,
+                    }
+                }
+            }
+        }
+        validate_connection = FakeConnection(is_admin=True)
+        save_connection = FakeConnection(is_admin=True)
+        storage = FakeStorage()
+        hass = FakeHass(storage)
+
+        await ws_validate_config(
+            hass,
+            validate_connection,
+            {"id": 1, "type": "helman/validate_config", "config": config},
+        )
+        await ws_save_config(
+            hass,
+            save_connection,
+            {"id": 2, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertFalse(validate_connection.results[0][1]["valid"])
+        self.assertEqual(
+            validate_connection.results[0][1]["errors"][0]["path"],
+            "power_devices.solar.forecast.daily_energy_entity_ids",
+        )
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertFalse(save_connection.results[0][1]["validation"]["valid"])
+        self.assertEqual(
+            save_connection.results[0][1]["validation"]["errors"][0]["path"],
+            "power_devices.solar.forecast.daily_energy_entity_ids",
+        )
+
+    async def test_get_solar_forecast_sources_returns_supported_entries_only(self) -> None:
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(FakeStorage())
+        hass.config_entries.entries = [
+            FakeConfigEntry("helman-entry", DOMAIN, "Helman"),
+            FakeConfigEntry("forecast-entry", "forecast_solar", "Forecast"),
+            FakeConfigEntry("weather-entry", "weather", "Weather"),
+        ]
+
+        import custom_components.helman.solar_forecast_source as source_module
+
+        async def _async_get_energy_platforms(_hass):
+            return ["helman", "forecast_solar"]
+
+        original = source_module.async_get_energy_platforms
+        source_module.async_get_energy_platforms = _async_get_energy_platforms
+        self.addCleanup(
+            setattr,
+            source_module,
+            "async_get_energy_platforms",
+            original,
+        )
+
+        await ws_get_solar_forecast_sources(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/get_solar_forecast_sources"},
+        )
+
+        self.assertEqual(connection.errors, [])
+        self.assertEqual(
+            connection.results,
+            [
+                (
+                    1,
+                    [
+                        {
+                            "entry_id": "forecast-entry",
+                            "title": "Forecast",
+                            "domain": "forecast_solar",
+                        }
+                    ],
+                )
+            ],
+        )
 
     async def test_save_config_does_not_persist_invalid_document(self) -> None:
         storage = FakeStorage()
@@ -455,6 +586,229 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.results[0][1]["reloadStarted"])
         self.assertTrue(connection.results[0][1]["reloadSucceeded"])
         self.assertIsNone(connection.results[0][1]["reloadError"])
+
+    async def test_save_config_strips_legacy_daily_energy_entity_ids_from_persisted_config(
+        self,
+    ) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        hass.data[DOMAIN]["entry_id"] = "helman-entry"
+        hass.config_entries.entries = [
+            FakeConfigEntry("entry-1", DOMAIN, "Helman"),
+            FakeConfigEntry("forecast-entry", "forecast_solar", "Forecast"),
+        ]
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": [
+                            "sensor.energy_production_today",
+                            "sensor.energy_production_tomorrow",
+                        ],
+                        "total_energy_entity_id": "sensor.solar_total",
+                    }
+                }
+            }
+        }
+
+        entity_registry_mod = sys.modules["homeassistant.helpers.entity_registry"]
+        original_registry_get = entity_registry_mod.async_get
+        registry = types.SimpleNamespace(
+            async_get=lambda entity_id: {
+                "sensor.energy_production_today": types.SimpleNamespace(
+                    config_entry_id="forecast-entry"
+                ),
+                "sensor.energy_production_tomorrow": types.SimpleNamespace(
+                    config_entry_id="forecast-entry"
+                ),
+            }.get(entity_id)
+        )
+        entity_registry_mod.async_get = lambda _hass: registry
+        self.addCleanup(
+            setattr,
+            entity_registry_mod,
+            "async_get",
+            original_registry_get,
+        )
+
+        import custom_components.helman.solar_forecast_source as source_module
+
+        async def _async_get_energy_platforms(_hass):
+            return ["helman", "forecast_solar"]
+
+        original = source_module.async_get_energy_platforms
+        original_source_registry_get = source_module.er.async_get
+        source_module.async_get_energy_platforms = _async_get_energy_platforms
+        source_module.er.async_get = lambda _hass: registry
+        self.addCleanup(
+            setattr,
+            source_module,
+            "async_get_energy_platforms",
+            original,
+        )
+        self.addCleanup(
+            setattr,
+            source_module.er,
+            "async_get",
+            original_source_registry_get,
+        )
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertEqual(
+            storage.saved_payloads,
+            [
+                {
+                    "power_devices": {
+                        "solar": {
+                            "forecast": {
+                                "source_config_entry_id": "forecast-entry",
+                                "total_energy_entity_id": "sensor.solar_total",
+                            }
+                        }
+                    }
+                }
+            ],
+        )
+        self.assertTrue(connection.results[0][1]["success"])
+
+    async def test_save_config_allows_malformed_power_devices_to_flow_to_validation(
+        self,
+    ) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": {"power_devices": []}},
+        )
+
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertEqual(hass.config_entries.reload_calls, [])
+        self.assertEqual(connection.errors, [])
+        self.assertFalse(connection.results[0][1]["success"])
+        self.assertFalse(connection.results[0][1]["reloadStarted"])
+        self.assertFalse(connection.results[0][1]["validation"]["valid"])
+
+    async def test_save_config_rejects_invalid_explicit_source_config_entry_id(
+        self,
+    ) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        hass.data[DOMAIN]["entry_id"] = "helman-entry"
+        hass.config_entries.entries = [
+            FakeConfigEntry("entry-1", DOMAIN, "Helman"),
+            FakeConfigEntry("forecast-entry", "forecast_solar", "Forecast"),
+        ]
+        config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": [
+                            "sensor.energy_production_today",
+                            "sensor.energy_production_tomorrow",
+                        ],
+                        "source_config_entry_id": "   ",
+                        "total_energy_entity_id": "sensor.solar_total",
+                    }
+                }
+            }
+        }
+
+        registry = types.SimpleNamespace(
+            async_get=lambda entity_id: {
+                "sensor.energy_production_today": types.SimpleNamespace(
+                    config_entry_id="forecast-entry"
+                ),
+                "sensor.energy_production_tomorrow": types.SimpleNamespace(
+                    config_entry_id="forecast-entry"
+                ),
+            }.get(entity_id)
+        )
+
+        import custom_components.helman.solar_forecast_source as source_module
+
+        original_platforms = source_module.async_get_energy_platforms
+        original_registry_get = source_module.er.async_get
+
+        async def _async_get_energy_platforms(_hass):
+            return ["helman", "forecast_solar"]
+
+        source_module.async_get_energy_platforms = _async_get_energy_platforms
+        source_module.er.async_get = lambda _hass: registry
+        self.addCleanup(
+            setattr,
+            source_module,
+            "async_get_energy_platforms",
+            original_platforms,
+        )
+        self.addCleanup(
+            setattr,
+            source_module.er,
+            "async_get",
+            original_registry_get,
+        )
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertEqual(hass.config_entries.reload_calls, [])
+        self.assertEqual(connection.errors, [])
+        self.assertFalse(connection.results[0][1]["success"])
+        self.assertFalse(connection.results[0][1]["reloadStarted"])
+        self.assertFalse(connection.results[0][1]["validation"]["valid"])
+        self.assertEqual(
+            connection.results[0][1]["validation"]["errors"][0]["path"],
+            "power_devices.solar.forecast.source_config_entry_id",
+        )
+
+    async def test_save_config_allows_non_list_daily_energy_entity_ids_to_flow_to_validation(
+        self,
+    ) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+
+        await ws_save_config(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": "helman/save_config",
+                "config": {
+                    "power_devices": {
+                        "solar": {
+                            "forecast": {
+                                "daily_energy_entity_ids": 7,
+                            }
+                        }
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertEqual(hass.config_entries.reload_calls, [])
+        self.assertEqual(connection.errors, [])
+        self.assertFalse(connection.results[0][1]["success"])
+        self.assertFalse(connection.results[0][1]["reloadStarted"])
+        self.assertFalse(connection.results[0][1]["validation"]["valid"])
+        self.assertEqual(
+            connection.results[0][1]["validation"]["errors"][0]["path"],
+            "power_devices.solar.forecast.daily_energy_entity_ids",
+        )
 
     async def test_save_config_persists_minimal_automation_config(self) -> None:
         storage = FakeStorage()

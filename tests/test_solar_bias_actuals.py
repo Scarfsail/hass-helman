@@ -41,6 +41,26 @@ def _install_import_stubs() -> None:
     if components_pkg is None:
         components_pkg = types.ModuleType("homeassistant.components")
         sys.modules["homeassistant.components"] = components_pkg
+    if not hasattr(components_pkg, "__path__"):
+        components_pkg.__path__ = []
+
+    energy_pkg = sys.modules.get("homeassistant.components.energy")
+    if energy_pkg is None:
+        energy_pkg = types.ModuleType("homeassistant.components.energy")
+        sys.modules["homeassistant.components.energy"] = energy_pkg
+    if not hasattr(energy_pkg, "__path__"):
+        energy_pkg.__path__ = []
+
+    energy_ws_mod = sys.modules.get("homeassistant.components.energy.websocket_api")
+    if energy_ws_mod is None:
+        energy_ws_mod = types.ModuleType(
+            "homeassistant.components.energy.websocket_api"
+        )
+        sys.modules["homeassistant.components.energy.websocket_api"] = energy_ws_mod
+    if not hasattr(energy_ws_mod, "async_get_energy_platforms"):
+        async def _async_get_energy_platforms(_hass):
+            return []
+        energy_ws_mod.async_get_energy_platforms = _async_get_energy_platforms
 
     recorder_mod = sys.modules.get("homeassistant.components.recorder")
     if recorder_mod is None:
@@ -72,6 +92,20 @@ def _install_import_stubs() -> None:
     if not hasattr(dt_mod, "as_utc"):
         dt_mod.as_utc = lambda value: value
     util_pkg.dt = dt_mod
+
+    helpers_pkg = sys.modules.get("homeassistant.helpers")
+    if helpers_pkg is None:
+        helpers_pkg = types.ModuleType("homeassistant.helpers")
+        sys.modules["homeassistant.helpers"] = helpers_pkg
+    if not hasattr(helpers_pkg, "__path__"):
+        helpers_pkg.__path__ = []
+
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    if not hasattr(entity_registry_mod, "async_get"):
+        entity_registry_mod.async_get = lambda _hass: None
 
 
 _install_import_stubs()
@@ -345,6 +379,56 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(slot_keys), {"2026-04-16"})
         self.assertEqual(len(slot_keys["2026-04-16"]), 96)
         self.assertIn("12:00", slot_keys["2026-04-16"])
+
+    async def test_load_actuals_window_uses_discovered_provider_entities_for_data_glitches(
+        self,
+    ) -> None:
+        hass = SimpleNamespace(
+            data={"helman": {"coordinator": SimpleNamespace(config={})}},
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            source_config_entry_id="forecast-entry",
+            slot_invalidation_max_battery_soc_percent=None,
+            slot_invalidation_export_enabled_entity_id=None,
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=200.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
+        )
+
+        async def _fake_historical_forecast(hass, entity_ids, target_date, *, local_now):
+            self.assertEqual(entity_ids, ["sensor.solar_today"])
+            self.assertEqual(target_date, date(2026, 4, 16))
+            self.assertEqual(local_now, datetime(2026, 4, 17, 12, 0, tzinfo=TZ))
+            return {"12:00": 300.0}
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(return_value={"12:00": 0.0, "12:15": 600.0}),
+        ), patch.object(
+            actuals,
+            "async_discover_provider_daily_forecast_entities",
+            AsyncMock(return_value=["sensor.solar_today"]),
+            create=True,
+        ) as discover_entities, patch.object(
+            actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(side_effect=_fake_historical_forecast),
+        ), patch.object(
+            actuals,
+            "compute_data_glitch_invalidations",
+            return_value={"2026-04-16": {"12:00"}},
+        ) as compute_invalidated:
+            window = await actuals.load_actuals_window(hass, cfg, days=1)
+
+        self.assertEqual(window.invalidated_slots_by_date, {"2026-04-16": {"12:00"}})
+        discover_entities.assert_awaited_once_with(hass, "forecast-entry")
+        self.assertEqual(
+            compute_invalidated.call_args.kwargs["forecast_slot_wh_by_date"],
+            {"2026-04-16": {"12:00": 300.0}},
+        )
 
 
 if __name__ == "__main__":

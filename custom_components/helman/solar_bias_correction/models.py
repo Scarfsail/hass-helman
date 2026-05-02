@@ -22,7 +22,7 @@ class BiasConfig:
     training_time: str
     clamp_min: float
     clamp_max: float
-    daily_energy_entity_ids: list[str]
+    source_config_entry_id: str | None
     total_energy_entity_id: str | None
     min_valid_slot_days: int = SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
     aggregation_method: str = SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
@@ -312,7 +312,9 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     aggregation_method = bias.get("aggregation_method", SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD)
     slot_invalidation = bias.get("slot_invalidation") or {}
 
-    daily_energy_entity_ids = forecast.get("daily_energy_entity_ids") or []
+    source_config_entry_id = _normalize_source_config_entry_id(
+        forecast.get("source_config_entry_id")
+    )
     total_energy_entity_id = bias.get("total_energy_entity_id") or forecast.get(
         "total_energy_entity_id"
     )
@@ -363,7 +365,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         clamp_max=clamp_max,
         min_valid_slot_days=min_valid_slot_days,
         aggregation_method=aggregation_method,
-        daily_energy_entity_ids=daily_energy_entity_ids,
+        source_config_entry_id=source_config_entry_id,
         total_energy_entity_id=total_energy_entity_id,
         slot_invalidation_max_battery_soc_percent=(
             slot_invalidation_max_battery_soc_percent
@@ -382,3 +384,10 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         ),
         max_training_window_days=max_training_window_days,
     )
+
+
+def _normalize_source_config_entry_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None

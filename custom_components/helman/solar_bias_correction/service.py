@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..solar_forecast_source import async_discover_provider_daily_forecast_entities
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
 from .forecast_history import load_forecast_points_for_day, load_trainer_samples
@@ -249,8 +250,12 @@ class SolarBiasCorrectionService:
         today = local_now.date()
         previous_days = max(self._metadata.usable_days, 0)
         min_date = today - timedelta(days=previous_days)
+        provider_entity_ids = await async_discover_provider_daily_forecast_entities(
+            self._hass,
+            self._cfg.source_config_entry_id,
+        )
         max_date = today + timedelta(
-            days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
+            days=max(len(provider_entity_ids) - 1, 0)
         )
 
         raw_points = await load_forecast_points_for_day(

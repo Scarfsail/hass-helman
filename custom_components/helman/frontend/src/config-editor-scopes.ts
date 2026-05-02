@@ -171,8 +171,8 @@ const SOLAR_FORECAST_GENERAL_PROJECTION_MEMBERS = [
     documentPath: ["power_devices", "solar", "forecast", "total_energy_entity_id"],
   },
   {
-    yamlKey: "daily_energy_entity_ids",
-    documentPath: ["power_devices", "solar", "forecast", "daily_energy_entity_ids"],
+    yamlKey: "source_config_entry_id",
+    documentPath: ["power_devices", "solar", "forecast", "source_config_entry_id"],
   },
 ] satisfies ScopeProjectionMember[];
 

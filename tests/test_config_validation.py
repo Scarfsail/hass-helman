@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +34,49 @@ def _install_import_stubs() -> None:
         sys.modules["homeassistant.core"] = core_mod
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
 
+    helpers_pkg = sys.modules.get("homeassistant.helpers")
+    if helpers_pkg is None:
+        helpers_pkg = types.ModuleType("homeassistant.helpers")
+        sys.modules["homeassistant.helpers"] = helpers_pkg
+    if not hasattr(helpers_pkg, "__path__"):
+        helpers_pkg.__path__ = []
+
+    storage_mod = sys.modules.get("homeassistant.helpers.storage")
+    if storage_mod is None:
+        storage_mod = types.ModuleType("homeassistant.helpers.storage")
+        sys.modules["homeassistant.helpers.storage"] = storage_mod
+    storage_mod.Store = type("Store", (), {})
+    helpers_pkg.storage = storage_mod
+
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    if not hasattr(entity_registry_mod, "async_get"):
+        entity_registry_mod.async_get = lambda _hass: None
+    helpers_pkg.entity_registry = entity_registry_mod
+
+    components_pkg = sys.modules.get("homeassistant.components")
+    if components_pkg is None:
+        components_pkg = types.ModuleType("homeassistant.components")
+        sys.modules["homeassistant.components"] = components_pkg
+
+    energy_pkg = sys.modules.get("homeassistant.components.energy")
+    if energy_pkg is None:
+        energy_pkg = types.ModuleType("homeassistant.components.energy")
+        sys.modules["homeassistant.components.energy"] = energy_pkg
+
+    websocket_mod = sys.modules.get("homeassistant.components.energy.websocket_api")
+    if websocket_mod is None:
+        websocket_mod = types.ModuleType(
+            "homeassistant.components.energy.websocket_api"
+        )
+        sys.modules["homeassistant.components.energy.websocket_api"] = websocket_mod
+    async def _async_get_energy_platforms(_hass):
+        return []
+    websocket_mod.async_get_energy_platforms = _async_get_energy_platforms
+    energy_pkg.websocket_api = websocket_mod
+
     util_pkg = sys.modules.get("homeassistant.util")
     if util_pkg is None:
         util_pkg = types.ModuleType("homeassistant.util")
@@ -52,6 +96,36 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.config_validation import validate_config_document
+from custom_components.helman.const import STORAGE_KEY
+import custom_components.helman.storage as helman_storage_module
+from custom_components.helman.storage import HelmanStorage
+
+
+class _FakeStore:
+    loads_by_key: dict[str, object] = {}
+    saves_by_key: dict[str, list[object]] = {}
+    instances: list["_FakeStore"] = []
+
+    def __init__(self, _hass, _version, key) -> None:
+        self.key = key
+        self._async_migrate_func = None
+        type(self).instances.append(self)
+
+    async def async_load(self):
+        return deepcopy(type(self).loads_by_key.get(self.key))
+
+    async def async_save(self, payload):
+        type(self).saves_by_key.setdefault(self.key, []).append(deepcopy(payload))
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.loads_by_key = {}
+        cls.saves_by_key = {}
+        cls.instances = []
+
+
+sys.modules["homeassistant.helpers.storage"].Store = _FakeStore
+helman_storage_module.storage.Store = _FakeStore
 
 
 def _valid_config() -> dict:
@@ -95,10 +169,7 @@ def _valid_config() -> dict:
                     "remaining_today_energy_forecast": "sensor.solar_remaining",
                 },
                 "forecast": {
-                    "daily_energy_entity_ids": [
-                        "sensor.solar_day_1",
-                        "sensor.solar_day_2",
-                    ],
+                    "source_config_entry_id": "forecast-entry",
                     "total_energy_entity_id": "sensor.solar_total",
                 },
             },
@@ -303,6 +374,49 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_solar_forecast_source_config_entry_id_accepts_non_empty_string(
+        self,
+    ) -> None:
+        config = _valid_config()
+        forecast = config["power_devices"]["solar"]["forecast"]
+        forecast.pop("daily_energy_entity_ids", None)
+        forecast["source_config_entry_id"] = "forecast-entry"
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+
+    def test_solar_forecast_source_config_entry_id_rejects_blank_string(
+        self,
+    ) -> None:
+        config = _valid_config()
+        forecast = config["power_devices"]["solar"]["forecast"]
+        forecast.pop("daily_energy_entity_ids", None)
+        forecast["source_config_entry_id"] = "   "
+
+        report = validate_config_document(config)
+
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.source_config_entry_id"
+                for issue in report.errors
+            )
+        )
+
+    def test_solar_forecast_source_config_entry_id_rejects_non_string(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["source_config_entry_id"] = 42
+
+        report = validate_config_document(config)
+
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.solar.forecast.source_config_entry_id"
+                and issue.code == "invalid_type"
+                for issue in report.errors
+            )
+        )
+
     def test_surplus_appliance_optimizer_passes_for_configured_generic_appliance(self) -> None:
         config = _valid_config()
         config["appliances"].append(_generic_appliance())
@@ -349,6 +463,56 @@ class ConfigValidationTests(unittest.TestCase):
                 issue.path == "automation.optimizers[0].params.appliance_id"
                 for issue in report.errors
             )
+        )
+
+
+class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _FakeStore.reset()
+        storage_mod = sys.modules["homeassistant.helpers.storage"]
+        storage_mod.Store = _FakeStore
+        helman_storage_module.storage = storage_mod
+        helman_storage_module.storage.Store = _FakeStore
+
+    async def test_async_load_normalizes_legacy_config_in_memory_only(self) -> None:
+        legacy_config = _valid_config()
+        forecast = legacy_config["power_devices"]["solar"]["forecast"]
+        forecast.pop("source_config_entry_id", None)
+        forecast["daily_energy_entity_ids"] = [
+            "sensor.solar_day_1",
+            "sensor.solar_day_2",
+        ]
+        _FakeStore.loads_by_key[STORAGE_KEY] = legacy_config
+
+        store = HelmanStorage(object())
+
+        await store.async_load()
+
+        self.assertEqual(
+            store.config["power_devices"]["solar"]["forecast"],
+            {"total_energy_entity_id": "sensor.solar_total"},
+        )
+        self.assertNotIn(STORAGE_KEY, _FakeStore.saves_by_key)
+
+    async def test_async_save_persists_normalized_config(self) -> None:
+        store = HelmanStorage(object())
+        config = _valid_config()
+        forecast = config["power_devices"]["solar"]["forecast"]
+        forecast["source_config_entry_id"] = "  forecast-entry  "
+        forecast["daily_energy_entity_ids"] = ["sensor.solar_day_1"]
+
+        await store.async_save(config)
+
+        self.assertEqual(
+            store.config["power_devices"]["solar"]["forecast"],
+            {
+                "source_config_entry_id": "forecast-entry",
+                "total_energy_entity_id": "sensor.solar_total",
+            },
+        )
+        self.assertEqual(
+            _FakeStore.saves_by_key[STORAGE_KEY],
+            [store.config],
         )
 
     def test_surplus_appliance_optimizer_rejects_climate_mode_for_generic_appliance(

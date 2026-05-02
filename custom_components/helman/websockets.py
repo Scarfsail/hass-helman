@@ -16,6 +16,11 @@ from .forecast_request import (
     ForecastRequestNotSupportedError,
     ensure_supported_forecast_request,
 )
+from .solar_forecast_source import (
+    async_list_supported_solar_forecast_entries,
+    async_migrate_legacy_solar_forecast_config,
+    has_invalid_legacy_daily_energy_entity_ids,
+)
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_inspector,
     ws_get_solar_bias_profile,
@@ -79,6 +84,7 @@ def _validate_forecast_days(value: object) -> int:
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
+    async_register_command(hass, ws_get_solar_forecast_sources)
     async_register_command(hass, ws_validate_config)
     async_register_command(hass, ws_save_config)
     async_register_command(hass, ws_get_schedule)
@@ -136,18 +142,38 @@ def ws_get_config(
 
 
 @websocket_api.websocket_command({
-    vol.Required("type"): "helman/validate_config",
-    vol.Required("config"): dict,
+    vol.Required("type"): "helman/get_solar_forecast_sources",
 })
-@callback
-def ws_validate_config(
+@websocket_api.async_response
+async def ws_get_solar_forecast_sources(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
     if not _require_admin(connection, msg):
         return
-    connection.send_result(msg["id"], validate_config_document(msg["config"]).to_dict())
+    connection.send_result(
+        msg["id"],
+        await async_list_supported_solar_forecast_entries(hass),
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/validate_config",
+    vol.Required("config"): dict,
+})
+@websocket_api.async_response
+async def ws_validate_config(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    if not _require_admin(connection, msg):
+        return
+    connection.send_result(
+        msg["id"],
+        (await _validate_config_for_editor(hass, msg["config"])).to_dict(),
+    )
 
 
 @websocket_api.websocket_command({
@@ -168,7 +194,12 @@ async def ws_save_config(
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
 
-    validation = validate_config_document(msg["config"])
+    normalized_config = await async_migrate_legacy_solar_forecast_config(hass, msg["config"])
+    validation = await _validate_config_for_editor(
+        hass,
+        msg["config"],
+        normalized_config=normalized_config,
+    )
     if not validation.valid:
         connection.send_result(
             msg["id"],
@@ -180,7 +211,7 @@ async def ws_save_config(
         )
         return
 
-    await stor.async_save(msg["config"])
+    await stor.async_save(normalized_config)
 
     entries = hass.config_entries.async_entries(DOMAIN)
     if not entries:
@@ -391,6 +422,27 @@ async def ws_run_automation(
 
     result = await coordinator.run_automation(reason="websocket")
     connection.send_result(msg["id"], result.to_dict())
+
+
+async def _validate_config_for_editor(
+    hass: HomeAssistant,
+    config: dict,
+    *,
+    normalized_config: dict | None = None,
+):
+    normalized = normalized_config
+    if normalized is None:
+        normalized = await async_migrate_legacy_solar_forecast_config(hass, config)
+
+    validation = validate_config_document(normalized)
+    if has_invalid_legacy_daily_energy_entity_ids(config):
+        validation.add_error(
+            section="power_devices",
+            path="power_devices.solar.forecast.daily_energy_entity_ids",
+            code="invalid_type",
+            message="power_devices.solar.forecast.daily_energy_entity_ids must be a list",
+        )
+    return validation
 
 
 def _require_admin(

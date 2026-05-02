@@ -68,7 +68,7 @@ def make_cfg(
         clamp_max=clamp_max,
         min_valid_slot_days=min_valid_slot_days,
         aggregation_method=aggregation_method,
-        daily_energy_entity_ids=[],
+        source_config_entry_id=None,
         total_energy_entity_id=None,
     )
 

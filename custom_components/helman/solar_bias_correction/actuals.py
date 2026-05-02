@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
+from ..solar_forecast_source import async_discover_provider_daily_forecast_entities
 from .models import BiasConfig, SolarActualsWindow
 from .forecast_history import load_historical_per_slot_forecast
 from .slot_invalidation import (
@@ -257,6 +258,13 @@ async def _load_data_glitch_invalidations(
 
     forecast_slot_wh_by_date: dict[str, dict[str, float]] = {}
     if min_neighbour_forecast_wh > 0:
+        provider_entity_ids = await async_discover_provider_daily_forecast_entities(
+            hass,
+            cfg.source_config_entry_id,
+        )
+        if not provider_entity_ids:
+            return {}
+
         for day in sorted(slot_actuals_by_date):
             try:
                 target_date = date.fromisoformat(day)
@@ -264,7 +272,7 @@ async def _load_data_glitch_invalidations(
                 continue
             day_forecast = await load_historical_per_slot_forecast(
                 hass,
-                cfg,
+                provider_entity_ids,
                 target_date,
                 local_now=local_now,
             )
@@ -470,5 +478,4 @@ def _parse_bool_state_value(raw_value: Any) -> bool | None:
         if value_text in {"off", "false", "0"}:
             return False
     return None
-
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any
 from homeassistant.helpers import storage
 from homeassistant.core import HomeAssistant
+
 from .const import (
     FORECAST_SNAPSHOT_STORAGE_KEY,
     FORECAST_SNAPSHOT_STORAGE_VERSION,
@@ -10,6 +11,7 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+from .solar_forecast_source import migrate_legacy_solar_forecast_config
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "history_buckets": 60,
@@ -39,7 +41,11 @@ class HelmanStorage:
 
     async def async_load(self) -> None:
         stored = await self._store.async_load()
-        self._config = {**DEFAULT_CONFIG, **(stored or {})}
+        merged = {**DEFAULT_CONFIG, **(stored or {})}
+        self._config = migrate_legacy_solar_forecast_config(
+            merged,
+            inferred_source_config_entry_id=None,
+        )
         self._snapshot = await self._snapshot_store.async_load()
         self._schedule_document = await self._schedule_store.async_load()
 
@@ -56,8 +62,17 @@ class HelmanStorage:
         return self._schedule_document
 
     async def async_save(self, new_config: dict[str, Any]) -> None:
-        self._config = new_config
-        await self._store.async_save(new_config)
+        normalized = migrate_legacy_solar_forecast_config(
+            new_config,
+            inferred_source_config_entry_id=(
+                new_config.get("power_devices", {})
+                .get("solar", {})
+                .get("forecast", {})
+                .get("source_config_entry_id")
+            ),
+        )
+        self._config = normalized
+        await self._store.async_save(normalized)
 
     async def async_save_snapshot(self, snapshot: dict[str, Any]) -> None:
         self._snapshot = snapshot

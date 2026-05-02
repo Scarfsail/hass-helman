@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .recorder_hourly_series import query_slot_energy_changes
+from .solar_forecast_source import async_load_upstream_solar_forecast
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,12 +35,11 @@ class HelmanForecastBuilder:
         power_devices = self._read_dict(self._config.get("power_devices"))
         solar_config = self._read_dict(power_devices.get("solar"))
         solar_forecast = self._read_dict(solar_config.get("forecast"))
+        source_config_entry_id = self._read_entity_id(
+            solar_forecast.get("source_config_entry_id")
+        )
 
-        daily_entity_ids = self._read_entity_id_list(
-            solar_forecast.get("daily_energy_entity_ids")
-        )[:8]
-
-        if not daily_entity_ids:
+        if source_config_entry_id is None:
             return {
                 "status": "not_configured",
                 "unit": None,
@@ -47,36 +47,14 @@ class HelmanForecastBuilder:
                 "points": [],
             }
 
-        today = reference_time.astimezone(self._local_tz).date()
-        points_with_sort_keys: list[tuple[datetime, dict[str, Any]]] = []
-        entities_with_points = 0
-        for index, entity_id in enumerate(daily_entity_ids):
-            expected_date = today + timedelta(days=index)
-            entity_points = self._extract_hourly_solar_points(entity_id, expected_date)
-            if entity_points:
-                entities_with_points += 1
-            points_with_sort_keys.extend(entity_points)
-
-        points_with_sort_keys.sort(key=lambda item: item[0])
-        points = [point for _, point in points_with_sort_keys]
-        unit = self._read_first_unit(daily_entity_ids)
-
-        if entities_with_points == len(daily_entity_ids):
-            status = "available"
-        elif entities_with_points > 0:
-            status = "partial"
-            _LOGGER.warning(
-                "Solar forecast partial: %d/%d daily energy entities have points",
-                entities_with_points,
-                len(daily_entity_ids),
-            )
-        else:
-            status = "unavailable"
-            _LOGGER.warning(
-                "Solar forecast unavailable: none of %d daily energy entities "
-                "have forecast points",
-                len(daily_entity_ids),
-            )
+        upstream_forecast = await async_load_upstream_solar_forecast(
+            self._hass,
+            source_config_entry_id
+        )
+        points = self._build_points_from_wh_hours(
+            self._read_dict(upstream_forecast).get("wh_hours")
+        )
+        status = "available" if points else "unavailable"
 
         remaining_today_entity_id = self._read_entity_id(
             self._read_dict(solar_config.get("entities")).get("remaining_today_energy_forecast")
@@ -88,11 +66,36 @@ class HelmanForecastBuilder:
 
         return {
             "status": status,
-            "unit": unit,
+            "unit": "Wh" if points else None,
             "remainingTodayEnergyEntityId": remaining_today_entity_id,
             "actualHistory": actual_history,
             "points": points,
         }
+
+    def _build_points_from_wh_hours(self, raw_wh_hours: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_wh_hours, dict):
+            return []
+
+        points_with_sort_keys: list[tuple[datetime, dict[str, Any]]] = []
+        for raw_timestamp, raw_value in raw_wh_hours.items():
+            timestamp = self._parse_attribute_timestamp(raw_timestamp)
+            value = self._parse_float(raw_value)
+            if timestamp is None or value is None:
+                continue
+
+            utc_timestamp = dt_util.as_utc(timestamp)
+            points_with_sort_keys.append(
+                (
+                    utc_timestamp,
+                    {
+                        "timestamp": timestamp.isoformat(),
+                        "value": value,
+                    },
+                )
+            )
+
+        points_with_sort_keys.sort(key=lambda item: item[0])
+        return [point for _, point in points_with_sort_keys]
 
     async def _build_solar_actual_history(
         self,

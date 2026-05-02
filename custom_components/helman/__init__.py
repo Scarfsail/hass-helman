@@ -37,6 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_setup()
 
     domain_data["coordinator"] = coordinator
+    domain_data["entry_id"] = entry.entry_id
     domain_data[entry.entry_id] = {}
 
     try:
@@ -44,6 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:
         await coordinator.async_unload()
         domain_data.pop("coordinator", None)
+        domain_data.pop("entry_id", None)
         domain_data.pop(entry.entry_id, None)
         raise
     return True
@@ -59,5 +61,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if coordinator:
         await coordinator.async_unload()
     hass.data[DOMAIN].pop(entry.entry_id, None)
+    hass.data[DOMAIN].pop("entry_id", None)
     hass.data[DOMAIN].pop("coordinator", None)
     return unload_ok

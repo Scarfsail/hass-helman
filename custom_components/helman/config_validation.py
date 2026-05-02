@@ -307,12 +307,18 @@ def _validate_solar_config(
         "power_devices.solar.forecast.total_energy_entity_id",
         forecast_map.get("total_energy_entity_id"),
     )
-    _validate_entity_id_list(
-        report,
-        section,
-        "power_devices.solar.forecast.daily_energy_entity_ids",
-        forecast_map.get("daily_energy_entity_ids"),
-    )
+    source_config_entry_id = forecast_map.get("source_config_entry_id")
+    if source_config_entry_id is not None:
+        if (
+            not isinstance(source_config_entry_id, str)
+            or not source_config_entry_id.strip()
+        ):
+            report.add_error(
+                section=section,
+                path="power_devices.solar.forecast.source_config_entry_id",
+                code="invalid_type",
+                message="power_devices.solar.forecast.source_config_entry_id must be a non-empty string",
+            )
 
     # bias_correction subtree validation
     bias = forecast_map.get("bias_correction")

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..solar_forecast_source import async_discover_provider_daily_forecast_entities
 from .models import BiasConfig, TrainerSample
 
 try:
@@ -64,7 +65,10 @@ async def load_forecast_points_for_day(
     *,
     local_now: datetime,
 ) -> list[dict[str, Any]]:
-    entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=None)
+    entity_ids = await async_discover_provider_daily_forecast_entities(
+        hass,
+        cfg.source_config_entry_id,
+    )
     if not entity_ids:
         return []
 
@@ -73,7 +77,12 @@ async def load_forecast_points_for_day(
     offset = (target_date - today).days
 
     if offset < 0:
-        state = await _read_historical_forecast_state(hass, cfg, target_date, local_tz)
+        state = await _read_historical_forecast_state(
+            hass,
+            entity_ids,
+            target_date,
+            local_tz,
+        )
         if state is None:
             return []
     elif offset >= len(entity_ids):
@@ -106,11 +115,10 @@ async def load_forecast_points_for_day(
 
 async def _read_historical_forecast_state(
     hass: HomeAssistant,
-    cfg: BiasConfig,
+    entity_ids: list[str],
     target_date: date,
     local_tz: ZoneInfo,
 ) -> Any:
-    entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids, limit=1)
     if not entity_ids:
         return None
 
@@ -135,7 +143,7 @@ async def _read_historical_forecast_state(
 
 async def load_historical_per_slot_forecast(
     hass: HomeAssistant,
-    cfg: BiasConfig,
+    entity_ids: list[str],
     target_date: date,
     *,
     local_now: datetime,
@@ -143,7 +151,7 @@ async def load_historical_per_slot_forecast(
     """Return slot_key -> Wh for the forecast as published at the start of target_date.
 
     Reads the `wh_period` attribute from the recorder history of
-    daily_energy_entity_ids[0] (the "today" entity) as captured at start of
+    the earliest discovered provider daily-forecast entity as captured at start of
     target_date (local midnight). Returns None if no usable state is available.
 
     Slot keys are HH:MM in the configured local timezone.
@@ -151,7 +159,7 @@ async def load_historical_per_slot_forecast(
     NOTE: requires recorder to retain attribute history >= min_history_days.
     """
     local_tz = ZoneInfo(str(hass.config.time_zone))
-    state = await _read_historical_forecast_state(hass, cfg, target_date, local_tz)
+    state = await _read_historical_forecast_state(hass, entity_ids, target_date, local_tz)
     if state is None:
         return None
     attributes = getattr(state, "attributes", {})
@@ -253,7 +261,10 @@ async def _read_history_for_entities_with_attributes(
 async def load_trainer_samples(
     hass: HomeAssistant, cfg: BiasConfig, now: datetime
 ) -> list[TrainerSample]:
-    entity_ids = _read_entity_ids(cfg.daily_energy_entity_ids)
+    entity_ids = await async_discover_provider_daily_forecast_entities(
+        hass,
+        cfg.source_config_entry_id,
+    )
     if not entity_ids:
         return []
 
@@ -274,7 +285,7 @@ async def load_trainer_samples(
 
         slot_forecast_wh = await load_historical_per_slot_forecast(
             hass,
-            cfg,
+            entity_ids,
             target_date,
             local_now=local_now,
         )
@@ -454,21 +465,6 @@ def _parse_state_wh(raw_value: Any) -> float | None:
             return None
 
     return None
-
-
-def _read_entity_ids(raw_value: Any, *, limit: int | None = 1) -> list[str]:
-    if not isinstance(raw_value, list):
-        return []
-
-    entity_ids: list[str] = []
-    for item in raw_value:
-        if isinstance(item, str):
-            entity_id = item.strip()
-            if entity_id:
-                entity_ids.append(entity_id)
-    if limit is None:
-        return entity_ids
-    return entity_ids[:limit]
 
 
 def _parse_attribute_wh(raw_value: Any) -> float | None:
