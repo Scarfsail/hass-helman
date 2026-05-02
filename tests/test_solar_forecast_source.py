@@ -182,11 +182,6 @@ def test_async_list_supported_solar_forecast_entries_uses_persisted_helman_entry
             "title": "Forecast",
             "domain": "forecast_solar",
         },
-        {
-            "entry_id": "helman-entry-1",
-            "title": "Helman A",
-            "domain": "helman",
-        },
     ]
 
 
@@ -337,6 +332,53 @@ def test_migrate_legacy_solar_forecast_config_ignores_blank_inferred_source_id()
     forecast = migrated["power_devices"]["solar"]["forecast"]
     assert "daily_energy_entity_ids" not in forecast
     assert forecast.get("source_config_entry_id") is None
+
+
+def test_migrate_legacy_solar_forecast_config_normalizes_existing_source_id():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "daily_energy_entity_ids": ["sensor.day_1", "sensor.day_2"],
+                    "source_config_entry_id": "  forecast-entry  ",
+                    "total_energy_entity_id": "sensor.solar_total",
+                }
+            }
+        }
+    }
+
+    migrated = solar_forecast_source.migrate_legacy_solar_forecast_config(
+        config,
+        inferred_source_config_entry_id=None,
+    )
+
+    forecast = migrated["power_devices"]["solar"]["forecast"]
+    assert forecast["source_config_entry_id"] == "forecast-entry"
+    assert config["power_devices"]["solar"]["forecast"]["source_config_entry_id"] == (
+        "  forecast-entry  "
+    )
+
+
+def test_migrate_legacy_solar_forecast_config_removes_blank_existing_source_id():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "daily_energy_entity_ids": ["sensor.day_1", "sensor.day_2"],
+                    "source_config_entry_id": "   ",
+                    "total_energy_entity_id": "sensor.solar_total",
+                }
+            }
+        }
+    }
+
+    migrated = solar_forecast_source.migrate_legacy_solar_forecast_config(
+        config,
+        inferred_source_config_entry_id=None,
+    )
+
+    forecast = migrated["power_devices"]["solar"]["forecast"]
+    assert "source_config_entry_id" not in forecast
 
 
 def test_migrate_legacy_solar_forecast_config_sets_source_id_and_deep_copies():

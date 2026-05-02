@@ -8,6 +8,13 @@ from homeassistant.components.energy.websocket_api import async_get_energy_platf
 from .const import DOMAIN
 
 
+def _normalize_source_config_entry_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def is_supported_solar_forecast_entry(
     hass,
     config_entry_id: str | None,
@@ -69,28 +76,34 @@ def migrate_legacy_solar_forecast_config(
         return migrated
 
     forecast.pop("daily_energy_entity_ids", None)
-    normalized_source_config_entry_id = None
-    if isinstance(inferred_source_config_entry_id, str):
-        normalized_source_config_entry_id = inferred_source_config_entry_id.strip()
-    if normalized_source_config_entry_id:
-        forecast["source_config_entry_id"] = normalized_source_config_entry_id
+    existing_source_config_entry_id = _normalize_source_config_entry_id(
+        forecast.get("source_config_entry_id")
+    )
+    if existing_source_config_entry_id is None:
+        forecast.pop("source_config_entry_id", None)
+    else:
+        forecast["source_config_entry_id"] = existing_source_config_entry_id
+
+    inferred_source_config_entry_id = _normalize_source_config_entry_id(
+        inferred_source_config_entry_id
+    )
+    if inferred_source_config_entry_id:
+        forecast["source_config_entry_id"] = inferred_source_config_entry_id
     return migrated
 
 
 async def async_list_supported_solar_forecast_entries(hass) -> list[dict[str, str]]:
     supported_domains = set(await async_get_energy_platforms(hass))
-    domain_data = hass.data.get(DOMAIN, {})
-    helman_entry_id = domain_data.get("entry_id")
     payload: list[dict[str, str]] = []
 
     for entry in hass.config_entries.async_entries():
-        if helman_entry_id is None and entry.domain == DOMAIN:
+        if entry.domain == DOMAIN:
             continue
         if not is_supported_solar_forecast_entry(
             hass,
             entry.entry_id,
             supported_domains=supported_domains,
-            helman_entry_id=helman_entry_id,
+            helman_entry_id=None,
         ):
             continue
         payload.append(
