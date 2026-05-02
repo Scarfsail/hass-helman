@@ -31,7 +31,22 @@ if "custom_components.helman" not in sys.modules:
 
 if "homeassistant" not in sys.modules:
     ha_pkg = types.ModuleType("homeassistant")
+    ha_pkg.__path__ = []
     sys.modules["homeassistant"] = ha_pkg
+
+components_mod = types.ModuleType("homeassistant.components")
+components_mod.__path__ = []
+sys.modules["homeassistant.components"] = components_mod
+
+energy_pkg = types.ModuleType("homeassistant.components.energy")
+energy_pkg.__path__ = []
+sys.modules["homeassistant.components.energy"] = energy_pkg
+
+energy_ws_mod = types.ModuleType("homeassistant.components.energy.websocket_api")
+async def _async_get_energy_platforms(_hass):
+    return []
+energy_ws_mod.async_get_energy_platforms = _async_get_energy_platforms
+sys.modules["homeassistant.components.energy.websocket_api"] = energy_ws_mod
 
 # minimal homeassistant.core with HomeAssistant type
 core_mod = types.ModuleType("homeassistant.core")
@@ -40,7 +55,12 @@ sys.modules["homeassistant.core"] = core_mod
 
 # minimal helpers.storage module
 helpers_mod = types.ModuleType("homeassistant.helpers")
+helpers_mod.__path__ = []
 sys.modules["homeassistant.helpers"] = helpers_mod
+
+entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+entity_registry_mod.async_get = lambda _hass: None
+sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
 
 storage_stub = types.ModuleType("homeassistant.helpers.storage")
 
@@ -434,7 +454,7 @@ def test_serialize_state_writes_version_2():
         training_time="03:00",
         clamp_min=0.3,
         clamp_max=2.0,
-        daily_energy_entity_ids=[],
+        source_config_entry_id=None,
         total_energy_entity_id=None,
         max_training_window_days=90,
     )
@@ -530,7 +550,7 @@ def test_async_train_saves_version_2_payload():
             training_time="03:00",
             clamp_min=0.3,
             clamp_max=2.0,
-            daily_energy_entity_ids=[],
+            source_config_entry_id=None,
             total_energy_entity_id=None,
             max_training_window_days=90,
         )
