@@ -69,8 +69,11 @@ def migrate_legacy_solar_forecast_config(
         return migrated
 
     forecast.pop("daily_energy_entity_ids", None)
-    if inferred_source_config_entry_id:
-        forecast["source_config_entry_id"] = inferred_source_config_entry_id
+    normalized_source_config_entry_id = None
+    if isinstance(inferred_source_config_entry_id, str):
+        normalized_source_config_entry_id = inferred_source_config_entry_id.strip()
+    if normalized_source_config_entry_id:
+        forecast["source_config_entry_id"] = normalized_source_config_entry_id
     return migrated
 
 

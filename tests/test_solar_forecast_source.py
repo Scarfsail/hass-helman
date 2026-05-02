@@ -317,6 +317,28 @@ def test_migrate_legacy_solar_forecast_config_is_noop_without_forecast_section()
     assert "forecast" not in config["power_devices"]["solar"]
 
 
+def test_migrate_legacy_solar_forecast_config_ignores_blank_inferred_source_id():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "daily_energy_entity_ids": ["sensor.day_1", "sensor.day_2"],
+                    "total_energy_entity_id": "sensor.solar_total",
+                }
+            }
+        }
+    }
+
+    migrated = solar_forecast_source.migrate_legacy_solar_forecast_config(
+        config,
+        inferred_source_config_entry_id="   ",
+    )
+
+    forecast = migrated["power_devices"]["solar"]["forecast"]
+    assert "daily_energy_entity_ids" not in forecast
+    assert forecast.get("source_config_entry_id") is None
+
+
 def test_migrate_legacy_solar_forecast_config_sets_source_id_and_deep_copies():
     config = {
         "power_devices": {
