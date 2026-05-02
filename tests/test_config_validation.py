@@ -38,6 +38,8 @@ def _install_import_stubs() -> None:
     if helpers_pkg is None:
         helpers_pkg = types.ModuleType("homeassistant.helpers")
         sys.modules["homeassistant.helpers"] = helpers_pkg
+    if not hasattr(helpers_pkg, "__path__"):
+        helpers_pkg.__path__ = []
 
     storage_mod = sys.modules.get("homeassistant.helpers.storage")
     if storage_mod is None:
@@ -45,6 +47,14 @@ def _install_import_stubs() -> None:
         sys.modules["homeassistant.helpers.storage"] = storage_mod
     storage_mod.Store = type("Store", (), {})
     helpers_pkg.storage = storage_mod
+
+    entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
+    if entity_registry_mod is None:
+        entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
+    if not hasattr(entity_registry_mod, "async_get"):
+        entity_registry_mod.async_get = lambda _hass: None
+    helpers_pkg.entity_registry = entity_registry_mod
 
     components_pkg = sys.modules.get("homeassistant.components")
     if components_pkg is None:
@@ -87,6 +97,7 @@ _install_import_stubs()
 
 from custom_components.helman.config_validation import validate_config_document
 from custom_components.helman.const import STORAGE_KEY
+import custom_components.helman.storage as helman_storage_module
 from custom_components.helman.storage import HelmanStorage
 
 
@@ -114,6 +125,7 @@ class _FakeStore:
 
 
 sys.modules["homeassistant.helpers.storage"].Store = _FakeStore
+helman_storage_module.storage.Store = _FakeStore
 
 
 def _valid_config() -> dict:
@@ -457,6 +469,10 @@ class ConfigValidationTests(unittest.TestCase):
 class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         _FakeStore.reset()
+        storage_mod = sys.modules["homeassistant.helpers.storage"]
+        storage_mod.Store = _FakeStore
+        helman_storage_module.storage = storage_mod
+        helman_storage_module.storage.Store = _FakeStore
 
     async def test_async_load_normalizes_legacy_config_in_memory_only(self) -> None:
         legacy_config = _valid_config()
