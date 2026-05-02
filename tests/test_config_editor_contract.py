@@ -734,6 +734,42 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             "power_devices.solar.forecast.source_config_entry_id",
         )
 
+    async def test_save_config_allows_non_list_daily_energy_entity_ids_to_flow_to_validation(
+        self,
+    ) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+
+        await ws_save_config(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": "helman/save_config",
+                "config": {
+                    "power_devices": {
+                        "solar": {
+                            "forecast": {
+                                "daily_energy_entity_ids": 7,
+                            }
+                        }
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertEqual(hass.config_entries.reload_calls, [])
+        self.assertEqual(connection.errors, [])
+        self.assertFalse(connection.results[0][1]["success"])
+        self.assertFalse(connection.results[0][1]["reloadStarted"])
+        self.assertFalse(connection.results[0][1]["validation"]["valid"])
+        self.assertEqual(
+            connection.results[0][1]["validation"]["errors"][0]["path"],
+            "power_devices.solar.forecast.daily_energy_entity_ids",
+        )
+
     async def test_save_config_persists_minimal_automation_config(self) -> None:
         storage = FakeStorage()
         connection = FakeConnection(is_admin=True)

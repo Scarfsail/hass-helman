@@ -29,6 +29,18 @@ def _get_forecast_section(config: dict[str, Any]) -> dict[str, Any] | None:
     return forecast if isinstance(forecast, dict) else None
 
 
+def _get_legacy_daily_energy_entity_ids(forecast: dict[str, Any]) -> list[str]:
+    legacy_ids = forecast.get("daily_energy_entity_ids")
+    return legacy_ids if isinstance(legacy_ids, list) else []
+
+
+def has_invalid_legacy_daily_energy_entity_ids(config: dict[str, Any]) -> bool:
+    forecast = _get_forecast_section(config)
+    if forecast is None or "daily_energy_entity_ids" not in forecast:
+        return False
+    return not isinstance(forecast.get("daily_energy_entity_ids"), list)
+
+
 def is_supported_solar_forecast_entry(
     hass,
     config_entry_id: str | None,
@@ -140,7 +152,7 @@ async def async_migrate_legacy_solar_forecast_config(
             preserve_existing_source_config_entry_id=True,
         )
 
-    legacy_ids = forecast.get("daily_energy_entity_ids") or []
+    legacy_ids = _get_legacy_daily_energy_entity_ids(forecast)
     inferred = infer_source_config_entry_id_from_legacy_entities(
         legacy_ids,
         entity_entries={entity_id: registry.async_get(entity_id) for entity_id in legacy_ids},

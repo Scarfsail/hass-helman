@@ -19,6 +19,7 @@ from .forecast_request import (
 from .solar_forecast_source import (
     async_list_supported_solar_forecast_entries,
     async_migrate_legacy_solar_forecast_config,
+    has_invalid_legacy_daily_energy_entity_ids,
 )
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_inspector,
@@ -194,6 +195,13 @@ async def ws_save_config(
         hass, msg["config"]
     )
     validation = validate_config_document(normalized_config)
+    if has_invalid_legacy_daily_energy_entity_ids(msg["config"]):
+        validation.add_error(
+            section="power_devices",
+            path="power_devices.solar.forecast.daily_energy_entity_ids",
+            code="invalid_type",
+            message="power_devices.solar.forecast.daily_energy_entity_ids must be a list",
+        )
     if not validation.valid:
         connection.send_result(
             msg["id"],

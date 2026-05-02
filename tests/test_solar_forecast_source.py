@@ -616,3 +616,55 @@ def test_async_migrate_legacy_solar_forecast_config_preserves_invalid_explicit_s
             }
         }
     }
+
+
+def test_async_migrate_legacy_solar_forecast_config_tolerates_non_list_legacy_ids():
+    hass = SimpleNamespace(
+        data={"helman": {"entry_id": "helman-entry"}},
+        config_entries=_FakeConfigEntries(
+            {
+                "helman-entry": _FakeConfigEntry("helman-entry", "helman", "Helman"),
+                "forecast-entry": _FakeConfigEntry(
+                    "forecast-entry", "forecast_solar", "Forecast"
+                ),
+            }
+        ),
+    )
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "daily_energy_entity_ids": 7,
+                    "total_energy_entity_id": "sensor.solar_total",
+                }
+            }
+        }
+    }
+
+    async def _async_get_energy_platforms(_hass):
+        return ["helman", "forecast_solar"]
+
+    original_platforms = solar_forecast_source.async_get_energy_platforms
+    solar_forecast_source.async_get_energy_platforms = _async_get_energy_platforms
+
+    original_registry_get = solar_forecast_source.er.async_get
+    solar_forecast_source.er.async_get = lambda _hass: SimpleNamespace(async_get=lambda _entity_id: None)
+    try:
+        migrated = asyncio.run(
+            solar_forecast_source.async_migrate_legacy_solar_forecast_config(
+                hass, config
+            )
+        )
+    finally:
+        solar_forecast_source.async_get_energy_platforms = original_platforms
+        solar_forecast_source.er.async_get = original_registry_get
+
+    assert migrated == {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "total_energy_entity_id": "sensor.solar_total",
+                }
+            }
+        }
+    }
