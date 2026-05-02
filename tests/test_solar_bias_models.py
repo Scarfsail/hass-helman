@@ -48,7 +48,7 @@ def test_defaults_empty_config():
     assert bias.clamp_max == const.SOLAR_BIAS_DEFAULT_CLAMP_MAX
     assert bias.min_valid_slot_days == const.SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
     assert bias.aggregation_method == const.SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
-    assert bias.daily_energy_entity_ids == []
+    assert bias.source_config_entry_id is None
     assert bias.total_energy_entity_id is None
 
 
@@ -66,7 +66,7 @@ def test_read_nested_config():
                         "clamp_max": 1.5,
                         "min_valid_slot_days": 7,
                     },
-                    "daily_energy_entity_ids": ["sensor.daily1", "sensor.daily2"],
+                    "source_config_entry_id": "provider-entry",
                     "total_energy_entity_id": "sensor.total",
                 }
             }
@@ -81,7 +81,7 @@ def test_read_nested_config():
     assert bias.clamp_min == 0.5
     assert bias.clamp_max == 1.5
     assert bias.min_valid_slot_days == 7
-    assert bias.daily_energy_entity_ids == ["sensor.daily1", "sensor.daily2"]
+    assert bias.source_config_entry_id == "provider-entry"
     assert bias.total_energy_entity_id == "sensor.total"
 
 
@@ -93,7 +93,7 @@ def test_reads_total_energy_entity_from_bias_correction_config():
                     "bias_correction": {
                         "total_energy_entity_id": "sensor.bias_total",
                     },
-                    "daily_energy_entity_ids": ["sensor.daily1"],
+                    "source_config_entry_id": "provider-entry",
                 }
             }
         }
@@ -287,3 +287,43 @@ def test_read_bias_config_passes_explicit_aggregation_method():
     bias = read_bias_config(config)
 
     assert bias.aggregation_method == "trimmed_mean"
+
+
+def test_read_bias_config_reads_source_config_entry_id():
+    config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "source_config_entry_id": " provider-entry ",
+                }
+            }
+        }
+    }
+
+    bias = read_bias_config(config)
+
+    assert bias.source_config_entry_id == "provider-entry"
+
+
+def test_read_bias_config_normalizes_blank_or_non_string_source_config_entry_id():
+    blank_config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "source_config_entry_id": "  ",
+                }
+            }
+        }
+    }
+    non_string_config = {
+        "power_devices": {
+            "solar": {
+                "forecast": {
+                    "source_config_entry_id": 123,
+                }
+            }
+        }
+    }
+
+    assert read_bias_config(blank_config).source_config_entry_id is None
+    assert read_bias_config(non_string_config).source_config_entry_id is None

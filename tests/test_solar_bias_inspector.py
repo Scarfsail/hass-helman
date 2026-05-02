@@ -33,6 +33,13 @@ def _install_import_stubs() -> None:
     components_mod.__path__ = []
     sys.modules["homeassistant.components"] = components_mod
 
+    energy_mod = types.ModuleType("homeassistant.components.energy")
+    energy_mod.__path__ = []
+    sys.modules["homeassistant.components.energy"] = energy_mod
+    energy_ws_mod = types.ModuleType("homeassistant.components.energy.websocket_api")
+    energy_ws_mod.async_get_energy_platforms = lambda hass: []
+    sys.modules["homeassistant.components.energy.websocket_api"] = energy_ws_mod
+
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
     recorder_mod.get_instance = lambda hass: None
     sys.modules["homeassistant.components.recorder"] = recorder_mod
@@ -46,6 +53,13 @@ def _install_import_stubs() -> None:
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
     sys.modules["homeassistant.core"] = core_mod
+
+    helpers_mod = types.ModuleType("homeassistant.helpers")
+    helpers_mod.__path__ = []
+    sys.modules["homeassistant.helpers"] = helpers_mod
+    entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+    entity_registry_mod.async_get = lambda hass: None
+    sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
 
     util_mod = types.ModuleType("homeassistant.util")
     sys.modules["homeassistant.util"] = util_mod
@@ -257,12 +271,12 @@ def _make_cfg():
         clamp_min=0.3,
         clamp_max=2.0,
         aggregation_method="ratio_of_sums",
-        daily_energy_entity_ids=["sensor.solar_today", "sensor.solar_tomorrow"],
+        source_config_entry_id="provider-entry",
         total_energy_entity_id="sensor.solar_total",
     )
 
 
-def test_load_forecast_points_for_day_reads_daily_entity_slots():
+def test_load_forecast_points_for_day_reads_discovered_provider_slots():
     class _States:
         def get(self, entity_id):
             if entity_id == "sensor.solar_today":
@@ -281,14 +295,21 @@ def test_load_forecast_points_for_day_reads_daily_entity_slots():
         config=SimpleNamespace(time_zone="Europe/Prague"),
     )
 
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-25"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+    with patch.object(
+        forecast_history,
+        "async_discover_provider_daily_forecast_entities",
+        new=AsyncMock(
+            return_value=["sensor.solar_today", "sensor.solar_tomorrow"]
+        ),
+    ):
+        result = asyncio.run(
+            forecast_history.load_forecast_points_for_day(
+                hass,
+                _make_cfg(),
+                date.fromisoformat("2026-04-25"),
+                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+            )
         )
-    )
 
     assert result == [
         {"timestamp": "2026-04-25T00:00:00+02:00", "value": 0.0},
@@ -318,14 +339,21 @@ def test_load_forecast_points_for_day_selects_entity_by_day_offset():
         config=SimpleNamespace(time_zone="Europe/Prague"),
     )
 
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-26"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+    with patch.object(
+        forecast_history,
+        "async_discover_provider_daily_forecast_entities",
+        new=AsyncMock(
+            return_value=["sensor.solar_today", "sensor.solar_tomorrow"]
+        ),
+    ):
+        result = asyncio.run(
+            forecast_history.load_forecast_points_for_day(
+                hass,
+                _make_cfg(),
+                date.fromisoformat("2026-04-26"),
+                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+            )
         )
-    )
 
     assert requested_entities == ["sensor.solar_tomorrow"]
     assert result == [
@@ -353,14 +381,19 @@ def test_load_forecast_points_for_day_sorts_attribute_timestamps_by_utc():
         config=SimpleNamespace(time_zone="Europe/Prague"),
     )
 
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-25"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+    with patch.object(
+        forecast_history,
+        "async_discover_provider_daily_forecast_entities",
+        new=AsyncMock(return_value=["sensor.solar_today"]),
+    ):
+        result = asyncio.run(
+            forecast_history.load_forecast_points_for_day(
+                hass,
+                _make_cfg(),
+                date.fromisoformat("2026-04-25"),
+                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+            )
         )
-    )
 
     assert result == [
         {"timestamp": "2026-04-25T00:00:00+02:00", "value": 1.0},
@@ -374,14 +407,44 @@ def test_load_forecast_points_for_day_returns_empty_outside_configured_horizon()
         config=SimpleNamespace(time_zone="Europe/Prague"),
     )
 
-    result = asyncio.run(
-        forecast_history.load_forecast_points_for_day(
-            hass,
-            _make_cfg(),
-            date.fromisoformat("2026-04-29"),
-            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+    with patch.object(
+        forecast_history,
+        "async_discover_provider_daily_forecast_entities",
+        new=AsyncMock(
+            return_value=["sensor.solar_today", "sensor.solar_tomorrow"]
+        ),
+    ):
+        result = asyncio.run(
+            forecast_history.load_forecast_points_for_day(
+                hass,
+                _make_cfg(),
+                date.fromisoformat("2026-04-29"),
+                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+            )
         )
+
+    assert result == []
+
+
+def test_load_forecast_points_for_day_returns_empty_when_provider_discovery_is_empty():
+    hass = SimpleNamespace(
+        states=SimpleNamespace(get=lambda entity_id: None),
+        config=SimpleNamespace(time_zone="Europe/Prague"),
     )
+
+    with patch.object(
+        forecast_history,
+        "async_discover_provider_daily_forecast_entities",
+        new=AsyncMock(return_value=[]),
+    ):
+        result = asyncio.run(
+            forecast_history.load_forecast_points_for_day(
+                hass,
+                _make_cfg(),
+                date.fromisoformat("2026-04-25"),
+                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+            )
+        )
 
     assert result == []
 
@@ -403,16 +466,20 @@ def test_load_forecast_points_for_day_reads_history_for_past_days():
             config=SimpleNamespace(time_zone="Europe/Prague"),
         )
         cfg = _make_cfg()
-        cfg.daily_energy_entity_ids = ["sensor.today", "sensor.tomorrow"]
 
-        result = asyncio.run(
-            forecast_history.load_forecast_points_for_day(
-                hass,
-                cfg,
-                date.fromisoformat("2026-04-24"),
-                local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+        with patch.object(
+            forecast_history,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.today", "sensor.tomorrow"]),
+        ):
+            result = asyncio.run(
+                forecast_history.load_forecast_points_for_day(
+                    hass,
+                    cfg,
+                    date.fromisoformat("2026-04-24"),
+                    local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+                )
             )
-        )
 
     assert len(result) == 24
     assert result[6]["timestamp"] == "2026-04-24T06:00:00+02:00"
@@ -572,6 +639,68 @@ def test_inspector_day_uses_trained_usable_days_for_previous_range():
 
     assert payload["range"]["minDate"] == "2026-04-10"
     assert payload["range"]["canGoPrevious"] is True
+
+
+def test_inspector_day_uses_discovered_provider_entities_for_future_range():
+    service = _make_service()
+
+    async def fake_forecast_points(*args, **kwargs):
+        return []
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        with patch.object(
+            service_mod,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=["sensor.today", "sensor.tomorrow"]),
+        ):
+            payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["range"]["maxDate"] == "2026-04-26"
+    assert payload["range"]["canGoNext"] is True
+
+
+def test_inspector_day_handles_empty_provider_discovery_safely():
+    service = _make_service()
+
+    async def fake_forecast_points(*args, **kwargs):
+        return []
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_forecast = service_mod.load_forecast_points_for_day
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_forecast_points_for_day = fake_forecast_points
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        with patch.object(
+            service_mod,
+            "async_discover_provider_daily_forecast_entities",
+            new=AsyncMock(return_value=[]),
+        ):
+            payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_forecast_points_for_day = old_forecast
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["range"]["maxDate"] == "2026-04-25"
+    assert payload["range"]["canGoNext"] is False
 
 
 def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():

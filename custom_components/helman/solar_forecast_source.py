@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import importlib
 import logging
 from typing import Any
@@ -183,6 +184,46 @@ async def async_load_upstream_solar_forecast(
     return await loader(hass, source_config_entry_id)
 
 
+async def async_discover_provider_daily_forecast_entities(
+    hass, source_config_entry_id: str | None
+) -> list[str]:
+    normalized_source_config_entry_id = _normalize_source_config_entry_id(
+        source_config_entry_id
+    )
+    if normalized_source_config_entry_id is None:
+        return []
+
+    registry = er.async_get(hass)
+    states = getattr(hass, "states", None)
+    entities = getattr(registry, "entities", None)
+    if not isinstance(entities, dict) or states is None:
+        return []
+
+    discovered: list[tuple[datetime, str]] = []
+    for entry in entities.values():
+        if getattr(entry, "config_entry_id", None) != normalized_source_config_entry_id:
+            continue
+
+        entity_id = getattr(entry, "entity_id", None)
+        if not isinstance(entity_id, str) or not entity_id:
+            continue
+
+        state = states.get(entity_id)
+        attributes = getattr(state, "attributes", None)
+        wh_period = attributes.get("wh_period") if isinstance(attributes, dict) else None
+        if not isinstance(wh_period, dict) or not wh_period:
+            continue
+
+        earliest = _earliest_wh_period_timestamp(wh_period)
+        if earliest is None:
+            continue
+
+        discovered.append((earliest, entity_id))
+
+    discovered.sort(key=lambda item: (item[0], item[1]))
+    return [entity_id for _, entity_id in discovered]
+
+
 def _load_energy_platform_loader(domain: str):
     for module_name in (
         f"custom_components.{domain}.energy",
@@ -203,3 +244,26 @@ def _load_energy_platform_loader(domain: str):
             return loader
 
     return None
+
+
+def _earliest_wh_period_timestamp(wh_period: dict[str, Any]) -> datetime | None:
+    timestamps = [
+        parsed
+        for raw_key in wh_period
+        if (parsed := _parse_wh_period_timestamp(raw_key)) is not None
+    ]
+    return min(timestamps, default=None)
+
+
+def _parse_wh_period_timestamp(raw_key: Any) -> datetime | None:
+    if not isinstance(raw_key, str):
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(raw_key.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
