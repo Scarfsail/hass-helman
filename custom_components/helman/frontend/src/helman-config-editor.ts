@@ -1524,18 +1524,6 @@ export class HelmanConfigEditorPanel extends LitElement {
                   undefined,
                   "editor.help.solar_today_energy_entity",
                 )}
-                ${this._renderOptionalEntityField(
-                  [
-                    "power_devices",
-                    "solar",
-                    "entities",
-                    "remaining_today_energy_forecast",
-                  ],
-                  "editor.fields.remaining_today_energy_forecast",
-                  ["sensor"],
-                  undefined,
-                  "editor.help.solar_remaining_today_energy_forecast",
-                )}
               </div>
             `,
             { initialOpen: false },
@@ -1548,13 +1536,6 @@ export class HelmanConfigEditorPanel extends LitElement {
                 SECTION_SCOPE_IDS.power_devices.solar_forecast_general,
                 html`
                   <div class="field-grid field-grid--roomy">
-                    ${this._renderOptionalEntityField(
-                      ["power_devices", "solar", "forecast", "total_energy_entity_id"],
-                      "editor.fields.forecast_total_energy_entity",
-                      ["sensor"],
-                      undefined,
-                      "editor.help.solar_forecast_total_energy_entity",
-                    )}
                     <div class="field">
                       <div class="field-label-row">
                         <label>${this._t("editor.fields.solar_forecast_source")}</label>

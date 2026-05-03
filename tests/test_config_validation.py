@@ -417,6 +417,16 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_solar_validation_ignores_removed_forecast_entity_fields(self) -> None:
+        config = _valid_config()
+        # Use invalid entity_id format (no dot) to trigger errors if those fields are still validated
+        config["power_devices"]["solar"]["forecast"]["total_energy_entity_id"] = "no_dot"
+        config["power_devices"]["solar"]["entities"]["remaining_today_energy_forecast"] = "no_dot"
+        report = validate_config_document(config)
+        error_paths = {issue.path for issue in report.errors}
+        self.assertNotIn("power_devices.solar.forecast.total_energy_entity_id", error_paths)
+        self.assertNotIn("power_devices.solar.entities.remaining_today_energy_forecast", error_paths)
+
     def test_surplus_appliance_optimizer_passes_for_configured_generic_appliance(self) -> None:
         config = _valid_config()
         config["appliances"].append(_generic_appliance())
@@ -490,7 +500,7 @@ class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             store.config["power_devices"]["solar"]["forecast"],
-            {"total_energy_entity_id": "sensor.solar_total"},
+            {},
         )
         self.assertNotIn(STORAGE_KEY, _FakeStore.saves_by_key)
 
@@ -507,7 +517,6 @@ class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
             store.config["power_devices"]["solar"]["forecast"],
             {
                 "source_config_entry_id": "forecast-entry",
-                "total_energy_entity_id": "sensor.solar_total",
             },
         )
         self.assertEqual(

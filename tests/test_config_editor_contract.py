@@ -668,7 +668,6 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                         "solar": {
                             "forecast": {
                                 "source_config_entry_id": "forecast-entry",
-                                "total_energy_entity_id": "sensor.solar_total",
                             }
                         }
                     }
@@ -933,6 +932,38 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.results[0][1]["reloadStarted"])
         self.assertFalse(connection.results[0][1]["reloadSucceeded"])
         self.assertEqual(connection.results[0][1]["reloadError"], "reload failed")
+
+
+    async def test_config_editor_contract_omits_removed_solar_forecast_entity_fields(
+        self,
+    ) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        # invalid entity_id format — if still validated, save must fail; after removal, save succeeds
+        config = {
+            "power_devices": {
+                "solar": {
+                    "entities": {
+                        "remaining_today_energy_forecast": "no_dot",
+                    },
+                    "forecast": {
+                        "source_config_entry_id": "forecast-entry",
+                        "total_energy_entity_id": "no_dot",
+                    },
+                }
+            }
+        }
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+        self.assertTrue(connection.results[0][1]["success"])
+        errors = connection.results[0][1]["validation"]["errors"]
+        error_paths = {e["path"] for e in errors}
+        self.assertNotIn("power_devices.solar.forecast.total_energy_entity_id", error_paths)
+        self.assertNotIn("power_devices.solar.entities.remaining_today_energy_forecast", error_paths)
 
 
 if __name__ == "__main__":

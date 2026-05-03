@@ -22,6 +22,14 @@ def _normalize_source_config_entry_id(value: Any) -> str | None:
     return normalized or None
 
 
+def _get_solar_section(config: dict[str, Any]) -> dict[str, Any] | None:
+    power_devices = config.get("power_devices")
+    if not isinstance(power_devices, dict):
+        return None
+    solar = power_devices.get("solar")
+    return solar if isinstance(solar, dict) else None
+
+
 def _get_forecast_section(config: dict[str, Any]) -> dict[str, Any] | None:
     power_devices = config.get("power_devices")
     if not isinstance(power_devices, dict):
@@ -101,6 +109,12 @@ def migrate_legacy_solar_forecast_config(
         return migrated
 
     forecast.pop("daily_energy_entity_ids", None)
+    forecast.pop("total_energy_entity_id", None)
+
+    solar = _get_solar_section(migrated)
+    if solar is not None and isinstance(solar.get("entities"), dict):
+        solar["entities"].pop("remaining_today_energy_forecast", None)
+
     if preserve_existing_source_config_entry_id and "source_config_entry_id" in forecast:
         return migrated
 

@@ -1160,10 +1160,6 @@ const Mi = {
   }
 ], Ti = [
   {
-    yamlKey: "total_energy_entity_id",
-    documentPath: ["power_devices", "solar", "forecast", "total_energy_entity_id"]
-  },
-  {
     yamlKey: "source_config_entry_id",
     documentPath: ["power_devices", "solar", "forecast", "source_config_entry_id"]
   }
@@ -4356,18 +4352,6 @@ const oo = [
           void 0,
           "editor.help.solar_today_energy_entity"
         )}
-                ${this._renderOptionalEntityField(
-          [
-            "power_devices",
-            "solar",
-            "entities",
-            "remaining_today_energy_forecast"
-          ],
-          "editor.fields.remaining_today_energy_forecast",
-          ["sensor"],
-          void 0,
-          "editor.help.solar_remaining_today_energy_forecast"
-        )}
               </div>
             `,
         { initialOpen: !1 }
@@ -4380,13 +4364,6 @@ const oo = [
           _.power_devices.solar_forecast_general,
           l`
                   <div class="field-grid field-grid--roomy">
-                    ${this._renderOptionalEntityField(
-            ["power_devices", "solar", "forecast", "total_energy_entity_id"],
-            "editor.fields.forecast_total_energy_entity",
-            ["sensor"],
-            void 0,
-            "editor.help.solar_forecast_total_energy_entity"
-          )}
                     <div class="field">
                       <div class="field-label-row">
                         <label>${this._t("editor.fields.solar_forecast_source")}</label>

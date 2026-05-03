@@ -167,10 +167,6 @@ const AUTOMATION_SETTINGS_MEMBERS = [
 
 const SOLAR_FORECAST_GENERAL_PROJECTION_MEMBERS = [
   {
-    yamlKey: "total_energy_entity_id",
-    documentPath: ["power_devices", "solar", "forecast", "total_energy_entity_id"],
-  },
-  {
     yamlKey: "source_config_entry_id",
     documentPath: ["power_devices", "solar", "forecast", "source_config_entry_id"],
   },
