@@ -134,6 +134,14 @@ def migrate_legacy_solar_forecast_config(
     return migrated
 
 
+async def async_discover_provider_daily_forecast_entities(
+    hass,
+    source_config_entry_id: str | None,
+) -> list[str]:
+    """Stub kept for import compatibility — replaced by wh_hours in Task 4."""
+    return []
+
+
 async def async_list_supported_solar_forecast_entries(hass) -> list[dict[str, str]]:
     supported_domains = set(await async_get_energy_platforms(hass))
     payload: list[dict[str, str]] = []

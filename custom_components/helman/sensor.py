@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime
+from homeassistant.const import UnitOfEnergy, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .forecast_builder import REMAINING_TODAY_FORECAST_ENTITY_ID
 
 
 async def async_setup_entry(
@@ -44,6 +45,8 @@ async def async_setup_entry(
         if node.get("ratioSensorId") and node.get("powerSensorId") and node.get("sourceType")
     }
 
+    remaining_today_forecast = HelmanRemainingTodayEnergyForecastSensor(entry)
+
     coordinator.set_sensors(
         battery_time_to_full=battery_time_to_full,
         battery_time_to_empty=battery_time_to_empty,
@@ -51,6 +54,7 @@ async def async_setup_entry(
         total_power=total_power,
         production_total=production_total,
         source_ratio_sensors=source_ratio_sensors,
+        remaining_today_forecast=remaining_today_forecast,
     )
     coordinator.set_entity_factory(
         entry,
@@ -65,6 +69,7 @@ async def async_setup_entry(
         + list(unmeasured_sensors.values())
         + [total_power, production_total]
         + list(source_ratio_sensors.values())
+        + [remaining_today_forecast]
     )
 
 
@@ -222,6 +227,31 @@ class HelmanProductionTotalSensor(SensorEntity):
 
     def update_value(self, watts: float) -> None:
         self._value = watts
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+
+class HelmanRemainingTodayEnergyForecastSensor(SensorEntity):
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfEnergy.WATT_HOUR
+    _attr_name = "Helman Remaining Today Energy Forecast"
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        self._attr_unique_id = f"{entry.entry_id}_remaining_today_energy_forecast"
+        self.entity_id = REMAINING_TODAY_FORECAST_ENTITY_ID
+        self._value: float | None = None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._value
+
+    async def async_added_to_hass(self) -> None:
+        pass
+
+    def update_value(self, wh: float) -> None:
+        self._value = round(wh, 1)
         if self.hass is not None:
             self.async_write_ha_state()
 

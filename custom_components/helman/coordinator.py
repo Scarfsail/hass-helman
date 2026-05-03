@@ -226,6 +226,7 @@ class HelmanCoordinator:
         self._unmeasured_sensors: dict[str, Any] = {}
         self._consumption_total_sensor = None
         self._production_total_sensor = None
+        self._remaining_today_forecast_sensor = None
         self._async_add_entities: Callable | None = None
         self._unmeasured_sensor_factory: Callable | None = None
         self._entry: Any = None
@@ -324,7 +325,7 @@ class HelmanCoordinator:
         walk(tree.get("consumers", []))
         return result
 
-    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None, production_total=None, source_ratio_sensors: dict | None = None) -> None:
+    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None, production_total=None, source_ratio_sensors: dict | None = None, remaining_today_forecast=None) -> None:
         """Called from async_setup_entry to register all sensor entities."""
         self._battery_time_to_full = battery_time_to_full
         self._battery_time_to_empty = battery_time_to_empty
@@ -332,6 +333,7 @@ class HelmanCoordinator:
         self._consumption_total_sensor = total_power
         self._production_total_sensor = production_total
         self._source_ratio_sensors = source_ratio_sensors or {}
+        self._remaining_today_forecast_sensor = remaining_today_forecast
 
     def set_entity_factory(
         self,
@@ -1498,10 +1500,14 @@ class HelmanCoordinator:
         if house_forecast.get("status") != "available":
             return None
 
-        raw_result = await HelmanForecastBuilder(
-            self._hass,
-            self._active_config,
-        ).build(reference_time=reference_time)
+        builder = HelmanForecastBuilder(self._hass, self._active_config)
+        raw_result = await builder.build(reference_time=reference_time)
+        if self._remaining_today_forecast_sensor is not None:
+            remaining_wh = builder._sum_remaining_today_wh(
+                raw_result["solar"].get("points", []),
+                reference_time,
+            )
+            self._remaining_today_forecast_sensor.update_value(remaining_wh)
         return AutomationInputBundle(
             original_house_forecast=deepcopy(house_forecast),
             solar_forecast=build_solar_forecast_response(
@@ -2708,6 +2714,7 @@ class HelmanCoordinator:
         self._unmeasured_sensors = {}
         self._consumption_total_sensor = None
         self._production_total_sensor = None
+        self._remaining_today_forecast_sensor = None
         self._source_ratio_sensors = {}
         self._async_add_entities = None
         self._unmeasured_sensor_factory = None

@@ -286,9 +286,6 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                     "forecast": {
                         "source_config_entry_id": "forecast-entry",
                     },
-                    "entities": {
-                        "remaining_today_energy_forecast": "sensor.remaining_today_energy",
-                    },
                 }
             }
         }
@@ -314,7 +311,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["status"], "available")
         self.assertEqual(payload["unit"], "Wh")
-        self.assertEqual(payload["remainingTodayEnergyEntityId"], "sensor.remaining_today_energy")
+        self.assertEqual(payload["remainingTodayEnergyEntityId"], "sensor.helman_remaining_today_energy_forecast")
         self.assertEqual(payload["actualHistory"], [{"timestamp": "history"}])
         self.assertEqual(
             payload["points"],
@@ -397,6 +394,41 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         load_forecast_mock.assert_awaited_once_with(builder._hass, "forecast-entry")
+
+    async def test_forecast_payload_returns_helman_remaining_today_entity_id(self) -> None:
+        forecast_builder_module, builder = self._make_builder()
+        builder._config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "source_config_entry_id": "forecast-entry",
+                    },
+                }
+            }
+        }
+        load_forecast_mock = AsyncMock(return_value={"wh_hours": {}})
+        with patch.object(
+            forecast_builder_module,
+            "async_load_upstream_solar_forecast",
+            load_forecast_mock,
+        ), patch.object(builder, "_build_solar_actual_history", AsyncMock(return_value=[])):
+            payload = await builder._build_solar_forecast(REFERENCE_TIME)
+        self.assertEqual(
+            payload["remainingTodayEnergyEntityId"],
+            "sensor.helman_remaining_today_energy_forecast",
+        )
+
+    def test_sum_remaining_today_wh_sums_future_today_points(self) -> None:
+        forecast_builder_module, builder = self._make_builder()
+        # REFERENCE_TIME = 2026-03-20T21:07:00+01:00
+        points = [
+            {"timestamp": "2026-03-20T19:00:00+01:00", "value": 100.0},  # past
+            {"timestamp": "2026-03-20T22:00:00+01:00", "value": 200.0},  # future today
+            {"timestamp": "2026-03-20T23:00:00+01:00", "value": 300.0},  # future today
+            {"timestamp": "2026-03-21T01:00:00+01:00", "value": 400.0},  # next day
+        ]
+        total = builder._sum_remaining_today_wh(points, REFERENCE_TIME)
+        self.assertAlmostEqual(total, 500.0)
 
 
 if __name__ == "__main__":

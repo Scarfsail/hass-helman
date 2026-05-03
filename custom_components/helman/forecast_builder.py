@@ -15,6 +15,8 @@ from .solar_forecast_source import async_load_upstream_solar_forecast, build_poi
 
 _LOGGER = logging.getLogger(__name__)
 
+REMAINING_TODAY_FORECAST_ENTITY_ID = "sensor.helman_remaining_today_energy_forecast"
+
 
 class HelmanForecastBuilder:
     def __init__(self, hass: HomeAssistant, config: dict) -> None:
@@ -56,9 +58,6 @@ class HelmanForecastBuilder:
         )
         status = "available" if points else "unavailable"
 
-        remaining_today_entity_id = self._read_entity_id(
-            self._read_dict(solar_config.get("entities")).get("remaining_today_energy_forecast")
-        )
         actual_history = await self._build_solar_actual_history(
             reference_time,
             interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
@@ -67,7 +66,7 @@ class HelmanForecastBuilder:
         return {
             "status": status,
             "unit": "Wh" if points else None,
-            "remainingTodayEnergyEntityId": remaining_today_entity_id,
+            "remainingTodayEnergyEntityId": REMAINING_TODAY_FORECAST_ENTITY_ID,
             "actualHistory": actual_history,
             "points": points,
         }
@@ -103,6 +102,32 @@ class HelmanForecastBuilder:
             }
             for slot_start, value_kwh in sorted(values_by_slot.items())
         ]
+
+    def _sum_remaining_today_wh(
+        self,
+        points: list[dict[str, Any]],
+        reference_time: datetime,
+    ) -> float:
+        local_ref = reference_time.astimezone(self._local_tz)
+        today = local_ref.date()
+        total = 0.0
+        for point in points:
+            raw_ts = point.get("timestamp")
+            if not isinstance(raw_ts, str):
+                continue
+            try:
+                ts = datetime.fromisoformat(raw_ts)
+            except ValueError:
+                continue
+            local_ts = ts.astimezone(self._local_tz)
+            if local_ts.date() != today:
+                continue
+            if local_ts <= local_ref:
+                continue
+            value = point.get("value")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                total += float(value)
+        return total
 
     def _get_state(self, entity_id: str | None):
         if entity_id is None:
@@ -163,13 +188,8 @@ class HelmanForecastBuilder:
     def _read_solar_actual_energy_entity_id(self) -> str | None:
         power_devices = self._read_dict(self._config.get("power_devices"))
         solar_config = self._read_dict(power_devices.get("solar"))
-        forecast_config = self._read_dict(solar_config.get("forecast"))
         entities = self._read_dict(solar_config.get("entities"))
-
-        return (
-            self._read_entity_id(forecast_config.get("total_energy_entity_id"))
-            or self._read_entity_id(entities.get("today_energy"))
-        )
+        return self._read_entity_id(entities.get("today_energy"))
 
     @staticmethod
     def _read_unit_from_state(state) -> str | None:
