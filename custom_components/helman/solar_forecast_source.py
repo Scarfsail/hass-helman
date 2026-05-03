@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import importlib
 import logging
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.components.energy.websocket_api import async_get_energy_platforms
 from homeassistant.helpers import entity_registry as er
@@ -181,47 +182,57 @@ async def async_load_upstream_solar_forecast(
     if loader is None:
         return None
 
-    return await loader(hass, source_config_entry_id)
+    raw = await loader(hass, source_config_entry_id)
+    raw_dict = raw if isinstance(raw, dict) else {}
+    wh_hours = _normalize_wh_hours(raw_dict.get("wh_hours"))
+    return {"wh_hours": wh_hours}
 
 
-async def async_discover_provider_daily_forecast_entities(
-    hass, source_config_entry_id: str | None
-) -> list[str]:
-    normalized_source_config_entry_id = _normalize_source_config_entry_id(
-        source_config_entry_id
-    )
-    if normalized_source_config_entry_id is None:
+def build_points_from_wh_hours(raw_wh_hours: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_wh_hours, dict):
         return []
 
-    registry = er.async_get(hass)
-    states = getattr(hass, "states", None)
-    entities = getattr(registry, "entities", None)
-    if not isinstance(entities, dict) or states is None:
+    points_with_sort_keys: list[tuple[datetime, dict[str, Any]]] = []
+    for raw_timestamp, raw_value in raw_wh_hours.items():
+        timestamp = _parse_wh_timestamp(raw_timestamp)
+        value = _parse_wh_value(raw_value)
+        if timestamp is None or value is None:
+            continue
+
+        utc_timestamp = timestamp.astimezone(timezone.utc)
+        points_with_sort_keys.append(
+            (utc_timestamp, {"timestamp": raw_timestamp, "value": value})
+        )
+
+    points_with_sort_keys.sort(key=lambda item: item[0])
+    return [point for _, point in points_with_sort_keys]
+
+
+def slice_wh_hours_by_local_date(
+    raw_wh_hours: Any,
+    *,
+    local_tz: ZoneInfo,
+    target_date: date,
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_wh_hours, dict):
         return []
 
-    discovered: list[tuple[datetime, str]] = []
-    for entry in entities.values():
-        if getattr(entry, "config_entry_id", None) != normalized_source_config_entry_id:
+    matched: list[tuple[datetime, dict[str, Any]]] = []
+    for raw_timestamp, raw_value in raw_wh_hours.items():
+        ts = _parse_wh_timestamp(raw_timestamp)
+        value = _parse_wh_value(raw_value)
+        if ts is None or value is None:
             continue
 
-        entity_id = getattr(entry, "entity_id", None)
-        if not isinstance(entity_id, str) or not entity_id:
+        local_ts = ts.astimezone(local_tz)
+        if local_ts.date() != target_date:
             continue
 
-        state = states.get(entity_id)
-        attributes = getattr(state, "attributes", None)
-        wh_period = attributes.get("wh_period") if isinstance(attributes, dict) else None
-        if not isinstance(wh_period, dict) or not wh_period:
-            continue
+        utc_ts = ts.astimezone(timezone.utc)
+        matched.append((utc_ts, {"timestamp": raw_timestamp, "value": value}))
 
-        earliest = _earliest_wh_period_timestamp(wh_period)
-        if earliest is None:
-            continue
-
-        discovered.append((earliest, entity_id))
-
-    discovered.sort(key=lambda item: (item[0], item[1]))
-    return [entity_id for _, entity_id in discovered]
+    matched.sort(key=lambda item: item[0])
+    return [point for _, point in matched]
 
 
 def _load_energy_platform_loader(domain: str):
@@ -246,24 +257,43 @@ def _load_energy_platform_loader(domain: str):
     return None
 
 
-def _earliest_wh_period_timestamp(wh_period: dict[str, Any]) -> datetime | None:
-    timestamps = [
-        parsed
-        for raw_key in wh_period
-        if (parsed := _parse_wh_period_timestamp(raw_key)) is not None
-    ]
-    return min(timestamps, default=None)
+def _normalize_wh_hours(raw_wh_hours: Any) -> dict[str, float]:
+    if not isinstance(raw_wh_hours, dict):
+        return {}
+    result: dict[str, float] = {}
+    for raw_key, raw_value in raw_wh_hours.items():
+        if not isinstance(raw_key, str):
+            continue
+        value = _parse_wh_value(raw_value)
+        if value is None:
+            continue
+        result[raw_key] = value
+    return result
 
 
-def _parse_wh_period_timestamp(raw_key: Any) -> datetime | None:
+def _parse_wh_value(raw_value: Any) -> float | None:
+    if isinstance(raw_value, bool) or raw_value is None:
+        return None
+    if isinstance(raw_value, (int, float)):
+        return float(raw_value)
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_wh_timestamp(raw_key: Any) -> datetime | None:
     if not isinstance(raw_key, str):
         return None
-
     try:
         parsed = datetime.fromisoformat(raw_key.replace("Z", "+00:00"))
     except ValueError:
         return None
-
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)

@@ -682,8 +682,10 @@ def test_async_load_upstream_solar_forecast_falls_back_to_builtin_energy_module(
     )
     async def _async_get_solar_forecast(inner_hass, entry_id):
         return {
-            "hass": inner_hass,
-            "entry_id": entry_id,
+            "wh_hours": {
+                "2026-05-02T04:00:00+00:00": 93,
+                "2026-05-02T05:00:00+00:00": 866,
+            }
         }
 
     builtin_loader = SimpleNamespace(async_get_solar_forecast=_async_get_solar_forecast)
@@ -708,8 +710,10 @@ def test_async_load_upstream_solar_forecast_falls_back_to_builtin_energy_module(
         solar_forecast_source.importlib.import_module = original_import_module
 
     assert result == {
-        "hass": hass,
-        "entry_id": "forecast-entry",
+        "wh_hours": {
+            "2026-05-02T04:00:00+00:00": 93.0,
+            "2026-05-02T05:00:00+00:00": 866.0,
+        }
     }
 
 
@@ -745,3 +749,65 @@ def test_async_load_upstream_solar_forecast_swallows_missing_module_only():
         solar_forecast_source.importlib.import_module = original_import_module
 
     assert result is None
+
+
+def test_build_points_from_wh_hours_sorts_and_parses():
+    raw = {
+        "2026-05-02T05:00:00+00:00": 866,
+        "2026-05-02T04:00:00+00:00": 93,
+    }
+    points = solar_forecast_source.build_points_from_wh_hours(raw)
+    assert points == [
+        {"timestamp": "2026-05-02T04:00:00+00:00", "value": 93.0},
+        {"timestamp": "2026-05-02T05:00:00+00:00", "value": 866.0},
+    ]
+
+
+def test_build_points_from_wh_hours_returns_empty_for_non_dict():
+    assert solar_forecast_source.build_points_from_wh_hours(None) == []
+    assert solar_forecast_source.build_points_from_wh_hours("bad") == []
+
+
+def test_slice_wh_hours_by_local_date_filters_target_date():
+    from datetime import date as date_cls
+    from zoneinfo import ZoneInfo
+
+    raw = {
+        "2026-05-02T04:00:00+00:00": 93,
+        "2026-05-02T05:00:00+00:00": 866,
+        "2026-05-03T04:00:00+00:00": 102,
+    }
+    points = solar_forecast_source.slice_wh_hours_by_local_date(
+        raw,
+        local_tz=ZoneInfo("UTC"),
+        target_date=date_cls(2026, 5, 2),
+    )
+    assert [p["value"] for p in points] == [93.0, 866.0]
+    assert len(points) == 2
+
+
+def test_async_load_upstream_solar_forecast_wraps_raw_in_wh_hours_key():
+    hass = SimpleNamespace(
+        config_entries=_FakeConfigEntries(
+            {"entry-1": _FakeConfigEntry("entry-1", "forecast_solar", "Forecast")}
+        )
+    )
+
+    async def _loader(inner_hass, entry_id):
+        return {"other_key": "value"}
+
+    def _import_module(name: str):
+        if name == "custom_components.forecast_solar.energy":
+            return SimpleNamespace(async_get_solar_forecast=_loader)
+        raise AssertionError(name)
+
+    original = solar_forecast_source.importlib.import_module
+    solar_forecast_source.importlib.import_module = _import_module
+    try:
+        result = asyncio.run(
+            solar_forecast_source.async_load_upstream_solar_forecast(hass, "entry-1")
+        )
+    finally:
+        solar_forecast_source.importlib.import_module = original
+
+    assert result == {"wh_hours": {}}

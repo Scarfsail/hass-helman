@@ -4,7 +4,7 @@ import importlib
 import sys
 import types
 import unittest
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -357,52 +357,46 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(payload["unit"])
         self.assertEqual(payload["points"], [])
 
-    async def test_extract_hourly_solar_points_reanchors_post_dst_stale_offset_day(self) -> None:
-        entity_id = "sensor.energy_production_d2"
-        wh_period = {
-            f"2026-03-30T{hour:02d}:00:00+01:00": float(hour)
-            for hour in range(24)
+    async def test_build_solar_forecast_uses_provider_wh_hours_only(self) -> None:
+        _, builder = self._make_builder()
+        builder._config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "source_config_entry_id": "forecast-entry",
+                    },
+                }
+            }
         }
-        forecast_builder_module, builder = self._make_builder(
-            states={
-                entity_id: SimpleNamespace(attributes={"wh_period": wh_period}),
+        actual_history_mock = AsyncMock(return_value=[])
+        load_forecast_mock = AsyncMock(
+            return_value={
+                "wh_hours": {
+                    "2026-05-03T04:00:00+00:00": 102,
+                    "2026-05-03T05:00:00+00:00": 909,
+                }
             }
         )
 
-        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
-            points = builder._extract_hourly_solar_points(entity_id, date(2026, 3, 30))
+        with (
+            patch.object(
+                importlib.import_module("custom_components.helman.forecast_builder"),
+                "async_load_upstream_solar_forecast",
+                load_forecast_mock,
+            ),
+            patch.object(builder, "_build_solar_actual_history", actual_history_mock),
+        ):
+            payload = await builder._build_solar_forecast(REFERENCE_TIME)
 
-        self.assertEqual(len(points), 24)
-        self.assertEqual(points[0][0].isoformat(), "2026-03-30T00:00:00+02:00")
-        self.assertEqual(points[0][1]["timestamp"], "2026-03-30T00:00:00+02:00")
-        self.assertEqual(points[0][1]["value"], 0.0)
-        self.assertEqual(points[1][0].isoformat(), "2026-03-30T01:00:00+02:00")
-        self.assertEqual(points[-1][0].isoformat(), "2026-03-30T23:00:00+02:00")
-        self.assertEqual(points[-1][1]["value"], 23.0)
-
-    async def test_extract_hourly_solar_points_keeps_dst_gap_day_on_local_hour_axis(self) -> None:
-        entity_id = "sensor.energy_production_tomorrow"
-        wh_period = {
-            f"2026-03-29T{hour:02d}:00:00+01:00": float(hour)
-            for hour in range(24)
-        }
-        forecast_builder_module, builder = self._make_builder(
-            states={
-                entity_id: SimpleNamespace(attributes={"wh_period": wh_period}),
-            }
+        self.assertEqual(payload["status"], "available")
+        self.assertEqual(
+            payload["points"],
+            [
+                {"timestamp": "2026-05-03T04:00:00+00:00", "value": 102.0},
+                {"timestamp": "2026-05-03T05:00:00+00:00", "value": 909.0},
+            ],
         )
-
-        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
-            points = builder._extract_hourly_solar_points(entity_id, date(2026, 3, 29))
-
-        self.assertEqual(len(points), 23)
-        self.assertEqual(points[0][0].isoformat(), "2026-03-29T00:00:00+01:00")
-        self.assertEqual(points[1][0].isoformat(), "2026-03-29T01:00:00+01:00")
-        self.assertEqual(points[2][0].isoformat(), "2026-03-29T03:00:00+02:00")
-        self.assertTrue(all("T02:" not in point["timestamp"] for _, point in points))
-        self.assertEqual(points[2][1]["value"], 2.0)
-        self.assertEqual(points[-1][0].isoformat(), "2026-03-29T23:00:00+02:00")
-        self.assertEqual(points[-1][1]["value"], 22.0)
+        load_forecast_mock.assert_awaited_once_with(builder._hass, "forecast-entry")
 
 
 if __name__ == "__main__":

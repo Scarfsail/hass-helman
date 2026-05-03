@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,7 +11,7 @@ from homeassistant.util import dt as dt_util
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .recorder_hourly_series import query_slot_energy_changes
-from .solar_forecast_source import async_load_upstream_solar_forecast
+from .solar_forecast_source import async_load_upstream_solar_forecast, build_points_from_wh_hours
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class HelmanForecastBuilder:
             self._hass,
             source_config_entry_id
         )
-        points = self._build_points_from_wh_hours(
+        points = build_points_from_wh_hours(
             self._read_dict(upstream_forecast).get("wh_hours")
         )
         status = "available" if points else "unavailable"
@@ -71,31 +71,6 @@ class HelmanForecastBuilder:
             "actualHistory": actual_history,
             "points": points,
         }
-
-    def _build_points_from_wh_hours(self, raw_wh_hours: Any) -> list[dict[str, Any]]:
-        if not isinstance(raw_wh_hours, dict):
-            return []
-
-        points_with_sort_keys: list[tuple[datetime, dict[str, Any]]] = []
-        for raw_timestamp, raw_value in raw_wh_hours.items():
-            timestamp = self._parse_attribute_timestamp(raw_timestamp)
-            value = self._parse_float(raw_value)
-            if timestamp is None or value is None:
-                continue
-
-            utc_timestamp = dt_util.as_utc(timestamp)
-            points_with_sort_keys.append(
-                (
-                    utc_timestamp,
-                    {
-                        "timestamp": timestamp.isoformat(),
-                        "value": value,
-                    },
-                )
-            )
-
-        points_with_sort_keys.sort(key=lambda item: item[0])
-        return [point for _, point in points_with_sort_keys]
 
     async def _build_solar_actual_history(
         self,
@@ -128,68 +103,6 @@ class HelmanForecastBuilder:
             }
             for slot_start, value_kwh in sorted(values_by_slot.items())
         ]
-
-    def _extract_hourly_solar_points(
-        self, entity_id: str, expected_date: date
-    ) -> list[tuple[datetime, dict[str, Any]]]:
-        state = self._get_state(entity_id)
-        if state is None:
-            return []
-
-        wh_period = state.attributes.get("wh_period")
-        if not isinstance(wh_period, dict):
-            return []
-
-        parsed_points: list[tuple[datetime, float]] = []
-        for raw_key, raw_value in wh_period.items():
-            value = self._parse_float(raw_value)
-            if value is None:
-                continue
-
-            parsed_timestamp = self._parse_attribute_timestamp(raw_key)
-            if parsed_timestamp is None:
-                continue
-
-            parsed_points.append((parsed_timestamp, value))
-
-        if not parsed_points:
-            return []
-
-        parsed_points.sort(key=lambda item: dt_util.as_utc(item[0]))
-        expected_slots = self._build_local_hour_slots_for_date(expected_date)
-        if not expected_slots:
-            return []
-
-        points: list[tuple[datetime, dict[str, Any]]] = []
-        for slot_start, (_, value) in zip(expected_slots, parsed_points):
-            points.append(
-                (
-                    slot_start,
-                    {
-                        "timestamp": slot_start.isoformat(),
-                        "value": value,
-                    },
-                )
-            )
-
-        return points
-
-    def _build_local_hour_slots_for_date(self, expected_date: date) -> list[datetime]:
-        local_start = datetime.combine(expected_date, time.min, tzinfo=self._local_tz)
-        local_end = datetime.combine(
-            expected_date + timedelta(days=1),
-            time.min,
-            tzinfo=self._local_tz,
-        )
-
-        slots: list[datetime] = []
-        cursor_utc = dt_util.as_utc(local_start)
-        end_utc = dt_util.as_utc(local_end)
-        while cursor_utc < end_utc:
-            slots.append(dt_util.as_local(cursor_utc))
-            cursor_utc += timedelta(hours=1)
-
-        return slots
 
     def _get_state(self, entity_id: str | None):
         if entity_id is None:
