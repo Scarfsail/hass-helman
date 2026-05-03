@@ -109,7 +109,18 @@ def migrate_legacy_solar_forecast_config(
         return migrated
 
     forecast.pop("daily_energy_entity_ids", None)
-    forecast.pop("total_energy_entity_id", None)
+
+    # Move forecast-level total_energy_entity_id to bias_correction where it is now read.
+    old_tee = forecast.pop("total_energy_entity_id", None)
+    if isinstance(old_tee, str):
+        old_tee = old_tee.strip()
+    if old_tee:
+        bias_cfg = forecast.setdefault("bias_correction", {})
+        if not isinstance(bias_cfg, dict):
+            bias_cfg = {}
+            forecast["bias_correction"] = bias_cfg
+        if not bias_cfg.get("total_energy_entity_id"):
+            bias_cfg["total_energy_entity_id"] = old_tee
 
     solar = _get_solar_section(migrated)
     if solar is not None and isinstance(solar.get("entities"), dict):

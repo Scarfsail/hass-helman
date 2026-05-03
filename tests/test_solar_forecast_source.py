@@ -476,7 +476,9 @@ def test_async_migrate_legacy_solar_forecast_config_infers_source_from_registry_
             "solar": {
                 "forecast": {
                     "source_config_entry_id": "forecast-entry",
-                    "total_energy_entity_id": "sensor.solar_total",
+                    "bias_correction": {
+                        "total_energy_entity_id": "sensor.solar_total",
+                    },
                 }
             }
         }
@@ -545,7 +547,9 @@ def test_async_migrate_legacy_solar_forecast_config_keeps_explicit_source_over_i
             "solar": {
                 "forecast": {
                     "source_config_entry_id": "forecast-entry-a",
-                    "total_energy_entity_id": "sensor.solar_total",
+                    "bias_correction": {
+                        "total_energy_entity_id": "sensor.solar_total",
+                    },
                 }
             }
         }
@@ -611,7 +615,9 @@ def test_async_migrate_legacy_solar_forecast_config_preserves_invalid_explicit_s
             "solar": {
                 "forecast": {
                     "source_config_entry_id": "   ",
-                    "total_energy_entity_id": "sensor.solar_total",
+                    "bias_correction": {
+                        "total_energy_entity_id": "sensor.solar_total",
+                    },
                 }
             }
         }
@@ -663,7 +669,9 @@ def test_async_migrate_legacy_solar_forecast_config_tolerates_non_list_legacy_id
         "power_devices": {
             "solar": {
                 "forecast": {
-                    "total_energy_entity_id": "sensor.solar_total",
+                    "bias_correction": {
+                        "total_energy_entity_id": "sensor.solar_total",
+                    },
                 }
             }
         }

@@ -500,7 +500,11 @@ class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             store.config["power_devices"]["solar"]["forecast"],
-            {},
+            {
+                "bias_correction": {
+                    "total_energy_entity_id": "sensor.solar_total",
+                },
+            },
         )
         self.assertNotIn(STORAGE_KEY, _FakeStore.saves_by_key)
 
@@ -517,6 +521,9 @@ class HelmanStorageTests(unittest.IsolatedAsyncioTestCase):
             store.config["power_devices"]["solar"]["forecast"],
             {
                 "source_config_entry_id": "forecast-entry",
+                "bias_correction": {
+                    "total_energy_entity_id": "sensor.solar_total",
+                },
             },
         )
         self.assertEqual(

@@ -668,6 +668,9 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                         "solar": {
                             "forecast": {
                                 "source_config_entry_id": "forecast-entry",
+                                "bias_correction": {
+                                    "total_energy_entity_id": "sensor.solar_total",
+                                },
                             }
                         }
                     }
@@ -964,6 +967,34 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         error_paths = {e["path"] for e in errors}
         self.assertNotIn("power_devices.solar.forecast.total_energy_entity_id", error_paths)
         self.assertNotIn("power_devices.solar.entities.remaining_today_energy_forecast", error_paths)
+
+
+    async def test_editor_contract_exposes_only_source_config_entry_id_for_solar_forecast(
+        self,
+    ) -> None:
+        """source_config_entry_id is the only validated solar forecast field."""
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        # blank source_config_entry_id → validation error at that path
+        invalid_config = {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "source_config_entry_id": "   ",
+                    },
+                }
+            }
+        }
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": invalid_config},
+        )
+        errors = connection.results[0][1]["validation"]["errors"]
+        error_paths = {e["path"] for e in errors}
+        self.assertIn("power_devices.solar.forecast.source_config_entry_id", error_paths)
+        self.assertNotIn("power_devices.solar.forecast.total_energy_entity_id", error_paths)
 
 
 if __name__ == "__main__":

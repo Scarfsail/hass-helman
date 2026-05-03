@@ -83,7 +83,7 @@ These points were explicitly resolved during refinement:
 
 The design is grounded in the current implementation:
 
-- Solar forecast is built live from `power_devices.solar.forecast.daily_energy_entity_ids` and `wh_period`.
+- Solar forecast is built live from the upstream Energy-provider `wh_hours` contract (selected via `power_devices.solar.forecast.source_config_entry_id`).
 - Solar `actualHistory` currently covers **today so far**, not a retained multi-day solar history.
 - There is currently **no persisted historical solar forecast archive**.
 - Forecast internals already use a canonical `15`-minute model and aggregate to `15`, `30`, or `60` minute responses.
@@ -235,16 +235,14 @@ The feature should live under the existing solar forecast config branch.
 power_devices:
   solar:
     forecast:
-      daily_energy_entity_ids:
-        - sensor.energy_production_today
-        - sensor.energy_production_tomorrow
-      total_energy_entity_id: sensor.solar_energy_total
+      source_config_entry_id: <upstream-energy-provider-entry-id>
       bias_correction:
         enabled: true                    # default true
         min_history_days: 10             # default 10
         training_time: "03:00"           # local HH:MM, default "03:00"
         clamp_min: 0.3                   # factor lower bound, default 0.3
         clamp_max: 2.0                   # factor upper bound, default 2.0
+        total_energy_entity_id: sensor.solar_energy_total  # actuals source
 ```
 
 ### Config requirements
