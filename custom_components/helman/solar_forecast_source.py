@@ -276,12 +276,17 @@ def _load_energy_platform_loader(domain: str):
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as err:
-            if err.name != module_name:
-                _LOGGER.exception(
-                    "Failed importing upstream energy platform module %s", module_name
-                )
-                return None
-            continue
+            # Silently skip when the module itself or a parent package is absent.
+            # Only log when a *dependency* of the module is missing (i.e. the
+            # missing name is unrelated to the path we tried to import).
+            if err.name is not None and (
+                err.name == module_name or module_name.startswith(err.name + ".")
+            ):
+                continue
+            _LOGGER.exception(
+                "Failed importing upstream energy platform module %s", module_name
+            )
+            return None
 
         loader = getattr(module, "async_get_solar_forecast", None)
         if callable(loader):
