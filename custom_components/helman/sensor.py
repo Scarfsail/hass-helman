@@ -37,6 +37,17 @@ async def async_setup_entry(
     }
     total_power = HelmanConsumptionTotalSensor(coordinator, entry)
     production_total = HelmanProductionTotalSensor(coordinator, entry)
+    forecast_entities = [
+        HelmanSolarForecastEnergySensor(coordinator, entry, "today", day_offset=0),
+        HelmanSolarForecastEnergySensor(coordinator, entry, "tomorrow", day_offset=1),
+        HelmanSolarForecastEnergySensor(coordinator, entry, "d2", day_offset=2),
+        HelmanSolarForecastEnergySensor(coordinator, entry, "d3", day_offset=3),
+        HelmanSolarForecastEnergySensor(coordinator, entry, "d4", day_offset=4),
+        HelmanSolarForecastEnergySensor(coordinator, entry, "d5", day_offset=5),
+        HelmanSolarForecastEnergySensor(coordinator, entry, "d6", day_offset=6),
+        HelmanSolarForecastEnergySensor(coordinator, entry, "d7", day_offset=7),
+        HelmanSolarForecastRemainingSensor(coordinator, entry),
+    ]
 
     source_ratio_sensors: dict[str, HelmanSourceRatioSensor] = {
         node["powerSensorId"]: HelmanSourceRatioSensor(coordinator, entry, node["sourceType"])
@@ -65,6 +76,7 @@ async def async_setup_entry(
         + list(unmeasured_sensors.values())
         + [total_power, production_total]
         + list(source_ratio_sensors.values())
+        + forecast_entities
     )
 
 
@@ -249,3 +261,51 @@ class HelmanSourceRatioSensor(SensorEntity):
         self._value = round(pct, 1)
         if self.hass is not None:
             self.async_write_ha_state()
+
+
+class HelmanSolarForecastEnergySensor(SensorEntity):
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = "Wh"
+
+    def __init__(
+        self,
+        coordinator,
+        entry: ConfigEntry,
+        key: str,
+        *,
+        day_offset: int,
+    ) -> None:
+        self._coordinator = coordinator
+        self._day_offset = day_offset
+        self.entity_id = f"sensor.helman_energy_production_{key}"
+        self._attr_unique_id = f"{entry.entry_id}_energy_production_{key}"
+        self._attr_name = f"Helman Energy Production {key.replace('_', ' ').title()}"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.get_solar_forecast_day_total(self._day_offset) is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.get_solar_forecast_day_total(self._day_offset)
+
+
+class HelmanSolarForecastRemainingSensor(SensorEntity):
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = "Wh"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        self._coordinator = coordinator
+        self.entity_id = "sensor.helman_energy_production_today_remaining"
+        self._attr_unique_id = f"{entry.entry_id}_energy_production_today_remaining"
+        self._attr_name = "Helman Energy Production Today Remaining"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.get_solar_forecast_today_remaining() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.get_solar_forecast_today_remaining()

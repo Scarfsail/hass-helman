@@ -1,0 +1,387 @@
+from __future__ import annotations
+
+import importlib
+import sys
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+from test_solar_bias_response import (
+    REFERENCE_TIME,
+    _install_coordinator_import_stubs,
+    _restore_modules,
+)
+
+
+class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
+    def _load_coordinator_module(self):
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            return (
+                importlib.import_module("custom_components.helman.coordinator"),
+                previous_modules,
+            )
+        except Exception:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            raise
+
+    async def test_refresh_forecast_persists_canonical_solar_snapshot(self) -> None:
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+            coordinator._hass = SimpleNamespace()
+            coordinator._active_config = {}
+            coordinator._cached_forecast = None
+            coordinator._cached_solar_forecast = None
+            coordinator._invalidate_battery_forecast_cache = Mock()
+            coordinator._async_refresh_automation_input_bundle = AsyncMock(
+                return_value=True
+            )
+            coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
+
+            house_snapshot = {"status": "available", "currentSlot": {"timestamp": "2026-05-03T09:45:00+02:00"}}
+            solar_snapshot = {
+                "status": "available",
+                "resolution": "15m",
+                "horizonHours": 336,
+                "points": [
+                    {"timestamp": "2026-05-03T10:00:00+02:00", "value": 1200.0}
+                ],
+                "rawPoints": [
+                    {"timestamp": "2026-05-03T10:00:00+02:00", "value": 1500.0}
+                ],
+                "generatedAt": "2026-05-03T09:45:00+02:00",
+            }
+
+            builder_instance = SimpleNamespace(build=AsyncMock(return_value=house_snapshot))
+            coordinator._async_build_canonical_solar_forecast = AsyncMock(
+                return_value=solar_snapshot
+            )
+
+            with patch.object(
+                coordinator_module,
+                "ConsumptionForecastBuilder",
+                return_value=builder_instance,
+            ):
+                await coordinator._async_refresh_forecast(reference_time=REFERENCE_TIME)
+
+            self.assertEqual(coordinator._cached_forecast, house_snapshot)
+            self.assertEqual(coordinator._cached_solar_forecast, solar_snapshot)
+            coordinator._storage.async_save_snapshots.assert_awaited_once_with(
+                house_snapshot=house_snapshot,
+                solar_snapshot=solar_snapshot,
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_get_forecast_uses_shared_refresh_path_when_solar_cache_missing(self) -> None:
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+            coordinator._hass = SimpleNamespace()
+            coordinator._active_config = {}
+            coordinator._cached_forecast = {"status": "available"}
+            coordinator._cached_solar_forecast = None
+            coordinator._storage = SimpleNamespace(config={})
+            coordinator._read_house_forecast_config = Mock(
+                return_value=("sensor.house_total", 56, 14, "fp")
+            )
+            coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
+            coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
+            coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+                return_value=SimpleNamespace(
+                    adjusted_house_forecast={"status": "available"},
+                    battery_forecast={"status": "available", "series": []},
+                )
+            )
+
+            async def _populate_solar_cache(*, reason: str, reference_time=None) -> None:
+                coordinator._cached_solar_forecast = {
+                    "status": "available",
+                    "resolution": "15m",
+                    "horizonHours": 336,
+                    "points": [
+                        {"timestamp": "2026-05-03T10:00:00+02:00", "value": 900.5}
+                    ],
+                    "rawPoints": [
+                        {"timestamp": "2026-05-03T10:00:00+02:00", "value": 1250.25}
+                    ],
+                }
+
+            coordinator._async_refresh_forecast_and_request_automation = AsyncMock(
+                side_effect=_populate_solar_cache
+            )
+            builder_instance = SimpleNamespace(
+                build=AsyncMock(
+                    return_value={
+                        "grid": {
+                            "export": {"status": "available", "currentPrice": 2.5},
+                            "import": {"status": "available", "currentPrice": 7.0},
+                        }
+                    }
+                )
+            )
+
+            with (
+                patch.object(
+                    coordinator_module,
+                    "HelmanForecastBuilder",
+                    return_value=builder_instance,
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_solar_forecast_response",
+                    side_effect=lambda snapshot, **kwargs: snapshot,
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_house_forecast_response",
+                    return_value={"kind": "house"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_battery_forecast_response",
+                    return_value={"kind": "battery"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_flow_forecast_snapshot",
+                    return_value={"canonical": "grid"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_flow_forecast_response",
+                    return_value={"kind": "grid-flow"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_price_forecast_response",
+                    return_value={
+                        "exportPriceUnit": "CZK/kWh",
+                        "currentExportPrice": 2.5,
+                        "exportPricePoints": [],
+                        "importPriceUnit": "CZK/kWh",
+                        "currentImportPrice": 7.0,
+                        "importPricePoints": [],
+                    },
+                    create=True,
+                ),
+            ):
+                await coordinator.get_forecast(granularity=60, forecast_days=7)
+
+            coordinator._async_refresh_forecast_and_request_automation.assert_awaited_once()
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_get_forecast_uses_cached_corrected_points_without_rebuilding_solar_snapshot(self) -> None:
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+            coordinator._hass = SimpleNamespace()
+            coordinator._active_config = {}
+            coordinator._cached_forecast = {"status": "available"}
+            coordinator._cached_solar_forecast = {
+                "status": "available",
+                "resolution": "15m",
+                "horizonHours": 336,
+                "generatedAt": REFERENCE_TIME.isoformat(),
+                "points": [
+                    {"timestamp": "2026-05-03T10:00:00+02:00", "value": 900.5}
+                ],
+                "rawPoints": [
+                    {"timestamp": "2026-05-03T10:00:00+02:00", "value": 1250.25}
+                ],
+            }
+            coordinator._storage = SimpleNamespace(config={})
+            coordinator._read_house_forecast_config = Mock(
+                return_value=("sensor.house_total", 56, 14, "fp")
+            )
+            coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
+            coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
+            coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+                return_value=SimpleNamespace(
+                    adjusted_house_forecast={"status": "available"},
+                    battery_forecast={"status": "available", "series": []},
+                )
+            )
+
+            builder_instance = SimpleNamespace(
+                build=AsyncMock(
+                    return_value={
+                        "grid": {
+                            "export": {"status": "available", "currentPrice": 2.5},
+                            "import": {"status": "available", "currentPrice": 7.0},
+                        }
+                    }
+                )
+            )
+
+            with (
+                patch.object(
+                    coordinator_module,
+                    "HelmanForecastBuilder",
+                    return_value=builder_instance,
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_solar_forecast_response",
+                    side_effect=lambda snapshot, **kwargs: snapshot,
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_house_forecast_response",
+                    return_value={"kind": "house"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_battery_forecast_response",
+                    return_value={"kind": "battery"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_flow_forecast_snapshot",
+                    return_value={"canonical": "grid"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_flow_forecast_response",
+                    return_value={"kind": "grid-flow"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_price_forecast_response",
+                    return_value={
+                        "exportPriceUnit": None,
+                        "currentExportPrice": None,
+                        "exportPricePoints": [],
+                        "importPriceUnit": None,
+                        "currentImportPrice": None,
+                        "importPricePoints": [],
+                    },
+                    create=True,
+                ),
+            ):
+                result = await coordinator.get_forecast(granularity=60, forecast_days=7)
+
+            self.assertEqual(result["solar"]["points"][0]["value"], 900.5)
+            coordinator._async_refresh_forecast_and_request_automation.assert_not_awaited()
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_get_forecast_falls_back_to_raw_points_when_corrected_missing(self) -> None:
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+            coordinator._hass = SimpleNamespace()
+            coordinator._active_config = {}
+            coordinator._cached_forecast = {"status": "available"}
+            coordinator._cached_solar_forecast = {
+                "status": "available",
+                "resolution": "15m",
+                "horizonHours": 336,
+                "generatedAt": REFERENCE_TIME.isoformat(),
+                "points": [],
+                "rawPoints": [
+                    {"timestamp": "2026-05-03T10:00:00+02:00", "value": 1250.25}
+                ],
+            }
+            coordinator._storage = SimpleNamespace(config={})
+            coordinator._read_house_forecast_config = Mock(
+                return_value=("sensor.house_total", 56, 14, "fp")
+            )
+            coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
+            coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+                return_value=SimpleNamespace(
+                    adjusted_house_forecast={"status": "available"},
+                    battery_forecast={"status": "available", "series": []},
+                )
+            )
+            builder_instance = SimpleNamespace(
+                build=AsyncMock(
+                    return_value={
+                        "grid": {
+                            "export": {"status": "available", "currentPrice": 2.5},
+                            "import": {"status": "available", "currentPrice": 7.0},
+                        }
+                    }
+                )
+            )
+
+            with (
+                patch.object(
+                    coordinator_module,
+                    "HelmanForecastBuilder",
+                    return_value=builder_instance,
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_solar_forecast_response",
+                    side_effect=lambda snapshot, **kwargs: snapshot,
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_house_forecast_response",
+                    return_value={"kind": "house"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_battery_forecast_response",
+                    return_value={"kind": "battery"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_flow_forecast_snapshot",
+                    return_value={"canonical": "grid"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_flow_forecast_response",
+                    return_value={"kind": "grid-flow"},
+                    create=True,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "build_grid_price_forecast_response",
+                    return_value={
+                        "exportPriceUnit": None,
+                        "currentExportPrice": None,
+                        "exportPricePoints": [],
+                        "importPriceUnit": None,
+                        "currentImportPrice": None,
+                        "importPricePoints": [],
+                    },
+                    create=True,
+                ),
+            ):
+                result = await coordinator.get_forecast(granularity=60, forecast_days=7)
+
+            self.assertEqual(result["solar"]["points"][0]["value"], 1250.25)
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+
+if __name__ == "__main__":
+    unittest.main()

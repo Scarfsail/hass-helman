@@ -184,6 +184,37 @@ def _build_price_channel_snapshot(
     }
 
 
+def _iter_local_solar_points(
+    points: list[dict[str, Any]],
+) -> list[tuple[datetime, float]]:
+    normalized_points: list[tuple[datetime, float]] = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        timestamp = point.get("timestamp")
+        value = point.get("value")
+        if not isinstance(timestamp, str) or isinstance(value, bool):
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        parsed_timestamp = dt_util.parse_datetime(timestamp)
+        if parsed_timestamp is None:
+            continue
+        normalized_points.append((dt_util.as_local(parsed_timestamp), float(value)))
+    normalized_points.sort(key=lambda item: dt_util.as_utc(item[0]))
+    return normalized_points
+
+
+def _bucket_points_by_local_day(
+    points: list[dict[str, Any]],
+) -> dict[str, list[float]]:
+    buckets: dict[str, list[float]] = {}
+    for point_time, value in _iter_local_solar_points(points):
+        bucket_key = point_time.date().isoformat()
+        buckets.setdefault(bucket_key, []).append(value)
+    return buckets
+
+
 @dataclass(frozen=True)
 class _ApplianceForecastPipelineSnapshot:
     started_at: datetime
@@ -241,6 +272,7 @@ class HelmanCoordinator:
         self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
+        self._cached_solar_forecast: dict[str, Any] | None = None
         self._cached_battery_forecast: dict | None = None
         self._cached_battery_forecast_expires_at: datetime | None = None
         self._cached_battery_forecast_house_generated_at: str | None = None
@@ -408,6 +440,7 @@ class HelmanCoordinator:
 
         # House forecast: load persisted snapshot and schedule recurring refreshes.
         self._cached_forecast = self._storage.forecast_snapshot
+        self._cached_solar_forecast = self._storage.solar_forecast_snapshot
         (
             total_energy_entity_id,
             training_window_days,
@@ -421,6 +454,11 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         ):
             self._cached_forecast = None
+        if not self._has_current_slot_solar_forecast(
+            self._cached_solar_forecast,
+            reference_time=dt_util.now(),
+        ):
+            self._cached_solar_forecast = None
         self._start_forecast_refresh()
 
         await self._async_normalize_schedule_document()
@@ -647,6 +685,59 @@ class HelmanCoordinator:
         )
         return local_snapshot_slot == local_current_slot
 
+    @staticmethod
+    def _has_current_slot_solar_forecast(
+        snapshot: dict[str, Any] | None,
+        *,
+        reference_time: datetime | None = None,
+    ) -> bool:
+        if not isinstance(snapshot, dict):
+            return False
+
+        generated_at = snapshot.get("generatedAt")
+        if not isinstance(generated_at, str):
+            return False
+
+        generated_at_dt = dt_util.parse_datetime(generated_at)
+        if generated_at_dt is None:
+            return False
+
+        local_snapshot_slot = get_local_current_slot_start(
+            generated_at_dt,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        )
+        local_current_slot = get_local_current_slot_start(
+            reference_time or dt_util.now(),
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        )
+        return local_snapshot_slot == local_current_slot
+
+    async def _async_build_canonical_solar_forecast(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> dict[str, Any]:
+        builder = HelmanForecastBuilder(self._hass, self._active_config)
+        raw_result = await builder.build(reference_time=reference_time)
+        canonical_raw = build_solar_forecast_response(
+            raw_result["solar"],
+            granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+            forecast_days=MAX_FORECAST_DAYS,
+        )
+        snapshot = deepcopy(canonical_raw)
+        raw_points = deepcopy(canonical_raw.get("points", []))
+        snapshot["rawPoints"] = raw_points
+        solar_bias_service = getattr(self, "_solar_bias_service", None)
+        if solar_bias_service is not None:
+            bias_result = solar_bias_service.build_adjustment_result(
+                raw_points,
+                reference_time,
+            )
+            if bias_result is not None:
+                snapshot["points"] = deepcopy(bias_result.adjusted_points)
+        snapshot["generatedAt"] = reference_time.isoformat()
+        return snapshot
+
     async def get_forecast(
         self,
         *,
@@ -663,36 +754,33 @@ class HelmanCoordinator:
             forecast_days=forecast_days,
         )
         request_now = dt_util.now()
-        builder = HelmanForecastBuilder(self._hass, self._active_config)
-        raw_result = await builder.build(reference_time=request_now)
-        canonical_solar_forecast = build_solar_forecast_response(
-            raw_result["solar"],
-            granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-            forecast_days=MAX_FORECAST_DAYS,
+        canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
+            reference_time=request_now
         )
+        if canonical_solar_forecast is None:
+            canonical_solar_forecast = {
+                "status": "unavailable",
+                "points": [],
+                "rawPoints": [],
+            }
+
         effective_solar_forecast = deepcopy(canonical_solar_forecast)
-        bias_result = None
-        solar_bias_service = getattr(self, "_solar_bias_service", None)
-        if solar_bias_service is not None:
-            bias_result = solar_bias_service.build_adjustment_result(
-                canonical_solar_forecast.get("points", []),
-                request_now,
+        if not effective_solar_forecast.get("points"):
+            effective_solar_forecast["points"] = deepcopy(
+                canonical_solar_forecast.get("rawPoints", [])
             )
-            effective_solar_forecast["points"] = bias_result.adjusted_points
+
         result = {
-            "solar": compose_solar_bias_response(
-                raw_result["solar"],
-                bias_result,
-                granularity=granularity,
-                forecast_days=forecast_days,
-            )
-            if bias_result is not None
-            else build_solar_forecast_response(
-                raw_result["solar"],
+            "solar": build_solar_forecast_response(
+                effective_solar_forecast,
                 granularity=granularity,
                 forecast_days=forecast_days,
             ),
         }
+        raw_result = await HelmanForecastBuilder(
+            self._hass,
+            self._active_config,
+        ).build(reference_time=request_now)
         (
             total_energy_entity_id,
             training_window_days,
@@ -770,6 +858,30 @@ class HelmanCoordinator:
             forecast_days=forecast_days,
         )
         return result
+
+    async def _async_get_canonical_solar_forecast(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> dict[str, Any] | None:
+        cached_solar_forecast = getattr(self, "_cached_solar_forecast", None)
+        if self._has_current_slot_solar_forecast(
+            cached_solar_forecast,
+            reference_time=reference_time,
+        ):
+            return cached_solar_forecast
+
+        await self._async_refresh_forecast_and_request_automation(
+            reason="request_refresh",
+            reference_time=reference_time,
+        )
+        cached_solar_forecast = getattr(self, "_cached_solar_forecast", None)
+        if self._has_current_slot_solar_forecast(
+            cached_solar_forecast,
+            reference_time=reference_time,
+        ):
+            return cached_solar_forecast
+        return None
 
     async def _async_get_canonical_house_forecast(
         self,
@@ -1045,6 +1157,39 @@ class HelmanCoordinator:
     async def get_appliances(self) -> ApplianceMetadataResponseDict:
         self._refresh_climate_appliance_capabilities()
         return build_appliances_response(self._appliances_registry)
+
+    def get_effective_solar_forecast_points(self) -> list[dict[str, Any]]:
+        snapshot = self._cached_solar_forecast or {}
+        points = snapshot.get("points")
+        if isinstance(points, list) and points:
+            return points
+        raw_points = snapshot.get("rawPoints")
+        if isinstance(raw_points, list):
+            return raw_points
+        return []
+
+    def get_solar_forecast_day_total(self, day_offset: int) -> float | None:
+        buckets = _bucket_points_by_local_day(self.get_effective_solar_forecast_points())
+        target_day = (dt_util.now().date() + timedelta(days=day_offset)).isoformat()
+        values = buckets.get(target_day)
+        if not values:
+            return None
+        return round(sum(values), 4)
+
+    def get_solar_forecast_today_remaining(self) -> float | None:
+        now = dt_util.now()
+        total = 0.0
+        found = False
+        for point_time, value in _iter_local_solar_points(
+            self.get_effective_solar_forecast_points()
+        ):
+            if point_time.date() != now.date() or point_time < now:
+                continue
+            total += value
+            found = True
+        if not found:
+            return None
+        return round(total, 4)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
         self._refresh_climate_appliance_capabilities()
@@ -1407,18 +1552,29 @@ class HelmanCoordinator:
     async def _async_refresh_forecast(
         self, reference_time: datetime | None = None
     ) -> _ForecastRefreshResult:
-        """Build a new house forecast snapshot, cache it, and persist it."""
+        """Build new forecast snapshots, cache them, and persist them."""
         request_now = reference_time or dt_util.now()
         try:
             builder = ConsumptionForecastBuilder(self._hass, self._active_config)
-            snapshot = await builder.build(
+            house_snapshot = await builder.build(
                 reference_time=request_now,
                 forecast_days=MAX_FORECAST_DAYS,
                 padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
             )
-            self._cached_forecast = snapshot
+            solar_snapshot = await self._async_build_canonical_solar_forecast(
+                reference_time=request_now
+            )
+            self._cached_forecast = house_snapshot
+            self._cached_solar_forecast = solar_snapshot
             self._invalidate_battery_forecast_cache()
-            await self._storage.async_save_snapshot(snapshot)
+            save_snapshots = getattr(self._storage, "async_save_snapshots", None)
+            if save_snapshots is not None:
+                await save_snapshots(
+                    house_snapshot=house_snapshot,
+                    solar_snapshot=solar_snapshot,
+                )
+            else:
+                await self._storage.async_save_snapshot(house_snapshot)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
             return _ForecastRefreshResult(
@@ -1428,7 +1584,7 @@ class HelmanCoordinator:
 
         bundle_ready = await self._async_refresh_automation_input_bundle(
             reference_time=request_now,
-            house_forecast=snapshot,
+            house_forecast=house_snapshot,
         )
         return _ForecastRefreshResult(
             forecast_refreshed=True,

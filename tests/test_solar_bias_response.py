@@ -573,7 +573,7 @@ class SolarBiasResponseTests(unittest.TestCase):
 
 
 class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
-    async def test_get_forecast_uses_composed_public_solar_response_when_bias_result_exists(self) -> None:
+    async def test_get_forecast_uses_cached_adjusted_solar_points_when_bias_snapshot_exists(self) -> None:
         previous_modules = _install_coordinator_import_stubs()
         try:
             sys.modules.pop("custom_components.helman.coordinator", None)
@@ -589,10 +589,21 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
         coordinator._cached_forecast = {"status": "available"}
+        coordinator._cached_solar_forecast = {
+            "status": "available",
+            "generatedAt": REFERENCE_TIME.isoformat(),
+            "points": [
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 20.0},
+            ],
+            "rawPoints": [
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
+            ],
+        }
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
         coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
+        coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
 
         adjusted_house_forecast = {
             "status": "available",
@@ -611,38 +622,15 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        raw_solar_snapshot = {
-            "status": "available",
-            "unit": "Wh",
-            "points": [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
-            ],
-            "actualHistory": [],
-        }
         builder_instance = SimpleNamespace(
             build=AsyncMock(
                 return_value={
-                    "solar": raw_solar_snapshot,
                     "grid": {
                         "export": {"status": "available", "currentPrice": 2.5},
                         "import": {"status": "available", "currentPrice": 7.0},
                     },
                 }
             )
-        )
-        canonical_solar = {
-            "status": "available",
-            "points": [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
-            ],
-        }
-        bias_result = SimpleNamespace(
-            status="applied",
-            effective_variant="adjusted",
-            adjusted_points=[
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 20.0},
-            ],
-            explainability=SimpleNamespace(),
         )
         solar_response = {"kind": "solar-with-bias"}
         house_response = {"kind": "house"}
@@ -656,10 +644,6 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             "currentImportPrice": 7.0,
             "importPricePoints": [],
         }
-        coordinator._solar_bias_service = SimpleNamespace(
-            build_adjustment_result=Mock(return_value=bias_result)
-        )
-
         with (
             patch.object(
                 coordinator_module,
@@ -670,15 +654,9 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 coordinator_module,
                 "build_solar_forecast_response",
-                return_value=canonical_solar,
-                create=True,
-            ),
-            patch.object(
-                coordinator_module,
-                "compose_solar_bias_response",
                 return_value=solar_response,
                 create=True,
-            ) as compose_response,
+            ),
             patch.object(
                 coordinator_module,
                 "build_house_forecast_response",
@@ -712,17 +690,16 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await coordinator.get_forecast(granularity=60, forecast_days=1)
 
-        compose_response.assert_called_once_with(
-            raw_solar_snapshot,
-            bias_result,
-            granularity=60,
-            forecast_days=1,
-        )
+        coordinator._async_refresh_forecast_and_request_automation.assert_not_awaited()
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
             solar_forecast={
                 "status": "available",
+                "generatedAt": REFERENCE_TIME.isoformat(),
                 "points": [
                     {"timestamp": "2026-03-20T21:00:00+01:00", "value": 20.0},
+                ],
+                "rawPoints": [
+                    {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
                 ],
             },
             house_forecast=coordinator._cached_forecast,
@@ -732,7 +709,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["house_consumption"], house_response)
         self.assertEqual(result["battery_capacity"], battery_response)
 
-    async def test_get_forecast_keeps_raw_public_solar_response_without_bias_service(self) -> None:
+    async def test_get_forecast_falls_back_to_cached_raw_points_without_bias_snapshot(self) -> None:
         previous_modules = _install_coordinator_import_stubs()
         try:
             sys.modules.pop("custom_components.helman.coordinator", None)
@@ -748,10 +725,19 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
         coordinator._cached_forecast = {"status": "available"}
+        coordinator._cached_solar_forecast = {
+            "status": "available",
+            "generatedAt": REFERENCE_TIME.isoformat(),
+            "points": [],
+            "rawPoints": [
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
+            ],
+        }
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
         coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
+        coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
         coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
             return_value=SimpleNamespace(
                 adjusted_house_forecast={"status": "available"},
@@ -759,18 +745,9 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        raw_solar_snapshot = {
-            "status": "available",
-            "unit": "Wh",
-            "points": [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
-            ],
-            "actualHistory": [],
-        }
         builder_instance = SimpleNamespace(
             build=AsyncMock(
                 return_value={
-                    "solar": raw_solar_snapshot,
                     "grid": {
                         "export": {"status": "available", "currentPrice": 2.5},
                         "import": {"status": "available", "currentPrice": 7.0},
@@ -778,12 +755,6 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
-        canonical_solar = {
-            "status": "available",
-            "points": [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
-            ],
-        }
         solar_response = {"kind": "raw-solar"}
 
         with (
@@ -796,14 +767,9 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 coordinator_module,
                 "build_solar_forecast_response",
-                side_effect=[canonical_solar, solar_response],
+                return_value=solar_response,
                 create=True,
             ),
-            patch.object(
-                coordinator_module,
-                "compose_solar_bias_response",
-                create=True,
-            ) as compose_response,
             patch.object(
                 coordinator_module,
                 "build_house_forecast_response",
@@ -844,9 +810,18 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await coordinator.get_forecast(granularity=60, forecast_days=1)
 
-        compose_response.assert_not_called()
+        coordinator._async_refresh_forecast_and_request_automation.assert_not_awaited()
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
-            solar_forecast=canonical_solar,
+            solar_forecast={
+                "status": "available",
+                "generatedAt": REFERENCE_TIME.isoformat(),
+                "points": [
+                    {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
+                ],
+                "rawPoints": [
+                    {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
+                ],
+            },
             house_forecast=coordinator._cached_forecast,
             started_at=REFERENCE_TIME,
         )

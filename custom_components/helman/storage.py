@@ -32,6 +32,7 @@ class HelmanStorage:
             hass, FORECAST_SNAPSHOT_STORAGE_VERSION, FORECAST_SNAPSHOT_STORAGE_KEY
         )
         self._snapshot: dict[str, Any] | None = None
+        self._solar_snapshot: dict[str, Any] | None = None
         self._schedule_store = storage.Store(
             hass, SCHEDULE_STORAGE_VERSION, SCHEDULE_STORAGE_KEY
         )
@@ -40,7 +41,18 @@ class HelmanStorage:
     async def async_load(self) -> None:
         stored = await self._store.async_load()
         self._config = {**DEFAULT_CONFIG, **(stored or {})}
-        self._snapshot = await self._snapshot_store.async_load()
+        snapshot_document = await self._snapshot_store.async_load()
+        if isinstance(snapshot_document, dict) and "house" in snapshot_document:
+            self._snapshot = snapshot_document.get("house")
+            solar_snapshot = snapshot_document.get("solar")
+            self._solar_snapshot = (
+                solar_snapshot if isinstance(solar_snapshot, dict) else None
+            )
+        else:
+            self._snapshot = (
+                snapshot_document if isinstance(snapshot_document, dict) else None
+            )
+            self._solar_snapshot = None
         self._schedule_document = await self._schedule_store.async_load()
 
     @property
@@ -52,6 +64,10 @@ class HelmanStorage:
         return self._snapshot
 
     @property
+    def solar_forecast_snapshot(self) -> dict[str, Any] | None:
+        return self._solar_snapshot
+
+    @property
     def schedule_document(self) -> dict[str, Any] | None:
         return self._schedule_document
 
@@ -60,8 +76,22 @@ class HelmanStorage:
         await self._store.async_save(new_config)
 
     async def async_save_snapshot(self, snapshot: dict[str, Any]) -> None:
-        self._snapshot = snapshot
-        await self._snapshot_store.async_save(snapshot)
+        await self.async_save_snapshots(
+            house_snapshot=snapshot,
+            solar_snapshot=self._solar_snapshot,
+        )
+
+    async def async_save_snapshots(
+        self,
+        *,
+        house_snapshot: dict[str, Any],
+        solar_snapshot: dict[str, Any] | None,
+    ) -> None:
+        self._snapshot = house_snapshot
+        self._solar_snapshot = solar_snapshot
+        await self._snapshot_store.async_save(
+            {"house": house_snapshot, "solar": solar_snapshot}
+        )
 
     async def async_save_schedule_document(
         self, schedule_document: dict[str, Any]

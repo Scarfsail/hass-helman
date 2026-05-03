@@ -21,8 +21,16 @@ def build_solar_forecast_response(
     granularity: int,
     forecast_days: int,
 ) -> dict[str, Any]:
+    normalized_snapshot = deepcopy(snapshot)
+    if (
+        not normalized_snapshot.get("points")
+        and normalized_snapshot.get("rawPoints")
+    ):
+        normalized_snapshot["points"] = deepcopy(
+            normalized_snapshot["rawPoints"]
+        )
     return _build_point_forecast_response(
-        snapshot,
+        normalized_snapshot,
         granularity=granularity,
         forecast_days=forecast_days,
         aggregation_mode="sum",
