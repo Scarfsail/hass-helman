@@ -19,9 +19,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
-from ..solar_forecast_source import async_discover_provider_daily_forecast_entities
+from ..solar_forecast_source import async_load_upstream_solar_forecast, slice_wh_hours_by_local_date
+from .forecast_history import _points_to_slot_map
 from .models import BiasConfig, SolarActualsWindow
-from .forecast_history import load_historical_per_slot_forecast
 from .slot_invalidation import (
     InvalidationInputs,
     StateSample,
@@ -258,26 +258,20 @@ async def _load_data_glitch_invalidations(
 
     forecast_slot_wh_by_date: dict[str, dict[str, float]] = {}
     if min_neighbour_forecast_wh > 0:
-        provider_entity_ids = await async_discover_provider_daily_forecast_entities(
-            hass,
-            cfg.source_config_entry_id,
-        )
-        if not provider_entity_ids:
+        upstream = await async_load_upstream_solar_forecast(hass, cfg.source_config_entry_id)
+        if upstream is None:
             return {}
+        wh_hours = upstream.get("wh_hours") or {}
+        local_tz = ZoneInfo(str(hass.config.time_zone))
 
         for day in sorted(slot_actuals_by_date):
             try:
                 target_date = date.fromisoformat(day)
             except ValueError:
                 continue
-            day_forecast = await load_historical_per_slot_forecast(
-                hass,
-                provider_entity_ids,
-                target_date,
-                local_now=local_now,
-            )
-            if day_forecast:
-                forecast_slot_wh_by_date[day] = day_forecast
+            day_points = slice_wh_hours_by_local_date(wh_hours, local_tz=local_tz, target_date=target_date)
+            if day_points:
+                forecast_slot_wh_by_date[day] = _points_to_slot_map(day_points, local_tz)
 
     return compute_data_glitch_invalidations(
         slot_actuals_by_date=slot_actuals_by_date,

@@ -67,7 +67,6 @@ def test_read_nested_config():
                         "min_valid_slot_days": 7,
                     },
                     "source_config_entry_id": "provider-entry",
-                    "total_energy_entity_id": "sensor.total",
                 }
             }
         }
@@ -82,7 +81,7 @@ def test_read_nested_config():
     assert bias.clamp_max == 1.5
     assert bias.min_valid_slot_days == 7
     assert bias.source_config_entry_id == "provider-entry"
-    assert bias.total_energy_entity_id == "sensor.total"
+    assert bias.total_energy_entity_id is None
 
 
 def test_reads_total_energy_entity_from_bias_correction_config():

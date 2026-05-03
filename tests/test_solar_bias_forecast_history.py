@@ -3,13 +3,13 @@ from __future__ import annotations
 import sys
 import types
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-TZ = timezone.utc
+UTC = timezone.utc
 
 
 def _install_import_stubs() -> None:
@@ -127,435 +127,133 @@ def _make_cfg(*, source_config_entry_id: str | None = "forecast-entry", max_trai
     )
 
 
-def test_expand_to_15min_uses_watts_weighting():
-    hourly = {"07:00": 1000.0}
-    watts = {"07:00": 0.0, "07:15": 600.0, "07:30": 200.0, "07:45": 200.0}
-
-    result = forecast_history._expand_hourly_to_15min(hourly, watts)
-
-    assert set(result) == {"07:00", "07:15", "07:30", "07:45"}
-    assert result["07:00"] == 0.0
-    assert result["07:15"] == 600.0
-    assert result["07:30"] == 200.0
-    assert result["07:45"] == 200.0
-    assert abs(sum(result.values()) - 1000.0) < 1e-9
+def _make_hass():
+    return SimpleNamespace(
+        config=SimpleNamespace(time_zone="UTC"),
+        config_entries=SimpleNamespace(async_get_entry=lambda entry_id: None),
+    )
 
 
-def test_expand_to_15min_falls_back_to_equal_split_when_watts_sum_zero():
-    hourly = {"00:00": 0.0, "12:00": 800.0}
-    watts = {
-        "00:00": 0.0,
-        "00:15": 0.0,
-        "00:30": 0.0,
-        "00:45": 0.0,
-        "12:00": 0.0,
-        "12:15": 0.0,
-        "12:30": 0.0,
-        "12:45": 0.0,
-    }
-
-    result = forecast_history._expand_hourly_to_15min(hourly, watts)
-
-    assert result["00:00"] == 0.0
-    assert result["00:15"] == 0.0
-    assert result["12:00"] == 200.0
-    assert result["12:15"] == 200.0
-    assert result["12:30"] == 200.0
-    assert result["12:45"] == 200.0
-
-
-def test_expand_to_15min_skips_hours_missing_from_watts():
-    hourly = {"07:00": 400.0, "08:00": 800.0}
-    watts = {"07:00": 100.0, "07:15": 100.0, "07:30": 100.0, "07:45": 100.0}
-
-    result = forecast_history._expand_hourly_to_15min(hourly, watts)
-
-    assert set(result) == {"07:00", "07:15", "07:30", "07:45"}
-    assert result["07:00"] == 100.0
-    assert result["07:15"] == 100.0
-    assert result["07:30"] == 100.0
-    assert result["07:45"] == 100.0
-
-
-class _FakeState:
-    def __init__(self, state: str, last_updated: datetime) -> None:
-        self.state = state
-        self.last_updated = last_updated
-
-
-class ForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_uses_only_today_forecast_entity_for_historical_day(self) -> None:
-        hass = SimpleNamespace()
-        cfg = _make_cfg()
-        later = datetime(2026, 3, 20, 0, 5, tzinfo=TZ)
-        history = {
-            "sensor.energy_production_today": [_FakeState("30.0", later)],
-            "sensor.energy_production_tomorrow": [_FakeState("40.0", later)],
-            "sensor.energy_production_d2": [_FakeState("50.0", later)],
+class LoadForecastPointsForDayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_load_forecast_points_for_past_day_reads_provider_wh_hours_slice(self) -> None:
+        forecast = {
+            "wh_hours": {
+                "2026-05-02T04:00:00+00:00": 93,
+                "2026-05-02T05:00:00+00:00": 866,
+                "2026-05-03T04:00:00+00:00": 102,
+            }
         }
-
-        async def _get_significant_states(hass_arg, start_time, end_time, **kwargs):
-            if start_time.date() == datetime(2026, 3, 20, tzinfo=TZ).date():
-                return history
-            return {}
 
         with patch.object(
             forecast_history,
-            "get_significant_states",
-            AsyncMock(side_effect=_get_significant_states),
-        ), patch.object(
-            forecast_history,
-            "load_historical_per_slot_forecast",
-            new=AsyncMock(return_value={"12:00": 1.0}),
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(
-                return_value=[
-                    "sensor.energy_production_today",
-                    "sensor.energy_production_tomorrow",
-                    "sensor.energy_production_d2",
-                ]
-            ),
+            "async_load_upstream_solar_forecast",
+            new=AsyncMock(return_value=forecast),
         ):
-            samples = await forecast_history.load_trainer_samples(
-                hass,
-                cfg,
-                datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
+            result = await forecast_history.load_forecast_points_for_day(
+                _make_hass(),
+                _make_cfg(),
+                date.fromisoformat("2026-05-02"),
+                local_now=datetime(2026, 5, 3, 10, 0, tzinfo=UTC),
             )
 
-        self.assertEqual(len(samples), 1)
-        self.assertEqual(samples[0].forecast_wh, 120000.0)
+        self.assertEqual([p["value"] for p in result], [93.0, 866.0])
 
-    async def test_ignores_midnight_boundary_state(self) -> None:
-        hass = SimpleNamespace()
-        cfg = _make_cfg()
-        midnight = datetime(2026, 3, 20, 0, 0, tzinfo=TZ)
-        later = datetime(2026, 3, 20, 0, 5, tzinfo=TZ)
-        history = {
-            "sensor.energy_production_today": [
-                _FakeState("1.0", midnight),
-                _FakeState("2.0", later),
-            ]
-        }
-
-        async def _get_significant_states(hass_arg, start_time, end_time, **kwargs):
-            if start_time.date() == datetime(2026, 3, 20, tzinfo=TZ).date():
-                return history
-            return {}
-
+    async def test_load_forecast_points_returns_empty_when_provider_unavailable(self) -> None:
         with patch.object(
             forecast_history,
-            "get_significant_states",
-            AsyncMock(side_effect=_get_significant_states),
-        ), patch.object(
-            forecast_history,
-            "load_historical_per_slot_forecast",
-            new=AsyncMock(return_value={"12:00": 1.0}),
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(return_value=["sensor.energy_production_today"]),
+            "async_load_upstream_solar_forecast",
+            new=AsyncMock(return_value=None),
         ):
-            samples = await forecast_history.load_trainer_samples(
-                hass,
-                cfg,
-                datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
+            result = await forecast_history.load_forecast_points_for_day(
+                _make_hass(),
+                _make_cfg(),
+                date.fromisoformat("2026-05-02"),
+                local_now=datetime(2026, 5, 3, 10, 0, tzinfo=UTC),
             )
 
-        self.assertEqual(len(samples), 1)
-        self.assertEqual(samples[0].forecast_wh, 2000.0)
-
-    async def test_load_trainer_samples_uses_configured_max_training_window_days(self) -> None:
-        hass = SimpleNamespace()
-        cfg = _make_cfg(max_training_window_days=2)
-        cfg.min_history_days = 2
-
-        with patch.object(
-            forecast_history,
-            "_read_day_forecast_wh",
-            new=AsyncMock(side_effect=[1000.0, 2000.0]),
-        ) as read_day_forecast_wh, patch.object(
-            forecast_history,
-            "load_historical_per_slot_forecast",
-            new=AsyncMock(side_effect=[{"12:00": 1.0}, {"12:00": 2.0}]),
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(return_value=["sensor.energy_production_today"]),
-        ):
-            samples = await forecast_history.load_trainer_samples(
-                hass,
-                cfg,
-                datetime(2026, 3, 21, 12, 0, tzinfo=TZ),
-            )
-
-        self.assertEqual(
-            [sample.date for sample in samples],
-            ["2026-03-19", "2026-03-20"],
-        )
-        self.assertEqual(read_day_forecast_wh.await_count, 2)
-
-
-class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
-    async def test_returns_15min_keys_when_watts_attribute_present(self):
-        from datetime import date as date_cls
-
-        cfg = _make_cfg()
-
-        target_date = date_cls(2026, 4, 15)
-        local_now = datetime(2026, 4, 25, 10, 0, tzinfo=TZ)
-
-        wh_period = {
-            "2026-04-15T07:00:00+00:00": 1000.0,
-            "2026-04-15T08:00:00+00:00": 2400.0,
-        }
-        watts = {
-            "2026-04-15T07:00:00+00:00": 0.0,
-            "2026-04-15T07:15:00+00:00": 600.0,
-            "2026-04-15T07:30:00+00:00": 200.0,
-            "2026-04-15T07:45:00+00:00": 200.0,
-            "2026-04-15T08:00:00+00:00": 300.0,
-            "2026-04-15T08:15:00+00:00": 400.0,
-            "2026-04-15T08:30:00+00:00": 800.0,
-            "2026-04-15T08:45:00+00:00": 900.0,
-        }
-
-        historical_state = SimpleNamespace(
-            state="3400",
-            attributes={"wh_period": wh_period, "watts": watts},
-            last_updated=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
-            last_changed=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
-        )
-
-        async def fake_history(*args, **kwargs):
-            return {"sensor.energy_production_today": [historical_state]}
-
-        with patch.object(
-            forecast_history,
-            "_read_history_for_entities_with_attributes",
-            new=AsyncMock(side_effect=fake_history),
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(return_value=["sensor.energy_production_today"]),
-        ):
-            result = await forecast_history.load_historical_per_slot_forecast(
-                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                entity_ids=["sensor.energy_production_today"],
-                target_date=target_date,
-                local_now=local_now,
-            )
-
-        assert result == {
-            "07:00": 0.0,
-            "07:15": 600.0,
-            "07:30": 200.0,
-            "07:45": 200.0,
-            "08:00": 300.0,
-            "08:15": 400.0,
-            "08:30": 800.0,
-            "08:45": 900.0,
-        }
-
-    async def test_returns_none_when_watts_attribute_missing(self):
-        from datetime import date as date_cls
-
-        cfg = _make_cfg()
-
-        target_date = date_cls(2026, 4, 15)
-        local_now = datetime(2026, 4, 25, 10, 0, tzinfo=TZ)
-
-        wh_period = {
-            "2026-04-15T11:00:00+00:00": 7000.0,
-            "2026-04-15T12:00:00+00:00": 9000.0,
-            "2026-04-15T13:00:00+00:00": 8500.0,
-        }
-        historical_state = SimpleNamespace(
-            state="24500",
-            attributes={"wh_period": wh_period},
-            last_updated=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
-            last_changed=datetime(2026, 4, 15, 0, 5, tzinfo=TZ),
-        )
-
-        async def fake_history(*args, **kwargs):
-            return {"sensor.energy_production_today": [historical_state]}
-
-        with patch.object(
-            forecast_history, "_read_history_for_entities_with_attributes", new=AsyncMock(side_effect=fake_history)
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(return_value=["sensor.energy_production_today"]),
-        ):
-            result = await forecast_history.load_historical_per_slot_forecast(
-                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                entity_ids=["sensor.energy_production_today"],
-                target_date=target_date,
-                local_now=local_now,
-            )
-
-        assert result is None
-
-    async def test_returns_none_when_state_missing(self):
-        from datetime import date as date_cls
-
-        cfg = _make_cfg()
-
-        async def fake_history(*args, **kwargs):
-            return {"sensor.energy_production_today": []}
-
-        with patch.object(
-            forecast_history, "_read_history_for_entities_with_attributes", new=AsyncMock(side_effect=fake_history)
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(return_value=["sensor.energy_production_today"]),
-        ):
-            result = await forecast_history.load_historical_per_slot_forecast(
-                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                entity_ids=["sensor.energy_production_today"],
-                target_date=date_cls(2026, 4, 15),
-                local_now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
-            )
-
-        assert result is None
-
-    async def test_returns_none_when_no_entity_configured(self):
-        from datetime import date as date_cls
-
-        cfg = _make_cfg(source_config_entry_id=None)
-
-        result = await forecast_history.load_historical_per_slot_forecast(
-            hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-            entity_ids=[],
-            target_date=date_cls(2026, 4, 15),
-            local_now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
-        )
-
-        assert result is None
+        self.assertEqual(result, [])
 
 
 class LoadTrainerSamplesTests(unittest.IsolatedAsyncioTestCase):
-    async def test_samples_carry_per_slot_forecast(self):
-        cfg = _make_cfg()
+    async def test_load_trainer_samples_returns_samples_for_past_days_in_wh_hours(self) -> None:
+        forecast = {
+            "wh_hours": {
+                "2026-05-01T06:00:00+00:00": 500.0,
+                "2026-05-01T07:00:00+00:00": 800.0,
+                "2026-05-02T06:00:00+00:00": 400.0,
+                "2026-05-02T07:00:00+00:00": 600.0,
+                "2026-05-03T06:00:00+00:00": 300.0,  # today — excluded from training
+            }
+        }
+        cfg = _make_cfg(max_training_window_days=5)
         cfg.min_history_days = 2
 
-        async def fake_total(hass, entity_ids, target_date, *, local_now):
-            return 60000.0 if str(target_date) in {"2026-04-23", "2026-04-24"} else None
-
-        async def fake_per_slot(hass, c, target_date, *, local_now):
-            return {"12:00": 9000.0, "13:00": 9100.0}
-
         with patch.object(
-            forecast_history, "_read_day_forecast_wh", new=AsyncMock(side_effect=fake_total)
-        ), patch.object(
             forecast_history,
-            "load_historical_per_slot_forecast",
-            new=AsyncMock(side_effect=fake_per_slot),
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(return_value=["sensor.energy_production_today"]),
+            "async_load_upstream_solar_forecast",
+            new=AsyncMock(return_value=forecast),
         ):
             samples = await forecast_history.load_trainer_samples(
-                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                cfg=cfg,
-                now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+                _make_hass(),
+                cfg,
+                datetime(2026, 5, 3, 10, 0, tzinfo=UTC),
             )
 
+        self.assertEqual(len(samples), 2)
         dates = [s.date for s in samples]
-        assert "2026-04-23" in dates
-        assert "2026-04-24" in dates
-        for s in samples:
-            assert s.slot_forecast_wh == {"12:00": 9000.0, "13:00": 9100.0}
+        self.assertIn("2026-05-01", dates)
+        self.assertIn("2026-05-02", dates)
+        sample_05_01 = next(s for s in samples if s.date == "2026-05-01")
+        self.assertAlmostEqual(sample_05_01.forecast_wh, 1300.0)
+        self.assertIn("06:00", sample_05_01.slot_forecast_wh)
+        self.assertIn("07:00", sample_05_01.slot_forecast_wh)
 
-    async def test_sample_dropped_when_per_slot_forecast_missing(self):
-        cfg = _make_cfg()
-        cfg.min_history_days = 2
-
-        async def fake_total(hass, entity_ids, target_date, *, local_now):
-            return 60000.0
-
-        async def fake_per_slot(hass, c, target_date, *, local_now):
-            return None  # recorder retention exhausted
+    async def test_load_trainer_samples_drops_days_when_provider_has_insufficient_past_wh_hours(self) -> None:
+        forecast = {
+            "wh_hours": {
+                "2026-05-03T04:00:00+00:00": 102,  # today only
+            }
+        }
+        cfg = _make_cfg(max_training_window_days=3)
 
         with patch.object(
-            forecast_history, "_read_day_forecast_wh", new=AsyncMock(side_effect=fake_total)
-        ), patch.object(
             forecast_history,
-            "load_historical_per_slot_forecast",
-            new=AsyncMock(side_effect=fake_per_slot),
-        ), patch.object(
-            forecast_history,
-            "async_discover_provider_daily_forecast_entities",
-            new=AsyncMock(return_value=["sensor.energy_production_today"]),
+            "async_load_upstream_solar_forecast",
+            new=AsyncMock(return_value=forecast),
         ):
             samples = await forecast_history.load_trainer_samples(
-                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
-                cfg=cfg,
-                now=datetime(2026, 4, 25, 10, 0, tzinfo=TZ),
+                _make_hass(),
+                cfg,
+                datetime(2026, 5, 3, 10, 0, tzinfo=UTC),
             )
 
-        assert samples == []
+        self.assertEqual(samples, [])
 
+    async def test_load_trainer_samples_uses_configured_max_training_window_days(self) -> None:
+        forecast = {
+            "wh_hours": {
+                "2026-03-20T08:00:00+00:00": 500.0,
+                "2026-03-19T08:00:00+00:00": 400.0,
+                "2026-03-15T08:00:00+00:00": 300.0,  # outside 2-day window
+            }
+        }
+        cfg = _make_cfg(max_training_window_days=2)
 
-def test_select_first_state_for_window_includes_midnight_boundary():
-    from datetime import timedelta, timezone
-    midnight_utc = datetime(2026, 4, 24, 22, 0, 0, tzinfo=timezone.utc)  # midnight Prague (UTC+2)
+        with patch.object(
+            forecast_history,
+            "async_load_upstream_solar_forecast",
+            new=AsyncMock(return_value=forecast),
+        ):
+            samples = await forecast_history.load_trainer_samples(
+                _make_hass(),
+                cfg,
+                datetime(2026, 3, 21, 12, 0, tzinfo=UTC),
+            )
 
-    class _State:
-        def __init__(self, ts):
-            self.last_updated = ts
-
-    before = _State(midnight_utc - timedelta(seconds=1))
-    at_midnight = _State(midnight_utc)
-    after = _State(midnight_utc + timedelta(seconds=1))
-
-    result = forecast_history._select_first_state_for_window(
-        [before, at_midnight, after], after=midnight_utc
-    )
-    assert result is at_midnight
-
-
-def test_select_first_state_for_window_returns_boundary_when_no_state_at_midnight():
-    """Regression: recorder synthesizes the start-of-window boundary state with
-    its original last_updated (before midnight). The selector must return that
-    boundary state, not the first state-change inside the window — otherwise
-    `load_historical_per_slot_forecast` returns a mid-day forecast refresh
-    whose wh_period/watts may be trimmed to a subset of the day's hours."""
-    from datetime import timedelta, timezone
-    midnight_utc = datetime(2026, 4, 26, 22, 0, 0, tzinfo=timezone.utc)
-
-    class _State:
-        def __init__(self, ts, label):
-            self.last_updated = ts
-            self.label = label
-
-    boundary = _State(midnight_utc - timedelta(hours=4), "boundary")
-    midday_change = _State(midnight_utc + timedelta(hours=16), "midday")
-
-    result = forecast_history._select_first_state_for_window(
-        [boundary, midday_change], after=midnight_utc
-    )
-    assert result is boundary
-
-
-def test_select_first_state_for_window_falls_back_to_first_in_window_when_no_boundary():
-    from datetime import timedelta, timezone
-    midnight_utc = datetime(2026, 4, 26, 22, 0, 0, tzinfo=timezone.utc)
-
-    class _State:
-        def __init__(self, ts):
-            self.last_updated = ts
-
-    first_in_window = _State(midnight_utc + timedelta(hours=2))
-    later_in_window = _State(midnight_utc + timedelta(hours=10))
-
-    result = forecast_history._select_first_state_for_window(
-        [first_in_window, later_in_window], after=midnight_utc
-    )
-    assert result is first_in_window
+        self.assertEqual(
+            [s.date for s in samples],
+            ["2026-03-19", "2026-03-20"],
+        )
 
 
 if __name__ == "__main__":

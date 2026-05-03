@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..solar_forecast_source import async_discover_provider_daily_forecast_entities
+from ..solar_forecast_source import async_load_upstream_solar_forecast
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
 from .forecast_history import load_forecast_points_for_day, load_trainer_samples
@@ -248,15 +248,14 @@ class SolarBiasCorrectionService:
         target_date = date.fromisoformat(raw_date)
         local_now = dt_util.as_local(dt_util.now())
         today = local_now.date()
+        local_tz = ZoneInfo(str(self._hass.config.time_zone))
         previous_days = max(self._metadata.usable_days, 0)
         min_date = today - timedelta(days=previous_days)
-        provider_entity_ids = await async_discover_provider_daily_forecast_entities(
+        upstream = await async_load_upstream_solar_forecast(
             self._hass,
             self._cfg.source_config_entry_id,
         )
-        max_date = today + timedelta(
-            days=max(len(provider_entity_ids) - 1, 0)
-        )
+        max_date = _max_forecast_date(upstream, today, local_tz)
 
         raw_points = await load_forecast_points_for_day(
             self._hass,
@@ -283,7 +282,7 @@ class SolarBiasCorrectionService:
         actual_points = _actual_points_for_date(
             actuals_by_slot,
             target_date,
-            ZoneInfo(str(self._hass.config.time_zone)),
+            local_tz,
         )
         invalidated_points: list[SolarBiasInspectorPoint] = []
         invalidated_slots = set(
@@ -590,6 +589,28 @@ def _optional_float(raw_value: Any) -> float | None:
         return float(raw_value)
     except (TypeError, ValueError):
         return None
+
+
+def _max_forecast_date(
+    upstream: dict[str, Any] | None,
+    today: date,
+    local_tz: ZoneInfo,
+) -> date:
+    if upstream is None:
+        return today
+    wh_hours = upstream.get("wh_hours") or {}
+    max_date = today
+    for raw_ts in wh_hours:
+        if not isinstance(raw_ts, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(raw_ts)
+        except ValueError:
+            continue
+        local_date = ts.astimezone(local_tz).date()
+        if local_date > max_date:
+            max_date = local_date
+    return max_date
 
 
 def _copy_points(raw_points: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -315,9 +315,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     source_config_entry_id = _normalize_source_config_entry_id(
         forecast.get("source_config_entry_id")
     )
-    total_energy_entity_id = bias.get("total_energy_entity_id") or forecast.get(
-        "total_energy_entity_id"
-    )
+    total_energy_entity_id = bias.get("total_energy_entity_id") or None
     max_battery_soc_percent = slot_invalidation.get("max_battery_soc_percent")
     slot_invalidation_max_battery_soc_percent = None
     if isinstance(max_battery_soc_percent, (int, float)) and not isinstance(
