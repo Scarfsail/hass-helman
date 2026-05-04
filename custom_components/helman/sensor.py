@@ -266,7 +266,8 @@ class HelmanSourceRatioSensor(SensorEntity):
 class HelmanSolarForecastEnergySensor(SensorEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_native_unit_of_measurement = "Wh"
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -280,7 +281,7 @@ class HelmanSolarForecastEnergySensor(SensorEntity):
         self._day_offset = day_offset
         self.entity_id = f"sensor.helman_energy_production_{key}"
         self._attr_unique_id = f"{entry.entry_id}_energy_production_{key}"
-        self._attr_name = f"Helman Energy Production {key.replace('_', ' ').title()}"
+        self._attr_translation_key = f"energy_production_{key}"
 
     @property
     def available(self) -> bool:
@@ -294,13 +295,14 @@ class HelmanSolarForecastEnergySensor(SensorEntity):
 class HelmanSolarForecastRemainingSensor(SensorEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_native_unit_of_measurement = "Wh"
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         self._coordinator = coordinator
         self.entity_id = "sensor.helman_energy_production_today_remaining"
         self._attr_unique_id = f"{entry.entry_id}_energy_production_today_remaining"
-        self._attr_name = "Helman Energy Production Today Remaining"
+        self._attr_translation_key = "energy_production_today_remaining"
 
     @property
     def available(self) -> bool:

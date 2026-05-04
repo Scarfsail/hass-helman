@@ -1174,7 +1174,7 @@ class HelmanCoordinator:
         values = buckets.get(target_day)
         if not values:
             return None
-        return round(sum(values), 4)
+        return round(sum(values) / 1000.0, 4)
 
     def get_solar_forecast_today_remaining(self) -> float | None:
         now = dt_util.now()
@@ -1189,7 +1189,7 @@ class HelmanCoordinator:
             found = True
         if not found:
             return None
-        return round(total, 4)
+        return round(total / 1000.0, 4)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
         self._refresh_climate_appliance_capabilities()

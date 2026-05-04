@@ -9,5 +9,36 @@
         "description": "Helman Energy will read your HA energy configuration automatically. No additional setup required."
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "energy_production_today": {
+        "name": "Energy production today"
+      },
+      "energy_production_tomorrow": {
+        "name": "Energy production tomorrow"
+      },
+      "energy_production_d2": {
+        "name": "Energy production day 2"
+      },
+      "energy_production_d3": {
+        "name": "Energy production day 3"
+      },
+      "energy_production_d4": {
+        "name": "Energy production day 4"
+      },
+      "energy_production_d5": {
+        "name": "Energy production day 5"
+      },
+      "energy_production_d6": {
+        "name": "Energy production day 6"
+      },
+      "energy_production_d7": {
+        "name": "Energy production day 7"
+      },
+      "energy_production_today_remaining": {
+        "name": "Energy production today remaining"
+      }
+    }
   }
 }

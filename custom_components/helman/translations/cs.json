@@ -1,0 +1,44 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "Je podporována pouze jedna instance Helman Energy."
+    },
+    "step": {
+      "user": {
+        "title": "Nastavení Helman Energy",
+        "description": "Helman Energy si automaticky načte vaši energetickou konfiguraci Home Assistantu. Není potřeba žádné další nastavení."
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "energy_production_today": {
+        "name": "Výroba energie dnes"
+      },
+      "energy_production_tomorrow": {
+        "name": "Výroba energie zítra"
+      },
+      "energy_production_d2": {
+        "name": "Výroba energie den 2"
+      },
+      "energy_production_d3": {
+        "name": "Výroba energie den 3"
+      },
+      "energy_production_d4": {
+        "name": "Výroba energie den 4"
+      },
+      "energy_production_d5": {
+        "name": "Výroba energie den 5"
+      },
+      "energy_production_d6": {
+        "name": "Výroba energie den 6"
+      },
+      "energy_production_d7": {
+        "name": "Výroba energie den 7"
+      },
+      "energy_production_today_remaining": {
+        "name": "Zbývající výroba energie dnes"
+      }
+    }
+  }
+}

@@ -100,6 +100,40 @@ class _FakeEntry:
 
 
 class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:
+        sensor_module = _load_sensor_module()
+
+        class FakeCoordinator:
+            def get_solar_forecast_day_total(self, day_offset: int):
+                return 2.0 if day_offset == 0 else None
+
+            def get_solar_forecast_today_remaining(self):
+                return 1.25
+
+        today_entity = sensor_module.HelmanSolarForecastEnergySensor(
+            FakeCoordinator(),
+            _FakeEntry(),
+            "today",
+            day_offset=0,
+        )
+        remaining_entity = sensor_module.HelmanSolarForecastRemainingSensor(
+            FakeCoordinator(),
+            _FakeEntry(),
+        )
+
+        self.assertEqual(today_entity._attr_native_unit_of_measurement, "kWh")
+        self.assertEqual(today_entity._attr_translation_key, "energy_production_today")
+        self.assertTrue(today_entity._attr_has_entity_name)
+        self.assertEqual(
+            remaining_entity._attr_native_unit_of_measurement,
+            "kWh",
+        )
+        self.assertEqual(
+            remaining_entity._attr_translation_key,
+            "energy_production_today_remaining",
+        )
+        self.assertTrue(remaining_entity._attr_has_entity_name)
+
     async def test_daily_entities_sum_local_day_buckets(self) -> None:
         previous_modules = _install_coordinator_import_stubs()
         try:
@@ -120,8 +154,8 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        self.assertEqual(coordinator.get_solar_forecast_day_total(0), 2000.0)
-        self.assertEqual(coordinator.get_solar_forecast_day_total(1), 2000.0)
+        self.assertEqual(coordinator.get_solar_forecast_day_total(0), 2.0)
+        self.assertEqual(coordinator.get_solar_forecast_day_total(1), 2.0)
 
     async def test_today_remaining_excludes_elapsed_points(self) -> None:
         previous_modules = _install_coordinator_import_stubs()
@@ -148,7 +182,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             "now",
             return_value=REFERENCE_TIME.replace(hour=9, minute=15),
         ):
-            self.assertEqual(coordinator.get_solar_forecast_today_remaining(), 2250.0)
+            self.assertEqual(coordinator.get_solar_forecast_today_remaining(), 2.25)
 
     async def test_missing_d4_bucket_is_unavailable(self) -> None:
         sensor_module = _load_sensor_module()
