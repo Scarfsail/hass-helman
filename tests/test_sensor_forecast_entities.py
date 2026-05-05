@@ -5,7 +5,8 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from test_solar_bias_response import (
     REFERENCE_TIME,
@@ -100,6 +101,41 @@ class _FakeEntry:
 
 
 class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_async_setup_entry_registers_forecast_entities_with_coordinator(
+        self,
+    ) -> None:
+        sensor_module = _load_sensor_module()
+        coordinator = SimpleNamespace(
+            get_device_tree=AsyncMock(return_value={"sources": [], "consumers": []}),
+            collect_qualifying_nodes=Mock(return_value={}),
+            config={},
+            set_sensors=Mock(),
+            set_entity_factory=Mock(),
+        )
+        hass = SimpleNamespace(data={"helman": {"coordinator": coordinator}})
+        added_entities: list[object] = []
+
+        await sensor_module.async_setup_entry(
+            hass,
+            _FakeEntry(),
+            added_entities.extend,
+        )
+
+        forecast_sensors = coordinator.set_sensors.call_args.kwargs["forecast_sensors"]
+        self.assertEqual(len(forecast_sensors), 9)
+        self.assertEqual(
+            forecast_sensors[0].entity_id,
+            "sensor.helman_energy_production_today",
+        )
+        self.assertEqual(
+            forecast_sensors[-1].entity_id,
+            "sensor.helman_energy_production_today_remaining",
+        )
+        self.assertEqual(
+            [entity.entity_id for entity in added_entities[-9:]],
+            [entity.entity_id for entity in forecast_sensors],
+        )
+
     async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:
         sensor_module = _load_sensor_module()
 
@@ -203,6 +239,42 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(entity.available)
         self.assertIsNone(entity.native_value)
+
+    async def test_sparse_day_offsets_and_today_remaining_use_shared_snapshot(self) -> None:
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coordinator_module = importlib.import_module(
+                "custom_components.helman.coordinator"
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._cached_solar_forecast = {
+            "points": [
+                {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
+                {"timestamp": "2026-03-20T12:00:00+01:00", "value": 1500.0},
+                {"timestamp": "2026-03-21T10:00:00+01:00", "value": 2000.0},
+                {"timestamp": "2026-03-24T09:15:00+01:00", "value": 3250.0},
+            ]
+        }
+
+        with patch.object(
+            coordinator_module.dt_util,
+            "now",
+            return_value=REFERENCE_TIME.replace(hour=9, minute=15),
+        ):
+            self.assertEqual(coordinator.get_solar_forecast_day_total(0), 2.0)
+            self.assertEqual(coordinator.get_solar_forecast_day_total(1), 2.0)
+            self.assertIsNone(coordinator.get_solar_forecast_day_total(2))
+            self.assertIsNone(coordinator.get_solar_forecast_day_total(3))
+            self.assertEqual(coordinator.get_solar_forecast_day_total(4), 3.25)
+            self.assertIsNone(coordinator.get_solar_forecast_day_total(5))
+            self.assertIsNone(coordinator.get_solar_forecast_day_total(6))
+            self.assertIsNone(coordinator.get_solar_forecast_day_total(7))
+            self.assertEqual(coordinator.get_solar_forecast_today_remaining(), 1.5)
 
 
 if __name__ == "__main__":

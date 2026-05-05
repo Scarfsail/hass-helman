@@ -62,6 +62,7 @@ async def async_setup_entry(
         total_power=total_power,
         production_total=production_total,
         source_ratio_sensors=source_ratio_sensors,
+        forecast_sensors=forecast_entities,
     )
     coordinator.set_entity_factory(
         entry,

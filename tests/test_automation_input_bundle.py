@@ -646,13 +646,26 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
-        coordinator._storage = SimpleNamespace(async_save_snapshot=AsyncMock())
+        coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
         coordinator._invalidate_battery_forecast_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
         coordinator._cached_forecast = None
+        coordinator._cached_solar_forecast = None
+        coordinator._solar_forecast_sensors = []
 
         snapshot = _make_house_forecast()
+        solar_snapshot = {
+            "status": "available",
+            "resolution": "15m",
+            "horizonHours": 336,
+            "generatedAt": REFERENCE_TIME.isoformat(),
+            "points": [],
+            "rawPoints": [],
+        }
         builder_instance = SimpleNamespace(build=AsyncMock(return_value=snapshot))
+        coordinator._async_build_canonical_solar_forecast = AsyncMock(
+            return_value=solar_snapshot
+        )
         with patch.object(
             coordinator_module,
             "ConsumptionForecastBuilder",
@@ -671,7 +684,10 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         coordinator._invalidate_battery_forecast_cache.assert_called_once_with()
-        coordinator._storage.async_save_snapshot.assert_awaited_once_with(snapshot)
+        coordinator._storage.async_save_snapshots.assert_awaited_once_with(
+            house_snapshot=snapshot,
+            solar_snapshot=solar_snapshot,
+        )
         coordinator._async_refresh_automation_input_bundle.assert_awaited_once_with(
             reference_time=REFERENCE_TIME,
             house_forecast=snapshot,

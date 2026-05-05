@@ -268,6 +268,7 @@ class HelmanCoordinator:
         # In-memory rolling buffers (oldest first)
         self._power_history: dict[str, deque[float]] = {}
         self._source_ratio_sensors: dict[str, Any] = {}
+        self._solar_forecast_sensors: list[Any] = []
         # Tick lifecycle
         self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
@@ -356,7 +357,16 @@ class HelmanCoordinator:
         walk(tree.get("consumers", []))
         return result
 
-    def set_sensors(self, battery_time_to_full, battery_time_to_empty, unmeasured_sensors: dict, total_power=None, production_total=None, source_ratio_sensors: dict | None = None) -> None:
+    def set_sensors(
+        self,
+        battery_time_to_full,
+        battery_time_to_empty,
+        unmeasured_sensors: dict,
+        total_power=None,
+        production_total=None,
+        source_ratio_sensors: dict | None = None,
+        forecast_sensors: list[Any] | None = None,
+    ) -> None:
         """Called from async_setup_entry to register all sensor entities."""
         self._battery_time_to_full = battery_time_to_full
         self._battery_time_to_empty = battery_time_to_empty
@@ -364,6 +374,7 @@ class HelmanCoordinator:
         self._consumption_total_sensor = total_power
         self._production_total_sensor = production_total
         self._source_ratio_sensors = source_ratio_sensors or {}
+        self._solar_forecast_sensors = list(forecast_sensors or [])
 
     def set_entity_factory(
         self,
@@ -378,6 +389,18 @@ class HelmanCoordinator:
 
     def register_sensor_ready(self) -> None:
         """No-op: sensors receive their first value on the next tick."""
+
+    def _publish_solar_forecast_entities(self) -> None:
+        for sensor in self._solar_forecast_sensors:
+            if getattr(sensor, "hass", None) is None:
+                continue
+            try:
+                sensor.async_write_ha_state()
+            except Exception:
+                _LOGGER.exception(
+                    "Error publishing solar forecast sensor state: %s",
+                    getattr(sensor, "entity_id", "<unknown>"),
+                )
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -1575,6 +1598,7 @@ class HelmanCoordinator:
                 )
             else:
                 await self._storage.async_save_snapshot(house_snapshot)
+            self._publish_solar_forecast_entities()
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
             return _ForecastRefreshResult(
@@ -2865,6 +2889,7 @@ class HelmanCoordinator:
         self._consumption_total_sensor = None
         self._production_total_sensor = None
         self._source_ratio_sensors = {}
+        self._solar_forecast_sensors = []
         self._async_add_entities = None
         self._unmeasured_sensor_factory = None
         self._entry = None
