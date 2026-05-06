@@ -54,6 +54,7 @@ _COORDINATOR_STUBBED_MODULES = (
     "homeassistant.components.energy.data",
     "homeassistant.core",
     "homeassistant.helpers",
+    "homeassistant.helpers.debounce",
     "homeassistant.helpers.entity_registry",
     "homeassistant.helpers.event",
 )
@@ -398,10 +399,27 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
         helpers_pkg = types.ModuleType("homeassistant.helpers")
         sys.modules["homeassistant.helpers"] = helpers_pkg
 
+    debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
+    if debounce_mod is None:
+        debounce_mod = types.ModuleType("homeassistant.helpers.debounce")
+        sys.modules["homeassistant.helpers.debounce"] = debounce_mod
+
+    class Debouncer:
+        def __init__(self, hass, logger, *, cooldown, immediate, function):
+            self.function = function
+
+        async def async_call(self):
+            await self.function()
+
+    debounce_mod.Debouncer = Debouncer
+
     event_mod = sys.modules.get("homeassistant.helpers.event")
     if event_mod is None:
         event_mod = types.ModuleType("homeassistant.helpers.event")
         sys.modules["homeassistant.helpers.event"] = event_mod
+    event_mod.async_track_state_change_event = (
+        lambda hass, entity_ids, callback: lambda: None
+    )
     event_mod.async_track_time_change = (
         lambda hass, callback, **kwargs: lambda: None
     )
@@ -559,9 +577,10 @@ class SolarBiasResponseTests(unittest.TestCase):
             forecast_days=1,
         )
 
-        self.assertEqual(response["adjustedPoints"], response["points"])
+        self.assertNotIn("adjustedPoints", response)
         self.assertEqual(response["biasCorrection"]["status"], "training_failed")
         self.assertEqual(response["biasCorrection"]["effectiveVariant"], "raw")
+        self.assertNotIn("rawPoints", response)
         self.assertEqual(
             response["biasCorrection"]["explainability"]["fallbackReason"],
             "profile_unavailable",
@@ -728,7 +747,9 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         coordinator._cached_solar_forecast = {
             "status": "available",
             "generatedAt": REFERENCE_TIME.isoformat(),
-            "points": [],
+            "points": [
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
+            ],
             "rawPoints": [
                 {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
             ],

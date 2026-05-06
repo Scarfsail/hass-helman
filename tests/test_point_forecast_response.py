@@ -128,5 +128,62 @@ class PointForecastResponseTests(unittest.TestCase):
             {"timestamp": "2026-03-20T20:30:00+01:00", "value": 200.0},
         ])
 
+    def test_solar_response_expands_raw_and_corrected_points_with_same_slots(self) -> None:
+        response = point_forecast_response.build_solar_forecast_response(
+            {
+                "status": "available",
+                "unit": "Wh",
+                "points": [
+                    {
+                        "timestamp": "2026-03-20T21:00:00+01:00",
+                        "value": 400.0,
+                    },
+                    {
+                        "timestamp": "2026-03-20T22:00:00+01:00",
+                        "value": 800.0,
+                    },
+                ],
+                "rawPoints": [
+                    {
+                        "timestamp": "2026-03-20T21:00:00+01:00",
+                        "value": 400.0,
+                    },
+                ],
+                "correctedPoints": [
+                    {
+                        "timestamp": "2026-03-20T21:00:00+01:00",
+                        "value": 600.0,
+                    },
+                ],
+            },
+            corrected_points=[
+                {
+                    "timestamp": "2026-03-20T21:00:00+01:00",
+                    "value": 600.0,
+                },
+                {
+                    "timestamp": "2026-03-20T22:00:00+01:00",
+                    "value": 200.0,
+                },
+            ],
+            granularity=30,
+            forecast_days=1,
+        )
+
+        self.assertEqual(
+            [point["timestamp"] for point in response["points"]],
+            [point["timestamp"] for point in response["adjustedPoints"]],
+        )
+        self.assertEqual(
+            [point["value"] for point in response["points"]],
+            [200.0, 200.0, 400.0, 400.0],
+        )
+        self.assertEqual(
+            [point["value"] for point in response["adjustedPoints"]],
+            [300.0, 300.0, 100.0, 100.0],
+        )
+        self.assertNotIn("rawPoints", response)
+        self.assertNotIn("correctedPoints", response)
+
 if __name__ == "__main__":
     unittest.main()

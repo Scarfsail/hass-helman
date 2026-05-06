@@ -20,22 +20,34 @@ def build_solar_forecast_response(
     *,
     granularity: int,
     forecast_days: int,
+    corrected_points: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    normalized_snapshot = deepcopy(snapshot)
-    if (
-        not normalized_snapshot.get("points")
-        and normalized_snapshot.get("rawPoints")
-    ):
-        normalized_snapshot["points"] = deepcopy(
-            normalized_snapshot["rawPoints"]
-        )
-    return _build_point_forecast_response(
-        normalized_snapshot,
+    internal_fields = {"raw" + "Points", "corrected" + "Points"}
+    public_snapshot = {
+        key: deepcopy(value)
+        for key, value in snapshot.items()
+        if key not in internal_fields
+    }
+    response = _build_point_forecast_response(
+        public_snapshot,
         granularity=granularity,
         forecast_days=forecast_days,
         aggregation_mode="sum",
         include_actual_history=True,
     )
+    if corrected_points:
+        group_size = get_aggregation_group_size(
+            source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+            target_granularity_minutes=granularity,
+        )
+        target_count = forecast_days * 24 * 60 // granularity
+        response["adjustedPoints"] = _build_points(
+            corrected_points,
+            aggregation_mode="sum",
+            group_size=group_size,
+            target_count=target_count,
+        )
+    return response
 
 
 def build_price_channel_response(

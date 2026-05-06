@@ -51,16 +51,20 @@ class SolarBiasCorrectionService:
         hass: HomeAssistant,
         store: SolarBiasCorrectionStore,
         cfg: BiasConfig,
+        *,
+        canonical_solar_forecast_provider=None,
     ) -> None:
         self._hass = hass
         self._store = store
         self._cfg = cfg
+        self._canonical_solar_forecast_provider = canonical_solar_forecast_provider
         self._profile: SolarBiasProfile | None = None
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
         self._explainability: SolarBiasTrainingExplainability | None = None
         self._is_stale = False
         self._training_lock = asyncio.Lock()
         self._training_in_progress = False
+        self._last_emitted_status: tuple[str, str] | None = None
 
     async def async_setup(self) -> None:
         stored = self._store.profile
@@ -194,6 +198,7 @@ class SolarBiasCorrectionService:
             factor_median=self._metadata.factor_median,
             error=self._metadata.error_reason,
         )
+        self._emit_status_changed_if_needed(status, effective_variant)
         return SolarBiasAdjustmentResult(
             status=status,
             effective_variant=effective_variant,
@@ -253,12 +258,9 @@ class SolarBiasCorrectionService:
             days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
         )
 
-        raw_points = await load_forecast_points_for_day(
-            self._hass,
-            self._cfg,
-            target_date,
-            local_now=local_now,
-        )
+        status, effective_variant, _fallback_reason = self._resolve_status()
+        timezone = ZoneInfo(str(self._hass.config.time_zone))
+
         actuals_by_slot = {}
         if target_date <= today:
             actuals_by_slot = await load_actuals_for_day(
@@ -268,17 +270,46 @@ class SolarBiasCorrectionService:
                 local_now=local_now,
             )
 
-        status, effective_variant, _fallback_reason = self._resolve_status()
-        corrected_points = _copy_points(raw_points)
+        if target_date >= today:
+            provider = self._canonical_solar_forecast_provider
+            if provider is not None:
+                canonical_snapshot = await provider(reference_time=local_now)
+            else:
+                canonical_snapshot = None
+            if not isinstance(canonical_snapshot, dict):
+                canonical_snapshot = {}
+            raw_points = _hourly_buckets_for_local_date(
+                canonical_snapshot.get("rawPoints") or canonical_snapshot.get("points") or [],
+                target_date,
+                timezone,
+            )
+            canonical_corrected = canonical_snapshot.get("correctedPoints") or []
+            if effective_variant == "adjusted" and canonical_corrected:
+                corrected_points = _hourly_buckets_for_local_date(
+                    canonical_corrected,
+                    target_date,
+                    timezone,
+                )
+            else:
+                corrected_points = _copy_points(raw_points)
+        else:
+            raw_points = await load_forecast_points_for_day(
+                self._hass,
+                self._cfg,
+                target_date,
+                local_now=local_now,
+            )
+            corrected_points = _copy_points(raw_points)
+            if effective_variant == "adjusted" and self._profile is not None:
+                corrected_points = adjust(raw_points, self._profile)
+
         has_profile = self._has_usable_profile()
-        if effective_variant == "adjusted" and self._profile is not None:
-            corrected_points = adjust(raw_points, self._profile)
 
         factors = _factor_points_for_profile(self._profile if has_profile else None)
         actual_points = _actual_points_for_date(
             actuals_by_slot,
             target_date,
-            ZoneInfo(str(self._hass.config.time_zone)),
+            timezone,
         )
         invalidated_points: list[SolarBiasInspectorPoint] = []
         invalidated_slots = set(
@@ -355,6 +386,20 @@ class SolarBiasCorrectionService:
                 return ("training_failed", "adjusted", None)
             return ("training_failed", "raw", "training_failed")
         return ("no_training_yet", "raw", "no_training_yet")
+
+    def _emit_status_changed_if_needed(
+        self,
+        status: str,
+        effective_variant: str,
+    ) -> None:
+        current = (status, effective_variant)
+        if self._last_emitted_status == current:
+            return
+        self._last_emitted_status = current
+        self._hass.bus.async_fire(
+            "helman_solar_bias_status_changed",
+            {"status": status, "effectiveVariant": effective_variant},
+        )
 
     def _build_default_metadata(self, *, last_outcome: str) -> SolarBiasMetadata:
         return SolarBiasMetadata(
@@ -585,6 +630,37 @@ def _optional_float(raw_value: Any) -> float | None:
         return float(raw_value)
     except (TypeError, ValueError):
         return None
+
+
+def _hourly_buckets_for_local_date(
+    points: list[dict[str, Any]],
+    target_date: date,
+    timezone: ZoneInfo,
+) -> list[dict[str, Any]]:
+    buckets: dict[str, float] = {}
+    parse_datetime = getattr(dt_util, "parse_datetime", datetime.fromisoformat)
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        timestamp = point.get("timestamp")
+        value = point.get("value")
+        if not isinstance(timestamp, str) or isinstance(value, bool):
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        parsed_timestamp = parse_datetime(timestamp)
+        if parsed_timestamp is None:
+            continue
+        local_timestamp = dt_util.as_local(parsed_timestamp).astimezone(timezone)
+        if local_timestamp.date() != target_date:
+            continue
+        hour_start = local_timestamp.replace(minute=0, second=0, microsecond=0)
+        key = hour_start.isoformat()
+        buckets[key] = buckets.get(key, 0.0) + float(value)
+    return [
+        {"timestamp": timestamp, "value": round(value, 4)}
+        for timestamp, value in sorted(buckets.items())
+    ]
 
 
 def _copy_points(raw_points: list[dict[str, Any]]) -> list[dict[str, Any]]:

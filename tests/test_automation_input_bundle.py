@@ -36,6 +36,7 @@ _STUBBED_MODULES = (
     "homeassistant.components.energy.data",
     "homeassistant.core",
     "homeassistant.helpers",
+    "homeassistant.helpers.debounce",
     "homeassistant.helpers.entity_registry",
     "homeassistant.helpers.event",
     "homeassistant.util",
@@ -277,10 +278,27 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         helpers_pkg = types.ModuleType("homeassistant.helpers")
         sys.modules["homeassistant.helpers"] = helpers_pkg
 
+    debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
+    if debounce_mod is None:
+        debounce_mod = types.ModuleType("homeassistant.helpers.debounce")
+        sys.modules["homeassistant.helpers.debounce"] = debounce_mod
+
+    class Debouncer:
+        def __init__(self, hass, logger, *, cooldown, immediate, function):
+            self.function = function
+
+        async def async_call(self):
+            await self.function()
+
+    debounce_mod.Debouncer = Debouncer
+
     event_mod = sys.modules.get("homeassistant.helpers.event")
     if event_mod is None:
         event_mod = types.ModuleType("homeassistant.helpers.event")
         sys.modules["homeassistant.helpers.event"] = event_mod
+    event_mod.async_track_state_change_event = (
+        lambda hass, entity_ids, callback: lambda: None
+    )
     event_mod.async_track_time_change = (
         lambda hass, callback, **kwargs: lambda: None
     )
@@ -401,7 +419,21 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._automation_input_bundle = None
         house_forecast = _make_house_forecast()
         canonical_solar = {
-            "points": [{"timestamp": "2026-03-20T21:15:00+01:00", "value": 0.1}]
+            "points": [{"timestamp": "2026-03-20T21:15:00+01:00", "value": 0.1}],
+            "correctedPoints": [
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 0.08}
+            ],
+        }
+        corrected_solar = {
+            "points": [
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 0.08}
+            ],
+            "correctedPoints": [
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 0.08}
+            ],
+            "adjustedPoints": [
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 0.08}
+            ],
         }
         canonical_grid_price = {
             "importPricePoints": [
@@ -424,6 +456,11 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(return_value={"pool-pump": 0.8}),
             ),
             patch.object(
+                coordinator,
+                "_async_get_canonical_solar_forecast",
+                AsyncMock(return_value=canonical_solar),
+            ),
+            patch.object(
                 coordinator_module,
                 "build_solar_forecast_response",
                 return_value=canonical_solar,
@@ -443,7 +480,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             coordinator._automation_input_bundle,
             AutomationInputBundle(
                 original_house_forecast=house_forecast,
-                solar_forecast=canonical_solar,
+                solar_forecast=corrected_solar,
                 grid_price_forecast=canonical_grid_price,
                 when_active_hourly_energy_kwh_by_appliance_id={"pool-pump": 0.8},
             ),

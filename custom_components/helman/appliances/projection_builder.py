@@ -689,7 +689,11 @@ def _build_house_series_map(house_forecast: dict[str, Any]) -> dict[datetime, fl
 
 
 def _build_solar_slot_map(solar_forecast: dict[str, Any]) -> dict[datetime, float]:
-    points = solar_forecast.get("points")
+    points = solar_forecast.get("adjustedPoints")
+    if not isinstance(points, list):
+        points = solar_forecast.get("correctedPoints")
+    if not isinstance(points, list):
+        points = solar_forecast.get("points")
     if not isinstance(points, list):
         return {}
 

@@ -12,8 +12,10 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
+    async_track_state_change_event,
     async_track_time_change,
     async_track_time_interval,
 )
@@ -78,7 +80,7 @@ from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
-from .solar_bias_correction.response import compose_solar_bias_response
+from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
     estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
@@ -215,6 +217,18 @@ def _bucket_points_by_local_day(
     return buckets
 
 
+def _build_corrected_solar_forecast_view(
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    forecast = deepcopy(snapshot)
+    corrected_points = forecast.get("correctedPoints")
+    if isinstance(corrected_points, list) and corrected_points:
+        # corrected canonical points for automation and battery planning.
+        forecast["points"] = deepcopy(corrected_points)
+        forecast["adjustedPoints"] = deepcopy(corrected_points)
+    return forecast
+
+
 @dataclass(frozen=True)
 class _ApplianceForecastPipelineSnapshot:
     started_at: datetime
@@ -323,6 +337,7 @@ class HelmanCoordinator:
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
         self._solar_bias_scheduler: SolarBiasTrainingScheduler | None = None
+        self._solar_invalidation_debouncer: Debouncer | None = None
         self._last_schedule_control_config_issue: str | None = None
         self._last_schedule_battery_state_issue: str | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
@@ -414,6 +429,14 @@ class HelmanCoordinator:
             self._hass,
             self._solar_bias_store,
             bias_config,
+            canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
+        )
+        self._solar_invalidation_debouncer = Debouncer(
+            self._hass,
+            _LOGGER,
+            cooldown=1.0,
+            immediate=False,
+            function=self._async_invalidate_and_refresh_solar,
         )
         await self._solar_bias_service.async_setup()
         if bias_config.enabled:
@@ -441,6 +464,26 @@ class HelmanCoordinator:
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "device_registry_updated", self._on_registry_updated
+            )
+        )
+        if bias_config.daily_energy_entity_ids:
+            self._unsub_listeners.append(
+                async_track_state_change_event(
+                    self._hass,
+                    list(bias_config.daily_energy_entity_ids),
+                    self._on_solar_forecast_source_state_changed,
+                )
+            )
+        self._unsub_listeners.append(
+            self._hass.bus.async_listen(
+                "helman_solar_bias_trained",
+                self._on_solar_bias_changed,
+            )
+        )
+        self._unsub_listeners.append(
+            self._hass.bus.async_listen(
+                "helman_solar_bias_status_changed",
+                self._on_solar_bias_changed,
             )
         )
 
@@ -516,6 +559,41 @@ class HelmanCoordinator:
             return
         self._cached_tree = None
         self._hass.async_create_task(self._async_rebuild_subscriptions())
+
+    async def _async_invalidate_and_refresh_solar(self) -> None:
+        self._cached_solar_forecast = None
+        await self._async_refresh_forecast_and_request_automation(
+            reason="solar_invalidation"
+        )
+
+    @callback
+    def _schedule_solar_invalidation(self) -> None:
+        debouncer = getattr(self, "_solar_invalidation_debouncer", None)
+        if debouncer is None:
+            return
+        create_task = getattr(
+            self._hass,
+            "async_create_task",
+            getattr(self, "_create_task", asyncio.create_task),
+        )
+        create_task(debouncer.async_call())
+
+    @callback
+    def _on_solar_forecast_source_state_changed(self, event) -> None:
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        if old_state is not None and new_state is not None:
+            if (
+                old_state.state == new_state.state
+                and old_state.attributes.get("wh_period")
+                == new_state.attributes.get("wh_period")
+            ):
+                return
+        self._schedule_solar_invalidation()
+
+    @callback
+    def _on_solar_bias_changed(self, event) -> None:
+        self._schedule_solar_invalidation()
 
     def invalidate_tree(self) -> None:
         """Invalidate the cached tree (call after config changes)."""
@@ -748,8 +826,8 @@ class HelmanCoordinator:
             forecast_days=MAX_FORECAST_DAYS,
         )
         snapshot = deepcopy(canonical_raw)
-        raw_points = deepcopy(canonical_raw.get("points", []))
-        snapshot["rawPoints"] = raw_points
+        raw_points = snapshot.get("points", []) or []
+        snapshot["rawPoints"] = deepcopy(raw_points)
         solar_bias_service = getattr(self, "_solar_bias_service", None)
         if solar_bias_service is not None:
             bias_result = solar_bias_service.build_adjustment_result(
@@ -757,7 +835,13 @@ class HelmanCoordinator:
                 reference_time,
             )
             if bias_result is not None:
-                snapshot["points"] = deepcopy(bias_result.adjusted_points)
+                snapshot["biasCorrection"] = build_bias_correction_payload(
+                    bias_result
+                )
+                if bias_result.effective_variant == "adjusted":
+                    snapshot["correctedPoints"] = deepcopy(
+                        bias_result.adjusted_points
+                    )
         snapshot["generatedAt"] = reference_time.isoformat()
         return snapshot
 
@@ -787,18 +871,17 @@ class HelmanCoordinator:
                 "rawPoints": [],
             }
 
-        effective_solar_forecast = deepcopy(canonical_solar_forecast)
-        if not effective_solar_forecast.get("points"):
-            effective_solar_forecast["points"] = deepcopy(
-                canonical_solar_forecast.get("rawPoints", [])
-            )
-
+        solar_response = build_solar_forecast_response(
+            canonical_solar_forecast,
+            granularity=granularity,
+            forecast_days=forecast_days,
+            corrected_points=canonical_solar_forecast.get("correctedPoints"),
+        )
+        bias_correction = canonical_solar_forecast.get("biasCorrection")
+        if isinstance(bias_correction, dict):
+            solar_response["biasCorrection"] = deepcopy(bias_correction)
         result = {
-            "solar": build_solar_forecast_response(
-                effective_solar_forecast,
-                granularity=granularity,
-                forecast_days=forecast_days,
-            ),
+            "solar": solar_response,
         }
         raw_result = await HelmanForecastBuilder(
             self._hass,
@@ -849,7 +932,9 @@ class HelmanCoordinator:
                     alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
                 )
         pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=effective_solar_forecast,
+            solar_forecast=_build_corrected_solar_forecast_view(
+                canonical_solar_forecast
+            ),
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
@@ -1181,18 +1266,25 @@ class HelmanCoordinator:
         self._refresh_climate_appliance_capabilities()
         return build_appliances_response(self._appliances_registry)
 
-    def get_effective_solar_forecast_points(self) -> list[dict[str, Any]]:
+    def get_raw_solar_forecast_points(self) -> list[dict[str, Any]]:
         snapshot = self._cached_solar_forecast or {}
         points = snapshot.get("points")
-        if isinstance(points, list) and points:
+        if isinstance(points, list):
             return points
         raw_points = snapshot.get("rawPoints")
         if isinstance(raw_points, list):
             return raw_points
         return []
 
+    def get_corrected_solar_forecast_points(self) -> list[dict[str, Any]]:
+        snapshot = self._cached_solar_forecast or {}
+        corrected_points = snapshot.get("correctedPoints")
+        if isinstance(corrected_points, list) and corrected_points:
+            return corrected_points
+        return self.get_raw_solar_forecast_points()
+
     def get_solar_forecast_day_total(self, day_offset: int) -> float | None:
-        buckets = _bucket_points_by_local_day(self.get_effective_solar_forecast_points())
+        buckets = _bucket_points_by_local_day(self.get_corrected_solar_forecast_points())
         target_day = (dt_util.now().date() + timedelta(days=day_offset)).isoformat()
         values = buckets.get(target_day)
         if not values:
@@ -1204,7 +1296,7 @@ class HelmanCoordinator:
         total = 0.0
         found = False
         for point_time, value in _iter_local_solar_points(
-            self.get_effective_solar_forecast_points()
+            self.get_corrected_solar_forecast_points()
         ):
             if point_time.date() != now.date() or point_time < now:
                 continue
@@ -1217,15 +1309,11 @@ class HelmanCoordinator:
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
         self._refresh_climate_appliance_capabilities()
         request_now = dt_util.now()
-        raw_result = await HelmanForecastBuilder(
-            self._hass,
-            self._active_config,
-        ).build(reference_time=request_now)
-        canonical_solar_forecast = build_solar_forecast_response(
-            raw_result["solar"],
-            granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-            forecast_days=MAX_FORECAST_DAYS,
+        canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
+            reference_time=request_now
         )
+        if canonical_solar_forecast is None:
+            canonical_solar_forecast = {"status": "unavailable", "points": []}
         canonical_house_forecast = await self._async_get_canonical_house_forecast(
             reference_time=request_now
         )
@@ -1235,7 +1323,9 @@ class HelmanCoordinator:
             )
 
         plan = await self._async_get_appliance_projection_plan(
-            solar_forecast=canonical_solar_forecast,
+            solar_forecast=_build_corrected_solar_forecast_view(
+                canonical_solar_forecast
+            ),
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
@@ -1682,13 +1772,18 @@ class HelmanCoordinator:
             self._hass,
             self._active_config,
         ).build(reference_time=reference_time)
-        return AutomationInputBundle(
-            original_house_forecast=deepcopy(house_forecast),
-            solar_forecast=build_solar_forecast_response(
+        solar_forecast = await self._async_get_canonical_solar_forecast(
+            reference_time=reference_time
+        )
+        if solar_forecast is None:
+            solar_forecast = build_solar_forecast_response(
                 raw_result["solar"],
                 granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
                 forecast_days=MAX_FORECAST_DAYS,
-            ),
+            )
+        return AutomationInputBundle(
+            original_house_forecast=deepcopy(house_forecast),
+            solar_forecast=_build_corrected_solar_forecast_view(solar_forecast),
             grid_price_forecast=build_grid_price_forecast_response(
                 raw_result["grid"],
                 granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
@@ -2484,7 +2579,11 @@ class HelmanCoordinator:
     def _build_battery_forecast_solar_signature(
         solar_forecast: dict[str, Any],
     ) -> tuple[Any, ...]:
-        points = solar_forecast.get("points")
+        points = solar_forecast.get("adjustedPoints")
+        if not isinstance(points, list):
+            points = solar_forecast.get("correctedPoints")
+        if not isinstance(points, list):
+            points = solar_forecast.get("points")
         if not isinstance(points, list):
             points = []
 
