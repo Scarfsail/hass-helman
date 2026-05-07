@@ -1627,6 +1627,12 @@ export class HelmanConfigEditorPanel extends LitElement {
                           ],
                           "editor.help.bias_correction_aggregation_method",
                         )}
+                        ${this._renderOptionalNumberField(
+                          ["power_devices", "solar", "forecast", "bias_correction", "max_interpolated_consecutive_slots"],
+                          "editor.fields.bias_correction_max_interpolated_consecutive_slots",
+                          "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
+                          "editor.help.bias_correction_max_interpolated_consecutive_slots",
+                        )}
                         ${this._renderOptionalEntityField(
                           ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
                           "editor.fields.bias_correction_total_energy_entity",

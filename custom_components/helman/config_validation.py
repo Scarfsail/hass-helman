@@ -480,6 +480,23 @@ def _validate_solar_config(
                 message=f"{base_path}.aggregation_method must be one of {', '.join(SOLAR_BIAS_AGGREGATION_METHODS)}",
             )
 
+    max_interpolated_consecutive_slots = bias_map.get("max_interpolated_consecutive_slots")
+    if max_interpolated_consecutive_slots is not None:
+        if (
+            isinstance(max_interpolated_consecutive_slots, bool)
+            or not isinstance(max_interpolated_consecutive_slots, int)
+            or not (0 <= max_interpolated_consecutive_slots <= 24)
+        ):
+            report.add_error(
+                section=section,
+                path=f"{base_path}.max_interpolated_consecutive_slots",
+                code="invalid_value",
+                message=(
+                    f"{base_path}.max_interpolated_consecutive_slots must be an integer "
+                    "between 0 and 24"
+                ),
+            )
+
     slot_invalidation = bias_map.get("slot_invalidation")
     if slot_invalidation is not None:
         slot_invalidation_map = _require_mapping(

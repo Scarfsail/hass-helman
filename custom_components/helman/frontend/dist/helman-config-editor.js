@@ -3,8 +3,8 @@
  * Copyright 2019 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const ae = globalThis, fe = ae.ShadowRoot && (ae.ShadyCSS === void 0 || ae.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, ke = Symbol(), Ae = /* @__PURE__ */ new WeakMap();
-let at = class {
+const oe = globalThis, fe = oe.ShadowRoot && (oe.ShadyCSS === void 0 || oe.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, ke = Symbol(), Ae = /* @__PURE__ */ new WeakMap();
+let ot = class {
   constructor(e, t, i) {
     if (this._$cssResult$ = !0, i !== ke) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
     this.cssText = e, this.t = t;
@@ -22,58 +22,58 @@ let at = class {
     return this.cssText;
   }
 };
-const xt = (o) => new at(typeof o == "string" ? o : o + "", void 0, ke), ot = (o, ...e) => {
-  const t = o.length === 1 ? o[0] : e.reduce((i, a, r) => i + ((n) => {
+const xt = (a) => new ot(typeof a == "string" ? a : a + "", void 0, ke), at = (a, ...e) => {
+  const t = a.length === 1 ? a[0] : e.reduce((i, o, r) => i + ((n) => {
     if (n._$cssResult$ === !0) return n.cssText;
     if (typeof n == "number") return n;
     throw Error("Value passed to 'css' function must be a 'css' function result: " + n + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
-  })(a) + o[r + 1], o[0]);
-  return new at(t, o, ke);
-}, zt = (o, e) => {
-  if (fe) o.adoptedStyleSheets = e.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
+  })(o) + a[r + 1], a[0]);
+  return new ot(t, a, ke);
+}, zt = (a, e) => {
+  if (fe) a.adoptedStyleSheets = e.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
   else for (const t of e) {
-    const i = document.createElement("style"), a = ae.litNonce;
-    a !== void 0 && i.setAttribute("nonce", a), i.textContent = t.cssText, o.appendChild(i);
+    const i = document.createElement("style"), o = oe.litNonce;
+    o !== void 0 && i.setAttribute("nonce", o), i.textContent = t.cssText, a.appendChild(i);
   }
-}, je = fe ? (o) => o : (o) => o instanceof CSSStyleSheet ? ((e) => {
+}, je = fe ? (a) => a : (a) => a instanceof CSSStyleSheet ? ((e) => {
   let t = "";
   for (const i of e.cssRules) t += i.cssText;
   return xt(t);
-})(o) : o;
+})(a) : a;
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { is: At, defineProperty: jt, getOwnPropertyDescriptor: St, getOwnPropertyNames: Et, getOwnPropertySymbols: Mt, getPrototypeOf: Vt } = Object, C = globalThis, Se = C.trustedTypes, Ct = Se ? Se.emptyScript : "", de = C.reactiveElementPolyfillSupport, Q = (o, e) => o, oe = { toAttribute(o, e) {
+const { is: At, defineProperty: jt, getOwnPropertyDescriptor: St, getOwnPropertyNames: Et, getOwnPropertySymbols: Mt, getPrototypeOf: Vt } = Object, C = globalThis, Se = C.trustedTypes, Ct = Se ? Se.emptyScript : "", de = C.reactiveElementPolyfillSupport, Q = (a, e) => a, ae = { toAttribute(a, e) {
   switch (e) {
     case Boolean:
-      o = o ? Ct : null;
+      a = a ? Ct : null;
       break;
     case Object:
     case Array:
-      o = o == null ? o : JSON.stringify(o);
+      a = a == null ? a : JSON.stringify(a);
   }
-  return o;
-}, fromAttribute(o, e) {
-  let t = o;
+  return a;
+}, fromAttribute(a, e) {
+  let t = a;
   switch (e) {
     case Boolean:
-      t = o !== null;
+      t = a !== null;
       break;
     case Number:
-      t = o === null ? null : Number(o);
+      t = a === null ? null : Number(a);
       break;
     case Object:
     case Array:
       try {
-        t = JSON.parse(o);
+        t = JSON.parse(a);
       } catch {
         t = null;
       }
   }
   return t;
-} }, we = (o, e) => !At(o, e), Ee = { attribute: !0, type: String, converter: oe, reflect: !1, useDefault: !1, hasChanged: we };
+} }, we = (a, e) => !At(a, e), Ee = { attribute: !0, type: String, converter: ae, reflect: !1, useDefault: !1, hasChanged: we };
 Symbol.metadata ?? (Symbol.metadata = Symbol("metadata")), C.litPropertyMetadata ?? (C.litPropertyMetadata = /* @__PURE__ */ new WeakMap());
 let F = class extends HTMLElement {
   static addInitializer(e) {
@@ -84,18 +84,18 @@ let F = class extends HTMLElement {
   }
   static createProperty(e, t = Ee) {
     if (t.state && (t.attribute = !1), this._$Ei(), this.prototype.hasOwnProperty(e) && ((t = Object.create(t)).wrapped = !0), this.elementProperties.set(e, t), !t.noAccessor) {
-      const i = Symbol(), a = this.getPropertyDescriptor(e, i, t);
-      a !== void 0 && jt(this.prototype, e, a);
+      const i = Symbol(), o = this.getPropertyDescriptor(e, i, t);
+      o !== void 0 && jt(this.prototype, e, o);
     }
   }
   static getPropertyDescriptor(e, t, i) {
-    const { get: a, set: r } = St(this.prototype, e) ?? { get() {
+    const { get: o, set: r } = St(this.prototype, e) ?? { get() {
       return this[t];
     }, set(n) {
       this[t] = n;
     } };
-    return { get: a, set(n) {
-      const l = a == null ? void 0 : a.call(this);
+    return { get: o, set(n) {
+      const l = o == null ? void 0 : o.call(this);
       r == null || r.call(this, n), this.requestUpdate(e, l, i);
     }, configurable: !0, enumerable: !0 };
   }
@@ -111,17 +111,17 @@ let F = class extends HTMLElement {
     if (this.hasOwnProperty(Q("finalized"))) return;
     if (this.finalized = !0, this._$Ei(), this.hasOwnProperty(Q("properties"))) {
       const t = this.properties, i = [...Et(t), ...Mt(t)];
-      for (const a of i) this.createProperty(a, t[a]);
+      for (const o of i) this.createProperty(o, t[o]);
     }
     const e = this[Symbol.metadata];
     if (e !== null) {
       const t = litPropertyMetadata.get(e);
-      if (t !== void 0) for (const [i, a] of t) this.elementProperties.set(i, a);
+      if (t !== void 0) for (const [i, o] of t) this.elementProperties.set(i, o);
     }
     this._$Eh = /* @__PURE__ */ new Map();
     for (const [t, i] of this.elementProperties) {
-      const a = this._$Eu(t, i);
-      a !== void 0 && this._$Eh.set(a, t);
+      const o = this._$Eu(t, i);
+      o !== void 0 && this._$Eh.set(o, t);
     }
     this.elementStyles = this.finalizeStyles(this.styles);
   }
@@ -129,7 +129,7 @@ let F = class extends HTMLElement {
     const t = [];
     if (Array.isArray(e)) {
       const i = new Set(e.flat(1 / 0).reverse());
-      for (const a of i) t.unshift(je(a));
+      for (const o of i) t.unshift(je(o));
     } else e !== void 0 && t.push(je(e));
     return t;
   }
@@ -182,33 +182,33 @@ let F = class extends HTMLElement {
   }
   _$ET(e, t) {
     var r;
-    const i = this.constructor.elementProperties.get(e), a = this.constructor._$Eu(e, i);
-    if (a !== void 0 && i.reflect === !0) {
-      const n = (((r = i.converter) == null ? void 0 : r.toAttribute) !== void 0 ? i.converter : oe).toAttribute(t, i.type);
-      this._$Em = e, n == null ? this.removeAttribute(a) : this.setAttribute(a, n), this._$Em = null;
+    const i = this.constructor.elementProperties.get(e), o = this.constructor._$Eu(e, i);
+    if (o !== void 0 && i.reflect === !0) {
+      const n = (((r = i.converter) == null ? void 0 : r.toAttribute) !== void 0 ? i.converter : ae).toAttribute(t, i.type);
+      this._$Em = e, n == null ? this.removeAttribute(o) : this.setAttribute(o, n), this._$Em = null;
     }
   }
   _$AK(e, t) {
     var r, n;
-    const i = this.constructor, a = i._$Eh.get(e);
-    if (a !== void 0 && this._$Em !== a) {
-      const l = i.getPropertyOptions(a), d = typeof l.converter == "function" ? { fromAttribute: l.converter } : ((r = l.converter) == null ? void 0 : r.fromAttribute) !== void 0 ? l.converter : oe;
-      this._$Em = a;
+    const i = this.constructor, o = i._$Eh.get(e);
+    if (o !== void 0 && this._$Em !== o) {
+      const l = i.getPropertyOptions(o), d = typeof l.converter == "function" ? { fromAttribute: l.converter } : ((r = l.converter) == null ? void 0 : r.fromAttribute) !== void 0 ? l.converter : ae;
+      this._$Em = o;
       const c = d.fromAttribute(t, l.type);
-      this[a] = c ?? ((n = this._$Ej) == null ? void 0 : n.get(a)) ?? c, this._$Em = null;
+      this[o] = c ?? ((n = this._$Ej) == null ? void 0 : n.get(o)) ?? c, this._$Em = null;
     }
   }
-  requestUpdate(e, t, i, a = !1, r) {
+  requestUpdate(e, t, i, o = !1, r) {
     var n;
     if (e !== void 0) {
       const l = this.constructor;
-      if (a === !1 && (r = this[e]), i ?? (i = l.getPropertyOptions(e)), !((i.hasChanged ?? we)(r, t) || i.useDefault && i.reflect && r === ((n = this._$Ej) == null ? void 0 : n.get(e)) && !this.hasAttribute(l._$Eu(e, i)))) return;
+      if (o === !1 && (r = this[e]), i ?? (i = l.getPropertyOptions(e)), !((i.hasChanged ?? we)(r, t) || i.useDefault && i.reflect && r === ((n = this._$Ej) == null ? void 0 : n.get(e)) && !this.hasAttribute(l._$Eu(e, i)))) return;
       this.C(e, t, i);
     }
     this.isUpdatePending === !1 && (this._$ES = this._$EP());
   }
-  C(e, t, { useDefault: i, reflect: a, wrapped: r }, n) {
-    i && !(this._$Ej ?? (this._$Ej = /* @__PURE__ */ new Map())).has(e) && (this._$Ej.set(e, n ?? t ?? this[e]), r !== !0 || n !== void 0) || (this._$AL.has(e) || (this.hasUpdated || i || (t = void 0), this._$AL.set(e, t)), a === !0 && this._$Em !== e && (this._$Eq ?? (this._$Eq = /* @__PURE__ */ new Set())).add(e));
+  C(e, t, { useDefault: i, reflect: o, wrapped: r }, n) {
+    i && !(this._$Ej ?? (this._$Ej = /* @__PURE__ */ new Map())).has(e) && (this._$Ej.set(e, n ?? t ?? this[e]), r !== !0 || n !== void 0) || (this._$AL.has(e) || (this.hasUpdated || i || (t = void 0), this._$AL.set(e, t)), o === !0 && this._$Em !== e && (this._$Eq ?? (this._$Eq = /* @__PURE__ */ new Set())).add(e));
   }
   async _$EP() {
     this.isUpdatePending = !0;
@@ -231,8 +231,8 @@ let F = class extends HTMLElement {
         for (const [r, n] of this._$Ep) this[r] = n;
         this._$Ep = void 0;
       }
-      const a = this.constructor.elementProperties;
-      if (a.size > 0) for (const [r, n] of a) {
+      const o = this.constructor.elementProperties;
+      if (o.size > 0) for (const [r, n] of o) {
         const { wrapped: l } = n, d = this[r];
         l !== !0 || this._$AL.has(r) || d === void 0 || this.C(r, void 0, n, d);
       }
@@ -240,12 +240,12 @@ let F = class extends HTMLElement {
     let e = !1;
     const t = this._$AL;
     try {
-      e = this.shouldUpdate(t), e ? (this.willUpdate(t), (i = this._$EO) == null || i.forEach((a) => {
+      e = this.shouldUpdate(t), e ? (this.willUpdate(t), (i = this._$EO) == null || i.forEach((o) => {
         var r;
-        return (r = a.hostUpdate) == null ? void 0 : r.call(a);
+        return (r = o.hostUpdate) == null ? void 0 : r.call(o);
       }), this.update(t)) : this._$EM();
-    } catch (a) {
-      throw e = !1, this._$EM(), a;
+    } catch (o) {
+      throw e = !1, this._$EM(), o;
     }
     e && this._$AE(t);
   }
@@ -254,8 +254,8 @@ let F = class extends HTMLElement {
   _$AE(e) {
     var t;
     (t = this._$EO) == null || t.forEach((i) => {
-      var a;
-      return (a = i.hostUpdated) == null ? void 0 : a.call(i);
+      var o;
+      return (o = i.hostUpdated) == null ? void 0 : o.call(i);
     }), this.hasUpdated || (this.hasUpdated = !0, this.firstUpdated(e)), this.updated(e);
   }
   _$EM() {
@@ -284,28 +284,28 @@ F.elementStyles = [], F.shadowRootOptions = { mode: "open" }, F[Q("elementProper
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const X = globalThis, Me = (o) => o, re = X.trustedTypes, Ve = re ? re.createPolicy("lit-html", { createHTML: (o) => o }) : void 0, rt = "$lit$", V = `lit$${Math.random().toFixed(9).slice(2)}$`, nt = "?" + V, Ht = `<${nt}>`, I = document, ee = () => I.createComment(""), te = (o) => o === null || typeof o != "object" && typeof o != "function", $e = Array.isArray, Lt = (o) => $e(o) || typeof (o == null ? void 0 : o[Symbol.iterator]) == "function", ce = `[ 	
+const X = globalThis, Me = (a) => a, re = X.trustedTypes, Ve = re ? re.createPolicy("lit-html", { createHTML: (a) => a }) : void 0, rt = "$lit$", V = `lit$${Math.random().toFixed(9).slice(2)}$`, nt = "?" + V, Ht = `<${nt}>`, I = document, ee = () => I.createComment(""), te = (a) => a === null || typeof a != "object" && typeof a != "function", $e = Array.isArray, Lt = (a) => $e(a) || typeof (a == null ? void 0 : a[Symbol.iterator]) == "function", ce = `[ 	
 \f\r]`, q = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, Ce = /-->/g, He = />/g, H = RegExp(`>|${ce}(?:([^\\s"'>=/]+)(${ce}*=${ce}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`, "g"), Le = /'/g, Oe = /"/g, st = /^(?:script|style|textarea|title)$/i, Ot = (o) => (e, ...t) => ({ _$litType$: o, strings: e, values: t }), s = Ot(1), Y = Symbol.for("lit-noChange"), u = Symbol.for("lit-nothing"), Pe = /* @__PURE__ */ new WeakMap(), O = I.createTreeWalker(I, 129);
-function lt(o, e) {
-  if (!$e(o) || !o.hasOwnProperty("raw")) throw Error("invalid template strings array");
+\f\r"'\`<>=]|("|')|))|$)`, "g"), Le = /'/g, Oe = /"/g, st = /^(?:script|style|textarea|title)$/i, Ot = (a) => (e, ...t) => ({ _$litType$: a, strings: e, values: t }), s = Ot(1), Y = Symbol.for("lit-noChange"), u = Symbol.for("lit-nothing"), Pe = /* @__PURE__ */ new WeakMap(), O = I.createTreeWalker(I, 129);
+function lt(a, e) {
+  if (!$e(a) || !a.hasOwnProperty("raw")) throw Error("invalid template strings array");
   return Ve !== void 0 ? Ve.createHTML(e) : e;
 }
-const Pt = (o, e) => {
-  const t = o.length - 1, i = [];
-  let a, r = e === 2 ? "<svg>" : e === 3 ? "<math>" : "", n = q;
+const Pt = (a, e) => {
+  const t = a.length - 1, i = [];
+  let o, r = e === 2 ? "<svg>" : e === 3 ? "<math>" : "", n = q;
   for (let l = 0; l < t; l++) {
-    const d = o[l];
+    const d = a[l];
     let c, h, _ = -1, m = 0;
-    for (; m < d.length && (n.lastIndex = m, h = n.exec(d), h !== null); ) m = n.lastIndex, n === q ? h[1] === "!--" ? n = Ce : h[1] !== void 0 ? n = He : h[2] !== void 0 ? (st.test(h[2]) && (a = RegExp("</" + h[2], "g")), n = H) : h[3] !== void 0 && (n = H) : n === H ? h[0] === ">" ? (n = a ?? q, _ = -1) : h[1] === void 0 ? _ = -2 : (_ = n.lastIndex - h[2].length, c = h[1], n = h[3] === void 0 ? H : h[3] === '"' ? Oe : Le) : n === Oe || n === Le ? n = H : n === Ce || n === He ? n = q : (n = H, a = void 0);
-    const b = n === H && o[l + 1].startsWith("/>") ? " " : "";
+    for (; m < d.length && (n.lastIndex = m, h = n.exec(d), h !== null); ) m = n.lastIndex, n === q ? h[1] === "!--" ? n = Ce : h[1] !== void 0 ? n = He : h[2] !== void 0 ? (st.test(h[2]) && (o = RegExp("</" + h[2], "g")), n = H) : h[3] !== void 0 && (n = H) : n === H ? h[0] === ">" ? (n = o ?? q, _ = -1) : h[1] === void 0 ? _ = -2 : (_ = n.lastIndex - h[2].length, c = h[1], n = h[3] === void 0 ? H : h[3] === '"' ? Oe : Le) : n === Oe || n === Le ? n = H : n === Ce || n === He ? n = q : (n = H, o = void 0);
+    const b = n === H && a[l + 1].startsWith("/>") ? " " : "";
     r += n === q ? d + Ht : _ >= 0 ? (i.push(c), d.slice(0, _) + rt + d.slice(_) + V + b) : d + V + (_ === -2 ? l : b);
   }
-  return [lt(o, r + (o[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
+  return [lt(a, r + (a[t] || "<?>") + (e === 2 ? "</svg>" : e === 3 ? "</math>" : "")), i];
 };
 class ie {
   constructor({ strings: e, _$litType$: t }, i) {
-    let a;
+    let o;
     this.parts = [];
     let r = 0, n = 0;
     const l = e.length - 1, d = this.parts, [c, h] = Pt(e, t);
@@ -313,24 +313,24 @@ class ie {
       const _ = this.el.content.firstChild;
       _.replaceWith(..._.childNodes);
     }
-    for (; (a = O.nextNode()) !== null && d.length < l; ) {
-      if (a.nodeType === 1) {
-        if (a.hasAttributes()) for (const _ of a.getAttributeNames()) if (_.endsWith(rt)) {
-          const m = h[n++], b = a.getAttribute(_).split(V), N = /([.?@])?(.*)/.exec(m);
-          d.push({ type: 1, index: r, name: N[2], strings: b, ctor: N[1] === "." ? Tt : N[1] === "?" ? Nt : N[1] === "@" ? Rt : le }), a.removeAttribute(_);
-        } else _.startsWith(V) && (d.push({ type: 6, index: r }), a.removeAttribute(_));
-        if (st.test(a.tagName)) {
-          const _ = a.textContent.split(V), m = _.length - 1;
+    for (; (o = O.nextNode()) !== null && d.length < l; ) {
+      if (o.nodeType === 1) {
+        if (o.hasAttributes()) for (const _ of o.getAttributeNames()) if (_.endsWith(rt)) {
+          const m = h[n++], b = o.getAttribute(_).split(V), N = /([.?@])?(.*)/.exec(m);
+          d.push({ type: 1, index: r, name: N[2], strings: b, ctor: N[1] === "." ? Tt : N[1] === "?" ? Nt : N[1] === "@" ? Rt : le }), o.removeAttribute(_);
+        } else _.startsWith(V) && (d.push({ type: 6, index: r }), o.removeAttribute(_));
+        if (st.test(o.tagName)) {
+          const _ = o.textContent.split(V), m = _.length - 1;
           if (m > 0) {
-            a.textContent = re ? re.emptyScript : "";
-            for (let b = 0; b < m; b++) a.append(_[b], ee()), O.nextNode(), d.push({ type: 2, index: ++r });
-            a.append(_[m], ee());
+            o.textContent = re ? re.emptyScript : "";
+            for (let b = 0; b < m; b++) o.append(_[b], ee()), O.nextNode(), d.push({ type: 2, index: ++r });
+            o.append(_[m], ee());
           }
         }
-      } else if (a.nodeType === 8) if (a.data === nt) d.push({ type: 2, index: r });
+      } else if (o.nodeType === 8) if (o.data === nt) d.push({ type: 2, index: r });
       else {
         let _ = -1;
-        for (; (_ = a.data.indexOf(V, _ + 1)) !== -1; ) d.push({ type: 7, index: r }), _ += V.length - 1;
+        for (; (_ = o.data.indexOf(V, _ + 1)) !== -1; ) d.push({ type: 7, index: r }), _ += V.length - 1;
       }
       r++;
     }
@@ -340,12 +340,12 @@ class ie {
     return i.innerHTML = e, i;
   }
 }
-function U(o, e, t = o, i) {
+function U(a, e, t = a, i) {
   var n, l;
   if (e === Y) return e;
-  let a = i !== void 0 ? (n = t._$Co) == null ? void 0 : n[i] : t._$Cl;
+  let o = i !== void 0 ? (n = t._$Co) == null ? void 0 : n[i] : t._$Cl;
   const r = te(e) ? void 0 : e._$litDirective$;
-  return (a == null ? void 0 : a.constructor) !== r && ((l = a == null ? void 0 : a._$AO) == null || l.call(a, !1), r === void 0 ? a = void 0 : (a = new r(o), a._$AT(o, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = a : t._$Cl = a), a !== void 0 && (e = U(o, a._$AS(o, e.values), a, i)), e;
+  return (o == null ? void 0 : o.constructor) !== r && ((l = o == null ? void 0 : o._$AO) == null || l.call(o, !1), r === void 0 ? o = void 0 : (o = new r(a), o._$AT(a, t, i)), i !== void 0 ? (t._$Co ?? (t._$Co = []))[i] = o : t._$Cl = o), o !== void 0 && (e = U(a, o._$AS(a, e.values), o, i)), e;
 }
 class It {
   constructor(e, t) {
@@ -358,8 +358,8 @@ class It {
     return this._$AM._$AU;
   }
   u(e) {
-    const { el: { content: t }, parts: i } = this._$AD, a = ((e == null ? void 0 : e.creationScope) ?? I).importNode(t, !0);
-    O.currentNode = a;
+    const { el: { content: t }, parts: i } = this._$AD, o = ((e == null ? void 0 : e.creationScope) ?? I).importNode(t, !0);
+    O.currentNode = o;
     let r = O.nextNode(), n = 0, l = 0, d = i[0];
     for (; d !== void 0; ) {
       if (n === d.index) {
@@ -368,7 +368,7 @@ class It {
       }
       n !== (d == null ? void 0 : d.index) && (r = O.nextNode(), n++);
     }
-    return O.currentNode = I, a;
+    return O.currentNode = I, o;
   }
   p(e) {
     let t = 0;
@@ -380,8 +380,8 @@ class K {
     var e;
     return ((e = this._$AM) == null ? void 0 : e._$AU) ?? this._$Cv;
   }
-  constructor(e, t, i, a) {
-    this.type = 2, this._$AH = u, this._$AN = void 0, this._$AA = e, this._$AB = t, this._$AM = i, this.options = a, this._$Cv = (a == null ? void 0 : a.isConnected) ?? !0;
+  constructor(e, t, i, o) {
+    this.type = 2, this._$AH = u, this._$AN = void 0, this._$AA = e, this._$AB = t, this._$AM = i, this.options = o, this._$Cv = (o == null ? void 0 : o.isConnected) ?? !0;
   }
   get parentNode() {
     let e = this._$AA.parentNode;
@@ -408,10 +408,10 @@ class K {
   }
   $(e) {
     var r;
-    const { values: t, _$litType$: i } = e, a = typeof i == "number" ? this._$AC(e) : (i.el === void 0 && (i.el = ie.createElement(lt(i.h, i.h[0]), this.options)), i);
-    if (((r = this._$AH) == null ? void 0 : r._$AD) === a) this._$AH.p(t);
+    const { values: t, _$litType$: i } = e, o = typeof i == "number" ? this._$AC(e) : (i.el === void 0 && (i.el = ie.createElement(lt(i.h, i.h[0]), this.options)), i);
+    if (((r = this._$AH) == null ? void 0 : r._$AD) === o) this._$AH.p(t);
     else {
-      const n = new It(a, this), l = n.u(this.options);
+      const n = new It(o, this), l = n.u(this.options);
       n.p(t), this.T(l), this._$AH = n;
     }
   }
@@ -422,15 +422,15 @@ class K {
   k(e) {
     $e(this._$AH) || (this._$AH = [], this._$AR());
     const t = this._$AH;
-    let i, a = 0;
-    for (const r of e) a === t.length ? t.push(i = new K(this.O(ee()), this.O(ee()), this, this.options)) : i = t[a], i._$AI(r), a++;
-    a < t.length && (this._$AR(i && i._$AB.nextSibling, a), t.length = a);
+    let i, o = 0;
+    for (const r of e) o === t.length ? t.push(i = new K(this.O(ee()), this.O(ee()), this, this.options)) : i = t[o], i._$AI(r), o++;
+    o < t.length && (this._$AR(i && i._$AB.nextSibling, o), t.length = o);
   }
   _$AR(e = this._$AA.nextSibling, t) {
     var i;
     for ((i = this._$AP) == null ? void 0 : i.call(this, !1, !0, t); e !== this._$AB; ) {
-      const a = Me(e).nextSibling;
-      Me(e).remove(), e = a;
+      const o = Me(e).nextSibling;
+      Me(e).remove(), e = o;
     }
   }
   setConnected(e) {
@@ -445,10 +445,10 @@ class le {
   get _$AU() {
     return this._$AM._$AU;
   }
-  constructor(e, t, i, a, r) {
-    this.type = 1, this._$AH = u, this._$AN = void 0, this.element = e, this.name = t, this._$AM = a, this.options = r, i.length > 2 || i[0] !== "" || i[1] !== "" ? (this._$AH = Array(i.length - 1).fill(new String()), this.strings = i) : this._$AH = u;
+  constructor(e, t, i, o, r) {
+    this.type = 1, this._$AH = u, this._$AN = void 0, this.element = e, this.name = t, this._$AM = o, this.options = r, i.length > 2 || i[0] !== "" || i[1] !== "" ? (this._$AH = Array(i.length - 1).fill(new String()), this.strings = i) : this._$AH = u;
   }
-  _$AI(e, t = this, i, a) {
+  _$AI(e, t = this, i, o) {
     const r = this.strings;
     let n = !1;
     if (r === void 0) e = U(this, e, t, 0), n = !te(e) || e !== this._$AH && e !== Y, n && (this._$AH = e);
@@ -457,7 +457,7 @@ class le {
       let d, c;
       for (e = r[0], d = 0; d < r.length - 1; d++) c = U(this, l[i + d], t, d), c === Y && (c = this._$AH[d]), n || (n = !te(c) || c !== this._$AH[d]), c === u ? e = u : e !== u && (e += (c ?? "") + r[d + 1]), this._$AH[d] = c;
     }
-    n && !a && this.j(e);
+    n && !o && this.j(e);
   }
   j(e) {
     e === u ? this.element.removeAttribute(this.name) : this.element.setAttribute(this.name, e ?? "");
@@ -480,13 +480,13 @@ class Nt extends le {
   }
 }
 class Rt extends le {
-  constructor(e, t, i, a, r) {
-    super(e, t, i, a, r), this.type = 5;
+  constructor(e, t, i, o, r) {
+    super(e, t, i, o, r), this.type = 5;
   }
   _$AI(e, t = this) {
     if ((e = U(this, e, t, 0) ?? u) === Y) return;
-    const i = this._$AH, a = e === u && i !== u || e.capture !== i.capture || e.once !== i.once || e.passive !== i.passive, r = e !== u && (i === u || a);
-    a && this.element.removeEventListener(this.name, this, i), r && this.element.addEventListener(this.name, this, e), this._$AH = e;
+    const i = this._$AH, o = e === u && i !== u || e.capture !== i.capture || e.once !== i.once || e.passive !== i.passive, r = e !== u && (i === u || o);
+    o && this.element.removeEventListener(this.name, this, i), r && this.element.addEventListener(this.name, this, e), this._$AH = e;
   }
   handleEvent(e) {
     var t;
@@ -506,14 +506,14 @@ class Ft {
 }
 const Dt = { I: K }, pe = X.litHtmlPolyfillSupport;
 pe == null || pe(ie, K), (X.litHtmlVersions ?? (X.litHtmlVersions = [])).push("3.3.2");
-const dt = (o, e, t) => {
+const dt = (a, e, t) => {
   const i = (t == null ? void 0 : t.renderBefore) ?? e;
-  let a = i._$litPart$;
-  if (a === void 0) {
+  let o = i._$litPart$;
+  if (o === void 0) {
     const r = (t == null ? void 0 : t.renderBefore) ?? null;
-    i._$litPart$ = a = new K(e.insertBefore(ee(), r), r, void 0, t ?? {});
+    i._$litPart$ = o = new K(e.insertBefore(ee(), r), r, void 0, t ?? {});
   }
-  return a._$AI(o), a;
+  return o._$AI(a), o;
 };
 /**
  * @license
@@ -556,7 +556,7 @@ _e == null || _e({ LitElement: D });
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Yt = (o) => (...e) => ({ _$litDirective$: o, values: e });
+const Yt = (a) => (...e) => ({ _$litDirective$: a, values: e });
 let Ut = class {
   constructor(e) {
   }
@@ -578,62 +578,62 @@ let Ut = class {
  * Copyright 2020 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const { I: Kt } = Dt, Ie = (o) => o, Te = (o, e) => (o == null ? void 0 : o._$litType$) !== void 0, Wt = (o) => {
+const { I: Kt } = Dt, Ie = (a) => a, Te = (a, e) => (a == null ? void 0 : a._$litType$) !== void 0, Wt = (a) => {
   var e;
-  return ((e = o == null ? void 0 : o._$litType$) == null ? void 0 : e.h) != null;
-}, Ne = () => document.createComment(""), Re = (o, e, t) => {
+  return ((e = a == null ? void 0 : a._$litType$) == null ? void 0 : e.h) != null;
+}, Ne = () => document.createComment(""), Re = (a, e, t) => {
   var r;
-  const i = o._$AA.parentNode, a = o._$AB;
+  const i = a._$AA.parentNode, o = a._$AB;
   if (t === void 0) {
-    const n = i.insertBefore(Ne(), a), l = i.insertBefore(Ne(), a);
-    t = new Kt(n, l, o, o.options);
+    const n = i.insertBefore(Ne(), o), l = i.insertBefore(Ne(), o);
+    t = new Kt(n, l, a, a.options);
   } else {
-    const n = t._$AB.nextSibling, l = t._$AM, d = l !== o;
+    const n = t._$AB.nextSibling, l = t._$AM, d = l !== a;
     if (d) {
       let c;
-      (r = t._$AQ) == null || r.call(t, o), t._$AM = o, t._$AP !== void 0 && (c = o._$AU) !== l._$AU && t._$AP(c);
+      (r = t._$AQ) == null || r.call(t, a), t._$AM = a, t._$AP !== void 0 && (c = a._$AU) !== l._$AU && t._$AP(c);
     }
-    if (n !== a || d) {
+    if (n !== o || d) {
       let c = t._$AA;
       for (; c !== n; ) {
         const h = Ie(c).nextSibling;
-        Ie(i).insertBefore(c, a), c = h;
+        Ie(i).insertBefore(c, o), c = h;
       }
     }
   }
   return t;
-}, qt = {}, Fe = (o, e = qt) => o._$AH = e, De = (o) => o._$AH, Bt = (o) => {
-  o._$AR();
+}, qt = {}, Fe = (a, e = qt) => a._$AH = e, De = (a) => a._$AH, Bt = (a) => {
+  a._$AR();
 };
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Ye = (o) => Wt(o) ? o._$litType$.h : o.strings, Zt = Yt(class extends Ut {
-  constructor(o) {
-    super(o), this.et = /* @__PURE__ */ new WeakMap();
+const Ye = (a) => Wt(a) ? a._$litType$.h : a.strings, Zt = Yt(class extends Ut {
+  constructor(a) {
+    super(a), this.et = /* @__PURE__ */ new WeakMap();
   }
-  render(o) {
-    return [o];
+  render(a) {
+    return [a];
   }
-  update(o, [e]) {
+  update(a, [e]) {
     const t = Te(this.it) ? Ye(this.it) : null, i = Te(e) ? Ye(e) : null;
     if (t !== null && (i === null || t !== i)) {
-      const a = De(o).pop();
+      const o = De(a).pop();
       let r = this.et.get(t);
       if (r === void 0) {
         const n = document.createDocumentFragment();
         r = dt(u, n), r.setConnected(!1), this.et.set(t, r);
       }
-      Fe(r, [a]), Re(r, void 0, a);
+      Fe(r, [o]), Re(r, void 0, o);
     }
     if (i !== null) {
       if (t === null || t !== i) {
-        const a = this.et.get(i);
-        if (a !== void 0) {
-          const r = De(a).pop();
-          Bt(o), Re(o, void 0, r), Fe(o, [r]);
+        const o = this.et.get(i);
+        if (o !== void 0) {
+          const r = De(o).pop();
+          Bt(a), Re(a, void 0, r), Fe(a, [r]);
         }
       }
       this.it = e;
@@ -641,24 +641,24 @@ const Ye = (o) => Wt(o) ? o._$litType$.h : o.strings, Zt = Yt(class extends Ut {
     return this.render(e);
   }
 });
-function w(o) {
-  return typeof structuredClone == "function" ? structuredClone(o) : JSON.parse(JSON.stringify(o));
+function w(a) {
+  return typeof structuredClone == "function" ? structuredClone(a) : JSON.parse(JSON.stringify(a));
 }
-function E(o) {
-  return typeof o == "object" && o !== null && !Array.isArray(o);
+function E(a) {
+  return typeof a == "object" && a !== null && !Array.isArray(a);
 }
-function y(o) {
-  return E(o) ? o : void 0;
+function y(a) {
+  return E(a) ? a : void 0;
 }
-function $(o) {
-  return Array.isArray(o) ? o : void 0;
+function $(a) {
+  return Array.isArray(a) ? a : void 0;
 }
-function M(o) {
-  const e = y(o);
+function M(a) {
+  const e = y(a);
   return e ? Object.entries(e) : [];
 }
-function f(o, e) {
-  let t = o;
+function f(a, e) {
+  let t = a;
   for (const i of e) {
     if (typeof i == "number") {
       if (!Array.isArray(t))
@@ -672,10 +672,10 @@ function f(o, e) {
   }
   return t;
 }
-function g(o, e, t) {
+function g(a, e, t) {
   if (e.length === 0)
     return;
-  let i = o;
+  let i = a;
   for (let r = 0; r < e.length - 1; r += 1) {
     const n = e[r], d = typeof e[r + 1] == "number";
     if (typeof n == "number") {
@@ -689,73 +689,73 @@ function g(o, e, t) {
     let h = c[n];
     d ? Array.isArray(h) || (h = [], c[n] = h) : E(h) || (h = {}, c[n] = h), i = h;
   }
-  const a = e[e.length - 1];
-  if (typeof a == "number") {
+  const o = e[e.length - 1];
+  if (typeof o == "number") {
     if (!Array.isArray(i))
       return;
-    i[a] = t;
+    i[o] = t;
     return;
   }
-  i[a] = t;
+  i[o] = t;
 }
-function L(o, e) {
-  e.length !== 0 && (pt(o, e), pi(o, e.slice(0, -1)));
+function L(a, e) {
+  e.length !== 0 && (pt(a, e), pi(a, e.slice(0, -1)));
 }
-function S(o, e, t) {
-  const i = f(o, e), r = [...Array.isArray(i) ? i : [], t];
-  g(o, e, r);
+function S(a, e, t) {
+  const i = f(a, e), r = [...Array.isArray(i) ? i : [], t];
+  g(a, e, r);
 }
-function Gt(o, e, t) {
-  const i = f(o, e);
+function Gt(a, e, t) {
+  const i = f(a, e);
   if (!Array.isArray(i) || t < 0 || t >= i.length)
     return;
-  const a = i.filter((r, n) => n !== t);
-  if (a.length === 0) {
-    L(o, e);
+  const o = i.filter((r, n) => n !== t);
+  if (o.length === 0) {
+    L(a, e);
     return;
   }
-  g(o, e, a);
+  g(a, e, o);
 }
-function Jt(o, e, t, i) {
-  const a = f(o, e);
-  if (!Array.isArray(a) || t < 0 || i < 0 || t >= a.length || i >= a.length || t === i)
+function Jt(a, e, t, i) {
+  const o = f(a, e);
+  if (!Array.isArray(o) || t < 0 || i < 0 || t >= o.length || i >= o.length || t === i)
     return;
-  const r = [...a], [n] = r.splice(t, 1);
-  r.splice(i, 0, n), g(o, e, r);
+  const r = [...o], [n] = r.splice(t, 1);
+  r.splice(i, 0, n), g(a, e, r);
 }
-function Qt(o, e, t, i) {
-  const a = f(o, e);
-  if (!E(a))
+function Qt(a, e, t, i) {
+  const o = f(a, e);
+  if (!E(o))
     return { ok: !1, reason: "target_not_available" };
   const r = i.trim();
   if (!r)
     return { ok: !1, reason: "empty_key" };
   if (r === t)
     return { ok: !0 };
-  if (Object.prototype.hasOwnProperty.call(a, r))
+  if (Object.prototype.hasOwnProperty.call(o, r))
     return { ok: !1, reason: "duplicate_key", key: r };
-  if (a[t] === void 0)
+  if (o[t] === void 0)
     return { ok: !1, reason: "missing_key", key: t };
   const l = {};
-  for (const [d, c] of Object.entries(a)) {
+  for (const [d, c] of Object.entries(o)) {
     if (d === t) {
       l[r] = c;
       continue;
     }
     l[d] = c;
   }
-  return g(o, e, l), { ok: !0 };
+  return g(a, e, l), { ok: !0 };
 }
-function Xt(o) {
-  return j(o, "category");
+function Xt(a) {
+  return j(a, "category");
 }
-function ei(o) {
-  return j(o, "label");
+function ei(a) {
+  return j(a, "label");
 }
-function ti(o, e, t) {
+function ti(a, e, t) {
   return {
     kind: "ev_charger",
-    id: j(o, "ev-charger"),
+    id: j(a, "ev-charger"),
     name: e,
     limits: {
       max_charging_power_kw: 11
@@ -787,10 +787,10 @@ function ti(o, e, t) {
     vehicles: [ct([], t)]
   };
 }
-function ii(o, e) {
+function ii(a, e) {
   return {
     kind: "generic",
-    id: j(o, "generic-appliance"),
+    id: j(a, "generic-appliance"),
     name: e,
     controls: {
       switch: {
@@ -803,10 +803,10 @@ function ii(o, e) {
     }
   };
 }
-function ai(o, e) {
+function oi(a, e) {
   return {
     kind: "climate",
-    id: j(o, "climate-appliance"),
+    id: j(a, "climate-appliance"),
     name: e,
     controls: {
       climate: {
@@ -819,9 +819,9 @@ function ai(o, e) {
     }
   };
 }
-function Ue(o) {
+function Ue(a) {
   return {
-    id: j(o, "export-price"),
+    id: j(a, "export-price"),
     kind: "export_price",
     enabled: !0,
     params: {
@@ -830,9 +830,9 @@ function Ue(o) {
     }
   };
 }
-function Ke(o, e = "") {
+function Ke(a, e = "") {
   return {
-    id: j(o, "surplus-appliance"),
+    id: j(a, "surplus-appliance"),
     kind: "surplus_appliance",
     enabled: !0,
     params: {
@@ -842,9 +842,9 @@ function Ke(o, e = "") {
     }
   };
 }
-function ct(o, e) {
+function ct(a, e) {
   return {
-    id: j(o, "vehicle"),
+    id: j(a, "vehicle"),
     name: e,
     telemetry: {
       soc_entity_id: ""
@@ -855,7 +855,7 @@ function ct(o, e) {
     }
   };
 }
-function oi() {
+function ai() {
   return {
     behavior: "fixed_max_power"
   };
@@ -865,10 +865,10 @@ function ri() {
     min_power_kw: 1.4
   };
 }
-function ni(o) {
+function ni(a) {
   return {
     energy_entity_id: "",
-    label: o
+    label: a
   };
 }
 function si() {
@@ -881,35 +881,35 @@ function si() {
 function li() {
   return "";
 }
-function di(o) {
-  return j(o, "mode");
+function di(a) {
+  return j(a, "mode");
 }
-function ci(o) {
-  return j(o, "gear");
+function ci(a) {
+  return j(a, "gear");
 }
-function pt(o, e) {
-  const t = e.slice(0, -1), i = t.length === 0 ? o : f(o, t);
+function pt(a, e) {
+  const t = e.slice(0, -1), i = t.length === 0 ? a : f(a, t);
   if (i === void 0)
     return;
-  const a = e[e.length - 1];
-  if (typeof a == "number") {
-    if (!Array.isArray(i) || a < 0 || a >= i.length)
+  const o = e[e.length - 1];
+  if (typeof o == "number") {
+    if (!Array.isArray(i) || o < 0 || o >= i.length)
       return;
-    i.splice(a, 1);
+    i.splice(o, 1);
     return;
   }
-  !E(i) || !(a in i) || delete i[a];
+  !E(i) || !(o in i) || delete i[o];
 }
-function pi(o, e) {
+function pi(a, e) {
   for (let t = e.length; t > 0; t -= 1) {
-    const i = e.slice(0, t), a = f(o, i), r = E(a) && Object.keys(a).length === 0, n = Array.isArray(a) && a.length === 0;
+    const i = e.slice(0, t), o = f(a, i), r = E(o) && Object.keys(o).length === 0, n = Array.isArray(o) && o.length === 0;
     if (!r && !n)
       break;
-    pt(o, i);
+    pt(a, i);
   }
 }
-function j(o, e) {
-  const t = new Set(o);
+function j(a, e) {
+  const t = new Set(a);
   if (!t.has(e))
     return e;
   let i = 2;
@@ -917,8 +917,8 @@ function j(o, e) {
     i += 1;
   return `${e}-${i}`;
 }
-function ue(o, e, t) {
-  const i = t.trim(), a = ui(e), r = _i(o, a), n = i.length === 0 ? null : r.find((l) => l.id === i) ?? null;
+function ue(a, e, t) {
+  const i = t.trim(), o = ui(e), r = _i(a, o), n = i.length === 0 ? null : r.find((l) => l.id === i) ?? null;
   return {
     options: r,
     selectedId: i,
@@ -926,10 +926,10 @@ function ue(o, e, t) {
     selectedMissingFromDraft: i.length > 0 && n === null
   };
 }
-function he(o, e) {
+function he(a, e) {
   var r, n, l;
   const t = e.trim();
-  if (((r = o.selectedOption) == null ? void 0 : r.kind) !== "climate")
+  if (((r = a.selectedOption) == null ? void 0 : r.kind) !== "climate")
     return {
       visible: !1,
       disabled: !0,
@@ -937,7 +937,7 @@ function he(o, e) {
       value: t,
       options: []
     };
-  const i = o.selectedOption.liveClimateModes;
+  const i = a.selectedOption.liveClimateModes;
   if (!i || i.length === 0)
     return {
       visible: !0,
@@ -946,24 +946,24 @@ function he(o, e) {
       value: t,
       options: t.length === 0 ? [] : [{ value: t, isUnknown: !1 }]
     };
-  const a = i.map((d) => ({
+  const o = i.map((d) => ({
     value: d,
     isUnknown: !1
   }));
-  return t.length > 0 && !i.includes(t) && a.unshift({ value: t, isUnknown: !0 }), {
+  return t.length > 0 && !i.includes(t) && o.unshift({ value: t, isUnknown: !0 }), {
     visible: !0,
-    disabled: a.length === 1 && !((n = a[0]) != null && n.isUnknown),
+    disabled: o.length === 1 && !((n = o[0]) != null && n.isUnknown),
     unavailable: !1,
-    value: t.length > 0 ? t : ((l = a[0]) == null ? void 0 : l.value) ?? "",
-    options: a
+    value: t.length > 0 ? t : ((l = o[0]) == null ? void 0 : l.value) ?? "",
+    options: o
   };
 }
-function _i(o, e) {
-  if (!o)
+function _i(a, e) {
+  if (!a)
     return [];
-  const t = $(o.appliances) ?? [], i = [];
-  for (const a of t) {
-    const r = y(a);
+  const t = $(a.appliances) ?? [], i = [];
+  for (const o of t) {
+    const r = y(o);
     if (!r)
       continue;
     const n = We(r.id), l = mi(r.kind);
@@ -980,81 +980,81 @@ function _i(o, e) {
   }
   return i;
 }
-function ui(o) {
-  const e = Array.isArray(o == null ? void 0 : o.appliances) ? o.appliances : [], t = {};
+function ui(a) {
+  const e = Array.isArray(a == null ? void 0 : a.appliances) ? a.appliances : [], t = {};
   for (const i of e)
     gi(i) && (t[i.id] = i);
   return t;
 }
-function _t(o, e) {
-  var i, a;
-  if (!o || o.kind !== e)
+function _t(a, e) {
+  var i, o;
+  if (!a || a.kind !== e)
     return null;
-  const t = (a = (i = o.metadata) == null ? void 0 : i.scheduleCapabilities) == null ? void 0 : a.modes;
+  const t = (o = (i = a.metadata) == null ? void 0 : i.scheduleCapabilities) == null ? void 0 : o.modes;
   return Array.isArray(t) ? t.filter((r) => typeof r == "string" && r.length > 0) : null;
 }
-function hi(o, e) {
-  return (_t(o, e) ?? []).length > 0;
+function hi(a, e) {
+  return (_t(a, e) ?? []).length > 0;
 }
-function We(o) {
-  return typeof o == "string" && o.trim().length > 0 ? o.trim() : "";
+function We(a) {
+  return typeof a == "string" && a.trim().length > 0 ? a.trim() : "";
 }
-function mi(o) {
-  return o === "generic" || o === "climate" ? o : null;
+function mi(a) {
+  return a === "generic" || a === "climate" ? a : null;
 }
-function gi(o) {
-  return !!(o && typeof o == "object" && typeof o.id == "string" && typeof o.name == "string" && typeof o.kind == "string");
+function gi(a) {
+  return !!(a && typeof a == "object" && typeof a.id == "string" && typeof a.name == "string" && typeof a.kind == "string");
 }
 function vi() {
   return {
-    read(o) {
-      return w(o);
+    read(a) {
+      return w(a);
     },
-    apply(o, e) {
+    apply(a, e) {
       return w(e);
     },
-    validate(o) {
-      return xe(o, "object");
+    validate(a) {
+      return xe(a, "object");
     }
   };
 }
-function k(o, e) {
+function k(a, e) {
   return {
     read(t) {
-      const i = o.length === 0 ? t : f(t, o);
+      const i = a.length === 0 ? t : f(t, a);
       return w(i === void 0 ? e.emptyValue : i);
     },
     apply(t, i) {
-      if (o.length === 0)
+      if (a.length === 0)
         return w(i);
-      const a = w(t);
-      return g(a, o, w(i)), a;
+      const o = w(t);
+      return g(o, a, w(i)), o;
     },
     validate(t) {
       return xe(t, e.rootKind);
     }
   };
 }
-function B(o) {
-  const e = new Map(o.map((t) => [t.yamlKey, t]));
+function B(a) {
+  const e = new Map(a.map((t) => [t.yamlKey, t]));
   return {
     read(t) {
       const i = {};
-      for (const a of o) {
-        const r = f(t, a.documentPath);
-        r !== void 0 && (i[a.yamlKey] = w(r));
+      for (const o of a) {
+        const r = f(t, o.documentPath);
+        r !== void 0 && (i[o.yamlKey] = w(r));
       }
       return i;
     },
     apply(t, i) {
-      const a = w(t), r = i;
-      for (const n of o)
-        L(a, n.documentPath);
-      for (const n of o) {
+      const o = w(t), r = i;
+      for (const n of a)
+        L(o, n.documentPath);
+      for (const n of a) {
         const l = r[n.yamlKey];
-        l !== void 0 && g(a, n.documentPath, w(l));
+        l !== void 0 && g(o, n.documentPath, w(l));
       }
-      return a;
+      return o;
     },
     validate(t) {
       const i = xe(t, "object");
@@ -1062,15 +1062,15 @@ function B(o) {
         return i;
       if (!E(t))
         return { code: "expected_object" };
-      for (const a of Object.keys(t))
-        if (!e.has(a))
-          return { code: "unexpected_key", key: a };
+      for (const o of Object.keys(t))
+        if (!e.has(o))
+          return { code: "unexpected_key", key: o };
       return null;
     }
   };
 }
-function xe(o, e) {
-  return e === "array" ? Array.isArray(o) ? null : { code: "expected_array" } : E(o) ? null : { code: "expected_object" };
+function xe(a, e) {
+  return e === "array" ? Array.isArray(a) ? null : { code: "expected_array" } : E(a) ? null : { code: "expected_object" };
 }
 const yi = {
   general: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
@@ -1153,7 +1153,7 @@ const yi = {
   "show_others_group",
   "device_label_text"
 ], ki = ut.filter(
-  (o) => o !== "device_label_text"
+  (a) => a !== "device_label_text"
 ), x = {}, me = [], wi = gt(ut), $i = gt(
   ki
 ), xi = [
@@ -1179,6 +1179,7 @@ const yi = {
   { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
   { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },
   { yamlKey: "aggregation_method", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"] },
+  { yamlKey: "max_interpolated_consecutive_slots", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "max_interpolated_consecutive_slots"] },
   { yamlKey: "total_energy_entity_id", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"] }
 ], ht = {
   [z]: {
@@ -1416,30 +1417,30 @@ const yi = {
     })
   }
 }, mt = ht, Be = ji();
-function Z(o) {
-  return mt[o];
+function Z(a) {
+  return mt[a];
 }
-function Ze(o) {
-  const e = [], t = [...Be[o]];
+function Ze(a) {
+  const e = [], t = [...Be[a]];
   for (; t.length > 0; ) {
     const i = t.pop();
     i && (e.push(i), t.push(...Be[i]));
   }
   return e;
 }
-function gt(o) {
-  return o.map((e) => ({
+function gt(a) {
+  return a.map((e) => ({
     yamlKey: e,
     documentPath: [e]
   }));
 }
 function ji() {
-  const o = Object.fromEntries(
+  const a = Object.fromEntries(
     Object.keys(ht).map((e) => [e, []])
   );
   for (const e of Object.values(mt))
-    e.parentId && o[e.parentId].push(e.id);
-  return o;
+    e.parentId && a[e.parentId].push(e.id);
+  return a;
 }
 const vt = {
   title: "Editor konfigurace Helman",
@@ -1625,6 +1626,7 @@ const vt = {
     bias_correction_aggregation_method: "Metoda agregace",
     bias_correction_aggregation_method_ratio_of_sums: "Poměr součtů (Ratio of Sums)",
     bias_correction_aggregation_method_trimmed_mean: "Oříznutý průměr (Trimmed Mean)",
+    bias_correction_max_interpolated_consecutive_slots: "Max. po sobě jdoucích interpolovaných slotů",
     bias_correction_total_energy_entity: "Entita celkové energie",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Max. SoC baterie %",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Entita povolení exportu",
@@ -1654,6 +1656,7 @@ const vt = {
     bias_correction_max_training_window_days: "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy.",
     bias_correction_training_time: "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování.",
     bias_correction_min_valid_slot_days: "Minimální počet platných historických vzorků den-slot, než může slot přispět do trénování.",
+    bias_correction_max_interpolated_consecutive_slots: "Maximální délka série po sobě jdoucích vynechaných slotů, která může být doplněna interpolací. Nastavte na 0 pro vypnutí.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "0-100 %. Vyřadí sloty, kdy SoC baterie dosáhne této hranice a zároveň je export zakázaný.",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Booleovská entita, která říká Helmanu, zda je aktuálně povolen export do sítě.",
     bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Volitelné. Energie ve slotu nad tento strop je považována za chybu rekordéru. Pokud zůstane prázdné, odvodí se ze solar.max_power × 0.25 × 1.05.",
@@ -1804,6 +1807,7 @@ const vt = {
     bias_correction_min_valid_slot_days: "Minimální počet platných historických vzorků den-slot, které Helman vyžaduje před natrénováním korekčního faktoru pro konkrétní slot. Neplatné sloto-dny se do tohoto počtu nezapočítávají. Pokud má slot méně platných vzorků než tento práh, Helman slot z profilu vynechá a ponechá pro něj korekci na 0. Výchozí hodnota je 5 dní.",
     bias_correction_clamp_min: "Dolní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem nižší než prognóza. Například hodnota 0,0 umožní, aby opravená prognóza klesla až na nulu během fyzického zastínění panelů. Vyšší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 0,0.",
     bias_correction_clamp_max: "Horní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem vyšší než prognóza. Například hodnota 3,0 zajistí, že opravená prognóza bude činit maximálně 300 % původní hodnoty. Nižší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 3,0.",
+    bias_correction_max_interpolated_consecutive_slots: "Maximální počet po sobě jdoucích slotů, které nesplnily podmínku min_valid_slot_days a mohou být doplněny lineární interpolací mezi nejbližšími zdravými sousedy. Sloty vynechané z jiných důvodů (např. nízká prognóza) se nikdy neinterpolují. Nastavte na 0 pro úplné vypnutí interpolace a zachování původního chování. Výchozí hodnota je 2.",
     bias_correction_aggregation_method: "Metoda použitá k agregaci historických dat. 'Poměr součtů' správně váží jasné slunečné dny oproti menším oblačným dnům a přirozeně filtruje šum z kvantizace senzoru energie (doporučeno). 'Oříznutý průměr' počítá faktor pro každý den nezávisle a průměruje je po vynechání nejvyšších a nejnižších extrémů, což poskytuje robustnost proti jednodenním anomáliím, ale může příliš korigovat velké slunečné dny kvůli nedostatku vážení objemu. Výchozí hodnota je 'Poměr součtů'.",
     bias_correction_total_energy_entity: "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce."
   }
@@ -2059,6 +2063,7 @@ const vt = {
     bias_correction_aggregation_method: "Aggregation method",
     bias_correction_aggregation_method_ratio_of_sums: "Ratio of Sums",
     bias_correction_aggregation_method_trimmed_mean: "Trimmed Mean",
+    bias_correction_max_interpolated_consecutive_slots: "Max interpolated consecutive slots",
     bias_correction_total_energy_entity: "Total energy entity",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Max battery SoC %",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Export enabled entity",
@@ -2088,6 +2093,7 @@ const vt = {
     bias_correction_max_training_window_days: "Maximum number of past days Helman may use to train the solar bias correction model.",
     bias_correction_training_time: "Time of day (HH:MM in local time) when automatic training runs.",
     bias_correction_min_valid_slot_days: "Minimum number of valid historical day-slot samples required before a slot can contribute to training.",
+    bias_correction_max_interpolated_consecutive_slots: "Maximum run of consecutive omitted slots that can be filled by interpolation. Set to 0 to disable.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "0-100%. Exclude slots when battery SoC reaches this threshold and export is disabled.",
     bias_correction_slot_invalidation_export_enabled_entity_id: "Boolean entity that tells Helman whether grid export is currently allowed.",
     bias_correction_slot_invalidation_data_glitch_max_slot_wh: "Optional. Energy in a single 15-minute slot above this cap is treated as a recorder glitch. Defaults to solar.max_power × 0.25 × 1.05 when left blank.",
@@ -2238,6 +2244,7 @@ const vt = {
     bias_correction_min_valid_slot_days: "Minimum number of valid historical day-slot samples required before Helman trains a correction factor for a specific slot. Invalidated slot-days do not count. If a slot has fewer valid samples than this threshold, Helman omits the slot from the profile and leaves correction at 0 for that slot. Defaults to 5 days.",
     bias_correction_clamp_min: "Lower bound for the correction factor. Prevents over-correction when the actual production is much lower than the forecast. For example, 0.0 allows the corrected forecast to drop all the way to zero during physically blocked periods. A higher value (closer to 1.0) reduces the correction intensity. Defaults to 0.0.",
     bias_correction_clamp_max: "Upper bound for the correction factor. Prevents over-correction when the actual production is much higher than the forecast. For example, 3.0 ensures the corrected forecast is at most 300% of the original value. A lower value (closer to 1.0) reduces the correction intensity. Defaults to 3.0.",
+    bias_correction_max_interpolated_consecutive_slots: "Maximum number of consecutive slots that failed the min_valid_slot_days gate and can be filled via linear interpolation between the nearest healthy neighbors. Slots omitted for other reasons (e.g. forecast floor) are never interpolated. Set to 0 to disable interpolation entirely and preserve legacy behavior. Defaults to 2.",
     bias_correction_aggregation_method: "Method used to aggregate historical data. 'Ratio of Sums' correctly weights clear, sunny days over small, cloudy days and inherently filters out energy sensor quantization noise (recommended). 'Trimmed Mean' calculates the factor for each day independently and averages them after dropping the highest and lowest extremes, providing robustness to single-day anomalies but over-correcting large sunny days due to lack of volume weighting. Defaults to 'Ratio of Sums'.",
     bias_correction_total_energy_entity: "Cumulative solar energy sensor (kWh, ever-increasing) used to build the actual solar generation history for training the correction model.",
     bias_correction_slot_invalidation_max_battery_soc_percent: "Battery state-of-charge threshold as a percentage. When the battery reaches or exceeds this value during a forecast slot and export is disabled in the same slot, Helman excludes that slot from solar bias correction actuals to avoid training on curtailed production.",
@@ -2320,33 +2327,33 @@ const vt = {
   cs: Ei,
   en: Vi
 };
-function ne(o) {
+function ne(a) {
   var t;
-  const e = Hi((o == null ? void 0 : o.language) || ((t = o == null ? void 0 : o.locale) == null ? void 0 : t.language) || "cs");
+  const e = Hi((a == null ? void 0 : a.language) || ((t = a == null ? void 0 : a.locale) == null ? void 0 : t.language) || "cs");
   return (i) => Ci(i, e);
 }
-function Ci(o, e = "cs") {
+function Ci(a, e = "cs") {
   const t = e.replace(/['"]+/g, "").replace("_", "-");
   let i;
   try {
-    i = o.split(".").reduce((a, r) => a[r], ge[t]);
+    i = a.split(".").reduce((o, r) => o[r], ge[t]);
   } catch {
     try {
-      i = o.split(".").reduce((r, n) => r[n], ge.cs);
+      i = a.split(".").reduce((r, n) => r[n], ge.cs);
     } catch {
-      i = o;
+      i = a;
     }
   }
   if (i === void 0)
     try {
-      i = o.split(".").reduce((a, r) => a[r], ge.cs);
+      i = a.split(".").reduce((o, r) => o[r], ge.cs);
     } catch {
-      i = o;
+      i = a;
     }
   return i;
 }
-function Hi(o) {
-  return o ? o.substring(0, 2) : "cs";
+function Hi(a) {
+  return a ? a.substring(0, 2) : "cs";
 }
 const Ge = [
   "ha-entity-picker",
@@ -2356,27 +2363,27 @@ const Ge = [
 ], Je = "ha-yaml-editor";
 let G = null, J = null;
 const Li = async () => {
-  if (!Ge.every((o) => customElements.get(o))) {
+  if (!Ge.every((a) => customElements.get(a))) {
     if (G)
       return G;
     G = (async () => {
       await customElements.whenDefined("partial-panel-resolver");
-      const o = document.createElement(
+      const a = document.createElement(
         "partial-panel-resolver"
       );
-      o.hass = {
+      a.hass = {
         panels: [
           {
             url_path: "tmp",
             component_name: "config"
           }
         ]
-      }, o._updateRoutes(), await o.routerOptions.routes.tmp.load(), await customElements.whenDefined("ha-panel-config"), await document.createElement("ha-panel-config").routerOptions.routes.automation.load(), await Promise.all(Ge.map((t) => customElements.whenDefined(t)));
+      }, a._updateRoutes(), await a.routerOptions.routes.tmp.load(), await customElements.whenDefined("ha-panel-config"), await document.createElement("ha-panel-config").routerOptions.routes.automation.load(), await Promise.all(Ge.map((t) => customElements.whenDefined(t)));
     })();
     try {
       await G;
-    } catch (o) {
-      throw G = null, o;
+    } catch (a) {
+      throw G = null, a;
     }
   }
 }, Qe = async () => {
@@ -2384,22 +2391,22 @@ const Li = async () => {
     if (J)
       return J;
     J = (async () => {
-      var i, a, r, n, l, d, c;
-      await customElements.whenDefined("partial-panel-resolver"), await ((r = (a = (i = document.createElement(
+      var i, o, r, n, l, d, c;
+      await customElements.whenDefined("partial-panel-resolver"), await ((r = (o = (i = document.createElement(
         "partial-panel-resolver"
       ).getRoutes([
         {
           component_name: "developer-tools",
           url_path: "tmp"
         }
-      ]).routes) == null ? void 0 : i.tmp) == null ? void 0 : a.load) == null ? void 0 : r.call(a)), await customElements.whenDefined("developer-tools-router"), await ((c = (d = (l = (n = document.createElement(
+      ]).routes) == null ? void 0 : i.tmp) == null ? void 0 : o.load) == null ? void 0 : r.call(o)), await customElements.whenDefined("developer-tools-router"), await ((c = (d = (l = (n = document.createElement(
         "developer-tools-router"
       ).routerOptions) == null ? void 0 : n.routes) == null ? void 0 : l.service) == null ? void 0 : d.load) == null ? void 0 : c.call(d)), await customElements.whenDefined(Je);
     })();
     try {
       await J;
-    } catch (o) {
-      throw J = null, o;
+    } catch (a) {
+      throw J = null, a;
     }
   }
 };
@@ -2408,45 +2415,45 @@ const Li = async () => {
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-const Oi = { attribute: !0, type: String, converter: oe, reflect: !1, hasChanged: we }, Pi = (o = Oi, e, t) => {
-  const { kind: i, metadata: a } = t;
-  let r = globalThis.litPropertyMetadata.get(a);
-  if (r === void 0 && globalThis.litPropertyMetadata.set(a, r = /* @__PURE__ */ new Map()), i === "setter" && ((o = Object.create(o)).wrapped = !0), r.set(t.name, o), i === "accessor") {
+const Oi = { attribute: !0, type: String, converter: ae, reflect: !1, hasChanged: we }, Pi = (a = Oi, e, t) => {
+  const { kind: i, metadata: o } = t;
+  let r = globalThis.litPropertyMetadata.get(o);
+  if (r === void 0 && globalThis.litPropertyMetadata.set(o, r = /* @__PURE__ */ new Map()), i === "setter" && ((a = Object.create(a)).wrapped = !0), r.set(t.name, a), i === "accessor") {
     const { name: n } = t;
     return { set(l) {
       const d = e.get.call(this);
-      e.set.call(this, l), this.requestUpdate(n, d, o, !0, l);
+      e.set.call(this, l), this.requestUpdate(n, d, a, !0, l);
     }, init(l) {
-      return l !== void 0 && this.C(n, void 0, o, l), l;
+      return l !== void 0 && this.C(n, void 0, a, l), l;
     } };
   }
   if (i === "setter") {
     const { name: n } = t;
     return function(l) {
       const d = this[n];
-      e.call(this, l), this.requestUpdate(n, d, o, !0, l);
+      e.call(this, l), this.requestUpdate(n, d, a, !0, l);
     };
   }
   throw Error("Unsupported decorator location: " + i);
 };
-function $t(o) {
-  return (e, t) => typeof t == "object" ? Pi(o, e, t) : ((i, a, r) => {
-    const n = a.hasOwnProperty(r);
-    return a.constructor.createProperty(r, i), n ? Object.getOwnPropertyDescriptor(a, r) : void 0;
-  })(o, e, t);
+function $t(a) {
+  return (e, t) => typeof t == "object" ? Pi(a, e, t) : ((i, o, r) => {
+    const n = o.hasOwnProperty(r);
+    return o.constructor.createProperty(r, i), n ? Object.getOwnPropertyDescriptor(o, r) : void 0;
+  })(a, e, t);
 }
 /**
  * @license
  * Copyright 2017 Google LLC
  * SPDX-License-Identifier: BSD-3-Clause
  */
-function W(o) {
-  return $t({ ...o, state: !0, attribute: !1 });
+function W(a) {
+  return $t({ ...a, state: !0, attribute: !1 });
 }
-var Ii = Object.defineProperty, T = (o, e, t, i) => {
-  for (var a = void 0, r = o.length - 1, n; r >= 0; r--)
-    (n = o[r]) && (a = n(e, t, a) || a);
-  return a && Ii(e, t, a), a;
+var Ii = Object.defineProperty, T = (a, e, t, i) => {
+  for (var o = void 0, r = a.length - 1, n; r >= 0; r--)
+    (n = a[r]) && (o = n(e, t, o) || o);
+  return o && Ii(e, t, o), o;
 };
 const ze = class ze extends D {
   constructor() {
@@ -2534,8 +2541,8 @@ const ze = class ze extends D {
   _formatError(e, t) {
     const i = typeof (e == null ? void 0 : e.code) == "string" ? e.code : void 0;
     if (i) {
-      const a = this._tValue(`bias_correction.error_codes.${i}`, "");
-      if (a) return a;
+      const o = this._tValue(`bias_correction.error_codes.${i}`, "");
+      if (o) return o;
     }
     return typeof (e == null ? void 0 : e.message) == "string" && e.message ? e.message : this._t(t);
   }
@@ -2667,12 +2674,12 @@ const ze = class ze extends D {
   }
   _tFormat(e, t) {
     let i = this._t(e) || e;
-    for (const [a, r] of Object.entries(t))
-      i = i.replaceAll(`{${a}}`, String(r));
+    for (const [o, r] of Object.entries(t))
+      i = i.replaceAll(`{${o}}`, String(r));
     return i;
   }
 };
-ze.styles = ot`
+ze.styles = at`
     .container {
       padding: 16px;
       display: grid;
@@ -2862,35 +2869,35 @@ T([
 ], A.prototype, "_messageKind");
 customElements.define("helman-bias-correction-status", A);
 const ve = "YAML must resolve to JSON-compatible scalars, arrays, and objects.";
-function Xe(o) {
+function Xe(a) {
   try {
     return {
       ok: !0,
-      value: ye(o)
+      value: ye(a)
     };
   } catch {
     return { ok: !1, code: "non_json_value" };
   }
 }
-function ye(o) {
-  if (o === null)
+function ye(a) {
+  if (a === null)
     return null;
-  if (typeof o == "string" || typeof o == "boolean")
-    return o;
-  if (typeof o == "number") {
-    if (!Number.isFinite(o))
+  if (typeof a == "string" || typeof a == "boolean")
+    return a;
+  if (typeof a == "number") {
+    if (!Number.isFinite(a))
       throw new Error(ve);
-    return o;
+    return a;
   }
-  if (Array.isArray(o))
-    return o.map((e) => ye(e));
-  if (typeof o == "object") {
-    const e = Object.getPrototypeOf(o);
+  if (Array.isArray(a))
+    return a.map((e) => ye(e));
+  if (typeof a == "object") {
+    const e = Object.getPrototypeOf(a);
     if (e !== Object.prototype && e !== null)
       throw new Error(ve);
     const t = {};
-    for (const [i, a] of Object.entries(o))
-      t[i] = ye(a);
+    for (const [i, o] of Object.entries(a))
+      t[i] = ye(o);
     return t;
   }
   throw new Error(ve);
@@ -3017,7 +3024,7 @@ const Ti = [
         S(
           t,
           ["appliances"],
-          ai(
+          oi(
             e,
             this._tFormat("editor.dynamic.climate_appliance", {
               index: e.length + 1
@@ -3183,14 +3190,14 @@ const Ti = [
     `;
   }
   _renderSectionScope(e, t, i = {}) {
-    const a = Z(e), { initialOpen: r = !0 } = i, n = bi[e];
+    const o = Z(e), { initialOpen: r = !0 } = i, n = bi[e];
     return s`
       <details class="section-card" ?open=${r}>
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
               ${n ? this._renderSvgIcon(n, "section-icon") : u}
-              <span class="section-summary-label">${this._t(a.labelKey)}</span>
+              <span class="section-summary-label">${this._t(o.labelKey)}</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;" @click=${this._preventSummaryToggle}>
               ${this._renderModeToggle(e, { inSummary: !1 })}
@@ -3208,9 +3215,9 @@ const Ti = [
     return s`<svg class=${t} viewBox="0 0 24 24" aria-hidden="true"><path d=${e}/></svg>`;
   }
   _renderSimpleSection(e, t, i = {}) {
-    const { open: a = !0 } = i;
+    const { open: o = !0 } = i;
     return s`
-      <details class="section-card" ?open=${a}>
+      <details class="section-card" ?open=${o}>
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
@@ -3273,8 +3280,8 @@ const Ti = [
     delete t[e];
     const i = { ...this._applianceYamlValues };
     delete i[e];
-    const a = { ...this._applianceYamlErrors };
-    delete a[e], this._applianceModes = t, this._applianceYamlValues = i, this._applianceYamlErrors = a;
+    const o = { ...this._applianceYamlErrors };
+    delete o[e], this._applianceModes = t, this._applianceYamlValues = i, this._applianceYamlErrors = o;
   }
   _handleApplianceYamlChanged(e, t) {
     if (t.stopPropagation(), !t.detail.isValid) {
@@ -3300,24 +3307,24 @@ const Ti = [
       return;
     }
     try {
-      const a = w(this._config ?? {});
-      g(a, ["appliances", e], w(i.value)), this._config = a, this._dirty = !0, this._validation = null, this._message = null, this._applianceYamlValues = { ...this._applianceYamlValues, [e]: i.value };
+      const o = w(this._config ?? {});
+      g(o, ["appliances", e], w(i.value)), this._config = o, this._dirty = !0, this._validation = null, this._message = null, this._applianceYamlValues = { ...this._applianceYamlValues, [e]: i.value };
       const r = { ...this._applianceYamlErrors };
       delete r[e], this._applianceYamlErrors = r;
-    } catch (a) {
+    } catch (o) {
       this._applianceYamlErrors = {
         ...this._applianceYamlErrors,
-        [e]: this._formatError(a, this._t("editor.yaml.errors.apply_failed"))
+        [e]: this._formatError(o, this._t("editor.yaml.errors.apply_failed"))
       };
     }
   }
   _renderApplianceYamlEditor(e) {
-    const t = this._applianceYamlErrors[e], i = `appliance-${e}`, a = `${i}-yaml-helper`, r = `${i}-yaml-error`, n = t ? `${a} ${r}` : a, l = this._applianceYamlValues[e] ?? this._getValue(["appliances", e]);
+    const t = this._applianceYamlErrors[e], i = `appliance-${e}`, o = `${i}-yaml-helper`, r = `${i}-yaml-error`, n = t ? `${o} ${r}` : o, l = this._applianceYamlValues[e] ?? this._getValue(["appliances", e]);
     return s`
       <div class="yaml-surface">
         <div class="field yaml-field">
           <label>${this._t("editor.yaml.field_label")}</label>
-          <div id=${a} class="helper">${this._t("editor.yaml.helpers.section")}</div>
+          <div id=${o} class="helper">${this._t("editor.yaml.helpers.section")}</div>
           <ha-yaml-editor
             .hass=${this.hass}
             .defaultValue=${l}
@@ -3341,7 +3348,7 @@ const Ti = [
           type="button"
           class=${i === "visual" ? "active" : ""}
           aria-pressed=${i === "visual"}
-          @click=${(a) => this._handleScopeModeSelection(e, "visual", a)}
+          @click=${(o) => this._handleScopeModeSelection(e, "visual", o)}
         >
           ${this._t("editor.mode.visual")}
         </button>
@@ -3349,7 +3356,7 @@ const Ti = [
           type="button"
           class=${i === "yaml" ? "active" : ""}
           aria-pressed=${i === "yaml"}
-          @click=${(a) => this._handleScopeModeSelection(e, "yaml", a)}
+          @click=${(o) => this._handleScopeModeSelection(e, "yaml", o)}
         >
           ${this._t("editor.mode.yaml")}
         </button>
@@ -3357,7 +3364,7 @@ const Ti = [
     `;
   }
   _renderYamlEditor(e) {
-    const t = Z(e), i = this._t(t.labelKey), a = t.kind === "document" ? "editor.yaml.helpers.document" : t.kind === "tab" ? "editor.yaml.helpers.tab" : "editor.yaml.helpers.section", r = this._scopeYamlErrors[e], n = this._scopeDomId(e), l = `${n}-yaml-helper`, d = `${n}-yaml-error`, c = r ? `${l} ${d}` : l, h = this._scopeYamlValues[e] ?? t.adapter.read(this._config ?? {});
+    const t = Z(e), i = this._t(t.labelKey), o = t.kind === "document" ? "editor.yaml.helpers.document" : t.kind === "tab" ? "editor.yaml.helpers.tab" : "editor.yaml.helpers.section", r = this._scopeYamlErrors[e], n = this._scopeDomId(e), l = `${n}-yaml-helper`, d = `${n}-yaml-error`, c = r ? `${l} ${d}` : l, h = this._scopeYamlValues[e] ?? t.adapter.read(this._config ?? {});
     return s`
       <div class="yaml-surface">
         <div
@@ -3368,7 +3375,7 @@ const Ti = [
     ].filter((_) => _.length > 0).join(" ")}
         >
           <label>${this._t("editor.yaml.field_label")}</label>
-          <div id=${l} class="helper">${this._t(a)}</div>
+          <div id=${l} class="helper">${this._t(o)}</div>
           <ha-yaml-editor
             .hass=${this.hass}
             .defaultValue=${h}
@@ -3449,7 +3456,7 @@ const Ti = [
     `;
   }
   _renderPowerDevicesTab() {
-    var a, r, n, l;
+    var o, r, n, l;
     const e = $(this._getValue(["power_devices", "solar", "forecast", "daily_energy_entity_ids"])) ?? [], t = $(
       this._getValue(["power_devices", "house", "forecast", "deferrable_consumers"])
     ) ?? [], i = $(this._getValue(["power_devices", "grid", "forecast", "import_price_windows"])) ?? [];
@@ -3633,10 +3640,16 @@ const Ti = [
               ["power_devices", "solar", "forecast", "bias_correction", "aggregation_method"],
               "editor.fields.bias_correction_aggregation_method",
               [
-                { value: "ratio_of_sums", label: ((r = (a = this.hass) == null ? void 0 : a.localize) == null ? void 0 : r.call(a, "component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums")) || "Ratio of Sums" },
+                { value: "ratio_of_sums", label: ((r = (o = this.hass) == null ? void 0 : o.localize) == null ? void 0 : r.call(o, "component.helman.editor.fields.bias_correction_aggregation_method_ratio_of_sums")) || "Ratio of Sums" },
                 { value: "trimmed_mean", label: ((l = (n = this.hass) == null ? void 0 : n.localize) == null ? void 0 : l.call(n, "component.helman.editor.fields.bias_correction_aggregation_method_trimmed_mean")) || "Trimmed Mean" }
               ],
               "editor.help.bias_correction_aggregation_method"
+            )}
+                        ${this._renderOptionalNumberField(
+              ["power_devices", "solar", "forecast", "bias_correction", "max_interpolated_consecutive_slots"],
+              "editor.fields.bias_correction_max_interpolated_consecutive_slots",
+              "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
+              "editor.help.bias_correction_max_interpolated_consecutive_slots"
             )}
                         ${this._renderOptionalEntityField(
               ["power_devices", "solar", "forecast", "bias_correction", "total_energy_entity_id"],
@@ -3966,8 +3979,8 @@ const Ti = [
     `;
   }
   _renderAutomationOptimizerCard(e, t, i) {
-    const a = y(e) ?? {}, r = this._stringValue(a.kind);
-    return r === Ri ? this._renderExportPriceOptimizerCard(a, t, i) : r === et ? this._renderSurplusApplianceOptimizerCard(a, t, i) : this._renderUnsupportedAutomationOptimizerCard(a, t, i);
+    const o = y(e) ?? {}, r = this._stringValue(o.kind);
+    return r === Ri ? this._renderExportPriceOptimizerCard(o, t, i) : r === et ? this._renderSurplusApplianceOptimizerCard(o, t, i) : this._renderUnsupportedAutomationOptimizerCard(o, t, i);
   }
   _renderAutomationEnabledField() {
     const e = this._getAutomationEnabled();
@@ -3986,7 +3999,7 @@ const Ti = [
     `;
   }
   _renderExportPriceOptimizerCard(e, t, i) {
-    const a = ["automation", "optimizers", t], r = [...a, "params"], n = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "action"])) || Fi, h = this._getValue([...r, "when_price_below"]) ?? 0;
+    const o = ["automation", "optimizers", t], r = [...o, "params"], n = this._booleanValue(this._getValue([...o, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "action"])) || Fi, h = this._getValue([...r, "when_price_below"]) ?? 0;
     return s`
       <details class=${`list-card optimizer-card optimizer-card--${n ? "enabled" : "disabled"}`}>
         <summary>
@@ -3999,7 +4012,7 @@ const Ti = [
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderOptimizerEnabledToggle([...a, "enabled"], n)}
+              ${this._renderOptimizerEnabledToggle([...o, "enabled"], n)}
               <button
                 type="button"
                 ?disabled=${t === 0}
@@ -4021,7 +4034,7 @@ const Ti = [
         <div class="appliance-body">
           <div class="field-grid">
             ${this._renderRequiredTextField(
-      [...a, "id"],
+      [...o, "id"],
       "editor.fields.optimizer_id",
       void 0,
       "editor.help.automation_optimizer_id"
@@ -4050,7 +4063,7 @@ const Ti = [
     `;
   }
   _renderSurplusApplianceOptimizerCard(e, t, i) {
-    const a = ["automation", "optimizers", t], r = [...a, "params"], n = this._booleanValue(this._getValue([...a, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), h = this._stringValue(this._getValue([...r, "action"])) || Di, _ = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, m = ue(
+    const o = ["automation", "optimizers", t], r = [...o, "params"], n = this._booleanValue(this._getValue([...o, "enabled"]), !0), l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", c = this._stringValue(this._getValue([...r, "appliance_id"])), h = this._stringValue(this._getValue([...r, "action"])) || Di, _ = this._getValue([...r, "min_surplus_buffer_pct"]) ?? 5, m = ue(
       this._config,
       this._liveApplianceMetadata,
       c
@@ -4070,7 +4083,7 @@ const Ti = [
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderOptimizerEnabledToggle([...a, "enabled"], n)}
+              ${this._renderOptimizerEnabledToggle([...o, "enabled"], n)}
               <button
                 type="button"
                 ?disabled=${t === 0}
@@ -4092,7 +4105,7 @@ const Ti = [
         <div class="appliance-body">
           <div class="field-grid">
             ${this._renderRequiredTextField(
-      [...a, "id"],
+      [...o, "id"],
       "editor.fields.optimizer_id",
       void 0,
       "editor.help.automation_optimizer_id"
@@ -4151,7 +4164,7 @@ const Ti = [
     `;
   }
   _renderUnsupportedAutomationOptimizerCard(e, t, i) {
-    const a = ["automation", "optimizers", t], r = this._booleanValue(this._getValue([...a, "enabled"]), !0), n = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
+    const o = ["automation", "optimizers", t], r = this._booleanValue(this._getValue([...o, "enabled"]), !0), n = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", l = this._stringValue(e.id) || this._tFormat("editor.dynamic.optimizer", { index: t + 1 }), d = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
       kind: this._stringValue(e.kind) || this._t("editor.values.unknown")
     });
     return s`
@@ -4166,7 +4179,7 @@ const Ti = [
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderOptimizerEnabledToggle([...a, "enabled"], r)}
+              ${this._renderOptimizerEnabledToggle([...o, "enabled"], r)}
               <button
                 type="button"
                 ?disabled=${t === 0}
@@ -4245,7 +4258,7 @@ const Ti = [
   _renderDeviceLabelCategories() {
     const e = M(this._getValue(["device_label_text"]));
     return e.length === 0 ? [s`<div class="message info">${this._t("editor.empty.no_device_label_categories")}</div>`] : e.map(([t, i]) => {
-      const a = M(i);
+      const o = M(i);
       return s`
         <div class="list-card">
           <div class="card-header">
@@ -4279,7 +4292,7 @@ const Ti = [
             </div>
           </div>
           <div class="list-stack">
-            ${a.map(([r, n]) => s`
+            ${o.map(([r, n]) => s`
               <div class="nested-card">
                 <div class="card-header">
                   <div class="card-title">
@@ -4340,7 +4353,7 @@ const Ti = [
     });
   }
   _renderDeferrableConsumer(e, t, i) {
-    const a = y(e) ?? {}, r = [
+    const o = y(e) ?? {}, r = [
       "power_devices",
       "house",
       "forecast",
@@ -4351,7 +4364,7 @@ const Ti = [
       <div class="list-card">
         <div class="card-header">
           <div class="card-title">
-            <strong>${this._stringValue(a.label) || this._tFormat("editor.dynamic.consumer", { index: t + 1 })}</strong>
+            <strong>${this._stringValue(o.label) || this._tFormat("editor.dynamic.consumer", { index: t + 1 })}</strong>
             <span class="card-subtitle">${this._t("editor.card.house_deferrable_consumer")}</span>
           </div>
           <div class="list-actions">
@@ -4404,7 +4417,7 @@ const Ti = [
     `;
   }
   _renderDailyEnergyEntity(e, t, i) {
-    const a = [
+    const o = [
       "power_devices",
       "solar",
       "forecast",
@@ -4452,12 +4465,12 @@ const Ti = [
             </button>
           </div>
         </div>
-        ${this._renderRequiredEntityField(a, "editor.fields.entity_id", ["sensor"], void 0, e, "editor.help.solar_daily_energy_entity")}
+        ${this._renderRequiredEntityField(o, "editor.fields.entity_id", ["sensor"], void 0, e, "editor.help.solar_daily_energy_entity")}
       </div>
     `;
   }
   _renderImportPriceWindow(e, t, i) {
-    const a = y(e) ?? {}, r = [
+    const o = y(e) ?? {}, r = [
       "power_devices",
       "grid",
       "forecast",
@@ -4514,7 +4527,7 @@ const Ti = [
             </div>
             <input
               type="time"
-              .value=${this._stringValue(a.start)}
+              .value=${this._stringValue(o.start)}
               @change=${(n) => this._setRequiredString(
       [...r, "start"],
       n.currentTarget.value
@@ -4528,7 +4541,7 @@ const Ti = [
             </div>
             <input
               type="time"
-              .value=${this._stringValue(a.end)}
+              .value=${this._stringValue(o.end)}
               @change=${(n) => this._setRequiredString(
       [...r, "end"],
       n.currentTarget.value
@@ -4541,11 +4554,11 @@ const Ti = [
     `;
   }
   _renderApplianceCard(e, t, i) {
-    const a = y(e) ?? {}, r = this._stringValue(a.kind);
-    return r === "ev_charger" ? this._renderEvChargerAppliance(a, t, i) : r === "climate" ? this._renderClimateAppliance(a, t, i) : r === "generic" ? this._renderGenericAppliance(a, t, i) : this._renderUnsupportedAppliance(a, t, i);
+    const o = y(e) ?? {}, r = this._stringValue(o.kind);
+    return r === "ev_charger" ? this._renderEvChargerAppliance(o, t, i) : r === "climate" ? this._renderClimateAppliance(o, t, i) : r === "generic" ? this._renderGenericAppliance(o, t, i) : this._renderUnsupportedAppliance(o, t, i);
   }
   _renderUnsupportedAppliance(e, t, i) {
-    const a = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", r = this._stringValue(e.name) || this._tFormat("editor.dynamic.appliance", { index: t + 1 }), n = this._tFormat("editor.dynamic.unsupported_appliance_kind", {
+    const o = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", r = this._stringValue(e.name) || this._tFormat("editor.dynamic.appliance", { index: t + 1 }), n = this._tFormat("editor.dynamic.unsupported_appliance_kind", {
       kind: this._stringValue(e.kind) || this._t("editor.values.unknown")
     });
     return s`
@@ -4553,7 +4566,7 @@ const Ti = [
         <summary>
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
-              ${this._renderSvgIcon(a, "appliance-chevron")}
+              ${this._renderSvgIcon(o, "appliance-chevron")}
               <div class="card-title">
                 <strong>${r}</strong>
                 <span class="card-subtitle">${n}</span>
@@ -4585,11 +4598,11 @@ const Ti = [
     `;
   }
   _renderEvChargerAppliance(e, t, i) {
-    const a = ["appliances", t], r = M(
-      this._getValue([...a, "controls", "use_mode", "values"])
+    const o = ["appliances", t], r = M(
+      this._getValue([...o, "controls", "use_mode", "values"])
     ), n = M(
-      this._getValue([...a, "controls", "eco_gear", "values"])
-    ), l = $(this._getValue([...a, "vehicles"])) ?? [], d = this._stringValue(e.name) || this._tFormat("editor.dynamic.ev_charger", { index: t + 1 }), c = this._stringValue(e.id) || this._t("editor.values.missing_id"), h = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", _ = this._getApplianceMode(t) === "yaml";
+      this._getValue([...o, "controls", "eco_gear", "values"])
+    ), l = $(this._getValue([...o, "vehicles"])) ?? [], d = this._stringValue(e.name) || this._tFormat("editor.dynamic.ev_charger", { index: t + 1 }), c = this._stringValue(e.id) || this._t("editor.values.missing_id"), h = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", _ = this._getApplianceMode(t) === "yaml";
     return s`
       <details class="list-card">
         <summary>
@@ -4620,25 +4633,25 @@ const Ti = [
               ${this._renderSimpleSection(
       this._t("editor.sections.identity_and_limits"),
       s`<div class="field-grid">
-                  ${this._renderRequiredTextField([...a, "id"], "editor.fields.appliance_id", void 0, "editor.help.appliance_id")}
-                  ${this._renderRequiredTextField([...a, "name"], "editor.fields.appliance_name", void 0, "editor.help.appliance_name")}
-                  ${this._renderOptionalIconField([...a, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
+                  ${this._renderRequiredTextField([...o, "id"], "editor.fields.appliance_id", void 0, "editor.help.appliance_id")}
+                  ${this._renderRequiredTextField([...o, "name"], "editor.fields.appliance_name", void 0, "editor.help.appliance_name")}
+                  ${this._renderOptionalIconField([...o, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="ev_charger" disabled /></div>
-                  ${this._renderRequiredNumberField([...a, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", void 0, "any", "editor.help.ev_max_charging_power_kw")}
+                  ${this._renderRequiredNumberField([...o, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", void 0, "any", "editor.help.ev_max_charging_power_kw")}
                 </div>`
     )}
               ${this._renderSimpleSection(
       this._t("editor.sections.controls"),
       s`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...a, "controls", "charge", "entity_id"], "editor.fields.charge_switch_entity", ["switch"], void 0, void 0, "editor.help.ev_charge_switch_entity")}
-                  ${this._renderRequiredEntityField([...a, "controls", "use_mode", "entity_id"], "editor.fields.use_mode_entity", ["input_select", "select"], void 0, void 0, "editor.help.ev_use_mode_entity")}
-                  ${this._renderRequiredEntityField([...a, "controls", "eco_gear", "entity_id"], "editor.fields.eco_gear_entity", ["input_select", "select"], void 0, void 0, "editor.help.ev_eco_gear_entity")}
+                  ${this._renderRequiredEntityField([...o, "controls", "charge", "entity_id"], "editor.fields.charge_switch_entity", ["switch"], void 0, void 0, "editor.help.ev_charge_switch_entity")}
+                  ${this._renderRequiredEntityField([...o, "controls", "use_mode", "entity_id"], "editor.fields.use_mode_entity", ["input_select", "select"], void 0, void 0, "editor.help.ev_use_mode_entity")}
+                  ${this._renderRequiredEntityField([...o, "controls", "eco_gear", "entity_id"], "editor.fields.eco_gear_entity", ["input_select", "select"], void 0, void 0, "editor.help.ev_eco_gear_entity")}
                 </div>`
     )}
               ${this._renderSimpleSection(
       this._t("editor.sections.use_modes"),
       s`<div class="list-stack">
-                  ${r.map(([m, b]) => this._renderUseMode(a, m, b))}
+                  ${r.map(([m, b]) => this._renderUseMode(o, m, b))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddUseMode(t)}>${this._t("editor.actions.add_use_mode")}</button>
@@ -4647,7 +4660,7 @@ const Ti = [
               ${this._renderSimpleSection(
       this._t("editor.sections.eco_gears"),
       s`<div class="list-stack">
-                  ${n.map(([m, b]) => this._renderEcoGear(a, m, b))}
+                  ${n.map(([m, b]) => this._renderEcoGear(o, m, b))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddEcoGear(t)}>${this._t("editor.actions.add_eco_gear")}</button>
@@ -4656,7 +4669,7 @@ const Ti = [
               ${this._renderSimpleSection(
       this._t("editor.sections.vehicles"),
       s`<div class="list-stack">
-                  ${l.map((m, b) => this._renderVehicle(a, m, b, l.length))}
+                  ${l.map((m, b) => this._renderVehicle(o, m, b, l.length))}
                 </div>
                 <div class="section-footer">
                   <button type="button" class="add-button" @click=${() => this._handleAddVehicle(t)}>${this._t("editor.actions.add_vehicle")}</button>
@@ -4668,7 +4681,7 @@ const Ti = [
     `;
   }
   _renderGenericAppliance(e, t, i) {
-    const a = ["appliances", t], r = [...a, "projection", "history_average"], n = this._stringValue(this._getValue([...a, "projection", "strategy"])) || "fixed", l = this._stringValue(e.name) || this._tFormat("editor.dynamic.generic_appliance", { index: t + 1 }), d = this._stringValue(e.id) || this._t("editor.values.missing_id"), c = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", h = this._getApplianceMode(t) === "yaml";
+    const o = ["appliances", t], r = [...o, "projection", "history_average"], n = this._stringValue(this._getValue([...o, "projection", "strategy"])) || "fixed", l = this._stringValue(e.name) || this._tFormat("editor.dynamic.generic_appliance", { index: t + 1 }), d = this._stringValue(e.id) || this._t("editor.values.missing_id"), c = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", h = this._getApplianceMode(t) === "yaml";
     return s`
       <details class="list-card">
         <summary>
@@ -4699,22 +4712,22 @@ const Ti = [
               ${this._renderSimpleSection(
       this._t("editor.sections.identity_and_limits"),
       s`<div class="field-grid">
-                  ${this._renderRequiredTextField([...a, "id"], "editor.fields.appliance_id", void 0, "editor.help.appliance_id")}
-                  ${this._renderRequiredTextField([...a, "name"], "editor.fields.appliance_name", void 0, "editor.help.appliance_name")}
-                  ${this._renderOptionalIconField([...a, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
+                  ${this._renderRequiredTextField([...o, "id"], "editor.fields.appliance_id", void 0, "editor.help.appliance_id")}
+                  ${this._renderRequiredTextField([...o, "name"], "editor.fields.appliance_name", void 0, "editor.help.appliance_name")}
+                  ${this._renderOptionalIconField([...o, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="generic" disabled /></div>
                 </div>`
     )}
               ${this._renderSimpleSection(
       this._t("editor.sections.controls"),
       s`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...a, "controls", "switch", "entity_id"], "editor.fields.switch_entity", ["switch"], void 0, void 0, "editor.help.appliance_switch_entity")}
+                  ${this._renderRequiredEntityField([...o, "controls", "switch", "entity_id"], "editor.fields.switch_entity", ["switch"], void 0, void 0, "editor.help.appliance_switch_entity")}
                 </div>`
     )}
               ${this._renderSimpleSection(
       this._t("editor.sections.projection"),
       this._renderProjectedApplianceProjectionSection(
-        a,
+        o,
         n,
         r,
         "editor.notes.generic_appliance_projection",
@@ -4727,7 +4740,7 @@ const Ti = [
     `;
   }
   _renderClimateAppliance(e, t, i) {
-    const a = ["appliances", t], r = [...a, "projection", "history_average"], n = this._stringValue(this._getValue([...a, "projection", "strategy"])) || "fixed", l = this._stringValue(e.name) || this._tFormat("editor.dynamic.climate_appliance", { index: t + 1 }), d = this._stringValue(e.id) || this._t("editor.values.missing_id"), c = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", h = this._getApplianceMode(t) === "yaml";
+    const o = ["appliances", t], r = [...o, "projection", "history_average"], n = this._stringValue(this._getValue([...o, "projection", "strategy"])) || "fixed", l = this._stringValue(e.name) || this._tFormat("editor.dynamic.climate_appliance", { index: t + 1 }), d = this._stringValue(e.id) || this._t("editor.values.missing_id"), c = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z", h = this._getApplianceMode(t) === "yaml";
     return s`
       <details class="list-card">
         <summary>
@@ -4758,22 +4771,22 @@ const Ti = [
               ${this._renderSimpleSection(
       this._t("editor.sections.identity_and_limits"),
       s`<div class="field-grid">
-                  ${this._renderRequiredTextField([...a, "id"], "editor.fields.appliance_id", void 0, "editor.help.appliance_id")}
-                  ${this._renderRequiredTextField([...a, "name"], "editor.fields.appliance_name", void 0, "editor.help.appliance_name")}
-                  ${this._renderOptionalIconField([...a, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
+                  ${this._renderRequiredTextField([...o, "id"], "editor.fields.appliance_id", void 0, "editor.help.appliance_id")}
+                  ${this._renderRequiredTextField([...o, "name"], "editor.fields.appliance_name", void 0, "editor.help.appliance_name")}
+                  ${this._renderOptionalIconField([...o, "icon"], "editor.fields.appliance_icon", "editor.helpers.appliance_icon")}
                   <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="climate" disabled /></div>
                 </div>`
     )}
               ${this._renderSimpleSection(
       this._t("editor.sections.controls"),
       s`<div class="field-grid">
-                  ${this._renderRequiredEntityField([...a, "controls", "climate", "entity_id"], "editor.fields.climate_entity", ["climate"], void 0, void 0, "editor.help.appliance_climate_entity")}
+                  ${this._renderRequiredEntityField([...o, "controls", "climate", "entity_id"], "editor.fields.climate_entity", ["climate"], void 0, void 0, "editor.help.appliance_climate_entity")}
                 </div>`
     )}
               ${this._renderSimpleSection(
       this._t("editor.sections.projection"),
       this._renderProjectedApplianceProjectionSection(
-        a,
+        o,
         n,
         r,
         "editor.notes.climate_appliance_projection",
@@ -4785,11 +4798,11 @@ const Ti = [
       </details>
     `;
   }
-  _renderProjectedApplianceProjectionSection(e, t, i, a, r) {
+  _renderProjectedApplianceProjectionSection(e, t, i, o, r) {
     return s`
       <div class="section-content">
         <p class="inline-note">
-          ${this._t(a)}
+          ${this._t(o)}
         </p>
         <div class="field-grid">
           <div class="field">
@@ -4837,7 +4850,7 @@ const Ti = [
     `;
   }
   _renderUseMode(e, t, i) {
-    const a = y(i) ?? {}, r = [
+    const o = y(i) ?? {}, r = [
       ...e,
       "controls",
       "use_mode",
@@ -4875,7 +4888,7 @@ const Ti = [
           <div class="field">
             <label>${this._t("editor.fields.behavior")}</label>
             <select
-              .value=${this._stringValue(a.behavior) || "fixed_max_power"}
+              .value=${this._stringValue(o.behavior) || "fixed_max_power"}
               @change=${(n) => this._setRequiredString(
       [...r, t, "behavior"],
       n.currentTarget.value
@@ -4893,7 +4906,7 @@ const Ti = [
     `;
   }
   _renderEcoGear(e, t, i) {
-    const a = y(i) ?? {}, r = [
+    const o = y(i) ?? {}, r = [
       ...e,
       "controls",
       "eco_gear",
@@ -4931,13 +4944,13 @@ const Ti = [
           ${this._renderRequiredNumberField(
       [...r, t, "min_power_kw"],
       "editor.fields.min_power_kw",
-      a.min_power_kw
+      o.min_power_kw
     )}
         </div>
       </div>
     `;
   }
-  _renderVehicle(e, t, i, a) {
+  _renderVehicle(e, t, i, o) {
     const r = y(t) ?? {}, n = [...e, "vehicles", i];
     return s`
       <div class="nested-card">
@@ -4956,7 +4969,7 @@ const Ti = [
             </button>
             <button
               type="button"
-              ?disabled=${i === a - 1}
+              ?disabled=${i === o - 1}
               @click=${() => this._moveListItem([...e, "vehicles"], i, i + 1)}
             >
               ${this._t("editor.actions.down")}
@@ -5006,12 +5019,12 @@ const Ti = [
       </div>
     `;
   }
-  _renderOptionalTextField(e, t, i, a) {
+  _renderOptionalTextField(e, t, i, o) {
     return s`
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : u}
+          ${o ? this._renderHelpIcon(t, o) : u}
         </div>
         <input
           .value=${this._stringValue(this._getValue(e))}
@@ -5021,13 +5034,13 @@ const Ti = [
       </div>
     `;
   }
-  _renderRequiredTextField(e, t, i, a) {
+  _renderRequiredTextField(e, t, i, o) {
     const r = i === void 0 ? this._getValue(e) : i;
     return s`
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : u}
+          ${o ? this._renderHelpIcon(t, o) : u}
         </div>
         <input
           .value=${this._stringValue(r)}
@@ -5036,12 +5049,12 @@ const Ti = [
       </div>
     `;
   }
-  _renderOptionalNumberField(e, t, i, a, r = {}) {
+  _renderOptionalNumberField(e, t, i, o, r = {}) {
     return s`
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : u}
+          ${o ? this._renderHelpIcon(t, o) : u}
         </div>
         <div class="number-input-wrap">
           <input
@@ -5058,7 +5071,7 @@ const Ti = [
       </div>
     `;
   }
-  _renderRequiredNumberField(e, t, i, a = "any", r) {
+  _renderRequiredNumberField(e, t, i, o = "any", r) {
     const n = i === void 0 ? this._getValue(e) : i;
     return s`
       <div class="field">
@@ -5068,20 +5081,20 @@ const Ti = [
         </div>
         <input
           type="number"
-          .step=${a}
+          .step=${o}
           .value=${this._stringValue(n)}
           @change=${(l) => this._setRequiredNumber(e, l.currentTarget.value)}
         />
       </div>
     `;
   }
-  _renderOptionalSelectField(e, t, i, a) {
+  _renderOptionalSelectField(e, t, i, o) {
     const r = this._stringValue(this._getValue(e));
     return s`
       <div class="field">
         <div class="field-label-row">
           <label>${this._t(t)}</label>
-          ${a ? this._renderHelpIcon(t, a) : u}
+          ${o ? this._renderHelpIcon(t, o) : u}
         </div>
         <select
           .value=${r}
@@ -5108,9 +5121,9 @@ const Ti = [
           .helper=${i ? this._t(i) : void 0}
           .required=${!1}
           .value=${this._stringValue(this._getValue(e))}
-          @value-changed=${(a) => {
+          @value-changed=${(o) => {
       var n;
-      const r = ((n = a.detail) == null ? void 0 : n.value) ?? "";
+      const r = ((n = o.detail) == null ? void 0 : n.value) ?? "";
       this._setOptionalString(e, r);
     }}
         ></ha-selector>
@@ -5118,12 +5131,12 @@ const Ti = [
     `;
   }
   _renderBooleanField(e, t, i) {
-    const a = this._booleanValue(this._getValue(e), i);
+    const o = this._booleanValue(this._getValue(e), i);
     return s`
       <div class="field toggle-field">
         <ha-formfield .label=${this._t(t)}>
           <ha-switch
-            .checked=${a}
+            .checked=${o}
             @change=${(r) => this._setBoolean(
       e,
       r.currentTarget.checked
@@ -5133,29 +5146,29 @@ const Ti = [
       </div>
     `;
   }
-  _renderOptionalEntityField(e, t, i, a, r) {
+  _renderOptionalEntityField(e, t, i, o, r) {
     return this._renderEntityField(
       e,
       t,
       i,
-      a,
+      o,
       !1,
       this._getValue(e),
       r
     );
   }
-  _renderRequiredEntityField(e, t, i, a, r, n) {
+  _renderRequiredEntityField(e, t, i, o, r, n) {
     return this._renderEntityField(
       e,
       t,
       i,
-      a,
+      o,
       !0,
       r === void 0 ? this._getValue(e) : r,
       n
     );
   }
-  _renderEntityField(e, t, i, a, r, n, l) {
+  _renderEntityField(e, t, i, o, r, n, l) {
     return s`
       <div class="field">
         <div class="field-label-row">
@@ -5172,7 +5185,7 @@ const Ti = [
       r ? this._setRequiredString(e, c) : this._setOptionalString(e, c);
     }}
         ></ha-entity-picker>
-        ${a ? s`<div class="helper">${this._t(a)}</div>` : u}
+        ${o ? s`<div class="helper">${this._t(o)}</div>` : u}
       </div>
     `;
   }
@@ -5274,8 +5287,8 @@ const Ti = [
         ]);
         if (t.status !== "fulfilled")
           throw t.reason;
-        const a = y(t.value);
-        this._config = a ? w(a) : {}, this._liveApplianceMetadata = i.status === "fulfilled" ? i.value : null, this._validation = null, this._dirty = this._config ? this._normalizeSurplusApplianceOptimizerParams(this._config) : !1, this._resetScopeYamlState(), e.showMessage && (this._message = {
+        const o = y(t.value);
+        this._config = o ? w(o) : {}, this._liveApplianceMetadata = i.status === "fulfilled" ? i.value : null, this._validation = null, this._dirty = this._config ? this._normalizeSurplusApplianceOptimizerParams(this._config) : !1, this._resetScopeYamlState(), e.showMessage && (this._message = {
           kind: "info",
           text: this._t("editor.messages.reloaded_config")
         });
@@ -5377,16 +5390,16 @@ const Ti = [
         return;
       const i = this._omitScopeIds(this._scopeModes, t);
       i[e] = "yaml";
-      const a = this._omitScopeIds(
+      const o = this._omitScopeIds(
         this._scopeYamlValues,
         t
       );
-      a[e] = Z(e).adapter.read(this._config);
+      o[e] = Z(e).adapter.read(this._config);
       const r = this._omitScopeIds(
         this._scopeYamlErrors,
         t
       );
-      delete r[e], this._scopeModes = i, this._scopeYamlValues = a, this._scopeYamlErrors = r, this._message = null;
+      delete r[e], this._scopeModes = i, this._scopeYamlValues = o, this._scopeYamlErrors = r, this._message = null;
     } catch (i) {
       this._message = {
         kind: "error",
@@ -5404,8 +5417,8 @@ const Ti = [
     delete t[e];
     const i = { ...this._scopeYamlValues };
     delete i[e];
-    const a = { ...this._scopeYamlErrors };
-    delete a[e], this._scopeModes = t, this._scopeYamlValues = i, this._scopeYamlErrors = a;
+    const o = { ...this._scopeYamlErrors };
+    delete o[e], this._scopeModes = t, this._scopeYamlValues = i, this._scopeYamlErrors = o;
   }
   _handleYamlValueChanged(e, t) {
     if (t.stopPropagation(), !t.detail.isValid) {
@@ -5423,7 +5436,7 @@ const Ti = [
       };
       return;
     }
-    const a = Z(e).adapter, r = a.validate(i.value);
+    const o = Z(e).adapter, r = o.validate(i.value);
     if (r) {
       this._scopeYamlErrors = {
         ...this._scopeYamlErrors,
@@ -5433,7 +5446,7 @@ const Ti = [
     }
     try {
       const n = w(i.value);
-      this._config = a.apply(this._config ?? {}, n), this._dirty = !0, this._validation = null, this._message = null, this._scopeYamlValues = {
+      this._config = o.apply(this._config ?? {}, n), this._dirty = !0, this._validation = null, this._message = null, this._scopeYamlValues = {
         ...this._scopeYamlValues,
         [e]: n
       };
@@ -5466,8 +5479,8 @@ const Ti = [
   }
   _omitScopeIds(e, t) {
     const i = { ...e };
-    for (const a of t)
-      delete i[a];
+    for (const o of t)
+      delete i[o];
     return i;
   }
   _getScopeMode(e) {
@@ -5481,39 +5494,39 @@ const Ti = [
   }
   _handleAddDeviceLabel(e) {
     const t = M(this._getValue(["device_label_text", e])).map(
-      ([a]) => a
+      ([o]) => o
     ), i = ei(t);
-    this._applyMutation((a) => {
-      g(a, ["device_label_text", e, i], "");
+    this._applyMutation((o) => {
+      g(o, ["device_label_text", e, i], "");
     });
   }
   _handleSurplusApplianceIdChange(e, t) {
-    const i = t.trim(), a = ["automation", "optimizers", e, "params"];
+    const i = t.trim(), o = ["automation", "optimizers", e, "params"];
     this._applyMutation((r) => {
-      g(r, [...a, "appliance_id"], i);
+      g(r, [...o, "appliance_id"], i);
       const n = ue(
         r,
         this._liveApplianceMetadata,
         i
       ), l = he(
         n,
-        this._stringValue(f(r, [...a, "climate_mode"]))
+        this._stringValue(f(r, [...o, "climate_mode"]))
       );
       if (!l.visible || l.unavailable) {
-        L(r, [...a, "climate_mode"]);
+        L(r, [...o, "climate_mode"]);
         return;
       }
-      g(r, [...a, "climate_mode"], l.value);
+      g(r, [...o, "climate_mode"], l.value);
     });
   }
   _handleAddVehicle(e) {
-    const t = ["appliances", e, "vehicles"], i = ($(this._getValue(t)) ?? []).map((a) => {
+    const t = ["appliances", e, "vehicles"], i = ($(this._getValue(t)) ?? []).map((o) => {
       var r;
-      return this._stringValue((r = y(a)) == null ? void 0 : r.id);
-    }).filter((a) => a.length > 0);
-    this._applyMutation((a) => {
+      return this._stringValue((r = y(o)) == null ? void 0 : r.id);
+    }).filter((o) => o.length > 0);
+    this._applyMutation((o) => {
       S(
-        a,
+        o,
         t,
         ct(
           i,
@@ -5529,9 +5542,9 @@ const Ti = [
       "controls",
       "use_mode",
       "values"
-    ], i = di(M(this._getValue(t)).map(([a]) => a));
-    this._applyMutation((a) => {
-      g(a, [...t, i], oi());
+    ], i = di(M(this._getValue(t)).map(([o]) => o));
+    this._applyMutation((o) => {
+      g(o, [...t, i], ai());
     });
   }
   _handleAddEcoGear(e) {
@@ -5541,30 +5554,30 @@ const Ti = [
       "controls",
       "eco_gear",
       "values"
-    ], i = ci(M(this._getValue(t)).map(([a]) => a));
-    this._applyMutation((a) => {
-      g(a, [...t, i], ri());
+    ], i = ci(M(this._getValue(t)).map(([o]) => o));
+    this._applyMutation((o) => {
+      g(o, [...t, i], ri());
     });
   }
   _handleProjectedApplianceProjectionStrategyChange(e, t) {
     ["fixed", "history_average"].includes(t) && this._applyMutation((i) => {
-      const a = ["appliances", e, "projection"];
-      if (g(i, [...a, "strategy"], t), t !== "history_average")
+      const o = ["appliances", e, "projection"];
+      if (g(i, [...o, "strategy"], t), t !== "history_average")
         return;
       const r = y(
-        f(i, [...a, "history_average"])
+        f(i, [...o, "history_average"])
       ), n = r == null ? void 0 : r.lookback_days;
-      g(i, [...a, "history_average"], {
+      g(i, [...o, "history_average"], {
         energy_entity_id: this._stringValue(r == null ? void 0 : r.energy_entity_id),
         lookback_days: typeof n == "number" && Number.isFinite(n) ? n : 30
       });
     });
   }
   _handleRenameObjectKey(e, t, i) {
-    const a = i.trim();
-    if (!a || a === t || !this._config)
+    const o = i.trim();
+    if (!o || o === t || !this._config)
       return;
-    const r = w(this._config), n = Qt(r, e, t, a);
+    const r = w(this._config), n = Qt(r, e, t, o);
     if (!n.ok) {
       this._message = { kind: "error", text: this._formatRenameObjectKeyError(n) };
       return;
@@ -5572,8 +5585,8 @@ const Ti = [
     this._config = r, this._dirty = !0, this._validation = null, this._message = null;
   }
   _moveListItem(e, t, i) {
-    this._applyMutation((a) => {
-      Jt(a, e, t, i);
+    this._applyMutation((o) => {
+      Jt(o, e, t, i);
     });
   }
   _removeListItem(e, t) {
@@ -5588,12 +5601,12 @@ const Ti = [
   }
   _setOptionalString(e, t) {
     const i = t.trim();
-    this._applyMutation((a) => {
+    this._applyMutation((o) => {
       if (!i) {
-        L(a, e);
+        L(o, e);
         return;
       }
-      g(a, e, i);
+      g(o, e, i);
     });
   }
   _setRequiredString(e, t) {
@@ -5603,24 +5616,24 @@ const Ti = [
   }
   _setOptionalNumber(e, t) {
     const i = t.trim();
-    this._applyMutation((a) => {
+    this._applyMutation((o) => {
       if (!i) {
-        L(a, e);
+        L(o, e);
         return;
       }
       const r = Number(i);
-      g(a, e, Number.isFinite(r) ? r : i);
+      g(o, e, Number.isFinite(r) ? r : i);
     });
   }
   _setRequiredNumber(e, t) {
     const i = t.trim();
-    this._applyMutation((a) => {
+    this._applyMutation((o) => {
       if (!i) {
-        g(a, e, null);
+        g(o, e, null);
         return;
       }
       const r = Number(i);
-      g(a, e, Number.isFinite(r) ? r : i);
+      g(o, e, Number.isFinite(r) ? r : i);
     });
   }
   _getAutomationEnabled() {
@@ -5629,9 +5642,9 @@ const Ti = [
   }
   _setAutomationEnabled(e) {
     !e && this._getValue(["automation"]) === void 0 || this._applyMutation((t) => {
-      const i = f(t, ["automation"]), a = y(i);
-      if (a) {
-        g(t, ["automation", "enabled"], e), Array.isArray(a.optimizers) || g(t, ["automation", "optimizers"], []);
+      const i = f(t, ["automation"]), o = y(i);
+      if (o) {
+        g(t, ["automation", "enabled"], e), Array.isArray(o.optimizers) || g(t, ["automation", "optimizers"], []);
         return;
       }
       g(t, ["automation"], {
@@ -5648,9 +5661,9 @@ const Ti = [
   _normalizeSurplusApplianceOptimizerParams(e) {
     const t = $(f(e, ["automation", "optimizers"])) ?? [];
     let i = !1;
-    return t.forEach((a, r) => {
+    return t.forEach((o, r) => {
       var m;
-      const n = y(a);
+      const n = y(o);
       if (!n || this._stringValue(n.kind) !== et)
         return;
       const l = ["automation", "optimizers", r, "params"], d = this._stringValue(f(e, [...l, "appliance_id"])), c = this._stringValue(
@@ -5709,18 +5722,18 @@ const Ti = [
         </div>
         <select
           ?disabled=${t.disabled}
-          @change=${(a) => this._setRequiredString(
+          @change=${(o) => this._setRequiredString(
       [...e, "climate_mode"],
-      a.currentTarget.value
+      o.currentTarget.value
     )}
         >
           ${t.options.length > 0 ? t.options.map(
-      (a) => s`
+      (o) => s`
                   <option
-                    value=${a.value}
-                    ?selected=${a.value === i}
+                    value=${o.value}
+                    ?selected=${o.value === i}
                   >
-                    ${this._formatSurplusClimateModeLabel(a.value, a.isUnknown)}
+                    ${this._formatSurplusClimateModeLabel(o.value, o.isUnknown)}
                   </option>
                 `
     ) : s`
@@ -5778,8 +5791,8 @@ const Ti = [
   }
   _tFormat(e, t) {
     let i = this._t(e);
-    for (const [a, r] of Object.entries(t))
-      i = i.replaceAll(`{${a}}`, String(r));
+    for (const [o, r] of Object.entries(t))
+      i = i.replaceAll(`{${o}}`, String(r));
     return i;
   }
   _formatScopeYamlValidationError(e) {
@@ -5841,7 +5854,7 @@ se.properties = {
   _applianceYamlErrors: { state: !0 },
   _liveApplianceMetadata: { state: !0 },
   _helpDialog: { state: !0 }
-}, se.styles = ot`
+}, se.styles = at`
     :host {
       display: block;
       min-height: 100%;

@@ -183,6 +183,7 @@
       "bias_correction_aggregation_method": "Metoda agregace",
       "bias_correction_aggregation_method_ratio_of_sums": "Poměr součtů (Ratio of Sums)",
       "bias_correction_aggregation_method_trimmed_mean": "Oříznutý průměr (Trimmed Mean)",
+      "bias_correction_max_interpolated_consecutive_slots": "Max. po sobě jdoucích interpolovaných slotů",
       "bias_correction_total_energy_entity": "Entita celkové energie",
       "bias_correction_slot_invalidation_max_battery_soc_percent": "Max. SoC baterie %",
       "bias_correction_slot_invalidation_export_enabled_entity_id": "Entita povolení exportu",
@@ -212,6 +213,7 @@
         "bias_correction_max_training_window_days": "Maximální počet minulých dní, které Helman může použít pro trénování modelu korekce zkreslení solární prognózy.",
         "bias_correction_training_time": "Čas dne (HH:MM v místním čase), kdy se spouští automatické trénování.",
         "bias_correction_min_valid_slot_days": "Minimální počet platných historických vzorků den-slot, než může slot přispět do trénování.",
+        "bias_correction_max_interpolated_consecutive_slots": "Maximální délka série po sobě jdoucích vynechaných slotů, která může být doplněna interpolací. Nastavte na 0 pro vypnutí.",
         "bias_correction_slot_invalidation_max_battery_soc_percent": "0-100 %. Vyřadí sloty, kdy SoC baterie dosáhne této hranice a zároveň je export zakázaný.",
         "bias_correction_slot_invalidation_export_enabled_entity_id": "Booleovská entita, která říká Helmanu, zda je aktuálně povolen export do sítě.",
         "bias_correction_slot_invalidation_data_glitch_max_slot_wh": "Volitelné. Energie ve slotu nad tento strop je považována za chybu rekordéru. Pokud zůstane prázdné, odvodí se ze solar.max_power × 0.25 × 1.05.",
@@ -362,6 +364,7 @@
       "bias_correction_min_valid_slot_days": "Minimální počet platných historických vzorků den-slot, které Helman vyžaduje před natrénováním korekčního faktoru pro konkrétní slot. Neplatné sloto-dny se do tohoto počtu nezapočítávají. Pokud má slot méně platných vzorků než tento práh, Helman slot z profilu vynechá a ponechá pro něj korekci na 0. Výchozí hodnota je 5 dní.",
       "bias_correction_clamp_min": "Dolní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem nižší než prognóza. Například hodnota 0,0 umožní, aby opravená prognóza klesla až na nulu během fyzického zastínění panelů. Vyšší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 0,0.",
       "bias_correction_clamp_max": "Horní mez pro korekční faktor. Zabraňuje přílišné opravě, když je skutečná výroba mnohem vyšší než prognóza. Například hodnota 3,0 zajistí, že opravená prognóza bude činit maximálně 300 % původní hodnoty. Nižší hodnota (blíže k 1,0) snižuje intenzitu korekce. Výchozí hodnota je 3,0.",
+      "bias_correction_max_interpolated_consecutive_slots": "Maximální počet po sobě jdoucích slotů, které nesplnily podmínku min_valid_slot_days a mohou být doplněny lineární interpolací mezi nejbližšími zdravými sousedy. Sloty vynechané z jiných důvodů (např. nízká prognóza) se nikdy neinterpolují. Nastavte na 0 pro úplné vypnutí interpolace a zachování původního chování. Výchozí hodnota je 2.",
       "bias_correction_aggregation_method": "Metoda použitá k agregaci historických dat. 'Poměr součtů' správně váží jasné slunečné dny oproti menším oblačným dnům a přirozeně filtruje šum z kvantizace senzoru energie (doporučeno). 'Oříznutý průměr' počítá faktor pro každý den nezávisle a průměruje je po vynechání nejvyšších a nejnižších extrémů, což poskytuje robustnost proti jednodenním anomáliím, ale může příliš korigovat velké slunečné dny kvůli nedostatku vážení objemu. Výchozí hodnota je 'Poměr součtů'.",
       "bias_correction_total_energy_entity": "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce."
     }
