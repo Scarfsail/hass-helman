@@ -12,6 +12,7 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_CLAMP_MAX,
     SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS,
     SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD,
+    SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS,
 )
 
 
@@ -26,6 +27,9 @@ class BiasConfig:
     total_energy_entity_id: str | None
     min_valid_slot_days: int = SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
     aggregation_method: str = SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
+    max_interpolated_consecutive_slots: int = (
+        SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS
+    )
     slot_invalidation_max_battery_soc_percent: float | None = None
     slot_invalidation_export_enabled_entity_id: str | None = None
     slot_invalidation_data_glitch_max_slot_wh: float | None = None
@@ -310,6 +314,15 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     ):
         min_valid_slot_days = int(raw_min_valid_slot_days)
     aggregation_method = bias.get("aggregation_method", SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD)
+    raw_max_interp = bias.get(
+        "max_interpolated_consecutive_slots",
+        SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS,
+    )
+    max_interpolated_consecutive_slots = (
+        SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS
+    )
+    if isinstance(raw_max_interp, (int, float)) and not isinstance(raw_max_interp, bool):
+        max_interpolated_consecutive_slots = max(0, int(raw_max_interp))
     slot_invalidation = bias.get("slot_invalidation") or {}
 
     daily_energy_entity_ids = forecast.get("daily_energy_entity_ids") or []
@@ -363,6 +376,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         clamp_max=clamp_max,
         min_valid_slot_days=min_valid_slot_days,
         aggregation_method=aggregation_method,
+        max_interpolated_consecutive_slots=max_interpolated_consecutive_slots,
         daily_energy_entity_ids=daily_energy_entity_ids,
         total_energy_entity_id=total_energy_entity_id,
         slot_invalidation_max_battery_soc_percent=(

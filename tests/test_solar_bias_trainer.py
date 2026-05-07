@@ -73,6 +73,37 @@ def make_cfg(
     )
 
 
+def test_bias_config_defaults_max_interpolated_consecutive_slots_to_two():
+    cfg = make_cfg()
+    assert cfg.max_interpolated_consecutive_slots == 2
+
+
+def test_read_bias_config_parses_max_interpolated_consecutive_slots():
+    from custom_components.helman.solar_bias_correction.models import read_bias_config
+
+    cfg = read_bias_config(
+        {
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "bias_correction": {
+                            "max_interpolated_consecutive_slots": 4,
+                        }
+                    }
+                }
+            }
+        }
+    )
+    assert cfg.max_interpolated_consecutive_slots == 4
+
+
+def test_read_bias_config_max_interpolated_defaults_when_missing():
+    from custom_components.helman.solar_bias_correction.models import read_bias_config
+
+    cfg = read_bias_config({})
+    assert cfg.max_interpolated_consecutive_slots == 2
+
+
 def test_slot_with_too_few_valid_slot_days_is_omitted():
     cfg = make_cfg(min_history_days=1)
     cfg.min_valid_slot_days = 2
