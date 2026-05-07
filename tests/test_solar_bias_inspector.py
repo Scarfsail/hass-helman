@@ -226,6 +226,8 @@ def test_inspector_day_serializes_impact_and_training_explainability():
                 "clamped": False,
                 "forecastSumWh": 1500.0,
                 "actualSumWh": 2010.0,
+                "interpolated": False,
+                "interpolationAnchors": None,
                 "rows": [
                     {
                         "date": "2026-04-21",

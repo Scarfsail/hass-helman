@@ -142,6 +142,84 @@ def _training_day_totals(
     return forecast_total, actual_total
 
 
+def _interpolate_omitted_slots(
+    *,
+    sorted_forecast_slots: list[str],
+    factors: Dict[str, float],
+    omitted_slots: List[str],
+    omitted_slot_reasons: Dict[str, str],
+    max_run: int,
+) -> dict[str, tuple[str | None, str | None]]:
+    """Fill short runs of slots omitted for `slot_insufficient_valid_days` via linear interpolation.
+
+    Mutates `factors`, `omitted_slots`, and `omitted_slot_reasons` in place. Returns a mapping
+    {slot: (left_anchor_slot_or_None, right_anchor_slot_or_None)} for every interpolated slot.
+    """
+    if max_run <= 0:
+        return {}
+
+    eligible_reason = "slot_insufficient_valid_days"
+    eligible: set[str] = {
+        slot
+        for slot in omitted_slots
+        if omitted_slot_reasons.get(slot) == eligible_reason
+    }
+    if not eligible:
+        return {}
+
+    anchor_factors: dict[str, float] = dict(factors)
+    interpolated: dict[str, tuple[str | None, str | None]] = {}
+
+    i = 0
+    n = len(sorted_forecast_slots)
+    while i < n:
+        if sorted_forecast_slots[i] not in eligible:
+            i += 1
+            continue
+        j = i
+        while j < n and sorted_forecast_slots[j] in eligible:
+            j += 1
+        run = sorted_forecast_slots[i:j]
+        run_len = len(run)
+
+        if run_len <= max_run:
+            left_idx = i - 1
+            left_slot: str | None = None
+            left_value = 0.0
+            while left_idx >= 0:
+                candidate = sorted_forecast_slots[left_idx]
+                if candidate in anchor_factors:
+                    left_slot = candidate
+                    left_value = anchor_factors[candidate]
+                    break
+                left_idx -= 1
+
+            right_idx = j
+            right_slot: str | None = None
+            right_value = 0.0
+            while right_idx < n:
+                candidate = sorted_forecast_slots[right_idx]
+                if candidate in anchor_factors:
+                    right_slot = candidate
+                    right_value = anchor_factors[candidate]
+                    break
+                right_idx += 1
+
+            for offset, slot in enumerate(run, start=1):
+                value = left_value + (right_value - left_value) * offset / (run_len + 1)
+                factors[slot] = value
+                interpolated[slot] = (left_slot, right_slot)
+
+            run_set = set(run)
+            for slot in run:
+                omitted_slot_reasons.pop(slot, None)
+            omitted_slots[:] = [s for s in omitted_slots if s not in run_set]
+
+        i = j
+
+    return interpolated
+
+
 def _build_training_explainability(
     *,
     usable_samples: list[TrainerSample],
@@ -156,6 +234,7 @@ def _build_training_explainability(
     slot_forecast_sums: dict[str, float],
     slot_actual_sums: dict[str, float],
     slot_raw_ratios: dict[str, float | None],
+    interpolated_anchors: dict[str, tuple[str | None, str | None]] | None = None,
 ) -> SolarBiasTrainingExplainability:
     slots: dict[str, SolarBiasSlotExplainability] = {}
     omitted_slot_set = set(omitted_slots)
@@ -246,6 +325,26 @@ def _build_training_explainability(
         actual_sum = float(slot_actual_sums.get(slot, 0.0))
         raw_ratio = slot_raw_ratios.get(slot)
         factor = factors.get(slot)
+
+        is_interpolated = (
+            interpolated_anchors is not None and slot in interpolated_anchors
+        )
+        anchors_for_slot: tuple[str | None, str | None] | None = None
+        if is_interpolated and interpolated_anchors is not None:
+            anchors_for_slot = interpolated_anchors[slot]
+            left_label = anchors_for_slot[0] if anchors_for_slot[0] is not None else "edge_zero"
+            right_label = anchors_for_slot[1] if anchors_for_slot[1] is not None else "edge_zero"
+            rows = rows + [
+                SolarBiasContributionRow(
+                    date="",
+                    forecast_wh=None,
+                    actual_wh=None,
+                    ratio=None,
+                    status="interpolated",
+                    reason=f"left={left_label},right={right_label}",
+                )
+            ]
+
         slots[slot] = SolarBiasSlotExplainability(
             factor=factor,
             raw_ratio=raw_ratio,
@@ -271,6 +370,8 @@ def _build_training_explainability(
                 if slot in omitted_slot_set
                 else []
             ),
+            interpolated=is_interpolated,
+            interpolation_anchors=anchors_for_slot,
         )
 
     return SolarBiasTrainingExplainability(
@@ -419,6 +520,15 @@ def train(
         clamped = max(cfg.clamp_min, min(raw, cfg.clamp_max))
         factors[slot] = clamped
 
+    interpolated_anchors = _interpolate_omitted_slots(
+        sorted_forecast_slots=sorted_forecast_slots,
+        factors=factors,
+        omitted_slots=omitted_slots,
+        omitted_slot_reasons=omitted_slot_reasons,
+        max_run=cfg.max_interpolated_consecutive_slots,
+    )
+    interpolated_slot_count = len(interpolated_anchors)
+
     factor_values = list(factors.values())
     factor_min = min(factor_values) if factor_values else None
     factor_max = max(factor_values) if factor_values else None
@@ -438,6 +548,7 @@ def train(
         invalidated_slots_by_date=invalidated_slots_by_date,
         invalidated_slot_count=invalidated_slot_count,
         error_reason=None,
+        interpolated_slot_count=interpolated_slot_count,
     )
 
     explainability = _build_training_explainability(
@@ -453,6 +564,7 @@ def train(
         slot_forecast_sums=slot_forecast_sums,
         slot_actual_sums=slot_actual_sums,
         slot_raw_ratios=slot_raw_ratios,
+        interpolated_anchors=interpolated_anchors,
     )
 
     return TrainingOutcome(profile=profile, metadata=metadata, explainability=explainability)

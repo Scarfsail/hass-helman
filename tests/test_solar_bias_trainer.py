@@ -150,6 +150,7 @@ def test_slot_explainability_default_interpolation_fields():
 def test_slot_with_too_few_valid_slot_days_is_omitted():
     cfg = make_cfg(min_history_days=1)
     cfg.min_valid_slot_days = 2
+    cfg.max_interpolated_consecutive_slots = 0
 
     samples = [
         models.TrainerSample(
@@ -689,6 +690,7 @@ def test_no_invalidation_preserves_behavior_and_default_metadata():
 
 def test_fully_invalidated_slot_is_omitted_via_forecast_floor():
     cfg = make_cfg(min_history_days=2, clamp_min=0.5, clamp_max=2.0)
+    cfg.max_interpolated_consecutive_slots = 0
 
     slot_forecast = {"12:00": 30.0, "13:00": 100.0}
     samples = [
@@ -894,3 +896,232 @@ def test_ratio_of_sums_weights_by_volume_not_by_day_count():
     assert slot in outcome.profile.factors
     expected = 6000.0 / 5500.0
     assert abs(outcome.profile.factors[slot] - expected) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Slot interpolation fallback
+# ---------------------------------------------------------------------------
+
+
+def _interp_samples(
+    *,
+    days: int,
+    slots: list[str],
+    forecast_per_slot: float,
+) -> list[models.TrainerSample]:
+    """Build `days` identical training samples covering the given hourly slots."""
+    out = []
+    for i in range(days):
+        date = f"2024-03-{i + 1:02d}"
+        out.append(
+            models.TrainerSample(
+                date=date,
+                forecast_wh=forecast_per_slot * len(slots),
+                slot_forecast_wh={s: forecast_per_slot for s in slots},
+            )
+        )
+    return out
+
+
+def _interp_actuals(
+    samples: list[models.TrainerSample],
+    *,
+    slot_actual_factor: dict[str, float],
+    invalidated_slots_per_day: dict[str, set[str]] | None = None,
+) -> models.SolarActualsWindow:
+    """For each sample, produce actuals = forecast * factor[slot]."""
+    by_date: dict[str, dict[str, float]] = {}
+    for s in samples:
+        per_slot = {}
+        for slot, fcast in s.slot_forecast_wh.items():
+            per_slot[slot] = fcast * slot_actual_factor.get(slot, 1.0)
+        by_date[s.date] = per_slot
+    return models.SolarActualsWindow(
+        slot_actuals_by_date=by_date,
+        invalidated_slots_by_date=invalidated_slots_per_day or {},
+    )
+
+
+def test_interpolation_fills_single_slot_between_two_healthy():
+    # Slots 10:00 11:00 12:00. Healthy at 10 and 12; 11 is invalidated on most days.
+    cfg = make_cfg(min_history_days=2)
+    cfg.min_valid_slot_days = 5
+    cfg.max_interpolated_consecutive_slots = 2
+    samples = _interp_samples(days=6, slots=["10:00", "11:00", "12:00"], forecast_per_slot=200.0)
+    # 10:00 actual ratio = 0.6, 12:00 actual ratio = 1.4, 11:00 invalidated 5/6 days.
+    invalidated = {s.date: {"11:00"} for s in samples[:5]}
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={"10:00": 0.6, "11:00": 1.0, "12:00": 1.4},
+        invalidated_slots_per_day=invalidated,
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    # 11:00 should be interpolated as midpoint of (0.6, 1.4) = 1.0
+    assert "11:00" in outcome.profile.factors
+    assert "11:00" not in outcome.profile.omitted_slots
+    assert abs(outcome.profile.factors["11:00"] - 1.0) < 1e-9
+    assert outcome.metadata.interpolated_slot_count == 1
+    assert outcome.explainability is not None
+    slot_expl = outcome.explainability.slots["11:00"]
+    assert slot_expl.interpolated is True
+    assert slot_expl.interpolation_anchors == ("10:00", "12:00")
+    # A synthetic contribution row of status=interpolated is appended.
+    assert any(row.status == "interpolated" for row in slot_expl.rows)
+
+
+def test_interpolation_fills_run_of_two_with_one_third_two_thirds_weights():
+    cfg = make_cfg(min_history_days=2, clamp_min=0.0)
+    cfg.min_valid_slot_days = 5
+    cfg.max_interpolated_consecutive_slots = 2
+    samples = _interp_samples(
+        days=6, slots=["10:00", "11:00", "12:00", "13:00"], forecast_per_slot=200.0
+    )
+    invalidated = {s.date: {"11:00", "12:00"} for s in samples[:5]}
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={"10:00": 0.4, "11:00": 1.0, "12:00": 1.0, "13:00": 1.6},
+        invalidated_slots_per_day=invalidated,
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    # left=0.4, right=1.6, L=2 -> i=1: 0.4 + 1.2 * 1/3 = 0.8
+    #                            i=2: 0.4 + 1.2 * 2/3 = 1.2
+    assert abs(outcome.profile.factors["11:00"] - 0.8) < 1e-9
+    assert abs(outcome.profile.factors["12:00"] - 1.2) < 1e-9
+    assert outcome.metadata.interpolated_slot_count == 2
+
+
+def test_interpolation_skipped_when_run_exceeds_max():
+    cfg = make_cfg(min_history_days=2)
+    cfg.min_valid_slot_days = 5
+    cfg.max_interpolated_consecutive_slots = 2
+    samples = _interp_samples(
+        days=6,
+        slots=["10:00", "11:00", "12:00", "13:00", "14:00"],
+        forecast_per_slot=200.0,
+    )
+    invalidated = {s.date: {"11:00", "12:00", "13:00"} for s in samples[:5]}
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={"10:00": 0.6, "11:00": 1.0, "12:00": 1.0, "13:00": 1.0, "14:00": 1.4},
+        invalidated_slots_per_day=invalidated,
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    # All three remain omitted with the original reason.
+    for slot in ("11:00", "12:00", "13:00"):
+        assert slot in outcome.profile.omitted_slots
+        assert slot not in outcome.profile.factors
+    assert outcome.metadata.interpolated_slot_count == 0
+
+
+def test_interpolation_morning_edge_uses_zero_left_anchor():
+    cfg = make_cfg(min_history_days=2)
+    cfg.min_valid_slot_days = 5
+    cfg.max_interpolated_consecutive_slots = 2
+    samples = _interp_samples(days=6, slots=["06:00", "07:00"], forecast_per_slot=200.0)
+    invalidated = {s.date: {"06:00"} for s in samples[:5]}
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={"06:00": 1.0, "07:00": 1.5},
+        invalidated_slots_per_day=invalidated,
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    # left=0.0, right=1.5, L=1 -> midpoint = 0.75
+    assert abs(outcome.profile.factors["06:00"] - 0.75) < 1e-9
+    assert outcome.explainability.slots["06:00"].interpolation_anchors == (None, "07:00")
+
+
+def test_interpolation_evening_edge_uses_zero_right_anchor():
+    cfg = make_cfg(min_history_days=2)
+    cfg.min_valid_slot_days = 5
+    cfg.max_interpolated_consecutive_slots = 2
+    samples = _interp_samples(days=6, slots=["18:00", "19:00"], forecast_per_slot=200.0)
+    invalidated = {s.date: {"19:00"} for s in samples[:5]}
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={"18:00": 1.4, "19:00": 1.0},
+        invalidated_slots_per_day=invalidated,
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    # left=1.4, right=0.0, L=1 -> midpoint = 0.7
+    assert abs(outcome.profile.factors["19:00"] - 0.7) < 1e-9
+    assert outcome.explainability.slots["19:00"].interpolation_anchors == ("18:00", None)
+
+
+def test_interpolation_disabled_when_max_is_zero_matches_legacy_behavior():
+    cfg = make_cfg(min_history_days=2)
+    cfg.min_valid_slot_days = 5
+    cfg.max_interpolated_consecutive_slots = 0
+    samples = _interp_samples(days=6, slots=["10:00", "11:00", "12:00"], forecast_per_slot=200.0)
+    invalidated = {s.date: {"11:00"} for s in samples[:5]}
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={"10:00": 0.6, "11:00": 1.0, "12:00": 1.4},
+        invalidated_slots_per_day=invalidated,
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert "11:00" in outcome.profile.omitted_slots
+    assert "11:00" not in outcome.profile.factors
+    assert outcome.metadata.interpolated_slot_count == 0
+
+
+def test_two_runs_separated_by_healthy_slot_use_snapshot_anchors():
+    cfg = make_cfg(min_history_days=2, clamp_min=0.0)
+    cfg.min_valid_slot_days = 5
+    cfg.max_interpolated_consecutive_slots = 2
+    slots = ["10:00", "11:00", "12:00", "13:00", "14:00"]
+    samples = _interp_samples(days=6, slots=slots, forecast_per_slot=200.0)
+    # Healthy at 10, 12, 14. 11 and 13 invalidated 5/6 days.
+    invalidated = {s.date: {"11:00", "13:00"} for s in samples[:5]}
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={
+            "10:00": 0.4,
+            "11:00": 1.0,
+            "12:00": 1.0,
+            "13:00": 1.0,
+            "14:00": 1.6,
+        },
+        invalidated_slots_per_day=invalidated,
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    # 11:00 between 0.4 and 1.0 -> 0.7. 13:00 between 1.0 and 1.6 -> 1.3.
+    # Critically: 12:00 is the right anchor of run #1 AND left anchor of run #2 -
+    # both use the SAME (original) value of 1.0 from the snapshot.
+    assert abs(outcome.profile.factors["11:00"] - 0.7) < 1e-9
+    assert abs(outcome.profile.factors["13:00"] - 1.3) < 1e-9
+    assert outcome.metadata.interpolated_slot_count == 2
+
+
+def test_interpolation_does_not_apply_to_forecast_floor_omissions():
+    # Slot is omitted because forecast sum is too low - NOT eligible for interpolation
+    # even when neighbors are healthy.
+    cfg = make_cfg(min_history_days=2)
+    cfg.min_valid_slot_days = 1
+    cfg.max_interpolated_consecutive_slots = 2
+    # 11:00 forecast set very low so its summed forecast falls below the 50 Wh floor.
+    samples = []
+    for i in range(3):
+        date = f"2024-03-{i + 1:02d}"
+        samples.append(
+            models.TrainerSample(
+                date=date,
+                forecast_wh=200.0 + 200.0 + 1.0,
+                slot_forecast_wh={"10:00": 200.0, "11:00": 1.0, "12:00": 200.0},
+            )
+        )
+    actuals = _interp_actuals(
+        samples,
+        slot_actual_factor={"10:00": 0.6, "11:00": 1.0, "12:00": 1.4},
+    )
+    outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
+
+    assert "11:00" in outcome.profile.omitted_slots
+    assert "11:00" not in outcome.profile.factors
+    assert outcome.metadata.interpolated_slot_count == 0
