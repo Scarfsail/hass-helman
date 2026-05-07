@@ -119,6 +119,34 @@ def test_fingerprint_zero_max_interpolated_matches_payload_includes_value():
     assert fp.startswith("sha256:")
 
 
+def test_metadata_default_interpolated_slot_count_is_zero():
+    md = models.SolarBiasMetadata(
+        trained_at="2026-05-06T00:00:00",
+        training_config_fingerprint="sha256:abc",
+        usable_days=0,
+        dropped_days=[],
+        factor_min=None,
+        factor_max=None,
+        factor_median=None,
+        omitted_slot_count=0,
+        last_outcome="insufficient_history",
+    )
+    assert md.interpolated_slot_count == 0
+
+
+def test_slot_explainability_default_interpolation_fields():
+    se = models.SolarBiasSlotExplainability(
+        factor=None,
+        raw_ratio=None,
+        clamped=False,
+        forecast_sum_wh=0.0,
+        actual_sum_wh=0.0,
+        rows=[],
+    )
+    assert se.interpolated is False
+    assert se.interpolation_anchors is None
+
+
 def test_slot_with_too_few_valid_slot_days_is_omitted():
     cfg = make_cfg(min_history_days=1)
     cfg.min_valid_slot_days = 2

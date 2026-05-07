@@ -71,6 +71,7 @@ class SolarBiasMetadata:
     invalidated_slots_by_date: dict[str, list[str]] = field(default_factory=dict)
     invalidated_slot_count: int = 0
     error_reason: str | None = None
+    interpolated_slot_count: int = 0
 
 
 @dataclass
@@ -140,6 +141,8 @@ class SolarBiasSlotExplainability:
     forecast_sum_wh: float
     actual_sum_wh: float
     rows: list[SolarBiasContributionRow]
+    interpolated: bool = False
+    interpolation_anchors: tuple[str | None, str | None] | None = None
 
 
 @dataclass
@@ -269,6 +272,15 @@ def training_explainability_to_payload(
                 "clamped": details.clamped,
                 "forecastSumWh": details.forecast_sum_wh,
                 "actualSumWh": details.actual_sum_wh,
+                "interpolated": details.interpolated,
+                "interpolationAnchors": (
+                    {
+                        "left": details.interpolation_anchors[0],
+                        "right": details.interpolation_anchors[1],
+                    }
+                    if details.interpolation_anchors is not None
+                    else None
+                ),
                 "rows": [
                     {
                         "date": row.date,
