@@ -104,6 +104,21 @@ def test_read_bias_config_max_interpolated_defaults_when_missing():
     assert cfg.max_interpolated_consecutive_slots == 2
 
 
+def test_fingerprint_differs_when_max_interpolated_consecutive_slots_changes():
+    cfg_a = make_cfg()
+    cfg_a.max_interpolated_consecutive_slots = 2
+    cfg_b = make_cfg()
+    cfg_b.max_interpolated_consecutive_slots = 3
+    assert trainer.compute_fingerprint(cfg_a) != trainer.compute_fingerprint(cfg_b)
+
+
+def test_fingerprint_zero_max_interpolated_matches_payload_includes_value():
+    cfg = make_cfg()
+    cfg.max_interpolated_consecutive_slots = 0
+    fp = trainer.compute_fingerprint(cfg)
+    assert fp.startswith("sha256:")
+
+
 def test_slot_with_too_few_valid_slot_days_is_omitted():
     cfg = make_cfg(min_history_days=1)
     cfg.min_valid_slot_days = 2
@@ -373,7 +388,9 @@ def test_compute_fingerprint_includes_algorithm_version():
         "slot_invalidation_data_glitch_min_neighbour_forecast_wh="
         f"{cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh};"
         "slot_invalidation_data_glitch_backfill_max_minutes="
-        f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes}"
+        f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes};"
+        "max_interpolated_consecutive_slots="
+        f"{cfg.max_interpolated_consecutive_slots}"
     )
     import hashlib
 

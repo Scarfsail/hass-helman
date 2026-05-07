@@ -48,7 +48,9 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
         "slot_invalidation_data_glitch_min_neighbour_forecast_wh="
         f"{cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh};"
         "slot_invalidation_data_glitch_backfill_max_minutes="
-        f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes}"
+        f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes};"
+        "max_interpolated_consecutive_slots="
+        f"{cfg.max_interpolated_consecutive_slots}"
     )
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{h}"
