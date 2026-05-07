@@ -278,14 +278,14 @@ class SolarBiasCorrectionService:
                 canonical_snapshot = None
             if not isinstance(canonical_snapshot, dict):
                 canonical_snapshot = {}
-            raw_points = _hourly_buckets_for_local_date(
+            raw_points = _filter_points_to_local_date(
                 canonical_snapshot.get("rawPoints") or canonical_snapshot.get("points") or [],
                 target_date,
                 timezone,
             )
             canonical_corrected = canonical_snapshot.get("correctedPoints") or []
             if effective_variant == "adjusted" and canonical_corrected:
-                corrected_points = _hourly_buckets_for_local_date(
+                corrected_points = _filter_points_to_local_date(
                     canonical_corrected,
                     target_date,
                     timezone,
@@ -337,7 +337,6 @@ class SolarBiasCorrectionService:
                 impact=_impact_points_for_day(
                     raw_points,
                     corrected_points,
-                    self._profile if has_profile else None,
                 ),
             ),
             totals=SolarBiasInspectorTotals(
@@ -632,13 +631,14 @@ def _optional_float(raw_value: Any) -> float | None:
         return None
 
 
-def _hourly_buckets_for_local_date(
+def _filter_points_to_local_date(
     points: list[dict[str, Any]],
     target_date: date,
     timezone: ZoneInfo,
 ) -> list[dict[str, Any]]:
-    buckets: dict[str, float] = {}
+    """Return points whose timestamp falls on `target_date` in `timezone`, preserving native granularity."""
     parse_datetime = getattr(dt_util, "parse_datetime", datetime.fromisoformat)
+    filtered: list[tuple[datetime, dict[str, Any]]] = []
     for point in points:
         if not isinstance(point, dict):
             continue
@@ -654,13 +654,9 @@ def _hourly_buckets_for_local_date(
         local_timestamp = dt_util.as_local(parsed_timestamp).astimezone(timezone)
         if local_timestamp.date() != target_date:
             continue
-        hour_start = local_timestamp.replace(minute=0, second=0, microsecond=0)
-        key = hour_start.isoformat()
-        buckets[key] = buckets.get(key, 0.0) + float(value)
-    return [
-        {"timestamp": timestamp, "value": round(value, 4)}
-        for timestamp, value in sorted(buckets.items())
-    ]
+        filtered.append((local_timestamp, {"timestamp": timestamp, "value": float(value)}))
+    filtered.sort(key=lambda item: item[0])
+    return [point for _, point in filtered]
 
 
 def _copy_points(raw_points: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -729,7 +725,6 @@ def _factor_points_for_profile(
 def _impact_points_for_day(
     raw_points: list[dict[str, Any]],
     corrected_points: list[dict[str, Any]],
-    profile: SolarBiasProfile | None,
 ) -> list[SolarBiasImpactPoint]:
     corrected_by_slot: dict[str, float] = {}
     for point in corrected_points:
@@ -754,14 +749,22 @@ def _impact_points_for_day(
         corrected_wh = corrected_by_slot.get(slot)
         if corrected_wh is None:
             continue
-        factor = profile.factors.get(slot) if profile is not None else None
+        # Effective factor: corrected/raw. At 15-min granularity this equals
+        # profile.factors[slot]; at hourly granularity (today/future buckets
+        # aggregating four 15-min slots) it reflects the raw-weighted average
+        # of the underlying sub-slot factors actually applied.
+        effective_factor: float | None
+        if raw_wh > 0.0:
+            effective_factor = corrected_wh / raw_wh
+        else:
+            effective_factor = None
         impact.append(
             SolarBiasImpactPoint(
                 slot=slot,
                 raw_wh=raw_wh,
                 corrected_wh=corrected_wh,
                 impact_wh=corrected_wh - raw_wh,
-                factor=float(factor) if factor is not None else None,
+                factor=effective_factor,
             )
         )
     return impact

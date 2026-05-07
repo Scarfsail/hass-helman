@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+
+import pytest
 import sys
 import types
 from datetime import date, datetime
@@ -544,12 +546,24 @@ def test_inspector_day_applies_current_profile_and_totals():
         "hasInvalidated": False,
     }
     assert payload["series"]["raw"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 100.0},
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 200.0},
+        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T08:30:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T08:45:00+02:00", "valueWh": 25.0},
+        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 50.0},
+        {"timestamp": "2026-04-25T09:15:00+02:00", "valueWh": 50.0},
+        {"timestamp": "2026-04-25T09:30:00+02:00", "valueWh": 50.0},
+        {"timestamp": "2026-04-25T09:45:00+02:00", "valueWh": 50.0},
     ]
     assert payload["series"]["corrected"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 125.0},
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 175.0},
+        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 31.25},
+        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 31.25},
+        {"timestamp": "2026-04-25T08:30:00+02:00", "valueWh": 31.25},
+        {"timestamp": "2026-04-25T08:45:00+02:00", "valueWh": 31.25},
+        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 43.75},
+        {"timestamp": "2026-04-25T09:15:00+02:00", "valueWh": 43.75},
+        {"timestamp": "2026-04-25T09:30:00+02:00", "valueWh": 43.75},
+        {"timestamp": "2026-04-25T09:45:00+02:00", "valueWh": 43.75},
     ]
     assert payload["series"]["actual"] == [
         {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 90.0}
@@ -561,6 +575,115 @@ def test_inspector_day_applies_current_profile_and_totals():
     assert payload["totals"] == {"rawWh": 300.0, "correctedWh": 300.0, "actualWh": 90.0}
     assert payload["range"]["minDate"] == "2026-04-13"
     assert payload["range"]["isToday"] is True
+
+
+def test_inspector_day_today_preserves_15min_granularity():
+    """Today/future inspector must surface raw/corrected/impact at 15-min, matching factors and trainingExplainability."""
+    raw_15min = [
+        {"timestamp": "2026-04-25T16:00:00+02:00", "value": 600.0},
+        {"timestamp": "2026-04-25T16:15:00+02:00", "value": 600.0},
+        {"timestamp": "2026-04-25T16:30:00+02:00", "value": 600.0},
+        {"timestamp": "2026-04-25T16:45:00+02:00", "value": 600.0},
+    ]
+    corrected_15min = [
+        {"timestamp": "2026-04-25T16:00:00+02:00", "value": 600.0},
+        {"timestamp": "2026-04-25T16:15:00+02:00", "value": 600.0 * 0.8},
+        {"timestamp": "2026-04-25T16:30:00+02:00", "value": 600.0 * 0.9},
+        {"timestamp": "2026-04-25T16:45:00+02:00", "value": 600.0 * 1.0},
+    ]
+    service = _make_service(_canonical_provider(raw_15min, corrected_15min))
+    service._profile = models.SolarBiasProfile(
+        factors={"16:15": 0.8, "16:30": 0.9, "16:45": 1.0},
+        omitted_slots=["16:00"],
+    )
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=0.8,
+        factor_max=1.0,
+        factor_median=0.9,
+        omitted_slot_count=1,
+        last_outcome="profile_trained",
+        error_reason=None,
+    )
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    assert payload["series"]["raw"] == [
+        {"timestamp": "2026-04-25T16:00:00+02:00", "valueWh": 600.0},
+        {"timestamp": "2026-04-25T16:15:00+02:00", "valueWh": 600.0},
+        {"timestamp": "2026-04-25T16:30:00+02:00", "valueWh": 600.0},
+        {"timestamp": "2026-04-25T16:45:00+02:00", "valueWh": 600.0},
+    ]
+    assert payload["series"]["corrected"] == [
+        {"timestamp": "2026-04-25T16:00:00+02:00", "valueWh": 600.0},
+        {"timestamp": "2026-04-25T16:15:00+02:00", "valueWh": 480.0},
+        {"timestamp": "2026-04-25T16:30:00+02:00", "valueWh": 540.0},
+        {"timestamp": "2026-04-25T16:45:00+02:00", "valueWh": 600.0},
+    ]
+
+    impact = payload["series"]["impact"]
+    assert [entry["slot"] for entry in impact] == ["16:00", "16:15", "16:30", "16:45"]
+    assert impact[0]["factor"] == pytest.approx(1.0)
+    assert impact[1]["factor"] == pytest.approx(0.8)
+    assert impact[2]["factor"] == pytest.approx(0.9)
+    assert impact[3]["factor"] == pytest.approx(1.0)
+
+
+def test_inspector_day_impact_factor_is_none_when_raw_is_zero():
+    raw_15min = [
+        {"timestamp": "2026-04-25T22:00:00+02:00", "value": 0.0},
+        {"timestamp": "2026-04-25T22:15:00+02:00", "value": 0.0},
+        {"timestamp": "2026-04-25T22:30:00+02:00", "value": 0.0},
+        {"timestamp": "2026-04-25T22:45:00+02:00", "value": 0.0},
+    ]
+    corrected_15min = list(raw_15min)
+    service = _make_service(_canonical_provider(raw_15min, corrected_15min))
+    service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=None,
+        factor_max=None,
+        factor_median=None,
+        omitted_slot_count=0,
+        last_outcome="profile_trained",
+        error_reason=None,
+    )
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_actuals = service_mod.load_actuals_for_day
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.load_actuals_for_day = fake_actuals
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+    finally:
+        service_mod.load_actuals_for_day = old_actuals
+        service_mod.dt_util.now = old_now
+
+    impact = payload["series"]["impact"]
+    assert len(impact) == 4
+    for entry in impact:
+        assert entry["rawWh"] == 0.0
+        assert entry["factor"] is None
 
 
 def test_inspector_day_uses_trained_usable_days_for_previous_range():
