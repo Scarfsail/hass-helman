@@ -296,7 +296,13 @@ def test_load_forecast_points_for_day_reads_daily_entity_slots():
 
     assert result == [
         {"timestamp": "2026-04-25T00:00:00+02:00", "value": 0.0},
-        {"timestamp": "2026-04-25T01:00:00+02:00", "value": 250.0},
+        {"timestamp": "2026-04-25T00:15:00+02:00", "value": 0.0},
+        {"timestamp": "2026-04-25T00:30:00+02:00", "value": 0.0},
+        {"timestamp": "2026-04-25T00:45:00+02:00", "value": 0.0},
+        {"timestamp": "2026-04-25T01:00:00+02:00", "value": 62.5},
+        {"timestamp": "2026-04-25T01:15:00+02:00", "value": 62.5},
+        {"timestamp": "2026-04-25T01:30:00+02:00", "value": 62.5},
+        {"timestamp": "2026-04-25T01:45:00+02:00", "value": 62.5},
     ]
 
 
@@ -333,8 +339,14 @@ def test_load_forecast_points_for_day_selects_entity_by_day_offset():
 
     assert requested_entities == ["sensor.solar_tomorrow"]
     assert result == [
-        {"timestamp": "2026-04-26T00:00:00+02:00", "value": 1.0},
-        {"timestamp": "2026-04-26T01:00:00+02:00", "value": 2.0},
+        {"timestamp": "2026-04-26T00:00:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-26T00:15:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-26T00:30:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-26T00:45:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-26T01:00:00+02:00", "value": 0.5},
+        {"timestamp": "2026-04-26T01:15:00+02:00", "value": 0.5},
+        {"timestamp": "2026-04-26T01:30:00+02:00", "value": 0.5},
+        {"timestamp": "2026-04-26T01:45:00+02:00", "value": 0.5},
     ]
 
 
@@ -367,8 +379,57 @@ def test_load_forecast_points_for_day_sorts_attribute_timestamps_by_utc():
     )
 
     assert result == [
-        {"timestamp": "2026-04-25T00:00:00+02:00", "value": 1.0},
-        {"timestamp": "2026-04-25T01:00:00+02:00", "value": 2.0},
+        {"timestamp": "2026-04-25T00:00:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-25T00:15:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-25T00:30:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-25T00:45:00+02:00", "value": 0.25},
+        {"timestamp": "2026-04-25T01:00:00+02:00", "value": 0.5},
+        {"timestamp": "2026-04-25T01:15:00+02:00", "value": 0.5},
+        {"timestamp": "2026-04-25T01:30:00+02:00", "value": 0.5},
+        {"timestamp": "2026-04-25T01:45:00+02:00", "value": 0.5},
+    ]
+
+
+def test_load_forecast_points_for_day_uses_watts_weighting_when_available():
+    """When the entity exposes upstream `watts`, expansion must follow the watts shape, not equal split."""
+    class _States:
+        def get(self, entity_id):
+            if entity_id == "sensor.solar_today":
+                return SimpleNamespace(
+                    attributes={
+                        "wh_period": {
+                            "2026-04-25T08:00:00+02:00": 400,
+                        },
+                        "watts": {
+                            "08:00": 100,
+                            "08:15": 200,
+                            "08:30": 300,
+                            "08:45": 400,
+                        },
+                    }
+                )
+            return None
+
+    hass = SimpleNamespace(
+        states=_States(),
+        config=SimpleNamespace(time_zone="Europe/Prague"),
+    )
+
+    result = asyncio.run(
+        forecast_history.load_forecast_points_for_day(
+            hass,
+            _make_cfg(),
+            date.fromisoformat("2026-04-25"),
+            local_now=datetime.fromisoformat("2026-04-25T10:00:00+02:00"),
+        )
+    )
+
+    # Total watts = 1000; per-slot share = 400 * watt/1000.
+    assert result == [
+        {"timestamp": "2026-04-25T08:00:00+02:00", "value": 40.0},
+        {"timestamp": "2026-04-25T08:15:00+02:00", "value": 80.0},
+        {"timestamp": "2026-04-25T08:30:00+02:00", "value": 120.0},
+        {"timestamp": "2026-04-25T08:45:00+02:00", "value": 160.0},
     ]
 
 
@@ -418,11 +479,15 @@ def test_load_forecast_points_for_day_reads_history_for_past_days():
             )
         )
 
-    assert len(result) == 24
-    assert result[6]["timestamp"] == "2026-04-24T06:00:00+02:00"
-    assert result[6]["value"] == 100.0
-    assert result[7]["timestamp"] == "2026-04-24T07:00:00+02:00"
-    assert result[7]["value"] == 200.0
+    assert len(result) == 96
+    # 06:00 hour = 100 Wh -> equal split into four 15-min sub-slots = 25 each.
+    assert result[24]["timestamp"] == "2026-04-24T06:00:00+02:00"
+    assert result[24]["value"] == 25.0
+    assert result[27]["timestamp"] == "2026-04-24T06:45:00+02:00"
+    assert result[27]["value"] == 25.0
+    # 07:00 hour = 200 Wh -> equal split = 50 each.
+    assert result[28]["timestamp"] == "2026-04-24T07:00:00+02:00"
+    assert result[28]["value"] == 50.0
 
 
 def test_load_actuals_for_day_uses_existing_slot_actual_reader():

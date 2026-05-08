@@ -84,24 +84,63 @@ async def load_forecast_points_for_day(
             return []
 
     attributes = getattr(state, "attributes", {})
-    wh_period = attributes.get("wh_period") if isinstance(attributes, dict) else None
+    if not isinstance(attributes, dict):
+        return []
+    wh_period = attributes.get("wh_period")
     if not isinstance(wh_period, dict):
         return []
 
-    parsed_points: list[tuple[datetime, float]] = []
+    hourly_wh: dict[str, float] = {}
     for raw_key, raw_value in wh_period.items():
         parsed_value = _parse_attribute_wh(raw_value)
         parsed_timestamp = _parse_attribute_timestamp(raw_key, local_tz)
         if parsed_value is None or parsed_timestamp is None:
             continue
-        parsed_points.append((parsed_timestamp, parsed_value))
+        local_ts = dt_util.as_local(parsed_timestamp).astimezone(local_tz)
+        if local_ts.date() != target_date:
+            continue
+        slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
+        hourly_wh[slot_key] = parsed_value
 
-    parsed_points.sort(key=lambda item: dt_util.as_utc(item[0]))
-    expected_slots = _build_local_hour_slots_for_date(target_date, local_tz)
-    return [
-        {"timestamp": slot_start.isoformat(), "value": value}
-        for slot_start, (_, value) in zip(expected_slots, parsed_points)
-    ]
+    if not hourly_wh:
+        return []
+
+    raw_watts = attributes.get("watts")
+    watts = raw_watts if isinstance(raw_watts, dict) else {}
+    sub_slot_wh = _expand_hourly_to_15min(hourly_wh, watts)
+    if not sub_slot_wh:
+        # Fallback: split each hour evenly when upstream watts is unavailable.
+        for hour_key, hour_wh in hourly_wh.items():
+            hour_text, _, minute_text = hour_key.partition(":")
+            try:
+                hour = int(hour_text)
+                minute = int(minute_text)
+            except ValueError:
+                continue
+            if minute != 0:
+                continue
+            share = hour_wh / len(_SUB_SLOT_OFFSETS_MIN)
+            for offset in _SUB_SLOT_OFFSETS_MIN:
+                sub_slot_wh[f"{hour:02d}:{offset:02d}"] = share
+
+    points: list[tuple[datetime, dict[str, Any]]] = []
+    for slot_key, value in sub_slot_wh.items():
+        try:
+            hour_text, minute_text = slot_key.split(":", 1)
+            hour = int(hour_text)
+            minute = int(minute_text)
+        except (ValueError, AttributeError):
+            continue
+        slot_start = datetime.combine(
+            target_date,
+            time(hour=hour, minute=minute),
+            tzinfo=local_tz,
+        )
+        points.append(
+            (slot_start, {"timestamp": slot_start.isoformat(), "value": float(value)})
+        )
+    points.sort(key=lambda item: item[0])
+    return [point for _, point in points]
 
 
 async def _read_historical_forecast_state(
@@ -488,26 +527,6 @@ def _parse_attribute_wh(raw_value: Any) -> float | None:
             return None
 
     return None
-
-
-def _build_local_hour_slots_for_date(
-    target_date: date,
-    local_tz: ZoneInfo,
-) -> list[datetime]:
-    local_start = datetime.combine(target_date, time.min, tzinfo=local_tz)
-    local_end = datetime.combine(
-        target_date + timedelta(days=1),
-        time.min,
-        tzinfo=local_tz,
-    )
-
-    slots: list[datetime] = []
-    cursor_utc = dt_util.as_utc(local_start)
-    end_utc = dt_util.as_utc(local_end)
-    while cursor_utc < end_utc:
-        slots.append(cursor_utc.astimezone(local_tz))
-        cursor_utc += timedelta(hours=1)
-    return slots
 
 
 def _parse_attribute_timestamp(raw_key: Any, local_tz: ZoneInfo) -> datetime | None:
