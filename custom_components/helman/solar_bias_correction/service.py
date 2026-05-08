@@ -606,6 +606,17 @@ def _training_explainability_from_dict(
                     reason=reason if isinstance(reason, str) else None,
                 )
             )
+        raw_anchors = raw_slot.get(
+            "interpolationAnchors", raw_slot.get("interpolation_anchors")
+        )
+        anchors: tuple[str | None, str | None] | None = None
+        if isinstance(raw_anchors, dict):
+            left = raw_anchors.get("left")
+            right = raw_anchors.get("right")
+            anchors = (
+                left if isinstance(left, str) else None,
+                right if isinstance(right, str) else None,
+            )
         slots[slot] = SolarBiasSlotExplainability(
             factor=_optional_float(raw_slot.get("factor")),
             raw_ratio=_optional_float(raw_slot.get("rawRatio", raw_slot.get("raw_ratio"))),
@@ -613,6 +624,8 @@ def _training_explainability_from_dict(
             forecast_sum_wh=_optional_float(raw_slot.get("forecastSumWh", raw_slot.get("forecast_sum_wh"))) or 0.0,
             actual_sum_wh=_optional_float(raw_slot.get("actualSumWh", raw_slot.get("actual_sum_wh"))) or 0.0,
             rows=rows,
+            interpolated=bool(raw_slot.get("interpolated", False)),
+            interpolation_anchors=anchors,
         )
 
     return SolarBiasTrainingExplainability(

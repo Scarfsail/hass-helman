@@ -502,6 +502,43 @@ def test_training_explainability_from_dict_parses_valid_snapshot():
     assert parsed.slots["12:00"].rows[0].status == "included"
 
 
+def test_training_explainability_from_dict_preserves_interpolation_metadata():
+    service_mod = _load_service_module()
+
+    parsed = service_mod._training_explainability_from_dict(
+        {
+            "trainedAt": "2026-04-25T03:00:00+02:00",
+            "aggregationMethod": "ratio_of_sums",
+            "slots": {
+                "16:00": {
+                    "factor": 1.054,
+                    "rawRatio": None,
+                    "clamped": False,
+                    "forecastSumWh": 0,
+                    "actualSumWh": 0,
+                    "interpolated": True,
+                    "interpolationAnchors": {"left": "14:00", "right": "16:15"},
+                    "rows": [
+                        {
+                            "date": "",
+                            "forecastWh": None,
+                            "actualWh": None,
+                            "ratio": None,
+                            "status": "interpolated",
+                            "reason": "left=14:00,right=16:15",
+                        }
+                    ],
+                }
+            },
+        }
+    )
+
+    assert parsed is not None
+    slot = parsed.slots["16:00"]
+    assert slot.interpolated is True
+    assert slot.interpolation_anchors == ("14:00", "16:15")
+
+
 def test_training_explainability_from_dict_returns_none_for_missing_snapshot():
     service_mod = _load_service_module()
 
