@@ -96,9 +96,7 @@ async def load_forecast_points_for_day(
         parsed_timestamp = _parse_attribute_timestamp(raw_key, local_tz)
         if parsed_value is None or parsed_timestamp is None:
             continue
-        local_ts = dt_util.as_local(parsed_timestamp).astimezone(local_tz)
-        if local_ts.date() != target_date:
-            continue
+        local_ts = dt_util.as_local(parsed_timestamp)
         slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
         hourly_wh[slot_key] = parsed_value
 
