@@ -319,8 +319,9 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results, [(1, payload)])
         self.assertEqual(connection.errors, [])
 
-    def test_status_requires_admin(self) -> None:
-        service = SimpleNamespace(get_status_payload=Mock())
+    def test_status_allows_non_admin(self) -> None:
+        payload = {"status": "applied", "enabled": True}
+        service = SimpleNamespace(get_status_payload=Mock(return_value=payload))
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection(is_admin=False)
 
@@ -330,12 +331,9 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/solar_bias/status"},
         )
 
-        service.get_status_payload.assert_not_called()
-        self.assertEqual(connection.results, [])
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
+        service.get_status_payload.assert_called_once_with()
+        self.assertEqual(connection.results, [(1, payload)])
+        self.assertEqual(connection.errors, [])
 
     def test_status_returns_not_loaded_when_service_or_coordinator_missing(self) -> None:
         cases = (
@@ -605,8 +603,9 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(connection.errors, [])
 
-    def test_profile_requires_admin(self) -> None:
-        service = SimpleNamespace(get_profile_payload=Mock())
+    def test_profile_allows_non_admin(self) -> None:
+        payload = {"factors": {"08:00": 1.0}, "omittedSlots": []}
+        service = SimpleNamespace(get_profile_payload=Mock(return_value=payload))
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection(is_admin=False)
 
@@ -616,12 +615,9 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/solar_bias/profile"},
         )
 
-        service.get_profile_payload.assert_not_called()
-        self.assertEqual(connection.results, [])
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
+        service.get_profile_payload.assert_called_once_with()
+        self.assertEqual(connection.results, [(1, payload)])
+        self.assertEqual(connection.errors, [])
 
     def test_profile_returns_no_profile_before_training(self) -> None:
         service = SimpleNamespace(get_profile_payload=Mock(return_value=None))
@@ -707,8 +703,15 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.results, [(1, payload)])
         self.assertEqual(connection.errors, [])
 
-    async def test_inspector_requires_admin(self) -> None:
-        service = SimpleNamespace(async_get_inspector_day=AsyncMock())
+    async def test_inspector_allows_non_admin(self) -> None:
+        payload = {
+            "date": "2026-04-25",
+            "timezone": "Europe/Prague",
+            "series": {"raw": [], "corrected": [], "actual": [], "factors": []},
+        }
+        service = SimpleNamespace(
+            async_get_inspector_day=AsyncMock(return_value=payload)
+        )
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection(is_admin=False)
 
@@ -718,11 +721,9 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/solar_bias/inspector", "date": "2026-04-25"},
         )
 
-        service.async_get_inspector_day.assert_not_awaited()
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
+        service.async_get_inspector_day.assert_awaited_once_with("2026-04-25")
+        self.assertEqual(connection.results, [(1, payload)])
+        self.assertEqual(connection.errors, [])
 
     async def test_inspector_rejects_invalid_date(self) -> None:
         for raw_date in ("04/25/2026", "20260425", "2026-W17-6"):

@@ -25,9 +25,6 @@ def ws_get_solar_bias_status(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
-
     service = _get_solar_bias_service(hass, connection, msg)
     if service is None:
         return
@@ -93,9 +90,6 @@ def ws_get_solar_bias_profile(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
-
     service = _get_solar_bias_service(hass, connection, msg)
     if service is None:
         return
@@ -120,9 +114,6 @@ async def ws_get_solar_bias_inspector(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
-
     raw_date = msg.get("date")
     try:
         if not isinstance(raw_date, str) or _DASHED_DATE_RE.fullmatch(raw_date) is None:
