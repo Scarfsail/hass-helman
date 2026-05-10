@@ -148,8 +148,8 @@ async def query_cumulative_slot_energy_changes(
     if current_state is not None:
         default_unit = current_state.attributes.get("unit_of_measurement")
 
-    history = await get_instance(hass).async_add_executor_job(
-        lambda: state_changes_during_period(
+    def _query_and_parse() -> dict[datetime, float]:
+        history = state_changes_during_period(
             hass,
             utc_boundaries[0],
             utc_boundaries[-1],
@@ -159,22 +159,18 @@ async def query_cumulative_slot_energy_changes(
             None,
             True,
         )
-    )
-    states = history.get(entity_id) or history.get(entity_id.lower()) or []
-    observations = _build_unwrapped_energy_observations(
-        _parse_energy_observations(
-            states,
-            default_unit=default_unit,
+        states = history.get(entity_id) or history.get(entity_id.lower()) or []
+        observations = _build_unwrapped_energy_observations(
+            _parse_energy_observations(states, default_unit=default_unit)
         )
-    )
-    boundary_samples = _sample_energy_observations_at_boundaries(
-        observations,
-        utc_boundaries,
-    )
-    return _build_slot_energy_changes_from_boundaries(
-        utc_boundaries,
-        boundary_samples,
-    )
+        boundary_samples = _sample_energy_observations_at_boundaries(
+            observations, utc_boundaries
+        )
+        return _build_slot_energy_changes_from_boundaries(
+            utc_boundaries, boundary_samples
+        )
+
+    return await get_instance(hass).async_add_executor_job(_query_and_parse)
 
 
 async def query_cumulative_hourly_energy_changes(
