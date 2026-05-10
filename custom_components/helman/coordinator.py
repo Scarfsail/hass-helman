@@ -509,9 +509,10 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         ):
             self._cached_forecast = None
+        reference_time = dt_util.now()
         if not self._has_current_slot_solar_forecast(
             self._cached_solar_forecast,
-            reference_time=dt_util.now(),
+            reference_time=reference_time,
         ):
             self._cached_solar_forecast = None
         self._start_forecast_refresh()
@@ -528,12 +529,12 @@ class HelmanCoordinator:
         ):
             await self._async_cleanup_automation_owned_actions_if_needed(
                 execution_enabled=True,
-                reference_time=dt_util.now(),
+                reference_time=reference_time,
             )
         if self._load_schedule_document().execution_enabled:
             await self._async_reconcile_schedule_execution_if_enabled(
                 reason="startup",
-                reference_time=dt_util.now(),
+                reference_time=reference_time,
             )
         self._create_tracked_refresh_task(
             self._async_refresh_forecast_and_request_automation(reason="startup")
