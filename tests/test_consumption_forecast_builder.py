@@ -280,5 +280,45 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["currentSlot"]["timestamp"], "2026-03-20T21:15:00+01:00")
 
 
+class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
+    def _make_builder(self):
+        importlib.reload(
+            importlib.import_module("custom_components.helman.recorder_hourly_series")
+        )
+        consumption_module = importlib.reload(
+            importlib.import_module("custom_components.helman.consumption_forecast_builder")
+        )
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague"),
+            states=SimpleNamespace(get=lambda entity_id: None),
+        )
+        return (
+            consumption_module,
+            consumption_module.ConsumptionForecastBuilder(hass, config={}),
+        )
+
+    async def test_consumer_slot_history_cache_avoids_duplicate_recorder_calls(self):
+        """Two builds in quick succession should hit the recorder only once
+        per consumer."""
+        from unittest.mock import AsyncMock, patch
+
+        consumption_module, builder = self._make_builder()
+
+        calls: list[str] = []
+
+        async def _fake_query(_hass, entity_id, _ref, **_kw):
+            calls.append(entity_id)
+            return {}
+
+        consumers = [{"energy_entity_id": "sensor.a", "label": "A"}]
+        ref = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+
+        with patch.object(consumption_module, "query_slot_energy_changes", _fake_query):
+            await builder._query_consumer_slot_histories(consumers, reference_time=ref)
+            await builder._query_consumer_slot_histories(consumers, reference_time=ref)
+
+        self.assertEqual(calls, ["sensor.a"])  # second call hit the cache
+
+
 if __name__ == "__main__":
     unittest.main()
