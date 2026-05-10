@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
@@ -7,6 +9,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+
+_HYSTERESIS_W: float = 5.0
+_HYSTERESIS_MAX_GAP_S: float = 30.0
 
 
 async def async_setup_entry(
@@ -183,8 +188,24 @@ class HelmanUnmeasuredPowerSensor(SensorEntity):
     async def async_added_to_hass(self) -> None:
         self._coordinator.register_sensor_ready()
 
+    def _should_emit(self, watts: float) -> bool:
+        last = getattr(self, "_last_emit_value", None)
+        last_ts = getattr(self, "_last_emit_ts", 0.0)
+        now = time.monotonic()
+        if last is None:
+            return True
+        if abs(watts - last) >= _HYSTERESIS_W:
+            return True
+        if now - last_ts >= _HYSTERESIS_MAX_GAP_S:
+            return True
+        return False
+
     def update_value(self, watts: float) -> None:
+        if not self._should_emit(watts):
+            return
         self._value = watts
+        self._last_emit_value = watts
+        self._last_emit_ts = time.monotonic()
         if self.hass is not None:
             self.async_write_ha_state()
 
@@ -208,8 +229,24 @@ class HelmanConsumptionTotalSensor(SensorEntity):
     async def async_added_to_hass(self) -> None:
         self._coordinator.register_sensor_ready()
 
+    def _should_emit(self, watts: float) -> bool:
+        last = getattr(self, "_last_emit_value", None)
+        last_ts = getattr(self, "_last_emit_ts", 0.0)
+        now = time.monotonic()
+        if last is None:
+            return True
+        if abs(watts - last) >= _HYSTERESIS_W:
+            return True
+        if now - last_ts >= _HYSTERESIS_MAX_GAP_S:
+            return True
+        return False
+
     def update_value(self, watts: float) -> None:
+        if not self._should_emit(watts):
+            return
         self._value = watts
+        self._last_emit_value = watts
+        self._last_emit_ts = time.monotonic()
         if self.hass is not None:
             self.async_write_ha_state()
 
@@ -233,8 +270,24 @@ class HelmanProductionTotalSensor(SensorEntity):
     async def async_added_to_hass(self) -> None:
         self._coordinator.register_sensor_ready()
 
+    def _should_emit(self, watts: float) -> bool:
+        last = getattr(self, "_last_emit_value", None)
+        last_ts = getattr(self, "_last_emit_ts", 0.0)
+        now = time.monotonic()
+        if last is None:
+            return True
+        if abs(watts - last) >= _HYSTERESIS_W:
+            return True
+        if now - last_ts >= _HYSTERESIS_MAX_GAP_S:
+            return True
+        return False
+
     def update_value(self, watts: float) -> None:
+        if not self._should_emit(watts):
+            return
         self._value = watts
+        self._last_emit_value = watts
+        self._last_emit_ts = time.monotonic()
         if self.hass is not None:
             self.async_write_ha_state()
 
