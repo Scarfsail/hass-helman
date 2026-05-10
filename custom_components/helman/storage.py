@@ -1,4 +1,6 @@
 from __future__ import annotations
+import hashlib
+import json
 from typing import Any
 from homeassistant.helpers import storage
 from homeassistant.core import HomeAssistant
@@ -87,11 +89,29 @@ class HelmanStorage:
         house_snapshot: dict[str, Any],
         solar_snapshot: dict[str, Any] | None,
     ) -> None:
+        new_hash = self._snapshot_hash(house_snapshot, solar_snapshot)
+        if new_hash == getattr(self, "_last_saved_hash", None):
+            self._snapshot = house_snapshot
+            self._solar_snapshot = solar_snapshot
+            return
         self._snapshot = house_snapshot
         self._solar_snapshot = solar_snapshot
+        self._last_saved_hash = new_hash
         await self._snapshot_store.async_save(
             {"house": house_snapshot, "solar": solar_snapshot}
         )
+
+    @staticmethod
+    def _snapshot_hash(
+        house_snapshot: dict[str, Any] | None,
+        solar_snapshot: dict[str, Any] | None,
+    ) -> str:
+        payload = json.dumps(
+            {"house": house_snapshot, "solar": solar_snapshot},
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
     async def async_save_schedule_document(
         self, schedule_document: dict[str, Any]
