@@ -139,26 +139,15 @@ def _merge_grid_forecast_responses(
     grid_flow_response: dict[str, Any],
     grid_price_response: dict[str, Any],
 ) -> dict[str, Any]:
-    merged_response = deepcopy(grid_flow_response)
-    merged_response["exportPriceUnit"] = deepcopy(
-        grid_price_response.get("exportPriceUnit")
-    )
-    merged_response["currentExportPrice"] = deepcopy(
-        grid_price_response.get("currentExportPrice")
-    )
-    merged_response["exportPricePoints"] = deepcopy(
-        grid_price_response.get("exportPricePoints", [])
-    )
-    merged_response["importPriceUnit"] = deepcopy(
-        grid_price_response.get("importPriceUnit")
-    )
-    merged_response["currentImportPrice"] = deepcopy(
-        grid_price_response.get("currentImportPrice")
-    )
-    merged_response["importPricePoints"] = deepcopy(
-        grid_price_response.get("importPricePoints", [])
-    )
-    return merged_response
+    return {
+        **grid_flow_response,
+        "exportPriceUnit": grid_price_response.get("exportPriceUnit"),
+        "currentExportPrice": grid_price_response.get("currentExportPrice"),
+        "exportPricePoints": list(grid_price_response.get("exportPricePoints", [])),
+        "importPriceUnit": grid_price_response.get("importPriceUnit"),
+        "currentImportPrice": grid_price_response.get("currentImportPrice"),
+        "importPricePoints": list(grid_price_response.get("importPricePoints", [])),
+    }
 
 
 def _build_grid_forecast_snapshot_with_prices(
@@ -180,9 +169,9 @@ def _build_price_channel_snapshot(
     points_field: str,
 ) -> dict[str, Any]:
     return {
-        "unit": deepcopy(grid_price_forecast.get(unit_field)),
-        "currentPrice": deepcopy(grid_price_forecast.get(current_price_field)),
-        "points": deepcopy(grid_price_forecast.get(points_field, [])),
+        "unit": grid_price_forecast.get(unit_field),
+        "currentPrice": grid_price_forecast.get(current_price_field),
+        "points": list(grid_price_forecast.get(points_field, [])),
     }
 
 

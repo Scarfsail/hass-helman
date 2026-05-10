@@ -36,6 +36,7 @@ _STUBBED_MODULES = (
     "homeassistant.components.energy.data",
     "homeassistant.core",
     "homeassistant.helpers",
+    "homeassistant.helpers.debounce",
     "homeassistant.helpers.entity_registry",
     "homeassistant.helpers.event",
     "homeassistant.util",
@@ -162,10 +163,16 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
     schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
+    schedule_mod.ScheduleAction = type("ScheduleAction", (), {})
+    schedule_mod.ScheduleDomains = type("ScheduleDomains", (), {})
+    schedule_mod.EMPTY_SCHEDULE_ACTION = None
     schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
+    schedule_mod.build_horizon_end = lambda reference_time: reference_time
     schedule_mod.build_horizon_start = lambda reference_time: reference_time
     schedule_mod.describe_schedule_control_config_issue = lambda config: None
     schedule_mod.format_slot_id = lambda slot: ""
+    schedule_mod.is_default_domains = lambda domains: True
+    schedule_mod.iter_horizon_slot_ids = lambda reference_time: iter([])
     schedule_mod.parse_slot_id = datetime.fromisoformat
     schedule_mod.materialize_schedule_slots = lambda stored_slots, reference_time: []
     schedule_mod.normalize_schedule_document_for_registry = (
@@ -261,11 +268,21 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     if helpers_pkg is None:
         helpers_pkg = types.ModuleType("homeassistant.helpers")
         sys.modules["homeassistant.helpers"] = helpers_pkg
+    helpers_pkg.__path__ = []  # mark as package so sub-imports work
+
+    debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
+    if debounce_mod is None:
+        debounce_mod = types.ModuleType("homeassistant.helpers.debounce")
+        sys.modules["homeassistant.helpers.debounce"] = debounce_mod
+    debounce_mod.Debouncer = type("Debouncer", (), {"async_call": lambda self: None})
 
     event_mod = sys.modules.get("homeassistant.helpers.event")
     if event_mod is None:
         event_mod = types.ModuleType("homeassistant.helpers.event")
         sys.modules["homeassistant.helpers.event"] = event_mod
+    event_mod.async_track_state_change_event = (
+        lambda hass, entity_ids, action: lambda: None
+    )
     event_mod.async_track_time_change = (
         lambda hass, callback, **kwargs: lambda: None
     )
@@ -343,6 +360,13 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
                 battery_forecast=canonical_battery_forecast,
             )
         )
+        canonical_solar = {"canonical": "solar"}
+        coordinator._async_get_canonical_solar_forecast = AsyncMock(
+            return_value=canonical_solar
+        )
+        coordinator._async_get_canonical_house_forecast = AsyncMock(
+            return_value=adjusted_house_forecast
+        )
 
         builder_instance = SimpleNamespace(
             build=AsyncMock(
@@ -355,7 +379,6 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
-        canonical_solar = {"canonical": "solar"}
         solar_response = {"kind": "solar"}
         house_response = {"kind": "house"}
         battery_response = {"kind": "battery"}
@@ -393,7 +416,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 coordinator_module,
                 "build_solar_forecast_response",
-                side_effect=[canonical_solar, solar_response],
+                return_value=solar_response,
             ),
             patch.object(
                 coordinator_module,
@@ -460,6 +483,31 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             grid_price_response["importPricePoints"],
         )
         self.assertNotIn("currentPrice", result["grid"])
+
+
+class MergeGridForecastResponsesTests(unittest.TestCase):
+    def test_does_not_alias_top_level_keys(self) -> None:
+        _merge_grid_forecast_responses = (
+            coordinator_module._merge_grid_forecast_responses
+        )
+
+        flow = {"slots": [{"t": 0}], "exportPriceUnit": "old"}
+        price = {
+            "exportPriceUnit": "EUR",
+            "currentExportPrice": 1.0,
+            "exportPricePoints": [{"t": 1}],
+            "importPriceUnit": "EUR",
+            "currentImportPrice": 2.0,
+            "importPricePoints": [{"t": 2}],
+        }
+        merged = _merge_grid_forecast_responses(
+            grid_flow_response=flow, grid_price_response=price
+        )
+        # Top-level overwrites must not bleed back into source dicts
+        merged["exportPriceUnit"] = "MUTATED"
+        self.assertEqual(price["exportPriceUnit"], "EUR")
+        # Slots from the flow response are passed through (shallow share allowed)
+        self.assertIs(merged["slots"], flow["slots"])
 
 
 if __name__ == "__main__":
