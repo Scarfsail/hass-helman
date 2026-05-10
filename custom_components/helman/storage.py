@@ -15,7 +15,7 @@ from .const import (
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "history_buckets": 60,
-    "history_bucket_duration": 1,
+    "history_bucket_duration": 5,
     "sources_title": "Energy Sources",
     "consumers_title": "Energy Consumers",
     "others_group_label": "Others",
