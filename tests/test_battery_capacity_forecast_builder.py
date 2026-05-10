@@ -1481,5 +1481,22 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("baselineSocPct", payload["series"][0])
 
 
+    def test_solar_slot_expansion_skips_inner_loop_when_divisor_is_one(self) -> None:
+        from datetime import timedelta
+
+        module, builder = self._make_builder()
+
+        # 5-min granularity input → split_factor = 1 (finer than canonical 15 min)
+        base = datetime(2026, 5, 10, 12, 0, tzinfo=TZ)
+        points = [
+            {"timestamp": (base + timedelta(minutes=5 * i)).isoformat(), "value": 1.0}
+            for i in range(4)
+        ]
+        result = builder._build_solar_slot_map({"points": points})
+        # 4 input points, divisor=1 → 4 output keys, value preserved
+        assert len(result) == 4
+        assert all(v == 1.0 for v in result.values())
+
+
 if __name__ == "__main__":
     unittest.main()

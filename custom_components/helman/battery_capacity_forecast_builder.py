@@ -1114,6 +1114,12 @@ class BatteryCapacityForecastBuilder:
         split_factor = self._get_solar_point_split_factor(parsed_points)
         slot_value_divisor = split_factor if split_factor > 0 else 1
         by_slot: dict[datetime, float] = {}
+
+        if slot_value_divisor == 1:
+            for slot_start, value in parsed_points:
+                by_slot[slot_start] = by_slot.get(slot_start, 0.0) + value
+            return by_slot
+
         for slot_start, value in parsed_points:
             slot_value = value / slot_value_divisor
             for split_index in range(slot_value_divisor):
