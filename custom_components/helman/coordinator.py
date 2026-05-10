@@ -2719,7 +2719,7 @@ class HelmanCoordinator:
         """Start the periodic tick using HA's time-interval tracker."""
         if self._unsub_tick is not None:
             return
-        bucket_duration: int = self._active_config.get("history_bucket_duration", 1)
+        bucket_duration: int = self._active_config.get("history_bucket_duration", 5)
         self._unsub_tick = async_track_time_interval(
             self._hass,
             self._tick,

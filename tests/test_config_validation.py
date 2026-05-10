@@ -63,7 +63,7 @@ def _valid_config() -> dict:
         "show_empty_groups": False,
         "show_others_group": True,
         "history_buckets": 60,
-        "history_bucket_duration": 1,
+        "history_bucket_duration": 5,
         "device_label_text": {
             "rooms": {
                 "Kitchen": "KT",
