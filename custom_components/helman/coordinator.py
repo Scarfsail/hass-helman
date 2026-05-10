@@ -423,7 +423,7 @@ class HelmanCoordinator:
         self._solar_invalidation_debouncer = Debouncer(
             self._hass,
             _LOGGER,
-            cooldown=1.0,
+            cooldown=30.0,
             immediate=False,
             function=self._async_invalidate_and_refresh_solar,
         )
@@ -571,12 +571,19 @@ class HelmanCoordinator:
     def _on_solar_forecast_source_state_changed(self, event) -> None:
         old_state = event.data.get("old_state")
         new_state = event.data.get("new_state")
-        if old_state is not None and new_state is not None:
-            if (
-                old_state.state == new_state.state
-                and old_state.attributes.get("wh_period")
+        if new_state is None:
+            return
+        if old_state is not None:
+            same_state = old_state.state == new_state.state
+            same_period = (
+                old_state.attributes.get("wh_period")
                 == new_state.attributes.get("wh_period")
-            ):
+            )
+            same_last_changed = (
+                old_state.attributes.get("last_changed")
+                == new_state.attributes.get("last_changed")
+            )
+            if same_state and same_period and same_last_changed:
                 return
         self._schedule_solar_invalidation()
 

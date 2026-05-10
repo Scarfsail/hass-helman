@@ -598,5 +598,67 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             sys.modules.pop("custom_components.helman.coordinator", None)
 
 
+class SolarInvalidationDebouncerCooldownTest(unittest.IsolatedAsyncioTestCase):
+    async def test_solar_invalidation_debouncer_uses_30s_cooldown(self) -> None:
+        """Coordinator must initialise _solar_invalidation_debouncer with cooldown=30.0."""
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            captured: list[float] = []
+
+            class _CapturingDebouncer:
+                def __init__(self, hass, logger, *, cooldown, immediate, function):
+                    captured.append(cooldown)
+                    self.function = function
+
+                async def async_call(self) -> None: ...
+
+            # Patch the Debouncer in the debounce stub before loading the coordinator.
+            debounce_mod = sys.modules["homeassistant.helpers.debounce"]
+            debounce_mod.Debouncer = _CapturingDebouncer
+
+            # Add SolarBiasCorrectionStore to the storage stub (local import in async_setup).
+            storage_mod = sys.modules["custom_components.helman.storage"]
+            fake_bias_store = SimpleNamespace(async_load=AsyncMock())
+            storage_mod.SolarBiasCorrectionStore = lambda hass: fake_bias_store
+
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coord_mod = importlib.import_module("custom_components.helman.coordinator")
+
+            fake_bias_service = SimpleNamespace(async_setup=AsyncMock(), async_train=AsyncMock())
+            coordinator = object.__new__(coord_mod.HelmanCoordinator)
+            coordinator._hass = SimpleNamespace(
+                async_create_task=asyncio.create_task,
+                bus=SimpleNamespace(async_listen=lambda *a, **kw: lambda: None),
+            )
+            coordinator._storage = SimpleNamespace(config={})
+            coordinator._solar_bias_scheduler = None
+            coordinator._solar_invalidation_debouncer = None
+            coordinator._unsub_listeners = []
+
+            bias_cfg = SimpleNamespace(
+                enabled=False,
+                training_time=None,
+                daily_energy_entity_ids=[],
+            )
+            try:
+                with patch.object(coord_mod, "SolarBiasCorrectionService", return_value=fake_bias_service), \
+                     patch.object(coord_mod, "read_bias_config", return_value=bias_cfg), \
+                     patch.object(coord_mod, "deepcopy", return_value={}), \
+                     patch.object(coord_mod, "build_appliances_runtime_registry", return_value=SimpleNamespace()):
+                    await coordinator.async_setup()
+            except Exception:
+                pass  # async_setup may fail further along; we only need the Debouncer call
+
+            self.assertTrue(len(captured) > 0, "Debouncer was never instantiated during async_setup")
+            self.assertEqual(
+                captured[0],
+                30.0,
+                f"Expected cooldown=30.0, got {captured[0]}",
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+
 if __name__ == "__main__":
     unittest.main()
