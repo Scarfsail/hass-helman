@@ -424,6 +424,9 @@ class HelmanCoordinator:
             self._solar_bias_store,
             bias_config,
             canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
+            battery_forecast_provider=lambda: self._cached_battery_forecast,
+            house_energy_entity_id_provider=self._get_house_energy_entity_id,
+            battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
         )
         self._solar_invalidation_debouncer = Debouncer(
             self._hass,
@@ -653,6 +656,20 @@ class HelmanCoordinator:
             builder = HelmanTreeBuilder(self._hass, self._active_config)
             self._cached_tree = await builder.build()
         return self._cached_tree
+
+    def _get_house_energy_entity_id(self) -> str | None:
+        power_devices = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("power_devices")
+        )
+        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
+        forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
+        return ConsumptionForecastBuilder._read_entity_id(
+            forecast_cfg.get("total_energy_entity_id")
+        )
+
+    def _get_battery_soc_entity_id(self) -> str | None:
+        entity_config = read_battery_entity_config(self._active_config)
+        return entity_config.capacity_entity_id if entity_config is not None else None
 
     def _read_house_forecast_config(self) -> tuple[str | None, int, int, str]:
         power_devices = ConsumptionForecastBuilder._read_dict(
