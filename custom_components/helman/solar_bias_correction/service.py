@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
@@ -976,15 +977,19 @@ def _actual_points_for_date(
 async def _get_significant_states_safe(hass, start_utc, end_utc, entity_ids):
     """Wrapper around get_significant_states that handles import failures."""
     try:
+        from homeassistant.components.recorder import get_instance
         from homeassistant.components.recorder.history import get_significant_states
     except Exception:
         return {}
-    return await get_significant_states(
-        hass,
-        start_utc,
-        end_utc,
-        entity_ids,
-        significant_changes_only=False,
+    return await get_instance(hass).async_add_executor_job(
+        partial(
+            get_significant_states,
+            hass,
+            start_utc,
+            end_utc,
+            entity_ids,
+            significant_changes_only=False,
+        )
     )
 
 

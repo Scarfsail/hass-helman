@@ -52,6 +52,8 @@ def _install_import_stubs() -> None:
     if recorder_mod is None:
         recorder_mod = types.ModuleType("homeassistant.components.recorder")
         sys.modules["homeassistant.components.recorder"] = recorder_mod
+    if not hasattr(recorder_mod, "get_instance"):
+        recorder_mod.get_instance = lambda hass: None
 
     history_mod = sys.modules.get("homeassistant.components.recorder.history")
     if history_mod is None:
@@ -85,6 +87,13 @@ def _state(value: float, ts_iso: str):
     return SimpleNamespace(state=str(value), last_changed=datetime.fromisoformat(ts_iso))
 
 
+class _FakeInstance:
+    """Fake recorder instance that runs executor jobs synchronously."""
+
+    async def async_add_executor_job(self, func):
+        return func()
+
+
 class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_buckets_state_changes_into_15min_slots(self):
         target = date(2026, 5, 10)
@@ -93,11 +102,10 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
             _state(800, "2026-05-10T00:00:00+02:00"),
             _state(1200, "2026-05-10T12:00:00+02:00"),
         ]
-        fake_get_states = AsyncMock(return_value={
-            "sensor.helman_house_consumption_forecast_current": states,
-        })
+        fake_result = {"sensor.helman_house_consumption_forecast_current": states}
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", fake_get_states):
+        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
+             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         self.assertEqual(len(points), 96)
         # First slot: 800 W → 800 / 4 = 200 Wh
@@ -110,9 +118,9 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_empty_when_no_states(self):
         target = date(2026, 5, 9)
-        fake_get_states = AsyncMock(return_value={})
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", fake_get_states):
+        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: {}), \
+             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         self.assertEqual(points, [])
 

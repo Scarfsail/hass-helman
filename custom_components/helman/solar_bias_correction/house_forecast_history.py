@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -8,8 +9,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 try:
+    from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.history import get_significant_states
 except Exception:  # pragma: no cover
+    get_instance = None  # type: ignore[assignment]
     get_significant_states = None  # type: ignore[assignment]
 
 HOUSE_FORECAST_CURRENT_ENTITY = "sensor.helman_house_consumption_forecast_current"
@@ -31,7 +34,7 @@ async def load_house_forecast_points_for_day(
     Returns a list of {"timestamp": ISO local time, "wh": float}.
     Empty list if no recorder data for the day.
     """
-    if get_significant_states is None:
+    if get_significant_states is None or get_instance is None:
         return []
     local_tz = ZoneInfo(str(hass.config.time_zone))
     day_start_local = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
@@ -39,12 +42,15 @@ async def load_house_forecast_points_for_day(
     start_utc = dt_util.as_utc(day_start_local)
     end_utc = dt_util.as_utc(day_end_local)
 
-    states_by_entity = await get_significant_states(
-        hass,
-        start_utc,
-        end_utc,
-        [HOUSE_FORECAST_CURRENT_ENTITY],
-        significant_changes_only=False,
+    states_by_entity = await get_instance(hass).async_add_executor_job(
+        partial(
+            get_significant_states,
+            hass,
+            start_utc,
+            end_utc,
+            [HOUSE_FORECAST_CURRENT_ENTITY],
+            significant_changes_only=False,
+        )
     )
     states = states_by_entity.get(HOUSE_FORECAST_CURRENT_ENTITY) or []
     if not states:
