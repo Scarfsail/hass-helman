@@ -85,6 +85,14 @@ async def async_setup_entry(
         + forecast_entities
     )
 
+    house_consumption_forecast_current_sensor = HelmanHouseConsumptionForecastCurrentSensor(
+        coordinator, entry,
+    )
+    async_add_entities([house_consumption_forecast_current_sensor])
+    coordinator.register_house_consumption_forecast_current_sensor(
+        house_consumption_forecast_current_sensor,
+    )
+
 
 class HelmanBatteryTimeSensor(SensorEntity):
     _attr_should_poll = False
@@ -365,3 +373,36 @@ class HelmanSolarForecastRemainingSensor(SensorEntity):
     @property
     def native_value(self) -> float | None:
         return self._coordinator.get_solar_forecast_today_remaining()
+
+
+class HelmanHouseConsumptionForecastCurrentSensor(SensorEntity):
+    """Publishes the forecasted house consumption for the *current* 15-min slot.
+
+    The state value is the slot's energy expressed in Wh-per-hour (i.e. W).
+    A slot forecast of 250 Wh is published as `1000` because 250 Wh / 0.25 h = 1000 Wh/h.
+    Reading the recorder history of this entity over a past day yields a stair-step
+    series of past forecast values, one step per slot.
+    """
+
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "W"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        self._coordinator = coordinator
+        self.entity_id = "sensor.helman_house_consumption_forecast_current"
+        self._attr_unique_id = f"{entry.entry_id}_house_consumption_forecast_current"
+        self._attr_translation_key = "house_consumption_forecast_current"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.get_house_consumption_forecast_current_w() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._coordinator.get_house_consumption_forecast_current_w()
+        if value is None:
+            return None
+        return round(value, 1)

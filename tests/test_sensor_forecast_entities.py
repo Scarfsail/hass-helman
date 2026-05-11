@@ -111,6 +111,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             config={},
             set_sensors=Mock(),
             set_entity_factory=Mock(),
+            register_house_consumption_forecast_current_sensor=Mock(),
         )
         hass = SimpleNamespace(data={"helman": {"coordinator": coordinator}})
         added_entities: list[object] = []
@@ -131,9 +132,15 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             forecast_sensors[-1].entity_id,
             "sensor.helman_energy_production_today_remaining",
         )
+        # Last 9 added entities should be the forecast sensors
         self.assertEqual(
-            [entity.entity_id for entity in added_entities[-9:]],
+            [entity.entity_id for entity in added_entities[-10:-1]],
             [entity.entity_id for entity in forecast_sensors],
+        )
+        # Last added entity should be the house consumption forecast current sensor
+        self.assertEqual(
+            added_entities[-1].entity_id,
+            "sensor.helman_house_consumption_forecast_current",
         )
 
     async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:

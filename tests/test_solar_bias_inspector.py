@@ -41,7 +41,11 @@ def _install_import_stubs() -> None:
 
     history_mod = types.ModuleType("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
+
+    async def _fake_get_significant_states(*args, **kwargs):
+        return {}
+
+    history_mod.get_significant_states = _fake_get_significant_states
     sys.modules["homeassistant.components.recorder.history"] = history_mod
 
     core_mod = types.ModuleType("homeassistant.core")
@@ -132,14 +136,22 @@ def test_inspector_day_serializes_frontend_contract():
             "invalidated": [],
             "factors": [{"slot": "08:00", "factor": 1.21}],
             "impact": [],
+            "houseForecast": [],
+            "houseActual": [],
+            "batterySocForecast": [],
+            "batterySocActual": [],
         },
-        "totals": {"rawWh": 420.0, "correctedWh": 510.0, "actualWh": 480.0},
+        "totals": {"rawWh": 420.0, "correctedWh": 510.0, "actualWh": 480.0, "houseForecastWh": None, "houseActualWh": None},
         "availability": {
             "hasRawForecast": True,
             "hasCorrectedForecast": True,
             "hasActuals": True,
             "hasProfile": True,
             "hasInvalidated": False,
+            "hasHouseForecast": False,
+            "hasHouseActual": False,
+            "hasBatterySocForecast": False,
+            "hasBatterySocActual": False,
         },
         "trainingExplainability": None,
     }
@@ -609,6 +621,10 @@ def test_inspector_day_applies_current_profile_and_totals():
         "hasActuals": True,
         "hasProfile": True,
         "hasInvalidated": False,
+        "hasHouseForecast": False,
+        "hasHouseActual": False,
+        "hasBatterySocForecast": False,
+        "hasBatterySocActual": False,
     }
     assert payload["series"]["raw"] == [
         {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 25.0},
@@ -637,7 +653,7 @@ def test_inspector_day_applies_current_profile_and_totals():
         {"slot": "08:00", "factor": 1.5},
         {"slot": "09:00", "factor": 0.5},
     ]
-    assert payload["totals"] == {"rawWh": 300.0, "correctedWh": 300.0, "actualWh": 90.0}
+    assert payload["totals"] == {"rawWh": 300.0, "correctedWh": 300.0, "actualWh": 90.0, "houseForecastWh": None, "houseActualWh": None}
     assert payload["range"]["minDate"] == "2026-04-13"
     assert payload["range"]["isToday"] is True
 

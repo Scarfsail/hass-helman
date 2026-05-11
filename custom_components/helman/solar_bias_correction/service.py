@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
@@ -13,7 +14,9 @@ from homeassistant.util import dt as dt_util
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
 from .forecast_history import load_forecast_points_for_day, load_trainer_samples
+from .house_forecast_history import load_house_forecast_points_for_day
 from .models import (
+    BatterySocPoint,
     BiasConfig,
     SolarBiasAdjustmentResult,
     SolarBiasContributionRow,
@@ -37,6 +40,9 @@ from .trainer import compute_fingerprint, train
 if TYPE_CHECKING:
     from ..storage import SolarBiasCorrectionStore
 
+_LOGGER = logging.getLogger(__name__)
+
+
 class TrainingInProgressError(RuntimeError):
     pass
 
@@ -53,11 +59,17 @@ class SolarBiasCorrectionService:
         cfg: BiasConfig,
         *,
         canonical_solar_forecast_provider=None,
+        battery_forecast_provider=None,
+        house_energy_entity_id_provider=None,
+        battery_soc_entity_id_provider=None,
     ) -> None:
         self._hass = hass
         self._store = store
         self._cfg = cfg
         self._canonical_solar_forecast_provider = canonical_solar_forecast_provider
+        self._battery_forecast_provider = battery_forecast_provider
+        self._house_energy_entity_id_provider = house_energy_entity_id_provider
+        self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
         self._profile: SolarBiasProfile | None = None
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
         self._explainability: SolarBiasTrainingExplainability | None = None
@@ -320,6 +332,46 @@ class SolarBiasCorrectionService:
                 actual_points,
                 invalidated_slots=invalidated_slots,
             )
+
+        # --- House forecast (from recorder of house forecast sensor) ---
+        house_forecast_points: list[dict] = []
+        try:
+            house_forecast_points = await load_house_forecast_points_for_day(
+                self._hass, target_date,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to load house forecast history for inspector")
+
+        # --- House actual consumption (energy meter history) ---
+        house_actual_points: list[dict] = []
+        if target_date <= today:
+            try:
+                house_actual_points = await self._load_house_actual_for_date(
+                    target_date, timezone
+                )
+            except Exception:
+                _LOGGER.exception("Failed to load house actual for inspector")
+
+        # --- Battery SoC actual (historical SoC % from recorder) ---
+        battery_soc_actual_points: list[dict] = []
+        if target_date <= today:
+            try:
+                battery_soc_actual_points = await self._load_battery_soc_actual_for_date(
+                    target_date, timezone
+                )
+            except Exception:
+                _LOGGER.exception("Failed to load battery SoC actual for inspector")
+
+        # --- Battery SoC forecast (future slots only, today/future) ---
+        battery_soc_forecast_points: list[dict] = []
+        if target_date >= today:
+            battery_soc_forecast_points = _filter_battery_soc_future(
+                self._get_battery_forecast_snapshot(),
+                target_date=target_date,
+                local_now=local_now,
+                timezone=timezone,
+            )
+
         day = SolarBiasInspectorDay(
             date=target_date.isoformat(),
             timezone=str(self._hass.config.time_zone),
@@ -338,6 +390,10 @@ class SolarBiasCorrectionService:
                     raw_points,
                     corrected_points,
                 ),
+                house_forecast=_inspector_points_from_raw(house_forecast_points),
+                house_actual=_inspector_points_from_raw(house_actual_points),
+                battery_soc_forecast=_battery_soc_points_from_raw(battery_soc_forecast_points),
+                battery_soc_actual=_battery_soc_points_from_raw(battery_soc_actual_points),
             ),
             totals=SolarBiasInspectorTotals(
                 raw_wh=_sum_point_values(raw_points) if raw_points else None,
@@ -345,6 +401,16 @@ class SolarBiasCorrectionService:
                     _sum_point_values(corrected_points) if corrected_points else None
                 ),
                 actual_wh=sum(actuals_by_slot.values()) if actuals_by_slot else None,
+                house_forecast_wh=(
+                    sum(p["wh"] for p in house_forecast_points)
+                    if house_forecast_points
+                    else None
+                ),
+                house_actual_wh=(
+                    sum(p["wh"] for p in house_actual_points)
+                    if house_actual_points
+                    else None
+                ),
             ),
             availability=SolarBiasInspectorAvailability(
                 has_raw_forecast=bool(raw_points),
@@ -352,12 +418,111 @@ class SolarBiasCorrectionService:
                 has_actuals=bool(actuals_by_slot),
                 has_profile=has_profile,
                 has_invalidated=bool(invalidated_points),
+                has_house_forecast=bool(house_forecast_points),
+                has_house_actual=bool(house_actual_points),
+                has_battery_soc_forecast=bool(battery_soc_forecast_points),
+                has_battery_soc_actual=bool(battery_soc_actual_points),
             ),
             is_today=target_date == today,
             is_future=target_date > today,
             training_explainability=self._explainability if has_profile else None,
         )
         return inspector_day_to_payload(day)
+
+    def _get_battery_forecast_snapshot(self) -> dict | None:
+        if self._battery_forecast_provider is None:
+            return None
+        try:
+            return self._battery_forecast_provider()
+        except Exception:
+            _LOGGER.exception("Battery forecast provider failed")
+            return None
+
+    async def _load_house_actual_for_date(
+        self, target_date: date, local_tz: ZoneInfo
+    ) -> list[dict]:
+        """Load per-15-min house energy actuals for target_date."""
+        if self._house_energy_entity_id_provider is None:
+            return []
+        entity_id = self._house_energy_entity_id_provider()
+        if not entity_id:
+            return []
+        local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
+        local_end = local_start + timedelta(days=1)
+        try:
+            from ..recorder_hourly_series import query_cumulative_slot_energy_changes
+            by_slot = await query_cumulative_slot_energy_changes(
+                self._hass,
+                entity_id,
+                local_start=local_start,
+                local_end=local_end,
+                interval_minutes=15,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to load house actual for inspector")
+            return []
+        points = []
+        for slot_start_utc, kwh in sorted(by_slot.items()):
+            slot_local = dt_util.as_local(slot_start_utc)
+            if slot_local.date() == target_date:
+                points.append(
+                    {"timestamp": slot_local.isoformat(), "wh": kwh * 1000.0}
+                )
+        return points
+
+    async def _load_battery_soc_actual_for_date(
+        self, target_date: date, local_tz: ZoneInfo
+    ) -> list[dict]:
+        """Load per-15-min battery SoC history for target_date."""
+        if self._battery_soc_entity_id_provider is None:
+            return []
+        entity_id = self._battery_soc_entity_id_provider()
+        if not entity_id:
+            return []
+        local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
+        local_end = local_start + timedelta(days=1)
+        start_utc = dt_util.as_utc(local_start)
+        end_utc = dt_util.as_utc(local_end)
+        try:
+            states_by_entity = await _get_significant_states_safe(
+                self._hass, start_utc, end_utc, [entity_id]
+            )
+        except Exception:
+            _LOGGER.exception("Failed to load battery SoC history for inspector")
+            return []
+        states = (states_by_entity or {}).get(entity_id) or []
+        if not states:
+            return []
+        timeline: list[tuple[datetime, float]] = []
+        for state in states:
+            raw = getattr(state, "state", None)
+            try:
+                value_pct = float(raw)
+            except (TypeError, ValueError):
+                continue
+            ts = getattr(state, "last_changed", None) or getattr(
+                state, "last_updated", None
+            )
+            if ts is None:
+                continue
+            timeline.append((dt_util.as_local(ts), value_pct))
+        if not timeline:
+            return []
+        timeline.sort(key=lambda pair: pair[0])
+        _SLOT_MINUTES = 15
+        points: list[dict] = []
+        cursor = 0
+        current_pct: float | None = None
+        for slot_index in range(96):
+            slot_start = local_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
+            while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
+                current_pct = timeline[cursor][1]
+                cursor += 1
+            if current_pct is None:
+                continue
+            slot_str = f"{slot_start.hour:02d}:{slot_start.minute:02d}"
+            points.append({"slot": slot_str, "pct": current_pct})
+        return points
 
     @property
     def _current_fingerprint(self) -> str:
@@ -806,3 +971,69 @@ def _actual_points_for_date(
         except (TypeError, ValueError):
             continue
     return points
+
+
+async def _get_significant_states_safe(hass, start_utc, end_utc, entity_ids):
+    """Wrapper around get_significant_states that handles import failures."""
+    try:
+        from homeassistant.components.recorder.history import get_significant_states
+    except Exception:
+        return {}
+    return await get_significant_states(
+        hass,
+        start_utc,
+        end_utc,
+        entity_ids,
+        significant_changes_only=False,
+    )
+
+
+def _filter_battery_soc_future(
+    snapshot: dict | None,
+    *,
+    target_date: date,
+    local_now: datetime,
+    timezone: ZoneInfo,
+) -> list[dict]:
+    """Extract future battery SoC forecast slots for target_date from the snapshot."""
+    if not isinstance(snapshot, dict):
+        return []
+    series = snapshot.get("series") or []
+    points: list[dict] = []
+    for entry in series:
+        if not isinstance(entry, dict):
+            continue
+        ts_raw = entry.get("timestamp")
+        if not isinstance(ts_raw, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_raw)
+        except ValueError:
+            continue
+        ts_local = ts.astimezone(timezone) if ts.tzinfo else ts.replace(tzinfo=timezone)
+        if ts_local.date() != target_date:
+            continue
+        if ts_local < local_now:
+            continue
+        pct = entry.get("socPct")
+        if pct is None:
+            continue
+        slot = f"{ts_local.hour:02d}:{ts_local.minute:02d}"
+        points.append({"slot": slot, "pct": float(pct)})
+    return points
+
+
+def _inspector_points_from_raw(raw: list[dict]) -> list[SolarBiasInspectorPoint]:
+    return [
+        SolarBiasInspectorPoint(timestamp=p["timestamp"], value_wh=float(p["wh"]))
+        for p in raw
+        if "timestamp" in p and "wh" in p
+    ]
+
+
+def _battery_soc_points_from_raw(raw: list[dict]) -> list[BatterySocPoint]:
+    return [
+        BatterySocPoint(slot=p["slot"], pct=float(p["pct"]))
+        for p in raw
+        if "slot" in p and "pct" in p
+    ]

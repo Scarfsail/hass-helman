@@ -44,6 +44,14 @@ power_devices:
 
 Deferrable consumers are deduplicated by `energy_entity_id`.
 
+### Inspector history retention
+
+The full day inspector reconstructs past-day house consumption forecast from
+the recorder history of `sensor.helman_house_consumption_forecast_current`.
+Home Assistant's default recorder retention is 10 days. If you want past-day
+inspection beyond that window, increase `purge_keep_days` in your `recorder:`
+config.
+
 ## Request contract
 
 `helman/get_forecast` accepts these optional forecast parameters:
