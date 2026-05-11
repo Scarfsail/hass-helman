@@ -61,6 +61,16 @@ def _install_import_stubs() -> None:
     sys.modules["homeassistant.util.dt"] = dt_mod
     util_mod.dt = dt_mod
 
+    # Force a fresh service import (test_solar_bias_service_runtime.py pops the
+    # service module at collection time, which can leave it cached without the
+    # load_house_forecast_points_for_day attribute when tests run in full suite).
+    sys.modules.pop(
+        "custom_components.helman.solar_bias_correction.service", None
+    )
+    sys.modules.pop(
+        "custom_components.helman.solar_bias_correction.house_forecast_history", None
+    )
+
 
 _install_import_stubs()
 
@@ -148,9 +158,9 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                 "2026-05-11T10:00:00+02:00"
             )
             service_mod.load_actuals_for_day = AsyncMock(return_value={})
-            with patch(
-                "custom_components.helman.solar_bias_correction.service"
-                ".load_house_forecast_points_for_day",
+            with patch.object(
+                service_mod,
+                "load_house_forecast_points_for_day",
                 AsyncMock(return_value=HOUSE_FC_POINTS),
             ), patch.object(
                 service,
