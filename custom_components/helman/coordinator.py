@@ -276,6 +276,7 @@ class HelmanCoordinator:
         self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
+        self._house_consumption_forecast_current_sensor = None
         self._cached_solar_forecast: dict[str, Any] | None = None
         self._cached_battery_forecast: dict | None = None
         self._cached_battery_forecast_expires_at: datetime | None = None
@@ -405,6 +406,10 @@ class HelmanCoordinator:
                     "Error publishing solar forecast sensor state: %s",
                     getattr(sensor, "entity_id", "<unknown>"),
                 )
+        hcfc_sensor = getattr(self, "_house_consumption_forecast_current_sensor", None)
+        if hcfc_sensor is not None:
+            if getattr(hcfc_sensor, "hass", None) is not None:
+                hcfc_sensor.async_write_ha_state()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -1287,6 +1292,52 @@ class HelmanCoordinator:
         if not values:
             return None
         return round(sum(values) / 1000.0, 4)
+
+    def register_house_consumption_forecast_current_sensor(self, sensor) -> None:
+        self._house_consumption_forecast_current_sensor = sensor
+
+    def get_house_consumption_forecast_current_w(self) -> float | None:
+        forecast = self._cached_forecast
+        if not isinstance(forecast, dict):
+            return None
+        if forecast.get("status") != "available":
+            return None
+        series = forecast.get("series") or []
+        current_slot = forecast.get("currentSlot")
+        if not series and current_slot is None:
+            return None
+        now_local = dt_util.as_local(dt_util.now())
+        all_entries = []
+        if isinstance(current_slot, dict):
+            all_entries.append(current_slot)
+        all_entries.extend(series if isinstance(series, list) else [])
+        for entry in all_entries:
+            if not isinstance(entry, dict):
+                continue
+            ts_raw = entry.get("timestamp")
+            if not isinstance(ts_raw, str):
+                continue
+            slot_start = dt_util.as_local(dt_util.parse_datetime(ts_raw))
+            if slot_start is None:
+                continue
+            slot_end = slot_start + timedelta(minutes=15)
+            if slot_start <= now_local < slot_end:
+                nd = entry.get("nonDeferrable") or {}
+                nd_wh = nd.get("value") if isinstance(nd, dict) else None
+                if nd_wh is None:
+                    return None
+                try:
+                    nd_wh = float(nd_wh)
+                except (TypeError, ValueError):
+                    return None
+                deferrable_wh = sum(
+                    float(c.get("value", 0))
+                    for c in (entry.get("deferrableConsumers") or [])
+                    if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
+                )
+                total_wh = nd_wh + deferrable_wh
+                return total_wh / 0.25  # Convert Wh to W (15-min slot)
+        return None
 
     def get_solar_forecast_today_remaining(self) -> float | None:
         now = dt_util.now()
