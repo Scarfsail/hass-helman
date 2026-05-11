@@ -124,6 +124,12 @@ class SolarBiasImpactPoint:
 
 
 @dataclass
+class BatterySocPoint:
+    slot: str  # "HH:MM"
+    pct: float
+
+
+@dataclass
 class SolarBiasContributionRow:
     date: str
     forecast_wh: float | None
@@ -160,6 +166,10 @@ class SolarBiasInspectorSeries:
     factors: list[SolarBiasFactorPoint]
     invalidated: list[SolarBiasInspectorPoint] = field(default_factory=list)
     impact: list[SolarBiasImpactPoint] = field(default_factory=list)
+    house_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    house_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    battery_soc_forecast: list[BatterySocPoint] = field(default_factory=list)
+    battery_soc_actual: list[BatterySocPoint] = field(default_factory=list)
 
 
 @dataclass
@@ -167,6 +177,8 @@ class SolarBiasInspectorTotals:
     raw_wh: float | None
     corrected_wh: float | None
     actual_wh: float | None
+    house_forecast_wh: float | None = None
+    house_actual_wh: float | None = None
 
 
 @dataclass
@@ -176,6 +188,10 @@ class SolarBiasInspectorAvailability:
     has_actuals: bool
     has_profile: bool
     has_invalidated: bool = False
+    has_house_forecast: bool = False
+    has_house_actual: bool = False
+    has_battery_soc_forecast: bool = False
+    has_battery_soc_actual: bool = False
 
 
 @dataclass
@@ -224,11 +240,21 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
                 for point in day.series.factors
             ],
             "impact": [_impact_point_payload(point) for point in day.series.impact],
+            "houseForecast": [_inspector_point_payload(p) for p in day.series.house_forecast],
+            "houseActual": [_inspector_point_payload(p) for p in day.series.house_actual],
+            "batterySocForecast": [
+                {"slot": p.slot, "pct": p.pct} for p in day.series.battery_soc_forecast
+            ],
+            "batterySocActual": [
+                {"slot": p.slot, "pct": p.pct} for p in day.series.battery_soc_actual
+            ],
         },
         "totals": {
             "rawWh": day.totals.raw_wh,
             "correctedWh": day.totals.corrected_wh,
             "actualWh": day.totals.actual_wh,
+            "houseForecastWh": day.totals.house_forecast_wh,
+            "houseActualWh": day.totals.house_actual_wh,
         },
         "availability": {
             "hasRawForecast": day.availability.has_raw_forecast,
@@ -236,6 +262,10 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasActuals": day.availability.has_actuals,
             "hasProfile": day.availability.has_profile,
             "hasInvalidated": day.availability.has_invalidated,
+            "hasHouseForecast": day.availability.has_house_forecast,
+            "hasHouseActual": day.availability.has_house_actual,
+            "hasBatterySocForecast": day.availability.has_battery_soc_forecast,
+            "hasBatterySocActual": day.availability.has_battery_soc_actual,
         },
         "trainingExplainability": training_explainability_to_payload(
             day.training_explainability
