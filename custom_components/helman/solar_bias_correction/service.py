@@ -61,6 +61,7 @@ class SolarBiasCorrectionService:
         *,
         canonical_solar_forecast_provider=None,
         battery_forecast_provider=None,
+        house_forecast_snapshot_provider=None,
         house_energy_entity_id_provider=None,
         battery_soc_entity_id_provider=None,
     ) -> None:
@@ -69,6 +70,7 @@ class SolarBiasCorrectionService:
         self._cfg = cfg
         self._canonical_solar_forecast_provider = canonical_solar_forecast_provider
         self._battery_forecast_provider = battery_forecast_provider
+        self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
         self._profile: SolarBiasProfile | None = None
@@ -334,14 +336,21 @@ class SolarBiasCorrectionService:
                 invalidated_slots=invalidated_slots,
             )
 
-        # --- House forecast (from recorder of house forecast sensor) ---
+        # --- House forecast ---
+        # Future days: read directly from the cached forecast snapshot (kWh → Wh).
+        # Past/today: read from the recorder history of the house forecast sensor (W → Wh).
         house_forecast_points: list[dict] = []
-        try:
-            house_forecast_points = await load_house_forecast_points_for_day(
-                self._hass, target_date,
+        if target_date > today:
+            house_forecast_points = _house_forecast_points_from_snapshot(
+                self._get_house_forecast_snapshot(), target_date
             )
-        except Exception:
-            _LOGGER.exception("Failed to load house forecast history for inspector")
+        else:
+            try:
+                house_forecast_points = await load_house_forecast_points_for_day(
+                    self._hass, target_date,
+                )
+            except Exception:
+                _LOGGER.exception("Failed to load house forecast history for inspector")
 
         # --- House actual consumption (energy meter history) ---
         house_actual_points: list[dict] = []
@@ -429,6 +438,15 @@ class SolarBiasCorrectionService:
             training_explainability=self._explainability if has_profile else None,
         )
         return inspector_day_to_payload(day)
+
+    def _get_house_forecast_snapshot(self) -> dict | None:
+        if self._house_forecast_snapshot_provider is None:
+            return None
+        try:
+            return self._house_forecast_snapshot_provider()
+        except Exception:
+            _LOGGER.exception("House forecast snapshot provider failed")
+            return None
 
     def _get_battery_forecast_snapshot(self) -> dict | None:
         if self._battery_forecast_provider is None:
@@ -991,6 +1009,49 @@ async def _get_significant_states_safe(hass, start_utc, end_utc, entity_ids):
             significant_changes_only=False,
         )
     )
+
+
+def _house_forecast_points_from_snapshot(
+    snapshot: dict | None, target_date: date
+) -> list[dict]:
+    """Extract 15-min house forecast Wh points for target_date from a cached snapshot.
+
+    The snapshot series values are in kWh per canonical slot; convert to Wh.
+    Only used for future days where recorder history doesn't exist yet.
+    """
+    if not isinstance(snapshot, dict):
+        return []
+    if snapshot.get("status") != "available":
+        return []
+    points: list[dict] = []
+    for entry in snapshot.get("series") or []:
+        if not isinstance(entry, dict):
+            continue
+        ts_raw = entry.get("timestamp")
+        if not isinstance(ts_raw, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_raw)
+        except ValueError:
+            continue
+        if ts.date() != target_date:
+            continue
+        nd = entry.get("nonDeferrable") or {}
+        nd_kwh = nd.get("value") if isinstance(nd, dict) else None
+        if nd_kwh is None:
+            continue
+        try:
+            nd_kwh = float(nd_kwh)
+        except (TypeError, ValueError):
+            continue
+        deferrable_kwh = sum(
+            float(c.get("value", 0))
+            for c in (entry.get("deferrableConsumers") or [])
+            if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
+        )
+        total_wh = (nd_kwh + deferrable_kwh) * 1000
+        points.append({"timestamp": ts_raw, "wh": total_wh})
+    return points
 
 
 def _filter_battery_soc_future(

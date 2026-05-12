@@ -425,6 +425,7 @@ class HelmanCoordinator:
             bias_config,
             canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
             battery_forecast_provider=lambda: self._cached_battery_forecast,
+            house_forecast_snapshot_provider=lambda: self._cached_forecast,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
         )
@@ -1347,13 +1348,14 @@ class HelmanCoordinator:
                     nd_wh = float(nd_wh)
                 except (TypeError, ValueError):
                     return None
-                deferrable_wh = sum(
+                deferrable_kwh = sum(
                     float(c.get("value", 0))
                     for c in (entry.get("deferrableConsumers") or [])
                     if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
                 )
-                total_wh = nd_wh + deferrable_wh
-                return total_wh / 0.25  # Convert Wh to W (15-min slot)
+                # Values are kWh per 15-min slot; convert to W: kWh * 1000 / 0.25 h
+                total_kwh = nd_wh + deferrable_kwh
+                return total_kwh * 1000 / 0.25
         return None
 
     def get_solar_forecast_today_remaining(self) -> float | None:
