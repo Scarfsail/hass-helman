@@ -343,7 +343,9 @@ class SolarBiasCorrectionService:
         house_forecast_points: list[dict] = []
         if target_date >= today:
             house_forecast_points = _house_forecast_points_from_snapshot(
-                self._get_house_forecast_snapshot(), target_date
+                self._get_house_forecast_snapshot(),
+                target_date,
+                next_slot=_next_slot_boundary(local_now) if target_date == today else None,
             )
         else:
             try:
@@ -358,7 +360,8 @@ class SolarBiasCorrectionService:
         if target_date <= today:
             try:
                 house_actual_points = await self._load_house_actual_for_date(
-                    target_date, timezone
+                    target_date, timezone,
+                    local_now=local_now if target_date == today else None,
                 )
             except Exception:
                 _LOGGER.exception("Failed to load house actual for inspector")
@@ -459,7 +462,7 @@ class SolarBiasCorrectionService:
             return None
 
     async def _load_house_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo
+        self, target_date: date, local_tz: ZoneInfo, local_now: datetime | None = None
     ) -> list[dict]:
         """Load per-15-min house energy actuals for target_date."""
         if self._house_energy_entity_id_provider is None:
@@ -484,10 +487,11 @@ class SolarBiasCorrectionService:
         points = []
         for slot_start_utc, kwh in sorted(by_slot.items()):
             slot_local = dt_util.as_local(slot_start_utc)
-            if slot_local.date() == target_date:
-                points.append(
-                    {"timestamp": slot_local.isoformat(), "wh": kwh * 1000.0}
-                )
+            if slot_local.date() != target_date:
+                continue
+            if local_now is not None and slot_local > local_now:
+                continue
+            points.append({"timestamp": slot_local.isoformat(), "wh": kwh * 1000.0})
         return points
 
     async def _load_battery_soc_actual_for_date(
@@ -1017,12 +1021,16 @@ async def _get_significant_states_safe(hass, start_utc, end_utc, entity_ids):
 
 
 def _house_forecast_points_from_snapshot(
-    snapshot: dict | None, target_date: date
+    snapshot: dict | None,
+    target_date: date,
+    *,
+    next_slot: datetime | None = None,
 ) -> list[dict]:
     """Extract 15-min house forecast Wh points for target_date from a cached snapshot.
 
     The snapshot series values are in kWh per canonical slot; convert to Wh.
-    Only used for future days where recorder history doesn't exist yet.
+    Pass next_slot for today so past slots are excluded and forecast starts
+    seamlessly after the last actual slot.
     """
     if not isinstance(snapshot, dict):
         return []
@@ -1039,7 +1047,11 @@ def _house_forecast_points_from_snapshot(
             ts = datetime.fromisoformat(ts_raw)
         except ValueError:
             continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=next_slot.tzinfo if next_slot else None)
         if ts.date() != target_date:
+            continue
+        if next_slot is not None and ts < next_slot:
             continue
         nd = entry.get("nonDeferrable") or {}
         nd_kwh = nd.get("value") if isinstance(nd, dict) else None
@@ -1059,6 +1071,15 @@ def _house_forecast_points_from_snapshot(
     return points
 
 
+def _next_slot_boundary(local_now: datetime) -> datetime:
+    """Return the start of the first 15-min slot that begins after the slot containing now."""
+    slot_mins = (local_now.hour * 60 + local_now.minute) // 15 * 15
+    current_slot = local_now.replace(
+        hour=slot_mins // 60, minute=slot_mins % 60, second=0, microsecond=0
+    )
+    return current_slot + timedelta(minutes=15)
+
+
 def _filter_battery_soc_future(
     snapshot: dict | None,
     *,
@@ -1070,6 +1091,7 @@ def _filter_battery_soc_future(
     if not isinstance(snapshot, dict):
         return []
     series = snapshot.get("series") or []
+    next_slot = _next_slot_boundary(local_now)
     points: list[dict] = []
     for entry in series:
         if not isinstance(entry, dict):
@@ -1084,7 +1106,7 @@ def _filter_battery_soc_future(
         ts_local = ts.astimezone(timezone) if ts.tzinfo else ts.replace(tzinfo=timezone)
         if ts_local.date() != target_date:
             continue
-        if ts_local < local_now:
+        if ts_local < next_slot:
             continue
         pct = entry.get("socPct")
         if pct is None:
