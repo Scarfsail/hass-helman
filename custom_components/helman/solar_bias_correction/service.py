@@ -337,10 +337,11 @@ class SolarBiasCorrectionService:
             )
 
         # --- House forecast ---
-        # Future days: read directly from the cached forecast snapshot (kWh → Wh).
-        # Past/today: read from the recorder history of the house forecast sensor (W → Wh).
+        # Today/future: read from the cached forecast snapshot (kWh → Wh) so future
+        # slots of today are not held flat from the last recorder value.
+        # Past days: read from the recorder history of the house forecast sensor (W → Wh).
         house_forecast_points: list[dict] = []
-        if target_date > today:
+        if target_date >= today:
             house_forecast_points = _house_forecast_points_from_snapshot(
                 self._get_house_forecast_snapshot(), target_date
             )
