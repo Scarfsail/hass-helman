@@ -530,11 +530,15 @@ class SolarBiasCorrectionService:
             return []
         timeline.sort(key=lambda pair: pair[0])
         _SLOT_MINUTES = 15
+        local_now = datetime.now(local_tz)
+        is_today = target_date == local_now.date()
         points: list[dict] = []
         cursor = 0
         current_pct: float | None = None
         for slot_index in range(96):
             slot_start = local_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
+            if is_today and slot_start > local_now:
+                break
             while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
                 current_pct = timeline[cursor][1]
                 cursor += 1
