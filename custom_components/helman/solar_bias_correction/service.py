@@ -345,7 +345,7 @@ class SolarBiasCorrectionService:
             house_forecast_points = _house_forecast_points_from_snapshot(
                 self._get_house_forecast_snapshot(),
                 target_date,
-                next_slot=_next_slot_boundary(local_now) if target_date == today else None,
+                next_slot=(_next_slot_boundary(local_now) - timedelta(minutes=15)) if target_date == today else None,
             )
         else:
             try:
@@ -489,7 +489,7 @@ class SolarBiasCorrectionService:
             slot_local = dt_util.as_local(slot_start_utc)
             if slot_local.date() != target_date:
                 continue
-            if local_now is not None and slot_local > local_now:
+            if local_now is not None and slot_local >= _next_slot_boundary(local_now) - timedelta(minutes=15):
                 continue
             points.append({"timestamp": slot_local.isoformat(), "wh": kwh * 1000.0})
         return points
