@@ -10,9 +10,8 @@ from homeassistant.core import HomeAssistant
 from .const import (
     CUSTOM_COMPONENTS,
     DOMAIN,
-    PANEL_DIST_FOLDER,
+    FRONTEND_COMPILED_FOLDER,
     PANEL_FILENAME,
-    PANEL_FOLDER,
     PANEL_FRONTEND_URL_PATH,
     PANEL_ICON,
     PANEL_NAME,
@@ -28,7 +27,7 @@ _PANEL_REGISTERED = "panel_registered"
 async def async_register_panel(hass: HomeAssistant) -> None:
     domain_data = hass.data.setdefault(DOMAIN, {})
     root_dir = os.path.join(hass.config.path(CUSTOM_COMPONENTS), DOMAIN)
-    bundle_path = os.path.join(root_dir, PANEL_FOLDER, PANEL_DIST_FOLDER, PANEL_FILENAME)
+    bundle_path = os.path.join(root_dir, FRONTEND_COMPILED_FOLDER, PANEL_FILENAME)
 
     if not domain_data.get(_PANEL_STATIC_REGISTERED):
         await hass.http.async_register_static_paths(

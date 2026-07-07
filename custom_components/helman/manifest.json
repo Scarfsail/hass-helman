@@ -6,7 +6,9 @@
   "config_flow": true,
   "dependencies": [
     "energy",
-    "recorder"
+    "recorder",
+    "frontend",
+    "http"
   ],
   "requirements": [],
   "documentation": "https://github.com/Scarfsail/hass-helman",

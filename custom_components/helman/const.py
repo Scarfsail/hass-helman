@@ -44,8 +44,13 @@ BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY = 0.95
 BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY = 0.95
 BATTERY_CAPACITY_FORECAST_MODEL_ID = "battery_net_load_fractional_hour_v1"
 DEFAULT_APPLIANCE_ICON = "mdi:lightning-bolt"
-PANEL_FOLDER = "frontend"
-PANEL_DIST_FOLDER = "dist"
+
+# Compiled frontend (card + config editor), served as static files
+FRONTEND_COMPILED_FOLDER = "frontend_compiled"
+FRONTEND_URL_BASE = "/helman_frontend"
+CARD_FILENAME = "helman-card.js"
+CARD_URL = f"{FRONTEND_URL_BASE}/{CARD_FILENAME}"
+
 PANEL_FILENAME = "helman-config-editor.js"
 PANEL_URL = f"/api/panel_custom/{DOMAIN}-config"
 PANEL_TITLE = f"{NAME} Config"
