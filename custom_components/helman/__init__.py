@@ -2,6 +2,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .frontend import async_register_frontend, async_unregister_frontend
 from .panel import async_register_panel
 from .coordinator import HelmanCoordinator
 from .storage import HelmanStorage
@@ -19,6 +20,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         domain_data["storage"] = stor
     async_register_websocket_commands(hass)
     await async_register_panel(hass)
+    await async_register_frontend(hass)
     return True
 
 
@@ -33,6 +35,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         domain_data["storage"] = stor
 
     await async_register_panel(hass)
+    await async_register_frontend(hass)
     coordinator = HelmanCoordinator(hass, stor)
     await coordinator.async_setup()
 
@@ -58,6 +61,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = hass.data[DOMAIN].get("coordinator")
     if coordinator:
         await coordinator.async_unload()
+    await async_unregister_frontend(hass)
     hass.data[DOMAIN].pop(entry.entry_id, None)
     hass.data[DOMAIN].pop("coordinator", None)
     return unload_ok

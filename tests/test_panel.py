@@ -116,7 +116,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.http.static_paths), 1)
         self.assertEqual(hass.http.static_paths[0].url_path, PANEL_URL)
         self.assertIn(
-            "/config/custom_components/helman/frontend/dist/helman-config-editor.js",
+            "/config/custom_components/helman/frontend_compiled/helman-config-editor.js",
             hass.http.static_paths[0].path,
         )
 

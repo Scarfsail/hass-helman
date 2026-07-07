@@ -5,17 +5,17 @@ export default defineConfig(({ mode }) => {
     return {
         build: {
             lib: {
-                entry: "./src/helman-simple/helman-simple-card.ts",
+                entry: "./config-editor/index.ts",
                 formats: ["es"],
-                fileName: () => `helman-simple-card-${isProduction ? "prod" : "dev"}.js`,
+                fileName: () => "helman-config-editor.js",
             },
-            codeSplitting: false,
             rollupOptions: {
-                external: []
+                output: {
+                    assetFileNames: "assets/[name][extname]",
+                },
             },
             emptyOutDir: false,
-            outDir: './dist',
-            assetsDir: "compiled",
+            outDir: "../custom_components/helman/frontend_compiled",
             sourcemap: !isProduction,
             minify: isProduction
         },

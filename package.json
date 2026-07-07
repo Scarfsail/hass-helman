@@ -15,11 +15,16 @@
       ["@semantic-release/exec", {
         "prepareCmd": "python -c \"import json; p='custom_components/helman/manifest.json'; d=json.load(open(p)); d['version']='${nextRelease.version}'; f=open(p,'w'); json.dump(d, f, indent=2); f.write('\\n'); f.close()\""
       }],
+      ["@semantic-release/exec", {
+        "prepareCmd": "cd custom_components/helman && zip -r ../../helman.zip . -x '__pycache__/*' -x '*/__pycache__/*' && cd ../.."
+      }],
       ["@semantic-release/git", {
         "assets": ["custom_components/helman/manifest.json"],
         "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }],
-      "@semantic-release/github"
+      ["@semantic-release/github", {
+        "assets": [{ "path": "helman.zip", "label": "helman.zip" }]
+      }]
     ]
   }
 }

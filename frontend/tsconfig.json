@@ -17,8 +17,10 @@
     "resolveJsonModule": true
   },
   "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "src/**/*.json"    
+    "cards/**/*.ts",
+    "cards/**/*.tsx",
+    "cards/**/*.json",
+    "config-editor/**/*.ts",
+    "config-editor/**/*.json"
   ],
 }

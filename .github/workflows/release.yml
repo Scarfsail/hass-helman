@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - run: git submodule update --init frontend/hass-frontend
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run build
       - run: npm install
       - run: npx semantic-release
         env:
