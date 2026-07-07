@@ -1,0 +1,393 @@
+{
+  "card": {
+    "loading": "Načítání energetických dat…"
+  },
+  "house_section": {
+    "group_by": "Seskupit podle",
+    "others": "Ostatní"
+  },
+  "node_detail": {
+    "close": "Zavřít",
+    "title": {
+      "solar":   "Solární panely",
+      "battery": "Baterie",
+      "grid":    "Síť",
+      "house":   "Dům"
+    },
+    "battery": {
+      "mode":               "Režim",
+      "mode_charging":      "Nabíjení",
+      "mode_discharging":   "Vybíjení",
+      "mode_idle":          "Nečinnost",
+      "power":              "Výkon",
+      "soc":                "Nabití",
+      "min_soc":            "Min. nabití",
+      "max_soc":            "Max. nabití",
+      "remaining_energy":   "Zbývající energie",
+      "section_producer":   "Vybíjení",
+      "section_consumer":   "Nabíjení"
+    },
+    "solar": {
+      "power":        "Výkon",
+      "today_energy": "Dnes",
+      "forecast":     "Zbývající předpověď",
+      "forecast_section": "Předpověď",
+      "remaining_today": "Zbývá dnes",
+      "forecast_unavailable": "Předpověď není dostupná"
+    },
+    "grid": {
+      "power":            "Výkon",
+      "today_import":     "Dnes odebráno",
+      "today_export":     "Dnes dodáno",
+      "section_producer": "Import",
+      "section_consumer": "Export",
+      "forecast_section": "Předpověď sítě",
+      "current_sell_price": "Aktuální prodejní cena",
+      "forecast_unavailable": "Předpověď není dostupná"
+    },
+    "forecast_detail": {
+      "title": "Budoucí předpověď",
+      "today": "Dnes",
+      "tomorrow": "Zítra",
+      "current_label": "Teď",
+      "remaining_label": "Zbývá",
+      "overall_label": "Celkem",
+      "solar_label": "Solár",
+      "solar_unavailable": "Není k dispozici",
+      "grid_label": "Síť",
+      "grid_unavailable": "Zatím není k dispozici",
+      "grid_net": "Čistý tok",
+      "price_label": "Prodej",
+      "price_min": "Min",
+      "price_max": "Max",
+      "price_unavailable": "Zatím není k dispozici",
+      "no_future_data": "Žádná budoucí předpověď není k dispozici",
+      "hourly_detail": "Hodinový detail",
+      "partial_note": "Některá data předpovědi mohou chybět.",
+      "unavailable_note": "Část předpovědi není momentálně dostupná.",
+      "forecast_unavailable": "Předpověď není momentálně dostupná.",
+      "no_sections_enabled": "V konfiguraci karty nejsou povolené žádné sekce předpovědi."
+    },
+    "house": {
+      "power": "Výkon"
+    },
+    "house_forecast": {
+      "title": "Předpověď spotřeby",
+      "baseline": "Základní Spotřeba",
+      "baseline_detail": "Základní\nSpotřeba",
+      "deferrables": "Odložitelné",
+      "show_deferrables": "Zobrazit odložitelné spotřebiče",
+      "hide_deferrables": "Skrýt odložitelné spotřebiče",
+      "insufficient_history": "Předpověď bude dostupná po %d dnech historie.",
+      "unavailable": "Předpověď spotřeby není momentálně dostupná.",
+      "no_data": "Žádná data předpovědi spotřeby.",
+      "hourly_detail": "Hodinový detail"
+    },
+    "battery_forecast": {
+      "title": "Předpověď kapacity",
+      "status_label": "Stav",
+      "status_not_configured": "Není nakonfigurováno",
+      "status_insufficient_history": "Nedostatek historie",
+      "status_unavailable": "Nedostupné",
+      "status_partial": "Částečné",
+      "status_available": "Dostupné",
+      "coverage_until": "Pokrytí do",
+      "not_configured": "Předpověď kapacity baterie není nakonfigurovaná.",
+      "insufficient_history": "Předpověď kapacity baterie bude dostupná, až bude mít předpověď spotřeby dost historie.",
+      "unavailable": "Předpověď kapacity baterie není momentálně dostupná.",
+      "no_data": "Žádná data předpovědi kapacity baterie.",
+      "partial_note": "Předpověď kapacity baterie je dostupná jen pro část horizontu.",
+      "partial_reason_missing_current_hour_solar": "Předpověď nemůže začít, protože chybí solární data pro aktuální hodinu.",
+      "partial_reason_solar_forecast_ended": "Předpověď končí tam, kde končí dostupná solární předpověď.",
+      "end_soc": "SoC na konci dne",
+      "last_soc": "Poslední SoC",
+      "soc_range": "Rozsah SoC",
+      "min_soc": "Nejnižší SoC",
+      "max_soc": "Nejvyšší SoC",
+      "end_energy": "Energie na konci dne",
+      "last_energy": "Energie na konci pokrytí",
+      "daily_summary": "Denní souhrn",
+      "hourly_detail": "Hodinový detail",
+      "energy": "Energie",
+      "soc_flow": "Nabití / tok",
+      "charge_discharge": "Tok",
+      "charged": "Nabito",
+      "discharged": "Vybito",
+      "imported_from_grid": "Import ze sítě",
+      "exported_to_grid": "Export do sítě",
+      "slot_duration": "Délka slotu"
+    }
+  },
+  "scheduling": {
+    "empty": "Rozvrh není k dispozici.",
+    "execution": {
+      "toggle": "Vykonávat akce"
+    },
+    "status": {
+      "refreshing": "Obnovuje se…",
+      "updated": "Aktualizováno"
+    },
+    "day": {
+      "today": "Dnes",
+      "tomorrow": "Zítra"
+    },
+    "badge": {
+      "now": "Teď"
+    },
+    "action": {
+      "empty": "Bez zásahu",
+      "normal": "Normální",
+      "charge_to_target_soc": "Nabíjet do",
+      "discharge_to_target_soc": "Vybíjet do",
+      "stop_charging": "Zastavit nabíjení",
+      "stop_discharging": "Zastavit vybíjení",
+      "stop_export": "Zastavit export"
+    },
+    "action_table": {
+      "empty": "Bez zásahu",
+      "normal": "Normální",
+      "charge_to_target_soc": "Do",
+      "discharge_to_target_soc": "Do",
+      "stop_charging": "Nenabíjet",
+      "stop_discharging": "Nevybíjet",
+      "stop_export": "Neexportovat"
+    },
+    "action_kind": {
+      "empty": "Bez naplánovaného zásahu",
+      "normal": "Normální režim",
+      "charge_to_target_soc": "Nabíjet do cílového SoC",
+      "discharge_to_target_soc": "Vybíjet do cílového SoC",
+      "stop_charging": "Zakázat nabíjení",
+      "stop_discharging": "Zakázat vybíjení",
+      "stop_export": "Zakázat export do sítě"
+    },
+    "appliance": {
+      "action": {
+        "generic": "Naplánováno"
+      },
+      "generic": {
+        "action": {
+          "on": "Zapnout",
+          "off": "Vypnout"
+        },
+        "projected_energy": "Odhadovaná energie",
+        "projection_method": {
+          "fixed": "Fixní",
+          "history_average": "Historický průměr",
+          "fixed_fallback": "Fixní náhrada"
+        }
+      },
+      "climate": {
+        "projected_energy": "Odhadovaná energie klimatizace",
+        "mode": {
+          "off": "Vypnout",
+          "heat": "Topení",
+          "cool": "Chlazení"
+        }
+      },
+      "ev": {
+        "action": {
+          "no_charge": "Nenabíjet"
+        },
+        "mode": {
+          "fast": "Fast",
+          "eco": "ECO"
+        },
+        "expected_soc": "Očekávané SoC vozidla"
+      }
+    },
+    "reason": {
+      "scheduled": "Podle plánu",
+      "target_soc_reached": "Cílové SoC dosaženo"
+    },
+    "runtime": {
+      "applied": "Použito",
+      "error": "Chyba běhu"
+    },
+    "authorship": {
+      "user": "uživatel",
+      "automation": "automatizace",
+      "mixed": "Smíšené autorství",
+      "set_by_user": "Nastavil uživatel",
+      "set_by_automation": "Nastavila automatizace"
+    },
+    "actions": {
+      "refresh": "Obnovit",
+      "select_interval": "Vybrat celý interval",
+      "select_slot": "Vybrat slot",
+      "select_hour": "Vybrat celou hodinu",
+      "expand_day": "Rozbalit den",
+      "expand_hour": "Rozbalit hodinu",
+      "expand_appliance_actions": "Rozbalit akce spotřebičů",
+      "collapse_day": "Sbalit den",
+      "collapse_hour": "Sbalit hodinu",
+      "collapse_appliance_actions": "Sbalit akce spotřebičů",
+      "edit_hour": "Upravit hodinu",
+      "edit_selected": "Upravit vybrané"
+    },
+    "now": {
+      "title": "Teď",
+      "unavailable": "Aktuální slot není k dispozici.",
+      "scheduled": "Naplánováno",
+      "running": "Běží",
+      "reason": "Důvod",
+      "compliance_ok": "Podle plánu",
+      "compliance_off": "Mimo plán",
+      "execution_disabled": "Provádění je vypnuté",
+      "runtime_unavailable": "Stav běhu není k dispozici.",
+      "actor": {
+        "inverter": "Střídač"
+      },
+      "actual": {
+        "applied": "Použito",
+        "failed": "Selhalo",
+        "no_change": "Beze změny",
+        "stopped": "Zastaveno",
+        "status_unavailable": "Stav není k dispozici"
+      },
+      "detail": {
+        "expected": "Očekáváno",
+        "no_scheduled_action": "Bez naplánované akce"
+      }
+    },
+    "forecast": {
+      "battery_label": "Baterie",
+      "solar_label": "Solár",
+      "grid_label": "Síť",
+      "price_label": "Prodejní cena",
+      "net": "Netto",
+      "import": "Import",
+      "export": "Export",
+      "surplus": "Přebytek"
+    },
+    "table": {
+      "caption": "Tabulka plánu",
+      "time_label": "Čas",
+      "action_label": "Akce",
+      "soc_label": "SoC",
+      "solar_label": "Solár",
+      "grid_label": "Síť",
+      "price_label": "Prodej"
+    },
+    "dialog": {
+      "title": {
+        "edit_selection": "Upravit vybrané sloty"
+      },
+      "interval": "Interval",
+      "selection": "Výběr",
+      "action": "Akce",
+      "inverter": "Střídač",
+      "appliances": "Spotřebiče",
+      "tabs": "Karty editoru rozvrhu",
+      "tab": {
+        "configured": "Akce je nastavená",
+        "not_configured": "Akce není nastavená"
+      },
+      "choose_action": "Vyberte akci, která se má použít na vybrané sloty.",
+      "multiple_actions_defined": "Ve vybraných slotech je nastaveno více různých akcí.",
+      "existing_actions": "Aktuální akce",
+      "overwrite_existing_actions": "Přepsat jednou akcí",
+      "automation_owns_action": "Automatizace nyní vlastní tuto akci.",
+      "mixed_authorship_summary": "Vybrané sloty obsahují akce od uživatele i automatizace.",
+      "keep_existing": "Ponechat beze změny",
+      "replace_with_manual_action": "Nahradit ruční akcí",
+      "appliance": {
+        "no_action": "Bez zásahu",
+        "turn_on": "Zapnout",
+        "turn_off": "Vypnout",
+        "no_charge": "Nenabíjet",
+        "charge": "Nabíjet",
+        "vehicle": "Vozidlo",
+        "mode": "Režim",
+        "eco_gear": "ECO stupeň",
+        "missing_metadata": "Metadata pro tento spotřebič nejsou k dispozici, proto lze akce jen zobrazit.",
+        "unsupported_authoring": "Autorování pro tento typ spotřebiče zatím není v plánování dostupné."
+      },
+      "appliance_kind": {
+        "ev_charger": "EV nabíječka",
+        "generic": "Obecný spotřebič",
+        "climate": "Klimatizace"
+      },
+      "target_soc": "Cílové SoC",
+      "affects_prefix": "Ovlivní",
+      "cancel": "Zrušit",
+      "apply": "Použít změny"
+    },
+    "copy": {
+      "slot_one": "slot",
+      "slot_few": "sloty",
+      "slot_many": "slotů",
+      "selected_prefix": "Vybráno"
+    },
+    "error": {
+      "invalid_slots": "Vybrané sloty nejsou platné.",
+      "invalid_action": "Vybraná akce není platná.",
+      "not_configured": "Plánování není správně nakonfigurované.",
+      "execution_unavailable": "Provádění plánu není momentálně dostupné.",
+      "appliances_unavailable": "Metadata spotřebičů se nepodařilo načíst.",
+      "unknown": "Nepodařilo se načíst nebo upravit rozvrh.",
+      "showing_last_good": "Zobrazuji poslední známý rozvrh."
+    }
+  },
+  "bias_correction": {
+    "inspector": {
+      "title": "Vizuální inspektor",
+      "loading": "Načítám data inspektoru...",
+      "load_failed": "Nepodařilo se načíst data inspektoru.",
+      "previous_day": "Předchozí den",
+      "next_day": "Další den",
+      "today": "Dnes",
+      "forecast_only": "Pouze prognóza",
+      "raw_forecast": "Surová prognóza",
+      "corrected_forecast": "Opravená prognóza",
+      "actual_production": "Skutečná výroba",
+      "invalidated_production": "vyřazeno z trénování: plná baterie a zakázaný export",
+      "correction_factor": "Korekční faktor",
+      "power_axis_label": "kW (prům.)",
+      "daily_totals": "Denní součty",
+      "actual_not_available": "není k dispozici",
+      "today_training_note": "Dnešek se zatím nepoužívá pro trénování a vyřazené body se v dnešním zobrazení skutečné výroby nepromítají.",
+      "no_profile": "Natrénovaný profil zatím není k dispozici. Surová prognóza a skutečná historie se stále mohou zobrazit, pokud jsou dostupné.",
+      "no_data": "Pro {date} nejsou k dispozici žádná data. Zkuste novější den nebo obnovte po další aktualizaci prognózy.",
+      "positive_impact": "Korekce přidala",
+      "negative_impact": "Korekce odebrala",
+      "selected_slot": "Vybraný slot: {slot}",
+      "house_forecast": "Predikce spotřeby",
+      "house_actual": "Skutečná spotřeba",
+      "battery_soc_forecast": "Predikce SoC baterie",
+      "battery_soc_actual": "Skutečné SoC baterie",
+      "correction_impact": "Vliv korekce",
+      "factor": "Faktor",
+      "legend": {
+        "solar": "Solární",
+        "house": "Spotřeba",
+        "battery": "Baterie",
+        "correction": "Korekce"
+      },
+      "no_explainability": "Tento profil vznikl před ukládáním vysvětlení. Pro zobrazení příspěvků spusťte trénování znovu.",
+      "no_slot_explainability": "Pro slot {slot} není dostupné vysvětlení trénování.",
+      "training_contribution": "Příspěvky k trénování",
+      "training_contribution_meta": "Surový poměr {ratio} · faktor {factor}",
+      "date": "Datum",
+      "forecast_wh": "Prognóza Wh",
+      "actual_wh": "Skutečnost Wh",
+      "ratio": "Poměr",
+      "status": "Stav",
+      "interpolated_label": "Interpolováno",
+      "untrained_label": "Bez korekce",
+      "interpolated_explanation": "Tento slot neměl dost validních dnů pro vlastní faktor. Hodnota je lineárně dopočítaná ze sousedních zdravých slotů.",
+      "interpolated_from": "Interpolováno z {left} → {right}",
+      "interpolated_meta": "Hodnota faktoru je lineárně dopočítaná ze sousedů ({left} → {right}).",
+      "interpolated_anchor_zero": "0",
+      "contribution_status": {
+        "included": "Zahrnuto",
+        "trimmed": "Oříznuto",
+        "invalidated": "Vyřazeno",
+        "forecast_zero": "Nulová prognóza",
+        "dropped_day": "Vynechaný den",
+        "omitted_slot": "Vynechaný slot",
+        "interpolated": "Interpolováno"
+      }
+    }
+  }
+}

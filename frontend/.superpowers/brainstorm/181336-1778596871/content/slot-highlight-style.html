@@ -1,0 +1,163 @@
+<h2>How should the selected slot be highlighted in the chart?</h2>
+<p class="subtitle">All options make the full chart clickable. The difference is how the selected slot looks visually.</p>
+
+<div class="cards">
+
+  <!-- Option A: Full-height band -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 12px; background: #1a1a2e;">
+      <svg viewBox="0 0 340 130" style="width:100%;display:block;">
+        <!-- grid lines -->
+        <line x1="40" y1="10" x2="320" y2="10" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="40" x2="320" y2="40" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="70" x2="320" y2="70" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="100" x2="320" y2="100" stroke="#333" stroke-width="1"/>
+        <!-- Y axis labels -->
+        <text x="32" y="13" text-anchor="end" fill="#888" font-size="9">4</text>
+        <text x="32" y="43" text-anchor="end" fill="#888" font-size="9">3</text>
+        <text x="32" y="73" text-anchor="end" fill="#888" font-size="9">2</text>
+        <text x="32" y="103" text-anchor="end" fill="#888" font-size="9">1</text>
+        <!-- X labels -->
+        <text x="40" y="118" text-anchor="middle" fill="#888" font-size="9">06</text>
+        <text x="110" y="118" text-anchor="middle" fill="#888" font-size="9">09</text>
+        <text x="180" y="118" text-anchor="middle" fill="#888" font-size="9">12</text>
+        <text x="250" y="118" text-anchor="middle" fill="#888" font-size="9">15</text>
+        <text x="320" y="118" text-anchor="middle" fill="#888" font-size="9">18</text>
+        <!-- SELECTED SLOT: full-height semi-transparent band -->
+        <rect x="185" y="10" width="9" height="90" fill="rgba(37,99,235,0.18)" rx="1"/>
+        <line x1="189" y1="10" x2="189" y2="100" stroke="#2563eb" stroke-width="1.5" stroke-opacity="0.6"/>
+        <!-- raw forecast line (grey) -->
+        <polyline points="40,95 80,80 120,55 160,35 185,28 200,22 220,20 250,30 280,55 310,82 320,95" fill="none" stroke="#64748b" stroke-width="2"/>
+        <!-- corrected line (blue) -->
+        <polyline points="40,95 80,78 120,52 160,32 185,24 200,19 220,17 250,27 280,52 310,80 320,93" fill="none" stroke="#2563eb" stroke-width="2"/>
+        <!-- actual dots -->
+        <circle cx="80" cy="78" r="3" fill="#f59e0b"/>
+        <circle cx="120" cy="51" r="3" fill="#f59e0b"/>
+        <circle cx="160" cy="31" r="3" fill="#f59e0b"/>
+        <circle cx="185" cy="23" r="3.5" fill="#f59e0b" stroke="#fff" stroke-width="1.5"/>
+        <!-- impact strip below chart -->
+        <rect x="40" y="104" width="280" height="12" fill="#111827" rx="2"/>
+        <!-- impact bars -->
+        <rect x="80" y="106" width="6" height="5" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="115" y="105" width="6" height="6" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="150" y="104" width="6" height="8" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="185" y="104" width="6" height="10" fill="#16a34a" rx="1" stroke="#fff" stroke-width="1.5"/>
+        <rect x="220" y="105" width="6" height="7" fill="#dc2626" fill-opacity="0.55" rx="1"/>
+        <rect x="255" y="106" width="6" height="5" fill="#dc2626" fill-opacity="0.55" rx="1"/>
+        <!-- extend band into strip -->
+        <rect x="185" y="104" width="9" height="12" fill="rgba(37,99,235,0.12)" rx="1"/>
+      </svg>
+    </div>
+    <div class="card-body">
+      <h3>A — Filled band</h3>
+      <p>Semi-transparent blue column spans full chart height + impact strip. Clear spatial grouping across both areas.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Visually unambiguous</li><li>Connects chart to strip</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>May obscure the data lines slightly</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B: Thin vertical line only -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 12px; background: #1a1a2e;">
+      <svg viewBox="0 0 340 130" style="width:100%;display:block;">
+        <!-- grid lines -->
+        <line x1="40" y1="10" x2="320" y2="10" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="40" x2="320" y2="40" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="70" x2="320" y2="70" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="100" x2="320" y2="100" stroke="#333" stroke-width="1"/>
+        <text x="32" y="13" text-anchor="end" fill="#888" font-size="9">4</text>
+        <text x="32" y="43" text-anchor="end" fill="#888" font-size="9">3</text>
+        <text x="32" y="73" text-anchor="end" fill="#888" font-size="9">2</text>
+        <text x="32" y="103" text-anchor="end" fill="#888" font-size="9">1</text>
+        <text x="40" y="118" text-anchor="middle" fill="#888" font-size="9">06</text>
+        <text x="110" y="118" text-anchor="middle" fill="#888" font-size="9">09</text>
+        <text x="180" y="118" text-anchor="middle" fill="#888" font-size="9">12</text>
+        <text x="250" y="118" text-anchor="middle" fill="#888" font-size="9">15</text>
+        <text x="320" y="118" text-anchor="middle" fill="#888" font-size="9">18</text>
+        <!-- SELECTED SLOT: thin line + triangle -->
+        <line x1="189" y1="8" x2="189" y2="116" stroke="#2563eb" stroke-width="2" stroke-opacity="0.8"/>
+        <!-- triangle marker top -->
+        <polygon points="185,8 193,8 189,14" fill="#2563eb" opacity="0.8"/>
+        <!-- raw forecast line -->
+        <polyline points="40,95 80,80 120,55 160,35 185,28 200,22 220,20 250,30 280,55 310,82 320,95" fill="none" stroke="#64748b" stroke-width="2"/>
+        <!-- corrected line -->
+        <polyline points="40,95 80,78 120,52 160,32 185,24 200,19 220,17 250,27 280,52 310,80 320,93" fill="none" stroke="#2563eb" stroke-width="2"/>
+        <!-- actual dots -->
+        <circle cx="80" cy="78" r="3" fill="#f59e0b"/>
+        <circle cx="120" cy="51" r="3" fill="#f59e0b"/>
+        <circle cx="160" cy="31" r="3" fill="#f59e0b"/>
+        <circle cx="185" cy="23" r="3.5" fill="#f59e0b" stroke="#fff" stroke-width="1.5"/>
+        <!-- impact strip -->
+        <rect x="40" y="104" width="280" height="12" fill="#111827" rx="2"/>
+        <rect x="80" y="106" width="6" height="5" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="115" y="105" width="6" height="6" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="150" y="104" width="6" height="8" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="185" y="104" width="6" height="10" fill="#16a34a" rx="1" stroke="#2563eb" stroke-width="1.5"/>
+        <rect x="220" y="105" width="6" height="7" fill="#dc2626" fill-opacity="0.55" rx="1"/>
+        <rect x="255" y="106" width="6" height="5" fill="#dc2626" fill-opacity="0.55" rx="1"/>
+      </svg>
+    </div>
+    <div class="card-body">
+      <h3>B — Hairline + marker</h3>
+      <p>A single vertical line with a small triangle marker at the top. Minimal obstruction of the chart data.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Doesn't cover data</li><li>Precise cursor feeling</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Less obvious "slot" area</li><li>Thinner = harder to see</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option C: Band + border (current selection style extended) -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 12px; background: #1a1a2e;">
+      <svg viewBox="0 0 340 130" style="width:100%;display:block;">
+        <!-- grid lines -->
+        <line x1="40" y1="10" x2="320" y2="10" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="40" x2="320" y2="40" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="70" x2="320" y2="70" stroke="#333" stroke-width="1"/>
+        <line x1="40" y1="100" x2="320" y2="100" stroke="#333" stroke-width="1"/>
+        <text x="32" y="13" text-anchor="end" fill="#888" font-size="9">4</text>
+        <text x="32" y="43" text-anchor="end" fill="#888" font-size="9">3</text>
+        <text x="32" y="73" text-anchor="end" fill="#888" font-size="9">2</text>
+        <text x="32" y="103" text-anchor="end" fill="#888" font-size="9">1</text>
+        <text x="40" y="118" text-anchor="middle" fill="#888" font-size="9">06</text>
+        <text x="110" y="118" text-anchor="middle" fill="#888" font-size="9">09</text>
+        <text x="180" y="118" text-anchor="middle" fill="#888" font-size="9">12</text>
+        <text x="250" y="118" text-anchor="middle" fill="#888" font-size="9">15</text>
+        <text x="320" y="118" text-anchor="middle" fill="#888" font-size="9">18</text>
+        <!-- SELECTED SLOT: wider band with border, matching existing slot-width -->
+        <rect x="183" y="10" width="12" height="90" fill="rgba(37,99,235,0.13)" stroke="#2563eb" stroke-width="1" stroke-opacity="0.5" rx="1"/>
+        <!-- raw forecast line -->
+        <polyline points="40,95 80,80 120,55 160,35 185,28 200,22 220,20 250,30 280,55 310,82 320,95" fill="none" stroke="#64748b" stroke-width="2"/>
+        <!-- corrected line -->
+        <polyline points="40,95 80,78 120,52 160,32 185,24 200,19 220,17 250,27 280,52 310,80 320,93" fill="none" stroke="#2563eb" stroke-width="2"/>
+        <!-- actual dots -->
+        <circle cx="80" cy="78" r="3" fill="#f59e0b"/>
+        <circle cx="120" cy="51" r="3" fill="#f59e0b"/>
+        <circle cx="160" cy="31" r="3" fill="#f59e0b"/>
+        <circle cx="185" cy="23" r="3.5" fill="#f59e0b" stroke="#fff" stroke-width="1.5"/>
+        <!-- impact strip -->
+        <rect x="40" y="104" width="280" height="12" fill="#111827" rx="2"/>
+        <rect x="80" y="106" width="6" height="5" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="115" y="105" width="6" height="6" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="150" y="104" width="6" height="8" fill="#16a34a" fill-opacity="0.55" rx="1"/>
+        <rect x="185" y="104" width="8" height="10" fill="#16a34a" rx="1" stroke="#2563eb" stroke-width="1.5"/>
+        <rect x="220" y="105" width="6" height="7" fill="#dc2626" fill-opacity="0.55" rx="1"/>
+        <rect x="255" y="106" width="6" height="5" fill="#dc2626" fill-opacity="0.55" rx="1"/>
+        <!-- extend band into strip -->
+        <rect x="183" y="104" width="12" height="12" fill="rgba(37,99,235,0.13)" stroke="#2563eb" stroke-width="1" stroke-opacity="0.5" rx="1"/>
+      </svg>
+    </div>
+    <div class="card-body">
+      <h3>C — Slot-width bordered band</h3>
+      <p>A band exactly as wide as one 15-min slot, with a subtle border — same style as the existing row highlight, but vertical and across the chart.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Consistent with table row style</li><li>Shows slot boundaries precisely</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Very narrow — can be hard to see</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+</div>

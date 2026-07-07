@@ -1,0 +1,4 @@
+{"type":"server-started","port":60221,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:60221","screen_dir":"/home/ondra/dev/hass/hass-helman-card/.superpowers/brainstorm/181336-1778596871/content","state_dir":"/home/ondra/dev/hass/hass-helman-card/.superpowers/brainstorm/181336-1778596871/state"}
+{"type":"screen-added","file":"/home/ondra/dev/hass/hass-helman-card/.superpowers/brainstorm/181336-1778596871/content/slot-highlight-style.html"}
+{"type":"screen-added","file":"/home/ondra/dev/hass/hass-helman-card/.superpowers/brainstorm/181336-1778596871/content/waiting-1.html"}
+{"type":"server-stopped","reason":"idle timeout"}

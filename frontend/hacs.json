@@ -1,0 +1,9 @@
+
+{
+    "name": "House Electricity Manager Card",
+    "render_readme": true,
+    "filename": "helman-card-prod.js",
+    "version": "1.0.0",
+    "description": "A custom card for Home Assistant to manage power devices. It allows users to see power consumption, control devices, and manage power settings."
+}
+  
