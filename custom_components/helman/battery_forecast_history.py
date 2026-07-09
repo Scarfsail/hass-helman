@@ -107,9 +107,15 @@ def _is_slot_label(slot: str) -> bool:
     """True for an "HH:MM" label that lands on a 15-minute slot boundary."""
     hour, _, minute = slot.partition(":")
     try:
-        return int(minute) % _SLOT_MINUTES == 0 and 0 <= int(hour) < 24
+        hour_value = int(hour)
+        minute_value = int(minute)
     except ValueError:
         return False
+    return (
+        0 <= hour_value < 24
+        and 0 <= minute_value < 60
+        and minute_value % _SLOT_MINUTES == 0
+    )
 
 
 def _iter_snapshot_entries(snapshot: dict[str, Any], timezone: ZoneInfo):

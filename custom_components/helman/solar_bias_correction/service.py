@@ -352,34 +352,18 @@ class SolarBiasCorrectionService:
         # begins there (the in-progress slot sits in its "currentSlot" field, not
         # in "series"), so cutting the recorder any earlier would leave a hole.
         next_slot = _next_slot_boundary(local_now) if target_date == today else None
-        house_forecast_points: list[dict] = []
-        if target_date <= today:
-            try:
-                house_forecast_points = _points_before(
-                    await load_house_forecast_points_for_day(self._hass, target_date),
-                    cutoff=next_slot,
-                )
-            except Exception:
-                _LOGGER.exception("Failed to load house forecast history for inspector")
-        if target_date >= today:
-            house_forecast_points += _house_forecast_points_from_snapshot(
-                self._get_house_forecast_snapshot(),
-                target_date,
-                next_slot=next_slot,
-            )
+        need_past = target_date <= today
+        need_future = target_date >= today
+        actual_local_now = local_now if target_date == today else None
 
-        # --- Actual series: house consumption, battery SoC, net grid ---
-        # Independent recorder reads, so overlap them rather than awaiting in turn.
-        house_actual_points: list[dict] = []
-        battery_soc_actual_points: list[dict] = []
-        grid_actual_points: list[dict] = []
-        if target_date <= today:
-            actual_local_now = local_now if target_date == today else None
-            (
-                house_actual_points,
-                battery_soc_actual_points,
-                grid_actual_points,
-            ) = await asyncio.gather(
+        # Independent recorder/snapshot reads, so overlap them rather than
+        # awaiting in turn.
+        past_coros = (
+            [
+                self._guarded_points(
+                    load_house_forecast_points_for_day(self._hass, target_date),
+                    "house forecast history",
+                ),
                 self._guarded_points(
                     self._load_house_actual_for_date(
                         target_date, timezone, local_now=actual_local_now
@@ -396,6 +380,38 @@ class SolarBiasCorrectionService:
                     ),
                     "grid actual",
                 ),
+            ]
+            if need_past
+            else []
+        )
+        future_coros = (
+            [self._get_battery_forecast_snapshot()] if need_future else []
+        )
+        gathered = await asyncio.gather(*past_coros, *future_coros)
+
+        house_forecast_history_points: list[dict] = []
+        house_actual_points: list[dict] = []
+        battery_soc_actual_points: list[dict] = []
+        grid_actual_points: list[dict] = []
+        if need_past:
+            (
+                house_forecast_history_points,
+                house_actual_points,
+                battery_soc_actual_points,
+                grid_actual_points,
+            ) = gathered[:4]
+        battery_snapshot = gathered[-1] if need_future else None
+
+        house_forecast_points: list[dict] = []
+        if need_past:
+            house_forecast_points = _points_before(
+                house_forecast_history_points, cutoff=next_slot
+            )
+        if need_future:
+            house_forecast_points += _house_forecast_points_from_snapshot(
+                self._get_house_forecast_snapshot(),
+                target_date,
+                next_slot=next_slot,
             )
 
         # --- Battery SoC and grid forecast ---
@@ -405,13 +421,14 @@ class SolarBiasCorrectionService:
         # that live snapshot, which begins one slot boundary after now.
         battery_soc_forecast_points: list[dict] = []
         grid_forecast_points: list[dict] = []
-        if target_date <= today:
+        if need_past:
             (
                 battery_soc_forecast_points,
                 grid_forecast_points,
-            ) = self._recorded_battery_forecast_points(target_date, cutoff=next_slot)
-        if target_date >= today:
-            battery_snapshot = await self._get_battery_forecast_snapshot()
+            ) = self._recorded_battery_forecast_points(
+                target_date, cutoff=next_slot, timezone=timezone
+            )
+        if need_future:
             battery_soc_forecast_points += _filter_battery_soc_future(
                 battery_snapshot,
                 target_date=target_date,
@@ -515,7 +532,7 @@ class SolarBiasCorrectionService:
             return None
 
     def _recorded_battery_forecast_points(
-        self, target_date: date, *, cutoff: datetime | None
+        self, target_date: date, *, cutoff: datetime | None, timezone: ZoneInfo
     ) -> tuple[list[dict], list[dict]]:
         """Read archived SoC and net grid forecast slots for a day.
 
@@ -545,7 +562,7 @@ class SolarBiasCorrectionService:
             grid_net_wh = values.get("gridNetWh")
             if grid_net_wh is not None:
                 timestamp = datetime.combine(
-                    target_date, time(minutes // 60, minutes % 60)
+                    target_date, time(minutes // 60, minutes % 60), tzinfo=timezone
                 )
                 grid_points.append(
                     {"timestamp": timestamp.isoformat(), "wh": float(grid_net_wh)}

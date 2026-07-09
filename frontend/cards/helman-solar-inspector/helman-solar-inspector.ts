@@ -872,13 +872,14 @@ export class HelmanSolarInspector extends LitElement {
   ) {
     const { xForMinutes, yForW } = layout;
     const fcBridged = bridgeForecast(forecast, actual, (e) => e.minutes);
+    const closedActual = closeIntervalSeries(actual);
     const path = (points: ChartEntry[]) =>
       points.map((e, i) =>
         `${i === 0 ? "M" : "L"}${xForMinutes(e.minutes).toFixed(1)},${yForW(e.powerW).toFixed(1)}`,
       ).join(" ");
     return svg`
       ${this._renderForecastSplit(fcBridged, actual, (e) => e.minutes, path, color)}
-      ${actual.length > 1 ? svg`<path d=${path(actual)} fill="none" stroke=${color} stroke-width="2"></path>` : ""}
+      ${closedActual.length > 1 ? svg`<path d=${path(closedActual)} fill="none" stroke=${color} stroke-width="2"></path>` : ""}
     `;
   }
 
@@ -892,11 +893,9 @@ export class HelmanSolarInspector extends LitElement {
       this._isSeriesVisible("houseForecast")
         ? toAveragePower(payload.series.houseForecast, { bucketMinutes: 15 })
         : [],
-      closeIntervalSeries(
-        this._isSeriesVisible("houseActual")
-          ? toAveragePower(payload.series.houseActual, { bucketMinutes: 15 })
-          : [],
-      ),
+      this._isSeriesVisible("houseActual")
+        ? toAveragePower(payload.series.houseActual, { bucketMinutes: 15 })
+        : [],
     );
   }
 
@@ -910,11 +909,9 @@ export class HelmanSolarInspector extends LitElement {
       this._isSeriesVisible("gridForecast")
         ? toAveragePower(payload.series.gridForecast, { bucketMinutes: 15 })
         : [],
-      closeIntervalSeries(
-        this._isSeriesVisible("gridActual")
-          ? toAveragePower(payload.series.gridActual, { bucketMinutes: 15 })
-          : [],
-      ),
+      this._isSeriesVisible("gridActual")
+        ? toAveragePower(payload.series.gridActual, { bucketMinutes: 15 })
+        : [],
     );
   }
 
