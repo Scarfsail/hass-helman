@@ -47,6 +47,61 @@ type SeriesKey =
 
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
 
+/** Stroke opacity for forecast the actuals have already superseded. */
+const MUTED_FORECAST_OPACITY = 0.35;
+
+const MINUTES_PER_DAY = 1440;
+const SLOT_MINUTES = 15;
+
+/**
+ * Close an interval series with a vertex at the end of its last slot.
+ *
+ * Each entry is the average power over the slot *starting* at it, so the final
+ * slot has only one vertex and no segment gets drawn across it. Battery SoC
+ * needs no such closing: it is an instantaneous reading, not an interval.
+ */
+function closeIntervalSeries(points: ChartEntry[]): ChartEntry[] {
+  if (!points.length) return points;
+  const last = points[points.length - 1];
+  const slotEnd = last.minutes + SLOT_MINUTES;
+  if (slotEnd > MINUTES_PER_DAY) return points;
+  return [...points, { ...last, minutes: slotEnd }];
+}
+
+/** Minutes past midnight of the last actual sample, or null when there are none. */
+function lastActualMinutes<T>(
+  actual: readonly T[],
+  minutesOf: (point: T) => number | null,
+): number | null {
+  for (let index = actual.length - 1; index >= 0; index--) {
+    const minutes = minutesOf(actual[index]);
+    if (minutes !== null) return minutes;
+  }
+  return null;
+}
+
+/**
+ * Split a forecast into the part the actuals already cover and the part still
+ * ahead of them. The boundary point belongs to both so the two paths join with
+ * no visible seam.
+ */
+function splitForecastAtActuals<T>(
+  forecast: readonly T[],
+  cutoff: number | null,
+  minutesOf: (point: T) => number | null,
+): { covered: T[]; ahead: T[] } {
+  if (cutoff === null) return { covered: [], ahead: [...forecast] };
+  let split = 0;
+  while (split < forecast.length) {
+    const minutes = minutesOf(forecast[split]);
+    if (minutes === null || minutes > cutoff) break;
+    split++;
+  }
+  if (split === 0) return { covered: [], ahead: [...forecast] };
+  if (split >= forecast.length) return { covered: [...forecast], ahead: [] };
+  return { covered: forecast.slice(0, split), ahead: forecast.slice(split - 1) };
+}
+
 /**
  * Prepend the last actual point to the forecast so the solid and dashed
  * segments connect visually. Only valid when the forecast picks up after the
@@ -695,7 +750,9 @@ export class HelmanSolarInspector extends LitElement {
       this._isSeriesVisible(series) ? points : [];
     const rawPoints = visible("raw", toAveragePower(payload.series.raw));
     const correctedPoints = visible("corrected", toAveragePower(payload.series.corrected));
-    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: 15 }));
+    const actualPoints = closeIntervalSeries(
+      visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: 15 })),
+    );
     const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: 15 }));
 
     const linePath = (points: ChartEntry[]) =>
@@ -706,14 +763,23 @@ export class HelmanSolarInspector extends LitElement {
         })
         .join(" ");
 
+    // Invalidated slots are measurements too, so they extend how far the
+    // actuals reach and therefore how much of the forecast reads as history.
+    const measured = [...actualPoints, ...invalidatedPoints].sort(
+      (a, b) => a.minutes - b.minutes,
+    );
+    const minutesOf = (entry: ChartEntry) => entry.minutes;
+    const forecastSplit = (points: ChartEntry[], color: string) =>
+      this._renderForecastSplit(points, measured, minutesOf, linePath, color);
+
     return svg`
       ${rawPoints.length > 1
-        ? svg`<path d=${linePath(rawPoints)} fill="none" stroke=${CHART_COLORS.raw} stroke-width="2" stroke-dasharray="4 3"></path>`
+        ? forecastSplit(rawPoints, CHART_COLORS.raw)
         : rawPoints.length === 1
           ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForW(rawPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.raw}></circle>`
           : ""}
       ${correctedPoints.length > 1
-        ? svg`<path d=${linePath(correctedPoints)} fill="none" stroke=${CHART_COLORS.corrected} stroke-width="2" stroke-dasharray="4 3"></path>`
+        ? forecastSplit(correctedPoints, CHART_COLORS.corrected)
         : correctedPoints.length === 1
           ? svg`<circle cx=${xForMinutes(correctedPoints[0].minutes)} cy=${yForW(correctedPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.corrected}></circle>`
         : ""}
@@ -754,11 +820,8 @@ export class HelmanSolarInspector extends LitElement {
       if (!m) return null;
       return Number(m[1]) * 60 + Number(m[2]);
     };
-    const fcBridged: BatterySocPoint[] = bridgeForecast(
-      fc,
-      ac,
-      (p) => slotToMinutes(p.slot),
-    );
+    const minutesOf = (p: BatterySocPoint) => slotToMinutes(p.slot);
+    const fcBridged: BatterySocPoint[] = bridgeForecast(fc, ac, minutesOf);
     const path = (pts: BatterySocPoint[]) => {
       const valid = pts
         .map((p) => ({ m: slotToMinutes(p.slot), pct: p.pct }))
@@ -770,8 +833,34 @@ export class HelmanSolarInspector extends LitElement {
         .join(" ");
     };
     return svg`
-      ${fcBridged.length > 1 ? svg`<path d=${path(fcBridged)} fill="none" stroke=${CHART_COLORS.battery} stroke-width="2" stroke-dasharray="4 3"></path>` : ""}
+      ${this._renderForecastSplit(fcBridged, ac, minutesOf, path, CHART_COLORS.battery)}
       ${ac.length > 1 ? svg`<path d=${path(ac)} fill="none" stroke=${CHART_COLORS.battery} stroke-width="2"></path>` : ""}
+    `;
+  }
+
+  /**
+   * A dashed forecast line, dimmed where the actuals have overtaken it. Both
+   * segments keep the colour and dash pattern of the series they belong to.
+   */
+  private _renderForecastLine(d: string, color: string, muted: boolean) {
+    return svg`
+      <path d=${d} fill="none" stroke=${color} stroke-width="2" stroke-dasharray="4 3"
+            stroke-opacity=${muted ? MUTED_FORECAST_OPACITY : 1}></path>
+    `;
+  }
+
+  private _renderForecastSplit<T>(
+    forecast: readonly T[],
+    actual: readonly T[],
+    minutesOf: (point: T) => number | null,
+    path: (points: T[]) => string,
+    color: string,
+  ) {
+    const cutoff = lastActualMinutes(actual, minutesOf);
+    const { covered, ahead } = splitForecastAtActuals(forecast, cutoff, minutesOf);
+    return svg`
+      ${covered.length > 1 ? this._renderForecastLine(path(covered), color, true) : ""}
+      ${ahead.length > 1 ? this._renderForecastLine(path(ahead), color, false) : ""}
     `;
   }
 
@@ -783,13 +872,14 @@ export class HelmanSolarInspector extends LitElement {
   ) {
     const { xForMinutes, yForW } = layout;
     const fcBridged = bridgeForecast(forecast, actual, (e) => e.minutes);
+    const closedActual = closeIntervalSeries(actual);
     const path = (points: ChartEntry[]) =>
       points.map((e, i) =>
         `${i === 0 ? "M" : "L"}${xForMinutes(e.minutes).toFixed(1)},${yForW(e.powerW).toFixed(1)}`,
       ).join(" ");
     return svg`
-      ${fcBridged.length > 1 ? svg`<path d=${path(fcBridged)} fill="none" stroke=${color} stroke-width="2" stroke-dasharray="4 3"></path>` : ""}
-      ${actual.length > 1 ? svg`<path d=${path(actual)} fill="none" stroke=${color} stroke-width="2"></path>` : ""}
+      ${this._renderForecastSplit(fcBridged, actual, (e) => e.minutes, path, color)}
+      ${closedActual.length > 1 ? svg`<path d=${path(closedActual)} fill="none" stroke=${color} stroke-width="2"></path>` : ""}
     `;
   }
 

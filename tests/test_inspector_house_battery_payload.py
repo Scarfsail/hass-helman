@@ -190,7 +190,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["availability"]["hasHouseForecast"])
         self.assertTrue(payload["availability"]["hasHouseActual"])
         self.assertTrue(payload["availability"]["hasBatterySocActual"])
-        # past date → battery SoC forecast is not populated
+        # no forecast archive wired in → past days have no battery SoC forecast
         self.assertFalse(payload["availability"]["hasBatterySocForecast"])
 
         # totals

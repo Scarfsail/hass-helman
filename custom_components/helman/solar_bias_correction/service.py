@@ -62,6 +62,7 @@ class SolarBiasCorrectionService:
         *,
         canonical_solar_forecast_provider=None,
         battery_forecast_provider=None,
+        battery_forecast_history=None,
         house_forecast_snapshot_provider=None,
         house_energy_entity_id_provider=None,
         battery_soc_entity_id_provider=None,
@@ -73,6 +74,7 @@ class SolarBiasCorrectionService:
         self._cfg = cfg
         self._canonical_solar_forecast_provider = canonical_solar_forecast_provider
         self._battery_forecast_provider = battery_forecast_provider
+        self._battery_forecast_history = battery_forecast_history
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
@@ -342,36 +344,26 @@ class SolarBiasCorrectionService:
             )
 
         # --- House forecast ---
-        # Today/future: read from the cached forecast snapshot (kWh → Wh) so future
-        # slots of today are not held flat from the last recorder value.
-        # Past days: read from the recorder history of the house forecast sensor (W → Wh).
-        house_forecast_points: list[dict] = []
-        if target_date >= today:
-            house_forecast_points = _house_forecast_points_from_snapshot(
-                self._get_house_forecast_snapshot(),
-                target_date,
-                next_slot=_current_slot_start(local_now) if target_date == today else None,
-            )
-        else:
-            try:
-                house_forecast_points = await load_house_forecast_points_for_day(
-                    self._hass, target_date,
-                )
-            except Exception:
-                _LOGGER.exception("Failed to load house forecast history for inspector")
+        # The recorder history of the house forecast sensor (W → Wh) covers every
+        # slot up to and including the one in progress; the cached forecast
+        # snapshot (kWh → Wh) covers the slots after it, because the recorder
+        # would hold the last value flat across the rest of the day.
+        # The two must meet at the next slot boundary: the snapshot's series
+        # begins there (the in-progress slot sits in its "currentSlot" field, not
+        # in "series"), so cutting the recorder any earlier would leave a hole.
+        next_slot = _next_slot_boundary(local_now) if target_date == today else None
+        need_past = target_date <= today
+        need_future = target_date >= today
+        actual_local_now = local_now if target_date == today else None
 
-        # --- Actual series: house consumption, battery SoC, net grid ---
-        # Independent recorder reads, so overlap them rather than awaiting in turn.
-        house_actual_points: list[dict] = []
-        battery_soc_actual_points: list[dict] = []
-        grid_actual_points: list[dict] = []
-        if target_date <= today:
-            actual_local_now = local_now if target_date == today else None
-            (
-                house_actual_points,
-                battery_soc_actual_points,
-                grid_actual_points,
-            ) = await asyncio.gather(
+        # Independent recorder/snapshot reads, so overlap them rather than
+        # awaiting in turn.
+        past_coros = (
+            [
+                self._guarded_points(
+                    load_house_forecast_points_for_day(self._hass, target_date),
+                    "house forecast history",
+                ),
                 self._guarded_points(
                     self._load_house_actual_for_date(
                         target_date, timezone, local_now=actual_local_now
@@ -388,21 +380,62 @@ class SolarBiasCorrectionService:
                     ),
                     "grid actual",
                 ),
+            ]
+            if need_past
+            else []
+        )
+        future_coros = (
+            [self._get_battery_forecast_snapshot()] if need_future else []
+        )
+        gathered = await asyncio.gather(*past_coros, *future_coros)
+
+        house_forecast_history_points: list[dict] = []
+        house_actual_points: list[dict] = []
+        battery_soc_actual_points: list[dict] = []
+        grid_actual_points: list[dict] = []
+        if need_past:
+            (
+                house_forecast_history_points,
+                house_actual_points,
+                battery_soc_actual_points,
+                grid_actual_points,
+            ) = gathered[:4]
+        battery_snapshot = gathered[-1] if need_future else None
+
+        house_forecast_points: list[dict] = []
+        if need_past:
+            house_forecast_points = _points_before(
+                house_forecast_history_points, cutoff=next_slot
+            )
+        if need_future:
+            house_forecast_points += _house_forecast_points_from_snapshot(
+                self._get_house_forecast_snapshot(),
+                target_date,
+                next_slot=next_slot,
             )
 
-        # --- Battery SoC and grid forecast (future slots only, today/future) ---
-        # Both come out of the same battery forecast snapshot, so build it once.
+        # --- Battery SoC and grid forecast ---
+        # Elapsed slots come from the archive written as each snapshot was built,
+        # since neither series is recorded anywhere else and the live snapshot
+        # starts at the current slot. Slots still ahead of the clock come from
+        # that live snapshot, which begins one slot boundary after now.
         battery_soc_forecast_points: list[dict] = []
         grid_forecast_points: list[dict] = []
-        if target_date >= today:
-            battery_snapshot = await self._get_battery_forecast_snapshot()
-            battery_soc_forecast_points = _filter_battery_soc_future(
+        if need_past:
+            (
+                battery_soc_forecast_points,
+                grid_forecast_points,
+            ) = self._recorded_battery_forecast_points(
+                target_date, cutoff=next_slot, timezone=timezone
+            )
+        if need_future:
+            battery_soc_forecast_points += _filter_battery_soc_future(
                 battery_snapshot,
                 target_date=target_date,
                 local_now=local_now,
                 timezone=timezone,
             )
-            grid_forecast_points = _filter_grid_forecast_future(
+            grid_forecast_points += _filter_grid_forecast_future(
                 battery_snapshot,
                 target_date=target_date,
                 local_now=local_now,
@@ -497,6 +530,44 @@ class SolarBiasCorrectionService:
         except Exception:
             _LOGGER.exception("Battery forecast provider failed")
             return None
+
+    def _recorded_battery_forecast_points(
+        self, target_date: date, *, cutoff: datetime | None, timezone: ZoneInfo
+    ) -> tuple[list[dict], list[dict]]:
+        """Read archived SoC and net grid forecast slots for a day.
+
+        Returns (soc points, grid points) for slots starting before cutoff, or
+        for the whole day when cutoff is None.
+        """
+        if self._battery_forecast_history is None:
+            return [], []
+        try:
+            slots = self._battery_forecast_history.slots_for_day(target_date)
+        except Exception:
+            _LOGGER.exception("Failed to read battery forecast history for inspector")
+            return [], []
+        cutoff_minutes = _minutes_into_day(cutoff, target_date)
+        soc_points: list[dict] = []
+        grid_points: list[dict] = []
+        for slot in sorted(slots):
+            minutes = _slot_to_minutes(slot)
+            if minutes is None or minutes >= cutoff_minutes:
+                continue
+            values = slots[slot]
+            if not isinstance(values, dict):
+                continue
+            pct = values.get("socPct")
+            if pct is not None:
+                soc_points.append({"slot": slot, "pct": float(pct)})
+            grid_net_wh = values.get("gridNetWh")
+            if grid_net_wh is not None:
+                timestamp = datetime.combine(
+                    target_date, time(minutes // 60, minutes % 60), tzinfo=timezone
+                )
+                grid_points.append(
+                    {"timestamp": timestamp.isoformat(), "wh": float(grid_net_wh)}
+                )
+        return soc_points, grid_points
 
     async def _guarded_points(self, coro, description: str) -> list[dict]:
         """Await a series loader, degrading to an empty series if it fails.
@@ -1180,6 +1251,46 @@ def _current_slot_start(local_now: datetime) -> datetime:
 def _next_slot_boundary(local_now: datetime) -> datetime:
     """Return the start of the first 15-min slot that begins after the slot containing now."""
     return _current_slot_start(local_now) + timedelta(minutes=15)
+
+
+def _slot_to_minutes(slot: str) -> int | None:
+    """Turn an "HH:MM" slot label into minutes past midnight."""
+    hour_text, _, minute_text = slot.partition(":")
+    try:
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        return None
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return None
+    return hour * 60 + minute
+
+
+def _minutes_into_day(cutoff: datetime | None, target_date: date) -> int:
+    """Minutes past midnight of target_date at cutoff, or the full day.
+
+    A cutoff on a later date (the 23:45 slot rolls over) covers the whole day.
+    """
+    if cutoff is None or cutoff.date() > target_date:
+        return 24 * 60
+    return cutoff.hour * 60 + cutoff.minute
+
+
+def _points_before(points: list[dict], *, cutoff: datetime | None) -> list[dict]:
+    """Drop timestamped points that start at or after cutoff."""
+    if cutoff is None:
+        return points
+    kept: list[dict] = []
+    for point in points:
+        try:
+            ts = datetime.fromisoformat(point["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        if ts < cutoff.replace(tzinfo=None):
+            kept.append(point)
+    return kept
 
 
 def _slot_energy_points(

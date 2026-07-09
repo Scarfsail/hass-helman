@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Sequence
+from zoneinfo import ZoneInfo
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
@@ -131,6 +132,7 @@ _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
+    from .battery_forecast_history import BatteryForecastHistoryStore
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
 
 
@@ -278,6 +280,7 @@ class HelmanCoordinator:
         self._cached_forecast: dict | None = None
         self._house_consumption_forecast_current_sensor = None
         self._cached_solar_forecast: dict[str, Any] | None = None
+        self._battery_forecast_history: BatteryForecastHistoryStore | None = None
         self._cached_battery_forecast: dict | None = None
         self._cached_battery_forecast_expires_at: datetime | None = None
         self._cached_battery_forecast_house_generated_at: str | None = None
@@ -414,10 +417,13 @@ class HelmanCoordinator:
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
         self._active_config = deepcopy(self._storage.config)
+        from .battery_forecast_history import BatteryForecastHistoryStore
         from .storage import SolarBiasCorrectionStore
 
         self._solar_bias_store = SolarBiasCorrectionStore(self._hass)
         await self._solar_bias_store.async_load()
+        self._battery_forecast_history = BatteryForecastHistoryStore(self._hass)
+        await self._battery_forecast_history.async_load()
         bias_config = read_bias_config(self._active_config)
         self._solar_bias_service = SolarBiasCorrectionService(
             self._hass,
@@ -425,6 +431,7 @@ class HelmanCoordinator:
             bias_config,
             canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
             battery_forecast_provider=self._async_get_battery_forecast_snapshot,
+            battery_forecast_history=self._battery_forecast_history,
             house_forecast_snapshot_provider=lambda: self._cached_forecast,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
@@ -2131,7 +2138,29 @@ class HelmanCoordinator:
             appliance_schedule_signature=appliance_schedule_signature,
             schedule_effective_signature=schedule_effective_signature,
         )
+        self._record_battery_forecast_history(
+            rebuild.battery_forecast, started_at=started_at
+        )
         return pipeline
+
+    def _record_battery_forecast_history(
+        self, battery_forecast: dict[str, Any] | None, *, started_at: datetime
+    ) -> None:
+        """Archive today's forecast SoC and net grid slots before they elapse.
+
+        Only a fresh build reaches here, so the archive keeps the last forecast
+        made for each slot while it was still ahead of the clock.
+        """
+        if self._battery_forecast_history is None:
+            return
+        try:
+            self._battery_forecast_history.record_snapshot(
+                battery_forecast,
+                local_now=dt_util.as_local(started_at),
+                timezone=ZoneInfo(str(self._hass.config.time_zone)),
+            )
+        except Exception:
+            _LOGGER.exception("Failed to record battery forecast history")
 
     async def _async_get_appliance_projection_plan(
         self,
