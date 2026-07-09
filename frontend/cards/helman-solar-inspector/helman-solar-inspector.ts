@@ -102,26 +102,6 @@ function splitForecastAtActuals<T>(
   return { covered: forecast.slice(0, split), ahead: forecast.slice(split - 1) };
 }
 
-/**
- * Prepend the last actual point to the forecast so the solid and dashed
- * segments connect visually. Only valid when the forecast picks up after the
- * actual series ends; on past days both cover the full day, and bridging would
- * draw a stray dashed line back across the chart.
- */
-function bridgeForecast<T>(
-  forecast: readonly T[],
-  actual: readonly T[],
-  minutesOf: (point: T) => number | null,
-): T[] {
-  if (!forecast.length || !actual.length) return [...forecast];
-  const lastActual = minutesOf(actual[actual.length - 1]);
-  const firstForecast = minutesOf(forecast[0]);
-  if (lastActual === null || firstForecast === null || firstForecast <= lastActual) {
-    return [...forecast];
-  }
-  return [actual[actual.length - 1], ...forecast];
-}
-
 type RatioBounds = { min: number; max: number; maxAbsDeviation: number };
 
 type ChartLayout = {
@@ -750,10 +730,9 @@ export class HelmanSolarInspector extends LitElement {
       this._isSeriesVisible(series) ? points : [];
     const rawPoints = visible("raw", toAveragePower(payload.series.raw));
     const correctedPoints = visible("corrected", toAveragePower(payload.series.corrected));
-    const actualPoints = closeIntervalSeries(
-      visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: 15 })),
-    );
+    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: 15 }));
     const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: 15 }));
+    const drawnActual = closeIntervalSeries(actualPoints);
 
     const linePath = (points: ChartEntry[]) =>
       points
@@ -765,8 +744,8 @@ export class HelmanSolarInspector extends LitElement {
 
     // Invalidated slots are measurements too, so they extend how far the
     // actuals reach and therefore how much of the forecast reads as history.
-    const measured = [...actualPoints, ...invalidatedPoints].sort(
-      (a, b) => a.minutes - b.minutes,
+    const measured = closeIntervalSeries(
+      [...actualPoints, ...invalidatedPoints].sort((a, b) => a.minutes - b.minutes),
     );
     const minutesOf = (entry: ChartEntry) => entry.minutes;
     const forecastSplit = (points: ChartEntry[], color: string) =>
@@ -783,10 +762,10 @@ export class HelmanSolarInspector extends LitElement {
         : correctedPoints.length === 1
           ? svg`<circle cx=${xForMinutes(correctedPoints[0].minutes)} cy=${yForW(correctedPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.corrected}></circle>`
         : ""}
-      ${actualPoints.length > 1
-        ? svg`<path d=${linePath(actualPoints)} fill="none" stroke=${CHART_COLORS.actual} stroke-width="2.4"></path>`
-        : actualPoints.length === 1
-          ? svg`<circle cx=${xForMinutes(actualPoints[0].minutes)} cy=${yForW(actualPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.actual}></circle>`
+      ${drawnActual.length > 1
+        ? svg`<path d=${linePath(drawnActual)} fill="none" stroke=${CHART_COLORS.actual} stroke-width="2.4"></path>`
+        : drawnActual.length === 1
+          ? svg`<circle cx=${xForMinutes(drawnActual[0].minutes)} cy=${yForW(drawnActual[0].powerW)} r="3.5" fill=${CHART_COLORS.actual}></circle>`
           : ""}
       ${invalidatedPoints.map((entry) => svg`
         <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="#9ca3af" opacity="0.55">
@@ -821,7 +800,6 @@ export class HelmanSolarInspector extends LitElement {
       return Number(m[1]) * 60 + Number(m[2]);
     };
     const minutesOf = (p: BatterySocPoint) => slotToMinutes(p.slot);
-    const fcBridged: BatterySocPoint[] = bridgeForecast(fc, ac, minutesOf);
     const path = (pts: BatterySocPoint[]) => {
       const valid = pts
         .map((p) => ({ m: slotToMinutes(p.slot), pct: p.pct }))
@@ -833,7 +811,7 @@ export class HelmanSolarInspector extends LitElement {
         .join(" ");
     };
     return svg`
-      ${this._renderForecastSplit(fcBridged, ac, minutesOf, path, CHART_COLORS.battery)}
+      ${this._renderForecastSplit(fc, ac, minutesOf, path, CHART_COLORS.battery)}
       ${ac.length > 1 ? svg`<path d=${path(ac)} fill="none" stroke=${CHART_COLORS.battery} stroke-width="2"></path>` : ""}
     `;
   }
@@ -871,14 +849,13 @@ export class HelmanSolarInspector extends LitElement {
     actual: ChartEntry[],
   ) {
     const { xForMinutes, yForW } = layout;
-    const fcBridged = bridgeForecast(forecast, actual, (e) => e.minutes);
     const closedActual = closeIntervalSeries(actual);
     const path = (points: ChartEntry[]) =>
       points.map((e, i) =>
         `${i === 0 ? "M" : "L"}${xForMinutes(e.minutes).toFixed(1)},${yForW(e.powerW).toFixed(1)}`,
       ).join(" ");
     return svg`
-      ${this._renderForecastSplit(fcBridged, actual, (e) => e.minutes, path, color)}
+      ${this._renderForecastSplit(forecast, closedActual, (e) => e.minutes, path, color)}
       ${closedActual.length > 1 ? svg`<path d=${path(closedActual)} fill="none" stroke=${color} stroke-width="2"></path>` : ""}
     `;
   }
