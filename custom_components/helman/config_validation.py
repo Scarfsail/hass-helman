@@ -697,6 +697,15 @@ def _validate_battery_config(
                         f"power_devices.battery.entities.{field_name}",
                         entity_map.get(field_name),
                     )
+            # Either charge/discharge meter is useful on its own, so unlike the
+            # quartet above they carry no completeness requirement.
+            for field_name in ("today_charge_energy", "today_discharge_energy"):
+                _validate_optional_entity_id(
+                    report,
+                    section,
+                    f"power_devices.battery.entities.{field_name}",
+                    entity_map.get(field_name),
+                )
 
     forecast = battery.get("forecast")
     if forecast is None:

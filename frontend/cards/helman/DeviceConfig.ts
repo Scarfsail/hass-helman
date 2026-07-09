@@ -59,6 +59,8 @@ export interface BatteryDeviceConfig extends PowerDeviceConfigBase {
         min_soc?: string;
         max_soc?: string;
         remaining_energy?: string;
+        today_charge_energy?: string;
+        today_discharge_energy?: string;
     }
 }
 

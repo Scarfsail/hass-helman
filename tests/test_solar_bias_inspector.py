@@ -142,6 +142,8 @@ def test_inspector_day_serializes_frontend_contract():
             "batterySocActual": [],
             "gridForecast": [],
             "gridActual": [],
+            "batteryForecast": [],
+            "batteryActual": [],
         },
         "totals": {
             "rawWh": 420.0,
@@ -151,6 +153,8 @@ def test_inspector_day_serializes_frontend_contract():
             "houseActualWh": None,
             "gridForecastWh": None,
             "gridActualWh": None,
+            "batteryForecastWh": None,
+            "batteryActualWh": None,
         },
         "availability": {
             "hasRawForecast": True,
@@ -164,6 +168,8 @@ def test_inspector_day_serializes_frontend_contract():
             "hasBatterySocActual": False,
             "hasGridForecast": False,
             "hasGridActual": False,
+            "hasBatteryForecast": False,
+            "hasBatteryActual": False,
         },
         "trainingExplainability": None,
     }
@@ -639,6 +645,8 @@ def test_inspector_day_applies_current_profile_and_totals():
         "hasBatterySocActual": False,
         "hasGridForecast": False,
         "hasGridActual": False,
+        "hasBatteryForecast": False,
+        "hasBatteryActual": False,
     }
     assert payload["series"]["raw"] == [
         {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 25.0},
@@ -675,6 +683,8 @@ def test_inspector_day_applies_current_profile_and_totals():
         "houseActualWh": None,
         "gridForecastWh": None,
         "gridActualWh": None,
+        "batteryForecastWh": None,
+        "batteryActualWh": None,
     }
     assert payload["range"]["minDate"] == "2026-04-13"
     assert payload["range"]["isToday"] is True

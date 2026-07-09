@@ -129,13 +129,28 @@ def _snapshot(*entries: dict) -> dict:
     return {"status": "available", "series": list(entries)}
 
 
-def _entry(timestamp: str, *, soc: float, imported: float = 0.0, exported: float = 0.0) -> dict:
-    return {
+def _entry(
+    timestamp: str,
+    *,
+    soc: float,
+    imported: float = 0.0,
+    exported: float = 0.0,
+    charged: float | None = None,
+    discharged: float | None = None,
+) -> dict:
+    entry = {
         "timestamp": timestamp,
         "socPct": soc,
         "importedFromGridKwh": imported,
         "exportedToGridKwh": exported,
     }
+    # Left out entirely when unset, so a slot can stand in for a snapshot that
+    # carries no battery charge/discharge fields at all.
+    if charged is not None:
+        entry["chargedKwh"] = charged
+    if discharged is not None:
+        entry["dischargedKwh"] = discharged
+    return entry
 
 
 class TestBatteryForecastHistoryStore(unittest.IsolatedAsyncioTestCase):
@@ -159,6 +174,30 @@ class TestBatteryForecastHistoryStore(unittest.IsolatedAsyncioTestCase):
         # Import is negative, export positive, matching gridNetKwh elsewhere.
         self.assertEqual(slots["10:00"]["gridNetWh"], -400.0)
         self.assertEqual(slots["10:15"]["gridNetWh"], 200.0)
+
+    def test_records_net_battery_positive_when_charging(self):
+        store = self._store()
+        store.record_snapshot(
+            _snapshot(
+                _entry(f"{TODAY}T10:00:00+02:00", soc=50.0, charged=0.6),
+                _entry(f"{TODAY}T10:15:00+02:00", soc=45.0, discharged=0.25),
+            ),
+            local_now=datetime.fromisoformat(NOW),
+            timezone=PRAGUE,
+        )
+        slots = store.slots_for_day(date.fromisoformat(TODAY))
+        self.assertEqual(slots["10:00"]["batteryNetWh"], 600.0)
+        self.assertEqual(slots["10:15"]["batteryNetWh"], -250.0)
+
+    def test_slot_without_battery_fields_omits_battery_net(self):
+        store = self._store()
+        store.record_snapshot(
+            _snapshot(_entry(f"{TODAY}T10:00:00+02:00", soc=50.0, imported=0.4)),
+            local_now=datetime.fromisoformat(NOW),
+            timezone=PRAGUE,
+        )
+        slots = store.slots_for_day(date.fromisoformat(TODAY))
+        self.assertNotIn("batteryNetWh", slots["10:00"])
 
     def test_later_build_overwrites_only_the_slots_it_still_covers(self):
         store = self._store()

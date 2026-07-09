@@ -43,12 +43,37 @@ type SeriesKey =
   | "batterySocForecast"
   | "batterySocActual"
   | "gridForecast"
-  | "gridActual";
+  | "gridActual"
+  | "batteryForecast"
+  | "batteryActual";
 
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
 
+/**
+ * Flip a consumption-positive payload series into the chart's sign convention.
+ *
+ * The payload counts energy leaving the house's demand as positive: the house
+ * consuming, the grid taking an export, the battery charging. The chart instead
+ * draws whatever *supplies* the house upwards and whatever *draws from it*
+ * downwards, so grid import, battery discharge and solar all rise above zero.
+ * Solar is production-positive already and needs no flip.
+ */
+function asSupplyPositive(points: InspectorPoint[]): InspectorPoint[] {
+  return points.map((point) => ({ ...point, valueWh: -point.valueWh }));
+}
+
+function negateWh(value: number | null): number | null {
+  return value === null || !Number.isFinite(value) ? value : -value;
+}
+
 /** Stroke opacity for forecast the actuals have already superseded. */
 const MUTED_FORECAST_OPACITY = 0.35;
+
+type StrokeStyle = { width: number; opacity: number };
+
+/** Power series own the plot; SoC recedes behind them. */
+const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
+const SOC_STROKE: StrokeStyle = { width: 1.2, opacity: 0.5 };
 
 const MINUTES_PER_DAY = 1440;
 const SLOT_MINUTES = 15;
@@ -146,6 +171,8 @@ type InspectorPayload = {
     batterySocActual: BatterySocPoint[];
     gridForecast: InspectorPoint[];
     gridActual: InspectorPoint[];
+    batteryForecast: InspectorPoint[];
+    batteryActual: InspectorPoint[];
   };
   totals: {
     rawWh: number | null;
@@ -155,6 +182,8 @@ type InspectorPayload = {
     houseActualWh: number | null;
     gridForecastWh: number | null;
     gridActualWh: number | null;
+    batteryForecastWh: number | null;
+    batteryActualWh: number | null;
   };
   availability: {
     hasRawForecast: boolean;
@@ -168,6 +197,8 @@ type InspectorPayload = {
     hasBatterySocActual: boolean;
     hasGridForecast: boolean;
     hasGridActual: boolean;
+    hasBatteryForecast: boolean;
+    hasBatteryActual: boolean;
   };
   trainingExplainability: TrainingExplainability | null;
 };
@@ -626,19 +657,24 @@ export class HelmanSolarInspector extends LitElement {
       this._isSeriesVisible(series) ? entries.map((e) => e.powerW) : [];
     const actualPoints = toAveragePower(payload.series.actual, { bucketMinutes: 15 });
     const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: 15 });
+    const loadPower = (series: SeriesKey, points: InspectorPoint[]) =>
+      powerFor(series, toAveragePower(asSupplyPositive(points), { bucketMinutes: 15 }));
     const allPower = [
       ...powerFor("raw", toAveragePower(payload.series.raw)),
       ...powerFor("corrected", toAveragePower(payload.series.corrected)),
       ...powerFor("actual", actualPoints),
       ...powerFor("actual", invalidatedPoints),
-      ...powerFor("houseForecast", toAveragePower(payload.series.houseForecast, { bucketMinutes: 15 })),
-      ...powerFor("houseActual", toAveragePower(payload.series.houseActual, { bucketMinutes: 15 })),
-      ...powerFor("gridForecast", toAveragePower(payload.series.gridForecast, { bucketMinutes: 15 })),
-      ...powerFor("gridActual", toAveragePower(payload.series.gridActual, { bucketMinutes: 15 })),
+      ...loadPower("houseForecast", payload.series.houseForecast),
+      ...loadPower("houseActual", payload.series.houseActual),
+      ...loadPower("gridForecast", payload.series.gridForecast),
+      ...loadPower("gridActual", payload.series.gridActual),
+      ...loadPower("batteryForecast", payload.series.batteryForecast),
+      ...loadPower("batteryActual", payload.series.batteryActual),
     ];
     const maxW = Math.max(1000, ...allPower);
     const maxKw = Math.ceil(maxW / 1000);
-    // Grid export is negative, so the axis grows downwards only when it has to.
+    // House, grid export and battery charging all sit below zero, so the axis
+    // grows downwards only as far as they actually reach.
     const minKw = Math.min(0, Math.floor(Math.min(0, ...allPower) / 1000));
     const spanW = (maxKw - minKw) * 1000;
     const yTicks = this._buildYTicks(minKw, maxKw);
@@ -646,7 +682,7 @@ export class HelmanSolarInspector extends LitElement {
     const yForW = (powerW: number) =>
       margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
     // Anchor 0% SoC to the 0 kW baseline rather than the plot floor, so the SoC
-    // curve never dips into the negative (grid export) band below it.
+    // curve never dips into the negative (consumption) band below it.
     const zeroY = yForW(0);
     const yForPct = (pct: number) =>
       zeroY - (Math.max(0, Math.min(100, pct)) / 100) * (zeroY - margin.top);
@@ -673,8 +709,9 @@ export class HelmanSolarInspector extends LitElement {
         ${this._renderSolarLayer(payload, layout)}
         ${this._renderHouseLayer(payload, layout)}
         ${this._renderGridLayer(payload, layout)}
+        ${this._renderBatteryPowerLayer(payload, layout)}
         ${this._renderRightAxis(layout)}
-        ${this._renderBatteryLayer(payload, layout)}
+        ${this._renderBatterySocLayer(payload, layout)}
       </svg>
     `;
   }
@@ -789,7 +826,14 @@ export class HelmanSolarInspector extends LitElement {
     });
   }
 
-  private _renderBatteryLayer(payload: InspectorPayload, layout: ChartLayout) {
+  /**
+   * Battery state of charge, on its own right-hand % axis.
+   *
+   * It shares the battery's colour with the battery power line but is drawn
+   * thin and faint: SoC is background context for the power flow, not a fourth
+   * competing power series.
+   */
+  private _renderBatterySocLayer(payload: InspectorPayload, layout: ChartLayout) {
     if (!layout.hasSocAxis) return "";
     const { xForMinutes, yForPct } = layout;
     const fc = this._isSeriesVisible("batterySocForecast") ? payload.series.batterySocForecast : [];
@@ -811,8 +855,11 @@ export class HelmanSolarInspector extends LitElement {
         .join(" ");
     };
     return svg`
-      ${this._renderForecastSplit(fc, ac, minutesOf, path, CHART_COLORS.battery)}
-      ${ac.length > 1 ? svg`<path d=${path(ac)} fill="none" stroke=${CHART_COLORS.battery} stroke-width="2"></path>` : ""}
+      ${this._renderForecastSplit(fc, ac, minutesOf, path, CHART_COLORS.battery, SOC_STROKE)}
+      ${ac.length > 1
+        ? svg`<path d=${path(ac)} fill="none" stroke=${CHART_COLORS.battery}
+                    stroke-width=${SOC_STROKE.width} stroke-opacity=${SOC_STROKE.opacity}></path>`
+        : ""}
     `;
   }
 
@@ -820,10 +867,11 @@ export class HelmanSolarInspector extends LitElement {
    * A dashed forecast line, dimmed where the actuals have overtaken it. Both
    * segments keep the colour and dash pattern of the series they belong to.
    */
-  private _renderForecastLine(d: string, color: string, muted: boolean) {
+  private _renderForecastLine(d: string, color: string, muted: boolean, stroke: StrokeStyle) {
+    const opacity = muted ? MUTED_FORECAST_OPACITY * stroke.opacity : stroke.opacity;
     return svg`
-      <path d=${d} fill="none" stroke=${color} stroke-width="2" stroke-dasharray="4 3"
-            stroke-opacity=${muted ? MUTED_FORECAST_OPACITY : 1}></path>
+      <path d=${d} fill="none" stroke=${color} stroke-width=${stroke.width} stroke-dasharray="4 3"
+            stroke-opacity=${opacity}></path>
     `;
   }
 
@@ -833,12 +881,13 @@ export class HelmanSolarInspector extends LitElement {
     minutesOf: (point: T) => number | null,
     path: (points: T[]) => string,
     color: string,
+    stroke: StrokeStyle = POWER_STROKE,
   ) {
     const cutoff = lastActualMinutes(actual, minutesOf);
     const { covered, ahead } = splitForecastAtActuals(forecast, cutoff, minutesOf);
     return svg`
-      ${covered.length > 1 ? this._renderForecastLine(path(covered), color, true) : ""}
-      ${ahead.length > 1 ? this._renderForecastLine(path(ahead), color, false) : ""}
+      ${covered.length > 1 ? this._renderForecastLine(path(covered), color, true, stroke) : ""}
+      ${ahead.length > 1 ? this._renderForecastLine(path(ahead), color, false, stroke) : ""}
     `;
   }
 
@@ -860,6 +909,12 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
+  /** Average power of a consumption-positive payload series, flipped for the chart. */
+  private _supplyPower(series: SeriesKey, points: InspectorPoint[]) {
+    if (!this._isSeriesVisible(series)) return [];
+    return toAveragePower(asSupplyPositive(points), { bucketMinutes: 15 });
+  }
+
   private _renderHouseLayer(payload: InspectorPayload, layout: ChartLayout) {
     if (!payload.availability.hasHouseForecast && !payload.availability.hasHouseActual) {
       return "";
@@ -867,12 +922,8 @@ export class HelmanSolarInspector extends LitElement {
     return this._renderPowerSeriesPair(
       layout,
       CHART_COLORS.house,
-      this._isSeriesVisible("houseForecast")
-        ? toAveragePower(payload.series.houseForecast, { bucketMinutes: 15 })
-        : [],
-      this._isSeriesVisible("houseActual")
-        ? toAveragePower(payload.series.houseActual, { bucketMinutes: 15 })
-        : [],
+      this._supplyPower("houseForecast", payload.series.houseForecast),
+      this._supplyPower("houseActual", payload.series.houseActual),
     );
   }
 
@@ -883,12 +934,20 @@ export class HelmanSolarInspector extends LitElement {
     return this._renderPowerSeriesPair(
       layout,
       CHART_COLORS.grid,
-      this._isSeriesVisible("gridForecast")
-        ? toAveragePower(payload.series.gridForecast, { bucketMinutes: 15 })
-        : [],
-      this._isSeriesVisible("gridActual")
-        ? toAveragePower(payload.series.gridActual, { bucketMinutes: 15 })
-        : [],
+      this._supplyPower("gridForecast", payload.series.gridForecast),
+      this._supplyPower("gridActual", payload.series.gridActual),
+    );
+  }
+
+  private _renderBatteryPowerLayer(payload: InspectorPayload, layout: ChartLayout) {
+    if (!payload.availability.hasBatteryForecast && !payload.availability.hasBatteryActual) {
+      return "";
+    }
+    return this._renderPowerSeriesPair(
+      layout,
+      CHART_COLORS.battery,
+      this._supplyPower("batteryForecast", payload.series.batteryForecast),
+      this._supplyPower("batteryActual", payload.series.batteryActual),
     );
   }
 
@@ -1003,10 +1062,12 @@ export class HelmanSolarInspector extends LitElement {
           ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true, "raw")}
           ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(payload.totals.correctedWh), CHART_COLORS.corrected, true, "corrected")}
           ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(payload.totals.actualWh), CHART_COLORS.actual, false, "actual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(payload.totals.houseForecastWh), CHART_COLORS.house, true, "houseForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(payload.totals.houseActualWh), CHART_COLORS.house, false, "houseActual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_forecast"), this._formatWh(payload.totals.gridForecastWh), CHART_COLORS.grid, true, "gridForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_actual"), this._formatWh(payload.totals.gridActualWh), CHART_COLORS.grid, false, "gridActual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(negateWh(payload.totals.houseForecastWh)), CHART_COLORS.house, true, "houseForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(negateWh(payload.totals.houseActualWh)), CHART_COLORS.house, false, "houseActual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_forecast"), this._formatWh(negateWh(payload.totals.gridForecastWh)), CHART_COLORS.grid, true, "gridForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_actual"), this._formatWh(negateWh(payload.totals.gridActualWh)), CHART_COLORS.grid, false, "gridActual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_forecast"), this._formatWh(negateWh(payload.totals.batteryForecastWh)), CHART_COLORS.battery, true, "batteryForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_actual"), this._formatWh(negateWh(payload.totals.batteryActualWh)), CHART_COLORS.battery, false, "batteryActual")}
         </div>
       </div>
     `;
@@ -1026,6 +1087,8 @@ export class HelmanSolarInspector extends LitElement {
     const batterySocAc = findBatterySocActualForSlot(payload.series.batterySocActual, selectedSlot);
     const gridFc = findPointForSlot(payload.series.gridForecast, selectedSlot);
     const gridAc = findPointForSlot(payload.series.gridActual, selectedSlot);
+    const batteryFc = findPointForSlot(payload.series.batteryForecast, selectedSlot);
+    const batteryAc = findPointForSlot(payload.series.batteryActual, selectedSlot);
     const interpolated = trainingSlot?.interpolated === true;
     const anchors = trainingSlot?.interpolationAnchors ?? null;
     const impactColor = (impact?.impactWh ?? null) === null
@@ -1051,14 +1114,16 @@ export class HelmanSolarInspector extends LitElement {
           ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(raw?.valueWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true, "raw")}
           ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(corrected?.valueWh ?? impact?.correctedWh ?? null), CHART_COLORS.corrected, true, "corrected")}
           ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(actual?.valueWh ?? null), CHART_COLORS.actual, false, "actual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(houseFc?.valueWh ?? null), CHART_COLORS.house, true, "houseForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(houseAc?.valueWh ?? null), CHART_COLORS.house, false, "houseActual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(negateWh(houseFc?.valueWh ?? null)), CHART_COLORS.house, true, "houseForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(negateWh(houseAc?.valueWh ?? null)), CHART_COLORS.house, false, "houseActual")}
           ${this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null), impactColor)}
           ${this._renderMetric(this._t("bias_correction.inspector.factor"), this._formatFactor(impact?.factor ?? trainingSlot?.factor ?? null), impactColor)}
           ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_forecast"), this._formatPct(batterySocFc?.pct ?? null), CHART_COLORS.battery, true, "batterySocForecast")}
           ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_actual"), this._formatPct(batterySocAc?.pct ?? null), CHART_COLORS.battery, false, "batterySocActual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_forecast"), this._formatWh(gridFc?.valueWh ?? null), CHART_COLORS.grid, true, "gridForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_actual"), this._formatWh(gridAc?.valueWh ?? null), CHART_COLORS.grid, false, "gridActual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_forecast"), this._formatWh(negateWh(gridFc?.valueWh ?? null)), CHART_COLORS.grid, true, "gridForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_actual"), this._formatWh(negateWh(gridAc?.valueWh ?? null)), CHART_COLORS.grid, false, "gridActual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_forecast"), this._formatWh(negateWh(batteryFc?.valueWh ?? null)), CHART_COLORS.battery, true, "batteryForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_actual"), this._formatWh(negateWh(batteryAc?.valueWh ?? null)), CHART_COLORS.battery, false, "batteryActual")}
         </div>
       </div>
       ${this._renderContributionTable(payload, selectedSlot, trainingSlot)}
@@ -1231,16 +1296,22 @@ export class HelmanSolarInspector extends LitElement {
       payload.series.batterySocActual ??= [];
       payload.series.gridForecast ??= [];
       payload.series.gridActual ??= [];
+      payload.series.batteryForecast ??= [];
+      payload.series.batteryActual ??= [];
       payload.totals.houseForecastWh ??= null;
       payload.totals.houseActualWh ??= null;
       payload.totals.gridForecastWh ??= null;
       payload.totals.gridActualWh ??= null;
+      payload.totals.batteryForecastWh ??= null;
+      payload.totals.batteryActualWh ??= null;
       payload.availability.hasHouseForecast ??= false;
       payload.availability.hasHouseActual ??= false;
       payload.availability.hasBatterySocForecast ??= false;
       payload.availability.hasBatterySocActual ??= false;
       payload.availability.hasGridForecast ??= false;
       payload.availability.hasGridActual ??= false;
+      payload.availability.hasBatteryForecast ??= false;
+      payload.availability.hasBatteryActual ??= false;
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
         const resolvedSlot = resolveSelectedImpactSlot(

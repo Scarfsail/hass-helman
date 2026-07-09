@@ -441,6 +441,12 @@ class HelmanCoordinator:
             grid_export_energy_entity_id_provider=lambda: self._get_grid_energy_entity_id(
                 "today_export"
             ),
+            battery_charge_energy_entity_id_provider=lambda: self._get_battery_entity_id(
+                "today_charge_energy"
+            ),
+            battery_discharge_energy_entity_id_provider=lambda: self._get_battery_entity_id(
+                "today_discharge_energy"
+            ),
         )
         self._solar_invalidation_debouncer = Debouncer(
             self._hass,
@@ -691,6 +697,16 @@ class HelmanCoordinator:
         )
         grid_config = ConsumptionForecastBuilder._read_dict(power_devices.get("grid"))
         entities = ConsumptionForecastBuilder._read_dict(grid_config.get("entities"))
+        return ConsumptionForecastBuilder._read_entity_id(entities.get(key))
+
+    def _get_battery_entity_id(self, key: str) -> str | None:
+        power_devices = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("power_devices")
+        )
+        battery_config = ConsumptionForecastBuilder._read_dict(
+            power_devices.get("battery")
+        )
+        entities = ConsumptionForecastBuilder._read_dict(battery_config.get("entities"))
         return ConsumptionForecastBuilder._read_entity_id(entities.get(key))
 
     def _read_house_forecast_config(self) -> tuple[str | None, int, int, str]:

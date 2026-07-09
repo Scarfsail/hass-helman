@@ -21,10 +21,10 @@ _SLOT_MINUTES = 15
 
 
 class BatteryForecastHistoryStore:
-    """Rolling per-slot archive of forecast battery SoC and net grid energy.
+    """Rolling per-slot archive of forecast battery SoC, net grid and net battery energy.
 
     The battery forecast snapshot only spans from the current 15-minute slot
-    forward, and nothing else writes those two series to the recorder. Once a
+    forward, and nothing else writes those series to the recorder. Once a
     slot has elapsed there is no other record of what was predicted for it, so
     every rebuild upserts the snapshot's slots for the current day. The value
     that survives for a slot is the last one written while that slot had not
@@ -32,7 +32,12 @@ class BatteryForecastHistoryStore:
     ``sensor.helman_house_consumption_forecast_current`` history.
 
     Persisted shape:
-      {"days": {"YYYY-MM-DD": {"HH:MM": {"socPct": float, "gridNetWh": float}}}}
+      {"days": {"YYYY-MM-DD": {"HH:MM": {"socPct": float, "gridNetWh": float,
+                                         "batteryNetWh": float}}}}
+
+    ``batteryNetWh`` was added after the first release, so days archived before
+    then simply lack the key; readers treat a missing key as "no value for that
+    slot" rather than zero.
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -50,7 +55,7 @@ class BatteryForecastHistoryStore:
         self._days = days if isinstance(days, dict) else {}
 
     def slots_for_day(self, target_date: date) -> dict[str, dict[str, float]]:
-        """Return the recorded {slot: {socPct, gridNetWh}} map for a day."""
+        """Return the recorded {slot: {socPct, gridNetWh, batteryNetWh}} map for a day."""
         slots = self._days.get(target_date.isoformat())
         return slots if isinstance(slots, dict) else {}
 
@@ -133,9 +138,11 @@ def _iter_snapshot_entries(snapshot: dict[str, Any], timezone: ZoneInfo):
 
 
 def _slot_values(entry: dict[str, Any]) -> dict[str, float] | None:
-    """Pull SoC and net grid energy out of one snapshot slot.
+    """Pull SoC, net grid and net battery energy out of one snapshot slot.
 
-    Net grid is positive when exporting, matching gridNetKwh elsewhere.
+    Net grid is positive when exporting, matching gridNetKwh elsewhere. Net
+    battery follows the same "positive means energy leaving the house's demand"
+    rule, so it is positive when charging.
     """
     values: dict[str, float] = {}
     pct = entry.get("socPct")
@@ -149,6 +156,15 @@ def _slot_values(entry: dict[str, Any]) -> dict[str, float] | None:
     if imported is not None or exported is not None:
         try:
             values["gridNetWh"] = (float(exported or 0.0) - float(imported or 0.0)) * 1000.0
+        except (TypeError, ValueError):
+            pass
+    charged = entry.get("chargedKwh")
+    discharged = entry.get("dischargedKwh")
+    if charged is not None or discharged is not None:
+        try:
+            values["batteryNetWh"] = (
+                float(charged or 0.0) - float(discharged or 0.0)
+            ) * 1000.0
         except (TypeError, ValueError):
             pass
     return values or None

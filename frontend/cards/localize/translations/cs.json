@@ -360,6 +360,8 @@
       "battery_soc_actual": "Skutečné SoC baterie",
       "grid_forecast": "Predikce sítě",
       "grid_actual": "Skutečná síť",
+      "battery_forecast": "Predikce baterie",
+      "battery_actual": "Skutečná baterie",
       "correction_impact": "Vliv korekce",
       "factor": "Faktor",
       "legend": {
