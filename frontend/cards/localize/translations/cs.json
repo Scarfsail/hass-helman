@@ -345,6 +345,8 @@
       "correction_factor": "Korekční faktor",
       "power_axis_label": "kW (prům.)",
       "daily_totals": "Denní součty",
+      "legend_hide_series": "Skrýt z grafu",
+      "legend_show_series": "Zobrazit v grafu",
       "actual_not_available": "není k dispozici",
       "today_training_note": "Dnešek se zatím nepoužívá pro trénování a vyřazené body se v dnešním zobrazení skutečné výroby nepromítají.",
       "no_profile": "Natrénovaný profil zatím není k dispozici. Surová prognóza a skutečná historie se stále mohou zobrazit, pokud jsou dostupné.",

@@ -32,6 +32,17 @@ const CHART_COLORS = {
   impactNegative: '#dc2626',
 } as const;
 
+type SeriesKey =
+  | "raw"
+  | "corrected"
+  | "actual"
+  | "houseForecast"
+  | "houseActual"
+  | "batterySocForecast"
+  | "batterySocActual";
+
+const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
+
 type RatioBounds = { min: number; max: number; maxAbsDeviation: number };
 
 type ChartLayout = {
@@ -106,6 +117,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _selectedTrainingDate: string | null = null;
   @state() private _trainingTableCollapsed = true;
   @state() private _chartWidth = 720;
+  @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
 
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
   private _lastLayoutForStrip: ChartLayout | null = null;
@@ -353,6 +365,28 @@ export class HelmanSolarInspector extends LitElement {
       visibility: hidden;
     }
 
+    .metric-card.legend-toggle {
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      display: block;
+      width: 100%;
+    }
+
+    .metric-card.legend-toggle:focus-visible {
+      outline: 2px solid var(--primary-color, #2563eb);
+      outline-offset: 1px;
+    }
+
+    .metric-card.hidden-series {
+      background: none !important;
+      opacity: 0.5;
+    }
+
+    .metric-card.hidden-series .metric-label {
+      text-decoration: line-through;
+    }
+
     .metric-label {
       color: var(--secondary-text-color);
       font-size: 0.72rem;
@@ -512,29 +546,39 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
+  private _isSeriesVisible(series: SeriesKey) {
+    return !this._hiddenSeries.has(series);
+  }
+
+  private _toggleSeries(series: SeriesKey) {
+    const next = new Set(this._hiddenSeries);
+    if (!next.delete(series)) {
+      next.add(series);
+    }
+    this._hiddenSeries = next;
+  }
+
   private _computeChartLayout(payload: InspectorPayload): ChartLayout {
     const width = this._chartWidth;
     const height = 260;
     const hasSocAxis =
-      payload.availability.hasBatterySocForecast ||
-      payload.availability.hasBatterySocActual;
+      (payload.availability.hasBatterySocForecast && this._isSeriesVisible("batterySocForecast")) ||
+      (payload.availability.hasBatterySocActual && this._isSeriesVisible("batterySocActual"));
     const margin = { top: 18, right: hasSocAxis ? 40 : 24, bottom: 34, left: 48 };
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;
 
-    const rawPoints = toAveragePower(payload.series.raw);
-    const correctedPoints = toAveragePower(payload.series.corrected);
+    const powerFor = (series: SeriesKey, entries: ChartEntry[]) =>
+      this._isSeriesVisible(series) ? entries.map((e) => e.powerW) : [];
     const actualPoints = toAveragePower(payload.series.actual, { bucketMinutes: 15 });
     const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: 15 });
-    const houseForecastPower = toAveragePower(payload.series.houseForecast, { bucketMinutes: 15 });
-    const houseActualPower = toAveragePower(payload.series.houseActual, { bucketMinutes: 15 });
     const allPower = [
-      ...rawPoints.map((e) => e.powerW),
-      ...correctedPoints.map((e) => e.powerW),
-      ...actualPoints.map((e) => e.powerW),
-      ...invalidatedPoints.map((e) => e.powerW),
-      ...houseForecastPower.map((e) => e.powerW),
-      ...houseActualPower.map((e) => e.powerW),
+      ...powerFor("raw", toAveragePower(payload.series.raw)),
+      ...powerFor("corrected", toAveragePower(payload.series.corrected)),
+      ...powerFor("actual", actualPoints),
+      ...powerFor("actual", invalidatedPoints),
+      ...powerFor("houseForecast", toAveragePower(payload.series.houseForecast, { bucketMinutes: 15 })),
+      ...powerFor("houseActual", toAveragePower(payload.series.houseActual, { bucketMinutes: 15 })),
     ];
     const maxW = Math.max(1000, ...allPower);
     const maxKw = Math.ceil(maxW / 1000);
@@ -615,10 +659,12 @@ export class HelmanSolarInspector extends LitElement {
 
   private _renderSolarLayer(payload: InspectorPayload, layout: ChartLayout) {
     const { xForMinutes, yForW, margin, plotWidth, plotHeight } = layout;
-    const rawPoints = toAveragePower(payload.series.raw);
-    const correctedPoints = toAveragePower(payload.series.corrected);
-    const actualPoints = toAveragePower(payload.series.actual, { bucketMinutes: 15 });
-    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: 15 });
+    const visible = (series: SeriesKey, points: ChartEntry[]) =>
+      this._isSeriesVisible(series) ? points : [];
+    const rawPoints = visible("raw", toAveragePower(payload.series.raw));
+    const correctedPoints = visible("corrected", toAveragePower(payload.series.corrected));
+    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: 15 }));
+    const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: 15 }));
 
     const linePath = (points: ChartEntry[]) =>
       points
@@ -669,8 +715,8 @@ export class HelmanSolarInspector extends LitElement {
   private _renderBatteryLayer(payload: InspectorPayload, layout: ChartLayout) {
     if (!layout.hasSocAxis) return "";
     const { xForMinutes, yForPct } = layout;
-    const fc = payload.series.batterySocForecast;
-    const ac = payload.series.batterySocActual;
+    const fc = this._isSeriesVisible("batterySocForecast") ? payload.series.batterySocForecast : [];
+    const ac = this._isSeriesVisible("batterySocActual") ? payload.series.batterySocActual : [];
     // Bridge: start forecast line from last actual point so both segments connect visually
     const fcBridged: BatterySocPoint[] = ac.length > 0 && fc.length > 0 ? [ac[ac.length - 1], ...fc] : fc;
     const slotToMinutes = (slot: string) => {
@@ -699,8 +745,12 @@ export class HelmanSolarInspector extends LitElement {
       return "";
     }
     const { xForMinutes, yForW } = layout;
-    const fc = toAveragePower(payload.series.houseForecast, { bucketMinutes: 15 });
-    const ac = toAveragePower(payload.series.houseActual, { bucketMinutes: 15 });
+    const fc = this._isSeriesVisible("houseForecast")
+      ? toAveragePower(payload.series.houseForecast, { bucketMinutes: 15 })
+      : [];
+    const ac = this._isSeriesVisible("houseActual")
+      ? toAveragePower(payload.series.houseActual, { bucketMinutes: 15 })
+      : [];
     // Bridge: start forecast line from last actual point so both segments connect visually
     const fcBridged = ac.length > 0 && fc.length > 0 ? [ac[ac.length - 1], ...fc] : fc;
     const path = (points: ChartEntry[]) =>
@@ -891,11 +941,11 @@ export class HelmanSolarInspector extends LitElement {
       <div class="metrics-section">
         <strong>${this._t("bias_correction.inspector.daily_totals")}</strong>
         <div class="metric-grid">
-          ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true)}
-          ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(payload.totals.correctedWh), CHART_COLORS.corrected, true)}
-          ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(payload.totals.actualWh), CHART_COLORS.actual)}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(payload.totals.houseForecastWh), CHART_COLORS.house, true)}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(payload.totals.houseActualWh), CHART_COLORS.house)}
+          ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true, "raw")}
+          ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(payload.totals.correctedWh), CHART_COLORS.corrected, true, "corrected")}
+          ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(payload.totals.actualWh), CHART_COLORS.actual, false, "actual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(payload.totals.houseForecastWh), CHART_COLORS.house, true, "houseForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(payload.totals.houseActualWh), CHART_COLORS.house, false, "houseActual")}
         </div>
       </div>
     `;
@@ -935,33 +985,59 @@ export class HelmanSolarInspector extends LitElement {
           ? html`<div class="day-state">${this._t("bias_correction.inspector.interpolated_explanation")}</div>`
           : ""}
         <div class="metric-grid wide">
-          ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(raw?.valueWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true)}
-          ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(corrected?.valueWh ?? impact?.correctedWh ?? null), CHART_COLORS.corrected, true)}
-          ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(actual?.valueWh ?? null), CHART_COLORS.actual)}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(houseFc?.valueWh ?? null), CHART_COLORS.house, true)}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(houseAc?.valueWh ?? null), CHART_COLORS.house)}
+          ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(raw?.valueWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true, "raw")}
+          ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(corrected?.valueWh ?? impact?.correctedWh ?? null), CHART_COLORS.corrected, true, "corrected")}
+          ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(actual?.valueWh ?? null), CHART_COLORS.actual, false, "actual")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(houseFc?.valueWh ?? null), CHART_COLORS.house, true, "houseForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(houseAc?.valueWh ?? null), CHART_COLORS.house, false, "houseActual")}
           ${this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null), impactColor)}
           ${this._renderMetric(this._t("bias_correction.inspector.factor"), this._formatFactor(impact?.factor ?? trainingSlot?.factor ?? null), impactColor)}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_forecast"), this._formatPct(batterySocFc?.pct ?? null), CHART_COLORS.battery, true)}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_actual"), this._formatPct(batterySocAc?.pct ?? null), CHART_COLORS.battery)}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_forecast"), this._formatPct(batterySocFc?.pct ?? null), CHART_COLORS.battery, true, "batterySocForecast")}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_actual"), this._formatPct(batterySocAc?.pct ?? null), CHART_COLORS.battery, false, "batterySocActual")}
         </div>
       </div>
       ${this._renderContributionTable(payload, selectedSlot, trainingSlot)}
     `;
   }
 
-  private _renderMetric(label: string, value: string, color?: string, dashed?: boolean) {
+  private _renderMetric(
+    label: string,
+    value: string,
+    color?: string,
+    dashed?: boolean,
+    series?: SeriesKey,
+  ) {
     let background = "";
     if (color && dashed) {
       background = `background: repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 18%, transparent) 0px, color-mix(in srgb, ${color} 18%, transparent) 3px, transparent 3px, transparent 8px);`;
     } else if (color) {
       background = `background: color-mix(in srgb, ${color} 15%, transparent);`;
     }
+    if (!series) {
+      return html`
+        <div class="metric-card" style=${background}>
+          <div class="metric-label">${label}</div>
+          <div class="metric-value">${value}</div>
+        </div>
+      `;
+    }
+    const visible = this._isSeriesVisible(series);
     return html`
-      <div class="metric-card" style=${background}>
+      <button
+        class="metric-card legend-toggle ${visible ? "" : "hidden-series"}"
+        style=${background}
+        type="button"
+        aria-pressed=${visible ? "true" : "false"}
+        title=${this._t(
+          visible
+            ? "bias_correction.inspector.legend_hide_series"
+            : "bias_correction.inspector.legend_show_series",
+        )}
+        @click=${() => this._toggleSeries(series)}
+      >
         <div class="metric-label">${label}</div>
         <div class="metric-value">${value}</div>
-      </div>
+      </button>
     `;
   }
 

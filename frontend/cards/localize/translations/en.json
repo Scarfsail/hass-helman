@@ -15,6 +15,8 @@
       "correction_factor": "Correction factor",
       "power_axis_label": "kW (avg)",
       "daily_totals": "Daily totals",
+      "legend_hide_series": "Hide from chart",
+      "legend_show_series": "Show in chart",
       "actual_not_available": "not available",
       "today_training_note": "Today is not used for training yet, and invalidated points are not reflected in today's actual production view.",
       "no_profile": "No trained profile is available yet. Raw forecast and actual history can still be shown when available.",
