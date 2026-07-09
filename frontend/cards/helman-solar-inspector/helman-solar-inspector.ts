@@ -47,6 +47,26 @@ type SeriesKey =
 
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
 
+/**
+ * Prepend the last actual point to the forecast so the solid and dashed
+ * segments connect visually. Only valid when the forecast picks up after the
+ * actual series ends; on past days both cover the full day, and bridging would
+ * draw a stray dashed line back across the chart.
+ */
+function bridgeForecast<T>(
+  forecast: readonly T[],
+  actual: readonly T[],
+  minutesOf: (point: T) => number | null,
+): T[] {
+  if (!forecast.length || !actual.length) return [...forecast];
+  const lastActual = minutesOf(actual[actual.length - 1]);
+  const firstForecast = minutesOf(forecast[0]);
+  if (lastActual === null || firstForecast === null || firstForecast <= lastActual) {
+    return [...forecast];
+  }
+  return [actual[actual.length - 1], ...forecast];
+}
+
 type RatioBounds = { min: number; max: number; maxAbsDeviation: number };
 
 type ChartLayout = {
@@ -729,13 +749,16 @@ export class HelmanSolarInspector extends LitElement {
     const { xForMinutes, yForPct } = layout;
     const fc = this._isSeriesVisible("batterySocForecast") ? payload.series.batterySocForecast : [];
     const ac = this._isSeriesVisible("batterySocActual") ? payload.series.batterySocActual : [];
-    // Bridge: start forecast line from last actual point so both segments connect visually
-    const fcBridged: BatterySocPoint[] = ac.length > 0 && fc.length > 0 ? [ac[ac.length - 1], ...fc] : fc;
     const slotToMinutes = (slot: string) => {
       const m = /^(\d{2}):(\d{2})$/.exec(slot);
       if (!m) return null;
       return Number(m[1]) * 60 + Number(m[2]);
     };
+    const fcBridged: BatterySocPoint[] = bridgeForecast(
+      fc,
+      ac,
+      (p) => slotToMinutes(p.slot),
+    );
     const path = (pts: BatterySocPoint[]) => {
       const valid = pts
         .map((p) => ({ m: slotToMinutes(p.slot), pct: p.pct }))
@@ -759,11 +782,7 @@ export class HelmanSolarInspector extends LitElement {
     actual: ChartEntry[],
   ) {
     const { xForMinutes, yForW } = layout;
-    // Bridge: start forecast line from last actual point so both segments connect visually
-    const fcBridged =
-      actual.length > 0 && forecast.length > 0
-        ? [actual[actual.length - 1], ...forecast]
-        : forecast;
+    const fcBridged = bridgeForecast(forecast, actual, (e) => e.minutes);
     const path = (points: ChartEntry[]) =>
       points.map((e, i) =>
         `${i === 0 ? "M" : "L"}${xForMinutes(e.minutes).toFixed(1)},${yForW(e.powerW).toFixed(1)}`,
