@@ -1880,11 +1880,29 @@ class HelmanCoordinator:
     async def _async_get_battery_forecast_snapshot(self) -> dict[str, Any] | None:
         """Return the battery forecast snapshot for the solar bias inspector.
 
-        Builds the forecast when the cache is cold so the inspector does not
-        depend on another consumer having called get_forecast() first.
+        Goes through the forecast pipeline rather than reading the cache
+        directly, so the inspector does not depend on another consumer having
+        called get_forecast() first. Reuses the pipeline cache when it is warm.
         """
-        await self.get_forecast()
-        return self._cached_battery_forecast
+        request_now = dt_util.now()
+        canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
+            reference_time=request_now
+        )
+        if canonical_solar_forecast is None:
+            canonical_solar_forecast = {"status": "unavailable", "points": []}
+        canonical_house_forecast = await self._async_get_canonical_house_forecast(
+            reference_time=request_now
+        )
+        if canonical_house_forecast is None:
+            return None
+
+        return await self._async_get_battery_forecast(
+            solar_forecast=_build_corrected_solar_forecast_view(
+                canonical_solar_forecast
+            ),
+            house_forecast=canonical_house_forecast,
+            started_at=request_now,
+        )
 
     def _build_forecast_schedule_documents(
         self,
