@@ -350,7 +350,7 @@ class SolarBiasCorrectionService:
             house_forecast_points = _house_forecast_points_from_snapshot(
                 self._get_house_forecast_snapshot(),
                 target_date,
-                next_slot=(_next_slot_boundary(local_now) - timedelta(minutes=15)) if target_date == today else None,
+                next_slot=_current_slot_start(local_now) if target_date == today else None,
             )
         else:
             try:
@@ -360,37 +360,35 @@ class SolarBiasCorrectionService:
             except Exception:
                 _LOGGER.exception("Failed to load house forecast history for inspector")
 
-        # --- House actual consumption (energy meter history) ---
+        # --- Actual series: house consumption, battery SoC, net grid ---
+        # Independent recorder reads, so overlap them rather than awaiting in turn.
         house_actual_points: list[dict] = []
-        if target_date <= today:
-            try:
-                house_actual_points = await self._load_house_actual_for_date(
-                    target_date, timezone,
-                    local_now=local_now if target_date == today else None,
-                )
-            except Exception:
-                _LOGGER.exception("Failed to load house actual for inspector")
-
-        # --- Battery SoC actual (historical SoC % from recorder) ---
         battery_soc_actual_points: list[dict] = []
-        if target_date <= today:
-            try:
-                battery_soc_actual_points = await self._load_battery_soc_actual_for_date(
-                    target_date, timezone
-                )
-            except Exception:
-                _LOGGER.exception("Failed to load battery SoC actual for inspector")
-
-        # --- Grid actual (net of the import/export energy meters) ---
         grid_actual_points: list[dict] = []
         if target_date <= today:
-            try:
-                grid_actual_points = await self._load_grid_actual_for_date(
-                    target_date, timezone,
-                    local_now=local_now if target_date == today else None,
-                )
-            except Exception:
-                _LOGGER.exception("Failed to load grid actual for inspector")
+            actual_local_now = local_now if target_date == today else None
+            (
+                house_actual_points,
+                battery_soc_actual_points,
+                grid_actual_points,
+            ) = await asyncio.gather(
+                self._guarded_points(
+                    self._load_house_actual_for_date(
+                        target_date, timezone, local_now=actual_local_now
+                    ),
+                    "house actual",
+                ),
+                self._guarded_points(
+                    self._load_battery_soc_actual_for_date(target_date, timezone),
+                    "battery SoC actual",
+                ),
+                self._guarded_points(
+                    self._load_grid_actual_for_date(
+                        target_date, timezone, local_now=actual_local_now
+                    ),
+                    "grid actual",
+                ),
+            )
 
         # --- Battery SoC and grid forecast (future slots only, today/future) ---
         # Both come out of the same battery forecast snapshot, so build it once.
@@ -500,6 +498,18 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("Battery forecast provider failed")
             return None
 
+    async def _guarded_points(self, coro, description: str) -> list[dict]:
+        """Await a series loader, degrading to an empty series if it fails.
+
+        One failing series must not take down the whole inspector day, and the
+        loaders run concurrently, so each needs its own error boundary.
+        """
+        try:
+            return await coro
+        except Exception:
+            _LOGGER.exception("Failed to load %s for inspector", description)
+            return []
+
     async def _load_slot_energy_kwh(
         self, entity_id: str, target_date: date, local_tz: ZoneInfo
     ) -> dict[datetime, float]:
@@ -559,16 +569,16 @@ class SolarBiasCorrectionService:
         export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
         if not import_entity and not export_entity:
             return []
+
+        async def _load(entity_id: str | None) -> dict[datetime, float]:
+            if not entity_id:
+                return {}
+            return await self._load_slot_energy_kwh(entity_id, target_date, local_tz)
+
         try:
-            imported = (
-                await self._load_slot_energy_kwh(import_entity, target_date, local_tz)
-                if import_entity
-                else {}
-            )
-            exported = (
-                await self._load_slot_energy_kwh(export_entity, target_date, local_tz)
-                if export_entity
-                else {}
+            # The two meters are independent recorder reads; overlap them.
+            imported, exported = await asyncio.gather(
+                _load(import_entity), _load(export_entity)
             )
         except Exception:
             _LOGGER.exception("Failed to load grid actual for inspector")
@@ -1156,13 +1166,20 @@ def _house_forecast_points_from_snapshot(
     return points
 
 
+def _current_slot_start(local_now: datetime) -> datetime:
+    """Return the start of the 15-min slot containing local_now.
+
+    Imported lazily, like the other recorder_hourly_series helpers here, because
+    that module imports the recorder integration at module scope.
+    """
+    from ..recorder_hourly_series import get_local_current_slot_start
+
+    return get_local_current_slot_start(local_now, interval_minutes=15)
+
+
 def _next_slot_boundary(local_now: datetime) -> datetime:
     """Return the start of the first 15-min slot that begins after the slot containing now."""
-    slot_mins = (local_now.hour * 60 + local_now.minute) // 15 * 15
-    current_slot = local_now.replace(
-        hour=slot_mins // 60, minute=slot_mins % 60, second=0, microsecond=0
-    )
-    return current_slot + timedelta(minutes=15)
+    return _current_slot_start(local_now) + timedelta(minutes=15)
 
 
 def _slot_energy_points(
@@ -1176,14 +1193,13 @@ def _slot_energy_points(
     When local_now is given the still-running slot is dropped, since its energy
     delta only covers part of the slot.
     """
+    running_slot_start = _current_slot_start(local_now) if local_now is not None else None
     points: list[dict] = []
     for slot_start_utc, wh in sorted(wh_by_slot_utc.items()):
         slot_local = dt_util.as_local(slot_start_utc)
         if slot_local.date() != target_date:
             continue
-        if local_now is not None and slot_local >= _next_slot_boundary(
-            local_now
-        ) - timedelta(minutes=15):
+        if running_slot_start is not None and slot_local >= running_slot_start:
             continue
         points.append({"timestamp": slot_local.isoformat(), "wh": wh})
     return points
