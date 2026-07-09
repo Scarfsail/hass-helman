@@ -364,10 +364,6 @@ export class HelmanSolarInspector extends LitElement {
       min-width: 0;
     }
 
-    .metric-card.placeholder {
-      visibility: hidden;
-    }
-
     .metric-card.legend-toggle {
       font: inherit;
       text-align: left;
@@ -594,8 +590,11 @@ export class HelmanSolarInspector extends LitElement {
     const xForMinutes = (minutes: number) => margin.left + (minutes / 1440) * plotWidth;
     const yForW = (powerW: number) =>
       margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
+    // Anchor 0% SoC to the 0 kW baseline rather than the plot floor, so the SoC
+    // curve never dips into the negative (grid export) band below it.
+    const zeroY = yForW(0);
     const yForPct = (pct: number) =>
-      margin.top + plotHeight - (Math.max(0, Math.min(100, pct)) / 100) * plotHeight;
+      zeroY - (Math.max(0, Math.min(100, pct)) / 100) * (zeroY - margin.top);
 
     return { width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks, xForMinutes, yForW, hasSocAxis, yForPct };
   }
@@ -874,81 +873,6 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  private _renderImpactColumns(
-    impacts: ImpactPoint[],
-    explainability: TrainingExplainability | null,
-    plotLeft: number,
-    plotTop: number,
-    plotWidth: number,
-    plotHeight: number,
-  ) {
-    const values = impacts
-      .map((point) => Math.abs(point.impactWh ?? 0))
-      .filter((value) => Number.isFinite(value));
-    const maxImpact = Math.max(1, ...values);
-    const selectedSlot = resolveSelectedImpactSlot(impacts, this._selectedSlot);
-    return impacts.map((point) => {
-      if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
-      const match = point.slot.match(/^(\d{2}):(\d{2})$/);
-      if (!match) return "";
-      const hour = Number(match[1]);
-      const minute = Number(match[2]);
-      const startMinutes = hour * 60 + minute;
-      const x = plotLeft + (startMinutes / 1440) * plotWidth;
-      const width = Math.max(3, plotWidth / 96);
-      const columnHeight = Math.max(2, (Math.abs(point.impactWh) / maxImpact) * plotHeight);
-      const y = plotTop + plotHeight - columnHeight;
-      const selected = selectedSlot === point.slot;
-      const positive = point.impactWh >= 0;
-      const trainingSlot = explainability?.slots[point.slot] ?? null;
-      const interpolated = trainingSlot?.interpolated === true;
-      const untrained =
-        !interpolated &&
-        (trainingSlot === null || trainingSlot.factor === null);
-      const fill = untrained
-        ? "#9ca3af"
-        : interpolated
-          ? positive
-            ? "url(#impact-interpolated-positive)"
-            : "url(#impact-interpolated-negative)"
-          : positive
-            ? CHART_COLORS.impactPositive
-            : CHART_COLORS.impactNegative;
-      const fillOpacity = untrained ? "0.45" : interpolated ? "1" : "0.4";
-      const strokeColor = selected
-        ? "var(--primary-text-color)"
-        : untrained
-          ? "#9ca3af"
-          : interpolated
-            ? positive ? CHART_COLORS.impactPositive : CHART_COLORS.impactNegative
-            : "transparent";
-      const strokeWidth = selected ? "2" : untrained || interpolated ? "1" : "0";
-      const strokeDasharray = !selected && (interpolated || untrained) ? "2 2" : "";
-      const titleSuffix = untrained
-        ? ` · ${this._t("bias_correction.inspector.untrained_label")}`
-        : interpolated
-          ? ` · ${this._t("bias_correction.inspector.interpolated_label")}`
-          : "";
-      return svg`
-        <rect
-          x=${x}
-          y=${y}
-          width=${width}
-          height=${columnHeight}
-          fill=${fill}
-          fill-opacity=${fillOpacity}
-          stroke=${strokeColor}
-          stroke-width=${strokeWidth}
-          stroke-dasharray=${strokeDasharray}
-          style="cursor: pointer;"
-          @click=${(event: MouseEvent) => this._selectSlot(point.slot, event)}
-        >
-          <title>${point.slot} ${this._formatSignedWh(point.impactWh)}${titleSuffix}</title>
-        </rect>
-      `;
-    });
-  }
-
   private _selectSlot(slot: string, event?: Event) {
     event?.stopPropagation();
     const previous = this._selectedSlot;
@@ -1094,10 +1018,6 @@ export class HelmanSolarInspector extends LitElement {
         <div class="metric-value">${value}</div>
       </button>
     `;
-  }
-
-  private _renderMetricPlaceholder() {
-    return html`<div class="metric-card placeholder" aria-hidden="true"></div>`;
   }
 
   private _renderContributionTable(
