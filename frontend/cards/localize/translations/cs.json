@@ -358,6 +358,8 @@
       "house_actual": "Skutečná spotřeba",
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
+      "grid_forecast": "Predikce sítě",
+      "grid_actual": "Skutečná síť",
       "correction_impact": "Vliv korekce",
       "factor": "Faktor",
       "legend": {

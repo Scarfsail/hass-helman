@@ -285,6 +285,23 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_invalid_grid_energy_meter_entity_ids_are_reported(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["grid"]["entities"]["today_import"] = "not-an-entity-id"
+        config["power_devices"]["grid"]["entities"]["today_export"] = 42
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        for key in ("today_import", "today_export"):
+            self.assertTrue(
+                any(
+                    issue.path == f"power_devices.grid.entities.{key}"
+                    for issue in report.errors
+                ),
+                msg=f"expected an error for {key}",
+            )
+
     def test_invalid_grid_import_windows_are_reported(self) -> None:
         config = _valid_config()
         config["power_devices"]["grid"]["forecast"]["import_price_windows"] = [

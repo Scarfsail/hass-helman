@@ -1,13 +1,18 @@
-import { css } from "lit-element";
+import { css, unsafeCSS } from "lit-element";
+import { SIMPLE_CARD_COLORS } from "./simple-card-colors";
+
+const solar = unsafeCSS(SIMPLE_CARD_COLORS.source.solar);
+const grid = unsafeCSS(SIMPLE_CARD_COLORS.source.grid);
+const battery = unsafeCSS(SIMPLE_CARD_COLORS.source.battery);
 
 export const simpleCardSharedStyles = css`
     :host {
-        --simple-card-source-solar: #facc15;
-        --simple-card-source-solar-99: #facc1599;
-        --simple-card-source-grid: #38bdf8;
-        --simple-card-source-grid-99: #38bdf899;
-        --simple-card-source-battery: #22c55e;
-        --simple-card-source-battery-88: #22c55e88;
+        --simple-card-source-solar: ${solar};
+        --simple-card-source-solar-99: ${solar}99;
+        --simple-card-source-grid: ${grid};
+        --simple-card-source-grid-99: ${grid}99;
+        --simple-card-source-battery: ${battery};
+        --simple-card-source-battery-88: ${battery}88;
 
         --simple-card-neutral-stroke: #6b7280;
         --simple-card-neutral-stroke-soft: #4b5563;

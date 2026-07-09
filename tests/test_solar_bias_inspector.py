@@ -140,8 +140,18 @@ def test_inspector_day_serializes_frontend_contract():
             "houseActual": [],
             "batterySocForecast": [],
             "batterySocActual": [],
+            "gridForecast": [],
+            "gridActual": [],
         },
-        "totals": {"rawWh": 420.0, "correctedWh": 510.0, "actualWh": 480.0, "houseForecastWh": None, "houseActualWh": None},
+        "totals": {
+            "rawWh": 420.0,
+            "correctedWh": 510.0,
+            "actualWh": 480.0,
+            "houseForecastWh": None,
+            "houseActualWh": None,
+            "gridForecastWh": None,
+            "gridActualWh": None,
+        },
         "availability": {
             "hasRawForecast": True,
             "hasCorrectedForecast": True,
@@ -152,6 +162,8 @@ def test_inspector_day_serializes_frontend_contract():
             "hasHouseActual": False,
             "hasBatterySocForecast": False,
             "hasBatterySocActual": False,
+            "hasGridForecast": False,
+            "hasGridActual": False,
         },
         "trainingExplainability": None,
     }
@@ -625,6 +637,8 @@ def test_inspector_day_applies_current_profile_and_totals():
         "hasHouseActual": False,
         "hasBatterySocForecast": False,
         "hasBatterySocActual": False,
+        "hasGridForecast": False,
+        "hasGridActual": False,
     }
     assert payload["series"]["raw"] == [
         {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 25.0},
@@ -653,7 +667,15 @@ def test_inspector_day_applies_current_profile_and_totals():
         {"slot": "08:00", "factor": 1.5},
         {"slot": "09:00", "factor": 0.5},
     ]
-    assert payload["totals"] == {"rawWh": 300.0, "correctedWh": 300.0, "actualWh": 90.0, "houseForecastWh": None, "houseActualWh": None}
+    assert payload["totals"] == {
+        "rawWh": 300.0,
+        "correctedWh": 300.0,
+        "actualWh": 90.0,
+        "houseForecastWh": None,
+        "houseActualWh": None,
+        "gridForecastWh": None,
+        "gridActualWh": None,
+    }
     assert payload["range"]["minDate"] == "2026-04-13"
     assert payload["range"]["isToday"] is True
 

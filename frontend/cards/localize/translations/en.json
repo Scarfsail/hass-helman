@@ -11,6 +11,8 @@
       "raw_forecast": "Raw forecast",
       "corrected_forecast": "Corrected forecast",
       "actual_production": "Actual production",
+      "grid_forecast": "Grid forecast",
+      "grid_actual": "Actual grid",
       "invalidated_production": "excluded from training: battery full + export disabled",
       "correction_factor": "Correction factor",
       "power_axis_label": "kW (avg)",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterator
 from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
@@ -64,6 +65,8 @@ class SolarBiasCorrectionService:
         house_forecast_snapshot_provider=None,
         house_energy_entity_id_provider=None,
         battery_soc_entity_id_provider=None,
+        grid_import_energy_entity_id_provider=None,
+        grid_export_energy_entity_id_provider=None,
     ) -> None:
         self._hass = hass
         self._store = store
@@ -73,6 +76,8 @@ class SolarBiasCorrectionService:
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
+        self._grid_import_energy_entity_id_provider = grid_import_energy_entity_id_provider
+        self._grid_export_energy_entity_id_provider = grid_export_energy_entity_id_provider
         self._profile: SolarBiasProfile | None = None
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
         self._explainability: SolarBiasTrainingExplainability | None = None
@@ -376,11 +381,31 @@ class SolarBiasCorrectionService:
             except Exception:
                 _LOGGER.exception("Failed to load battery SoC actual for inspector")
 
-        # --- Battery SoC forecast (future slots only, today/future) ---
+        # --- Grid actual (net of the import/export energy meters) ---
+        grid_actual_points: list[dict] = []
+        if target_date <= today:
+            try:
+                grid_actual_points = await self._load_grid_actual_for_date(
+                    target_date, timezone,
+                    local_now=local_now if target_date == today else None,
+                )
+            except Exception:
+                _LOGGER.exception("Failed to load grid actual for inspector")
+
+        # --- Battery SoC and grid forecast (future slots only, today/future) ---
+        # Both come out of the same battery forecast snapshot, so build it once.
         battery_soc_forecast_points: list[dict] = []
+        grid_forecast_points: list[dict] = []
         if target_date >= today:
+            battery_snapshot = await self._get_battery_forecast_snapshot()
             battery_soc_forecast_points = _filter_battery_soc_future(
-                await self._get_battery_forecast_snapshot(),
+                battery_snapshot,
+                target_date=target_date,
+                local_now=local_now,
+                timezone=timezone,
+            )
+            grid_forecast_points = _filter_grid_forecast_future(
+                battery_snapshot,
                 target_date=target_date,
                 local_now=local_now,
                 timezone=timezone,
@@ -408,6 +433,8 @@ class SolarBiasCorrectionService:
                 house_actual=_inspector_points_from_raw(house_actual_points),
                 battery_soc_forecast=_battery_soc_points_from_raw(battery_soc_forecast_points),
                 battery_soc_actual=_battery_soc_points_from_raw(battery_soc_actual_points),
+                grid_forecast=_inspector_points_from_raw(grid_forecast_points),
+                grid_actual=_inspector_points_from_raw(grid_actual_points),
             ),
             totals=SolarBiasInspectorTotals(
                 raw_wh=_sum_point_values(raw_points) if raw_points else None,
@@ -425,6 +452,16 @@ class SolarBiasCorrectionService:
                     if house_actual_points
                     else None
                 ),
+                grid_forecast_wh=(
+                    sum(p["wh"] for p in grid_forecast_points)
+                    if grid_forecast_points
+                    else None
+                ),
+                grid_actual_wh=(
+                    sum(p["wh"] for p in grid_actual_points)
+                    if grid_actual_points
+                    else None
+                ),
             ),
             availability=SolarBiasInspectorAvailability(
                 has_raw_forecast=bool(raw_points),
@@ -436,6 +473,8 @@ class SolarBiasCorrectionService:
                 has_house_actual=bool(house_actual_points),
                 has_battery_soc_forecast=bool(battery_soc_forecast_points),
                 has_battery_soc_actual=bool(battery_soc_actual_points),
+                has_grid_forecast=bool(grid_forecast_points),
+                has_grid_actual=bool(grid_actual_points),
             ),
             is_today=target_date == today,
             is_future=target_date > today,
@@ -461,6 +500,25 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("Battery forecast provider failed")
             return None
 
+    async def _load_slot_energy_kwh(
+        self, entity_id: str, target_date: date, local_tz: ZoneInfo
+    ) -> dict[datetime, float]:
+        """Per-15-min energy deltas of a cumulative meter, keyed by UTC slot start.
+
+        Daily-resetting meters are fine here: the query unwraps total_increasing
+        resets, and a single local day never spans the midnight reset boundary.
+        """
+        from ..recorder_hourly_series import query_cumulative_slot_energy_changes
+
+        local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
+        return await query_cumulative_slot_energy_changes(
+            self._hass,
+            entity_id,
+            local_start=local_start,
+            local_end=local_start + timedelta(days=1),
+            interval_minutes=15,
+        )
+
     async def _load_house_actual_for_date(
         self, target_date: date, local_tz: ZoneInfo, local_now: datetime | None = None
     ) -> list[dict]:
@@ -470,29 +528,56 @@ class SolarBiasCorrectionService:
         entity_id = self._house_energy_entity_id_provider()
         if not entity_id:
             return []
-        local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
-        local_end = local_start + timedelta(days=1)
         try:
-            from ..recorder_hourly_series import query_cumulative_slot_energy_changes
-            by_slot = await query_cumulative_slot_energy_changes(
-                self._hass,
-                entity_id,
-                local_start=local_start,
-                local_end=local_end,
-                interval_minutes=15,
-            )
+            by_slot = await self._load_slot_energy_kwh(entity_id, target_date, local_tz)
         except Exception:
             _LOGGER.exception("Failed to load house actual for inspector")
             return []
-        points = []
-        for slot_start_utc, kwh in sorted(by_slot.items()):
-            slot_local = dt_util.as_local(slot_start_utc)
-            if slot_local.date() != target_date:
-                continue
-            if local_now is not None and slot_local >= _next_slot_boundary(local_now) - timedelta(minutes=15):
-                continue
-            points.append({"timestamp": slot_local.isoformat(), "wh": kwh * 1000.0})
-        return points
+        return _slot_energy_points(
+            {slot: kwh * 1000.0 for slot, kwh in by_slot.items()},
+            target_date,
+            local_now=local_now,
+        )
+
+    async def _load_grid_actual_for_date(
+        self, target_date: date, local_tz: ZoneInfo, local_now: datetime | None = None
+    ) -> list[dict]:
+        """Load per-15-min net grid energy for target_date.
+
+        Positive is exported to the grid, negative is imported from it, matching
+        the sign of the grid forecast and of gridNetKwh elsewhere in the project.
+
+        Only one of the two meters needs to be configured; the missing side
+        contributes zero, the same way a snapshot slot without one of the grid
+        fields does.
+        """
+
+        def _entity_id(provider) -> str | None:
+            return provider() if provider is not None else None
+
+        import_entity = _entity_id(self._grid_import_energy_entity_id_provider)
+        export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
+        if not import_entity and not export_entity:
+            return []
+        try:
+            imported = (
+                await self._load_slot_energy_kwh(import_entity, target_date, local_tz)
+                if import_entity
+                else {}
+            )
+            exported = (
+                await self._load_slot_energy_kwh(export_entity, target_date, local_tz)
+                if export_entity
+                else {}
+            )
+        except Exception:
+            _LOGGER.exception("Failed to load grid actual for inspector")
+            return []
+        net_wh_by_slot = {
+            slot: (exported.get(slot, 0.0) - imported.get(slot, 0.0)) * 1000.0
+            for slot in imported.keys() | exported.keys()
+        }
+        return _slot_energy_points(net_wh_by_slot, target_date, local_now=local_now)
 
     async def _load_battery_soc_actual_for_date(
         self, target_date: date, local_tz: ZoneInfo
@@ -1080,20 +1165,42 @@ def _next_slot_boundary(local_now: datetime) -> datetime:
     return current_slot + timedelta(minutes=15)
 
 
-def _filter_battery_soc_future(
+def _slot_energy_points(
+    wh_by_slot_utc: dict[datetime, float],
+    target_date: date,
+    *,
+    local_now: datetime | None,
+) -> list[dict]:
+    """Turn UTC-keyed slot energies into local per-slot inspector points.
+
+    When local_now is given the still-running slot is dropped, since its energy
+    delta only covers part of the slot.
+    """
+    points: list[dict] = []
+    for slot_start_utc, wh in sorted(wh_by_slot_utc.items()):
+        slot_local = dt_util.as_local(slot_start_utc)
+        if slot_local.date() != target_date:
+            continue
+        if local_now is not None and slot_local >= _next_slot_boundary(
+            local_now
+        ) - timedelta(minutes=15):
+            continue
+        points.append({"timestamp": slot_local.isoformat(), "wh": wh})
+    return points
+
+
+def _iter_future_snapshot_entries(
     snapshot: dict | None,
     *,
     target_date: date,
     local_now: datetime,
     timezone: ZoneInfo,
-) -> list[dict]:
-    """Extract future battery SoC forecast slots for target_date from the snapshot."""
+) -> Iterator[tuple[datetime, dict]]:
+    """Yield (local timestamp, entry) for snapshot slots on target_date not yet started."""
     if not isinstance(snapshot, dict):
-        return []
-    series = snapshot.get("series") or []
+        return
     next_slot = _next_slot_boundary(local_now)
-    points: list[dict] = []
-    for entry in series:
+    for entry in snapshot.get("series") or []:
         if not isinstance(entry, dict):
             continue
         ts_raw = entry.get("timestamp")
@@ -1108,11 +1215,51 @@ def _filter_battery_soc_future(
             continue
         if ts_local < next_slot:
             continue
+        yield ts_local, entry
+
+
+def _filter_battery_soc_future(
+    snapshot: dict | None,
+    *,
+    target_date: date,
+    local_now: datetime,
+    timezone: ZoneInfo,
+) -> list[dict]:
+    """Extract future battery SoC forecast slots for target_date from the snapshot."""
+    points: list[dict] = []
+    for ts_local, entry in _iter_future_snapshot_entries(
+        snapshot, target_date=target_date, local_now=local_now, timezone=timezone
+    ):
         pct = entry.get("socPct")
         if pct is None:
             continue
         slot = f"{ts_local.hour:02d}:{ts_local.minute:02d}"
         points.append({"slot": slot, "pct": float(pct)})
+    return points
+
+
+def _filter_grid_forecast_future(
+    snapshot: dict | None,
+    *,
+    target_date: date,
+    local_now: datetime,
+    timezone: ZoneInfo,
+) -> list[dict]:
+    """Extract future net grid energy slots for target_date from the snapshot.
+
+    Positive is exported to the grid, negative is imported from it, matching
+    gridNetKwh in the scheduling and forecast cards.
+    """
+    points: list[dict] = []
+    for ts_local, entry in _iter_future_snapshot_entries(
+        snapshot, target_date=target_date, local_now=local_now, timezone=timezone
+    ):
+        imported = entry.get("importedFromGridKwh")
+        exported = entry.get("exportedToGridKwh")
+        if imported is None and exported is None:
+            continue
+        net_kwh = float(exported or 0.0) - float(imported or 0.0)
+        points.append({"timestamp": ts_local.isoformat(), "wh": net_kwh * 1000.0})
     return points
 
 

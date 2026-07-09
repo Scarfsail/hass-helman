@@ -170,6 +170,8 @@ class SolarBiasInspectorSeries:
     house_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
     battery_soc_forecast: list[BatterySocPoint] = field(default_factory=list)
     battery_soc_actual: list[BatterySocPoint] = field(default_factory=list)
+    grid_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    grid_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
 
 
 @dataclass
@@ -179,6 +181,8 @@ class SolarBiasInspectorTotals:
     actual_wh: float | None
     house_forecast_wh: float | None = None
     house_actual_wh: float | None = None
+    grid_forecast_wh: float | None = None
+    grid_actual_wh: float | None = None
 
 
 @dataclass
@@ -192,6 +196,8 @@ class SolarBiasInspectorAvailability:
     has_house_actual: bool = False
     has_battery_soc_forecast: bool = False
     has_battery_soc_actual: bool = False
+    has_grid_forecast: bool = False
+    has_grid_actual: bool = False
 
 
 @dataclass
@@ -248,6 +254,8 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "batterySocActual": [
                 {"slot": p.slot, "pct": p.pct} for p in day.series.battery_soc_actual
             ],
+            "gridForecast": [_inspector_point_payload(p) for p in day.series.grid_forecast],
+            "gridActual": [_inspector_point_payload(p) for p in day.series.grid_actual],
         },
         "totals": {
             "rawWh": day.totals.raw_wh,
@@ -255,6 +263,8 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "actualWh": day.totals.actual_wh,
             "houseForecastWh": day.totals.house_forecast_wh,
             "houseActualWh": day.totals.house_actual_wh,
+            "gridForecastWh": day.totals.grid_forecast_wh,
+            "gridActualWh": day.totals.grid_actual_wh,
         },
         "availability": {
             "hasRawForecast": day.availability.has_raw_forecast,
@@ -266,6 +276,8 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasHouseActual": day.availability.has_house_actual,
             "hasBatterySocForecast": day.availability.has_battery_soc_forecast,
             "hasBatterySocActual": day.availability.has_battery_soc_actual,
+            "hasGridForecast": day.availability.has_grid_forecast,
+            "hasGridActual": day.availability.has_grid_actual,
         },
         "trainingExplainability": training_explainability_to_payload(
             day.training_explainability

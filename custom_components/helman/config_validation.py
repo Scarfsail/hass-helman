@@ -767,12 +767,13 @@ def _validate_grid_config(
             entities, "power_devices.grid.entities", section, report
         )
         if entity_map is not None:
-            _validate_optional_entity_id(
-                report,
-                section,
-                "power_devices.grid.entities.power",
-                entity_map.get("power"),
-            )
+            for key in ("power", "today_import", "today_export"):
+                _validate_optional_entity_id(
+                    report,
+                    section,
+                    f"power_devices.grid.entities.{key}",
+                    entity_map.get(key),
+                )
 
     forecast = grid.get("forecast")
     if forecast is None:
