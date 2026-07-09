@@ -380,7 +380,7 @@ class SolarBiasCorrectionService:
         battery_soc_forecast_points: list[dict] = []
         if target_date >= today:
             battery_soc_forecast_points = _filter_battery_soc_future(
-                self._get_battery_forecast_snapshot(),
+                await self._get_battery_forecast_snapshot(),
                 target_date=target_date,
                 local_now=local_now,
                 timezone=timezone,
@@ -452,11 +452,11 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("House forecast snapshot provider failed")
             return None
 
-    def _get_battery_forecast_snapshot(self) -> dict | None:
+    async def _get_battery_forecast_snapshot(self) -> dict | None:
         if self._battery_forecast_provider is None:
             return None
         try:
-            return self._battery_forecast_provider()
+            return await self._battery_forecast_provider()
         except Exception:
             _LOGGER.exception("Battery forecast provider failed")
             return None

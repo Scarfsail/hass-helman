@@ -102,6 +102,10 @@ BATTERY_SNAPSHOT = {
 }
 
 
+async def _battery_forecast_provider():
+    return BATTERY_SNAPSHOT
+
+
 class _DummyStore:
     profile = None
 
@@ -133,7 +137,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            battery_forecast_provider=lambda: BATTERY_SNAPSHOT,
+            battery_forecast_provider=_battery_forecast_provider,
             house_energy_entity_id_provider=lambda: "sensor.house_energy",
             battery_soc_entity_id_provider=lambda: "sensor.battery_soc",
         )

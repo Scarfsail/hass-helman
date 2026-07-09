@@ -424,7 +424,7 @@ class HelmanCoordinator:
             self._solar_bias_store,
             bias_config,
             canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
-            battery_forecast_provider=lambda: self._cached_battery_forecast,
+            battery_forecast_provider=self._async_get_battery_forecast_snapshot,
             house_forecast_snapshot_provider=lambda: self._cached_forecast,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
@@ -1876,6 +1876,15 @@ class HelmanCoordinator:
             started_at=started_at,
         )
         return pipeline.battery_forecast
+
+    async def _async_get_battery_forecast_snapshot(self) -> dict[str, Any] | None:
+        """Return the battery forecast snapshot for the solar bias inspector.
+
+        Builds the forecast when the cache is cold so the inspector does not
+        depend on another consumer having called get_forecast() first.
+        """
+        await self.get_forecast()
+        return self._cached_battery_forecast
 
     def _build_forecast_schedule_documents(
         self,
