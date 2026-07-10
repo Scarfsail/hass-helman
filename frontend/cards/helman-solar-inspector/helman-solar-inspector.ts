@@ -277,6 +277,7 @@ export class HelmanSolarInspector extends LitElement {
 
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
   private _lastLayoutForStrip: ChartLayout | null = null;
+  private _lastForecastFillFrom = Number.NEGATIVE_INFINITY;
   private _activeRequestId = 0;
   private _activeRequestDate: string | null = null;
   private _loadedConnection: unknown = null;
@@ -769,7 +770,11 @@ export class HelmanSolarInspector extends LitElement {
   private _renderChart(payload: InspectorPayload) {
     const stacks = this._buildStacks(payload);
     const layout = this._computeChartLayout(payload, stacks);
+    const forecastFillFrom = this._forecastFillFrom(stacks);
     this._lastLayoutForStrip = layout;
+    // The strip below renders from the same seam, so its columns turn forecast
+    // where the stacks above turn hatched.
+    this._lastForecastFillFrom = forecastFillFrom;
     const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
     return svg`
       <svg
@@ -784,7 +789,7 @@ export class HelmanSolarInspector extends LitElement {
         ${this._renderLeftAxis(layout)}
         ${this._renderXAxis(layout)}
         ${this._renderStackSet(layout, stacks.actual, "actual", Number.NEGATIVE_INFINITY)}
-        ${this._renderStackSet(layout, stacks.forecast, "forecast", this._forecastFillFrom(stacks))}
+        ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
         ${this._renderSolarLayer(payload, layout)}
       </svg>
     `;
@@ -1063,7 +1068,7 @@ export class HelmanSolarInspector extends LitElement {
     const forecast = this._isSeriesVisible("batterySocForecast")
       ? payload.series.batterySocForecast
       : [];
-    return buildSocBars(actual, forecast);
+    return buildSocBars(actual, forecast, this._lastForecastFillFrom);
   }
 
   /** The two levels a column is read against: empty and full. */

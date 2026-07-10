@@ -57,30 +57,41 @@ function directionsBySlot(points: readonly TimedPoint[]): Map<string, SocDirecti
 }
 
 /**
- * One column per SoC reading, measured where the day has been measured and
- * forecast beyond it.
+ * One column per slot, measured where the day has been measured and forecast
+ * from `forecastFrom` on — the same seam the chart above fills its stacks at.
  *
- * The last measured column has no later actual to move towards, so it borrows
- * the forecast's step across its own slot — a delta within the forecast, not
- * across the seam. Failing that, and for the final column of the day, nothing
- * is known about the movement and the column reads as holding.
+ * SoC is read instantaneously, so the actuals carry a reading at the start of
+ * the slot the clock is still inside. That reading is real, but the movement
+ * across its slot has not happened yet: it stands as the endpoint the last
+ * elapsed column moves towards, and the forecast draws the slot itself.
+ *
+ * A measured column that reaches the seam with no later reading — a gap in the
+ * recorder — borrows the forecast's step across its own slot, a delta within
+ * the forecast rather than across the seam. Failing that, and for the final
+ * column of the day, nothing is known about the movement and the column reads
+ * as holding.
  */
 export function buildSocBars(
   actual: readonly BatterySocPoint[],
   forecast: readonly BatterySocPoint[],
+  forecastFrom: number,
 ): SocBar[] {
   const measured = timed(actual);
   const projected = timed(forecast);
   const measuredDirections = directionsBySlot(measured);
   const forecastDirections = directionsBySlot(projected);
 
-  const cutoff = measured.length ? measured[measured.length - 1].minutes : -Infinity;
+  const elapsed = measured.filter((point) => point.minutes < forecastFrom);
   // The forecast speaks only for the part of the day the actuals never reached,
-  // so the two never contribute a column for the same slot.
-  const ahead = projected.filter((point) => point.minutes > cutoff);
+  // so the two never contribute a column for the same slot. With no measured
+  // column to yield to — no actuals, or the series hidden — it speaks for all
+  // of it.
+  const ahead = elapsed.length
+    ? projected.filter((point) => point.minutes >= forecastFrom)
+    : projected;
 
   return [
-    ...measured.map((point) => ({
+    ...elapsed.map((point) => ({
       ...point,
       forecast: false,
       direction:
