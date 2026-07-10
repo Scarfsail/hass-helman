@@ -37,6 +37,12 @@ from .appliances import (
     build_empty_appliance_projections_response,
 )
 from .automation.config import AutomationConfig, read_automation_config
+from .automation.day_context import (
+    DayContext,
+    FrozenDayContext,
+    build_day_contexts,
+)
+from .automation.day_context_store import DayContextStore
 from .automation.input_bundle import AutomationInputBundle
 from .automation.ownership import (
     has_automation_owned_actions,
@@ -324,6 +330,7 @@ class HelmanCoordinator:
         self._create_task = getattr(self._hass, "async_create_task", asyncio.create_task)
         self._refresh_tasks: set[asyncio.Task[Any]] = set()
         self._automation_input_bundle: AutomationInputBundle | None = None
+        self._day_context_store = DayContextStore(hass)
         self._last_automation_run_result: AutomationRunResult | None = None
         self._automation_triggers = AutomationTriggerCoordinator(
             create_task=self._create_task,
@@ -2080,12 +2087,59 @@ class HelmanCoordinator:
             grid_forecast=grid_forecast,
         )
 
+    async def async_resolve_day_contexts(
+        self,
+        *,
+        snapshot: OptimizationSnapshot,
+        reference_time: datetime,
+    ) -> dict[date, DayContext]:
+        """Build, freeze, and return the per-calendar-day contexts (A3/A4).
+
+        Computed once per automation run from the initial (baseline) snapshot.
+        Volatile fields are recomputed live; classification and the day-min
+        window are pinned via the freeze store so a rule cannot flip mid-day.
+        """
+        automation_config = read_automation_config(self._active_config)
+        if automation_config is None:
+            day_context_config = AutomationConfig().day_context
+        else:
+            day_context_config = automation_config.day_context
+
+        battery_series = snapshot.battery_forecast.get("series")
+        if not isinstance(battery_series, list):
+            battery_series = []
+        battery_state = snapshot.context.battery_state
+        battery_max_soc = battery_state.max_soc if battery_state is not None else None
+
+        frozen_overrides = await self._day_context_store.async_load()
+        day_contexts = build_day_contexts(
+            battery_series=battery_series,
+            export_price_points=snapshot.context.export_price_forecast.get("points", []),
+            import_price_points=snapshot.context.import_price_forecast.get("points", []),
+            battery_max_soc=battery_max_soc,
+            deficit_below_ratio=day_context_config.deficit_below_ratio,
+            surplus_above_ratio=day_context_config.surplus_above_ratio,
+            frozen_overrides=frozen_overrides,
+        )
+        await self._day_context_store.async_freeze_and_prune(
+            computed={
+                local_date: FrozenDayContext(
+                    classification=day_context.classification,
+                    day_min_window=day_context.day_min_window,
+                )
+                for local_date, day_context in day_contexts.items()
+            },
+            today=dt_util.as_local(reference_time).date(),
+        )
+        return day_contexts
+
     async def _build_automation_snapshot_from_schedule_locked(
         self,
         *,
         schedule_document: ScheduleDocument,
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
+        day_contexts: dict[date, DayContext] | None = None,
     ) -> OptimizationSnapshot:
         schedule_documents = self._build_forecast_schedule_documents(
             schedule_document=schedule_document
@@ -2150,6 +2204,7 @@ class HelmanCoordinator:
                 runtime_hours_by_appliance_id_by_local_date=deepcopy(
                     input_bundle.runtime_hours_by_appliance_id_by_local_date
                 ),
+                day_contexts=dict(day_contexts) if day_contexts else {},
             ),
         )
 

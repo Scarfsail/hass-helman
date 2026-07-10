@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..appliances.climate_appliance import SUPPORTED_CLIMATE_MODES
+from ..const import (
+    DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO,
+    DAY_CONTEXT_DEFAULT_SURPLUS_ABOVE_RATIO,
+)
 from .optimizer import KNOWN_OPTIMIZER_KINDS
 
 _MISSING = object()
@@ -30,10 +34,17 @@ class OptimizerInstanceConfig:
 
 
 @dataclass(frozen=True)
+class DayContextConfig:
+    deficit_below_ratio: float = DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO
+    surplus_above_ratio: float = DAY_CONTEXT_DEFAULT_SURPLUS_ABOVE_RATIO
+
+
+@dataclass(frozen=True)
 class AutomationConfig:
     enabled: bool = True
     optimizers: tuple[OptimizerInstanceConfig, ...] = ()
     execution_optimizers: tuple[OptimizerInstanceConfig, ...] = ()
+    day_context: DayContextConfig = field(default_factory=DayContextConfig)
 
     @classmethod
     def from_dict(
@@ -51,6 +62,10 @@ class AutomationConfig:
             data.get("optimizers", _MISSING),
             path=f"{path}.optimizers",
         )
+        day_context = _read_day_context(
+            data.get("day_context", _MISSING),
+            path=f"{path}.day_context",
+        )
         execution_optimizers = (
             ()
             if not enabled
@@ -60,7 +75,39 @@ class AutomationConfig:
             enabled=enabled,
             optimizers=optimizers,
             execution_optimizers=execution_optimizers,
+            day_context=day_context,
         )
+
+
+def _read_day_context(
+    value: object,
+    *,
+    path: str,
+) -> DayContextConfig:
+    if value is _MISSING:
+        return DayContextConfig()
+    data = _read_mapping(value, path=path)
+    deficit_below_ratio = _read_float(
+        data.get("deficit_below_ratio", DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO),
+        path=f"{path}.deficit_below_ratio",
+    )
+    surplus_above_ratio = _read_float(
+        data.get("surplus_above_ratio", DAY_CONTEXT_DEFAULT_SURPLUS_ABOVE_RATIO),
+        path=f"{path}.surplus_above_ratio",
+    )
+    if deficit_below_ratio >= surplus_above_ratio:
+        _raise_config_error(
+            path=path,
+            code="invalid_value",
+            message=(
+                f"{path}.deficit_below_ratio must be less than "
+                f"{path}.surplus_above_ratio"
+            ),
+        )
+    return DayContextConfig(
+        deficit_below_ratio=deficit_below_ratio,
+        surplus_above_ratio=surplus_above_ratio,
+    )
 
 
 def read_automation_config(

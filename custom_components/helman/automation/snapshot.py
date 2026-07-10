@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -54,6 +54,17 @@ class OptimizationSnapshot:
     battery_forecast: dict[str, Any]
     grid_forecast: dict[str, Any]
     context: OptimizationContext
+
+
+def attach_day_contexts(
+    snapshot: OptimizationSnapshot,
+    day_contexts: dict[date, "DayContext"],
+) -> OptimizationSnapshot:
+    """Return a copy of ``snapshot`` with day contexts on its context."""
+    return replace(
+        snapshot,
+        context=replace(snapshot.context, day_contexts=day_contexts),
+    )
 
 
 def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:

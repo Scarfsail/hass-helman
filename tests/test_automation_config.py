@@ -402,6 +402,39 @@ class AutomationConfigTests(unittest.TestCase):
         self.assertEqual(report.errors, [])
         self.assertEqual(report.warnings, [])
 
+    def test_day_context_defaults_when_absent(self) -> None:
+        parsed = AutomationConfig.from_dict({"enabled": True, "optimizers": []})
+        self.assertAlmostEqual(parsed.day_context.deficit_below_ratio, 0.7)
+        self.assertAlmostEqual(parsed.day_context.surplus_above_ratio, 1.3)
+
+    def test_day_context_reads_custom_ratios(self) -> None:
+        parsed = AutomationConfig.from_dict(
+            {
+                "enabled": True,
+                "optimizers": [],
+                "day_context": {
+                    "deficit_below_ratio": 0.5,
+                    "surplus_above_ratio": 1.5,
+                },
+            }
+        )
+        self.assertAlmostEqual(parsed.day_context.deficit_below_ratio, 0.5)
+        self.assertAlmostEqual(parsed.day_context.surplus_above_ratio, 1.5)
+
+    def test_day_context_rejects_deficit_ge_surplus(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "enabled": True,
+                    "optimizers": [],
+                    "day_context": {
+                        "deficit_below_ratio": 1.5,
+                        "surplus_above_ratio": 1.3,
+                    },
+                }
+            )
+        self.assertEqual(ctx.exception.code, "invalid_value")
+
 
 if __name__ == "__main__":
     unittest.main()

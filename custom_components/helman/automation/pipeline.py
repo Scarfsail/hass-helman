@@ -20,7 +20,7 @@ from .ownership import (
     strip_automation_owned_actions,
 )
 from .optimizer import build_optimizer
-from .snapshot import OptimizationSnapshot, snapshot_to_dict
+from .snapshot import OptimizationSnapshot, attach_day_contexts, snapshot_to_dict
 from ..scheduling.schedule import (
     ScheduleDocument,
     ScheduleDomains,
@@ -283,6 +283,14 @@ class AutomationRunner:
                             reference_time=active_reference_time,
                         )
                     )
+                    current_stage = "day_context"
+                    day_contexts = await self._coordinator.async_resolve_day_contexts(
+                        snapshot=initial_snapshot,
+                        reference_time=active_reference_time,
+                    )
+                    initial_snapshot = attach_day_contexts(
+                        initial_snapshot, day_contexts
+                    )
                     latest_snapshot = initial_snapshot
                     try:
                         current_stage = "optimizer_loop"
@@ -292,6 +300,7 @@ class AutomationRunner:
                             input_bundle=input_bundle,
                             reference_time=active_reference_time,
                             initial_snapshot=initial_snapshot,
+                            day_contexts=day_contexts,
                         )
                     except _OptimizerExecutionError as err:
                         result = AutomationRunResult.skipped(
@@ -361,6 +370,7 @@ class AutomationRunner:
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
         initial_snapshot: OptimizationSnapshot,
+        day_contexts: dict,
     ) -> _PipelineExecutionResult:
         working_schedule_document = schedule_document
         snapshot = initial_snapshot
@@ -390,6 +400,7 @@ class AutomationRunner:
                             schedule_document=working_schedule_document,
                             input_bundle=input_bundle,
                             reference_time=reference_time,
+                            day_contexts=day_contexts,
                         )
                     )
                 except Exception as rebuild_err:
@@ -430,6 +441,7 @@ class AutomationRunner:
                     schedule_document=working_schedule_document,
                     input_bundle=input_bundle,
                     reference_time=reference_time,
+                    day_contexts=day_contexts,
                 )
             except Exception as err:
                 raise _build_optimizer_error(
