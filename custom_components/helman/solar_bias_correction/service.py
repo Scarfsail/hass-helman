@@ -1366,6 +1366,11 @@ def _house_forecast_points_from_snapshot(
 ) -> list[dict]:
     """Extract 15-min house forecast Wh points for target_date from a cached snapshot.
 
+    The snapshot is the adjusted house forecast, the one the battery simulation
+    ran against: its nonDeferrable is the whole house, scheduled appliance
+    demand included. Its deferrableConsumers band is the model's own account of
+    those same appliances and must not be added on top.
+
     The snapshot series values are in kWh per canonical slot; convert to Wh.
     Pass next_slot for today so past slots are excluded and forecast starts
     seamlessly after the last actual slot.
@@ -1399,13 +1404,7 @@ def _house_forecast_points_from_snapshot(
             nd_kwh = float(nd_kwh)
         except (TypeError, ValueError):
             continue
-        deferrable_kwh = sum(
-            float(c.get("value", 0))
-            for c in (entry.get("deferrableConsumers") or [])
-            if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
-        )
-        total_wh = (nd_kwh + deferrable_kwh) * 1000
-        points.append({"timestamp": ts_raw, "wh": total_wh})
+        points.append({"timestamp": ts_raw, "wh": nd_kwh * 1000})
     return points
 
 

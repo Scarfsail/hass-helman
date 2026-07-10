@@ -458,6 +458,31 @@ class TestInspectorServesArchivedForecast(unittest.IsolatedAsyncioTestCase):
         # (kWh → Wh), never the recorder's held-flat 999.
         self.assertEqual([p["valueWh"] for p in house], [100.0, 200.0, 400.0, 500.0])
 
+    async def test_house_forecast_ignores_the_deferrable_consumers_band(self):
+        """nonDeferrable already carries the scheduled appliance demand.
+
+        The snapshot is the adjusted house forecast the battery simulation ran
+        against. Adding its deferrableConsumers band on top would count those
+        appliances twice and push the demand stack above production.
+        """
+        service = self._service(_FakeHistory({}), _snapshot())
+        service._house_forecast_snapshot_provider = lambda: {
+            "status": "available",
+            "series": [
+                {
+                    "timestamp": f"{TODAY}T10:15:00+02:00",
+                    "nonDeferrable": {"value": 0.4},
+                    "deferrableConsumers": [
+                        {"entityId": "sensor.boiler", "value": 0.75},
+                    ],
+                },
+            ],
+        }
+        payload = await self._inspect(service, TODAY, house_forecast_points=[])
+
+        house = payload["series"]["houseForecast"]
+        self.assertEqual([p["valueWh"] for p in house], [400.0])
+
 
 if __name__ == "__main__":
     unittest.main()

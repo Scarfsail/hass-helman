@@ -432,7 +432,7 @@ class HelmanCoordinator:
             canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
             battery_forecast_provider=self._async_get_battery_forecast_snapshot,
             battery_forecast_history=self._battery_forecast_history,
-            house_forecast_snapshot_provider=lambda: self._cached_forecast,
+            house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
             battery_soc_bounds_provider=self._get_battery_soc_bounds,
@@ -1957,6 +1957,26 @@ class HelmanCoordinator:
             house_forecast=canonical_house_forecast,
             started_at=request_now,
         )
+
+    def _get_adjusted_house_forecast_snapshot(self) -> dict[str, Any] | None:
+        """Return the house forecast the battery simulation ran against.
+
+        The inspector draws house demand beside the battery and grid bands the
+        simulation produced, so it has to read the same series the simulation
+        did: the adjusted forecast, whose nonDeferrable already carries the
+        scheduled appliance demand. The original snapshot would name a
+        different house — its nonDeferrable excludes the deferrable consumers,
+        and its own forecast of them need not fall in the slots the planner
+        scheduled them for — and the two stacks would not balance.
+
+        Reads the pipeline the caller has already built through
+        _async_get_battery_forecast_snapshot; there is no adjusted forecast to
+        speak of before that.
+        """
+        pipeline = self._cached_appliance_forecast_pipeline
+        if pipeline is None:
+            return None
+        return pipeline.adjusted_house_forecast
 
     def _build_forecast_schedule_documents(
         self,
