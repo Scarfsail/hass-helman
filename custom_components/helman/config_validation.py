@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .automation.config import AutomationConfigError, read_automation_config
+from .automation.optimizers.charge_from_grid import (
+    ChargeFromGridValidationError,
+    validate_charge_from_grid_optimizer_config,
+)
 from .automation.optimizers.charge_hold import (
     ChargeHoldValidationError,
     validate_charge_hold_optimizer_config,
@@ -1029,6 +1033,26 @@ def _validate_automation_config(
                         "export_price optimizer; export_price's stop_export will win "
                         "shared inverter slots. Place charge_hold first."
                     ),
+                )
+        elif optimizer.kind == "charge_from_grid":
+            if battery_issue is not None:
+                report.add_error(
+                    section="automation",
+                    path=f"automation.optimizers[{index}]",
+                    code="battery_required",
+                    message=(
+                        f"charge_from_grid optimizer {optimizer.id!r} requires a "
+                        f"configured battery: {battery_issue}"
+                    ),
+                )
+            try:
+                validate_charge_from_grid_optimizer_config(optimizer)
+            except ChargeFromGridValidationError as err:
+                report.add_error(
+                    section="automation",
+                    path=f"automation.optimizers[{index}].params.{err.field}",
+                    code="invalid_value",
+                    message=str(err),
                 )
 
 

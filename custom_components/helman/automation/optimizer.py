@@ -4,12 +4,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from .optimizers import (
     ExportPriceOptimizer,
+    build_charge_from_grid_optimizer,
     build_charge_hold_optimizer,
     build_surplus_appliance_optimizer,
 )
 
 KNOWN_OPTIMIZER_KINDS: frozenset[str] = frozenset(
-    {"export_price", "surplus_appliance", "charge_hold"}
+    {"export_price", "surplus_appliance", "charge_hold", "charge_from_grid"}
 )
 
 if TYPE_CHECKING:
@@ -50,4 +51,6 @@ def build_optimizer(
         )
     if config.kind == "charge_hold":
         return build_charge_hold_optimizer(config)
+    if config.kind == "charge_from_grid":
+        return build_charge_from_grid_optimizer(config)
     raise ValueError(f"Unsupported optimizer kind: {config.kind}")
