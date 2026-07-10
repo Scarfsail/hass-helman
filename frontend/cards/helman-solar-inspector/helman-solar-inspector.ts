@@ -91,9 +91,25 @@ const MINUTES_PER_DAY = 1440;
 
 /** Fill of the measured stack; low enough that the forecast outline reads through it. */
 const ACTUAL_BAND_FILL_OPACITY = 0.45;
-/** The forecast's own fill, past the last actual, is fainter than measured history. */
-const FORECAST_BAND_FILL_OPACITY = 0.25;
+/**
+ * The forecast's own fill, past the last actual. Its muting comes from the
+ * hatch pattern being mostly transparent, so the paint itself stays near solid.
+ */
+const FORECAST_BAND_FILL_OPACITY = 0.9;
 const FORECAST_OUTLINE: StrokeStyle = { width: 1.4, opacity: 0.55 };
+
+/** Band colours needing a hatch pattern; solar's forecast reuses the solar hue. */
+const STACK_HATCH_COLORS = [
+  CHART_COLORS.corrected,
+  CHART_COLORS.house,
+  CHART_COLORS.battery,
+  CHART_COLORS.grid,
+] as const;
+
+/** Patterns are referenced by url(#id), so each colour needs a stable id. */
+function hatchId(color: string): string {
+  return `stack-hatch-${color.replace("#", "")}`;
+}
 
 type ChartStacks = { forecast: StackSet; actual: StackSet };
 
@@ -802,7 +818,8 @@ export class HelmanSolarInspector extends LitElement {
     ];
     const toPath = (points: readonly (readonly [number, number])[]) =>
       points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-    const dash = variant === "forecast" ? "4 3" : "";
+    const forecast = variant === "forecast";
+    const dash = forecast ? "4 3" : "";
 
     const outline = (run: number[], band: StackBand) => svg`
       <path d=${toPath(run.flatMap((slot) => stepEdge(slot, band.top)))} fill="none"
@@ -812,10 +829,12 @@ export class HelmanSolarInspector extends LitElement {
     const area = (run: number[], band: StackBand) => {
       const outer = run.flatMap((slot) => stepEdge(slot, band.top));
       const inner = [...run].reverse().flatMap((slot) => [...stepEdge(slot, band.base)].reverse());
-      const fillOpacity =
-        variant === "forecast" ? FORECAST_BAND_FILL_OPACITY : ACTUAL_BAND_FILL_OPACITY;
+      // Measured hours read as solid colour; the forecast is hatched, so it is
+      // legible as a projection even where no actual line sits beside it.
+      const fill = forecast ? `url(#${hatchId(band.layer.color)})` : band.layer.color;
+      const fillOpacity = forecast ? FORECAST_BAND_FILL_OPACITY : ACTUAL_BAND_FILL_OPACITY;
       return svg`
-        <path d=${`${toPath([...outer, ...inner])} Z`} fill=${band.layer.color}
+        <path d=${`${toPath([...outer, ...inner])} Z`} fill=${fill}
               fill-opacity=${fillOpacity} stroke=${band.layer.color} stroke-width="0.75"
               stroke-dasharray=${dash} stroke-opacity="0.6"></path>
       `;
@@ -844,6 +863,12 @@ export class HelmanSolarInspector extends LitElement {
     return svg`
       <rect x="0" y="0" width=${layout.width} height=${layout.height} fill="var(--card-background-color)"></rect>
       <defs>
+        ${STACK_HATCH_COLORS.map((color) => svg`
+          <pattern id=${hatchId(color)} patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
+            <rect width="5" height="5" fill=${color} fill-opacity="0.12"></rect>
+            <line x1="0" y1="0" x2="0" y2="5" stroke=${color} stroke-width="1.5" stroke-opacity="0.7"></line>
+          </pattern>
+        `)}
         <pattern id="impact-interpolated-positive" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
           <rect width="4" height="4" fill=${CHART_COLORS.impactPositive} fill-opacity="0.12"></rect>
           <line x1="0" y1="0" x2="0" y2="4" stroke=${CHART_COLORS.impactPositive} stroke-width="1.6" stroke-opacity="0.85"></line>
