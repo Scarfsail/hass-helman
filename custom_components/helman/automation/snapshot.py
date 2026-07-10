@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from ..appliances import AppliancesRuntimeRegistry, build_appliances_response
@@ -19,6 +19,7 @@ from ..scheduling.schedule import (
 
 if TYPE_CHECKING:
     from ..battery_state import BatteryLiveState
+    from .day_context import DayContext
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,20 @@ class OptimizationContext:
     export_price_forecast: dict[str, Any]
     appliance_registry: AppliancesRuntimeRegistry
     when_active_hourly_energy_kwh_by_appliance_id: dict[str, float]
+    # A1 — battery parameters surfaced from the battery config/live state so
+    # single-pass rules (charge_hold) can size charge energy without touching
+    # the forecast builder. Static per run.
+    battery_max_charge_power_kw: float | None = None
+    battery_usable_capacity_kwh: float | None = None
+    battery_charge_efficiency: float | None = None
+    # A2 — framework-resolved runtime hours per appliance per local calendar day
+    # (recorder-derived). Rules read this synchronously.
+    runtime_hours_by_appliance_id_by_local_date: dict[str, dict[date, float]] = field(
+        default_factory=dict
+    )
+    # A3/A4 — frozen per-calendar-day context, keyed by local date. Attached by
+    # the coordinator once per run. Read-only for optimizers.
+    day_contexts: dict[date, "DayContext"] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,22 @@ def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:
             "whenActiveHourlyEnergyKwhByApplianceId": deepcopy(
                 snapshot.context.when_active_hourly_energy_kwh_by_appliance_id
             ),
+            "batteryMaxChargePowerKw": snapshot.context.battery_max_charge_power_kw,
+            "batteryUsableCapacityKwh": snapshot.context.battery_usable_capacity_kwh,
+            "batteryChargeEfficiency": snapshot.context.battery_charge_efficiency,
+            "runtimeHoursByApplianceIdByLocalDate": {
+                appliance_id: {
+                    local_date.isoformat(): hours
+                    for local_date, hours in hours_by_date.items()
+                }
+                for appliance_id, hours_by_date in (
+                    snapshot.context.runtime_hours_by_appliance_id_by_local_date.items()
+                )
+            },
+            "dayContexts": {
+                local_date.isoformat(): day_context.to_dict()
+                for local_date, day_context in snapshot.context.day_contexts.items()
+            },
         },
     }
 

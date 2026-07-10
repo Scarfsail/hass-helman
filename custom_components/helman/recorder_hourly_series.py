@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -267,6 +267,75 @@ async def estimate_average_hourly_energy_when_climate_active(
         lookback_days=lookback_days,
         active_states=("heat", "cool"),
     )
+
+
+async def query_active_hours_by_local_date(
+    hass: HomeAssistant,
+    *,
+    entity_id: str,
+    active_states: tuple[str, ...],
+    local_start: datetime,
+    local_end: datetime,
+) -> dict[date, float]:
+    """Return active-state hours bucketed by local calendar date.
+
+    Reads the entity's recorded state changes over ``[local_start, local_end]``
+    and sums, per local calendar day, the hours the entity spent in any of
+    ``active_states``. Intervals spanning midnight are split at the local day
+    boundary so each day gets only its own share.
+    """
+    if local_end <= local_start:
+        return {}
+
+    utc_start = dt_util.as_utc(local_start)
+    utc_end = dt_util.as_utc(local_end)
+
+    recorder = get_instance(hass)
+    entity_history = await recorder.async_add_executor_job(
+        lambda: state_changes_during_period(
+            hass,
+            utc_start,
+            utc_end,
+            entity_id,
+            True,
+            False,
+            None,
+            True,
+        )
+    )
+    entity_states = (
+        entity_history.get(entity_id) or entity_history.get(entity_id.lower()) or []
+    )
+    active_intervals = _build_active_state_intervals(
+        states=entity_states,
+        window_start=utc_start,
+        window_end=utc_end,
+        active_states=active_states,
+    )
+    return _bucket_interval_hours_by_local_date(active_intervals)
+
+
+def _bucket_interval_hours_by_local_date(
+    intervals: list[tuple[datetime, datetime]],
+) -> dict[date, float]:
+    hours_by_date: dict[date, float] = {}
+    for interval_start, interval_end in intervals:
+        cursor = dt_util.as_local(interval_start)
+        end = dt_util.as_local(interval_end)
+        while cursor < end:
+            day_start = _get_local_day_start(cursor)
+            next_day_start = _get_local_day_start(day_start + timedelta(days=1, hours=1))
+            segment_end = min(end, next_day_start)
+            duration_hours = (
+                dt_util.as_utc(segment_end) - dt_util.as_utc(cursor)
+            ).total_seconds() / 3600
+            if duration_hours > 0:
+                local_day = cursor.date()
+                hours_by_date[local_day] = (
+                    hours_by_date.get(local_day, 0.0) + duration_hours
+                )
+            cursor = segment_end
+    return hours_by_date
 
 
 async def _estimate_average_hourly_energy_when_entity_active(

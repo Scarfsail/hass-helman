@@ -129,6 +129,12 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     battery_state_mod.read_battery_live_state = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds_config = lambda config: None
+    battery_state_mod.read_battery_forecast_settings = lambda config: types.SimpleNamespace(
+        charge_efficiency=0.95,
+        discharge_efficiency=0.95,
+        max_charge_power_w=None,
+        max_discharge_power_w=None,
+    )
     sys.modules[battery_state_mod.__name__] = battery_state_mod
 
     recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
@@ -151,6 +157,13 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
+    )
+
+    async def _query_active_hours_by_local_date(*args, **kwargs):
+        return {}
+
+    recorder_slots_mod.query_active_hours_by_local_date = (
+        _query_active_hours_by_local_date
     )
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 

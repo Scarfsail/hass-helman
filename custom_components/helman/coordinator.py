@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 from zoneinfo import ZoneInfo
 
@@ -53,6 +53,7 @@ from .battery_state import (
     describe_battery_entity_config_issue,
     describe_battery_live_state_issue,
     read_battery_entity_config,
+    read_battery_forecast_settings,
     read_battery_live_state,
     read_battery_soc_bounds,
     read_battery_soc_bounds_config,
@@ -86,6 +87,7 @@ from .recorder_hourly_series import (
     estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
     get_local_current_slot_start,
+    query_active_hours_by_local_date,
 )
 from .scheduling.schedule import (
     ScheduleControlConfig,
@@ -134,6 +136,21 @@ if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
     from .battery_forecast_history import BatteryForecastHistoryStore
     from .scheduling.forecast_overlay import ScheduleForecastOverlay
+
+
+def _resolve_runtime_entity_and_states(
+    appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Return the recorder entity id and active-state set defining "on" runtime.
+
+    Generic appliances count their switch being ``on``; climate appliances count
+    the compressor running in any active heating/cooling mode.
+    """
+    if isinstance(appliance, GenericApplianceRuntime):
+        return appliance.switch_entity_id, ("on",)
+    if isinstance(appliance, ClimateApplianceRuntime):
+        return appliance.climate_entity_id, ("heat", "cool")
+    return None, ()
 
 
 def _merge_grid_forecast_responses(
@@ -1781,6 +1798,9 @@ class HelmanCoordinator:
             when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
                 self._automation_input_bundle.when_active_hourly_energy_kwh_by_appliance_id
             ),
+            runtime_hours_by_appliance_id_by_local_date=deepcopy(
+                self._automation_input_bundle.runtime_hours_by_appliance_id_by_local_date
+            ),
         )
 
     async def _async_refresh_forecast(
@@ -1912,6 +1932,11 @@ class HelmanCoordinator:
             ),
             when_active_hourly_energy_kwh_by_appliance_id=(
                 await self._async_resolve_when_active_hourly_energy_kwh_by_appliance_id(
+                    reference_time=reference_time
+                )
+            ),
+            runtime_hours_by_appliance_id_by_local_date=(
+                await self._async_resolve_runtime_hours_by_appliance_id_by_local_date(
                     reference_time=reference_time
                 )
             ),
@@ -2084,6 +2109,16 @@ class HelmanCoordinator:
         if battery_entity_config is not None:
             battery_state = read_battery_live_state(self._hass, battery_entity_config)
 
+        battery_settings = read_battery_forecast_settings(self._active_config)
+        battery_max_charge_power_kw = (
+            battery_settings.max_charge_power_w / 1000
+            if battery_settings.max_charge_power_w is not None
+            else None
+        )
+        battery_usable_capacity_kwh = (
+            battery_state.nominal_capacity_kwh if battery_state is not None else None
+        )
+
         return OptimizationSnapshot(
             schedule=deepcopy(schedule_document),
             adjusted_house_forecast=deepcopy(rebuild.adjusted_house_forecast),
@@ -2108,6 +2143,12 @@ class HelmanCoordinator:
                 appliance_registry=self._appliances_registry,
                 when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
                     input_bundle.when_active_hourly_energy_kwh_by_appliance_id
+                ),
+                battery_max_charge_power_kw=battery_max_charge_power_kw,
+                battery_usable_capacity_kwh=battery_usable_capacity_kwh,
+                battery_charge_efficiency=battery_settings.charge_efficiency,
+                runtime_hours_by_appliance_id_by_local_date=deepcopy(
+                    input_bundle.runtime_hours_by_appliance_id_by_local_date
                 ),
             ),
         )
@@ -2624,6 +2665,71 @@ class HelmanCoordinator:
                 reference_time=reference_time,
             )
         return estimates
+
+    async def _async_resolve_runtime_hours_by_appliance_id_by_local_date(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> dict[str, dict[date, float]]:
+        """Resolve recorder runtime hours per appliance per local date (A2).
+
+        Only resolved when at least one ``daily_runtime`` optimizer is enabled;
+        otherwise the recorder is left untouched. The lookback window covers the
+        largest configured ``max_consecutive_skips`` (plus one day) so the
+        consecutive-skip guard can be evaluated, plus today-so-far for the
+        current-day budget.
+        """
+        lookback_days = self._resolve_runtime_history_lookback_days()
+        if lookback_days is None:
+            return {}
+
+        local_now = dt_util.as_local(reference_time)
+        local_today_start = local_now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        local_start = local_today_start - timedelta(days=lookback_days)
+
+        runtime_by_appliance: dict[str, dict[date, float]] = {}
+        for appliance in self._iter_automation_candidate_appliances():
+            entity_id, active_states = _resolve_runtime_entity_and_states(appliance)
+            if entity_id is None:
+                continue
+            try:
+                runtime_by_appliance[appliance.id] = (
+                    await query_active_hours_by_local_date(
+                        self._hass,
+                        entity_id=entity_id,
+                        active_states=active_states,
+                        local_start=local_start,
+                        local_end=local_now,
+                    )
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Error resolving automation runtime history for appliance %r",
+                    appliance.id,
+                )
+                runtime_by_appliance[appliance.id] = {}
+        return runtime_by_appliance
+
+    def _resolve_runtime_history_lookback_days(self) -> int | None:
+        automation_config = read_automation_config(self._active_config)
+        if automation_config is None or not automation_config.enabled:
+            return None
+        max_consecutive_skips = 0
+        found_daily_runtime = False
+        for optimizer in automation_config.execution_optimizers:
+            if optimizer.kind != "daily_runtime":
+                continue
+            found_daily_runtime = True
+            skip = optimizer.params.get("skip")
+            if isinstance(skip, Mapping):
+                raw = skip.get("max_consecutive_skips")
+                if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+                    max_consecutive_skips = max(max_consecutive_skips, raw)
+        if not found_daily_runtime:
+            return None
+        return max_consecutive_skips + 1
 
     def _iter_automation_candidate_appliances(
         self,
