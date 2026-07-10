@@ -102,13 +102,8 @@ const SOC_COLORS = {
   idle:        '#9ca3af',
 } as const satisfies Record<SocDirection, string>;
 
-/**
- * The SoC strip's own geometry; it borrows only the x scale from the chart.
- *
- * Tall enough that a narrow reserve still reads: a 10% floor is a sliver of the
- * scale, and on a shorter strip its hatching had no room to show.
- */
-const SOC_STRIP = { height: 110, padTop: 8, padBottom: 8 } as const;
+/** The SoC strip's own geometry; it borrows only the x scale from the chart. */
+const SOC_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
 
 const SOC_UNUSABLE_HATCH_ID = "soc-unusable-hatch";
 
@@ -480,7 +475,7 @@ export class HelmanSolarInspector extends LitElement {
     }
 
     .soc-strip-wrap {
-      margin-top: 4px;
+      margin-top: 0;
       width: 100%;
     }
 
@@ -488,7 +483,7 @@ export class HelmanSolarInspector extends LitElement {
       display: block;
       width: 100%;
       min-width: 360px;
-      height: 110px;
+      height: 65px;
     }
 
     .impact-strip-wrap {
