@@ -130,6 +130,20 @@ class BatterySocPoint:
 
 
 @dataclass
+class BatterySocBoundsPoint:
+    """The SoC window the battery was held within over one slot.
+
+    The bounds are entities the inverter and its automations move during the
+    day, so they are a series, not a constant: a slot's floor is whatever the
+    floor was while that slot elapsed.
+    """
+
+    slot: str  # "HH:MM"
+    min_pct: float | None
+    max_pct: float | None
+
+
+@dataclass
 class SolarBiasContributionRow:
     date: str
     forecast_wh: float | None
@@ -221,6 +235,7 @@ class SolarBiasInspectorDay:
     is_today: bool
     is_future: bool
     training_explainability: SolarBiasTrainingExplainability | None = None
+    battery_soc_bounds: list[BatterySocBoundsPoint] = field(default_factory=list)
 
 
 def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
@@ -295,6 +310,10 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasBatteryForecast": day.availability.has_battery_forecast,
             "hasBatteryActual": day.availability.has_battery_actual,
         },
+        "batterySocBounds": [
+            {"slot": p.slot, "minPct": p.min_pct, "maxPct": p.max_pct}
+            for p in day.battery_soc_bounds
+        ],
         "trainingExplainability": training_explainability_to_payload(
             day.training_explainability
         ),

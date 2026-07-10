@@ -171,8 +171,46 @@ def test_inspector_day_serializes_frontend_contract():
             "hasBatteryForecast": False,
             "hasBatteryActual": False,
         },
+        "batterySocBounds": [],
         "trainingExplainability": None,
     }
+
+
+def test_inspector_day_serializes_battery_soc_bounds():
+    payload = models.inspector_day_to_payload(
+        models.SolarBiasInspectorDay(
+            date="2026-04-25",
+            timezone="Europe/Prague",
+            status="applied",
+            effective_variant="adjusted",
+            trained_at=None,
+            min_date="2026-04-18",
+            max_date="2026-04-27",
+            series=models.SolarBiasInspectorSeries(
+                raw=[], corrected=[], actual=[], factors=[]
+            ),
+            totals=models.SolarBiasInspectorTotals(
+                raw_wh=None, corrected_wh=None, actual_wh=None
+            ),
+            availability=models.SolarBiasInspectorAvailability(
+                has_raw_forecast=False,
+                has_corrected_forecast=False,
+                has_actuals=False,
+                has_profile=True,
+            ),
+            is_today=True,
+            is_future=False,
+            battery_soc_bounds=[
+                models.BatterySocBoundsPoint(slot="00:00", min_pct=15.0, max_pct=90.0),
+                models.BatterySocBoundsPoint(slot="00:15", min_pct=20.0, max_pct=None),
+            ],
+        )
+    )
+
+    assert payload["batterySocBounds"] == [
+        {"slot": "00:00", "minPct": 15.0, "maxPct": 90.0},
+        {"slot": "00:15", "minPct": 20.0, "maxPct": None},
+    ]
 
 
 def test_inspector_day_serializes_impact_and_training_explainability():

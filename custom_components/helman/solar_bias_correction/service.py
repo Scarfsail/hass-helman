@@ -18,6 +18,7 @@ from .adjuster import adjust
 from .forecast_history import load_forecast_points_for_day, load_trainer_samples
 from .house_forecast_history import load_house_forecast_points_for_day
 from .models import (
+    BatterySocBoundsPoint,
     BatterySocPoint,
     BiasConfig,
     SolarBiasAdjustmentResult,
@@ -66,6 +67,8 @@ class SolarBiasCorrectionService:
         house_forecast_snapshot_provider=None,
         house_energy_entity_id_provider=None,
         battery_soc_entity_id_provider=None,
+        battery_soc_bounds_provider=None,
+        battery_soc_bounds_entity_id_provider=None,
         grid_import_energy_entity_id_provider=None,
         grid_export_energy_entity_id_provider=None,
         battery_charge_energy_entity_id_provider=None,
@@ -80,6 +83,10 @@ class SolarBiasCorrectionService:
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
+        self._battery_soc_bounds_provider = battery_soc_bounds_provider
+        self._battery_soc_bounds_entity_id_provider = (
+            battery_soc_bounds_entity_id_provider
+        )
         self._grid_import_energy_entity_id_provider = grid_import_energy_entity_id_provider
         self._grid_export_energy_entity_id_provider = grid_export_energy_entity_id_provider
         self._battery_charge_energy_entity_id_provider = (
@@ -548,8 +555,64 @@ class SolarBiasCorrectionService:
             is_today=target_date == today,
             is_future=target_date > today,
             training_explainability=self._explainability if has_profile else None,
+            battery_soc_bounds=await self._battery_soc_bounds_for_date(
+                target_date, timezone, need_past=need_past
+            ),
         )
         return inspector_day_to_payload(day)
+
+    def _live_battery_soc_bounds(self) -> tuple[float | None, float | None]:
+        if self._battery_soc_bounds_provider is None:
+            return (None, None)
+        try:
+            return self._battery_soc_bounds_provider() or (None, None)
+        except Exception:
+            _LOGGER.exception("Battery SoC bounds provider failed")
+            return (None, None)
+
+    def _battery_soc_bounds_entity_ids(self) -> tuple[str | None, str | None]:
+        if self._battery_soc_bounds_entity_id_provider is None:
+            return (None, None)
+        try:
+            return self._battery_soc_bounds_entity_id_provider() or (None, None)
+        except Exception:
+            _LOGGER.exception("Battery SoC bounds entity id provider failed")
+            return (None, None)
+
+    async def _battery_soc_bounds_for_date(
+        self, target_date: date, local_tz: ZoneInfo, *, need_past: bool
+    ) -> list[BatterySocBoundsPoint]:
+        """The SoC window per slot: recorded where the day has elapsed.
+
+        Slots the clock has not reached — and elapsed slots the recorder has no
+        reading for — fall back to the bounds set right now, which is the only
+        window the battery forecast beyond them was ever built against.
+        """
+        min_entity_id, max_entity_id = self._battery_soc_bounds_entity_ids()
+        min_by_slot: dict[str, float] = {}
+        max_by_slot: dict[str, float] = {}
+        if need_past and (min_entity_id or max_entity_id):
+            min_by_slot, max_by_slot = await asyncio.gather(
+                self._load_numeric_history_by_slot(
+                    min_entity_id, target_date, local_tz, label="battery min SoC"
+                ),
+                self._load_numeric_history_by_slot(
+                    max_entity_id, target_date, local_tz, label="battery max SoC"
+                ),
+            )
+
+        live_min, live_max = self._live_battery_soc_bounds()
+        points: list[BatterySocBoundsPoint] = []
+        for slot_index in range(96):
+            slot = f"{slot_index // 4:02d}:{(slot_index % 4) * 15:02d}"
+            min_pct = min_by_slot.get(slot, live_min)
+            max_pct = max_by_slot.get(slot, live_max)
+            if min_pct is None and max_pct is None:
+                continue
+            points.append(
+                BatterySocBoundsPoint(slot=slot, min_pct=min_pct, max_pct=max_pct)
+            )
+        return points
 
     def _get_house_forecast_snapshot(self) -> dict | None:
         if self._house_forecast_snapshot_provider is None:
@@ -754,9 +817,31 @@ class SolarBiasCorrectionService:
         """Load per-15-min battery SoC history for target_date."""
         if self._battery_soc_entity_id_provider is None:
             return []
-        entity_id = self._battery_soc_entity_id_provider()
+        by_slot = await self._load_numeric_history_by_slot(
+            self._battery_soc_entity_id_provider(),
+            target_date,
+            local_tz,
+            label="battery SoC",
+        )
+        return [{"slot": slot, "pct": pct} for slot, pct in by_slot.items()]
+
+    async def _load_numeric_history_by_slot(
+        self,
+        entity_id: str | None,
+        target_date: date,
+        local_tz: ZoneInfo,
+        *,
+        label: str,
+    ) -> dict[str, float]:
+        """Sample a numeric entity's history onto the day's 15-minute slots.
+
+        A slot takes the last value the entity held at or before its start, so
+        an entity that goes unavailable holds its previous reading rather than
+        leaving a hole. Slots before the entity's first reading are absent, as
+        are slots the clock has not reached yet.
+        """
         if not entity_id:
-            return []
+            return {}
         local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
         local_end = local_start + timedelta(days=1)
         start_utc = dt_util.as_utc(local_start)
@@ -766,16 +851,16 @@ class SolarBiasCorrectionService:
                 self._hass, start_utc, end_utc, [entity_id]
             )
         except Exception:
-            _LOGGER.exception("Failed to load battery SoC history for inspector")
-            return []
+            _LOGGER.exception("Failed to load %s history for inspector", label)
+            return {}
         states = (states_by_entity or {}).get(entity_id) or []
         if not states:
-            return []
+            return {}
         timeline: list[tuple[datetime, float]] = []
         for state in states:
             raw = getattr(state, "state", None)
             try:
-                value_pct = float(raw)
+                value = float(raw)
             except (TypeError, ValueError):
                 continue
             ts = getattr(state, "last_changed", None) or getattr(
@@ -783,28 +868,27 @@ class SolarBiasCorrectionService:
             )
             if ts is None:
                 continue
-            timeline.append((dt_util.as_local(ts), value_pct))
+            timeline.append((dt_util.as_local(ts), value))
         if not timeline:
-            return []
+            return {}
         timeline.sort(key=lambda pair: pair[0])
         _SLOT_MINUTES = 15
         local_now = datetime.now(local_tz)
         is_today = target_date == local_now.date()
-        points: list[dict] = []
+        by_slot: dict[str, float] = {}
         cursor = 0
-        current_pct: float | None = None
+        current: float | None = None
         for slot_index in range(96):
             slot_start = local_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
             if is_today and slot_start > local_now:
                 break
             while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
-                current_pct = timeline[cursor][1]
+                current = timeline[cursor][1]
                 cursor += 1
-            if current_pct is None:
+            if current is None:
                 continue
-            slot_str = f"{slot_start.hour:02d}:{slot_start.minute:02d}"
-            points.append({"slot": slot_str, "pct": current_pct})
-        return points
+            by_slot[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = current
+        return by_slot
 
     @property
     def _current_fingerprint(self) -> str:

@@ -126,59 +126,67 @@ def _make_cfg():
     )
 
 
+async def _inspector_payload(_history=None, **service_kwargs):
+    hass = SimpleNamespace(
+        config=SimpleNamespace(time_zone="Europe/Prague"),
+        bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
+    )
+    service = service_mod.SolarBiasCorrectionService(
+        hass,
+        _DummyStore(),
+        _make_cfg(),
+        battery_forecast_provider=_battery_forecast_provider,
+        house_energy_entity_id_provider=lambda: "sensor.house_energy",
+        battery_soc_entity_id_provider=lambda: "sensor.battery_soc",
+        **service_kwargs,
+    )
+
+    service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-05-01T03:00:00+02:00",
+        training_config_fingerprint="fp",
+        usable_days=5,
+        dropped_days=[],
+        factor_min=None,
+        factor_max=None,
+        factor_median=None,
+        omitted_slot_count=0,
+        last_outcome="profile_trained",
+    )
+
+    if _history is not None:
+        service._load_numeric_history_by_slot = _history
+
+    old_now = service_mod.dt_util.now
+    old_actuals = service_mod.load_actuals_for_day
+    try:
+        service_mod.dt_util.now = lambda: datetime.fromisoformat(
+            "2026-05-11T10:00:00+02:00"
+        )
+        service_mod.load_actuals_for_day = AsyncMock(return_value={})
+        with patch.object(
+            service_mod,
+            "load_house_forecast_points_for_day",
+            AsyncMock(return_value=HOUSE_FC_POINTS),
+        ), patch.object(
+            service,
+            "_load_house_actual_for_date",
+            AsyncMock(return_value=HOUSE_ACTUAL_POINTS),
+        ), patch.object(
+            service,
+            "_load_battery_soc_actual_for_date",
+            AsyncMock(return_value=BATTERY_SOC_ACTUAL),
+        ):
+            return await service.async_get_inspector_day(TARGET_DATE)
+    finally:
+        service_mod.dt_util.now = old_now
+        service_mod.load_actuals_for_day = old_actuals
+
+
 class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
 
     async def test_inspector_payload_includes_house_and_battery_fields(self):
-        hass = SimpleNamespace(
-            config=SimpleNamespace(time_zone="Europe/Prague"),
-            bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
-        )
-        service = service_mod.SolarBiasCorrectionService(
-            hass,
-            _DummyStore(),
-            _make_cfg(),
-            battery_forecast_provider=_battery_forecast_provider,
-            house_energy_entity_id_provider=lambda: "sensor.house_energy",
-            battery_soc_entity_id_provider=lambda: "sensor.battery_soc",
-        )
-
-        service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
-        service._metadata = models.SolarBiasMetadata(
-            trained_at="2026-05-01T03:00:00+02:00",
-            training_config_fingerprint="fp",
-            usable_days=5,
-            dropped_days=[],
-            factor_min=None,
-            factor_max=None,
-            factor_median=None,
-            omitted_slot_count=0,
-            last_outcome="profile_trained",
-        )
-
-        old_now = service_mod.dt_util.now
-        old_actuals = service_mod.load_actuals_for_day
-        try:
-            service_mod.dt_util.now = lambda: datetime.fromisoformat(
-                "2026-05-11T10:00:00+02:00"
-            )
-            service_mod.load_actuals_for_day = AsyncMock(return_value={})
-            with patch.object(
-                service_mod,
-                "load_house_forecast_points_for_day",
-                AsyncMock(return_value=HOUSE_FC_POINTS),
-            ), patch.object(
-                service,
-                "_load_house_actual_for_date",
-                AsyncMock(return_value=HOUSE_ACTUAL_POINTS),
-            ), patch.object(
-                service,
-                "_load_battery_soc_actual_for_date",
-                AsyncMock(return_value=BATTERY_SOC_ACTUAL),
-            ):
-                payload = await service.async_get_inspector_day(TARGET_DATE)
-        finally:
-            service_mod.dt_util.now = old_now
-            service_mod.load_actuals_for_day = old_actuals
+        payload = await _inspector_payload()
 
         # series
         self.assertEqual(payload["series"]["houseForecast"][0]["valueWh"], 200.0)
@@ -196,3 +204,48 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         # totals
         self.assertEqual(payload["totals"]["houseForecastWh"], 200.0)
         self.assertEqual(payload["totals"]["houseActualWh"], 180.0)
+
+    async def test_battery_soc_bounds_fall_back_to_live_values_per_slot(self):
+        payload = await _inspector_payload(
+            battery_soc_bounds_provider=lambda: (10.0, 95.0)
+        )
+
+        bounds = payload["batterySocBounds"]
+        self.assertEqual(len(bounds), 96)
+        self.assertEqual(bounds[0], {"slot": "00:00", "minPct": 10.0, "maxPct": 95.0})
+        self.assertEqual(bounds[-1], {"slot": "23:45", "minPct": 10.0, "maxPct": 95.0})
+
+    async def test_battery_soc_bounds_prefer_recorded_history_per_slot(self):
+        # The floor was raised to 30% for the second slot of the day; the rest of
+        # the day has no reading and falls back to the bounds set right now.
+        async def _history(entity_id, *args, **kwargs):
+            if entity_id == "sensor.min_soc":
+                return {"00:00": 10.0, "00:15": 30.0}
+            return {"00:00": 95.0, "00:15": 80.0}
+
+        payload = await _inspector_payload(
+            battery_soc_bounds_provider=lambda: (10.0, 100.0),
+            battery_soc_bounds_entity_id_provider=lambda: (
+                "sensor.min_soc",
+                "sensor.max_soc",
+            ),
+            _history=_history,
+        )
+
+        bounds = {b["slot"]: b for b in payload["batterySocBounds"]}
+        self.assertEqual(bounds["00:00"], {"slot": "00:00", "minPct": 10.0, "maxPct": 95.0})
+        self.assertEqual(bounds["00:15"], {"slot": "00:15", "minPct": 30.0, "maxPct": 80.0})
+        self.assertEqual(bounds["12:00"], {"slot": "12:00", "minPct": 10.0, "maxPct": 100.0})
+
+    async def test_inspector_payload_omits_unconfigured_battery_soc_bounds(self):
+        payload = await _inspector_payload()
+
+        self.assertEqual(payload["batterySocBounds"], [])
+
+    async def test_inspector_payload_survives_failing_bounds_provider(self):
+        def _boom():
+            raise RuntimeError("battery bounds entity is unavailable")
+
+        payload = await _inspector_payload(battery_soc_bounds_provider=_boom)
+
+        self.assertEqual(payload["batterySocBounds"], [])

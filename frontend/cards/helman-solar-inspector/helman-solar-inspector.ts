@@ -15,6 +15,13 @@ import {
   type StackLayer,
   type StackSet,
 } from "./chart-stack";
+import {
+  buildSocBars,
+  slotToMinutes,
+  type SocBar,
+  type SocBoundsPoint,
+  type SocDirection,
+} from "./chart-soc";
 import { BATT_COLOR, GRID_COLOR, SOLAR_COLOR } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
@@ -84,11 +91,26 @@ const MUTED_FORECAST_OPACITY = 0.35;
 
 type StrokeStyle = { width: number; opacity: number };
 
-/** Power series own the plot; SoC recedes behind them. */
 const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
-const SOC_STROKE: StrokeStyle = { width: 1.2, opacity: 0.5 };
 
 const MINUTES_PER_DAY = 1440;
+
+/** What the battery is doing over a slot, read off the SoC it moves through. */
+const SOC_COLORS = {
+  charging:    '#16a34a',
+  discharging: '#dc2626',
+  idle:        '#9ca3af',
+} as const satisfies Record<SocDirection, string>;
+
+/**
+ * The SoC strip's own geometry; it borrows only the x scale from the chart.
+ *
+ * Tall enough that a narrow reserve still reads: a 10% floor is a sliver of the
+ * scale, and on a shorter strip its hatching had no room to show.
+ */
+const SOC_STRIP = { height: 110, padTop: 8, padBottom: 8 } as const;
+
+const SOC_UNUSABLE_HATCH_ID = "soc-unusable-hatch";
 
 /** Fill of the measured stack; low enough that the forecast outline reads through it. */
 const ACTUAL_BAND_FILL_OPACITY = 0.45;
@@ -176,8 +198,6 @@ type ChartLayout = {
   yTicks: number[];
   xForMinutes: (m: number) => number;
   yForW: (w: number) => number;
-  hasSocAxis: boolean;
-  yForPct: (pct: number) => number;
 };
 
 type InspectorPayload = {
@@ -236,6 +256,8 @@ type InspectorPayload = {
     hasBatteryForecast: boolean;
     hasBatteryActual: boolean;
   };
+  /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
+  batterySocBounds: SocBoundsPoint[];
   trainingExplainability: TrainingExplainability | null;
 };
 
@@ -454,6 +476,18 @@ export class HelmanSolarInspector extends LitElement {
       min-width: 360px;
       max-width: none;
       height: 260px;
+    }
+
+    .soc-strip-wrap {
+      margin-top: 4px;
+      width: 100%;
+    }
+
+    .soc-strip-wrap svg {
+      display: block;
+      width: 100%;
+      min-width: 360px;
+      height: 110px;
     }
 
     .impact-strip-wrap {
@@ -675,6 +709,9 @@ export class HelmanSolarInspector extends LitElement {
       ${hasAnySeries
         ? html`
             <div class="chart-wrap">${this._renderChart(payload)}</div>
+            ${this._lastLayoutForStrip && this._socBars(payload).length
+              ? html`<div class="soc-strip-wrap">${this._renderSocStrip(payload, this._lastLayoutForStrip)}</div>`
+              : ""}
             ${this._impactStripVisible && this._lastLayoutForStrip
               ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(payload, this._lastLayoutForStrip)}</div>`
               : ""}
@@ -700,10 +737,7 @@ export class HelmanSolarInspector extends LitElement {
   private _computeChartLayout(payload: InspectorPayload, stacks: ChartStacks): ChartLayout {
     const width = this._chartWidth;
     const height = 260;
-    const hasSocAxis =
-      (payload.availability.hasBatterySocForecast && this._isSeriesVisible("batterySocForecast")) ||
-      (payload.availability.hasBatterySocActual && this._isSeriesVisible("batterySocActual"));
-    const margin = { top: 18, right: hasSocAxis ? 40 : 24, bottom: 34, left: 48 };
+    const margin = { top: 18, right: 24, bottom: 34, left: 48 };
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;
 
@@ -728,13 +762,8 @@ export class HelmanSolarInspector extends LitElement {
     const xForMinutes = (minutes: number) => margin.left + (minutes / 1440) * plotWidth;
     const yForW = (powerW: number) =>
       margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
-    // Anchor 0% SoC to the 0 kW baseline rather than the plot floor, so the SoC
-    // curve never dips into the negative (consumption) band below it.
-    const zeroY = yForW(0);
-    const yForPct = (pct: number) =>
-      zeroY - (Math.max(0, Math.min(100, pct)) / 100) * (zeroY - margin.top);
 
-    return { width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks, xForMinutes, yForW, hasSocAxis, yForPct };
+    return { width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks, xForMinutes, yForW };
   }
 
   private _renderChart(payload: InspectorPayload) {
@@ -757,8 +786,6 @@ export class HelmanSolarInspector extends LitElement {
         ${this._renderStackSet(layout, stacks.actual, "actual", Number.NEGATIVE_INFINITY)}
         ${this._renderStackSet(layout, stacks.forecast, "forecast", this._forecastFillFrom(stacks))}
         ${this._renderSolarLayer(payload, layout)}
-        ${this._renderRightAxis(layout)}
-        ${this._renderBatterySocLayer(payload, layout)}
       </svg>
     `;
   }
@@ -970,55 +997,125 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  private _renderRightAxis(layout: ChartLayout) {
-    if (!layout.hasSocAxis) return "";
-    const ticks = [0, 25, 50, 75, 100];
+  /**
+   * Battery state of charge, as a column per slot below the power chart.
+   *
+   * SoC is a level, not a flow, so it does not belong in a plot whose y axis is
+   * watts. Given its own strip it keeps the chart's x scale — a column sits
+   * under the power it produced — while its height reads against the battery's
+   * own scale: empty, the configured floor and ceiling it is held between, and
+   * full.
+   */
+  private _renderSocStrip(payload: InspectorPayload, layout: ChartLayout) {
+    const bars = this._socBars(payload);
+    if (!bars.length) return "";
+    const { height, padTop, padBottom } = SOC_STRIP;
+    const innerHeight = height - padTop - padBottom;
+    const yForPct = (pct: number) =>
+      padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
+    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
+    const barWidth = Math.max(3, layout.plotWidth / 96);
+    return svg`
+      <svg
+        viewBox="0 0 ${layout.width} ${height}"
+        role="img"
+        aria-label=${this._t("bias_correction.inspector.battery_soc_strip")}
+        style="cursor: pointer;"
+        @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
+      >
+        <defs>
+          <!-- The scrim darkens whatever it covers, so the strokes are light in
+               both themes: dark-on-dark would read as a solid band, not a hatch. -->
+          <pattern id=${SOC_UNUSABLE_HATCH_ID} patternUnits="userSpaceOnUse"
+                   width="5" height="5" patternTransform="rotate(45)">
+            <rect width="5" height="5" fill="#000" fill-opacity="0.45"></rect>
+            <line x1="0" y1="0" x2="0" y2="5" stroke="#fff"
+                  stroke-width="1.8" stroke-opacity="0.4"></line>
+          </pattern>
+        </defs>
+        ${this._renderSocGridlines(layout, yForPct)}
+        ${this._renderSlotHighlight(layout, 0, height, selectedSlot)}
+        ${bars.map((bar) => {
+          const top = yForPct(bar.pct);
+          const color = SOC_COLORS[bar.direction];
+          return svg`
+            <rect
+              x=${layout.xForMinutes(bar.minutes) + 0.5} y=${top}
+              width=${Math.max(2, barWidth - 1)} height=${Math.max(1, yForPct(0) - top)}
+              fill=${color} fill-opacity=${bar.forecast ? 0.35 : 0.8}
+              stroke=${color} stroke-width=${bar.forecast ? 0.9 : 0}
+              stroke-dasharray=${bar.forecast ? "2 2" : ""}
+            >
+              <title>${bar.slot} ${this._formatPct(bar.pct)} · ${this._t(
+                `bias_correction.inspector.soc_direction.${bar.direction}`,
+              )}</title>
+            </rect>
+          `;
+        })}
+        ${this._renderSocUnusableZones(payload, layout, yForPct)}
+      </svg>
+    `;
+  }
+
+  /** The columns of the strip: measured where measured, forecast beyond. */
+  private _socBars(payload: InspectorPayload): SocBar[] {
+    const actual = this._isSeriesVisible("batterySocActual") ? payload.series.batterySocActual : [];
+    const forecast = this._isSeriesVisible("batterySocForecast")
+      ? payload.series.batterySocForecast
+      : [];
+    return buildSocBars(actual, forecast);
+  }
+
+  /** The two levels a column is read against: empty and full. */
+  private _renderSocGridlines(layout: ChartLayout, yForPct: (pct: number) => number) {
+    const xLeft = layout.margin.left;
     const xRight = layout.width - layout.margin.right;
-    return ticks.map((pct) => {
-      const y = layout.yForPct(pct);
-      return svg`
-        <text x=${xRight + 6} y=${y + 4} text-anchor="start"
-              fill="var(--secondary-text-color)" font-size="11"
-              opacity="0.75">${pct}%</text>
-      `;
-    });
+    return [0, 100].map((pct) => svg`
+      <line x1=${xLeft} y1=${yForPct(pct)} x2=${xRight} y2=${yForPct(pct)}
+            stroke="var(--divider-color)" stroke-width="1"></line>
+      <text x=${xLeft - 8} y=${yForPct(pct) + 4} text-anchor="end"
+            fill="var(--secondary-text-color)" font-size="11">${pct}%</text>
+    `);
   }
 
   /**
-   * Battery state of charge, on its own right-hand % axis.
+   * The SoC a slot could never reach: below its floor and above its ceiling.
    *
-   * It shares the battery's colour with the battery power line but is drawn
-   * thin and faint: SoC is background context for the power flow, not a fourth
-   * competing power series.
+   * Both bounds are entities the day can move, so each slot is hatched against
+   * its own window rather than the whole strip against one pair of lines. The
+   * hatch lies over the columns, mostly transparent, so a column that strays
+   * outside its window — a floor raised above where the battery already sat —
+   * still reads through it.
    */
-  private _renderBatterySocLayer(payload: InspectorPayload, layout: ChartLayout) {
-    if (!layout.hasSocAxis) return "";
-    const { xForMinutes, yForPct } = layout;
-    const fc = this._isSeriesVisible("batterySocForecast") ? payload.series.batterySocForecast : [];
-    const ac = this._isSeriesVisible("batterySocActual") ? payload.series.batterySocActual : [];
-    const slotToMinutes = (slot: string) => {
-      const m = /^(\d{2}):(\d{2})$/.exec(slot);
-      if (!m) return null;
-      return Number(m[1]) * 60 + Number(m[2]);
+  private _renderSocUnusableZones(
+    payload: InspectorPayload,
+    layout: ChartLayout,
+    yForPct: (pct: number) => number,
+  ) {
+    const slotWidth = layout.plotWidth / 96;
+    /** `edge` is the side facing the SoC the battery may actually reach. */
+    const zone = (minutes: number, topPct: number, bottomPct: number, edge: "top" | "bottom") => {
+      const y = yForPct(topPct);
+      const height = yForPct(bottomPct) - y;
+      if (height <= 0) return "";
+      const x = layout.xForMinutes(minutes);
+      const edgeY = edge === "top" ? y : y + height;
+      return svg`
+        <rect x=${x} y=${y} width=${slotWidth} height=${height}
+              fill=${`url(#${SOC_UNUSABLE_HATCH_ID})`} pointer-events="none"></rect>
+        <line x1=${x} y1=${edgeY} x2=${x + slotWidth} y2=${edgeY}
+              stroke="var(--primary-text-color)" stroke-width="1" stroke-opacity="0.7"
+              pointer-events="none"></line>
+      `;
     };
-    const minutesOf = (p: BatterySocPoint) => slotToMinutes(p.slot);
-    const path = (pts: BatterySocPoint[]) => {
-      const valid = pts
-        .map((p) => ({ m: slotToMinutes(p.slot), pct: p.pct }))
-        .filter((p): p is { m: number; pct: number } => p.m !== null);
-      return valid
-        .map((p, i) =>
-          `${i === 0 ? "M" : "L"}${xForMinutes(p.m).toFixed(1)},${yForPct(p.pct).toFixed(1)}`,
-        )
-        .join(" ");
-    };
-    return svg`
-      ${this._renderForecastSplit(fc, ac, minutesOf, path, CHART_COLORS.battery, SOC_STROKE)}
-      ${ac.length > 1
-        ? svg`<path d=${path(ac)} fill="none" stroke=${CHART_COLORS.battery}
-                    stroke-width=${SOC_STROKE.width} stroke-opacity=${SOC_STROKE.opacity}></path>`
-        : ""}
-    `;
+    return payload.batterySocBounds.map((bound) => {
+      const minutes = slotToMinutes(bound.slot);
+      if (minutes === null) return "";
+      return svg`
+        ${bound.minPct === null ? "" : zone(minutes, bound.minPct, 0, "top")}
+        ${bound.maxPct === null ? "" : zone(minutes, 100, bound.maxPct, "bottom")}
+      `;
+    });
   }
 
   /**
@@ -1401,6 +1498,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.availability.hasGridActual ??= false;
       payload.availability.hasBatteryForecast ??= false;
       payload.availability.hasBatteryActual ??= false;
+      payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
         const resolvedSlot = resolveSelectedImpactSlot(

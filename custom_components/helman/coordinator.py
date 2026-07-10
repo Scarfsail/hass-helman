@@ -435,6 +435,8 @@ class HelmanCoordinator:
             house_forecast_snapshot_provider=lambda: self._cached_forecast,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
+            battery_soc_bounds_provider=self._get_battery_soc_bounds,
+            battery_soc_bounds_entity_id_provider=self._get_battery_soc_bounds_entity_ids,
             grid_import_energy_entity_id_provider=lambda: self._get_grid_energy_entity_id(
                 "today_import"
             ),
@@ -690,6 +692,21 @@ class HelmanCoordinator:
     def _get_battery_soc_entity_id(self) -> str | None:
         entity_config = read_battery_entity_config(self._active_config)
         return entity_config.capacity_entity_id if entity_config is not None else None
+
+    def _get_battery_soc_bounds(self) -> tuple[float, float] | None:
+        bounds_config = read_battery_soc_bounds_config(self._active_config)
+        if bounds_config is None:
+            return None
+        bounds = read_battery_soc_bounds(self._hass, bounds_config)
+        if bounds is None:
+            return None
+        return (bounds.min_soc, bounds.max_soc)
+
+    def _get_battery_soc_bounds_entity_ids(self) -> tuple[str | None, str | None]:
+        bounds_config = read_battery_soc_bounds_config(self._active_config)
+        if bounds_config is None:
+            return (None, None)
+        return (bounds_config.min_soc_entity_id, bounds_config.max_soc_entity_id)
 
     def _get_grid_energy_entity_id(self, key: str) -> str | None:
         power_devices = ConsumptionForecastBuilder._read_dict(

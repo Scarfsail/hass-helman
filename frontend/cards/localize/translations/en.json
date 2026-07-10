@@ -15,6 +15,12 @@
       "house_actual": "Actual house",
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
+      "battery_soc_strip": "Battery state of charge",
+      "soc_direction": {
+        "charging": "charging",
+        "discharging": "discharging",
+        "idle": "holding"
+      },
       "grid_forecast": "Grid forecast",
       "grid_actual": "Actual grid",
       "battery_forecast": "Battery forecast",
