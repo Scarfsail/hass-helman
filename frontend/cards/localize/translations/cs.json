@@ -374,6 +374,7 @@
       "no_slot_explainability": "Pro slot {slot} není dostupné vysvětlení trénování.",
       "training_contribution": "Příspěvky k trénování",
       "training_contribution_meta": "Surový poměr {ratio} · faktor {factor}",
+      "show_impact_strip": "Zobrazit pruh vlivu korekce",
       "date": "Datum",
       "forecast_wh": "Prognóza Wh",
       "actual_wh": "Skutečnost Wh",

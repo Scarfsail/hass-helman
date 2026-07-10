@@ -249,6 +249,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _selectedSlot: string | null = null;
   @state() private _selectedTrainingDate: string | null = null;
   @state() private _trainingTableCollapsed = true;
+  @state() private _impactStripVisible = false;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
 
@@ -554,6 +555,21 @@ export class HelmanSolarInspector extends LitElement {
       transform: rotate(90deg);
     }
 
+    .impact-strip-switch {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      cursor: pointer;
+      color: var(--secondary-text-color);
+      font-size: 0.85em;
+    }
+
+    .impact-strip-switch input {
+      margin: 0;
+      cursor: pointer;
+    }
+
     .contribution-table-wrap {
       overflow-x: auto;
     }
@@ -659,7 +675,9 @@ export class HelmanSolarInspector extends LitElement {
       ${hasAnySeries
         ? html`
             <div class="chart-wrap">${this._renderChart(payload)}</div>
-            <div class="impact-strip-wrap">${this._lastLayoutForStrip ? this._renderImpactStrip(payload, this._lastLayoutForStrip) : ""}</div>
+            ${this._impactStripVisible && this._lastLayoutForStrip
+              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(payload, this._lastLayoutForStrip)}</div>`
+              : ""}
             ${this._renderTotals(payload)}
             ${this._renderSelectedSlotDetails(payload)}
           `
@@ -1282,6 +1300,14 @@ export class HelmanSolarInspector extends LitElement {
           ${payload.range.isToday
             ? html`<div class="day-state">${this._t("bias_correction.inspector.today_training_note")}</div>`
             : ""}
+          <label class="impact-strip-switch">
+            <input
+              type="checkbox"
+              .checked=${this._impactStripVisible}
+              @change=${() => { this._impactStripVisible = !this._impactStripVisible; }}
+            />
+            ${this._t("bias_correction.inspector.show_impact_strip")}
+          </label>
         </div>
         <div class="contribution-table-wrap">
           <table class="contribution-table">

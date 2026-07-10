@@ -38,6 +38,7 @@
       "no_slot_explainability": "No training explainability is available for {slot}.",
       "training_contribution": "Training contribution",
       "training_contribution_meta": "Raw ratio {ratio} · factor {factor}",
+      "show_impact_strip": "Show correction impact strip",
       "date": "Date",
       "forecast_wh": "Forecast Wh",
       "actual_wh": "Actual Wh",
