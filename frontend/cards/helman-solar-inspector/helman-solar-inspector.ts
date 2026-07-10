@@ -2,6 +2,18 @@ import { LitElement, css, html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
+import {
+  SLOT_MINUTES,
+  accumulateBands,
+  bandRuns,
+  lastStackSlot,
+  stackSlots,
+  stackTotals,
+  toSlotMap,
+  type StackBand,
+  type StackLayer,
+  type StackSet,
+} from "./chart-stack";
 import { BATT_COLOR, GRID_COLOR, SOLAR_COLOR } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
@@ -76,7 +88,14 @@ const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
 const SOC_STROKE: StrokeStyle = { width: 1.2, opacity: 0.5 };
 
 const MINUTES_PER_DAY = 1440;
-const SLOT_MINUTES = 15;
+
+/** Fill of the measured stack; low enough that the forecast outline reads through it. */
+const ACTUAL_BAND_FILL_OPACITY = 0.45;
+/** The forecast's own fill, past the last actual, is fainter than measured history. */
+const FORECAST_BAND_FILL_OPACITY = 0.25;
+const FORECAST_OUTLINE: StrokeStyle = { width: 1.4, opacity: 0.55 };
+
+type ChartStacks = { forecast: StackSet; actual: StackSet };
 
 /**
  * Close an interval series with a vertex at the end of its last slot.
@@ -643,7 +662,7 @@ export class HelmanSolarInspector extends LitElement {
     this._hiddenSeries = next;
   }
 
-  private _computeChartLayout(payload: InspectorPayload): ChartLayout {
+  private _computeChartLayout(payload: InspectorPayload, stacks: ChartStacks): ChartLayout {
     const width = this._chartWidth;
     const height = 260;
     const hasSocAxis =
@@ -655,21 +674,14 @@ export class HelmanSolarInspector extends LitElement {
 
     const powerFor = (series: SeriesKey, entries: ChartEntry[]) =>
       this._isSeriesVisible(series) ? entries.map((e) => e.powerW) : [];
-    const actualPoints = toAveragePower(payload.series.actual, { bucketMinutes: 15 });
-    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: 15 });
-    const loadPower = (series: SeriesKey, points: InspectorPoint[]) =>
-      powerFor(series, toAveragePower(asSupplyPositive(points), { bucketMinutes: 15 }));
+    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: SLOT_MINUTES });
+    // The stacks decide the axis: a band's outer edge is the sum beneath it, so
+    // the tallest slot total is what has to fit, not the tallest single series.
     const allPower = [
       ...powerFor("raw", toAveragePower(payload.series.raw)),
-      ...powerFor("corrected", toAveragePower(payload.series.corrected)),
-      ...powerFor("actual", actualPoints),
       ...powerFor("actual", invalidatedPoints),
-      ...loadPower("houseForecast", payload.series.houseForecast),
-      ...loadPower("houseActual", payload.series.houseActual),
-      ...loadPower("gridForecast", payload.series.gridForecast),
-      ...loadPower("gridActual", payload.series.gridActual),
-      ...loadPower("batteryForecast", payload.series.batteryForecast),
-      ...loadPower("batteryActual", payload.series.batteryActual),
+      ...stackTotals(stacks.forecast),
+      ...stackTotals(stacks.actual),
     ];
     const maxW = Math.max(1000, ...allPower);
     const maxKw = Math.ceil(maxW / 1000);
@@ -691,7 +703,8 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderChart(payload: InspectorPayload) {
-    const layout = this._computeChartLayout(payload);
+    const stacks = this._buildStacks(payload);
+    const layout = this._computeChartLayout(payload, stacks);
     this._lastLayoutForStrip = layout;
     const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
     return svg`
@@ -706,14 +719,125 @@ export class HelmanSolarInspector extends LitElement {
         ${this._renderSlotHighlight(layout, layout.margin.top, layout.plotHeight, selectedSlot)}
         ${this._renderLeftAxis(layout)}
         ${this._renderXAxis(layout)}
+        ${this._renderStackSet(layout, stacks.actual, "actual", Number.NEGATIVE_INFINITY)}
+        ${this._renderStackSet(layout, stacks.forecast, "forecast", this._forecastFillFrom(stacks))}
         ${this._renderSolarLayer(payload, layout)}
-        ${this._renderHouseLayer(payload, layout)}
-        ${this._renderGridLayer(payload, layout)}
-        ${this._renderBatteryPowerLayer(payload, layout)}
         ${this._renderRightAxis(layout)}
         ${this._renderBatterySocLayer(payload, layout)}
       </svg>
     `;
+  }
+
+  /**
+   * The two stacks, in the order they build outwards from the zero baseline:
+   * solar, battery discharge and grid import above; house, battery charge and
+   * grid export below.
+   */
+  private _buildStacks(payload: InspectorPayload): ChartStacks {
+    const series = payload.series;
+    const solarForecast = this._stackLayer("corrected", CHART_COLORS.corrected, series.corrected, false);
+    const solarActual = this._stackLayer("actual", CHART_COLORS.actual, series.actual, false);
+    const houseForecast = this._stackLayer("houseForecast", CHART_COLORS.house, series.houseForecast, true);
+    const houseActual = this._stackLayer("houseActual", CHART_COLORS.house, series.houseActual, true);
+    const batteryForecast = this._stackLayer("batteryForecast", CHART_COLORS.battery, series.batteryForecast, true);
+    const batteryActual = this._stackLayer("batteryActual", CHART_COLORS.battery, series.batteryActual, true);
+    const gridForecast = this._stackLayer("gridForecast", CHART_COLORS.grid, series.gridForecast, true);
+    const gridActual = this._stackLayer("gridActual", CHART_COLORS.grid, series.gridActual, true);
+    return {
+      forecast: {
+        positive: [solarForecast, batteryForecast, gridForecast],
+        negative: [houseForecast, batteryForecast, gridForecast],
+      },
+      actual: {
+        positive: [solarActual, batteryActual, gridActual],
+        negative: [houseActual, batteryActual, gridActual],
+      },
+    };
+  }
+
+  /**
+   * The first slot the forecast has to speak for alone: one past the last
+   * measured slot. With no actuals at all the forecast fills the whole day.
+   */
+  private _forecastFillFrom(stacks: ChartStacks): number {
+    const lastActual = lastStackSlot(stacks.actual);
+    return lastActual === null ? Number.NEGATIVE_INFINITY : lastActual + SLOT_MINUTES;
+  }
+
+  /** A hidden series yields an empty layer, so toggling it collapses its band. */
+  private _stackLayer(
+    key: SeriesKey,
+    color: string,
+    points: InspectorPoint[],
+    consumptionPositive: boolean,
+  ): StackLayer {
+    if (!this._isSeriesVisible(key)) return { color, values: new Map() };
+    const oriented = consumptionPositive ? asSupplyPositive(points) : points;
+    return { color, values: toSlotMap(toAveragePower(oriented, { bucketMinutes: SLOT_MINUTES })) };
+  }
+
+  /**
+   * A stacked area. Slots from `fillFrom` onwards are drawn as filled bands;
+   * everything before it is drawn as dashed band edges only.
+   *
+   * The measured stack fills throughout. The forecast stack fills only the part
+   * of the day the actuals never reached, and recedes to bare edges over the
+   * measured hours, where it is a claim to compare against rather than the
+   * account of what happened.
+   */
+  private _renderStackSet(
+    layout: ChartLayout,
+    set: StackSet,
+    variant: "actual" | "forecast",
+    fillFrom: number,
+  ) {
+    const slots = stackSlots(set);
+    if (!slots.length) return "";
+    const { xForMinutes, yForW } = layout;
+    // Each slot's power is an average over the interval that starts at it, so a
+    // band is a run of rectangles, not a sloped ribbon between sample points.
+    const stepEdge = (slot: number, level: Map<number, number>) => [
+      [xForMinutes(slot), yForW(level.get(slot)!)] as const,
+      [xForMinutes(slot + SLOT_MINUTES), yForW(level.get(slot)!)] as const,
+    ];
+    const toPath = (points: readonly (readonly [number, number])[]) =>
+      points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const dash = variant === "forecast" ? "4 3" : "";
+
+    const outline = (run: number[], band: StackBand) => svg`
+      <path d=${toPath(run.flatMap((slot) => stepEdge(slot, band.top)))} fill="none"
+            stroke=${band.layer.color} stroke-width=${FORECAST_OUTLINE.width}
+            stroke-dasharray=${dash} stroke-opacity=${FORECAST_OUTLINE.opacity}></path>
+    `;
+    const area = (run: number[], band: StackBand) => {
+      const outer = run.flatMap((slot) => stepEdge(slot, band.top));
+      const inner = [...run].reverse().flatMap((slot) => [...stepEdge(slot, band.base)].reverse());
+      const fillOpacity =
+        variant === "forecast" ? FORECAST_BAND_FILL_OPACITY : ACTUAL_BAND_FILL_OPACITY;
+      return svg`
+        <path d=${`${toPath([...outer, ...inner])} Z`} fill=${band.layer.color}
+              fill-opacity=${fillOpacity} stroke=${band.layer.color} stroke-width="0.75"
+              stroke-dasharray=${dash} stroke-opacity="0.6"></path>
+      `;
+    };
+
+    return [1, -1].flatMap((sign) => {
+      const layers = sign > 0 ? set.positive : set.negative;
+      return accumulateBands(layers, slots, sign as 1 | -1).flatMap((band) =>
+        // Slots where the band is flat carry no information and would stroke
+        // over the band beneath them, so each run of real height stands alone.
+        bandRuns(band, slots).flatMap((run) => {
+          // `fillFrom` is monotonic across a sorted run, so each side stays
+          // contiguous and the two pieces abut at the boundary with no seam.
+          const outlined = run.filter((slot) => slot < fillFrom);
+          const filled = run.filter((slot) => slot >= fillFrom);
+          return [
+            outlined.length ? outline(outlined, band) : "",
+            filled.length ? area(filled, band) : "",
+          ].filter(Boolean);
+        }),
+      );
+    });
   }
 
   private _renderChartBackground(layout: ChartLayout) {
@@ -761,15 +885,18 @@ export class HelmanSolarInspector extends LitElement {
     });
   }
 
+  /**
+   * The solar diagnostics that sit outside the stacks: the uncorrected forecast,
+   * and the slots whose measurement was thrown away. Corrected forecast and
+   * actual production are the bottom band of their respective stack.
+   */
   private _renderSolarLayer(payload: InspectorPayload, layout: ChartLayout) {
-    const { xForMinutes, yForW, margin, plotWidth, plotHeight } = layout;
+    const { xForMinutes, yForW } = layout;
     const visible = (series: SeriesKey, points: ChartEntry[]) =>
       this._isSeriesVisible(series) ? points : [];
     const rawPoints = visible("raw", toAveragePower(payload.series.raw));
-    const correctedPoints = visible("corrected", toAveragePower(payload.series.corrected));
-    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: 15 }));
-    const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: 15 }));
-    const drawnActual = closeIntervalSeries(actualPoints);
+    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: SLOT_MINUTES }));
+    const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: SLOT_MINUTES }));
 
     const linePath = (points: ChartEntry[]) =>
       points
@@ -784,25 +911,12 @@ export class HelmanSolarInspector extends LitElement {
     const measured = closeIntervalSeries(
       [...actualPoints, ...invalidatedPoints].sort((a, b) => a.minutes - b.minutes),
     );
-    const minutesOf = (entry: ChartEntry) => entry.minutes;
-    const forecastSplit = (points: ChartEntry[], color: string) =>
-      this._renderForecastSplit(points, measured, minutesOf, linePath, color);
 
     return svg`
       ${rawPoints.length > 1
-        ? forecastSplit(rawPoints, CHART_COLORS.raw)
+        ? this._renderForecastSplit(rawPoints, measured, (entry) => entry.minutes, linePath, CHART_COLORS.raw)
         : rawPoints.length === 1
           ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForW(rawPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.raw}></circle>`
-          : ""}
-      ${correctedPoints.length > 1
-        ? forecastSplit(correctedPoints, CHART_COLORS.corrected)
-        : correctedPoints.length === 1
-          ? svg`<circle cx=${xForMinutes(correctedPoints[0].minutes)} cy=${yForW(correctedPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.corrected}></circle>`
-        : ""}
-      ${drawnActual.length > 1
-        ? svg`<path d=${linePath(drawnActual)} fill="none" stroke=${CHART_COLORS.actual} stroke-width="2.4"></path>`
-        : drawnActual.length === 1
-          ? svg`<circle cx=${xForMinutes(drawnActual[0].minutes)} cy=${yForW(drawnActual[0].powerW)} r="3.5" fill=${CHART_COLORS.actual}></circle>`
           : ""}
       ${invalidatedPoints.map((entry) => svg`
         <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="#9ca3af" opacity="0.55">
@@ -889,66 +1003,6 @@ export class HelmanSolarInspector extends LitElement {
       ${covered.length > 1 ? this._renderForecastLine(path(covered), color, true, stroke) : ""}
       ${ahead.length > 1 ? this._renderForecastLine(path(ahead), color, false, stroke) : ""}
     `;
-  }
-
-  private _renderPowerSeriesPair(
-    layout: ChartLayout,
-    color: string,
-    forecast: ChartEntry[],
-    actual: ChartEntry[],
-  ) {
-    const { xForMinutes, yForW } = layout;
-    const closedActual = closeIntervalSeries(actual);
-    const path = (points: ChartEntry[]) =>
-      points.map((e, i) =>
-        `${i === 0 ? "M" : "L"}${xForMinutes(e.minutes).toFixed(1)},${yForW(e.powerW).toFixed(1)}`,
-      ).join(" ");
-    return svg`
-      ${this._renderForecastSplit(forecast, closedActual, (e) => e.minutes, path, color)}
-      ${closedActual.length > 1 ? svg`<path d=${path(closedActual)} fill="none" stroke=${color} stroke-width="2"></path>` : ""}
-    `;
-  }
-
-  /** Average power of a consumption-positive payload series, flipped for the chart. */
-  private _supplyPower(series: SeriesKey, points: InspectorPoint[]) {
-    if (!this._isSeriesVisible(series)) return [];
-    return toAveragePower(asSupplyPositive(points), { bucketMinutes: 15 });
-  }
-
-  private _renderHouseLayer(payload: InspectorPayload, layout: ChartLayout) {
-    if (!payload.availability.hasHouseForecast && !payload.availability.hasHouseActual) {
-      return "";
-    }
-    return this._renderPowerSeriesPair(
-      layout,
-      CHART_COLORS.house,
-      this._supplyPower("houseForecast", payload.series.houseForecast),
-      this._supplyPower("houseActual", payload.series.houseActual),
-    );
-  }
-
-  private _renderGridLayer(payload: InspectorPayload, layout: ChartLayout) {
-    if (!payload.availability.hasGridForecast && !payload.availability.hasGridActual) {
-      return "";
-    }
-    return this._renderPowerSeriesPair(
-      layout,
-      CHART_COLORS.grid,
-      this._supplyPower("gridForecast", payload.series.gridForecast),
-      this._supplyPower("gridActual", payload.series.gridActual),
-    );
-  }
-
-  private _renderBatteryPowerLayer(payload: InspectorPayload, layout: ChartLayout) {
-    if (!payload.availability.hasBatteryForecast && !payload.availability.hasBatteryActual) {
-      return "";
-    }
-    return this._renderPowerSeriesPair(
-      layout,
-      CHART_COLORS.battery,
-      this._supplyPower("batteryForecast", payload.series.batteryForecast),
-      this._supplyPower("batteryActual", payload.series.batteryActual),
-    );
   }
 
   private _renderImpactStrip(payload: InspectorPayload, layout: ChartLayout) {
