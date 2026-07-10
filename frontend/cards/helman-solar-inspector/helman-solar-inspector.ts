@@ -2,6 +2,7 @@ import { LitElement, css, html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
+import { symmetricPowerAxis } from "./chart-axis";
 import {
   SLOT_MINUTES,
   accumulateBands,
@@ -699,13 +700,13 @@ export class HelmanSolarInspector extends LitElement {
       ...stackTotals(stacks.forecast),
       ...stackTotals(stacks.actual),
     ];
-    const maxW = Math.max(1000, ...allPower);
-    const maxKw = Math.ceil(maxW / 1000);
-    // House, grid export and battery charging all sit below zero, so the axis
-    // grows downwards only as far as they actually reach.
-    const minKw = Math.min(0, Math.floor(Math.min(0, ...allPower) / 1000));
+    // Every watt supplied is a watt consumed, so the two stacks are mirror
+    // images and the axis has to be too: a slot that reaches 3 kW of production
+    // reaches 3 kW of consumption. One bound serves both directions.
+    const peakW = Math.max(1000, ...allPower.map((w) => Math.abs(w)));
+    const { maxKw, yTicks } = symmetricPowerAxis(peakW);
+    const minKw = -maxKw;
     const spanW = (maxKw - minKw) * 1000;
-    const yTicks = this._buildYTicks(minKw, maxKw);
     const xForMinutes = (minutes: number) => margin.left + (minutes / 1440) * plotWidth;
     const yForW = (powerW: number) =>
       margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
@@ -1114,23 +1115,6 @@ export class HelmanSolarInspector extends LitElement {
     this._selectedSlot = null;
     this._selectedTrainingDate = null;
     this.requestUpdate("_selectedSlot", previous);
-  }
-
-  private _buildYTicks(minKwh: number, maxKwh: number) {
-    const span = maxKwh - minKwh;
-    const step = span <= 4 ? 1 : Math.ceil(span / 4);
-    const ticks: number[] = [];
-    for (let value = minKwh; value <= maxKwh; value += step) {
-      ticks.push(value);
-    }
-    if (ticks[ticks.length - 1] !== maxKwh) {
-      ticks.push(maxKwh);
-    }
-    if (minKwh < 0 && !ticks.includes(0)) {
-      ticks.push(0);
-      ticks.sort((a, b) => a - b);
-    }
-    return ticks;
   }
 
   private _renderTotals(payload: InspectorPayload) {
