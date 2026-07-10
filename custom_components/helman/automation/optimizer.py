@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .optimizers import ExportPriceOptimizer, build_surplus_appliance_optimizer
+from .optimizers import (
+    ExportPriceOptimizer,
+    build_charge_hold_optimizer,
+    build_surplus_appliance_optimizer,
+)
 
 KNOWN_OPTIMIZER_KINDS: frozenset[str] = frozenset(
-    {"export_price", "surplus_appliance"}
+    {"export_price", "surplus_appliance", "charge_hold"}
 )
 
 if TYPE_CHECKING:
@@ -44,4 +48,6 @@ def build_optimizer(
             config,
             appliance_registry=appliance_registry,
         )
+    if config.kind == "charge_hold":
+        return build_charge_hold_optimizer(config)
     raise ValueError(f"Unsupported optimizer kind: {config.kind}")

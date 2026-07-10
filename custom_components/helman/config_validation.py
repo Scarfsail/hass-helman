@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .automation.config import AutomationConfigError, read_automation_config
+from .automation.optimizers.charge_hold import (
+    ChargeHoldValidationError,
+    validate_charge_hold_optimizer_config,
+)
 from .automation.optimizers.surplus_appliance import (
     SurplusApplianceValidationError,
     validate_surplus_appliance_optimizer_config,
@@ -977,21 +981,55 @@ def _validate_automation_config(
         return
 
     appliance_registry = build_appliances_runtime_registry(config)
+    battery_issue = describe_battery_entity_config_issue(config)
+    seen_export_price = False
     for index, optimizer in enumerate(automation_config.execution_optimizers):
-        if optimizer.kind != "surplus_appliance":
-            continue
-        try:
-            validate_surplus_appliance_optimizer_config(
-                optimizer,
-                appliance_registry=appliance_registry,
-            )
-        except SurplusApplianceValidationError as err:
-            report.add_error(
-                section="automation",
-                path=f"automation.optimizers[{index}].params.{err.field}",
-                code="invalid_value",
-                message=str(err),
-            )
+        if optimizer.kind == "export_price":
+            seen_export_price = True
+        if optimizer.kind == "surplus_appliance":
+            try:
+                validate_surplus_appliance_optimizer_config(
+                    optimizer,
+                    appliance_registry=appliance_registry,
+                )
+            except SurplusApplianceValidationError as err:
+                report.add_error(
+                    section="automation",
+                    path=f"automation.optimizers[{index}].params.{err.field}",
+                    code="invalid_value",
+                    message=str(err),
+                )
+        elif optimizer.kind == "charge_hold":
+            if battery_issue is not None:
+                report.add_error(
+                    section="automation",
+                    path=f"automation.optimizers[{index}]",
+                    code="battery_required",
+                    message=(
+                        f"charge_hold optimizer {optimizer.id!r} requires a "
+                        f"configured battery: {battery_issue}"
+                    ),
+                )
+            try:
+                validate_charge_hold_optimizer_config(optimizer)
+            except ChargeHoldValidationError as err:
+                report.add_error(
+                    section="automation",
+                    path=f"automation.optimizers[{index}].params.{err.field}",
+                    code="invalid_value",
+                    message=str(err),
+                )
+            if seen_export_price:
+                report.add_warning(
+                    section="automation",
+                    path=f"automation.optimizers[{index}]",
+                    code="charge_hold_after_export_price",
+                    message=(
+                        f"charge_hold optimizer {optimizer.id!r} is ordered after an "
+                        "export_price optimizer; export_price's stop_export will win "
+                        "shared inverter slots. Place charge_hold first."
+                    ),
+                )
 
 
 def _read_supported_appliance(
