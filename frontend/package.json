@@ -7,7 +7,9 @@
     "build": "npm run build:card && npm run build:editor",
     "build:card": "vite build",
     "build:editor": "vite build -c vite.config.editor.ts",
-    "watch": "vite build --watch --mode development"
+    "watch": "npm run watch:card & npm run watch:editor",
+    "watch:card": "vite build --watch --mode development",
+    "watch:editor": "vite build --watch --mode development -c vite.config.editor.ts"
   },
   "dependencies": {
     "lit": "3.3.3",
