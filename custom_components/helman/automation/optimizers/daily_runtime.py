@@ -201,7 +201,7 @@ class DailyRuntimeOptimizer:
                     )
                     export_price = export_price_by_bucket.get(cursor, float("inf"))
                     candidates.append(
-                        (0 if covered else 1, export_price, cursor, slot_id)
+                        (export_price, 0 if covered else 1, cursor, slot_id)
                     )
             cursor += _SLOT_DURATION
 

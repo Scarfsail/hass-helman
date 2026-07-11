@@ -306,11 +306,12 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
         # yesterday already a skip -> skipping today would exceed max=1 -> run.
         self.assertEqual(set(_placed_slots(result, appliance.id)), cheap)
 
-    def test_prefers_solar_covered_slots_over_cheaper_uncovered(self) -> None:
+    def test_cheaper_uncovered_slot_beats_pricier_covered(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
         # slot 10:00 covered by solar (buckets 10:00, 10:15) but pricey export;
-        # slot 12:00 cheaper export but uncovered.
+        # slots 12:00/12:30 cheaper export but uncovered. Price is primary, so the
+        # cheaper uncovered slots win; coverage is only a tiebreak.
         grid_series = [
             {"timestamp": _at(10, 0).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
             {"timestamp": _at(10, 15).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
@@ -327,9 +328,34 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             ),
             cfg,
         )
-        # min_hours 1 -> 2 slots; first should be the solar-covered 10:00.
+        # min_hours 1 -> 2 slots; both cheapest slots, not the covered 10:00.
         placed = _placed_slots(result, appliance.id)
-        self.assertIn(_slot_id(10, 0), placed)
+        self.assertEqual(set(placed), {_slot_id(12, 0), _slot_id(12, 30)})
+
+    def test_coverage_breaks_ties_between_equal_priced_slots(self) -> None:
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=0.5)
+        # slots 11:00 and 13:00 share the cheapest export price; only 13:00 is
+        # solar-covered. With one slot needed, coverage breaks the tie in favour
+        # of 13:00 even though 11:00 is earlier.
+        grid_series = [
+            {"timestamp": _at(13, 0).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
+            {"timestamp": _at(13, 15).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
+        ]
+        export_points = _export_points({_slot_id(11, 0), _slot_id(13, 0)})
+        result = build_daily_runtime_optimizer(
+            cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
+        ).optimize(
+            _make_snapshot(
+                appliance=appliance,
+                export_points=export_points,
+                grid_series=grid_series,
+                when_active={appliance.id: 0.4},
+            ),
+            cfg,
+        )
+        placed = _placed_slots(result, appliance.id)
+        self.assertEqual(set(placed), {_slot_id(13, 0)})
 
     def test_leaves_user_owned_appliance_slot_untouched(self) -> None:
         appliance = _generic()
