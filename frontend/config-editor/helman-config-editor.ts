@@ -10,6 +10,9 @@ import {
   createApplianceDraft,
   createClimateApplianceDraft,
   createExportPriceOptimizerDraft,
+  createChargeHoldOptimizerDraft,
+  createChargeFromGridOptimizerDraft,
+  createDailyRuntimeOptimizerDraft,
   createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
@@ -83,6 +86,11 @@ const EXPORT_PRICE_OPTIMIZER_KIND = "export_price";
 const EXPORT_PRICE_OPTIMIZER_ACTION = "stop_export";
 const SURPLUS_APPLIANCE_OPTIMIZER_KIND = "surplus_appliance";
 const SURPLUS_APPLIANCE_OPTIMIZER_ACTION = "on";
+const CHARGE_HOLD_OPTIMIZER_KIND = "charge_hold";
+const CHARGE_FROM_GRID_OPTIMIZER_KIND = "charge_from_grid";
+const DAILY_RUNTIME_OPTIMIZER_KIND = "daily_runtime";
+const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
+const OPTIMIZER_CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
@@ -659,6 +667,20 @@ export class HelmanConfigEditorPanel extends LitElement {
       color: var(--secondary-text-color);
       font-size: 0.86rem;
       line-height: 1.4;
+    }
+
+    .checkbox-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      padding: 4px 0;
+    }
+
+    .checkbox-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.92rem;
     }
 
     .list-stack {
@@ -1927,6 +1949,20 @@ export class HelmanConfigEditorPanel extends LitElement {
           </p>
           <div class="field-grid">
             ${this._renderAutomationEnabledField()}
+            ${this._renderOptionalNumberField(
+              ["automation", "day_context", "deficit_below_ratio"],
+              "editor.fields.day_context_deficit_ratio",
+              "editor.helpers.day_context_deficit_ratio",
+              "editor.help.day_context_deficit_ratio",
+              { min: 0 },
+            )}
+            ${this._renderOptionalNumberField(
+              ["automation", "day_context", "surplus_above_ratio"],
+              "editor.fields.day_context_surplus_ratio",
+              "editor.helpers.day_context_surplus_ratio",
+              "editor.help.day_context_surplus_ratio",
+              { min: 0 },
+            )}
           </div>
         `,
       )}
@@ -1960,6 +1996,19 @@ export class HelmanConfigEditorPanel extends LitElement {
             >
               ${this._t("editor.actions.add_surplus_appliance_optimizer")}
             </button>
+            <button type="button" class="add-button" @click=${this._handleAddChargeHoldOptimizer}>
+              ${this._t("editor.actions.add_charge_hold_optimizer")}
+            </button>
+            <button
+              type="button"
+              class="add-button"
+              @click=${this._handleAddChargeFromGridOptimizer}
+            >
+              ${this._t("editor.actions.add_charge_from_grid_optimizer")}
+            </button>
+            <button type="button" class="add-button" @click=${this._handleAddDailyRuntimeOptimizer}>
+              ${this._t("editor.actions.add_daily_runtime_optimizer")}
+            </button>
           </div>
         `,
       )}
@@ -1978,6 +2027,15 @@ export class HelmanConfigEditorPanel extends LitElement {
     }
     if (kind === SURPLUS_APPLIANCE_OPTIMIZER_KIND) {
       return this._renderSurplusApplianceOptimizerCard(optimizerObject, index, total);
+    }
+    if (kind === CHARGE_HOLD_OPTIMIZER_KIND) {
+      return this._renderChargeHoldOptimizerCard(optimizerObject, index, total);
+    }
+    if (kind === CHARGE_FROM_GRID_OPTIMIZER_KIND) {
+      return this._renderChargeFromGridOptimizerCard(optimizerObject, index, total);
+    }
+    if (kind === DAILY_RUNTIME_OPTIMIZER_KIND) {
+      return this._renderDailyRuntimeOptimizerCard(optimizerObject, index, total);
     }
     return this._renderUnsupportedAutomationOptimizerCard(optimizerObject, index, total);
   }
@@ -2201,6 +2259,356 @@ export class HelmanConfigEditorPanel extends LitElement {
             ${climateModeFieldState.visible
               ? this._renderSurplusClimateModeField(paramsPath, climateModeFieldState)
               : this._renderSurplusApplianceActionField(action)}
+          </div>
+        </div>
+      </details>
+    `;
+  }
+
+  private _renderOptimizerListActions(
+    basePath: PathSegment[],
+    index: number,
+    total: number,
+    enabled: boolean,
+  ): TemplateResult {
+    return html`
+      <div class="list-actions" @click=${this._preventSummaryToggle}>
+        ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
+        <button
+          type="button"
+          ?disabled=${index === 0}
+          @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
+        >${this._t("editor.actions.up")}</button>
+        <button
+          type="button"
+          ?disabled=${index === total - 1}
+          @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
+        >${this._t("editor.actions.down")}</button>
+        <button
+          type="button"
+          class="danger"
+          @click=${() => this._removeListItem(["automation", "optimizers"], index)}
+        >${this._t("editor.actions.remove")}</button>
+      </div>
+    `;
+  }
+
+  private _renderDayClassificationField(
+    path: PathSegment[],
+    labelKey: string,
+    helpKey: string,
+  ): TemplateResult {
+    const selected = (asJsonArray(this._getValue(path)) ?? []).map((value) =>
+      this._stringValue(value),
+    );
+    return html`
+      <div class="field">
+        <div class="field-label-row">
+          <label>${this._t(labelKey)}</label>
+          ${this._renderHelpIcon(labelKey, helpKey)}
+        </div>
+        <div class="checkbox-group">
+          ${DAY_CLASSIFICATIONS.map(
+            (classification) => html`
+              <label class="checkbox-option">
+                <input
+                  type="checkbox"
+                  .checked=${selected.includes(classification)}
+                  @change=${(event: Event) =>
+                    this._toggleDayClassification(
+                      path,
+                      classification,
+                      (event.currentTarget as HTMLInputElement).checked,
+                    )}
+                />
+                ${this._t(`editor.values.classification_${classification}`)}
+              </label>
+            `,
+          )}
+        </div>
+      </div>
+    `;
+  }
+
+  private _toggleDayClassification(
+    path: PathSegment[],
+    value: string,
+    checked: boolean,
+  ): void {
+    this._applyMutation((draft) => {
+      const current = (asJsonArray(getValueAtPath(draft, path)) ?? [])
+        .map((item) => this._stringValue(item))
+        .filter((item) => item.length > 0);
+      const next = checked
+        ? Array.from(new Set([...current, value]))
+        : current.filter((item) => item !== value);
+      setValueAtPath(
+        draft,
+        path,
+        DAY_CLASSIFICATIONS.filter((classification) => next.includes(classification)),
+      );
+    });
+  }
+
+  private _renderChargeHoldOptimizerCard(
+    optimizer: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["automation", "optimizers", index];
+    const paramsPath: PathSegment[] = [...basePath, "params"];
+    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
+    const optimizerId =
+      this._stringValue(optimizer.id) ||
+      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
+    const holdAction =
+      this._stringValue(this._getValue([...paramsPath, "hold_action"])) || "stop_charging";
+
+    return html`
+      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(OPTIMIZER_CHEVRON_PATH, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${optimizerId}</strong>
+                <span class="card-subtitle">${this._t("editor.values.charge_hold")}</span>
+              </div>
+            </div>
+            ${this._renderOptimizerListActions(basePath, index, total, enabled)}
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <div class="field-grid">
+            ${this._renderRequiredTextField(
+              [...basePath, "id"],
+              "editor.fields.optimizer_id",
+              undefined,
+              "editor.help.automation_optimizer_id",
+            )}
+            ${this._renderDayClassificationField(
+              [...paramsPath, "only_on_days"],
+              "editor.fields.only_on_days",
+              "editor.help.charge_hold_only_on_days",
+            )}
+            ${this._renderRequiredTextField(
+              [...paramsPath, "window", "start"],
+              "editor.fields.window_start",
+              undefined,
+              "editor.help.optimizer_window",
+            )}
+            ${this._renderRequiredTextField(
+              [...paramsPath, "window", "end"],
+              "editor.fields.window_end",
+              undefined,
+              "editor.help.optimizer_window",
+            )}
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "battery_first", "target_soc"],
+              "editor.fields.target_soc",
+              undefined,
+              "1",
+              "editor.help.charge_hold_target_soc",
+            )}
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "battery_first", "margin_pct"],
+              "editor.fields.margin_pct",
+              undefined,
+              "1",
+              "editor.help.charge_hold_margin_pct",
+            )}
+            <div class="field">
+              <div class="field-label-row">
+                <label>${this._t("editor.fields.hold_action")}</label>
+                ${this._renderHelpIcon("editor.fields.hold_action", "editor.help.charge_hold_action")}
+              </div>
+              <input .value=${holdAction} disabled />
+              <div class="helper">${this._t("editor.helpers.charge_hold_action")}</div>
+            </div>
+          </div>
+        </div>
+      </details>
+    `;
+  }
+
+  private _renderChargeFromGridOptimizerCard(
+    optimizer: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["automation", "optimizers", index];
+    const paramsPath: PathSegment[] = [...basePath, "params"];
+    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
+    const optimizerId =
+      this._stringValue(optimizer.id) ||
+      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
+
+    return html`
+      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(OPTIMIZER_CHEVRON_PATH, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${optimizerId}</strong>
+                <span class="card-subtitle">${this._t("editor.values.charge_from_grid")}</span>
+              </div>
+            </div>
+            ${this._renderOptimizerListActions(basePath, index, total, enabled)}
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <div class="field-grid">
+            ${this._renderRequiredTextField(
+              [...basePath, "id"],
+              "editor.fields.optimizer_id",
+              undefined,
+              "editor.help.automation_optimizer_id",
+            )}
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "reserve_floor_soc"],
+              "editor.fields.reserve_floor_soc",
+              undefined,
+              "1",
+              "editor.help.charge_from_grid_reserve_floor_soc",
+            )}
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "margin_pct"],
+              "editor.fields.margin_pct",
+              undefined,
+              "1",
+              "editor.help.charge_from_grid_margin_pct",
+            )}
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "max_target_soc"],
+              "editor.fields.max_target_soc",
+              undefined,
+              "1",
+              "editor.help.charge_from_grid_max_target_soc",
+            )}
+          </div>
+        </div>
+      </details>
+    `;
+  }
+
+  private _renderDailyRuntimeOptimizerCard(
+    optimizer: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["automation", "optimizers", index];
+    const paramsPath: PathSegment[] = [...basePath, "params"];
+    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
+    const optimizerId =
+      this._stringValue(optimizer.id) ||
+      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
+    const applianceId = this._stringValue(this._getValue([...paramsPath, "appliance_id"]));
+    const selectionState = buildSurplusApplianceSelectionState(
+      this._config,
+      this._liveApplianceMetadata,
+      applianceId,
+    );
+    const climateModeFieldState = buildSurplusClimateModeFieldState(
+      selectionState,
+      this._stringValue(this._getValue([...paramsPath, "climate_mode"])),
+    );
+    const summaryTitle = this._getSurplusApplianceOptimizerTitle(selectionState, optimizerId);
+
+    return html`
+      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(OPTIMIZER_CHEVRON_PATH, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${summaryTitle}</strong>
+                <span class="card-subtitle">${this._t("editor.values.daily_runtime")}</span>
+              </div>
+            </div>
+            ${this._renderOptimizerListActions(basePath, index, total, enabled)}
+          </div>
+        </summary>
+        <div class="appliance-body">
+          <div class="field-grid">
+            ${this._renderRequiredTextField(
+              [...basePath, "id"],
+              "editor.fields.optimizer_id",
+              undefined,
+              "editor.help.automation_optimizer_id",
+            )}
+            <div class="field">
+              <div class="field-label-row">
+                <label>${this._t("editor.fields.appliance_id")}</label>
+                ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.daily_runtime_appliance_id")}
+              </div>
+              <select
+                @change=${(event: Event) =>
+                  this._handleDailyRuntimeApplianceIdChange(
+                    index,
+                    (event.currentTarget as HTMLSelectElement).value,
+                  )}
+              >
+                <option value="" ?selected=${selectionState.selectedId.length === 0}>
+                  ${this._t("editor.values.select_appliance")}
+                </option>
+                ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
+                  ? html`
+                      <option value=${selectionState.selectedId} ?selected=${true}>
+                        ${this._tFormat("editor.dynamic.stale_appliance", {
+                          id: selectionState.selectedId,
+                        })}
+                      </option>
+                    `
+                  : nothing}
+                ${selectionState.options.map(
+                  (option) => html`
+                    <option
+                      value=${option.id}
+                      ?disabled=${option.selectionDisabled}
+                      ?selected=${option.id === selectionState.selectedId}
+                    >
+                      ${this._formatSurplusApplianceOptionLabel(option)}
+                    </option>
+                  `,
+                )}
+              </select>
+              <div class="helper">${this._renderSurplusApplianceIdHelper(selectionState)}</div>
+            </div>
+            ${climateModeFieldState.visible
+              ? this._renderSurplusClimateModeField(paramsPath, climateModeFieldState)
+              : nothing}
+            ${this._renderRequiredNumberField(
+              [...paramsPath, "min_hours_per_day"],
+              "editor.fields.min_hours_per_day",
+              undefined,
+              "any",
+              "editor.help.daily_runtime_min_hours",
+            )}
+            ${this._renderRequiredTextField(
+              [...paramsPath, "window", "start"],
+              "editor.fields.window_start",
+              undefined,
+              "editor.help.optimizer_window",
+            )}
+            ${this._renderRequiredTextField(
+              [...paramsPath, "window", "end"],
+              "editor.fields.window_end",
+              undefined,
+              "editor.help.optimizer_window",
+            )}
+            ${this._renderDayClassificationField(
+              [...paramsPath, "skip", "on_days"],
+              "editor.fields.skip_on_days",
+              "editor.help.daily_runtime_skip_on_days",
+            )}
+            ${this._renderOptionalNumberField(
+              [...paramsPath, "skip", "max_consecutive_skips"],
+              "editor.fields.max_consecutive_skips",
+              "editor.helpers.daily_runtime_max_consecutive_skips",
+              "editor.help.daily_runtime_max_consecutive_skips",
+              { min: 0 },
+            )}
           </div>
         </div>
       </details>
@@ -4015,6 +4423,14 @@ export class HelmanConfigEditorPanel extends LitElement {
   };
 
   private _handleSurplusApplianceIdChange(index: number, rawValue: string): void {
+    this._applyApplianceIdChange(index, rawValue);
+  }
+
+  private _handleDailyRuntimeApplianceIdChange(index: number, rawValue: string): void {
+    this._applyApplianceIdChange(index, rawValue);
+  }
+
+  private _applyApplianceIdChange(index: number, rawValue: string): void {
     const applianceId = rawValue.trim();
     const paramsPath: PathSegment[] = ["automation", "optimizers", index, "params"];
     this._applyMutation((draft) => {
@@ -4035,6 +4451,35 @@ export class HelmanConfigEditorPanel extends LitElement {
       setValueAtPath(draft, [...paramsPath, "climate_mode"], climateModeFieldState.value);
     });
   }
+
+  private _addOptimizer(factory: (existingIds: string[]) => JsonObject): void {
+    const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
+      .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
+      .filter((value) => value.length > 0);
+    this._applyMutation((draft) => {
+      const automation = asJsonObject(getValueAtPath(draft, ["automation"]));
+      if (!automation) {
+        setValueAtPath(draft, ["automation"], {
+          enabled: true,
+          optimizers: [factory(existingIds)],
+        });
+        return;
+      }
+      appendListItem(draft, ["automation", "optimizers"], factory(existingIds));
+    });
+  }
+
+  private _handleAddChargeHoldOptimizer = (): void => {
+    this._addOptimizer(createChargeHoldOptimizerDraft);
+  };
+
+  private _handleAddChargeFromGridOptimizer = (): void => {
+    this._addOptimizer(createChargeFromGridOptimizerDraft);
+  };
+
+  private _handleAddDailyRuntimeOptimizer = (): void => {
+    this._addOptimizer(createDailyRuntimeOptimizerDraft);
+  };
 
   private _handleAddEvCharger = (): void => {
     const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
@@ -4289,7 +4734,12 @@ export class HelmanConfigEditorPanel extends LitElement {
     let changed = false;
     optimizers.forEach((optimizer, index) => {
       const optimizerObject = asJsonObject(optimizer);
-      if (!optimizerObject || this._stringValue(optimizerObject.kind) !== SURPLUS_APPLIANCE_OPTIMIZER_KIND) {
+      const optimizerKind = this._stringValue(optimizerObject?.kind);
+      if (
+        !optimizerObject ||
+        (optimizerKind !== SURPLUS_APPLIANCE_OPTIMIZER_KIND &&
+          optimizerKind !== DAILY_RUNTIME_OPTIMIZER_KIND)
+      ) {
         return;
       }
 

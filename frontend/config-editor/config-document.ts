@@ -337,6 +337,66 @@ export function createSurplusApplianceOptimizerDraft(
   };
 }
 
+export function createChargeHoldOptimizerDraft(existingIds: string[]): JsonObject {
+  const optimizerId = createUniqueKey(existingIds, "charge-hold");
+  return {
+    id: optimizerId,
+    kind: "charge_hold",
+    enabled: true,
+    params: {
+      only_on_days: ["surplus"],
+      hold_action: "stop_charging",
+      release: "day_price_min",
+      window: {
+        start: "06:00",
+        end: "14:00",
+      },
+      battery_first: {
+        target_soc: 100,
+        margin_pct: 20,
+      },
+    },
+  };
+}
+
+export function createChargeFromGridOptimizerDraft(existingIds: string[]): JsonObject {
+  const optimizerId = createUniqueKey(existingIds, "charge-from-grid");
+  return {
+    id: optimizerId,
+    kind: "charge_from_grid",
+    enabled: true,
+    params: {
+      reserve_floor_soc: 30,
+      margin_pct: 10,
+      max_target_soc: 100,
+    },
+  };
+}
+
+export function createDailyRuntimeOptimizerDraft(
+  existingIds: string[],
+  applianceId = "",
+): JsonObject {
+  const optimizerId = createUniqueKey(existingIds, "daily-runtime");
+  return {
+    id: optimizerId,
+    kind: "daily_runtime",
+    enabled: true,
+    params: {
+      appliance_id: applianceId,
+      min_hours_per_day: 8,
+      window: {
+        start: "08:00",
+        end: "18:00",
+      },
+      skip: {
+        on_days: ["deficit"],
+        max_consecutive_skips: 1,
+      },
+    },
+  };
+}
+
 export function createVehicleDraft(existingIds: string[], vehicleName: string): JsonObject {
   const vehicleId = createUniqueKey(existingIds, "vehicle");
   return {
