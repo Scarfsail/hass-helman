@@ -14,6 +14,10 @@ from .automation.optimizers.charge_hold import (
     ChargeHoldValidationError,
     validate_charge_hold_optimizer_config,
 )
+from .automation.optimizers.daily_runtime import (
+    DailyRuntimeValidationError,
+    validate_daily_runtime_optimizer_config,
+)
 from .automation.optimizers.surplus_appliance import (
     SurplusApplianceValidationError,
     validate_surplus_appliance_optimizer_config,
@@ -1048,6 +1052,19 @@ def _validate_automation_config(
             try:
                 validate_charge_from_grid_optimizer_config(optimizer)
             except ChargeFromGridValidationError as err:
+                report.add_error(
+                    section="automation",
+                    path=f"automation.optimizers[{index}].params.{err.field}",
+                    code="invalid_value",
+                    message=str(err),
+                )
+        elif optimizer.kind == "daily_runtime":
+            try:
+                validate_daily_runtime_optimizer_config(
+                    optimizer,
+                    appliance_registry=appliance_registry,
+                )
+            except DailyRuntimeValidationError as err:
                 report.add_error(
                     section="automation",
                     path=f"automation.optimizers[{index}].params.{err.field}",

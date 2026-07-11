@@ -6,11 +6,18 @@ from .optimizers import (
     ExportPriceOptimizer,
     build_charge_from_grid_optimizer,
     build_charge_hold_optimizer,
+    build_daily_runtime_optimizer,
     build_surplus_appliance_optimizer,
 )
 
 KNOWN_OPTIMIZER_KINDS: frozenset[str] = frozenset(
-    {"export_price", "surplus_appliance", "charge_hold", "charge_from_grid"}
+    {
+        "export_price",
+        "surplus_appliance",
+        "charge_hold",
+        "charge_from_grid",
+        "daily_runtime",
+    }
 )
 
 if TYPE_CHECKING:
@@ -53,4 +60,9 @@ def build_optimizer(
         return build_charge_hold_optimizer(config)
     if config.kind == "charge_from_grid":
         return build_charge_from_grid_optimizer(config)
+    if config.kind == "daily_runtime":
+        return build_daily_runtime_optimizer(
+            config,
+            appliance_registry=appliance_registry,
+        )
     raise ValueError(f"Unsupported optimizer kind: {config.kind}")

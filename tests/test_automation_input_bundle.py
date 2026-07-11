@@ -305,6 +305,24 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
     debounce_mod.Debouncer = Debouncer
 
+    storage_helper_mod = sys.modules.get("homeassistant.helpers.storage")
+    if storage_helper_mod is None:
+        storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
+        sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
+
+    class _Store:
+        def __init__(self, *args, **kwargs) -> None:
+            self._data = None
+
+        async def async_load(self):
+            return self._data
+
+        async def async_save(self, data) -> None:
+            self._data = data
+
+    storage_helper_mod.Store = _Store
+    helpers_pkg.storage = storage_helper_mod
+
     event_mod = sys.modules.get("homeassistant.helpers.event")
     if event_mod is None:
         event_mod = types.ModuleType("homeassistant.helpers.event")
