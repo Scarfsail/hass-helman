@@ -306,6 +306,9 @@ class HelmanCoordinator:
         # In-memory rolling buffers (oldest first)
         self._power_history: dict[str, deque[float]] = {}
         self._source_ratio_sensors: dict[str, Any] = {}
+        # Map: source_power_sensor_id → ratio_sensor_entity_id (derived from the tree in
+        # _init_buffers, independent of when the sensor platform registers the ratio entities).
+        self._source_ratio_entity_ids: dict[str, str] = {}
         self._solar_forecast_sensors: list[Any] = []
         # Tick lifecycle
         self._unsub_tick: Callable[[], None] | None = None
@@ -3040,6 +3043,21 @@ class HelmanCoordinator:
                 ids.append(sensor_id)
         return ids
 
+    @staticmethod
+    def _collect_source_ratio_entity_ids(tree: dict) -> dict[str, str]:
+        """Return {source_power_sensor_id → ratio_sensor_entity_id} for top-level sources.
+
+        Derived from the tree so the tick can create and fill source-ratio history buffers
+        without waiting for the sensor platform to register the ratio sensor entity objects.
+        """
+        ids: dict[str, str] = {}
+        for node in tree.get("sources", []):
+            power_id = node.get("powerSensorId")
+            ratio_id = node.get("ratioSensorId")
+            if power_id and ratio_id:
+                ids[power_id] = ratio_id
+        return ids
+
     def _collect_source_value_types(self, tree: dict) -> dict[str, str]:
         """Return a mapping of source power_sensor_id → value_type."""
         types: dict[str, str] = {}
@@ -3095,9 +3113,17 @@ class HelmanCoordinator:
         }
         self._power_history[CONSUMPTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
         self._power_history[PRODUCTION_TOTAL_ENTITY_ID] = deque(maxlen=history_buckets)
-        # Add deques for source ratio sensors so their history is included in get_history()
-        for sensor in self._source_ratio_sensors.values():
-            self._power_history[sensor.entity_id] = deque(maxlen=history_buckets)
+        # Add deques for source ratio sensors so their history is included in get_history().
+        # Derive the ratio entity IDs from the tree (NOT from _source_ratio_sensors, which the
+        # sensor platform only populates via set_sensors AFTER async_setup has already built these
+        # buffers). Without this the ratio history is absent from get_history() and the card paints
+        # every past consumer bucket with its fallback colour instead of the source colours.
+        # Mark them virtual: their values are computed by _tick Step 3, so the Step 1 real-sensor
+        # read loop must not also append them (that would double-append per tick and desync them).
+        self._source_ratio_entity_ids = self._collect_source_ratio_entity_ids(tree)
+        for ratio_entity_id in self._source_ratio_entity_ids.values():
+            self._power_history[ratio_entity_id] = deque(maxlen=history_buckets)
+            self._virtual_sensor_ids.add(ratio_entity_id)
 
     def _start_tick(self) -> None:
         """Start the periodic tick using HA's time-interval tracker."""
@@ -3152,8 +3178,11 @@ class HelmanCoordinator:
         if self._production_total_sensor is not None:
             self._production_total_sensor.update_value(production)
 
-        # Step 3: Compute global source ratios and update ratio sensors
-        if self._source_ratio_sensors:
+        # Step 3: Compute global source ratios, record their history, and update ratio sensors.
+        # Driven by the tree-derived ratio entity IDs (not the sensor objects) so ratio history is
+        # recorded from the first tick, even before the sensor platform registers the ratio sensor
+        # entities. The sensor objects, when present, are used only to publish the displayed value.
+        if self._source_ratio_entity_ids:
             normalized = {
                 src: self._normalize_source_value(
                     self._power_history[src][-1] if self._power_history.get(src) else 0.0,
@@ -3163,11 +3192,13 @@ class HelmanCoordinator:
                 if src in self._power_history
             }
             total_source = sum(normalized.values())
-            for src_eid, sensor in self._source_ratio_sensors.items():
+            for src_eid, ratio_entity_id in self._source_ratio_entity_ids.items():
                 ratio_pct = (normalized.get(src_eid, 0.0) / total_source * 100.0) if total_source > 0 else 0.0
-                sensor.update_value(ratio_pct)
-                if sensor.entity_id in self._power_history:
-                    self._power_history[sensor.entity_id].append(ratio_pct)
+                if ratio_entity_id in self._power_history:
+                    self._power_history[ratio_entity_id].append(ratio_pct)
+                sensor = self._source_ratio_sensors.get(src_eid)
+                if sensor is not None:
+                    sensor.update_value(ratio_pct)
 
         # Step 4: Battery ETAs (separate sensors for charging and discharging)
         if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
@@ -3372,6 +3403,7 @@ class HelmanCoordinator:
         self._consumption_total_sensor = None
         self._production_total_sensor = None
         self._source_ratio_sensors = {}
+        self._source_ratio_entity_ids = {}
         self._solar_forecast_sensors = []
         self._async_add_entities = None
         self._unmeasured_sensor_factory = None
