@@ -45,24 +45,31 @@ def _install_import_stubs() -> None:
 
     util_pkg = _ensure("homeassistant.util")
     dt_mod = _ensure("homeassistant.util.dt")
-
-    def _as_local(value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value.replace(tzinfo=PRAGUE)
-        return value.astimezone(PRAGUE)
-
-    def _as_utc(value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-
-    dt_mod.as_local = _as_local
-    dt_mod.as_utc = _as_utc
+    if not hasattr(dt_mod, "as_local"):
+        dt_mod.as_local = lambda value: value
+    if not hasattr(dt_mod, "as_utc"):
+        dt_mod.as_utc = lambda value: value
     dt_mod.parse_datetime = datetime.fromisoformat
     util_pkg.dt = dt_mod
 
+    # A sibling automation test may have installed a fake recorder module; drop it
+    # so the real module (with the helper under test) is imported.
+    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
+
 
 _install_import_stubs()
+
+import homeassistant.util.dt as _dt_mod  # noqa: E402
+
+
+def _as_local(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=PRAGUE)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 from custom_components.helman.recorder_hourly_series import (  # noqa: E402
     _bucket_interval_hours_by_local_date,
@@ -70,6 +77,17 @@ from custom_components.helman.recorder_hourly_series import (  # noqa: E402
 
 
 class BucketIntervalHoursByLocalDateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Scope a UTC-converting dt to this test's runtime so DST is handled
+        # correctly (CPython returns naive wall-clock for same-tzinfo
+        # subtraction) without leaking into sibling tests' identity dt stubs.
+        self._saved = (_dt_mod.as_local, _dt_mod.as_utc)
+        _dt_mod.as_local = _as_local
+        _dt_mod.as_utc = _as_utc
+
+    def tearDown(self) -> None:
+        _dt_mod.as_local, _dt_mod.as_utc = self._saved
+
     def test_single_interval_within_one_day(self) -> None:
         start = datetime(2026, 7, 10, 8, 0, tzinfo=PRAGUE)
         end = datetime(2026, 7, 10, 14, 0, tzinfo=PRAGUE)
