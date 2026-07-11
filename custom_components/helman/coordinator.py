@@ -159,6 +159,16 @@ def _resolve_runtime_entity_and_states(
     return None, ()
 
 
+def _iter_local_dates(start: date, end: date) -> list[date]:
+    """Inclusive list of local calendar dates from ``start`` to ``end``."""
+    dates: list[date] = []
+    cursor = start
+    while cursor <= end:
+        dates.append(cursor)
+        cursor += timedelta(days=1)
+    return dates
+
+
 def _merge_grid_forecast_responses(
     *,
     grid_flow_response: dict[str, Any],
@@ -2728,36 +2738,43 @@ class HelmanCoordinator:
     ) -> dict[str, dict[date, float]]:
         """Resolve recorder runtime hours per appliance per local date (A2).
 
-        Only resolved when at least one ``daily_runtime`` optimizer is enabled;
-        otherwise the recorder is left untouched. The lookback window covers the
-        largest configured ``max_consecutive_skips`` (plus one day) so the
-        consecutive-skip guard can be evaluated, plus today-so-far for the
-        current-day budget.
+        Only resolved for appliances referenced by an enabled ``daily_runtime``
+        optimizer; every other appliance (and the recorder) is left untouched.
+        The lookback window covers the largest configured
+        ``max_consecutive_skips`` (plus one day) so the consecutive-skip guard
+        can be evaluated, plus today-so-far for the current-day budget.
+
+        Every local date in the lookback window is seeded to ``0.0`` before the
+        recorder data is merged in, so a day the appliance never ran is present
+        as an explicit zero rather than absent — the consecutive-skip guard
+        walks back day by day and must be able to see fully-idle days.
         """
-        lookback_days = self._resolve_runtime_history_lookback_days()
-        if lookback_days is None:
+        requirements = self._resolve_runtime_history_requirements()
+        if requirements is None:
             return {}
+        lookback_days, referenced_appliance_ids = requirements
 
         local_now = dt_util.as_local(reference_time)
         local_today_start = local_now.replace(
             hour=0, minute=0, second=0, microsecond=0
         )
         local_start = local_today_start - timedelta(days=lookback_days)
+        window_dates = _iter_local_dates(local_start.date(), local_now.date())
 
         runtime_by_appliance: dict[str, dict[date, float]] = {}
         for appliance in self._iter_automation_candidate_appliances():
+            if appliance.id not in referenced_appliance_ids:
+                continue
             entity_id, active_states = _resolve_runtime_entity_and_states(appliance)
             if entity_id is None:
                 continue
             try:
-                runtime_by_appliance[appliance.id] = (
-                    await query_active_hours_by_local_date(
-                        self._hass,
-                        entity_id=entity_id,
-                        active_states=active_states,
-                        local_start=local_start,
-                        local_end=local_now,
-                    )
+                queried = await query_active_hours_by_local_date(
+                    self._hass,
+                    entity_id=entity_id,
+                    active_states=active_states,
+                    local_start=local_start,
+                    local_end=local_now,
                 )
             except Exception:
                 _LOGGER.exception(
@@ -2765,26 +2782,42 @@ class HelmanCoordinator:
                     appliance.id,
                 )
                 runtime_by_appliance[appliance.id] = {}
+                continue
+            runtime_by_appliance[appliance.id] = {
+                **{local_date: 0.0 for local_date in window_dates},
+                **queried,
+            }
         return runtime_by_appliance
 
-    def _resolve_runtime_history_lookback_days(self) -> int | None:
+    def _resolve_runtime_history_requirements(
+        self,
+    ) -> tuple[int, set[str]] | None:
+        """Return ``(lookback_days, appliance_ids)`` for daily_runtime rules.
+
+        ``appliance_ids`` are the appliances referenced by an enabled
+        ``daily_runtime`` optimizer — the only appliances whose recorder history
+        needs resolving. Returns ``None`` when no such optimizer references a
+        valid appliance.
+        """
         automation_config = read_automation_config(self._active_config)
         if automation_config is None or not automation_config.enabled:
             return None
         max_consecutive_skips = 0
-        found_daily_runtime = False
+        appliance_ids: set[str] = set()
         for optimizer in automation_config.execution_optimizers:
             if optimizer.kind != "daily_runtime":
                 continue
-            found_daily_runtime = True
+            appliance_id = optimizer.params.get("appliance_id")
+            if isinstance(appliance_id, str) and appliance_id:
+                appliance_ids.add(appliance_id)
             skip = optimizer.params.get("skip")
             if isinstance(skip, Mapping):
                 raw = skip.get("max_consecutive_skips")
                 if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
                     max_consecutive_skips = max(max_consecutive_skips, raw)
-        if not found_daily_runtime:
+        if not appliance_ids:
             return None
-        return max_consecutive_skips + 1
+        return max_consecutive_skips + 1, appliance_ids
 
     def _iter_automation_candidate_appliances(
         self,

@@ -165,9 +165,17 @@ class ChargeHoldOptimizer:
         if window_end <= window_start:
             return set()
 
+        # Only this calendar day's own solar can refill the battery for this
+        # day's hold, so bound the surplus accounting at the local midnight after
+        # ``local_date`` — never spill tomorrow's forecast surplus into today.
+        day_end = datetime.combine(
+            local_date + timedelta(days=1), time.min, tzinfo=tzinfo
+        )
+
         release_slot = _resolve_release_slot(
             window_start=window_start,
             window_end=window_end,
+            day_end=day_end,
             needed_kwh=needed_kwh,
             margin_multiplier=margin_multiplier,
             surplus_by_bucket=surplus_by_bucket,
@@ -206,6 +214,7 @@ def _resolve_release_slot(
     *,
     window_start: datetime,
     window_end: datetime,
+    day_end: datetime,
     needed_kwh: float,
     margin_multiplier: float,
     surplus_by_bucket: list[tuple[datetime, float]],
@@ -217,12 +226,12 @@ def _resolve_release_slot(
         latest_safe_release = window_end
     else:
         threshold = needed_kwh * margin_multiplier
-        # surplus_after is monotonically non-increasing in t, so the latest
-        # candidate slot that still covers the threshold is the boundary.
+        # surplus in [t, day_end) is monotonically non-increasing in t, so the
+        # latest candidate slot that still covers the threshold is the boundary.
         latest_safe_release = None
         cursor = window_start
         while cursor <= window_end:
-            if _surplus_after(surplus_by_bucket, cursor) >= threshold:
+            if _surplus_between(surplus_by_bucket, cursor, day_end) >= threshold:
                 latest_safe_release = cursor
             cursor += _SLOT_DURATION
         if latest_safe_release is None:
@@ -237,15 +246,17 @@ def _resolve_release_slot(
     return release_slot
 
 
-def _surplus_after(
+def _surplus_between(
     surplus_by_bucket: list[tuple[datetime, float]],
     release_time: datetime,
+    day_end: datetime,
 ) -> float:
     release_utc = dt_util.as_utc(release_time)
+    day_end_utc = dt_util.as_utc(day_end)
     return sum(
         surplus
         for bucket_start, surplus in surplus_by_bucket
-        if dt_util.as_utc(bucket_start) >= release_utc
+        if release_utc <= dt_util.as_utc(bucket_start) < day_end_utc
     )
 
 

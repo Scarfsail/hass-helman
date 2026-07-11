@@ -116,6 +116,7 @@ def _make_snapshot(
     current_soc: float = 60.0,
     day_context: DayContext | None = None,
     battery_configured: bool = True,
+    surplus_series: list[dict[str, object]] | None = None,
 ) -> OptimizationSnapshot:
     battery_state = (
         types.SimpleNamespace(current_soc=current_soc, max_soc=100.0)
@@ -126,7 +127,10 @@ def _make_snapshot(
     return OptimizationSnapshot(
         schedule=ScheduleDocument() if schedule_document is None else schedule_document,
         adjusted_house_forecast={"status": "available", "series": []},
-        battery_forecast={"status": "available", "series": _surplus_series()},
+        battery_forecast={
+            "status": "available",
+            "series": _surplus_series() if surplus_series is None else surplus_series,
+        },
         grid_forecast={"status": "available", "series": []},
         context=OptimizationContext(
             now=REFERENCE_TIME,
@@ -227,6 +231,42 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         )
         result = build_charge_hold_optimizer(_make_config()).optimize(
             _make_snapshot(day_context=day_context, current_soc=10.0),
+            _make_config(),
+        )
+        self.assertEqual(_held_slot_ids(result), set())
+
+    def test_surplus_is_scoped_to_the_resolved_day(self) -> None:
+        # Today's own surplus (3 kWh at 10:00/10:30/11:00) is below the 4 kWh
+        # need, but tomorrow's forecast surplus is plentiful. Tomorrow's solar
+        # cannot refill today's battery, so it must not count toward the release
+        # decision — the day has no room to hold and nothing is held.
+        today_surplus = [
+            {
+                "timestamp": datetime(2026, 7, 10, hour, minute, tzinfo=TZ).isoformat(
+                    timespec="seconds"
+                ),
+                "solarKwh": 1.0,
+                "baselineHouseKwh": 0.0,
+                "durationHours": 0.5,
+            }
+            for hour, minute in ((10, 0), (10, 30), (11, 0))
+        ]
+        tomorrow_surplus = [
+            {
+                "timestamp": (
+                    datetime(2026, 7, 11, 10, 0, tzinfo=TZ) + timedelta(minutes=30 * i)
+                ).isoformat(timespec="seconds"),
+                "solarKwh": 1.0,
+                "baselineHouseKwh": 0.0,
+                "durationHours": 0.5,
+            }
+            for i in range(8)
+        ]
+        result = build_charge_hold_optimizer(_make_config()).optimize(
+            _make_snapshot(
+                day_context=_day_context(),
+                surplus_series=today_surplus + tomorrow_surplus,
+            ),
             _make_config(),
         )
         self.assertEqual(_held_slot_ids(result), set())
