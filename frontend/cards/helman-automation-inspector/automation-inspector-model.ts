@@ -99,6 +99,36 @@ export class AutomationInspectorModel {
         return this.trace.steps;
     }
 
+    /**
+     * Find the reason a persisted automation action was written, for the
+     * scheduling card's "why" popover. Scans steps in order so the last step
+     * that wrote (slotId, domain) — the one that produced the final action —
+     * wins, mirroring how later optimizers override earlier writes.
+     */
+    findActionReason(
+        slotId: string,
+        domain: string,
+        localize: LocalizeFunction,
+    ): FormattedReason | null {
+        const slotIndex = this.slotIds.indexOf(slotId);
+        if (slotIndex < 0) return null;
+        let found: FormattedReason | null = null;
+        for (let stepIndex = 0; stepIndex < this._steps.length; stepIndex++) {
+            const entry = this._steps[stepIndex];
+            const write = entry.writeBySlot.get(slotId);
+            if (!write || write.domain !== domain) continue;
+            const decision = entry.decisionBySlot.get(slotId);
+            const code = decision?.reason?.code ?? "unexplained";
+            found = this._formatReason(
+                code,
+                decision?.reason?.params ?? {},
+                slotIndex,
+                localize,
+            );
+        }
+        return found;
+    }
+
     railValue(rail: (number | null)[] | undefined, slotIndex: number): number | null {
         if (!rail || slotIndex < 0 || slotIndex >= rail.length) return null;
         return rail[slotIndex] ?? null;

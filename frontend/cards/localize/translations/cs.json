@@ -534,7 +534,8 @@
           "title": "Nezvažováno",
           "detail": "Tento slot byl mimo záběr tohoto optimalizátoru."
         }
-      }
+      },
+      "why": "Proč?"
     }
   }
 }

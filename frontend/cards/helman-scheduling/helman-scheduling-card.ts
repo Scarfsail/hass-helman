@@ -3,7 +3,8 @@ import { customElement, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
-import type { ForecastPayload, SchedulePayload } from "../helman-api";
+import type { AutomationRunPayload, ForecastPayload, SchedulePayload } from "../helman-api";
+import { AutomationInspectorModel } from "../helman-automation-inspector/automation-inspector-model";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
@@ -159,6 +160,9 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     @state() private _expandedApplianceActions = false;
     @state() private _nowMs = Date.now();
     @state() private _invalidScheduleAuthorship = false;
+    @state() private _automationModel: AutomationInspectorModel | null = null;
+
+    private _automationRequested = false;
 
     public set hass(value: HomeAssistant) {
         const previous = this._hass;
@@ -174,6 +178,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         if (this.isConnected) {
             this._syncScheduleOwner();
             void this._loadAppliances();
+            void this._loadAutomationTrace();
         }
 
         this.requestUpdate("hass", previous);
@@ -197,6 +202,25 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         super.connectedCallback();
         this._syncScheduleOwner();
         void this._loadAppliances();
+        void this._loadAutomationTrace();
+    }
+
+    private async _loadAutomationTrace(): Promise<void> {
+        const hass = this._hass;
+        if (!hass || this._automationRequested) return;
+        this._automationRequested = true;
+        try {
+            const payload = await hass.callWS<AutomationRunPayload>({
+                type: "helman/get_last_automation_run",
+            });
+            this._automationModel = payload
+                ? AutomationInspectorModel.fromPayload(payload)
+                : null;
+        } catch {
+            // The "why" popover is a best-effort enhancement; a failed load just
+            // means no badges appear.
+            this._automationModel = null;
+        }
     }
 
     disconnectedCallback(): void {
@@ -384,6 +408,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                                 .busy=${this._ownerSnapshot.writing || this._ownerSnapshot.togglingExecution}
                                 .executionEnabled=${this._ownerSnapshot.schedule?.executionEnabled ?? false}
                                 .expandedApplianceActions=${this._expandedApplianceActions}
+                                .automationModel=${this._automationModel}
                             ></scheduling-slot-table>
                         `}
                 </div>
@@ -642,6 +667,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         this._expandedHourKeys = [];
         this._expandedApplianceActions = false;
         this._appliancesRequested = false;
+        this._automationRequested = false;
+        this._automationModel = null;
         this._nowMs = Date.now();
         this._clearTimelineBoundaryTick();
     }

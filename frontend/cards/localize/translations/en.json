@@ -191,7 +191,8 @@
           "title": "Not considered",
           "detail": "This slot was outside this optimizer's scope."
         }
-      }
+      },
+      "why": "Why?"
     }
   }
 }

@@ -1,7 +1,11 @@
 import { LitElement, css, html, type PropertyValues } from "lit-element";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../localize/localize";
+import type {
+    AutomationInspectorModel,
+    FormattedReason,
+} from "../../helman-automation-inspector/automation-inspector-model";
 import "./scheduling-action-chip";
 import "./scheduling-appliance-chip";
 import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
@@ -99,6 +103,57 @@ export class SchedulingSlotTable extends LitElement {
             :host {
                 --schedule-table-disclosure-width: 16px;
                 --schedule-table-metric-column-width: 82px;
+            }
+
+            .why-badge {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 14px;
+                height: 14px;
+                margin-left: 2px;
+                border-radius: 50%;
+                font-size: 0.6rem;
+                font-weight: 700;
+                cursor: pointer;
+                color: var(--primary-color);
+                background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+                flex-shrink: 0;
+            }
+            .why-backdrop {
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.2);
+                z-index: 20;
+            }
+            .why-popover {
+                position: fixed;
+                z-index: 21;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: var(--card-background-color, #fff);
+                border: 1px solid var(--divider-color, #e0e0e0);
+                border-radius: 10px;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+                padding: 12px 14px;
+                min-width: 240px;
+                max-width: 92vw;
+            }
+            .why-head {
+                display: flex;
+                justify-content: space-between;
+                gap: 12px;
+                align-items: center;
+            }
+            .why-title { font-weight: 700; }
+            .why-close { background: none; border: none; cursor: pointer; font-size: 14px; }
+            .why-detail { margin-top: 8px; }
+            .why-code {
+                margin-top: 8px;
+                color: var(--disabled-text-color, #999);
+                font-size: 11px;
+                font-family: monospace;
             }
 
             .table-shell {
@@ -1153,6 +1208,9 @@ export class SchedulingSlotTable extends LitElement {
     @property({ type: Boolean }) public busy = false;
     @property({ type: Boolean }) public executionEnabled = false;
     @property({ type: Boolean }) public expandedApplianceActions = false;
+    @property({ attribute: false }) public automationModel: AutomationInspectorModel | null = null;
+
+    @state() private _why: FormattedReason | null = null;
 
     protected willUpdate(changedProperties: PropertyValues<this>): void {
         super.willUpdate(changedProperties);
@@ -1179,6 +1237,7 @@ export class SchedulingSlotTable extends LitElement {
                     ${this.tableModel.sections.map((section) => this._renderSection(section))}
                 </table>
             </div>
+            ${this._renderWhyPopover()}
         `;
     }
 
@@ -1613,6 +1672,7 @@ export class SchedulingSlotTable extends LitElement {
                     size="compact"
                     ?iconOnly=${true}
                 ></scheduling-action-chip>
+                ${this._renderWhyBadge(item.authorship, item.firstSlotId, "inverter")}
             `;
         }
 
@@ -1641,6 +1701,53 @@ export class SchedulingSlotTable extends LitElement {
                 size="compact"
                 ?iconOnly=${true}
             ></scheduling-appliance-chip>
+            ${this._renderWhyBadge(item.authorship, item.firstSlotId, `appliance:${item.appliance.id}`)}
+        `;
+    }
+
+    private _renderWhyBadge(
+        authorship: ScheduleActionAuthorshipSummary,
+        slotId: string,
+        domain: string,
+    ) {
+        if (!this.automationModel || authorship.counts.automation <= 0) {
+            return nothing;
+        }
+        const reason = this.automationModel.findActionReason(slotId, domain, this.localize);
+        if (!reason) return nothing;
+        return html`
+            <span
+                class="why-badge"
+                role="button"
+                tabindex="0"
+                title=${this.localize("automation.inspector.why")}
+                @click=${(e: Event) => this._openWhy(e, reason)}
+                @keydown=${(e: KeyboardEvent) => {
+                    if (e.key === "Enter" || e.key === " ") this._openWhy(e, reason);
+                }}
+            >?</span>
+        `;
+    }
+
+    private _openWhy(event: Event, reason: FormattedReason) {
+        event.stopPropagation();
+        event.preventDefault();
+        this._why = reason;
+    }
+
+    private _renderWhyPopover() {
+        if (!this._why) return nothing;
+        const reason = this._why;
+        return html`
+            <div class="why-backdrop" @click=${() => (this._why = null)}></div>
+            <div class="why-popover" @click=${(e: Event) => e.stopPropagation()}>
+                <div class="why-head">
+                    <span class="why-title">${reason.title}</span>
+                    <button class="why-close" @click=${() => (this._why = null)}>✕</button>
+                </div>
+                <div class="why-detail">${reason.detail || reason.code}</div>
+                <div class="why-code">${reason.code}</div>
+            </div>
         `;
     }
 
