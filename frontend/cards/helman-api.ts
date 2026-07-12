@@ -556,6 +556,8 @@ export interface TraceNoteDTO {
 export interface TraceStepRailsDTO {
     availableSurplusKwh?: (number | null)[];
     batterySocPct?: (number | null)[];
+    importedFromGridKwh?: (number | null)[];
+    exportedToGridKwh?: (number | null)[];
 }
 
 export interface TraceStepDTO {

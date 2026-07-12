@@ -9,7 +9,9 @@ import type {
 } from "../helman-api";
 import {
     AutomationInspectorModel,
+    RAIL_METRICS,
     type CellView,
+    type RailDelta,
 } from "./automation-inspector-model";
 
 interface SelectedCell {
@@ -26,6 +28,15 @@ const STATE_GLYPH: Record<string, string> = {
     unexplained: "?",
 };
 
+// Corner status accent shown alongside delta chips — the neutral "·" states are
+// blanked so they don't add noise to a cell that already shows its effect.
+const CORNER_GLYPH: Record<string, string> = {
+    applied: "●",
+    blocked: "🔒",
+    rejected: "▢",
+    unexplained: "?",
+};
+
 export class HelmanAutomationInspector extends LitElement {
     @property({ attribute: false }) hass?: HomeAssistant;
 
@@ -34,7 +45,7 @@ export class HelmanAutomationInspector extends LitElement {
     @state() private _payload: AutomationRunPayload | null = null;
     @state() private _model: AutomationInspectorModel | null = null;
     @state() private _selected: SelectedCell | null = null;
-    @state() private _onlyActivity = false;
+    @state() private _onlyActivity = true;
     @state() private _running = false;
 
     private _activeRequestId = 0;
@@ -160,6 +171,7 @@ export class HelmanAutomationInspector extends LitElement {
         }
 
         return html`
+            ${this._renderLegend()}
             <div class="matrix-scroll">
                 <table class="matrix">
                     <thead>
@@ -184,6 +196,24 @@ export class HelmanAutomationInspector extends LitElement {
         `;
     }
 
+    private _renderLegend() {
+        const t = this._localize;
+        return html`
+            <div class="legend">
+                <span class="legend-label">${t("automation.inspector.effects")}:</span>
+                ${RAIL_METRICS.map(
+                    (m) => html`
+                        <span class="legend-item metric-${m.id}">
+                            <span class="legend-swatch"></span>
+                            ${t(`automation.inspector.metric.${m.id}`)}
+                            <span class="legend-unit">${m.unit}</span>
+                        </span>
+                    `,
+                )}
+            </div>
+        `;
+    }
+
     private _renderRow(model: AutomationInspectorModel, slotIndex: number, steps: TraceStepDTO[]) {
         const importPrice = model.railValue(model.trace.staticRails.importPrice, slotIndex);
         const exportPrice = model.railValue(model.trace.staticRails.exportPrice, slotIndex);
@@ -203,19 +233,46 @@ export class HelmanAutomationInspector extends LitElement {
 
     private _renderCell(model: AutomationInspectorModel, stepIndex: number, slotIndex: number) {
         const cell = model.resolveCell(stepIndex, slotIndex, this._localize);
+        const deltas = model.cellDeltas(stepIndex, slotIndex);
         const selected =
             this._selected?.stepIndex === stepIndex && this._selected?.slotIndex === slotIndex;
         const highlighted =
             !selected && this._isSiblingOfSelected(model, stepIndex, slotIndex);
+        // The dominant changed metric tints the cell's inbound edge, giving the
+        // sense of a value flowing in from the previous column.
+        const edge = deltas.length ? ` metric-edge-${deltas[0].metric.id}` : "";
         return html`
             <td
-                class="cell cell-${cell.state} ${selected ? "selected" : ""} ${highlighted ? "sibling" : ""}"
+                class="cell cell-${cell.state}${edge} ${selected ? "selected" : ""} ${highlighted ? "sibling" : ""}"
                 title=${cell.reason.title}
                 @click=${() => this._selectCell(stepIndex, slotIndex)}
             >
-                <span class="glyph">${STATE_GLYPH[cell.state] ?? "·"}</span>
+                ${deltas.length
+                    ? html`<div class="deltas">
+                          ${deltas.map((d) => this._renderDelta(d))}
+                          <span class="glyph corner status-${cell.state}">${CORNER_GLYPH[cell.state] ?? ""}</span>
+                      </div>`
+                    : html`<span class="glyph">${STATE_GLYPH[cell.state] ?? "·"}</span>`}
             </td>
         `;
+    }
+
+    private _renderDelta(delta: RailDelta) {
+        const { metric, before, after } = delta;
+        return html`
+            <span class="chip metric-${metric.id}" title=${this._deltaTitle(delta)}>
+                <span class="v">${fmtMetric(before, metric.precision)}</span>
+                <span class="arrow">→</span>
+                <span class="v">${fmtMetric(after, metric.precision)}</span>
+            </span>
+        `;
+    }
+
+    private _deltaTitle(delta: RailDelta): string {
+        const t = this._localize;
+        const { metric, before, after } = delta;
+        const name = t(`automation.inspector.metric.${metric.id}`);
+        return `${name}: ${fmtMetric(before, metric.precision)} → ${fmtMetric(after, metric.precision)} ${metric.unit}`;
     }
 
     private _isSiblingOfSelected(
@@ -239,8 +296,7 @@ export class HelmanAutomationInspector extends LitElement {
         const model = this._model;
         const step = model.steps[stepIndex];
         const cell = model.resolveCell(stepIndex, slotIndex, this._localize);
-        const surplus = model.railValue(step.railsIn.availableSurplusKwh, slotIndex);
-        const soc = model.railValue(step.railsIn.batterySocPct, slotIndex);
+        const deltas = model.cellDeltas(stepIndex, slotIndex);
         const importPrice = model.railValue(model.trace.staticRails.importPrice, slotIndex);
         const exportPrice = model.railValue(model.trace.staticRails.exportPrice, slotIndex);
         return html`
@@ -255,9 +311,24 @@ export class HelmanAutomationInspector extends LitElement {
                 </div>
                 <div class="popover-body">
                     <div class="reason-detail">${cell.reason.detail || cell.reason.code}</div>
+                    ${deltas.length
+                        ? html`<div class="effects">
+                              <div class="effects-head">${t("automation.inspector.effects")}</div>
+                              ${deltas.map(
+                                  (d) => html`<div class="effect-row metric-${d.metric.id}">
+                                      <span class="effect-swatch"></span>
+                                      <span class="effect-name">${t(`automation.inspector.metric.${d.metric.id}`)}</span>
+                                      <span class="effect-val">
+                                          ${fmtMetric(d.before, d.metric.precision)}
+                                          <span class="arrow">→</span>
+                                          ${fmtMetric(d.after, d.metric.precision)}
+                                          <span class="effect-unit">${d.metric.unit}</span>
+                                      </span>
+                                  </div>`,
+                              )}
+                          </div>`
+                        : html`<div class="effects-none">${t("automation.inspector.no_effect")}</div>`}
                     <div class="pins">
-                        <div class="pin"><span>${t("automation.inspector.rail.surplus")}</span><b>${fmt(surplus)}</b></div>
-                        <div class="pin"><span>${t("automation.inspector.rail.soc")}</span><b>${fmt(soc)}</b></div>
                         <div class="pin"><span>${t("automation.inspector.rail.import")}</span><b>${fmt(importPrice)}</b></div>
                         <div class="pin"><span>${t("automation.inspector.rail.export")}</span><b>${fmt(exportPrice)}</b></div>
                     </div>
@@ -294,12 +365,15 @@ export class HelmanAutomationInspector extends LitElement {
         return all.filter((slotIndex) =>
             model.steps.some((_step, stepIndex) => {
                 const cell = model.resolveCell(stepIndex, slotIndex, this._localize);
-                return (
+                if (
                     cell.state === "applied" ||
                     cell.state === "blocked" ||
                     cell.state === "rejected" ||
                     cell.state === "unexplained"
-                );
+                ) {
+                    return true;
+                }
+                return model.cellDeltas(stepIndex, slotIndex).length > 0;
             }),
         );
     }
@@ -330,7 +404,19 @@ export class HelmanAutomationInspector extends LitElement {
     }
 
     static styles = css`
-        :host { display: block; font-size: 13px; }
+        :host {
+            display: block; font-size: 13px;
+            /* Canonical metric palette (falls back when the app-level tokens
+               from the other cards are not in scope). */
+            --m-surplus: var(--simple-card-source-solar, #facc15);
+            --m-soc: var(--simple-card-source-battery, #22c55e);
+            --m-import: var(--forecast-grid-import, #2563eb);
+            --m-export: var(--forecast-grid-export, #7dd3fc);
+        }
+        .metric-surplus { --m: var(--m-surplus); }
+        .metric-soc { --m: var(--m-soc); }
+        .metric-import { --m: var(--m-import); }
+        .metric-export { --m: var(--m-export); }
         .msg { padding: 16px; color: var(--secondary-text-color); }
         .msg.error { color: var(--error-color); }
         .header {
@@ -369,8 +455,40 @@ export class HelmanAutomationInspector extends LitElement {
         .classification { color: var(--secondary-text-color); font-weight: 400; }
         .now-row { background: color-mix(in srgb, var(--primary-color) 8%, transparent); }
         .now-marker { color: var(--primary-color); margin-right: 2px; }
-        .cell { cursor: pointer; }
+        .legend {
+            display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center;
+            margin: 2px 0 8px; font-size: 11px; color: var(--secondary-text-color);
+        }
+        .legend-label { font-weight: 600; }
+        .legend-item { display: inline-flex; gap: 4px; align-items: center; }
+        .legend-swatch {
+            width: 9px; height: 9px; border-radius: 2px; background: var(--m, #888);
+        }
+        .legend-unit { color: var(--disabled-text-color, #999); }
+        .cell { cursor: pointer; padding: 2px 4px; }
         .cell .glyph { display: inline-block; min-width: 1em; }
+        .deltas {
+            display: flex; flex-direction: column; gap: 1px;
+            align-items: stretch; position: relative;
+        }
+        .chip {
+            display: inline-flex; gap: 3px; align-items: baseline;
+            justify-content: flex-end;
+            padding-left: 4px; border-left: 2px solid var(--m, #888);
+            color: var(--m, inherit); font-variant-numeric: tabular-nums;
+            font-size: 11px; line-height: 1.35; white-space: nowrap;
+        }
+        .chip .arrow { color: var(--secondary-text-color); opacity: 0.7; }
+        .chip .v:last-child { font-weight: 700; }
+        .glyph.corner {
+            position: absolute; top: -2px; right: -2px; font-size: 9px;
+            min-width: 0; opacity: 0.85; pointer-events: none;
+        }
+        /* Inbound edge tint — the value "arriving" from the previous column. */
+        .cell.metric-edge-surplus { box-shadow: inset 3px 0 0 -1px var(--m-surplus); }
+        .cell.metric-edge-soc { box-shadow: inset 3px 0 0 -1px var(--m-soc); }
+        .cell.metric-edge-import { box-shadow: inset 3px 0 0 -1px var(--m-import); }
+        .cell.metric-edge-export { box-shadow: inset 3px 0 0 -1px var(--m-export); }
         .cell-applied { color: var(--success-color, #16a34a); font-weight: 700; }
         .cell-blocked { color: var(--warning-color, #d97706); }
         .cell-rejected { color: var(--secondary-text-color); }
@@ -400,6 +518,21 @@ export class HelmanAutomationInspector extends LitElement {
         .popover-sub { color: var(--secondary-text-color); font-size: 12px; }
         .close { background: none; border: none; cursor: pointer; font-size: 14px; }
         .reason-detail { margin: 8px 0; }
+        .effects { margin: 8px 0; }
+        .effects-head {
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.04em; color: var(--secondary-text-color); margin-bottom: 4px;
+        }
+        .effects-none { margin: 8px 0; color: var(--secondary-text-color); font-size: 12px; }
+        .effect-row {
+            display: grid; grid-template-columns: auto 1fr auto; gap: 8px;
+            align-items: center; padding: 2px 0;
+        }
+        .effect-swatch { width: 9px; height: 9px; border-radius: 2px; background: var(--m, #888); }
+        .effect-name { color: var(--primary-text-color); }
+        .effect-val { font-variant-numeric: tabular-nums; color: var(--m, inherit); font-weight: 600; }
+        .effect-val .arrow { color: var(--secondary-text-color); opacity: 0.7; font-weight: 400; }
+        .effect-unit { color: var(--disabled-text-color, #999); font-weight: 400; margin-left: 2px; }
         .pins { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 8px 0; }
         .pin { display: flex; justify-content: space-between; }
         .pin span { color: var(--secondary-text-color); }
@@ -412,6 +545,11 @@ export class HelmanAutomationInspector extends LitElement {
 function fmt(value: number | null): string {
     if (value === null || value === undefined) return "—";
     return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function fmtMetric(value: number | null, precision: number): string {
+    if (value === null || value === undefined) return "—";
+    return value.toFixed(precision);
 }
 
 function fmtAction(action: Record<string, unknown> | null): string {

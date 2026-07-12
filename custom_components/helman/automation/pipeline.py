@@ -698,20 +698,30 @@ def _capture_step_rails(
     snapshot: OptimizationSnapshot,
     slot_ids: tuple[str, ...],
 ) -> dict[str, list[float | None]]:
-    """Step-sensitive rails: redirectable surplus + projected SoC trajectory."""
+    """Step-sensitive rails: the system parameters an optimizer can move.
+
+    Captured before each step and after the last one, so the frontend can show
+    every decision's effect as a before->after delta (this step's rail vs the
+    next step's). Surplus is the redirectable solar; SoC is the projected
+    trajectory; import/export energy are the effective grid flows after the
+    battery schedule the step just changed.
+    """
     surplus = aggregate_series_to_slots(
         snapshot.grid_forecast.get("series"),
         slot_ids,
         sum_fields=("availableSurplusKwh",),
     )
-    soc = aggregate_series_to_slots(
+    battery = aggregate_series_to_slots(
         snapshot.battery_forecast.get("series"),
         slot_ids,
+        sum_fields=("importedFromGridKwh", "exportedToGridKwh"),
         last_fields=("socPct",),
     )
     return {
         "availableSurplusKwh": surplus["availableSurplusKwh"],
-        "batterySocPct": soc["socPct"],
+        "batterySocPct": battery["socPct"],
+        "importedFromGridKwh": battery["importedFromGridKwh"],
+        "exportedToGridKwh": battery["exportedToGridKwh"],
     }
 
 

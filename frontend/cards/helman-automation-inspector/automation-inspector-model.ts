@@ -4,6 +4,7 @@ import type {
     AutomationTraceDTO,
     TraceDecisionDTO,
     TraceStepDTO,
+    TraceStepRailsDTO,
     TraceWriteDTO,
 } from "../helman-api";
 
@@ -36,6 +37,47 @@ export interface CellView {
     /** Present when this cell corresponds to a committed write. */
     write?: TraceWriteDTO;
 }
+
+/**
+ * A mutable system parameter an optimizer can move. The pipeline captures each
+ * of these before every step (and after the last), so a cell can show the
+ * decision's effect as a before->after delta. `id` keys both the localized
+ * label and the color token; `key` is the rail field on the DTO.
+ */
+export interface RailMetricDef {
+    id: "surplus" | "soc" | "import" | "export";
+    key: "availableSurplusKwh" | "batterySocPct" | "importedFromGridKwh" | "exportedToGridKwh";
+    unit: string;
+    precision: number;
+    /** Smallest |after-before| worth rendering — filters float noise. */
+    epsilon: number;
+}
+
+export const RAIL_METRICS: readonly RailMetricDef[] = [
+    { id: "surplus", key: "availableSurplusKwh", unit: "kWh", precision: 2, epsilon: 0.05 },
+    { id: "soc", key: "batterySocPct", unit: "%", precision: 0, epsilon: 0.5 },
+    { id: "import", key: "importedFromGridKwh", unit: "kWh", precision: 2, epsilon: 0.05 },
+    { id: "export", key: "exportedToGridKwh", unit: "kWh", precision: 2, epsilon: 0.05 },
+];
+
+export interface RailDelta {
+    metric: RailMetricDef;
+    before: number | null;
+    after: number | null;
+}
+
+/** The scheduling card's per-action explanation: why + this run's impact. */
+export interface ActionExplanation {
+    reason: FormattedReason | null;
+    /** Rails this run moved for the action; empty when it was left unchanged. */
+    deltas: RailDelta[];
+    /** How the reason was attributed — a diff-write is exact, a decision is a
+     * best-effort match for an action left unchanged this run. */
+    attribution: "write" | "decision";
+}
+
+/** Optimizer kinds that write the inverter action (vs. an appliance action). */
+const INVERTER_KINDS = new Set(["charge_hold", "charge_from_grid", "export_price"]);
 
 const KNOWN_REASON_CODES = new Set([
     "price_below_threshold",
@@ -117,28 +159,109 @@ export class AutomationInspectorModel {
         domain: string,
         localize: LocalizeFunction,
     ): FormattedReason | null {
+        return this.explainAction(slotId, domain, localize)?.reason ?? null;
+    }
+
+    /**
+     * Explain a persisted automation action for the scheduling card: the reason
+     * plus the system impact this run had. Attribution prefers the step that
+     * actually wrote (slotId, domain) — exact, and carrying the run's rail
+     * deltas. When the action was left unchanged this run (no diff-write, common
+     * for idempotent slots), an inverter action falls back to the last
+     * inverter-kind step that emitted an ``applied`` decision for the slot, so
+     * the row still explains *why the schedule looks this way* — with empty
+     * deltas, since nothing moved this run. Appliance domains have no reliable
+     * write-free attribution (a decision does not name its appliance), so they
+     * return null and the card shows a generic "set by automation".
+     */
+    explainAction(
+        slotId: string,
+        domain: string,
+        localize: LocalizeFunction,
+    ): ActionExplanation | null {
         const slotIndex = this._slotIndex(slotId);
         if (slotIndex < 0) return null;
-        let found: FormattedReason | null = null;
+
+        let owningStep = -1;
         for (let stepIndex = 0; stepIndex < this._steps.length; stepIndex++) {
-            const entry = this._steps[stepIndex];
-            const writes = entry.writesBySlot.get(slotId);
-            if (!writes || !writes.some((w) => w.domain === domain)) continue;
-            const decision = entry.decisionBySlot.get(slotId);
-            const code = decision?.reason?.code ?? "unexplained";
-            found = this._formatReason(
-                code,
-                decision?.reason?.params ?? {},
-                slotIndex,
-                localize,
-            );
+            const writes = this._steps[stepIndex].writesBySlot.get(slotId);
+            if (writes && writes.some((w) => w.domain === domain)) {
+                owningStep = stepIndex;
+            }
         }
-        return found;
+        if (owningStep >= 0) {
+            return {
+                reason: this._reasonForStepSlot(owningStep, slotId, slotIndex, localize),
+                deltas: this.cellDeltas(owningStep, slotIndex),
+                attribution: "write",
+            };
+        }
+
+        if (domain === "inverter") {
+            for (let stepIndex = this._steps.length - 1; stepIndex >= 0; stepIndex--) {
+                const entry = this._steps[stepIndex];
+                if (!INVERTER_KINDS.has(entry.step.kind)) continue;
+                const decision = entry.decisionBySlot.get(slotId);
+                if (!decision || decision.outcome !== "applied") continue;
+                return {
+                    reason: this._reasonForStepSlot(stepIndex, slotId, slotIndex, localize),
+                    deltas: this.cellDeltas(stepIndex, slotIndex),
+                    attribution: "decision",
+                };
+            }
+        }
+        return null;
+    }
+
+    private _reasonForStepSlot(
+        stepIndex: number,
+        slotId: string,
+        slotIndex: number,
+        localize: LocalizeFunction,
+    ): FormattedReason {
+        const decision = this._steps[stepIndex].decisionBySlot.get(slotId);
+        return this._formatReason(
+            decision?.reason?.code ?? "unexplained",
+            decision?.reason?.params ?? {},
+            slotIndex,
+            localize,
+        );
     }
 
     railValue(rail: (number | null)[] | undefined, slotIndex: number): number | null {
         if (!rail || slotIndex < 0 || slotIndex >= rail.length) return null;
         return rail[slotIndex] ?? null;
+    }
+
+    /**
+     * The mutable rails as they stood *after* step ``stepIndex`` ran — i.e. what
+     * the next step received, or the final snapshot for the last step. Pairing
+     * this with the step's own ``railsIn`` gives the decision's before/after.
+     */
+    railsAfterStep(stepIndex: number): TraceStepRailsDTO {
+        const next = this.trace.steps[stepIndex + 1];
+        return next ? next.railsIn : this.trace.railsFinal;
+    }
+
+    /**
+     * Per-slot before->after for every parameter this step moved by more than
+     * its epsilon. Empty when the step left the slot's rails untouched. A rail
+     * can move on a slot the step never wrote (e.g. charging earlier drains a
+     * later slot's surplus) — that ripple is a real effect, so it's included.
+     */
+    cellDeltas(stepIndex: number, slotIndex: number): RailDelta[] {
+        const before = this.trace.steps[stepIndex]?.railsIn;
+        if (!before) return [];
+        const after = this.railsAfterStep(stepIndex);
+        const deltas: RailDelta[] = [];
+        for (const metric of RAIL_METRICS) {
+            const b = this.railValue(before[metric.key], slotIndex);
+            const a = this.railValue(after[metric.key], slotIndex);
+            if (b === null && a === null) continue;
+            if (Math.abs((a ?? 0) - (b ?? 0)) < metric.epsilon) continue;
+            deltas.push({ metric, before: b, after: a });
+        }
+        return deltas;
     }
 
     private _indexStep(step: TraceStepDTO): StepIndexEntry {

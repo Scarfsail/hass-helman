@@ -4,7 +4,8 @@ import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../localize/localize";
 import type {
     AutomationInspectorModel,
-    FormattedReason,
+    ActionExplanation,
+    RailDelta,
 } from "../../helman-automation-inspector/automation-inspector-model";
 import "./scheduling-action-chip";
 import "./scheduling-appliance-chip";
@@ -30,6 +31,8 @@ import {
     type ScheduleHourToggleDetail,
     type ScheduleTableActionCellModel,
     type ScheduleTableActionItemModel,
+    type ScheduleTableInverterActionItemModel,
+    type ScheduleTableApplianceActionItemModel,
     type ScheduleTableColumnKey,
     type ScheduleTableDetailRowModel,
     type ScheduleTableHourRowModel,
@@ -46,6 +49,22 @@ import type {
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 
 const ZERO_KWH_DISPLAY_THRESHOLD = GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KWH;
+
+/** One action's line in a row's "why" popover. */
+interface WhyActionEntry {
+    /** Human label, e.g. "Boiler · Charge" or "Hold charging". */
+    label: string;
+    hasAutomation: boolean;
+    hasUser: boolean;
+    /** Automation reason + this-run impact; null when not attributable. */
+    explanation: ActionExplanation | null;
+}
+
+/** The popover shown from a row's "why" button — every action in that row. */
+interface WhyRowExplanation {
+    title: string;
+    entries: WhyActionEntry[];
+}
 
 function _formatSolarGaugeValue(wh: number): string {
     const kwh = wh / 1000;
@@ -85,6 +104,12 @@ function _formatVisiblePriceValue(value: number): string {
     return value.toFixed(1);
 }
 
+/** Fixed-precision value for a "why" impact chip; em dash when unavailable. */
+function fmtWhyMetric(value: number | null, precision: number): string {
+    if (value === null || value === undefined) return "—";
+    return value.toFixed(precision);
+}
+
 function _getCenterOriginDirection(value: number): "negative" | "positive" | null {
     if (value < 0) {
         return "negative";
@@ -103,6 +128,22 @@ export class SchedulingSlotTable extends LitElement {
             :host {
                 --schedule-table-disclosure-width: 16px;
                 --schedule-table-metric-column-width: 82px;
+                /* canonical metric palette, shared with the automation inspector */
+                --m-surplus: var(--simple-card-source-solar, #facc15);
+                --m-soc: var(--simple-card-source-battery, #22c55e);
+                --m-import: var(--forecast-grid-import, #2563eb);
+                --m-export: var(--forecast-grid-export, #7dd3fc);
+            }
+            .metric-surplus { --m: var(--m-surplus); }
+            .metric-soc { --m: var(--m-soc); }
+            .metric-import { --m: var(--m-import); }
+            .metric-export { --m: var(--m-export); }
+
+            .action-cell-inner {
+                display: inline-flex;
+                align-items: center;
+                gap: 2px;
+                min-width: 0;
             }
 
             .why-badge {
@@ -148,7 +189,84 @@ export class SchedulingSlotTable extends LitElement {
             }
             .why-title { font-weight: 700; }
             .why-close { background: none; border: none; cursor: pointer; font-size: 14px; }
-            .why-detail { margin-top: 8px; }
+            .why-entries {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                margin-top: 10px;
+            }
+            .why-entry:not(:first-child) {
+                border-top: 1px solid var(--divider-color, #e0e0e0);
+                padding-top: 12px;
+            }
+            .why-entry-head {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                gap: 10px;
+            }
+            .why-entry-label { font-weight: 600; }
+            .why-tag {
+                font-size: 10px;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                padding: 1px 6px;
+                border-radius: 999px;
+                white-space: nowrap;
+                flex-shrink: 0;
+            }
+            .why-tag-automation {
+                color: var(--schedule-authorship-automation-color, #2563eb);
+                background: color-mix(in srgb, var(--schedule-authorship-automation-color, #2563eb) 14%, transparent);
+            }
+            .why-tag-user {
+                color: var(--schedule-authorship-user-color, #c49012);
+                background: color-mix(in srgb, var(--schedule-authorship-user-color, #c49012) 16%, transparent);
+            }
+            .why-tag-mixed {
+                color: var(--schedule-authorship-mixed-color, #ea7a18);
+                background: color-mix(in srgb, var(--schedule-authorship-mixed-color, #ea7a18) 16%, transparent);
+            }
+            .why-detail { margin-top: 6px; }
+            .why-note {
+                margin-top: 6px;
+                color: var(--secondary-text-color);
+                font-size: 12px;
+            }
+            .why-effects {
+                display: flex;
+                flex-direction: column;
+                gap: 3px;
+                margin-top: 8px;
+            }
+            .why-effect {
+                display: grid;
+                grid-template-columns: auto 1fr auto;
+                gap: 8px;
+                align-items: center;
+            }
+            .why-effect-swatch {
+                width: 9px;
+                height: 9px;
+                border-radius: 2px;
+                background: var(--m, #888);
+            }
+            .why-effect-name { color: var(--primary-text-color); }
+            .why-effect-val {
+                font-variant-numeric: tabular-nums;
+                color: var(--m, inherit);
+                font-weight: 600;
+            }
+            .why-effect-val .why-arrow {
+                color: var(--secondary-text-color);
+                opacity: 0.7;
+                font-weight: 400;
+            }
+            .why-effect-unit {
+                color: var(--disabled-text-color, #999);
+                font-weight: 400;
+                margin-left: 2px;
+            }
             .why-code {
                 margin-top: 8px;
                 color: var(--disabled-text-color, #999);
@@ -1210,7 +1328,7 @@ export class SchedulingSlotTable extends LitElement {
     @property({ type: Boolean }) public expandedApplianceActions = false;
     @property({ attribute: false }) public automationModel: AutomationInspectorModel | null = null;
 
-    @state() private _why: FormattedReason | null = null;
+    @state() private _why: WhyRowExplanation | null = null;
 
     protected willUpdate(changedProperties: PropertyValues<this>): void {
         super.willUpdate(changedProperties);
@@ -1644,17 +1762,20 @@ export class SchedulingSlotTable extends LitElement {
 
         return html`
             <td class="action-cell">
-                <button
-                    class=${actionButtonClasses}
-                    type="button"
-                    ?disabled=${this.busy || !actionCell.interactive || slotId === null}
-                    aria-label=${ariaLabel}
-                    @click=${() => this._handleActionClick(slotId, slotIds)}
-                >
-                    <span class=${actionPillListClasses}>
-                        ${visibleItems.map((item) => this._renderActionItem(item))}
-                    </span>
-                </button>
+                <div class="action-cell-inner">
+                    <button
+                        class=${actionButtonClasses}
+                        type="button"
+                        ?disabled=${this.busy || !actionCell.interactive || slotId === null}
+                        aria-label=${ariaLabel}
+                        @click=${() => this._handleActionClick(slotId, slotIds)}
+                    >
+                        <span class=${actionPillListClasses}>
+                            ${visibleItems.map((item) => this._renderActionItem(item))}
+                        </span>
+                    </button>
+                    ${this._renderRowWhyButton(actionCell.items, rangeLabel)}
+                </div>
             </td>
         `;
     }
@@ -1672,7 +1793,6 @@ export class SchedulingSlotTable extends LitElement {
                     size="compact"
                     ?iconOnly=${true}
                 ></scheduling-action-chip>
-                ${this._renderWhyBadge(item.authorship, item.firstSlotId, "inverter")}
             `;
         }
 
@@ -1701,52 +1821,153 @@ export class SchedulingSlotTable extends LitElement {
                 size="compact"
                 ?iconOnly=${true}
             ></scheduling-appliance-chip>
-            ${this._renderWhyBadge(item.authorship, item.firstSlotId, `appliance:${item.appliance.id}`)}
         `;
     }
 
-    private _renderWhyBadge(
-        authorship: ScheduleActionAuthorshipSummary,
-        slotId: string,
-        domain: string,
-    ) {
-        if (!this.automationModel || authorship.counts.automation <= 0) {
-            return nothing;
+    /** The concrete actions in a row (appliance summaries expanded), skipping
+     * slots with no explicit action (authorship "none"). */
+    private _explainableActionItems(
+        items: readonly ScheduleTableActionItemModel[],
+    ): (ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel)[] {
+        const flat: (ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel)[] = [];
+        for (const item of items) {
+            if (item.kind === "appliance_summary") flat.push(...item.items);
+            else flat.push(item);
         }
-        const reason = this.automationModel.findActionReason(slotId, domain, this.localize);
-        if (!reason) return nothing;
+        return flat.filter((item) => item.authorship.state !== "none");
+    }
+
+    private _renderRowWhyButton(
+        items: readonly ScheduleTableActionItemModel[],
+        rangeLabel: string,
+    ) {
+        const actions = this._explainableActionItems(items);
+        if (actions.length === 0) return nothing;
         return html`
             <span
                 class="why-badge"
                 role="button"
                 tabindex="0"
                 title=${this.localize("automation.inspector.why")}
-                @click=${(e: Event) => this._openWhy(e, reason)}
+                @click=${(e: Event) => this._openRowWhy(e, actions, rangeLabel)}
                 @keydown=${(e: KeyboardEvent) => {
-                    if (e.key === "Enter" || e.key === " ") this._openWhy(e, reason);
+                    if (e.key === "Enter" || e.key === " ") this._openRowWhy(e, actions, rangeLabel);
                 }}
             >?</span>
         `;
     }
 
-    private _openWhy(event: Event, reason: FormattedReason) {
+    private _openRowWhy(
+        event: Event,
+        actions: (ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel)[],
+        rangeLabel: string,
+    ) {
         event.stopPropagation();
         event.preventDefault();
-        this._why = reason;
+        this._why = {
+            title: rangeLabel,
+            entries: actions.map((item) => this._buildWhyEntry(item)),
+        };
+    }
+
+    private _buildWhyEntry(
+        item: ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel,
+    ): WhyActionEntry {
+        const domain =
+            item.kind === "inverter" ? "inverter" : `appliance:${item.appliance.id}`;
+        const label =
+            item.kind === "inverter"
+                ? getScheduleActionLabel(item.action, this.localize)
+                : `${item.appliance.name} · ${getScheduleApplianceActionPresentation({
+                      appliance: item.appliance,
+                      action: item.action,
+                      localize: this.localize,
+                  }).label}`;
+        const hasAutomation = item.authorship.counts.automation > 0;
+        const explanation =
+            hasAutomation && this.automationModel
+                ? this.automationModel.explainAction(item.firstSlotId, domain, this.localize)
+                : null;
+        return {
+            label,
+            hasAutomation,
+            hasUser: item.authorship.counts.user > 0,
+            explanation,
+        };
     }
 
     private _renderWhyPopover() {
         if (!this._why) return nothing;
-        const reason = this._why;
+        const why = this._why;
         return html`
             <div class="why-backdrop" @click=${() => (this._why = null)}></div>
             <div class="why-popover" @click=${(e: Event) => e.stopPropagation()}>
                 <div class="why-head">
-                    <span class="why-title">${reason.title}</span>
+                    <span class="why-title">${why.title}</span>
                     <button class="why-close" @click=${() => (this._why = null)}>✕</button>
                 </div>
-                <div class="why-detail">${reason.detail || reason.code}</div>
-                <div class="why-code">${reason.code}</div>
+                <div class="why-entries">
+                    ${why.entries.map((entry) => this._renderWhyEntry(entry))}
+                </div>
+            </div>
+        `;
+    }
+
+    private _renderWhyEntry(entry: WhyActionEntry) {
+        const reason = entry.hasAutomation ? entry.explanation?.reason ?? null : null;
+        const deltas = entry.explanation?.deltas ?? [];
+        return html`
+            <div class="why-entry">
+                <div class="why-entry-head">
+                    <span class="why-entry-label">${entry.label}</span>
+                    ${this._renderWhyTag(entry)}
+                </div>
+                ${entry.hasAutomation
+                    ? reason
+                        ? html`
+                              <div class="why-detail">${reason.detail || reason.code}</div>
+                              ${deltas.length
+                                  ? this._renderWhyDeltas(deltas)
+                                  : html`<div class="why-note">${this.localize("scheduling.why.no_change")}</div>`}
+                              <div class="why-code">${reason.code}</div>
+                          `
+                        : html`<div class="why-note">${this.localize("scheduling.why.automation_generic")}</div>`
+                    : nothing}
+                ${entry.hasUser
+                    ? html`<div class="why-note">${this.localize("scheduling.why.manual_note")}</div>`
+                    : nothing}
+            </div>
+        `;
+    }
+
+    private _renderWhyTag(entry: WhyActionEntry) {
+        const kind = entry.hasAutomation && entry.hasUser ? "mixed" : entry.hasAutomation ? "automation" : "user";
+        const label =
+            kind === "mixed"
+                ? this.localize("scheduling.authorship.mixed")
+                : kind === "automation"
+                  ? this.localize("scheduling.authorship.set_by_automation")
+                  : this.localize("scheduling.authorship.set_by_user");
+        return html`<span class="why-tag why-tag-${kind}">${label}</span>`;
+    }
+
+    private _renderWhyDeltas(deltas: RailDelta[]) {
+        return html`
+            <div class="why-effects">
+                ${deltas.map(
+                    (d) => html`
+                        <div class="why-effect metric-${d.metric.id}">
+                            <span class="why-effect-swatch"></span>
+                            <span class="why-effect-name">${this.localize(`automation.inspector.metric.${d.metric.id}`)}</span>
+                            <span class="why-effect-val">
+                                ${fmtWhyMetric(d.before, d.metric.precision)}
+                                <span class="why-arrow">→</span>
+                                ${fmtWhyMetric(d.after, d.metric.precision)}
+                                <span class="why-effect-unit">${d.metric.unit}</span>
+                            </span>
+                        </div>
+                    `,
+                )}
             </div>
         `;
     }

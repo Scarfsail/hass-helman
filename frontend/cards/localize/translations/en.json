@@ -74,6 +74,14 @@
       "slot": "Slot",
       "action_before": "Before",
       "action_after": "After",
+      "effects": "Effects",
+      "no_effect": "This decision changed no tracked system parameter for this slot.",
+      "metric": {
+        "surplus": "Surplus",
+        "soc": "Battery SoC",
+        "import": "Grid import",
+        "export": "Grid export"
+      },
       "classification": {
         "surplus": "surplus day",
         "tight": "tight day",

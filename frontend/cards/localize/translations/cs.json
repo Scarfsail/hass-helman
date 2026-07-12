@@ -211,6 +211,11 @@
       "set_by_user": "Nastavil uživatel",
       "set_by_automation": "Nastavila automatizace"
     },
+    "why": {
+      "no_change": "Tento běh hodnotu nezměnil.",
+      "automation_generic": "Podrobné zdůvodnění pro tento slot není k dispozici.",
+      "manual_note": "Nastaveno ručně — dopad této akce automatizace nesleduje."
+    },
     "actions": {
       "refresh": "Obnovit",
       "select_interval": "Vybrat celý interval",
@@ -417,6 +422,14 @@
       "slot": "Slot",
       "action_before": "Před",
       "action_after": "Po",
+      "effects": "Účinky",
+      "no_effect": "Toto rozhodnutí pro tento slot nezměnilo žádný sledovaný parametr systému.",
+      "metric": {
+        "surplus": "Přebytek",
+        "soc": "SoC baterie",
+        "import": "Import ze sítě",
+        "export": "Export do sítě"
+      },
       "classification": {
         "surplus": "přebytkový den",
         "tight": "napjatý den",
