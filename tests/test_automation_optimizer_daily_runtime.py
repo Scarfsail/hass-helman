@@ -83,6 +83,10 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationSnapshot,
 )
 from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
+from automation_trace_contract import (  # noqa: E402
+    assert_trace_contract,
+    run_optimizer_with_trace,
+)
 
 
 def _at(hour: int, minute: int = 0) -> datetime:
@@ -413,6 +417,52 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(snapshot, cfg)
         self.assertEqual(snapshot.schedule.slots, before)
+
+
+class DailyRuntimeTraceContractTests(unittest.TestCase):
+    def test_placement_and_ranking_reasons_and_contract(self) -> None:
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        optimizer = build_daily_runtime_optimizer(
+            cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
+        )
+        snapshot = _make_snapshot(appliance=appliance, export_points=_export_points(cheap))
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["reason"]["code"], "runtime_deficit_placed")
+        self.assertTrue(
+            any(
+                d["reason"]["code"] == "ranked_more_expensive"
+                for d in step["decisions"]
+            )
+        )
+
+    def test_satisfied_day_emits_runtime_satisfied(self) -> None:
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        optimizer = build_daily_runtime_optimizer(
+            cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points(set()),
+            runtime_by_date={appliance.id: {DAY: 5.0}},
+        )
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        self.assertTrue(
+            any(d["reason"]["code"] == "runtime_satisfied" for d in step["decisions"])
+        )
 
 
 if __name__ == "__main__":

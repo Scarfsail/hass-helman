@@ -72,6 +72,10 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     schedule_document_to_dict,
 )
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from automation_trace_contract import (  # noqa: E402
+    assert_trace_contract,
+    run_optimizer_with_trace,
+)
 
 
 def _make_optimizer_config(
@@ -348,6 +352,86 @@ class ExportPriceOptimizerTests(unittest.TestCase):
         ).optimize(snapshot, _make_optimizer_config())
 
         self.assertEqual(schedule_document_to_dict(result)["slots"], {})
+
+
+class ExportPriceTraceContractTests(unittest.TestCase):
+    def test_applied_writes_are_explained_and_contract_holds(self) -> None:
+        schedule_document = ScheduleDocument(execution_enabled=True)
+        snapshot = _make_snapshot(
+            schedule_document=schedule_document,
+            export_price_points=[
+                {"timestamp": CURRENT_SLOT_ID, "value": -0.1},
+                {"timestamp": NEXT_SLOT_ID, "value": -0.2},
+            ],
+            current_price=-0.1,
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            ExportPriceOptimizer(id="avoid-negative-export", stop_export_supported=True),
+            snapshot,
+            _make_optimizer_config(),
+            reference_time=REFERENCE_TIME,
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["reason"]["code"], "price_below_threshold")
+
+    def test_no_candidates_is_fully_derivable(self) -> None:
+        snapshot = _make_snapshot(current_price=5.0)
+        _result, trace = run_optimizer_with_trace(
+            ExportPriceOptimizer(id="avoid-negative-export", stop_export_supported=True),
+            snapshot,
+            _make_optimizer_config(),
+            reference_time=REFERENCE_TIME,
+        )
+        assert_trace_contract(self, trace)
+
+    def test_blocked_user_owned_is_emitted(self) -> None:
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_charging", "setBy": "user"},
+                    "appliances": {},
+                }
+            },
+        )
+        snapshot = _make_snapshot(
+            schedule_document=schedule_document,
+            export_price_points=[{"timestamp": CURRENT_SLOT_ID, "value": -0.1}],
+            current_price=-0.1,
+        )
+        _result, trace = run_optimizer_with_trace(
+            ExportPriceOptimizer(id="avoid-negative-export", stop_export_supported=True),
+            snapshot,
+            _make_optimizer_config(),
+            reference_time=REFERENCE_TIME,
+        )
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        blocked = [d for d in step["decisions"] if d["outcome"] == "blocked"]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["reason"]["code"], "blocked_user_owned")
+
+    def test_unsupported_capability_emits_note(self) -> None:
+        snapshot = _make_snapshot(
+            export_price_points=[{"timestamp": CURRENT_SLOT_ID, "value": -0.1}],
+            current_price=-0.1,
+        )
+        _result, trace = run_optimizer_with_trace(
+            ExportPriceOptimizer(id="avoid-negative-export", stop_export_supported=False),
+            snapshot,
+            _make_optimizer_config(),
+            reference_time=REFERENCE_TIME,
+        )
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        self.assertTrue(
+            any(note["code"] == "stop_export_unsupported" for note in step["notes"])
+        )
 
 
 if __name__ == "__main__":

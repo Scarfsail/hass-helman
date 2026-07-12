@@ -19,6 +19,7 @@ from ...scheduling.schedule import (
     iter_horizon_slot_ids,
 )
 from ..ownership import is_user_owned_inverter_action
+from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
     from ..config import OptimizerInstanceConfig
@@ -38,8 +39,13 @@ class ExportPriceOptimizer:
         config: "OptimizerInstanceConfig",
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
+        trace = trace or NULL_TRACE
         threshold = _read_threshold(config)
         action = _read_action(config)
+        # `price_not_below_threshold` (rejected) is a frontend derivation rule
+        # (D) over the exportPrice rail + threshold config; leave those slots to
+        # it and only emit applied/blocked/notes here.
+        trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
         candidate_slot_ids = _find_candidate_slot_ids(
             snapshot=snapshot,
             threshold=threshold,
@@ -63,11 +69,26 @@ class ExportPriceOptimizer:
                 self.id,
                 len(candidate_slot_ids),
             )
+            trace.note(
+                code="stop_export_unsupported",
+                params={"skippedSlots": len(candidate_slot_ids)},
+            )
+            trace.decision(
+                slot_ids=list(candidate_slot_ids),
+                outcome="out_of_scope",
+                reason={
+                    "code": "stop_export_unsupported",
+                    "params": {"skippedSlots": len(candidate_slot_ids)},
+                },
+            )
             return updated_schedule_document
 
+        applied_slot_ids: list[str] = []
+        blocked_slot_ids: list[str] = []
         for slot_id in candidate_slot_ids:
             current_domains = updated_schedule_document.slots.get(slot_id, ScheduleDomains())
             if is_user_owned_inverter_action(current_domains.inverter):
+                blocked_slot_ids.append(slot_id)
                 continue
             updated_schedule_document.slots[slot_id] = ScheduleDomains(
                 inverter=ScheduleAction(
@@ -75,6 +96,26 @@ class ExportPriceOptimizer:
                     set_by="automation",
                 ),
                 appliances=dict(current_domains.appliances),
+            )
+            applied_slot_ids.append(slot_id)
+
+        if applied_slot_ids:
+            trace.decision(
+                slot_ids=applied_slot_ids,
+                outcome="applied",
+                action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_EXPORT},
+                reason={
+                    "code": "price_below_threshold",
+                    "params": {"threshold": threshold},
+                    "signals": ["exportPrice"],
+                },
+            )
+        if blocked_slot_ids:
+            trace.decision(
+                slot_ids=blocked_slot_ids,
+                outcome="blocked",
+                action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_EXPORT},
+                reason={"code": "blocked_user_owned", "params": {"domain": "inverter"}},
             )
 
         return updated_schedule_document

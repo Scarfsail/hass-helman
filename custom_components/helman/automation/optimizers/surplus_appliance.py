@@ -21,6 +21,7 @@ from ..ownership import (
     is_user_owned_appliance_action,
     stamp_automation_appliance_action,
 )
+from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
     from ...appliances import AppliancesRuntimeRegistry
@@ -72,6 +73,10 @@ class SurplusApplianceOptimizer:
         )
 
         del config
+        trace = trace or NULL_TRACE
+        # `surplus_insufficient` (rejected) is a frontend derivation rule (D)
+        # over the availableSurplusKwh rail vs demand; leave those slots to it.
+        trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
         updated_schedule_document = ScheduleDocument(
             execution_enabled=snapshot.schedule.execution_enabled,
             slots=deepcopy(snapshot.schedule.slots),
@@ -112,11 +117,14 @@ class SurplusApplianceOptimizer:
             appliance_id=self.target.appliance.id,
         )
         buffer_multiplier = 1 + (self.min_surplus_buffer_pct / 100)
+        applied_slot_ids: list[str] = []
+        blocked_slot_ids: list[str] = []
         for slot_id in iter_horizon_slot_ids(snapshot.context.now):
             current_domains = updated_schedule_document.slots.get(slot_id, ScheduleDomains())
             if is_user_owned_appliance_action(
                 current_domains.appliances.get(self.target.appliance.id)
             ):
+                blocked_slot_ids.append(slot_id)
                 continue
 
             demand_slices = build_when_active_demand_slices(
@@ -140,6 +148,27 @@ class SurplusApplianceOptimizer:
             updated_schedule_document.slots[slot_id] = ScheduleDomains(
                 inverter=current_domains.inverter,
                 appliances=updated_appliances,
+            )
+            applied_slot_ids.append(slot_id)
+
+        appliance_domain = f"appliance:{self.target.appliance.id}"
+        if applied_slot_ids:
+            trace.decision(
+                slot_ids=applied_slot_ids,
+                outcome="applied",
+                action={"domain": appliance_domain, **self.target.authored_action},
+                reason={
+                    "code": "surplus_covers_demand",
+                    "params": {"bufferPct": self.min_surplus_buffer_pct},
+                    "signals": ["availableSurplusKwh"],
+                },
+            )
+        if blocked_slot_ids:
+            trace.decision(
+                slot_ids=blocked_slot_ids,
+                outcome="blocked",
+                action={"domain": appliance_domain, **self.target.authored_action},
+                reason={"code": "blocked_user_owned", "params": {"domain": appliance_domain}},
             )
 
         return updated_schedule_document

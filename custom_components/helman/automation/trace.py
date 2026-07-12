@@ -102,6 +102,9 @@ class _MutableStep:
     writes: list[TraceWrite] = field(default_factory=list)
     decisions: list[TraceDecision] = field(default_factory=list)
     notes: list[TraceNote] = field(default_factory=list)
+    # slots the optimizer intentionally leaves to frontend derivation (the D
+    # rows of the reason catalogue); the coverage validator treats them covered.
+    derivable: set[str] = field(default_factory=set)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,13 +165,19 @@ class OptimizerTrace:
         if self._current is not None:
             self._current.decisions = []
             self._current.notes = []
+            self._current.derivable = set()
 
-    def end_step(
-        self,
-        *,
-        status: str,
-        derivable_slot_ids: Iterable[str] = (),
-    ) -> None:
+    def declare_derivable(self, slot_ids: Iterable[str]) -> None:
+        """Declare slots the optimizer leaves to a frontend derivation rule.
+
+        The coverage validator treats these as explained (the D rows of the v1
+        reason catalogue), so a kind whose ``rejected`` case is frontend-derived
+        need not emit anything for those slots.
+        """
+        if self._current is not None:
+            self._current.derivable.update(slot_ids)
+
+    def end_step(self, *, status: str) -> None:
         """Finalize the current step, running coverage validation.
 
         ``status="skipped"`` steps are exempt from the gap check (they carry a
@@ -181,7 +190,7 @@ class OptimizerTrace:
         step.status = status
         try:
             if status != "skipped":
-                self._validate_coverage(step, frozenset(derivable_slot_ids))
+                self._validate_coverage(step, frozenset(step.derivable))
         except Exception:  # pragma: no cover - observability must not fail runs
             _LOGGER.exception("trace coverage validation failed; run continues")
         self._steps.append(step)
@@ -303,6 +312,12 @@ class OptimizerTrace:
             "steps": [step.to_dict() for step in self._steps],
             "railsFinal": self._rails_final,
         }
+
+
+# A shared no-op recorder for callers (e.g. unit tests) that invoke an optimizer
+# without a live trace. It has no open step, so every mutator no-ops and nothing
+# ever accumulates on it.
+NULL_TRACE = OptimizerTrace(slot_ids=())
 
 
 # --- buckets -> slots reducer -----------------------------------------------

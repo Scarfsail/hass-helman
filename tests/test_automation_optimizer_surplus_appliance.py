@@ -109,6 +109,10 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
     OptimizationSnapshot,
 )
+from automation_trace_contract import (  # noqa: E402
+    assert_trace_contract,
+    run_optimizer_with_trace,
+)
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleDocument,
     build_horizon_end,
@@ -636,6 +640,65 @@ class SurplusApplianceOptimizerTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(partial_ctx.exception.appliance_id, appliance.id)
+
+
+class SurplusApplianceTraceContractTests(unittest.TestCase):
+    def test_applied_writes_are_explained_and_contract_holds(self) -> None:
+        appliance = _make_generic_runtime()
+        cfg = _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0)
+        optimizer = build_surplus_appliance_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = _make_snapshot(
+            appliances=(appliance,),
+            when_active_hourly_energy_kwh_by_appliance_id={appliance.id: 1.0},
+            grid_series=_grid_series([0.3, 0.3, 0.3, 0.3, 0.3, 0.3]),
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["reason"]["code"], "surplus_covers_demand")
+        # every committed write is an applied appliance action
+        self.assertTrue(all(w["domain"] == "appliance:boiler" for w in step["writes"]))
+
+    def test_blocked_user_owned_is_emitted(self) -> None:
+        appliance = _make_generic_runtime()
+        cfg = _make_optimizer_config(appliance_id=appliance.id, min_surplus_buffer_pct=0)
+        optimizer = build_surplus_appliance_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "empty"},
+                    "appliances": {appliance.id: {"on": False, "setBy": "user"}},
+                }
+            },
+        )
+        snapshot = _make_snapshot(
+            schedule_document=schedule_document,
+            appliances=(appliance,),
+            when_active_hourly_energy_kwh_by_appliance_id={appliance.id: 1.0},
+            grid_series=_grid_series([0.3, 0.3, 0.3, 0.3, 0.3, 0.3]),
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        blocked = [d for d in step["decisions"] if d["outcome"] == "blocked"]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["reason"]["code"], "blocked_user_owned")
 
 
 if __name__ == "__main__":

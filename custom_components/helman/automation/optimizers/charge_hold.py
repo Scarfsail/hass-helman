@@ -31,8 +31,11 @@ from ...scheduling.schedule import (
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
+    iter_horizon_slot_ids,
+    parse_slot_id,
 )
 from ..ownership import is_user_owned_inverter_action
+from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
     from ..config import OptimizerInstanceConfig
@@ -82,6 +85,7 @@ class ChargeHoldOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         del config
+        trace = trace or NULL_TRACE
         updated = ScheduleDocument(
             execution_enabled=snapshot.schedule.execution_enabled,
             slots=deepcopy(snapshot.schedule.slots),
@@ -100,6 +104,8 @@ class ChargeHoldOptimizer:
             or max_charge_power_kw is None
             or not max_charge_power_kw > 0
         ):
+            # Whole run out of scope: the column stays explained by one note.
+            trace.note_horizon(code="battery_params_missing", params={})
             return updated
 
         needed_kwh = _compute_needed_kwh(
@@ -115,88 +121,84 @@ class ChargeHoldOptimizer:
             max_charge_power_kw=max_charge_power_kw,
         )
 
-        horizon_start = build_horizon_start(snapshot.context.now)
-        horizon_end = build_horizon_end(snapshot.context.now)
-        tzinfo = horizon_start.tzinfo
+        tzinfo = build_horizon_start(snapshot.context.now).tzinfo
 
-        hold_slot_ids: set[str] = set()
-        for local_date, day_context in snapshot.context.day_contexts.items():
+        # Categorize every horizon slot so the column is fully explained. The
+        # hold window / release rationale is genuinely non-derivable, so it is
+        # all emitted here (the E rows of the reason catalogue).
+        resolutions: dict[date, _DayHoldResolution] = {}
+
+        def _resolution(local_date: date, day_context: "DayContext") -> "_DayHoldResolution":
+            cached = resolutions.get(local_date)
+            if cached is not None:
+                return cached
+            resolved = _resolve_day_hold(
+                local_date=local_date,
+                day_context=day_context,
+                window_start=self.config.window_start.on(local_date, tzinfo=tzinfo),
+                window_end=self.config.window_end.on(local_date, tzinfo=tzinfo),
+                needed_kwh=needed_kwh,
+                margin_multiplier=margin_multiplier,
+                surplus_by_bucket=surplus_by_bucket,
+                tzinfo=tzinfo,
+            )
+            resolutions[local_date] = resolved
+            return resolved
+
+        applied_by_day: dict[date, list[str]] = {}
+        blocked_by_day: dict[date, list[str]] = {}
+        after_release_by_day: dict[date, list[str]] = {}
+        no_room_by_day: dict[date, list[str]] = {}
+        outside_window: list[str] = []
+        day_not_matched: dict[str, list[str]] = {}
+
+        for slot_id in iter_horizon_slot_ids(snapshot.context.now):
+            slot_start = parse_slot_id(slot_id)
+            local_date = slot_start.date()
+            day_context = snapshot.context.day_contexts.get(local_date)
+            if day_context is None:
+                outside_window.append(slot_id)
+                continue
             if day_context.classification not in self.config.only_on_days:
+                day_not_matched.setdefault(day_context.classification, []).append(slot_id)
                 continue
-            hold_slot_ids.update(
-                self._resolve_hold_slot_ids(
-                    local_date=local_date,
-                    day_context=day_context,
-                    needed_kwh=needed_kwh,
-                    margin_multiplier=margin_multiplier,
-                    surplus_by_bucket=surplus_by_bucket,
-                    horizon_start=horizon_start,
-                    horizon_end=horizon_end,
-                    tzinfo=tzinfo,
+            resolved = _resolution(local_date, day_context)
+            if not (resolved.window_start <= slot_start < resolved.window_end):
+                outside_window.append(slot_id)
+                continue
+            if resolved.release_slot is None:
+                no_room_by_day.setdefault(local_date, []).append(slot_id)
+                continue
+            if slot_start < resolved.release_slot:
+                current_domains = updated.slots.get(slot_id, ScheduleDomains())
+                if is_user_owned_inverter_action(current_domains.inverter):
+                    blocked_by_day.setdefault(local_date, []).append(slot_id)
+                    continue
+                updated.slots[slot_id] = ScheduleDomains(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_STOP_CHARGING,
+                        set_by="automation",
+                    ),
+                    appliances=dict(current_domains.appliances),
                 )
-            )
+                applied_by_day.setdefault(local_date, []).append(slot_id)
+            else:
+                after_release_by_day.setdefault(local_date, []).append(slot_id)
 
-        for slot_id in hold_slot_ids:
-            current_domains = updated.slots.get(slot_id, ScheduleDomains())
-            if is_user_owned_inverter_action(current_domains.inverter):
-                continue
-            updated.slots[slot_id] = ScheduleDomains(
-                inverter=ScheduleAction(
-                    kind=SCHEDULE_ACTION_STOP_CHARGING,
-                    set_by="automation",
-                ),
-                appliances=dict(current_domains.appliances),
-            )
-
-        return updated
-
-    def _resolve_hold_slot_ids(
-        self,
-        *,
-        local_date: date,
-        day_context: "DayContext",
-        needed_kwh: float,
-        margin_multiplier: float,
-        surplus_by_bucket: list[tuple[datetime, float]],
-        horizon_start: datetime,
-        horizon_end: datetime,
-        tzinfo,
-    ) -> set[str]:
-        window_start = self.config.window_start.on(local_date, tzinfo=tzinfo)
-        window_end = self.config.window_end.on(local_date, tzinfo=tzinfo)
-        if window_end <= window_start:
-            return set()
-
-        # Only this calendar day's own solar can refill the battery for this
-        # day's hold, so bound the surplus accounting at the local midnight after
-        # ``local_date`` — never spill tomorrow's forecast surplus into today.
-        day_end = datetime.combine(
-            local_date + timedelta(days=1), time.min, tzinfo=tzinfo
-        )
-
-        release_slot = _resolve_release_slot(
-            window_start=window_start,
-            window_end=window_end,
-            day_end=day_end,
+        _emit_charge_hold_decisions(
+            trace,
             needed_kwh=needed_kwh,
-            margin_multiplier=margin_multiplier,
-            surplus_by_bucket=surplus_by_bucket,
-            day_min_window_start=(
-                None
-                if day_context.day_min_window is None
-                else day_context.day_min_window.start
-            ),
+            margin_pct=self.config.margin_pct,
+            only_on_days=self.config.only_on_days,
+            resolutions=resolutions,
+            applied_by_day=applied_by_day,
+            blocked_by_day=blocked_by_day,
+            after_release_by_day=after_release_by_day,
+            no_room_by_day=no_room_by_day,
+            outside_window=outside_window,
+            day_not_matched=day_not_matched,
         )
-        if release_slot is None:
-            return set()
-
-        hold_slot_ids: set[str] = set()
-        cursor = window_start
-        while cursor < release_slot:
-            if horizon_start <= cursor < horizon_end:
-                hold_slot_ids.add(format_slot_id(cursor))
-            cursor += _SLOT_DURATION
-        return hold_slot_ids
+        return updated
 
 
 def _compute_needed_kwh(
@@ -212,20 +214,49 @@ def _compute_needed_kwh(
     return soc_gap_fraction * usable_capacity_kwh / charge_efficiency
 
 
-def _resolve_release_slot(
+@dataclass(frozen=True)
+class _DayHoldResolution:
+    window_start: datetime
+    window_end: datetime
+    release_slot: datetime | None
+    bound_by: str | None
+    surplus_at_window_start: float
+
+
+def _resolve_day_hold(
     *,
+    local_date: date,
+    day_context: "DayContext",
     window_start: datetime,
     window_end: datetime,
-    day_end: datetime,
     needed_kwh: float,
     margin_multiplier: float,
     surplus_by_bucket: list[tuple[datetime, float]],
-    day_min_window_start: datetime | None,
-) -> datetime | None:
+    tzinfo,
+) -> _DayHoldResolution:
+    if window_end <= window_start:
+        return _DayHoldResolution(
+            window_start=window_start,
+            window_end=window_end,
+            release_slot=None,
+            bound_by=None,
+            surplus_at_window_start=0.0,
+        )
+
+    # Only this calendar day's own solar can refill the battery for this day's
+    # hold, so bound the surplus accounting at the local midnight after
+    # ``local_date`` — never spill tomorrow's forecast surplus into today.
+    day_end = datetime.combine(local_date + timedelta(days=1), time.min, tzinfo=tzinfo)
+    surplus_at_window_start = _surplus_between(surplus_by_bucket, window_start, day_end)
+    day_min_window_start = (
+        None if day_context.day_min_window is None else day_context.day_min_window.start
+    )
+
     if needed_kwh <= 0:
         # Nothing to charge: hold across the whole window (price bound may only
         # shorten it).
         latest_safe_release = window_end
+        bound_by = "window_end"
     else:
         threshold = needed_kwh * margin_multiplier
         # surplus in [t, day_end) is monotonically non-increasing in t, so the
@@ -239,13 +270,117 @@ def _resolve_release_slot(
         if latest_safe_release is None:
             # Even releasing at window.start cannot cover the need: no room to
             # hold.
-            return None
+            return _DayHoldResolution(
+                window_start=window_start,
+                window_end=window_end,
+                release_slot=None,
+                bound_by=None,
+                surplus_at_window_start=surplus_at_window_start,
+            )
+        bound_by = "surplus"
 
-    if day_min_window_start is not None:
-        release_slot = min(day_min_window_start, latest_safe_release)
+    if day_min_window_start is not None and day_min_window_start < latest_safe_release:
+        release_slot = day_min_window_start
+        bound_by = "day_min_window"
     else:
         release_slot = latest_safe_release
-    return release_slot
+    return _DayHoldResolution(
+        window_start=window_start,
+        window_end=window_end,
+        release_slot=release_slot,
+        bound_by=bound_by,
+        surplus_at_window_start=surplus_at_window_start,
+    )
+
+
+def _emit_charge_hold_decisions(
+    trace,
+    *,
+    needed_kwh: float,
+    margin_pct: float,
+    only_on_days: tuple[str, ...],
+    resolutions: dict[date, _DayHoldResolution],
+    applied_by_day: dict[date, list[str]],
+    blocked_by_day: dict[date, list[str]],
+    after_release_by_day: dict[date, list[str]],
+    no_room_by_day: dict[date, list[str]],
+    outside_window: list[str],
+    day_not_matched: dict[str, list[str]],
+) -> None:
+    for local_date, slot_ids in applied_by_day.items():
+        resolved = resolutions[local_date]
+        trace.decision(
+            slot_ids=slot_ids,
+            outcome="applied",
+            action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_CHARGING},
+            reason={
+                "code": "hold_window_applied",
+                "params": {
+                    "neededKwh": round(needed_kwh, 3),
+                    "marginPct": margin_pct,
+                    "releaseSlot": (
+                        None
+                        if resolved.release_slot is None
+                        else format_slot_id(resolved.release_slot)
+                    ),
+                    "boundBy": resolved.bound_by,
+                },
+            },
+        )
+    for slot_ids in blocked_by_day.values():
+        trace.decision(
+            slot_ids=slot_ids,
+            outcome="blocked",
+            action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_CHARGING},
+            reason={"code": "blocked_user_owned", "params": {"domain": "inverter"}},
+        )
+    for local_date, slot_ids in after_release_by_day.items():
+        resolved = resolutions[local_date]
+        trace.decision(
+            slot_ids=slot_ids,
+            outcome="out_of_scope",
+            reason={
+                "code": "after_release",
+                "params": {
+                    "releaseSlot": (
+                        None
+                        if resolved.release_slot is None
+                        else format_slot_id(resolved.release_slot)
+                    )
+                },
+            },
+        )
+    for local_date, slot_ids in no_room_by_day.items():
+        resolved = resolutions[local_date]
+        trace.decision(
+            slot_ids=slot_ids,
+            outcome="rejected",
+            reason={
+                "code": "no_room_to_hold",
+                "params": {
+                    "neededKwh": round(needed_kwh, 3),
+                    "surplusAtWindowStart": round(resolved.surplus_at_window_start, 3),
+                },
+            },
+        )
+    if outside_window:
+        trace.decision(
+            slot_ids=outside_window,
+            outcome="out_of_scope",
+            reason={"code": "outside_window", "params": {}},
+        )
+    for classification, slot_ids in day_not_matched.items():
+        trace.decision(
+            slot_ids=slot_ids,
+            outcome="out_of_scope",
+            reason={
+                "code": "day_not_matched",
+                "params": {
+                    "classification": classification,
+                    "onlyOnDays": list(only_on_days),
+                },
+            },
+        )
 
 
 def _surplus_between(

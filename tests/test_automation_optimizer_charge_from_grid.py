@@ -69,6 +69,10 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
 )
 from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from automation_trace_contract import (  # noqa: E402
+    assert_trace_contract,
+    run_optimizer_with_trace,
+)
 
 
 def _at(hour: int, minute: int = 0) -> datetime:
@@ -281,6 +285,46 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             snapshot, _make_config()
         )
         self.assertEqual(snapshot.schedule.slots, before)
+
+
+class ChargeFromGridTraceContractTests(unittest.TestCase):
+    def test_bridge_and_ranking_reasons_and_contract(self) -> None:
+        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        prices = _import_points({6: 3.0, 8: 6.0})
+        prices_map = {p["timestamp"]: p for p in prices}
+        prices_map[_slot_id(7, 0)]["value"] = 1.0
+        optimizer = build_charge_from_grid_optimizer(_make_config())
+        snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
+        )
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["reason"]["code"], "bridge_window")
+        self.assertTrue(
+            any(
+                d["reason"]["code"] == "cheaper_slot_chosen"
+                for d in step["decisions"]
+            )
+        )
+
+    def test_window_covered_reason_emitted(self) -> None:
+        soc = _soc_series({0: 80, 6: 80, 8: 70, 9: 60, 10: 60})
+        prices = _import_points({6: 2.0, 8: 6.0})
+        optimizer = build_charge_from_grid_optimizer(_make_config())
+        snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
+        )
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        self.assertTrue(
+            any(d["reason"]["code"] == "window_covered" for d in step["decisions"])
+        )
 
 
 if __name__ == "__main__":

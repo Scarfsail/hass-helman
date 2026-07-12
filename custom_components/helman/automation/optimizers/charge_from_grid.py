@@ -12,6 +12,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import json
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
@@ -30,8 +31,10 @@ from ...scheduling.schedule import (
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
+    iter_horizon_slot_ids,
 )
 from ..ownership import is_user_owned_inverter_action
+from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
     from ..config import OptimizerInstanceConfig
@@ -69,6 +72,10 @@ class ChargeFromGridOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         del config
+        trace = trace or NULL_TRACE
+        # Only band-relative rationales are non-derivable; every other horizon
+        # slot is "not considered" and left to a frontend default (D).
+        trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
         updated = ScheduleDocument(
             execution_enabled=snapshot.schedule.execution_enabled,
             slots=deepcopy(snapshot.schedule.slots),
@@ -101,6 +108,7 @@ class ChargeFromGridOptimizer:
         upper_target = min(battery_state.max_soc, self.config.max_target_soc)
         lower_target = battery_state.min_soc
 
+        emit = _ChargeFromGridEmission(trace)
         for day_context in snapshot.context.day_contexts.values():
             bands = day_context.import_bands
             for index, band in enumerate(bands):
@@ -122,8 +130,10 @@ class ChargeFromGridOptimizer:
                     lower_target=lower_target,
                     horizon_start=horizon_start,
                     horizon_end=horizon_end,
+                    emit=emit,
                 )
 
+        emit.flush()
         return updated
 
     def _plan_window(
@@ -141,7 +151,12 @@ class ChargeFromGridOptimizer:
         lower_target: float,
         horizon_start: datetime,
         horizon_end: datetime,
+        emit: "_ChargeFromGridEmission",
     ) -> None:
+        expensive_window = [
+            format_slot_id(expensive_band.start),
+            format_slot_id(expensive_band.end),
+        ]
         window_min_soc = _min_soc_over(
             soc_by_bucket, expensive_band.start, expensive_band.end
         )
@@ -149,7 +164,13 @@ class ChargeFromGridOptimizer:
             return
         dip = self.config.reserve_floor_soc - window_min_soc
         if dip <= 0:
-            return  # covered — SoC never dips below the reserve floor.
+            # covered — SoC never dips below the reserve floor.
+            emit.window_covered(
+                _band_horizon_slots(cheap_band, horizon_start, horizon_end),
+                expensive_window=expensive_window,
+                projected_min_soc=round(window_min_soc, 1),
+            )
+            return
 
         window_start_soc = _soc_at(soc_by_bucket, expensive_band.start)
         if window_start_soc is None:
@@ -172,14 +193,15 @@ class ChargeFromGridOptimizer:
             return
 
         target_soc = int(round(target))
-        for slot_id in self._pick_cheapest_slots(
+        ranked = self._pick_cheapest_slots(
             updated=updated,
             cheap_band=cheap_band,
             import_price_by_bucket=import_price_by_bucket,
-            slots_needed=slots_needed,
             horizon_start=horizon_start,
             horizon_end=horizon_end,
-        ):
+        )
+        chosen = ranked[:slots_needed]
+        for price, slot_id in chosen:
             current_domains = updated.slots.get(slot_id, ScheduleDomains())
             updated.slots[slot_id] = ScheduleDomains(
                 inverter=ScheduleAction(
@@ -189,6 +211,15 @@ class ChargeFromGridOptimizer:
                 ),
                 appliances=dict(current_domains.appliances),
             )
+            emit.applied(
+                slot_id,
+                expensive_window=expensive_window,
+                deficit_kwh=round(required_energy_kwh, 3),
+                target_soc=target_soc,
+            )
+        chosen_price = max((price for price, _ in chosen), default=0.0)
+        for _price, slot_id in ranked[slots_needed:]:
+            emit.cheaper_slot_chosen(slot_id, chosen_price=round(chosen_price, 4))
 
     def _pick_cheapest_slots(
         self,
@@ -196,10 +227,9 @@ class ChargeFromGridOptimizer:
         updated: ScheduleDocument,
         cheap_band: "ImportBand",
         import_price_by_bucket: dict[datetime, float],
-        slots_needed: int,
         horizon_start: datetime,
         horizon_end: datetime,
-    ) -> list[str]:
+    ) -> list[tuple[float, str]]:
         candidates: list[tuple[float, datetime, str]] = []
         cursor = cheap_band.start
         while cursor < cheap_band.end:
@@ -211,7 +241,100 @@ class ChargeFromGridOptimizer:
                     candidates.append((price, cursor, slot_id))
             cursor += _SLOT_DURATION
         candidates.sort(key=lambda item: (item[0], dt_util.as_utc(item[1])))
-        return [slot_id for _, _, slot_id in candidates[:slots_needed]]
+        return [(price, slot_id) for price, _, slot_id in candidates]
+
+
+def _band_horizon_slots(
+    band: "ImportBand",
+    horizon_start: datetime,
+    horizon_end: datetime,
+) -> list[str]:
+    slots: list[str] = []
+    cursor = band.start
+    while cursor < band.end:
+        if horizon_start <= cursor < horizon_end:
+            slots.append(format_slot_id(cursor))
+        cursor += _SLOT_DURATION
+    return slots
+
+
+class _ChargeFromGridEmission:
+    """Accumulate per-slot decisions, dedupe by priority, and flush as groups.
+
+    The same cheap slot can be evaluated by more than one expensive window, so
+    decisions are resolved per slot (applied > cheaper_slot_chosen >
+    window_covered) before grouping — a slot never lands in two groups.
+    """
+
+    _APPLIED = 3
+    _CHEAPER = 2
+    _COVERED = 1
+
+    def __init__(self, trace) -> None:
+        self._trace = trace
+        self._by_slot: dict[str, tuple[int, str, str, dict[str, Any]]] = {}
+
+    def _add(self, slot_id, priority, outcome, code, params) -> None:
+        current = self._by_slot.get(slot_id)
+        if current is None or priority > current[0]:
+            self._by_slot[slot_id] = (priority, outcome, code, params)
+
+    def applied(self, slot_id, *, expensive_window, deficit_kwh, target_soc) -> None:
+        self._add(
+            slot_id,
+            self._APPLIED,
+            "applied",
+            "bridge_window",
+            {
+                "expensiveWindow": expensive_window,
+                "deficitKwh": deficit_kwh,
+                "targetSoc": target_soc,
+            },
+        )
+
+    def cheaper_slot_chosen(self, slot_id, *, chosen_price) -> None:
+        self._add(
+            slot_id,
+            self._CHEAPER,
+            "rejected",
+            "cheaper_slot_chosen",
+            {"chosenPrice": chosen_price},
+        )
+
+    def window_covered(self, slot_ids, *, expensive_window, projected_min_soc) -> None:
+        for slot_id in slot_ids:
+            self._add(
+                slot_id,
+                self._COVERED,
+                "rejected",
+                "window_covered",
+                {
+                    "expensiveWindow": expensive_window,
+                    "projectedMinSoc": projected_min_soc,
+                },
+            )
+
+    def flush(self) -> None:
+        groups: dict[str, tuple[str, str, dict[str, Any], list[str]]] = {}
+        for slot_id, (_priority, outcome, code, params) in self._by_slot.items():
+            key = json.dumps([outcome, code, params], sort_keys=True)
+            groups.setdefault(key, (outcome, code, params, []))[3].append(slot_id)
+        for outcome, code, params, slot_ids in groups.values():
+            reason: dict[str, Any] = {"code": code, "params": params}
+            action: dict[str, Any] | None = None
+            if code == "bridge_window":
+                action = {
+                    "domain": "inverter",
+                    "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                }
+            if code == "cheaper_slot_chosen":
+                reason["signals"] = ["importPrice"]
+            self._trace.decision(
+                slot_ids=slot_ids,
+                outcome=outcome,
+                action=action,
+                reason=reason,
+            )
 
 
 def _find_preceding_cheap_band(
