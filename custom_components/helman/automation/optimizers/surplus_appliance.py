@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from ...appliances import AppliancesRuntimeRegistry
     from ..config import OptimizerInstanceConfig
     from ..snapshot import OptimizationSnapshot
+    from ..trace import OptimizerTrace
 
 @dataclass(frozen=True)
 class _SurplusApplianceTarget:
@@ -63,6 +64,7 @@ class SurplusApplianceOptimizer:
         self,
         snapshot: "OptimizationSnapshot",
         config: "OptimizerInstanceConfig",
+        trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         from ...appliances.projection_builder import (
             build_when_active_demand_slices,

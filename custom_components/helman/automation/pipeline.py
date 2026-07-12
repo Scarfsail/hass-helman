@@ -21,9 +21,19 @@ from .ownership import (
 )
 from .optimizer import build_optimizer
 from .snapshot import OptimizationSnapshot, attach_day_contexts, snapshot_to_dict
+from .trace import (
+    OptimizerTrace,
+    TraceWrite,
+    aggregate_series_to_slots,
+    price_points_to_slots,
+)
+from ..const import SCHEDULE_ACTION_EMPTY
 from ..scheduling.schedule import (
+    ScheduleAction,
     ScheduleDocument,
     ScheduleDomains,
+    action_to_dict,
+    iter_horizon_slot_ids,
     schedule_document_to_dict,
 )
 
@@ -92,6 +102,7 @@ class AutomationRunResult:
     duration_ms: int = 0
     cleanup: AutomationCleanupSummary | None = None
     failure: AutomationRunFailure | None = None
+    trace: OptimizerTrace | None = None
 
     @classmethod
     def skipped(
@@ -103,6 +114,7 @@ class AutomationRunResult:
         optimizers: tuple[OptimizerRunSummary, ...] = (),
         duration_ms: int = 0,
         cleanup: AutomationCleanupSummary | None = None,
+        trace: OptimizerTrace | None = None,
     ) -> "AutomationRunResult":
         return cls(
             ran_automation=False,
@@ -112,6 +124,7 @@ class AutomationRunResult:
             optimizers=optimizers,
             duration_ms=duration_ms,
             cleanup=cleanup,
+            trace=trace,
         )
 
     @classmethod
@@ -121,6 +134,7 @@ class AutomationRunResult:
         snapshot: OptimizationSnapshot,
         optimizers: tuple[OptimizerRunSummary, ...] = (),
         duration_ms: int = 0,
+        trace: OptimizerTrace | None = None,
     ) -> "AutomationRunResult":
         return cls(
             ran_automation=True,
@@ -128,6 +142,7 @@ class AutomationRunResult:
             snapshot=snapshot,
             optimizers=optimizers,
             duration_ms=duration_ms,
+            trace=trace,
         )
 
     @classmethod
@@ -141,6 +156,7 @@ class AutomationRunResult:
         optimizers: tuple[OptimizerRunSummary, ...] = (),
         duration_ms: int = 0,
         cleanup: AutomationCleanupSummary | None = None,
+        trace: OptimizerTrace | None = None,
     ) -> "AutomationRunResult":
         return cls(
             ran_automation=ran_automation,
@@ -151,6 +167,7 @@ class AutomationRunResult:
             duration_ms=duration_ms,
             cleanup=cleanup,
             failure=failure,
+            trace=trace,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -171,6 +188,8 @@ class AutomationRunResult:
             payload["cleanup"] = self.cleanup.to_dict()
         if self.failure is not None:
             payload["failure"] = self.failure.to_dict()
+        if self.trace is not None:
+            payload["trace"] = self.trace.to_dict()
         return payload
 
 
@@ -210,6 +229,7 @@ class _PipelineExecutionResult:
     working_schedule_document: ScheduleDocument
     snapshot: OptimizationSnapshot
     optimizers: tuple[OptimizerRunSummary, ...]
+    trace: OptimizerTrace
 
 
 @dataclass(frozen=True)
@@ -225,11 +245,13 @@ class _OptimizerExecutionError(RuntimeError):
         summary: OptimizerRunSummary,
         completed_optimizers: tuple[OptimizerRunSummary, ...] = (),
         snapshot: OptimizationSnapshot | None = None,
+        trace: OptimizerTrace | None = None,
     ) -> None:
         super().__init__(summary.error or "")
         self.summary = summary
         self.completed_optimizers = completed_optimizers
         self.snapshot = snapshot
+        self.trace = trace
 
 
 class AutomationRunner:
@@ -255,6 +277,7 @@ class AutomationRunner:
         last_result: AutomationRunResult | None = None
         latest_snapshot: OptimizationSnapshot | None = None
         latest_optimizers: tuple[OptimizerRunSummary, ...] = ()
+        latest_trace: OptimizerTrace | None = None
         current_stage = "baseline_schedule"
         try:
             async with self._coordinator._schedule_lock:
@@ -335,16 +358,19 @@ class AutomationRunner:
                             day_contexts=day_contexts,
                         )
                     except _OptimizerExecutionError as err:
+                        latest_trace = err.trace
                         result = AutomationRunResult.skipped(
                             reason="optimizer_failed",
                             message=err.summary.error,
                             snapshot=err.snapshot,
                             optimizers=err.completed_optimizers + (err.summary,),
+                            trace=err.trace,
                         )
                         last_result = result
                     else:
                         latest_snapshot = execution_result.snapshot
                         latest_optimizers = execution_result.optimizers
+                        latest_trace = execution_result.trace
                         current_stage = "final_persist"
                         run_post_write_side_effects = (
                             await self._coordinator._persist_automation_result_locked(
@@ -355,6 +381,7 @@ class AutomationRunner:
                         result = AutomationRunResult.completed(
                             snapshot=execution_result.snapshot,
                             optimizers=execution_result.optimizers,
+                            trace=execution_result.trace,
                         )
                         last_result = result
             if run_post_write_side_effects:
@@ -389,6 +416,11 @@ class AutomationRunner:
                     ),
                     ran_automation=False if last_result is None else last_result.ran_automation,
                     cleanup=None if last_result is None else last_result.cleanup,
+                    trace=(
+                        latest_trace
+                        if last_result is None
+                        else last_result.trace
+                    ),
                 ),
                 run_reason=run_reason,
                 run_started_at=run_started_at,
@@ -408,8 +440,17 @@ class AutomationRunner:
         snapshot = initial_snapshot
         control_config = self._coordinator._read_schedule_control_config()
         optimizer_summaries: list[OptimizerRunSummary] = []
+        trace = OptimizerTrace(slot_ids=iter_horizon_slot_ids(reference_time))
+        trace.set_static_rails(
+            _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
+        )
         for optimizer_config in self._automation_config.execution_optimizers:
             optimizer_started_at = time.perf_counter()
+            trace.begin_step(optimizer_config.id, optimizer_config.kind)
+            # railsIn is the rail segment the optimizer received (pre-rebuild).
+            trace.set_rails_in(
+                _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
+            )
             try:
                 optimizer = build_optimizer(
                     optimizer_config,
@@ -419,6 +460,7 @@ class AutomationRunner:
                 candidate_schedule_document = optimizer.optimize(
                     snapshot,
                     optimizer_config,
+                    trace,
                 )
             except SurplusApplianceSkip as err:
                 try:
@@ -436,13 +478,23 @@ class AutomationRunner:
                         )
                     )
                 except Exception as rebuild_err:
+                    trace.end_step(status="failed")
                     raise _build_optimizer_error(
                         config=optimizer_config,
                         duration_ms=_elapsed_ms(optimizer_started_at),
                         error=str(rebuild_err),
                         completed_optimizers=tuple(optimizer_summaries),
                         snapshot=snapshot,
+                        trace=trace,
                     ) from rebuild_err
+                # Skip discards partial decisions and collapses the column to a
+                # single horizon-wide `skipped` note; the validator exempts it.
+                trace.discard_step_decisions()
+                trace.note_horizon(
+                    code="optimizer_skipped",
+                    params={"applianceId": err.appliance_id, "reason": str(err)},
+                )
+                trace.end_step(status="skipped")
                 optimizer_summaries.append(
                     _build_optimizer_summary(
                         optimizer_id=optimizer_config.id,
@@ -455,12 +507,14 @@ class AutomationRunner:
                 )
                 continue
             except Exception as err:
+                trace.end_step(status="failed")
                 raise _build_optimizer_error(
                     config=optimizer_config,
                     duration_ms=_elapsed_ms(optimizer_started_at),
                     error=str(err),
                     completed_optimizers=tuple(optimizer_summaries),
                     snapshot=snapshot,
+                    trace=trace,
                 ) from err
 
             previous_schedule_document = working_schedule_document
@@ -476,29 +530,38 @@ class AutomationRunner:
                     day_contexts=day_contexts,
                 )
             except Exception as err:
+                trace.end_step(status="failed")
                 raise _build_optimizer_error(
                     config=optimizer_config,
                     duration_ms=_elapsed_ms(optimizer_started_at),
                     error=str(err),
                     completed_optimizers=tuple(optimizer_summaries),
                     snapshot=snapshot,
+                    trace=trace,
                 ) from err
+            write_records = _collect_changed_writable_action_records(
+                before_document=previous_schedule_document,
+                after_document=working_schedule_document,
+            )
+            trace.record_writes(write_records)
+            trace.end_step(status="ok")
             optimizer_summaries.append(
                 _build_optimizer_summary(
                     optimizer_id=optimizer_config.id,
                     optimizer_kind=optimizer_config.kind,
                     status="ok",
-                    slots_written=_count_changed_writable_action_positions(
-                        before_document=previous_schedule_document,
-                        after_document=working_schedule_document,
-                    ),
+                    slots_written=len(write_records),
                     duration_ms=_elapsed_ms(optimizer_started_at),
                 )
             )
+        trace.set_rails_final(
+            _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
+        )
         return _PipelineExecutionResult(
             working_schedule_document=working_schedule_document,
             snapshot=snapshot,
             optimizers=tuple(optimizer_summaries),
+            trace=trace,
         )
 
     async def _async_persist_cleanup_only_locked(
@@ -537,6 +600,7 @@ class AutomationRunner:
             duration_ms=_elapsed_ms(run_started_at),
             cleanup=result.cleanup,
             failure=result.failure,
+            trace=result.trace,
         )
         _log_run_result(result=finalized, run_reason=run_reason)
         return finalized
@@ -577,6 +641,7 @@ def _build_runner_failed_result(
     optimizers: tuple[OptimizerRunSummary, ...] = (),
     ran_automation: bool = False,
     cleanup: AutomationCleanupSummary | None = None,
+    trace: OptimizerTrace | None = None,
 ) -> AutomationRunResult:
     message = _format_exception_message(error)
     return AutomationRunResult.failed(
@@ -589,15 +654,92 @@ def _build_runner_failed_result(
         snapshot=snapshot,
         optimizers=optimizers,
         cleanup=cleanup,
+        trace=trace,
     )
 
 
-def _count_changed_writable_action_positions(
+def _safe_capture(
+    capture,
+    snapshot: OptimizationSnapshot,
+    slot_ids: tuple[str, ...],
+) -> dict[str, list[float | None]]:
+    """Run a rail-capture helper without ever failing the run."""
+    try:
+        return capture(snapshot, slot_ids)
+    except Exception:  # pragma: no cover - observability must not fail runs
+        _LOGGER.exception("trace rail capture failed; run continues")
+        return {}
+
+
+def _capture_static_rails(
+    snapshot: OptimizationSnapshot,
+    slot_ids: tuple[str, ...],
+) -> dict[str, list[float | None]]:
+    """Per-run rails identical at every step: prices + solar/baseline house."""
+    battery_series = snapshot.battery_forecast.get("series")
+    energy = aggregate_series_to_slots(
+        battery_series,
+        slot_ids,
+        sum_fields=("solarKwh", "baselineHouseKwh"),
+    )
+    return {
+        "importPrice": price_points_to_slots(
+            snapshot.context.import_price_forecast.get("points"), slot_ids
+        ),
+        "exportPrice": price_points_to_slots(
+            snapshot.context.export_price_forecast.get("points"), slot_ids
+        ),
+        "solarKwh": energy["solarKwh"],
+        "houseKwh": energy["baselineHouseKwh"],
+    }
+
+
+def _capture_step_rails(
+    snapshot: OptimizationSnapshot,
+    slot_ids: tuple[str, ...],
+) -> dict[str, list[float | None]]:
+    """Step-sensitive rails: redirectable surplus + projected SoC trajectory."""
+    surplus = aggregate_series_to_slots(
+        snapshot.grid_forecast.get("series"),
+        slot_ids,
+        sum_fields=("availableSurplusKwh",),
+    )
+    soc = aggregate_series_to_slots(
+        snapshot.battery_forecast.get("series"),
+        slot_ids,
+        last_fields=("socPct",),
+    )
+    return {
+        "availableSurplusKwh": surplus["availableSurplusKwh"],
+        "batterySocPct": soc["socPct"],
+    }
+
+
+def _write_action_to_dict(action: Any) -> dict[str, Any] | None:
+    """Serialize a schedule action for the trace, treating empty as ``None``.
+
+    Inverter actions are ``ScheduleAction`` objects; appliance actions are plain
+    serializable dicts (``{"on": True, "setBy": ...}``).
+    """
+    if action is None:
+        return None
+    if isinstance(action, ScheduleAction):
+        if action.kind == SCHEDULE_ACTION_EMPTY:
+            return None
+        return action_to_dict(action)
+    if isinstance(action, dict):
+        return dict(action)
+    return None
+
+
+def _collect_changed_writable_action_records(
     *,
     before_document: ScheduleDocument,
     after_document: ScheduleDocument,
-) -> int:
-    changed_positions = 0
+) -> list[TraceWrite]:
+    """Ground-truth committed writes (layer 1): the schedule positions the
+    optimizer actually changed, excluding user-owned positions."""
+    records: list[TraceWrite] = []
     for slot_id in sorted(set(before_document.slots) | set(after_document.slots)):
         before_domains = before_document.slots.get(slot_id, ScheduleDomains())
         after_domains = after_document.slots.get(slot_id, ScheduleDomains())
@@ -606,7 +748,14 @@ def _count_changed_writable_action_positions(
             and not is_user_owned_inverter_action(before_domains.inverter)
             and not is_user_owned_inverter_action(after_domains.inverter)
         ):
-            changed_positions += 1
+            records.append(
+                TraceWrite(
+                    slot_id=slot_id,
+                    domain="inverter",
+                    before=_write_action_to_dict(before_domains.inverter),
+                    after=_write_action_to_dict(after_domains.inverter),
+                )
+            )
         for appliance_id in sorted(
             set(before_domains.appliances) | set(after_domains.appliances)
         ):
@@ -618,8 +767,15 @@ def _count_changed_writable_action_positions(
                 before_action
             ) or is_user_owned_appliance_action(after_action):
                 continue
-            changed_positions += 1
-    return changed_positions
+            records.append(
+                TraceWrite(
+                    slot_id=slot_id,
+                    domain=f"appliance:{appliance_id}",
+                    before=_write_action_to_dict(before_action),
+                    after=_write_action_to_dict(after_action),
+                )
+            )
+    return records
 
 
 def _build_optimizer_summary(
@@ -648,6 +804,7 @@ def _build_optimizer_error(
     error: str,
     completed_optimizers: tuple[OptimizerRunSummary, ...],
     snapshot: OptimizationSnapshot | None,
+    trace: OptimizerTrace | None = None,
 ) -> _OptimizerExecutionError:
     return _OptimizerExecutionError(
         summary=_build_optimizer_summary(
@@ -660,6 +817,7 @@ def _build_optimizer_error(
         ),
         completed_optimizers=completed_optimizers,
         snapshot=snapshot,
+        trace=trace,
     )
 
 

@@ -265,6 +265,23 @@ def _install_import_stubs() -> None:
     event_mod.async_track_time_interval = (
         lambda hass, callback, interval: lambda: None
     )
+    event_mod.async_track_state_change_event = (
+        lambda hass, entity_ids, action: lambda: None
+    )
+
+    debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
+    if debounce_mod is None:
+        debounce_mod = types.ModuleType("homeassistant.helpers.debounce")
+        sys.modules["homeassistant.helpers.debounce"] = debounce_mod
+
+    class _Debouncer:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def async_call(self) -> None:
+            pass
+
+    debounce_mod.Debouncer = _Debouncer
 
     storage_mod = sys.modules.get("homeassistant.helpers.storage")
     if storage_mod is None:
@@ -337,6 +354,7 @@ from custom_components.helman.automation import pipeline as pipeline_module
 from custom_components.helman.scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
+    iter_horizon_slot_ids,
     schedule_document_to_dict,
 )
 from custom_components.helman.websockets import (
@@ -360,6 +378,7 @@ for module_name in (
     "homeassistant.components.energy.data",
     "homeassistant.helpers",
     "homeassistant.helpers.event",
+    "homeassistant.helpers.debounce",
     "homeassistant.helpers.storage",
     "homeassistant.helpers.entity_registry",
 ):
@@ -559,12 +578,21 @@ class _FakeCoordinator:
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         return None if self._bundle is None else deepcopy(self._bundle)
 
+    async def async_resolve_day_contexts(
+        self,
+        *,
+        snapshot: OptimizationSnapshot,
+        reference_time: datetime,
+    ) -> dict:
+        return {}
+
     async def _build_automation_snapshot_from_schedule_locked(
         self,
         *,
         schedule_document: ScheduleDocument,
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
+        day_contexts: dict | None = None,
     ) -> OptimizationSnapshot:
         self.snapshot_calls.append(
             {
@@ -866,7 +894,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             pipeline_module,
             "build_optimizer",
             return_value=SimpleNamespace(
-                optimize=lambda snapshot, config: deepcopy(snapshot.schedule)
+                optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
             ),
         ):
             first = await runner.run(reference_time=REFERENCE_TIME)
@@ -922,7 +950,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             pipeline_module,
             "build_optimizer",
             return_value=SimpleNamespace(
-                optimize=lambda snapshot, config: deepcopy(snapshot.schedule)
+                optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
             ),
         ):
             result = await AutomationRunner(
@@ -1042,7 +1070,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             pipeline_module,
             "build_optimizer",
             return_value=SimpleNamespace(
-                optimize=lambda snapshot, config: deepcopy(optimized_schedule)
+                optimize=lambda snapshot, config, trace=None: deepcopy(optimized_schedule)
             ),
         ):
             result = await AutomationRunner(
@@ -1102,7 +1130,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                     optimize=Mock(return_value=deepcopy(first_schedule))
                 )
 
-            def _second_optimize(snapshot, current_config):
+            def _second_optimize(snapshot, current_config, trace=None):
                 self.assertEqual(
                     schedule_document_to_dict(snapshot.schedule),
                     schedule_document_to_dict(first_schedule),
@@ -1146,7 +1174,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             side_effect=lambda config, *, control_config, appliance_registry: SimpleNamespace(
                 optimize=Mock(
-                    side_effect=lambda snapshot, current_config: deepcopy(
+                    side_effect=lambda snapshot, current_config, trace=None: deepcopy(
                         snapshot.schedule
                     )
                 )
@@ -1353,7 +1381,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             pipeline_module,
             "build_optimizer",
             return_value=SimpleNamespace(
-                optimize=Mock(side_effect=lambda snapshot, config: deepcopy(snapshot.schedule))
+                optimize=Mock(side_effect=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule))
             ),
         ):
             result = await AutomationRunner(
@@ -1391,7 +1419,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             pipeline_module,
             "build_optimizer",
             return_value=SimpleNamespace(
-                optimize=Mock(side_effect=lambda snapshot, config: deepcopy(snapshot.schedule))
+                optimize=Mock(side_effect=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule))
             ),
         ):
             result = await AutomationRunner(
@@ -1506,7 +1534,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             side_effect=lambda config, *, control_config, appliance_registry: SimpleNamespace(
                 optimize=Mock(
-                    side_effect=lambda snapshot, current_config: deepcopy(
+                    side_effect=lambda snapshot, current_config, trace=None: deepcopy(
                         snapshot.schedule
                     )
                 )
@@ -1524,6 +1552,202 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
         self.assertEqual(len(coordinator.snapshot_calls), 3)
         self.assertEqual(len(coordinator.persist_calls), 1)
+
+
+class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_run_attaches_trace_with_expected_shape(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertIsNotNone(result.trace)
+        payload = result.to_dict()
+        self.assertIn("trace", payload)
+        trace = payload["trace"]
+        expected_len = len(iter_horizon_slot_ids(REFERENCE_TIME))
+        self.assertEqual(len(trace["slotIds"]), expected_len)
+        for rail in trace["staticRails"].values():
+            self.assertEqual(len(rail), expected_len)
+        self.assertEqual(len(trace["steps"]), 1)
+        step = trace["steps"][0]
+        self.assertEqual(step["optimizerId"], "avoid-negative-export")
+        self.assertEqual(step["status"], "ok")
+        self.assertEqual(len(step["railsIn"]["availableSurplusKwh"]), expected_len)
+        self.assertEqual(len(trace["railsFinal"]["batterySocPct"]), expected_len)
+
+    async def test_validator_never_fails_the_run_on_coverage_gap(self) -> None:
+        # The mocked optimizer emits nothing, so every step is incomplete, yet
+        # the run still completes (observability must never fail the run).
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        step = result.to_dict()["trace"]["steps"][0]
+        self.assertFalse(step["complete"])
+        self.assertTrue(
+            any(
+                decision["reason"]["code"] == "unexplained"
+                for decision in step["decisions"]
+            )
+        )
+
+    async def test_appliance_write_records_serialize_before_and_after(self) -> None:
+        # An optimizer that turns the boiler on for the current slot -> the
+        # framework write diff must record the appliance dict, not null.
+        written_schedule = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "normal"},
+                    "appliances": {"boiler": {"on": True, "setBy": "automation"}},
+                }
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config, trace=None: deepcopy(written_schedule)
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(
+                        optimizer_id="run-boiler",
+                        kind="daily_runtime",
+                        params={"appliance_id": "boiler", "action": "on"},
+                    )
+                ),
+            ).run(reference_time=REFERENCE_TIME)
+
+        writes = result.to_dict()["trace"]["steps"][0]["writes"]
+        boiler_writes = [w for w in writes if w["domain"] == "appliance:boiler"]
+        self.assertEqual(len(boiler_writes), 1)
+        self.assertIsNone(boiler_writes[0]["before"])
+        self.assertEqual(
+            boiler_writes[0]["after"], {"on": True, "setBy": "automation"}
+        )
+
+    async def test_optimizer_failure_still_attaches_partial_trace(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=Mock(side_effect=RuntimeError("boom"))
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(result.reason, "optimizer_failed")
+        self.assertIsNotNone(result.trace)
+        payload = result.to_dict()
+        self.assertIn("trace", payload)
+        self.assertEqual(len(payload["trace"]["steps"]), 1)
+        self.assertEqual(payload["trace"]["steps"][0]["status"], "failed")
+
+    async def test_surplus_skip_collapses_column_to_skipped_note(self) -> None:
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "normal"},
+                    "appliances": {"boiler": {"on": True, "setBy": "automation"}},
+                }
+            },
+        )
+        coordinator = _FakeCoordinator(
+            schedule_document=schedule_document,
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=Mock(
+                    side_effect=SurplusApplianceSkip(
+                        "boiler",
+                        "when-active demand is unavailable",
+                    )
+                )
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(
+                        optimizer_id="run-boiler-on-surplus",
+                        kind="surplus_appliance",
+                        params={
+                            "appliance_id": "boiler",
+                            "action": "on",
+                            "min_surplus_buffer_pct": 5,
+                        },
+                    )
+                ),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertTrue(result.ran_automation)
+        self.assertIsNotNone(result.trace)
+        step = result.to_dict()["trace"]["steps"][0]
+        self.assertEqual(step["status"], "skipped")
+        self.assertTrue(step["complete"])
+        self.assertTrue(
+            any(note["code"] == "optimizer_skipped" for note in step["notes"])
+        )
+        # skipped column is fully explained -> no synthetic unexplained fill
+        self.assertFalse(
+            any(
+                decision["reason"]["code"] == "unexplained"
+                for decision in step["decisions"]
+            )
+        )
 
 
 class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):

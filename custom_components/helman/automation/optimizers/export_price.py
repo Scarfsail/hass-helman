@@ -23,6 +23,7 @@ from ..ownership import is_user_owned_inverter_action
 if TYPE_CHECKING:
     from ..config import OptimizerInstanceConfig
     from ..snapshot import OptimizationSnapshot
+    from ..trace import OptimizerTrace
 
 _LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class ExportPriceOptimizer:
         self,
         snapshot: "OptimizationSnapshot",
         config: "OptimizerInstanceConfig",
+        trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         threshold = _read_threshold(config)
         action = _read_action(config)

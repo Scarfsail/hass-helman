@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from ...appliances import AppliancesRuntimeRegistry
     from ..config import OptimizerInstanceConfig
     from ..snapshot import OptimizationSnapshot
+    from ..trace import OptimizerTrace
 
 _SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
@@ -80,6 +81,7 @@ class DailyRuntimeOptimizer:
         self,
         snapshot: "OptimizationSnapshot",
         config: "OptimizerInstanceConfig",
+        trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         del config
         updated = ScheduleDocument(

@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from ..config import OptimizerInstanceConfig
     from ..day_context import DayContext
     from ..snapshot import OptimizationSnapshot
+    from ..trace import OptimizerTrace
 
 _SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 
@@ -78,6 +79,7 @@ class ChargeHoldOptimizer:
         self,
         snapshot: "OptimizationSnapshot",
         config: "OptimizerInstanceConfig",
+        trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         del config
         updated = ScheduleDocument(

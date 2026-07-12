@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from .config import OptimizerInstanceConfig
     from ..scheduling.schedule import ScheduleControlConfig
     from ..scheduling.schedule import ScheduleDocument
+    from .trace import OptimizerTrace
 
 
 class Optimizer(Protocol):
@@ -35,6 +36,7 @@ class Optimizer(Protocol):
         self,
         snapshot: Any,
         config: OptimizerInstanceConfig,
+        trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument: ...
 
 
