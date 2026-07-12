@@ -46,13 +46,15 @@ export class HelmanAutomationInspector extends LitElement {
 
     updated() {
         if (this.hass && !this._loadedOnce && !this._loading) {
-            this._loadedOnce = true;
             void this._load();
         }
     }
 
     private async _load() {
         if (!this.hass) return;
+        // Owned here (not in updated()) so an explicit re-load — e.g. after Run
+        // now — never leaves _loadedOnce false and triggers a second fetch.
+        this._loadedOnce = true;
         const requestId = ++this._activeRequestId;
         this._loading = true;
         this._error = "";
@@ -76,7 +78,6 @@ export class HelmanAutomationInspector extends LitElement {
         this._running = true;
         try {
             await this.hass.callWS({ type: "helman/run_automation" });
-            this._loadedOnce = false;
             await this._load();
         } catch (err) {
             this._error = String((err as any)?.message ?? err);

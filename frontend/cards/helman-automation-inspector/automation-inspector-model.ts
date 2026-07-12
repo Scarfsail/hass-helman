@@ -68,8 +68,8 @@ interface StepIndexEntry {
     step: TraceStepDTO;
     /** slotId -> the decision covering it (last emission wins). */
     decisionBySlot: Map<string, TraceDecisionDTO>;
-    /** slotId -> committed write. */
-    writeBySlot: Map<string, TraceWriteDTO>;
+    /** slotId -> committed writes for that slot (one per domain). */
+    writesBySlot: Map<string, TraceWriteDTO[]>;
     /** Derivation inputs pulled from emitted params. */
     exportThreshold: number | null;
     surplusBufferPct: number | null;
@@ -83,11 +83,18 @@ export class AutomationInspectorModel {
     readonly trace: AutomationTraceDTO;
     readonly slotIds: string[];
     private readonly _steps: StepIndexEntry[];
+    /** slotId -> its index, built once so lookups stay O(1). */
+    private readonly _slotIndexById: Map<string, number>;
 
     constructor(trace: AutomationTraceDTO) {
         this.trace = trace;
         this.slotIds = trace.slotIds;
+        this._slotIndexById = new Map(this.slotIds.map((id, i) => [id, i]));
         this._steps = trace.steps.map((step) => this._indexStep(step));
+    }
+
+    private _slotIndex(slotId: string): number {
+        return this._slotIndexById.get(slotId) ?? -1;
     }
 
     static fromPayload(payload: AutomationRunPayload): AutomationInspectorModel | null {
@@ -110,13 +117,13 @@ export class AutomationInspectorModel {
         domain: string,
         localize: LocalizeFunction,
     ): FormattedReason | null {
-        const slotIndex = this.slotIds.indexOf(slotId);
+        const slotIndex = this._slotIndex(slotId);
         if (slotIndex < 0) return null;
         let found: FormattedReason | null = null;
         for (let stepIndex = 0; stepIndex < this._steps.length; stepIndex++) {
             const entry = this._steps[stepIndex];
-            const write = entry.writeBySlot.get(slotId);
-            if (!write || write.domain !== domain) continue;
+            const writes = entry.writesBySlot.get(slotId);
+            if (!writes || !writes.some((w) => w.domain === domain)) continue;
             const decision = entry.decisionBySlot.get(slotId);
             const code = decision?.reason?.code ?? "unexplained";
             found = this._formatReason(
@@ -141,9 +148,11 @@ export class AutomationInspectorModel {
                 decisionBySlot.set(slotId, decision);
             }
         }
-        const writeBySlot = new Map<string, TraceWriteDTO>();
+        const writesBySlot = new Map<string, TraceWriteDTO[]>();
         for (const write of step.writes) {
-            writeBySlot.set(write.slotId, write);
+            const existing = writesBySlot.get(write.slotId);
+            if (existing) existing.push(write);
+            else writesBySlot.set(write.slotId, [write]);
         }
         let exportThreshold: number | null = null;
         let surplusBufferPct: number | null = null;
@@ -156,7 +165,7 @@ export class AutomationInspectorModel {
                 surplusBufferPct = p.bufferPct;
             }
         }
-        return { step, decisionBySlot, writeBySlot, exportThreshold, surplusBufferPct };
+        return { step, decisionBySlot, writesBySlot, exportThreshold, surplusBufferPct };
     }
 
     /** Resolve the cell at (stepIndex, slotIndex) to a rendered view. */
@@ -167,7 +176,7 @@ export class AutomationInspectorModel {
     ): CellView {
         const entry = this._steps[stepIndex];
         const slotId = this.slotIds[slotIndex];
-        const write = entry.writeBySlot.get(slotId);
+        const write = entry.writesBySlot.get(slotId)?.[0];
         const decision = entry.decisionBySlot.get(slotId);
 
         if (decision) {
@@ -178,7 +187,7 @@ export class AutomationInspectorModel {
                     : (decision.outcome as CellState);
             const siblings: number[] = [];
             for (const sid of decision.slotIds) {
-                const idx = this.slotIds.indexOf(sid);
+                const idx = this._slotIndex(sid);
                 if (idx >= 0) siblings.push(idx);
             }
             return {
@@ -277,9 +286,24 @@ function substitute(template: string, params: Record<string, unknown>): string {
     return template.replace(/\{(\w+)\}/g, (match, key: string) => {
         const value = params[key];
         if (value === undefined || value === null) return "—";
-        if (typeof value === "number") {
-            return Number.isInteger(value) ? String(value) : value.toFixed(2);
+        if (Array.isArray(value)) {
+            return value.length ? value.map(formatScalar).join(", ") : "—";
         }
-        return String(value);
+        return formatScalar(value);
     });
+}
+
+/** ISO slot id, e.g. "2026-07-12T18:00" — rendered as its HH:MM time. */
+const SLOT_ID_RE = /^\d{4}-\d{2}-\d{2}T(\d{2}:\d{2})/;
+
+function formatScalar(value: unknown): string {
+    if (value === undefined || value === null) return "—";
+    if (typeof value === "number") {
+        return Number.isInteger(value) ? String(value) : value.toFixed(2);
+    }
+    if (typeof value === "string") {
+        const slot = SLOT_ID_RE.exec(value);
+        return slot ? slot[1] : value;
+    }
+    return String(value);
 }
