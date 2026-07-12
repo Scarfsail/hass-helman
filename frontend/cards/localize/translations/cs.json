@@ -9,36 +9,36 @@
   "node_detail": {
     "close": "Zavřít",
     "title": {
-      "solar":   "Solární panely",
+      "solar": "Solární panely",
       "battery": "Baterie",
-      "grid":    "Síť",
-      "house":   "Dům"
+      "grid": "Síť",
+      "house": "Dům"
     },
     "battery": {
-      "mode":               "Režim",
-      "mode_charging":      "Nabíjení",
-      "mode_discharging":   "Vybíjení",
-      "mode_idle":          "Nečinnost",
-      "power":              "Výkon",
-      "soc":                "Nabití",
-      "min_soc":            "Min. nabití",
-      "max_soc":            "Max. nabití",
-      "remaining_energy":   "Zbývající energie",
-      "section_producer":   "Vybíjení",
-      "section_consumer":   "Nabíjení"
+      "mode": "Režim",
+      "mode_charging": "Nabíjení",
+      "mode_discharging": "Vybíjení",
+      "mode_idle": "Nečinnost",
+      "power": "Výkon",
+      "soc": "Nabití",
+      "min_soc": "Min. nabití",
+      "max_soc": "Max. nabití",
+      "remaining_energy": "Zbývající energie",
+      "section_producer": "Vybíjení",
+      "section_consumer": "Nabíjení"
     },
     "solar": {
-      "power":        "Výkon",
+      "power": "Výkon",
       "today_energy": "Dnes",
-      "forecast":     "Zbývající předpověď",
+      "forecast": "Zbývající předpověď",
       "forecast_section": "Předpověď",
       "remaining_today": "Zbývá dnes",
       "forecast_unavailable": "Předpověď není dostupná"
     },
     "grid": {
-      "power":            "Výkon",
-      "today_import":     "Dnes odebráno",
-      "today_export":     "Dnes dodáno",
+      "power": "Výkon",
+      "today_import": "Dnes odebráno",
+      "today_export": "Dnes dodáno",
       "section_producer": "Import",
       "section_consumer": "Export",
       "forecast_section": "Předpověď sítě",
@@ -400,6 +400,140 @@
         "dropped_day": "Vynechaný den",
         "omitted_slot": "Vynechaný slot",
         "interpolated": "Interpolováno"
+      }
+    }
+  },
+  "automation": {
+    "inspector": {
+      "loading": "Načítám poslední běh automatizace…",
+      "load_failed": "Nepodařilo se načíst běh automatizace",
+      "no_run": "Zatím nebyl zaznamenán žádný běh.",
+      "no_trace": "Tento běh nemá záznam rozhodnutí.",
+      "completed": "dokončeno",
+      "skipped": "přeskočeno",
+      "only_activity": "Jen řádky s aktivitou",
+      "run_now": "Spustit",
+      "running": "Spouštím…",
+      "slot": "Slot",
+      "action_before": "Před",
+      "action_after": "Po",
+      "classification": {
+        "surplus": "přebytkový den",
+        "tight": "napjatý den",
+        "deficit": "deficitní den"
+      },
+      "rail": {
+        "import": "Cena importu",
+        "export": "Cena exportu",
+        "surplus": "Přebytek kWh",
+        "soc": "SoC baterie"
+      },
+      "status": {
+        "skipped": "přeskočeno",
+        "failed": "selhalo",
+        "incomplete": "neúplné"
+      },
+      "reason": {
+        "price_below_threshold": {
+          "title": "Zastavit export",
+          "detail": "Cena exportu {price} je pod prahem {threshold} — zastavuji export."
+        },
+        "price_not_below_threshold": {
+          "title": "Export povolen",
+          "detail": "Cena exportu {price} není pod prahem {threshold}."
+        },
+        "stop_export_unsupported": {
+          "title": "Stop exportu nedostupný",
+          "detail": "Měnič neumí zastavit export; přeskočeno {skippedSlots} slotů."
+        },
+        "hold_window_applied": {
+          "title": "Držet nabíjení",
+          "detail": "Držím nabití pro {neededKwh} kWh; uvolnění {releaseSlot} (podle {boundBy})."
+        },
+        "after_release": {
+          "title": "Po uvolnění",
+          "detail": "Po uvolnění držení v {releaseSlot}."
+        },
+        "outside_window": {
+          "title": "Mimo okno",
+          "detail": "Mimo okno držení."
+        },
+        "no_room_to_hold": {
+          "title": "Nelze držet",
+          "detail": "Potřeba {neededKwh} kWh, ale jen {surplusAtWindowStart} kWh přebytku na začátku okna."
+        },
+        "day_not_matched": {
+          "title": "Den neodpovídá",
+          "detail": "Den je {classification}; běží jen ve dnech {onlyOnDays}."
+        },
+        "battery_params_missing": {
+          "title": "Chybí parametry baterie",
+          "detail": "Parametry baterie nejsou dostupné."
+        },
+        "bridge_window": {
+          "title": "Nabít ze sítě",
+          "detail": "Nabíjím na {targetSoc}% pro překlenutí {expensiveWindow} ({deficitKwh} kWh)."
+        },
+        "cheaper_slot_chosen": {
+          "title": "Vybrán levnější slot",
+          "detail": "Byl vybrán levnější slot (nejhorší vybraný {chosenPrice})."
+        },
+        "window_covered": {
+          "title": "Okno pokryto",
+          "detail": "SoC zůstává na {projectedMinSoc}% přes {expensiveWindow}; překlenutí není potřeba."
+        },
+        "band_not_expensive": {
+          "title": "Není drahé pásmo",
+          "detail": "Toto pásmo není drahé."
+        },
+        "no_cheap_band": {
+          "title": "Žádné levné pásmo",
+          "detail": "Není předcházející levné pásmo pro nabití."
+        },
+        "runtime_deficit_placed": {
+          "title": "Spustit spotřebič",
+          "detail": "Umístěno {placedHours} h z {minHours} h ({doneHours} h již hotovo)."
+        },
+        "ranked_more_expensive": {
+          "title": "Dražší v pořadí",
+          "detail": "Dražší než vybrané sloty (nejhorší vybraný {worstChosenCost})."
+        },
+        "runtime_satisfied": {
+          "title": "Doba splněna",
+          "detail": "Dnes už běželo {doneHours} h."
+        },
+        "day_skipped": {
+          "title": "Den přeskočen",
+          "detail": "Přeskočeno v den typu {classification} (po sobě {consecutiveSkips})."
+        },
+        "surplus_covers_demand": {
+          "title": "Běh na přebytku",
+          "detail": "Solární přebytek pokryje spotřebu (+{bufferPct}% rezerva)."
+        },
+        "surplus_insufficient": {
+          "title": "Nedostatek přebytku",
+          "detail": "Přebytek {surplus} kWh nepokryje spotřebu (+{bufferPct}% rezerva)."
+        },
+        "forecast_unavailable": {
+          "title": "Předpověď nedostupná",
+          "detail": "Přebytek z předpovědi není dostupný ({status})."
+        },
+        "blocked_user_owned": {
+          "title": "Blokováno (uživatel)",
+          "detail": "Uživatelská akce na {domain} blokuje tento zápis."
+        },
+        "optimizer_skipped": {
+          "title": "Optimalizátor přeskočen",
+          "detail": "Tento optimalizátor byl v tomto běhu přeskočen."
+        },
+        "unexplained": {
+          "title": "Bez vysvětlení",
+          "detail": "Pro tento slot nebylo zaznamenáno vysvětlení (mezera v instrumentaci)."
+        },
+        "out_of_scope_default": {
+          "title": "Nezvažováno",
+          "detail": "Tento slot byl mimo záběr tohoto optimalizátoru."
+        }
       }
     }
   }

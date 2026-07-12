@@ -513,3 +513,104 @@ export interface ApplianceProjectionsPayload {
 export interface GetApplianceProjectionsRequest {
     type: "helman/get_appliance_projections";
 }
+
+// --- Automation optimizer decision-matrix trace -----------------------------
+
+export type TraceDecisionOutcome =
+    | "applied"
+    | "rejected"
+    | "blocked"
+    | "out_of_scope";
+
+export interface TraceReasonDTO {
+    code: string;
+    params: Record<string, unknown>;
+    signals?: string[];
+}
+
+export interface TraceActionDTO {
+    domain: string;
+    kind?: string;
+    [key: string]: unknown;
+}
+
+export interface TraceWriteDTO {
+    slotId: string;
+    domain: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+}
+
+export interface TraceDecisionDTO {
+    slotIds: string[];
+    outcome: TraceDecisionOutcome;
+    action?: TraceActionDTO | null;
+    reason?: TraceReasonDTO | null;
+}
+
+export interface TraceNoteDTO {
+    code: string;
+    params: Record<string, unknown>;
+}
+
+export interface TraceStepRailsDTO {
+    availableSurplusKwh?: (number | null)[];
+    batterySocPct?: (number | null)[];
+}
+
+export interface TraceStepDTO {
+    optimizerId: string;
+    kind: string;
+    status: string;
+    complete: boolean;
+    railsIn: TraceStepRailsDTO;
+    writes: TraceWriteDTO[];
+    decisions: TraceDecisionDTO[];
+    notes: TraceNoteDTO[];
+}
+
+export interface TraceStaticRailsDTO {
+    importPrice?: (number | null)[];
+    exportPrice?: (number | null)[];
+    solarKwh?: (number | null)[];
+    houseKwh?: (number | null)[];
+}
+
+export interface AutomationTraceDTO {
+    slotIds: string[];
+    staticRails: TraceStaticRailsDTO;
+    steps: TraceStepDTO[];
+    railsFinal: TraceStepRailsDTO;
+}
+
+export interface AutomationOptimizerSummaryDTO {
+    id: string;
+    kind: string;
+    status: string;
+    slotsWritten: number;
+    durationMs: number;
+    error?: string;
+}
+
+export interface AutomationDayContextSummaryDTO {
+    localDate: string;
+    classification: string;
+    dayMinWindow: { start: string; end: string } | null;
+}
+
+export interface AutomationRunPayload {
+    ranAutomation: boolean;
+    snapshot: unknown | null;
+    dayContexts: AutomationDayContextSummaryDTO[];
+    optimizers: AutomationOptimizerSummaryDTO[];
+    durationMs: number;
+    reason?: string;
+    message?: string;
+    cleanup?: { reason: string; actionsStripped: number };
+    failure?: { stage: string; message: string; unexpected: boolean };
+    trace?: AutomationTraceDTO;
+}
+
+export interface GetLastAutomationRunRequest {
+    type: "helman/get_last_automation_run";
+}
