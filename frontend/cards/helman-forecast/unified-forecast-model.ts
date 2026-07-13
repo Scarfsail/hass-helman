@@ -1,7 +1,7 @@
 import type { ForecastPayload, ForecastPointDTO } from "../helman-api";
 import type {
     HelmanForecastSectionVisibility,
-} from "./HelmanForecastCardConfig";
+} from "./forecast-types";
 import {
     buildBatteryOverviewCardModel,
     type BatteryOverviewChartBarModel,

@@ -1,6 +1,5 @@
 import './helman/helman-card.ts'
 import './helman-simple/helman-simple-card.ts'
-import './helman-forecast/helman-forecast-card.ts'
 import './helman-scheduling/helman-scheduling-card.ts'
 import './helman-solar-inspector/helman-solar-inspector-card.ts'
 import './helman-automation-inspector/helman-automation-inspector-card.ts'

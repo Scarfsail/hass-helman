@@ -42,7 +42,7 @@ import {
     projectIntervalsToSharedAxis,
     type SharedForecastAxis,
 } from "./shared/shared-forecast-axis";
-import type { HelmanForecastSectionVisibility } from "./HelmanForecastCardConfig";
+import type { HelmanForecastSectionVisibility } from "./forecast-types";
 import type { UnifiedForecastDayModel } from "./unified-forecast-model";
 
 interface UnifiedSolarPointProjection {

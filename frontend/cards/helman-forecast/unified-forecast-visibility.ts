@@ -1,4 +1,4 @@
-import type { HelmanForecastSectionVisibility } from "./HelmanForecastCardConfig";
+import type { HelmanForecastSectionVisibility } from "./forecast-types";
 
 export interface UnifiedForecastOverviewConfig {
     solarGauge: boolean;
@@ -12,7 +12,7 @@ export interface UnifiedForecastOverviewConfig {
     priceChart: boolean;
 }
 
-export type UnifiedForecastOverviewPreset = "solar" | "grid" | "house" | "battery" | "forecastCard";
+export type UnifiedForecastOverviewPreset = "solar" | "grid" | "house" | "battery";
 
 const EMPTY_UNIFIED_FORECAST_OVERVIEW_CONFIG: UnifiedForecastOverviewConfig = {
     solarGauge: false,
@@ -27,17 +27,6 @@ const EMPTY_UNIFIED_FORECAST_OVERVIEW_CONFIG: UnifiedForecastOverviewConfig = {
 };
 
 const UNIFIED_FORECAST_OVERVIEW_PRESETS: Record<UnifiedForecastOverviewPreset, UnifiedForecastOverviewConfig> = {
-    forecastCard: {
-        solarGauge: true,
-        solarChart: true,
-        gridGauge: false,
-        gridChart: false,
-        batteryGauge: false,
-        batteryChart: true,
-        consumptionGauge: false,
-        consumptionChart: false,
-        priceChart: true,
-    },
     solar: {
         solarGauge: true,
         solarChart: true,

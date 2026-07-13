@@ -31,7 +31,7 @@ import { forecastSharedStyles } from "./shared/forecast-shared-styles";
 import type {
     HelmanForecastMobileDensity,
     HelmanForecastSectionVisibility,
-} from "./HelmanForecastCardConfig";
+} from "./forecast-types";
 import {
     buildUnifiedForecastModel,
     type UnifiedBatteryOverviewModel,

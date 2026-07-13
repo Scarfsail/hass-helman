@@ -148,23 +148,6 @@ power_devices:
 - `deferrable_consumers`: optional per-consumer sub-meters, each a non-overlapping sub-meter already
   included in the house total. Baseline is derived as `house total - sum(deferrables)`.
 
-### `custom:helman-forecast-card`
-Standalone forecast card. Loads the shared `helman/get_forecast` payload once and renders solar
-production, battery SoC/flow, house consumption, and grid price.
-
-```yaml
-type: custom:helman-forecast-card
-transparent_background: false
-mobile_density: compact
-show_solar_gauge: true
-show_solar_chart: true
-show_battery_gauge: false
-show_battery_chart: true
-show_consumption_gauge: false
-show_consumption_chart: false
-show_price_chart: true
-```
-
 ### `custom:helman-solar-inspector-card`
 Solar bias correction inspector, using the `helman/solar_bias/inspector` WebSocket API.
 
