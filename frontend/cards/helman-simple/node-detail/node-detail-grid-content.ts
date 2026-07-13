@@ -6,7 +6,6 @@ import type { LocalizeFunction } from "../../localize/localize";
 import type { GridDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import "../../helman/power-device";
-import "./node-detail-forecast-section";
 
 @customElement("node-detail-grid-content")
 export class NodeDetailGridContent extends LitElement {
@@ -52,11 +51,6 @@ export class NodeDetailGridContent extends LitElement {
                         ` : nothing}
                     </div>
                 ` : nothing}
-                <node-detail-forecast-section
-                    .hass=${this.hass}
-                    .localize=${this.localize}
-                    .nodeType=${p.nodeType}
-                ></node-detail-forecast-section>
             </div>
         `;
     }

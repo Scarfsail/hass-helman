@@ -2,12 +2,10 @@ import { LitElement, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
-import type { LocalizeFunction } from "../../localize/localize";
 import type { HouseDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import "../../helman/power-device";
 import "../../helman/power-house-devices-section";
-import "./node-detail-forecast-section";
 
 @customElement("node-detail-house-content")
 export class NodeDetailHouseContent extends LitElement {
@@ -15,7 +13,6 @@ export class NodeDetailHouseContent extends LitElement {
     static styles = [nodeDetailSharedStyles];
 
     @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public params!: HouseDetailParams;
 
     render() {
@@ -49,11 +46,6 @@ export class NodeDetailHouseContent extends LitElement {
                         .uiConfig=${p.uiConfig}
                     ></power-house-devices-section>
                 ` : nothing}
-                <node-detail-forecast-section
-                    .hass=${this.hass}
-                    .localize=${this.localize}
-                    .nodeType=${p.nodeType}
-                ></node-detail-forecast-section>
             </div>
         `;
     }

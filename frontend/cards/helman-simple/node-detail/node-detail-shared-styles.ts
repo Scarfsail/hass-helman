@@ -71,10 +71,4 @@ export const nodeDetailSharedStyles = css`
         gap: 4px;
     }
 
-    .forecast-section {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-
 `;
