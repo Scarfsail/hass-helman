@@ -12,21 +12,6 @@ const MAX_LOCAL_DATE_TIME_DESCRIPTOR_CACHE_SIZE = 2048;
 const LOCAL_DATE_TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 const LOCAL_DATE_TIME_DESCRIPTOR_CACHE = new Map<string, LocalDateTimeDescriptor | null>();
 
-export function getCachedLocalDateTimeParts(
-    value: Date | string | number,
-    timeZone: string,
-): LocalDateTimeParts | null {
-    const descriptor = getCachedLocalDateTimeDescriptor(value, timeZone);
-    if (descriptor === null) {
-        return null;
-    }
-
-    return {
-        dayKey: descriptor.dayKey,
-        hour: descriptor.hour,
-    };
-}
-
 export function getCachedLocalDateTimeDescriptor(
     value: Date | string | number,
     timeZone: string,
