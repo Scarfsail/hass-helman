@@ -88,10 +88,29 @@ def _load_sensor_module():
     sys.modules["homeassistant.core"] = core_mod
 
     helpers_pkg = types.ModuleType("homeassistant.helpers")
+    helpers_pkg.__path__ = []  # mark as package so sub-imports work
     sys.modules["homeassistant.helpers"] = helpers_pkg
     entity_platform_mod = types.ModuleType("homeassistant.helpers.entity_platform")
     entity_platform_mod.AddEntitiesCallback = object
     sys.modules["homeassistant.helpers.entity_platform"] = entity_platform_mod
+
+    # ``automation.day_context_store`` (pulled in transitively) does
+    # ``from homeassistant.helpers import storage``; provide a lightweight stub.
+    storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
+
+    class _HelperStore:
+        def __init__(self, hass, version, key) -> None:
+            self._data = None
+
+        async def async_load(self):
+            return self._data
+
+        async def async_save(self, data) -> None:
+            self._data = data
+
+    storage_helper_mod.Store = _HelperStore
+    sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
+    helpers_pkg.storage = storage_helper_mod
 
     return importlib.import_module("custom_components.helman.sensor")
 

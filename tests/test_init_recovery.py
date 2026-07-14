@@ -27,14 +27,35 @@ def _load_helman_init_with_stubs():
         homeassistant_pkg = types.ModuleType("homeassistant")
         sys.modules["homeassistant"] = homeassistant_pkg
 
-    config_entries_mod = types.ModuleType("homeassistant.config_entries")
-    config_entries_mod.ConfigEntry = type("ConfigEntry", (), {})
-    sys.modules["homeassistant.config_entries"] = config_entries_mod
+    try:
+        import homeassistant.config_entries as config_entries_mod  # type: ignore  # noqa: F401
+    except ModuleNotFoundError:
+        config_entries_mod = types.ModuleType("homeassistant.config_entries")
+        config_entries_mod.ConfigEntry = type("ConfigEntry", (), {})
+        sys.modules["homeassistant.config_entries"] = config_entries_mod
 
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
+    # Prefer the real ``homeassistant.core`` when the package is importable
+    # (dev container / CI): a partial stub shadows it and breaks the many
+    # transitive ``from homeassistant.core import ...`` in real HA helpers.
+    try:
+        import homeassistant.core as core_mod  # type: ignore  # noqa: F401
+    except ModuleNotFoundError:
+        core_mod = types.ModuleType("homeassistant.core")
+        core_mod.HomeAssistant = type("HomeAssistant", (), {})
+        core_mod.callback = lambda func: func
+        sys.modules["homeassistant.core"] = core_mod
+
+    frontend_mod = types.ModuleType("custom_components.helman.frontend")
+
+    async def async_register_frontend(_hass) -> None:
+        return None
+
+    async def async_unregister_frontend(_hass) -> None:
+        return None
+
+    frontend_mod.async_register_frontend = async_register_frontend
+    frontend_mod.async_unregister_frontend = async_unregister_frontend
+    sys.modules["custom_components.helman.frontend"] = frontend_mod
 
     panel_mod = types.ModuleType("custom_components.helman.panel")
     panel_mod.register_calls = 0

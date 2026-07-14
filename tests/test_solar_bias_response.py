@@ -54,6 +54,7 @@ _COORDINATOR_STUBBED_MODULES = (
     "homeassistant.components.energy.data",
     "homeassistant.core",
     "homeassistant.helpers",
+    "homeassistant.helpers.storage",
     "homeassistant.helpers.debounce",
     "homeassistant.helpers.entity_registry",
     "homeassistant.helpers.event",
@@ -268,6 +269,7 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     battery_state_mod.read_battery_live_state = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds_config = lambda config: None
+    battery_state_mod.read_battery_forecast_settings = lambda config: None
     sys.modules[battery_state_mod.__name__] = battery_state_mod
 
     recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
@@ -291,6 +293,7 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
     )
+    recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
@@ -373,6 +376,10 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
         sys.modules["homeassistant.core"] = core_mod
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
+    # Real HA helpers imported transitively (e.g. config_validation) pull these
+    # names from ``homeassistant.core``; provide them on the stub.
+    core_mod.CALLBACK_TYPE = object
+    core_mod.DOMAIN = "homeassistant"
 
     components_pkg = sys.modules.get("homeassistant.components")
     if components_pkg is None:
@@ -398,6 +405,25 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     if helpers_pkg is None:
         helpers_pkg = types.ModuleType("homeassistant.helpers")
         sys.modules["homeassistant.helpers"] = helpers_pkg
+    helpers_pkg.__path__ = []  # mark as package so sub-imports work
+
+    # ``automation.day_context_store`` does ``from homeassistant.helpers import
+    # storage`` and builds a ``storage.Store``; provide a lightweight stub.
+    helper_storage_mod = types.ModuleType("homeassistant.helpers.storage")
+
+    class _HelperStore:
+        def __init__(self, hass, version, key) -> None:
+            self._data = None
+
+        async def async_load(self):
+            return self._data
+
+        async def async_save(self, data) -> None:
+            self._data = data
+
+    helper_storage_mod.Store = _HelperStore
+    sys.modules["homeassistant.helpers.storage"] = helper_storage_mod
+    helpers_pkg.storage = helper_storage_mod
 
     debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
     if debounce_mod is None:

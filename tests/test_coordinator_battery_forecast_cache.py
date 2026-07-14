@@ -76,6 +76,7 @@ def _install_import_stubs() -> None:
     battery_state_mod.read_battery_live_state = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds = lambda hass, config=None: None
     battery_state_mod.read_battery_soc_bounds_config = lambda config: None
+    battery_state_mod.read_battery_forecast_settings = lambda config: None
     sys.modules[battery_state_mod.__name__] = battery_state_mod
 
     recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
@@ -98,6 +99,7 @@ def _install_import_stubs() -> None:
     recorder_slots_mod.estimate_average_hourly_energy_when_climate_active = (
         _estimate_average_hourly_energy_when_climate_active
     )
+    recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
@@ -152,6 +154,12 @@ def _install_import_stubs() -> None:
     schedule_mod.validate_slot_patch_request = (
         lambda slots, reference_time, battery_soc_bounds: None
     )
+    schedule_mod.ScheduleAction = type("ScheduleAction", (), {})
+    schedule_mod.ScheduleDomains = type("ScheduleDomains", (), {})
+    schedule_mod.EMPTY_SCHEDULE_ACTION = None
+    schedule_mod.is_default_domains = lambda domains: True
+    schedule_mod.iter_horizon_slot_ids = lambda reference_time: iter([])
+    schedule_mod.build_horizon_end = lambda reference_time: reference_time
     sys.modules[schedule_mod.__name__] = schedule_mod
 
     runtime_status_mod = types.ModuleType(
@@ -264,11 +272,40 @@ def _install_import_stubs() -> None:
     if helpers_pkg is None:
         helpers_pkg = types.ModuleType("homeassistant.helpers")
         sys.modules["homeassistant.helpers"] = helpers_pkg
+    helpers_pkg.__path__ = []  # mark as package so sub-imports work
+
+    debounce_mod = sys.modules.get("homeassistant.helpers.debounce")
+    if debounce_mod is None:
+        debounce_mod = types.ModuleType("homeassistant.helpers.debounce")
+        sys.modules["homeassistant.helpers.debounce"] = debounce_mod
+    debounce_mod.Debouncer = type("Debouncer", (), {"async_call": lambda self: None})
+
+    # ``automation.day_context_store`` does ``from homeassistant.helpers import
+    # storage`` and builds a ``storage.Store``; provide a lightweight stub so a
+    # ``FakeHass`` without real ``data``/``config`` can back it.
+    storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
+
+    class _HelperStore:
+        def __init__(self, hass, version, key) -> None:
+            self._data = None
+
+        async def async_load(self):
+            return self._data
+
+        async def async_save(self, data) -> None:
+            self._data = data
+
+    storage_helper_mod.Store = _HelperStore
+    sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
+    helpers_pkg.storage = storage_helper_mod
 
     event_mod = sys.modules.get("homeassistant.helpers.event")
     if event_mod is None:
         event_mod = types.ModuleType("homeassistant.helpers.event")
         sys.modules["homeassistant.helpers.event"] = event_mod
+    event_mod.async_track_state_change_event = (
+        lambda hass, entity_ids, action: lambda: None
+    )
     event_mod.async_track_time_change = (
         lambda hass, callback, **kwargs: lambda: None
     )
@@ -427,6 +464,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._active_config = {}
         coordinator._appliances_registry = coordinator_module.AppliancesRuntimeRegistry()
+        coordinator._battery_forecast_history = None
         coordinator._cached_battery_forecast = None
         coordinator._cached_battery_forecast_expires_at = None
         coordinator._cached_battery_forecast_house_generated_at = None

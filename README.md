@@ -189,4 +189,23 @@ npm --prefix frontend run build   # → custom_components/helman/frontend_compil
 npm --prefix frontend run watch   # dev/watch mode
 ```
 
-Python tests: `pytest`.
+### Running tests
+
+The backend tests import the real Home Assistant package, so they need an
+interpreter with `homeassistant` installed (Python ≥3.14.2, matching HA's floor).
+The suite is run **one file per process** — many test modules install conflicting
+`sys.modules` stubs at import time, so a single `pytest tests/` invocation would
+cross-pollute and fail. `scripts/run_tests.sh` handles this for you.
+
+```bash
+scripts/setup_test_venv.sh    # once — creates .venv and installs requirements-test.txt (idempotent)
+scripts/run_tests.sh          # run the whole suite (auto-detects .venv)
+scripts/run_tests.sh tests/test_schedule.py   # run specific files
+```
+
+`scripts/run_tests.sh` uses the repo's `.venv` when present; override with
+`PYTHON=/path/to/python scripts/run_tests.sh`. To run against the Home Assistant
+dev container instead of a local venv, use `scripts/run_tests_in_container.sh`.
+
+CI (`.github/workflows/tests.yml`) runs the same `scripts/run_tests.sh` against
+`requirements-test.txt` on every push and pull request.

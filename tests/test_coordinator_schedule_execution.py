@@ -180,6 +180,40 @@ def _install_import_stubs() -> None:
         dt_mod.now = lambda: REFERENCE_TIME
         util_pkg.dt = dt_mod
 
+    # ``automation.day_context_store`` builds a ``storage.Store``; force a
+    # lightweight stub even when the real ``homeassistant`` package is importable
+    # (the ``except`` branch above is skipped then), so a ``FakeHass`` without a
+    # real ``data``/``config`` can still back the store.
+    helpers_pkg = sys.modules.setdefault(
+        "homeassistant.helpers", types.ModuleType("homeassistant.helpers")
+    )
+    storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
+
+    class _HelperStore:
+        def __init__(self, hass, version, key) -> None:
+            self._data = None
+
+        async def async_load(self):
+            return self._data
+
+        async def async_save(self, data) -> None:
+            self._data = data
+
+    storage_helper_mod.Store = _HelperStore
+    sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
+    helpers_pkg.storage = storage_helper_mod
+
+    # When real HA is importable the schedule module binds the real ``dt_util``;
+    # pin its default zone so slot ids render in local (Europe/Prague) time as
+    # the assertions expect.
+    try:
+        import homeassistant.util.dt as _real_dt  # type: ignore
+
+        sys.modules["homeassistant.util.dt"] = _real_dt
+        _real_dt.set_default_time_zone(_real_dt.get_time_zone("Europe/Prague"))
+    except ModuleNotFoundError:
+        pass
+
 
 _install_import_stubs()
 

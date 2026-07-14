@@ -118,6 +118,16 @@ aggregate_appliance_demand_by_slot = (
 )
 build_adjusted_house_forecast = forecast_integration_module.build_adjusted_house_forecast
 
+# The module under test binds the real ``dt_util`` at import while the restore
+# above drops it from ``sys.modules`` (so the conftest cannot reach it); pin its
+# default zone to Europe/Prague directly so ``as_local``-based slot ids match the
+# ``+01:00`` fixtures. A stubbed ``dt_util`` (host-only, identity ``as_local``)
+# has no ``set_default_time_zone`` and is left as-is.
+if hasattr(forecast_integration_module.dt_util, "set_default_time_zone"):
+    forecast_integration_module.dt_util.set_default_time_zone(
+        forecast_integration_module.dt_util.get_time_zone("Europe/Prague")
+    )
+
 
 def _make_house_forecast() -> dict:
     return {

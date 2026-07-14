@@ -123,6 +123,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         lambda *args, **kwargs: []
     )
     recorder_slots_mod.query_slot_energy_changes = lambda *args, **kwargs: []
+    recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")
@@ -256,6 +257,29 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         sys.modules["homeassistant.components.recorder.history"] = history_mod
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
 
+    # ``automation.day_context_store`` builds a ``storage.Store``; force a
+    # lightweight stub even when the real ``homeassistant`` package is importable
+    # (the ``except`` branch above is skipped then), so a ``FakeHass`` without a
+    # real ``data``/``config`` can still back the store.
+    helpers_pkg = sys.modules.setdefault(
+        "homeassistant.helpers", types.ModuleType("homeassistant.helpers")
+    )
+    storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
+
+    class _HelperStore:
+        def __init__(self, hass, version, key) -> None:
+            self._data = None
+
+        async def async_load(self):
+            return self._data
+
+        async def async_save(self, data) -> None:
+            self._data = data
+
+    storage_helper_mod.Store = _HelperStore
+    sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
+    helpers_pkg.storage = storage_helper_mod
+
     return previous_modules
 
 
@@ -296,6 +320,20 @@ finally:
             )
         ):
             sys.modules.pop(module_name, None)
+
+# The imported modules bound the real ``dt_util`` while the restore above drops
+# it from ``sys.modules`` (so the conftest reaches a different object); pin the
+# actually-bound module's default zone to Europe/Prague so ``as_local`` slot ids
+# match the ``+01:00`` fixtures. A stubbed ``dt_util`` has no setter.
+for _bound_module in (
+    pipeline_module,
+    triggers_module,
+    coordinator_module,
+    schedule_module,
+):
+    _bound_dt = getattr(_bound_module, "dt_util", None)
+    if _bound_dt is not None and hasattr(_bound_dt, "set_default_time_zone"):
+        _bound_dt.set_default_time_zone(_bound_dt.get_time_zone("Europe/Prague"))
 
 AutomationRunResult = pipeline_module.AutomationRunResult
 AutomationTriggerCoordinator = triggers_module.AutomationTriggerCoordinator
