@@ -207,5 +207,6 @@ scripts/run_tests.sh tests/test_schedule.py   # run specific files
 `PYTHON=/path/to/python scripts/run_tests.sh`. To run against the Home Assistant
 dev container instead of a local venv, use `scripts/run_tests_in_container.sh`.
 
-CI (`.github/workflows/tests.yml`) runs the same `scripts/run_tests.sh` against
-`requirements-test.txt` on every push and pull request.
+CI (`.github/workflows/release.yml`) runs the same `scripts/run_tests.sh` against
+`requirements-test.txt` on every push and pull request. The release job depends
+on the tests passing, so a red test run blocks the release.
