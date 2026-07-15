@@ -276,6 +276,7 @@
       "correction_factor": "Korekční faktor",
       "power_axis_label": "kW (prům.)",
       "daily_totals": "Denní součty",
+      "scheduled_actions": "Naplánované akce",
       "legend_hide_series": "Skrýt z grafu",
       "legend_show_series": "Zobrazit v grafu",
       "actual_not_available": "není k dispozici",

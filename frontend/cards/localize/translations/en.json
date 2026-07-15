@@ -29,6 +29,7 @@
       "correction_factor": "Correction factor",
       "power_axis_label": "kW (avg)",
       "daily_totals": "Daily totals",
+      "scheduled_actions": "Scheduled actions",
       "legend_hide_series": "Hide from chart",
       "legend_show_series": "Show in chart",
       "actual_not_available": "not available",

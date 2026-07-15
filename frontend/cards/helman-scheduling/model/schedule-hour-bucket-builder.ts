@@ -400,7 +400,7 @@ function _buildHourRow({
         slotIds: bucket.slots
             .filter(isScheduleBackedDisplaySlot)
             .map((slot) => slot.scheduleSlot.id),
-        actionCell: _buildActionCell(bucket.slots, appliances, applianceProjectionIndex),
+        actionCell: buildScheduleActionCell(bucket.slots, appliances, applianceProjectionIndex),
         forecast: aggregateScheduleHourForecast({
             slots: bucket.slots,
             slotForecastMap,
@@ -569,7 +569,12 @@ function _resolveApplianceKind(
     return "unknown";
 }
 
-function _buildActionCell(
+/**
+ * The grouped action-cell model for one or more schedule slots: distinct inverter
+ * actions, ev-charger appliance chips first-class, and the remaining appliances folded
+ * into a single summary chip. Shared with the solar inspector's schedule-actions strip.
+ */
+export function buildScheduleActionCell(
     slots: readonly ScheduleDisplaySlot[],
     appliances: readonly ScheduleApplianceMetadata[],
     applianceProjectionIndex: ScheduleApplianceProjectionIndex,
@@ -615,7 +620,7 @@ function _buildSlotRow({
         kind: "slot",
         rowId: variant === "raw" ? `slot:${slot.id}` : `hour-child:${slot.id}`,
         slot,
-        actionCell: _buildActionCell([slot], appliances, applianceProjectionIndex),
+        actionCell: buildScheduleActionCell([slot], appliances, applianceProjectionIndex),
         interactiveSlotId: isScheduleBackedDisplaySlot(slot) ? slot.scheduleSlot.id : null,
         displayTimeLabel: variant === "raw"
             ? {

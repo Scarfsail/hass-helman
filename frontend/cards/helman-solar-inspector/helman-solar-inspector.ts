@@ -24,6 +24,7 @@ import {
 } from "./chart-soc";
 import { BATT_COLOR, GRID_COLOR, SOLAR_COLOR } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
+import "./helman-solar-schedule-actions-strip";
 import {
   findImpactForSlot,
   findPointForSlot,
@@ -698,13 +699,17 @@ export class HelmanSolarInspector extends LitElement {
       payload.availability.hasActuals ||
       payload.availability.hasInvalidated;
 
+    const stacks = hasAnySeries ? this._buildStacks(payload) : null;
+    const layout = stacks ? this._computeChartLayout(payload, stacks) : null;
+
     return html`
       ${!payload.availability.hasProfile
         ? html`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`
         : ""}
-      ${hasAnySeries
+      ${hasAnySeries && stacks && layout
         ? html`
-            <div class="chart-wrap">${this._renderChart(payload)}</div>
+            <div class="chart-wrap">${this._renderChart(payload, stacks, layout)}</div>
+            ${this._renderScheduleActionsStrip(payload, layout)}
             ${this._lastLayoutForStrip && this._socBars(payload).length
               ? html`<div class="soc-strip-wrap">${this._renderSocStrip(payload, this._lastLayoutForStrip)}</div>`
               : ""}
@@ -762,9 +767,22 @@ export class HelmanSolarInspector extends LitElement {
     return { width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks, xForMinutes, yForW };
   }
 
-  private _renderChart(payload: InspectorPayload) {
-    const stacks = this._buildStacks(payload);
-    const layout = this._computeChartLayout(payload, stacks);
+  private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
+    return html`
+      <helman-solar-schedule-actions-strip
+        .hass=${this.hass}
+        .date=${payload.date}
+        .timeZone=${this._haTimeZone() ?? "UTC"}
+        .geometry=${{
+          width: layout.width,
+          marginLeft: layout.margin.left,
+          plotWidth: layout.plotWidth,
+        }}
+      ></helman-solar-schedule-actions-strip>
+    `;
+  }
+
+  private _renderChart(payload: InspectorPayload, stacks: ChartStacks, layout: ChartLayout) {
     const forecastFillFrom = this._forecastFillFrom(stacks);
     this._lastLayoutForStrip = layout;
     // The strip below renders from the same seam, so its columns turn forecast
