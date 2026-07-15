@@ -50,6 +50,27 @@ export interface ScheduleStripGeometry {
     marginLeft: number;
     /** Chart plot-area width, in viewBox units. */
     plotWidth: number;
+    /** Minute-of-day at the plot's left edge; defaults to 0 (whole day). */
+    startMinutes?: number;
+    /** Minute-of-day at the plot's right edge; defaults to 1440 (whole day). */
+    endMinutes?: number;
+}
+
+/** The minute-of-day window the plot spans, defaulting to the whole day. */
+export function stripWindow(geometry: ScheduleStripGeometry): { start: number; end: number } {
+    const start = geometry.startMinutes ?? 0;
+    const end = geometry.endMinutes ?? MINUTES_PER_DAY;
+    return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
+}
+
+/** Invert a strip's x mapping: a viewBox x back to its minute-of-day, or null in the gutter. */
+export function stripMinutesForSvgX(geometry: ScheduleStripGeometry, svgX: number): number | null {
+    const plotRight = geometry.marginLeft + geometry.plotWidth;
+    if (svgX < geometry.marginLeft || svgX > plotRight) {
+        return null;
+    }
+    const { start, end } = stripWindow(geometry);
+    return start + ((svgX - geometry.marginLeft) / geometry.plotWidth) * (end - start);
 }
 
 /** A schedule slot placed on the selected day's timeline. */
@@ -236,7 +257,12 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
             return nothing;
         }
 
-        const columns = this._buildColumns();
+        // Drop columns cropped out of the plot's window, so daylight-only view
+        // doesn't pile every night-time action's chips up at the axis edge.
+        const { start, end } = stripWindow(this.geometry);
+        const columns = this._buildColumns().filter(
+            (column) => column.endMinutes > start && column.startMinutes < end,
+        );
         if (columns.length === 0) {
             return nothing;
         }
@@ -339,11 +365,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         }
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        const plotRight = geometry.marginLeft + geometry.plotWidth;
-        const minutes = svgX < geometry.marginLeft || svgX > plotRight
-            ? null
-            : ((svgX - geometry.marginLeft) / geometry.plotWidth) * MINUTES_PER_DAY;
-        this._emitHover(minutes);
+        this._emitHover(stripMinutesForSvgX(geometry, svgX));
     }
 
     private _emitHover(minutes: number | null): void {
@@ -468,8 +490,9 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
     }
 
     private _fraction(minutes: number, geometry: ScheduleStripGeometry): number {
-        const clamped = Math.max(0, Math.min(MINUTES_PER_DAY, minutes));
-        return (geometry.marginLeft + (clamped / MINUTES_PER_DAY) * geometry.plotWidth) / geometry.width;
+        const { start, end } = stripWindow(geometry);
+        const clamped = Math.max(start, Math.min(end, minutes));
+        return (geometry.marginLeft + ((clamped - start) / (end - start)) * geometry.plotWidth) / geometry.width;
     }
 
     private _handleColumnClick(event: MouseEvent, slotId: string): void {

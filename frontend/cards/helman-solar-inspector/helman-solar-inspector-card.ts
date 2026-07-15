@@ -18,6 +18,14 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
                     name: "transparent_background",
                     selector: { boolean: {} },
                 },
+                {
+                    name: "daylight_threshold_w",
+                    selector: { number: { min: 0, step: 10, mode: "box", unit_of_measurement: "W" } },
+                },
+                {
+                    name: "daylight_only_default",
+                    selector: { boolean: {} },
+                },
             ],
         };
     }
@@ -50,6 +58,8 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
     setConfig(config: HelmanSolarInspectorCardConfig) {
         this._config = {
             transparent_background: false,
+            daylight_threshold_w: 100,
+            daylight_only_default: true,
             ...config,
         };
     }
@@ -64,7 +74,11 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
         return html`
             <ha-card class=${this._config?.transparent_background ? "transparent" : ""}>
                 <div class="card-content">
-                    <helman-solar-inspector .hass=${this._hass}></helman-solar-inspector>
+                    <helman-solar-inspector
+                        .hass=${this._hass}
+                        .daylightThresholdW=${this._config?.daylight_threshold_w ?? 100}
+                        .daylightOnlyDefault=${this._config?.daylight_only_default ?? true}
+                    ></helman-solar-inspector>
                 </div>
             </ha-card>
         `;

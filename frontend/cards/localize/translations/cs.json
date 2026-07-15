@@ -267,6 +267,8 @@
       "load_failed": "Nepodařilo se načíst data inspektoru.",
       "previous_day": "Předchozí den",
       "next_day": "Další den",
+      "refresh": "Obnovit",
+      "daylight_only": "Zobrazit jen hodiny se solární energií",
       "today": "Dnes",
       "forecast_only": "Pouze prognóza",
       "raw_forecast": "Surová prognóza",

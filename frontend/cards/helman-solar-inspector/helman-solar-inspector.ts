@@ -193,6 +193,12 @@ type ChartLayout = {
   minKw: number;
   maxKw: number;
   yTicks: number[];
+  /** Minute-of-day at the left edge of the plot; 0 unless the day is cropped. */
+  dayStartMinutes: number;
+  /** Minute-of-day at the right edge of the plot; 1440 unless the day is cropped. */
+  dayEndMinutes: number;
+  /** Pixel width of one 15-minute slot under the current x scale. */
+  slotWidth: number;
   xForMinutes: (m: number) => number;
   yForW: (w: number) => number;
 };
@@ -260,6 +266,10 @@ type InspectorPayload = {
 
 export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) hass?: HomeAssistant;
+  /** Solar power (W) at or above which a slot counts as carrying sun energy. */
+  @property({ attribute: false }) daylightThresholdW = 100;
+  /** Whether the daylight-only view starts on; the header toggle overrides it. */
+  @property({ attribute: false }) daylightOnlyDefault = true;
 
   @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
@@ -271,6 +281,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _impactStripVisible = false;
   @state() private _socStripExpanded = true;
   @state() private _exportPriceStripExpanded = true;
+  @state() private _daylightOnly = true;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
@@ -299,9 +310,21 @@ export class HelmanSolarInspector extends LitElement {
 
     .nav {
       display: grid;
-      grid-template-columns: 40px minmax(0, 1fr) 40px;
+      grid-template-columns: 40px minmax(0, 1fr) auto;
       align-items: center;
       gap: 8px;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .icon-button.active {
+      border-color: var(--primary-color, #2563eb);
+      background: color-mix(in srgb, var(--primary-color, #2563eb) 18%, var(--card-background-color));
+      color: var(--primary-color, #2563eb);
     }
 
     .icon-button {
@@ -680,6 +703,12 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   protected updated(changed: Map<string, unknown>) {
+    // Seed the view from the configured default. `changed` only carries this when
+    // the config value actually changes, so the runtime toggle — which touches
+    // `_daylightOnly`, not this property — is never overridden.
+    if (changed.has("daylightOnlyDefault")) {
+      this._daylightOnly = this.daylightOnlyDefault;
+    }
     if (changed.has("hass") && this.hass) {
       if (!this._selectedDate) {
         this._selectedDate = this._todayIso();
@@ -723,7 +752,21 @@ export class HelmanSolarInspector extends LitElement {
           <div class="day-label">${this._formatDay(this._selectedDate)}</div>
           <div class="day-state">${dayState}</div>
         </div>
-        <button class="icon-button" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
+        <div class="nav-actions">
+          <button
+            class="icon-button ${this._daylightOnly ? "active" : ""}"
+            title=${this._t("bias_correction.inspector.daylight_only")}
+            aria-pressed=${this._daylightOnly ? "true" : "false"}
+            @click=${() => { this._daylightOnly = !this._daylightOnly; }}
+          >☀</button>
+          <button
+            class="icon-button"
+            title=${this._t("bias_correction.inspector.refresh")}
+            ?disabled=${this._loading}
+            @click=${() => this._load()}
+          >⟳</button>
+          <button class="icon-button" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
+        </div>
       </div>
     `;
   }
@@ -797,11 +840,51 @@ export class HelmanSolarInspector extends LitElement {
     const { maxKw, yTicks } = symmetricPowerAxis(peakW);
     const minKw = -maxKw;
     const spanW = (maxKw - minKw) * 1000;
-    const xForMinutes = (minutes: number) => margin.left + (minutes / 1440) * plotWidth;
+    const { start: dayStartMinutes, end: dayEndMinutes } = this._daylightOnly
+      ? this._solarWindow(payload)
+      : { start: 0, end: MINUTES_PER_DAY };
+    const daySpan = dayEndMinutes - dayStartMinutes;
+    const slotWidth = (plotWidth * SLOT_MINUTES) / daySpan;
+    const xForMinutes = (minutes: number) =>
+      margin.left + ((minutes - dayStartMinutes) / daySpan) * plotWidth;
     const yForW = (powerW: number) =>
       margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
 
-    return { width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks, xForMinutes, yForW };
+    return {
+      width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks,
+      dayStartMinutes, dayEndMinutes, slotWidth, xForMinutes, yForW,
+    };
+  }
+
+  /**
+   * The hour-aligned span of the day that carries solar production — the first
+   * hour any of the raw, corrected or actual solar series reaches the daylight
+   * threshold to the hour past the last. Cropping to this window fills the plot
+   * with the daylight curve instead of squeezing it between empty night hours on
+   * either side. With no solar above the threshold anywhere (a fully clouded
+   * winter day, or no forecast yet) it falls back to the whole day so the other
+   * series still have somewhere to sit.
+   */
+  private _solarWindow(payload: InspectorPayload): { start: number; end: number } {
+    const threshold = Number.isFinite(this.daylightThresholdW) ? this.daylightThresholdW : 100;
+    let first = Number.POSITIVE_INFINITY;
+    let last = Number.NEGATIVE_INFINITY;
+    // No fixed bucket: infer each series' own sample spacing so the threshold is
+    // read against true average watts, whether the series is 15-minute or hourly.
+    for (const series of [payload.series.raw, payload.series.corrected, payload.series.actual]) {
+      for (const entry of toAveragePower(series)) {
+        if (entry.powerW < threshold) continue;
+        if (entry.minutes < first) first = entry.minutes;
+        if (entry.minutes > last) last = entry.minutes;
+      }
+    }
+    if (!Number.isFinite(first) || !Number.isFinite(last)) {
+      return { start: 0, end: MINUTES_PER_DAY };
+    }
+    const start = Math.max(0, Math.floor(first / 60) * 60);
+    // `last` is the start of a slot, so include the hour it falls in.
+    const end = Math.min(MINUTES_PER_DAY, (Math.floor(last / 60) + 1) * 60);
+    return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
   }
 
   private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
@@ -814,6 +897,8 @@ export class HelmanSolarInspector extends LitElement {
           width: layout.width,
           marginLeft: layout.margin.left,
           plotWidth: layout.plotWidth,
+          startMinutes: layout.dayStartMinutes,
+          endMinutes: layout.dayEndMinutes,
         }}
         .selectedMinutes=${this._selectedMinutes(payload)}
         .hoverMinutes=${this._hoveredMinutes}
@@ -846,7 +931,13 @@ export class HelmanSolarInspector extends LitElement {
       this._clearHover();
       return;
     }
-    this._setHoverMinutes(((svgX - layout.margin.left) / layout.plotWidth) * 1440);
+    this._setHoverMinutes(this._minutesForSvgX(layout, svgX));
+  }
+
+  /** Invert the plot's x scale: a viewBox x back to its minute-of-day. */
+  private _minutesForSvgX(layout: ChartLayout, svgX: number): number {
+    const daySpan = layout.dayEndMinutes - layout.dayStartMinutes;
+    return layout.dayStartMinutes + ((svgX - layout.margin.left) / layout.plotWidth) * daySpan;
   }
 
   /** Store the hovered minute at whole-minute resolution, skipping redundant updates. */
@@ -905,6 +996,8 @@ export class HelmanSolarInspector extends LitElement {
                   width: layout.width,
                   marginLeft: layout.margin.left,
                   plotWidth: layout.plotWidth,
+                  startMinutes: layout.dayStartMinutes,
+                  endMinutes: layout.dayEndMinutes,
                 }}
                 .hoverMinutes=${this._hoveredMinutes}
                 @slot-pick=${(event: CustomEvent<{ minutes: number | null }>) =>
@@ -974,13 +1067,16 @@ export class HelmanSolarInspector extends LitElement {
         @mouseleave=${() => this._clearHover()}
       >
         ${this._renderChartBackground(layout)}
+        ${this._plotClipDef("plot-clip-chart", layout, layout.height)}
         ${this._renderHoverHighlight(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderSlotHighlight(layout, layout.margin.top, layout.plotHeight, selectedSlot)}
         ${this._renderLeftAxis(layout)}
         ${this._renderXAxis(layout)}
-        ${this._renderStackSet(layout, stacks.actual, "actual", Number.NEGATIVE_INFINITY)}
-        ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
-        ${this._renderSolarLayer(payload, layout)}
+        <g clip-path="url(#plot-clip-chart)">
+          ${this._renderStackSet(layout, stacks.actual, "actual", Number.NEGATIVE_INFINITY)}
+          ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
+          ${this._renderSolarLayer(payload, layout)}
+        </g>
       </svg>
     `;
   }
@@ -1100,6 +1196,21 @@ export class HelmanSolarInspector extends LitElement {
     });
   }
 
+  /**
+   * A clip rectangle over the plot area, so series cropped to the daylight window
+   * never spill past its edges into the axis gutter. The id must be unique per
+   * `<svg>`, since a duplicate would resolve to the wrong strip's rectangle.
+   */
+  private _plotClipDef(id: string, layout: ChartLayout, height: number) {
+    return svg`
+      <defs>
+        <clipPath id=${id}>
+          <rect x=${layout.margin.left} y="0" width=${layout.plotWidth} height=${height}></rect>
+        </clipPath>
+      </defs>
+    `;
+  }
+
   private _renderChartBackground(layout: ChartLayout) {
     return svg`
       <rect x="0" y="0" width=${layout.width} height=${layout.height} fill="var(--card-background-color)"></rect>
@@ -1142,13 +1253,30 @@ export class HelmanSolarInspector extends LitElement {
 
   private _renderXAxis(layout: ChartLayout) {
     const { margin, height, xForMinutes } = layout;
-    return [0, 3, 6, 9, 12, 15, 18, 21, 24].map((hour) => {
+    return this._xAxisHours(layout).map((hour) => {
       const x = xForMinutes(hour * 60);
       return svg`
         <line x1=${x} y1=${margin.top} x2=${x} y2=${height - margin.bottom} stroke="var(--divider-color)" stroke-width="1" opacity="0.55"></line>
         <text x=${x} y=${height - 10} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(hour).padStart(2, "0")}</text>
       `;
     });
+  }
+
+  /**
+   * The whole hours to label on the x axis, spaced so a cropped window still
+   * gets a readable handful of ticks. The window edges are always whole hours,
+   * so a stride that divides the span lands ticks on them.
+   */
+  private _xAxisHours(layout: ChartLayout): number[] {
+    const startHour = Math.round(layout.dayStartMinutes / 60);
+    const endHour = Math.round(layout.dayEndMinutes / 60);
+    const span = endHour - startHour;
+    const stride = span > 12 ? 3 : span > 6 ? 2 : 1;
+    const hours: number[] = [];
+    for (let hour = startHour; hour <= endHour; hour += stride) {
+      hours.push(hour);
+    }
+    return hours;
   }
 
   /**
@@ -1209,7 +1337,7 @@ export class HelmanSolarInspector extends LitElement {
     const yForPct = (pct: number) =>
       padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
     const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
-    const barWidth = Math.max(3, layout.plotWidth / 96);
+    const barWidth = Math.max(3, layout.slotWidth);
     return svg`
       <svg
         viewBox="0 0 ${layout.width} ${height}"
@@ -1230,9 +1358,11 @@ export class HelmanSolarInspector extends LitElement {
                   stroke-width="1.8" stroke-opacity="0.4"></line>
           </pattern>
         </defs>
+        ${this._plotClipDef("plot-clip-soc", layout, height)}
         ${this._renderSocGridlines(layout, yForPct)}
         ${this._renderHoverHighlight(layout, 0, height)}
         ${this._renderSlotHighlight(layout, 0, height, selectedSlot)}
+        <g clip-path="url(#plot-clip-soc)">
         ${bars.map((bar) => {
           const top = yForPct(bar.pct);
           const color = SOC_COLORS[bar.direction];
@@ -1251,6 +1381,7 @@ export class HelmanSolarInspector extends LitElement {
           `;
         })}
         ${this._renderSocUnusableZones(payload, layout, yForPct)}
+        </g>
       </svg>
     `;
   }
@@ -1290,7 +1421,7 @@ export class HelmanSolarInspector extends LitElement {
     layout: ChartLayout,
     yForPct: (pct: number) => number,
   ) {
-    const slotWidth = layout.plotWidth / 96;
+    const slotWidth = layout.slotWidth;
     /** `edge` is the side facing the SoC the battery may actually reach. */
     const zone = (minutes: number, topPct: number, bottomPct: number, edge: "top" | "bottom") => {
       const y = yForPct(topPct);
@@ -1348,9 +1479,6 @@ export class HelmanSolarInspector extends LitElement {
     if (!payload.series.impact.length) return "";
     const stripHeight = 24;
     const stripWidth = layout.width;
-    const xLeft = layout.margin.left;
-    const xRight = layout.width - layout.margin.right;
-    const plotWidth = xRight - xLeft;
     const values = payload.series.impact
       .map((p) => Math.abs(p.impactWh ?? 0))
       .filter((v) => Number.isFinite(v));
@@ -1367,15 +1495,17 @@ export class HelmanSolarInspector extends LitElement {
         @mousemove=${(e: MouseEvent) => this._handleChartHover(e, payload)}
         @mouseleave=${() => this._clearHover()}
       >
+        ${this._plotClipDef("plot-clip-impact", layout, stripHeight)}
         ${this._renderHoverHighlight(layout, 0, stripHeight)}
         ${this._renderSlotHighlight(layout, 0, stripHeight, selectedSlot)}
+        <g clip-path="url(#plot-clip-impact)">
         ${payload.series.impact.map((point) => {
           if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
           const m = /^(\d{2}):(\d{2})$/.exec(point.slot);
           if (!m) return "";
           const minutes = Number(m[1]) * 60 + Number(m[2]);
-          const x = xLeft + (minutes / 1440) * plotWidth;
-          const w = Math.max(3, plotWidth / 96);
+          const x = layout.xForMinutes(minutes);
+          const w = Math.max(3, layout.slotWidth);
           const h = Math.max(2, (Math.abs(point.impactWh) / maxImpact) * (stripHeight - 4));
           const y = stripHeight - h - 2;
           const trainingSlot = explainability?.slots[point.slot] ?? null;
@@ -1400,6 +1530,7 @@ export class HelmanSolarInspector extends LitElement {
             </rect>
           `;
         })}
+        </g>
         <defs>
           <pattern id="impact-interpolated-positive" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
             <rect width="4" height="4" fill=${CHART_COLORS.impactPositive} fill-opacity="0.12"></rect>
@@ -1935,7 +2066,7 @@ export class HelmanSolarInspector extends LitElement {
       this._deselectSlot();
       return;
     }
-    const minutes = ((svgX - layout.margin.left) / layout.plotWidth) * 1440;
+    const minutes = this._minutesForSvgX(layout, svgX);
     const slot = this._findClosestImpactSlot(minutes, payload.series.impact);
     if (slot) {
       this._selectSlot(slot);
@@ -1954,8 +2085,10 @@ export class HelmanSolarInspector extends LitElement {
     const m = /^(\d{2}):(\d{2})$/.exec(selectedSlot);
     if (!m) return "";
     const minutes = Number(m[1]) * 60 + Number(m[2]);
+    // A slot cropped out of the daylight window has no place on the axis.
+    if (minutes < layout.dayStartMinutes || minutes >= layout.dayEndMinutes) return "";
     const x = layout.xForMinutes(minutes);
-    const w = Math.max(3, layout.plotWidth / 96);
+    const w = Math.max(3, layout.slotWidth);
     return svg`
       <rect
         x=${x} y=${y} width=${w} height=${height}

@@ -6,7 +6,11 @@ import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getScheduleLocalTimeParts } from "../helman-scheduling/model/schedule-time";
-import type { ScheduleStripGeometry } from "./helman-solar-schedule-actions-strip";
+import {
+    stripMinutesForSvgX,
+    stripWindow,
+    type ScheduleStripGeometry,
+} from "./helman-solar-schedule-actions-strip";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -161,8 +165,10 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         const yForValue = (value: number) => zeroY - value * scale;
         const seam = this._seamMinutes();
         const unit = this._forecast?.grid.exportPriceUnit ?? "";
+        const { start: windowStart, end: windowEnd } = stripWindow(geometry);
+        const windowSpan = windowEnd - windowStart;
         const xForMinutes = (minutes: number) =>
-            geometry.marginLeft + (Math.max(0, Math.min(MINUTES_PER_DAY, minutes)) / MINUTES_PER_DAY) * geometry.plotWidth;
+            geometry.marginLeft + ((minutes - windowStart) / windowSpan) * geometry.plotWidth;
 
         return html`
             <div class="strip-wrap">
@@ -176,9 +182,15 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     @mousemove=${(event: MouseEvent) => this._handleHover(event, geometry)}
                     @mouseleave=${() => this._emitHover(null)}
                 >
+                    <defs>
+                        <clipPath id="export-price-plot-clip">
+                            <rect x=${geometry.marginLeft} y="0" width=${geometry.plotWidth} height=${height}></rect>
+                        </clipPath>
+                    </defs>
                     ${this._renderGuides(geometry, zeroY, yForValue, maxAbs, hasNegative)}
                     ${this._renderBand(columns, this.hoverMinutes, "hover", height, xForMinutes)}
                     ${this._renderBand(columns, this.selectedMinutes, "selected", height, xForMinutes)}
+                    <g clip-path="url(#export-price-plot-clip)">
                     ${columns.map((column) => {
                         const positive = column.value >= 0;
                         const color = positive
@@ -203,6 +215,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                             </rect>
                         `;
                     })}
+                    </g>
                 </svg>
             `}
             </div>
@@ -282,10 +295,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         const svgEl = event.currentTarget as SVGSVGElement;
         const rect = svgEl.getBoundingClientRect();
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        const plotRight = geometry.marginLeft + geometry.plotWidth;
-        const minutes = svgX < geometry.marginLeft || svgX > plotRight
-            ? null
-            : ((svgX - geometry.marginLeft) / geometry.plotWidth) * MINUTES_PER_DAY;
+        const minutes = stripMinutesForSvgX(geometry, svgX);
         this.dispatchEvent(
             new CustomEvent<{ minutes: number | null }>("slot-pick", {
                 detail: { minutes },
@@ -300,11 +310,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         const svgEl = event.currentTarget as SVGSVGElement;
         const rect = svgEl.getBoundingClientRect();
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        const plotRight = geometry.marginLeft + geometry.plotWidth;
-        const minutes = svgX < geometry.marginLeft || svgX > plotRight
-            ? null
-            : ((svgX - geometry.marginLeft) / geometry.plotWidth) * MINUTES_PER_DAY;
-        this._emitHover(minutes);
+        this._emitHover(stripMinutesForSvgX(geometry, svgX));
     }
 
     private _emitHover(minutes: number | null): void {

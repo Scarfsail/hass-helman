@@ -6,6 +6,8 @@
       "load_failed": "Failed to load inspector data.",
       "previous_day": "Previous day",
       "next_day": "Next day",
+      "refresh": "Refresh",
+      "daylight_only": "Show only hours with solar energy",
       "today": "Today",
       "forecast_only": "Forecast only",
       "raw_forecast": "Raw forecast",
