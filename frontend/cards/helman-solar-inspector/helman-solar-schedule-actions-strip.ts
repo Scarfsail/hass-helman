@@ -52,6 +52,9 @@ export interface ScheduleStripGeometry {
     plotWidth: number;
 }
 
+/** Minute-of-day band a hovered action column covers; `null` when the hover ends. */
+export type ScheduleStripHoverDetail = { startMinutes: number; endMinutes: number } | null;
+
 /** A schedule slot placed on the selected day's timeline. */
 interface StripColumn {
     slot: ScheduleSlot;
@@ -154,6 +157,21 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
             border-radius: 4px;
         }
 
+        /* The column the chart's currently-selected slot falls into — a distinct,
+           amber "linked" accent, separate from the blue action-selection above. */
+        .slot-col.chart-linked {
+            background: rgba(245, 158, 11, 0.16);
+            box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.6);
+            border-radius: 4px;
+        }
+
+        .slot-col.selected.chart-linked {
+            background: rgba(37, 99, 235, 0.14);
+            box-shadow:
+                inset 0 0 0 1px rgba(37, 99, 235, 0.5),
+                inset 0 0 0 3px rgba(245, 158, 11, 0.45);
+        }
+
         .slot-col scheduling-action-chip,
         .slot-col scheduling-appliance-chip {
             flex: 0 0 auto;
@@ -165,6 +183,8 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
     @property({ type: String }) public date = "";
     @property({ type: String }) public timeZone = "UTC";
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
+    /** Minute-of-day of the chart's currently-selected slot, for the linked accent. */
+    @property({ attribute: false }) public chartSelectedMinutes: number | null = null;
 
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _appliances: ScheduleApplianceMetadata[] = [];
@@ -203,6 +223,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
+        this._emitHover(null);
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = undefined;
         this._scheduleOwner = undefined;
@@ -261,19 +282,36 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         const rightPct = this._fraction(column.endMinutes, geometry) * 100;
         const widthPct = Math.max(0, rightPct - leftPct);
         const selected = this._selectedSlotIds.includes(column.slot.id);
+        const chartLinked = this.chartSelectedMinutes !== null
+            && this.chartSelectedMinutes >= column.startMinutes
+            && this.chartSelectedMinutes < column.endMinutes;
         const items = this._visibleActionItems(column.slot);
         return html`
             <button
-                class=${`slot-col${selected ? " selected" : ""}`}
+                class=${`slot-col${selected ? " selected" : ""}${chartLinked ? " chart-linked" : ""}`}
                 type="button"
                 style=${`left:${leftPct}%;width:${widthPct}%;`}
                 title=${column.slot.rangeLabel}
                 aria-label=${column.slot.rangeLabel}
                 @click=${(event: MouseEvent) => this._handleColumnClick(event, column.slot.id)}
+                @mouseenter=${() => this._emitHover(column)}
+                @mouseleave=${() => this._emitHover(null)}
             >
                 ${items.map((item) => this._renderActionItem(item))}
             </button>
         `;
+    }
+
+    /** Tell the inspector which time band this column covers, so the chart can echo
+     *  the hover with a linked highlight; `null` clears it. */
+    private _emitHover(column: StripColumn | null): void {
+        this.dispatchEvent(new CustomEvent<ScheduleStripHoverDetail>("schedule-slot-hover", {
+            detail: column === null
+                ? null
+                : { startMinutes: column.startMinutes, endMinutes: column.endMinutes },
+            bubbles: true,
+            composed: true,
+        }));
     }
 
     private _renderActionItem(item: ScheduleTableActionItemModel) {

@@ -6,7 +6,7 @@ import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getScheduleLocalTimeParts } from "../helman-scheduling/model/schedule-time";
-import type { ScheduleStripGeometry } from "./helman-solar-schedule-actions-strip";
+import type { ScheduleStripGeometry, ScheduleStripHoverDetail } from "./helman-solar-schedule-actions-strip";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -58,6 +58,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
     /** Currently selected impact slot (`HH:MM`), highlighted across the strip. */
     @property({ type: String }) public selectedSlot: string | null = null;
+    /** Time band of a hovered schedule action, echoed as an amber "linked" band. */
+    @property({ attribute: false }) public hoverRange: ScheduleStripHoverDetail = null;
 
     @state() private _forecast: ForecastPayload | null = null;
 
@@ -173,6 +175,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
                 >
                     ${this._renderGuides(geometry, zeroY, yForValue, maxAbs, hasNegative)}
+                    ${this._renderHoverHighlight(height, xForMinutes)}
                     ${this._renderHighlight(geometry, height, xForMinutes)}
                     ${columns.map((column) => {
                         const positive = column.value >= 0;
@@ -230,6 +233,28 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             ${hasNegative
                 ? svg`${line(zeroY)}${label(zeroY, "0")}${line(yForValue(-maxAbs))}${label(yForValue(-maxAbs), `-${maxAbs.toFixed(1)}`)}`
                 : svg`${line(zeroY)}${label(zeroY, "0")}`}
+        `;
+    }
+
+    /** The time band of a hovered schedule action, mirroring the chart's amber band. */
+    private _renderHoverHighlight(
+        height: number,
+        xForMinutes: (minutes: number) => number,
+    ) {
+        const range = this.hoverRange;
+        if (!range) {
+            return nothing;
+        }
+        const x = xForMinutes(range.startMinutes);
+        const width = Math.max(2, xForMinutes(range.endMinutes) - x);
+        return svg`
+            <rect
+                x=${x} y="0" width=${width} height=${height}
+                fill="rgba(245,158,11,0.14)"
+                stroke="#f59e0b" stroke-width="1" stroke-opacity="0.55"
+                rx="1"
+                pointer-events="none"
+            ></rect>
         `;
     }
 

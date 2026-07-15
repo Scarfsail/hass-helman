@@ -25,6 +25,7 @@ import {
 import { BATT_COLOR, GRID_COLOR, SOLAR_COLOR } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
+import type { ScheduleStripHoverDetail } from "./helman-solar-schedule-actions-strip";
 import "./helman-solar-export-price-strip";
 import {
   findImpactForSlot,
@@ -273,6 +274,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _exportPriceStripExpanded = true;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
+  @state() private _hoveredScheduleRange: { startMinutes: number; endMinutes: number } | null = null;
 
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
   private _lastLayoutForStrip: ChartLayout | null = null;
@@ -804,6 +806,8 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
+    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
+    const chartSelectedMinutes = selectedSlot ? slotToMinutes(selectedSlot) : null;
     return html`
       <helman-solar-schedule-actions-strip
         .hass=${this.hass}
@@ -814,7 +818,34 @@ export class HelmanSolarInspector extends LitElement {
           marginLeft: layout.margin.left,
           plotWidth: layout.plotWidth,
         }}
+        .chartSelectedMinutes=${chartSelectedMinutes}
+        @schedule-slot-hover=${this._handleScheduleSlotHover}
       ></helman-solar-schedule-actions-strip>
+    `;
+  }
+
+  private _handleScheduleSlotHover(event: CustomEvent<ScheduleStripHoverDetail>) {
+    this._hoveredScheduleRange = event.detail;
+  }
+
+  /**
+   * The time band a hovered schedule action covers, drawn across the chart and its
+   * strips so the action reads against the data it applies to. Amber, to stay distinct
+   * from the blue selected-slot highlight.
+   */
+  private _renderScheduleHoverHighlight(layout: ChartLayout, y: number, height: number) {
+    const range = this._hoveredScheduleRange;
+    if (!range) return "";
+    const x = layout.xForMinutes(range.startMinutes);
+    const w = Math.max(2, layout.xForMinutes(range.endMinutes) - x);
+    return svg`
+      <rect
+        x=${x} y=${y} width=${w} height=${height}
+        fill="rgba(245,158,11,0.14)"
+        stroke="#f59e0b" stroke-width="1" stroke-opacity="0.55"
+        rx="1"
+        pointer-events="none"
+      ></rect>
     `;
   }
 
@@ -843,6 +874,7 @@ export class HelmanSolarInspector extends LitElement {
                   marginLeft: layout.margin.left,
                   plotWidth: layout.plotWidth,
                 }}
+                .hoverRange=${this._hoveredScheduleRange}
                 @slot-pick=${(event: CustomEvent<{ minutes: number | null }>) =>
                   this._handleStripSlotPick(event, payload)}
               ></helman-solar-export-price-strip>
@@ -906,6 +938,7 @@ export class HelmanSolarInspector extends LitElement {
         @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
       >
         ${this._renderChartBackground(layout)}
+        ${this._renderScheduleHoverHighlight(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderSlotHighlight(layout, layout.margin.top, layout.plotHeight, selectedSlot)}
         ${this._renderLeftAxis(layout)}
         ${this._renderXAxis(layout)}
@@ -1160,6 +1193,7 @@ export class HelmanSolarInspector extends LitElement {
           </pattern>
         </defs>
         ${this._renderSocGridlines(layout, yForPct)}
+        ${this._renderScheduleHoverHighlight(layout, 0, height)}
         ${this._renderSlotHighlight(layout, 0, height, selectedSlot)}
         ${bars.map((bar) => {
           const top = yForPct(bar.pct);
@@ -1293,6 +1327,7 @@ export class HelmanSolarInspector extends LitElement {
         style="cursor: pointer;"
         @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
       >
+        ${this._renderScheduleHoverHighlight(layout, 0, stripHeight)}
         ${this._renderSlotHighlight(layout, 0, stripHeight, selectedSlot)}
         ${payload.series.impact.map((point) => {
           if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
