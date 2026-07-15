@@ -52,9 +52,6 @@ export interface ScheduleStripGeometry {
     plotWidth: number;
 }
 
-/** Minute-of-day band a hovered action column covers; `null` when the hover ends. */
-export type ScheduleStripHoverDetail = { startMinutes: number; endMinutes: number } | null;
-
 /** A schedule slot placed on the selected day's timeline. */
 interface StripColumn {
     slot: ScheduleSlot;
@@ -146,30 +143,33 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
             box-sizing: border-box;
         }
 
-        .slot-col:hover {
-            background: color-mix(in srgb, var(--primary-color) 8%, transparent);
-            border-radius: 4px;
-        }
-
+        /* The multi-select for bulk editing (shift/ctrl-click): a solid outline so
+           it stays legible over the selection/hover bands drawn behind it. */
         .slot-col.selected {
-            background: rgba(37, 99, 235, 0.14);
+            box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.9);
+            border-radius: 4px;
+        }
+
+        /* The selected/hover slot bands, aligned to the chart's time axis and coloured
+           to match the highlights the inspector draws on every chart: blue for the
+           selected slot, orange for the hovered one. Drawn behind the action chips. */
+        .range-band {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            pointer-events: none;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        .range-band.selected {
+            background: rgba(37, 99, 235, 0.13);
             box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.5);
-            border-radius: 4px;
         }
 
-        /* The column the chart's currently-selected slot falls into — a distinct,
-           amber "linked" accent, separate from the blue action-selection above. */
-        .slot-col.chart-linked {
-            background: rgba(245, 158, 11, 0.16);
-            box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.6);
-            border-radius: 4px;
-        }
-
-        .slot-col.selected.chart-linked {
-            background: rgba(37, 99, 235, 0.14);
-            box-shadow:
-                inset 0 0 0 1px rgba(37, 99, 235, 0.5),
-                inset 0 0 0 3px rgba(245, 158, 11, 0.45);
+        .range-band.hover {
+            background: rgba(245, 158, 11, 0.14);
+            box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.55);
         }
 
         .slot-col scheduling-action-chip,
@@ -183,8 +183,10 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
     @property({ type: String }) public date = "";
     @property({ type: String }) public timeZone = "UTC";
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
-    /** Minute-of-day of the chart's currently-selected slot, for the linked accent. */
-    @property({ attribute: false }) public chartSelectedMinutes: number | null = null;
+    /** Minute-of-day of the inspector's selected slot; its column reads as selected (blue). */
+    @property({ attribute: false }) public selectedMinutes: number | null = null;
+    /** Minute-of-day under the pointer; its column reads as hovered (orange). */
+    @property({ attribute: false }) public hoverMinutes: number | null = null;
 
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _appliances: ScheduleApplianceMetadata[] = [];
@@ -249,7 +251,12 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         const toggleLabel = this._t("bias_correction.inspector.scheduled_actions");
         return html`
             <div class="strip-wrap">
-                <div class="strip-inner" style=${`height:${innerHeight}px;`}>
+                <div
+                    class="strip-inner"
+                    style=${`height:${innerHeight}px;`}
+                    @mousemove=${(event: MouseEvent) => this._handleHover(event)}
+                    @mouseleave=${() => this._emitHover(null)}
+                >
                     <button
                         class="strip-toggle"
                         type="button"
@@ -260,6 +267,8 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
                     >
                         <span class="strip-toggle-icon ${this._expandedActions ? "expanded" : ""}">▶</span>
                     </button>
+                    ${this._renderRangeBand(columns, this.selectedMinutes, "selected")}
+                    ${this._renderRangeBand(columns, this.hoverMinutes, "hover")}
                     ${columns.map((column) => this._renderColumn(column))}
                 </div>
             </div>
@@ -276,39 +285,70 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         `;
     }
 
+    /**
+     * The blue selection or orange hover band. A minute lands inside at most one
+     * action column, and the band covers that whole column — so the highlight reads
+     * as the action's true width, not the finer slot the minute came from.
+     */
+    private _renderRangeBand(columns: StripColumn[], minutes: number | null, kind: "selected" | "hover") {
+        if (minutes === null || this.geometry === null) {
+            return nothing;
+        }
+        const column = columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
+        if (!column) {
+            return nothing;
+        }
+        const leftPct = this._fraction(column.startMinutes, this.geometry) * 100;
+        const rightPct = this._fraction(column.endMinutes, this.geometry) * 100;
+        const widthPct = Math.max(0, rightPct - leftPct);
+        return html`
+            <div class=${`range-band ${kind}`} style=${`left:${leftPct}%;width:${widthPct}%;`}></div>
+        `;
+    }
+
     private _renderColumn(column: StripColumn) {
         const geometry = this.geometry!;
         const leftPct = this._fraction(column.startMinutes, geometry) * 100;
         const rightPct = this._fraction(column.endMinutes, geometry) * 100;
         const widthPct = Math.max(0, rightPct - leftPct);
         const selected = this._selectedSlotIds.includes(column.slot.id);
-        const chartLinked = this.chartSelectedMinutes !== null
-            && this.chartSelectedMinutes >= column.startMinutes
-            && this.chartSelectedMinutes < column.endMinutes;
         const items = this._visibleActionItems(column.slot);
         return html`
             <button
-                class=${`slot-col${selected ? " selected" : ""}${chartLinked ? " chart-linked" : ""}`}
+                class=${`slot-col${selected ? " selected" : ""}`}
                 type="button"
                 style=${`left:${leftPct}%;width:${widthPct}%;`}
                 title=${column.slot.rangeLabel}
                 aria-label=${column.slot.rangeLabel}
                 @click=${(event: MouseEvent) => this._handleColumnClick(event, column.slot.id)}
-                @mouseenter=${() => this._emitHover(column)}
-                @mouseleave=${() => this._emitHover(null)}
             >
                 ${items.map((item) => this._renderActionItem(item))}
             </button>
         `;
     }
 
-    /** Tell the inspector which time band this column covers, so the chart can echo
-     *  the hover with a linked highlight; `null` clears it. */
-    private _emitHover(column: StripColumn | null): void {
-        this.dispatchEvent(new CustomEvent<ScheduleStripHoverDetail>("schedule-slot-hover", {
-            detail: column === null
-                ? null
-                : { startMinutes: column.startMinutes, endMinutes: column.endMinutes },
+    /**
+     * Publish the pointer's minute-of-day so the inspector can light this row's
+     * column and every chart's own slot at that time. A position in the axis gutter
+     * carries `null`.
+     */
+    private _handleHover(event: MouseEvent): void {
+        const geometry = this.geometry;
+        if (geometry === null) {
+            return;
+        }
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
+        const plotRight = geometry.marginLeft + geometry.plotWidth;
+        const minutes = svgX < geometry.marginLeft || svgX > plotRight
+            ? null
+            : ((svgX - geometry.marginLeft) / geometry.plotWidth) * MINUTES_PER_DAY;
+        this._emitHover(minutes);
+    }
+
+    private _emitHover(minutes: number | null): void {
+        this.dispatchEvent(new CustomEvent<{ minutes: number | null }>("slot-hover", {
+            detail: { minutes },
             bubbles: true,
             composed: true,
         }));

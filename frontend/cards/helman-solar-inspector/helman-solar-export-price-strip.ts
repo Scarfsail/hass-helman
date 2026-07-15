@@ -6,7 +6,7 @@ import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getScheduleLocalTimeParts } from "../helman-scheduling/model/schedule-time";
-import type { ScheduleStripGeometry, ScheduleStripHoverDetail } from "./helman-solar-schedule-actions-strip";
+import type { ScheduleStripGeometry } from "./helman-solar-schedule-actions-strip";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -56,10 +56,10 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     @property({ type: String }) public date = "";
     @property({ type: String }) public timeZone = "UTC";
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
-    /** Currently selected impact slot (`HH:MM`), highlighted across the strip. */
-    @property({ type: String }) public selectedSlot: string | null = null;
-    /** Time band of a hovered schedule action, echoed as an amber "linked" band. */
-    @property({ attribute: false }) public hoverRange: ScheduleStripHoverDetail = null;
+    /** Minute-of-day of the selected slot; its price cell reads as selected (blue). */
+    @property({ attribute: false }) public selectedMinutes: number | null = null;
+    /** Minute-of-day under the pointer; its price cell reads as hovered (orange). */
+    @property({ attribute: false }) public hoverMinutes: number | null = null;
 
     @state() private _forecast: ForecastPayload | null = null;
 
@@ -173,10 +173,12 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     aria-label=${this._t("bias_correction.inspector.export_price_strip")}
                     style="cursor: pointer;"
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
+                    @mousemove=${(event: MouseEvent) => this._handleHover(event, geometry)}
+                    @mouseleave=${() => this._emitHover(null)}
                 >
                     ${this._renderGuides(geometry, zeroY, yForValue, maxAbs, hasNegative)}
-                    ${this._renderHoverHighlight(height, xForMinutes)}
-                    ${this._renderHighlight(geometry, height, xForMinutes)}
+                    ${this._renderBand(columns, this.hoverMinutes, "hover", height, xForMinutes)}
+                    ${this._renderBand(columns, this.selectedMinutes, "selected", height, xForMinutes)}
                     ${columns.map((column) => {
                         const positive = column.value >= 0;
                         const color = positive
@@ -236,49 +238,35 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         `;
     }
 
-    /** The time band of a hovered schedule action, mirroring the chart's amber band. */
-    private _renderHoverHighlight(
+    /**
+     * The blue selection or orange hover band. A minute falls inside one price
+     * sample, and the band covers that whole sample — so an hour-long price cell
+     * reads as the full hour, not the finer slot the minute came from.
+     */
+    private _renderBand(
+        columns: PriceColumn[],
+        minutes: number | null,
+        kind: "selected" | "hover",
         height: number,
         xForMinutes: (minutes: number) => number,
     ) {
-        const range = this.hoverRange;
-        if (!range) {
+        if (minutes === null) {
             return nothing;
         }
-        const x = xForMinutes(range.startMinutes);
-        const width = Math.max(2, xForMinutes(range.endMinutes) - x);
+        const column = columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
+        if (!column) {
+            return nothing;
+        }
+        const x = xForMinutes(column.startMinutes);
+        const width = Math.max(2, xForMinutes(column.endMinutes) - x);
+        const fill = kind === "hover" ? "rgba(245,158,11,0.14)" : "rgba(37,99,235,0.13)";
+        const stroke = kind === "hover" ? "#f59e0b" : "#2563eb";
+        const strokeOpacity = kind === "hover" ? "0.55" : "0.5";
         return svg`
             <rect
                 x=${x} y="0" width=${width} height=${height}
-                fill="rgba(245,158,11,0.14)"
-                stroke="#f59e0b" stroke-width="1" stroke-opacity="0.55"
-                rx="1"
-                pointer-events="none"
-            ></rect>
-        `;
-    }
-
-    /** The column of the selected slot, mirroring the chart's selection band. */
-    private _renderHighlight(
-        geometry: ScheduleStripGeometry,
-        height: number,
-        xForMinutes: (minutes: number) => number,
-    ) {
-        if (!this.selectedSlot) {
-            return nothing;
-        }
-        const match = /^(\d{2}):(\d{2})$/.exec(this.selectedSlot);
-        if (!match) {
-            return nothing;
-        }
-        const minutes = Number(match[1]) * 60 + Number(match[2]);
-        const x = xForMinutes(minutes);
-        const width = Math.max(3, geometry.plotWidth / 96);
-        return svg`
-            <rect
-                x=${x} y="0" width=${width} height=${height}
-                fill="rgba(37,99,235,0.13)"
-                stroke="#2563eb" stroke-width="1" stroke-opacity="0.5"
+                fill=${fill}
+                stroke=${stroke} stroke-width="1" stroke-opacity=${strokeOpacity}
                 rx="1"
                 pointer-events="none"
             ></rect>
@@ -300,6 +288,28 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             : ((svgX - geometry.marginLeft) / geometry.plotWidth) * MINUTES_PER_DAY;
         this.dispatchEvent(
             new CustomEvent<{ minutes: number | null }>("slot-pick", {
+                detail: { minutes },
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    /** Report the hovered minute-of-day so the inspector can echo it everywhere. */
+    private _handleHover(event: MouseEvent, geometry: ScheduleStripGeometry): void {
+        const svgEl = event.currentTarget as SVGSVGElement;
+        const rect = svgEl.getBoundingClientRect();
+        const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
+        const plotRight = geometry.marginLeft + geometry.plotWidth;
+        const minutes = svgX < geometry.marginLeft || svgX > plotRight
+            ? null
+            : ((svgX - geometry.marginLeft) / geometry.plotWidth) * MINUTES_PER_DAY;
+        this._emitHover(minutes);
+    }
+
+    private _emitHover(minutes: number | null): void {
+        this.dispatchEvent(
+            new CustomEvent<{ minutes: number | null }>("slot-hover", {
                 detail: { minutes },
                 bubbles: true,
                 composed: true,
