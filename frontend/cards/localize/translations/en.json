@@ -16,6 +16,7 @@
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
       "battery_soc_strip": "Battery state of charge",
+      "export_price_strip": "Export price",
       "soc_direction": {
         "charging": "charging",
         "discharging": "discharging",

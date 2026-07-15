@@ -291,6 +291,7 @@
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
       "battery_soc_strip": "Stav nabití baterie",
+      "export_price_strip": "Výkupní cena",
       "soc_direction": {
         "charging": "nabíjení",
         "discharging": "vybíjení",

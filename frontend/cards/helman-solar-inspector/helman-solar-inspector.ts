@@ -25,6 +25,7 @@ import {
 import { BATT_COLOR, GRID_COLOR, SOLAR_COLOR } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
+import "./helman-solar-export-price-strip";
 import {
   findImpactForSlot,
   findPointForSlot,
@@ -268,6 +269,8 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _selectedTrainingDate: string | null = null;
   @state() private _trainingTableCollapsed = true;
   @state() private _impactStripVisible = false;
+  @state() private _socStripExpanded = true;
+  @state() private _exportPriceStripExpanded = true;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
 
@@ -473,6 +476,38 @@ export class HelmanSolarInspector extends LitElement {
       min-width: 360px;
       max-width: none;
       height: 260px;
+    }
+
+    .strip-section {
+      display: grid;
+      gap: 2px;
+      width: 100%;
+    }
+
+    .strip-collapse-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--secondary-text-color);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0;
+      font: inherit;
+      font-size: 0.85em;
+      text-align: left;
+    }
+
+    .strip-collapse-icon {
+      display: inline-block;
+      font-style: normal;
+      transition: transform 0.2s;
+      font-size: 0.7em;
+      opacity: 0.7;
+    }
+
+    .strip-collapse-icon.expanded {
+      transform: rotate(90deg);
     }
 
     .soc-strip-wrap {
@@ -710,8 +745,9 @@ export class HelmanSolarInspector extends LitElement {
         ? html`
             <div class="chart-wrap">${this._renderChart(payload, stacks, layout)}</div>
             ${this._renderScheduleActionsStrip(payload, layout)}
+            ${this._renderExportPriceStrip(payload, layout)}
             ${this._lastLayoutForStrip && this._socBars(payload).length
-              ? html`<div class="soc-strip-wrap">${this._renderSocStrip(payload, this._lastLayoutForStrip)}</div>`
+              ? this._renderSocSection(payload, this._lastLayoutForStrip)
               : ""}
             ${this._impactStripVisible && this._lastLayoutForStrip
               ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(payload, this._lastLayoutForStrip)}</div>`
@@ -779,6 +815,78 @@ export class HelmanSolarInspector extends LitElement {
           plotWidth: layout.plotWidth,
         }}
       ></helman-solar-schedule-actions-strip>
+    `;
+  }
+
+  /** The export-price strip, behind a collapse toggle that starts expanded. */
+  private _renderExportPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
+    return html`
+      <div class="strip-section">
+        <button
+          class="strip-collapse-toggle"
+          type="button"
+          aria-expanded=${this._exportPriceStripExpanded ? "true" : "false"}
+          @click=${() => { this._exportPriceStripExpanded = !this._exportPriceStripExpanded; }}
+        >
+          <span class="strip-collapse-icon ${this._exportPriceStripExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.export_price_strip")}
+        </button>
+        ${this._exportPriceStripExpanded
+          ? html`
+              <helman-solar-export-price-strip
+                .hass=${this.hass}
+                .date=${payload.date}
+                .timeZone=${this._haTimeZone() ?? "UTC"}
+                .selectedSlot=${resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot)}
+                .geometry=${{
+                  width: layout.width,
+                  marginLeft: layout.margin.left,
+                  plotWidth: layout.plotWidth,
+                }}
+                @slot-pick=${(event: CustomEvent<{ minutes: number | null }>) =>
+                  this._handleStripSlotPick(event, payload)}
+              ></helman-solar-export-price-strip>
+            `
+          : ""}
+      </div>
+    `;
+  }
+
+  /** Resolve a strip click to the nearest impact slot, or clear the selection. */
+  private _handleStripSlotPick(
+    event: CustomEvent<{ minutes: number | null }>,
+    payload: InspectorPayload,
+  ) {
+    const minutes = event.detail?.minutes ?? null;
+    if (minutes === null) {
+      this._deselectSlot();
+      return;
+    }
+    const slot = this._findClosestImpactSlot(minutes, payload.series.impact);
+    if (slot) {
+      this._selectSlot(slot);
+    } else {
+      this._deselectSlot();
+    }
+  }
+
+  /** The battery SoC strip, behind a collapse toggle that starts expanded. */
+  private _renderSocSection(payload: InspectorPayload, layout: ChartLayout) {
+    return html`
+      <div class="strip-section">
+        <button
+          class="strip-collapse-toggle"
+          type="button"
+          aria-expanded=${this._socStripExpanded ? "true" : "false"}
+          @click=${() => { this._socStripExpanded = !this._socStripExpanded; }}
+        >
+          <span class="strip-collapse-icon ${this._socStripExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.battery_soc_strip")}
+        </button>
+        ${this._socStripExpanded
+          ? html`<div class="soc-strip-wrap">${this._renderSocStrip(payload, layout)}</div>`
+          : ""}
+      </div>
     `;
   }
 
