@@ -336,6 +336,13 @@
         "dropped_day": "Vynechaný den",
         "omitted_slot": "Vynechaný slot",
         "interpolated": "Interpolováno"
+      },
+      "merged": {
+        "solar": "Solární výroba",
+        "house": "Spotřeba",
+        "grid": "Síť",
+        "battery": "Baterie",
+        "battery_soc": "SoC baterie"
       }
     }
   },

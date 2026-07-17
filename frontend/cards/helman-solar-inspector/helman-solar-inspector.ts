@@ -1,4 +1,4 @@
-import { LitElement, css, html, svg } from "lit";
+import { LitElement, css, html, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
@@ -662,6 +662,26 @@ export class HelmanSolarInspector extends LitElement {
       text-decoration: line-through;
     }
 
+    .metric-card.hidden-series {
+      border-left-color: var(--divider-color) !important;
+    }
+
+    .metric-card.hidden-series .metric-chip {
+      background: none !important;
+    }
+
+    .metric-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .metric-chip {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+
     .metric-label {
       color: var(--secondary-text-color);
       font-size: 0.72rem;
@@ -953,6 +973,16 @@ export class HelmanSolarInspector extends LitElement {
     const next = new Set(this._hiddenSeries);
     if (!next.delete(series)) {
       next.add(series);
+    }
+    this._hiddenSeries = next;
+  }
+
+  /** Hide or show a merged card's series together, driven off its shown state. */
+  private _toggleSeriesGroup(series: SeriesKey[], visible: boolean) {
+    const next = new Set(this._hiddenSeries);
+    for (const key of series) {
+      if (visible) next.add(key);
+      else next.delete(key);
     }
     this._hiddenSeries = next;
   }
@@ -1713,15 +1743,41 @@ export class HelmanSolarInspector extends LitElement {
       <div class="metrics-section">
         <strong>${this._t("bias_correction.inspector.daily_totals")}</strong>
         <div class="metric-grid">
-          ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true, "raw")}
-          ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(payload.totals.correctedWh), CHART_COLORS.corrected, true, "corrected")}
-          ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(payload.totals.actualWh), CHART_COLORS.actual, false, "actual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(negateWh(payload.totals.houseForecastWh)), CHART_COLORS.house, true, "houseForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(negateWh(payload.totals.houseActualWh)), CHART_COLORS.house, false, "houseActual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_forecast"), this._formatWh(negateWh(payload.totals.gridForecastWh)), CHART_COLORS.grid, true, "gridForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_actual"), this._formatWh(negateWh(payload.totals.gridActualWh)), CHART_COLORS.grid, false, "gridActual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_forecast"), this._formatWh(negateWh(payload.totals.batteryForecastWh)), CHART_COLORS.battery, true, "batteryForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_actual"), this._formatWh(negateWh(payload.totals.batteryActualWh)), CHART_COLORS.battery, false, "batteryActual")}
+          ${this._isSeriesVisible("raw")
+            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true, "raw")
+            : ""}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.solar"),
+            CHART_COLORS.corrected,
+            this._mergedPart(payload.totals.correctedWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast")),
+            this._mergedPart(payload.totals.actualWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production")),
+            "corrected",
+            "actual",
+          )}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.house"),
+            CHART_COLORS.house,
+            this._mergedPart(negateWh(payload.totals.houseForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast")),
+            this._mergedPart(negateWh(payload.totals.houseActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual")),
+            "houseForecast",
+            "houseActual",
+          )}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.grid"),
+            CHART_COLORS.grid,
+            this._mergedPart(negateWh(payload.totals.gridForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast")),
+            this._mergedPart(negateWh(payload.totals.gridActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual")),
+            "gridForecast",
+            "gridActual",
+          )}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.battery"),
+            CHART_COLORS.battery,
+            this._mergedPart(negateWh(payload.totals.batteryForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast")),
+            this._mergedPart(negateWh(payload.totals.batteryActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual")),
+            "batteryForecast",
+            "batteryActual",
+          )}
         </div>
       </div>
     `;
@@ -1748,11 +1804,15 @@ export class HelmanSolarInspector extends LitElement {
     const impactColor = (impact?.impactWh ?? null) === null
       ? undefined
       : (impact!.impactWh! >= 0 ? CHART_COLORS.impactPositive : CHART_COLORS.impactNegative);
+    // The bias-correction internals (impact, factor, interpolation, training
+    // contributions) ride along with the raw forecast: hidden by default, they
+    // surface only once the raw diagnostic is turned on.
+    const showDiagnostics = this._isSeriesVisible("raw");
     return html`
       <div class="metrics-section">
         <strong>
           ${this._tFormat("bias_correction.inspector.selected_slot", { slot: selectedSlot })}
-          ${interpolated
+          ${interpolated && showDiagnostics
             ? html`<span class="interpolation-note" title=${this._t("bias_correction.inspector.interpolated_explanation")}>
                 ${this._tFormat("bias_correction.inspector.interpolated_from", {
                   left: anchors?.left ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
@@ -1761,26 +1821,151 @@ export class HelmanSolarInspector extends LitElement {
               </span>`
             : ""}
         </strong>
-        ${interpolated
+        ${interpolated && showDiagnostics
           ? html`<div class="day-state">${this._t("bias_correction.inspector.interpolated_explanation")}</div>`
           : ""}
         <div class="metric-grid">
-          ${this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(raw?.valueWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true, "raw")}
-          ${this._renderMetric(this._t("bias_correction.inspector.corrected_forecast"), this._formatWh(corrected?.valueWh ?? impact?.correctedWh ?? null), CHART_COLORS.corrected, true, "corrected")}
-          ${this._renderMetric(this._t("bias_correction.inspector.actual_production"), this._formatWh(actual?.valueWh ?? null), CHART_COLORS.actual, false, "actual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_forecast"), this._formatWh(negateWh(houseFc?.valueWh ?? null)), CHART_COLORS.house, true, "houseForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.house_actual"), this._formatWh(negateWh(houseAc?.valueWh ?? null)), CHART_COLORS.house, false, "houseActual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null), impactColor)}
-          ${this._renderMetric(this._t("bias_correction.inspector.factor"), this._formatFactor(impact?.factor ?? trainingSlot?.factor ?? null), impactColor)}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_forecast"), this._formatPct(batterySocFc?.pct ?? null), CHART_COLORS.battery, true, "batterySocForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_soc_actual"), this._formatPct(batterySocAc?.pct ?? null), CHART_COLORS.battery, false, "batterySocActual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_forecast"), this._formatWh(negateWh(gridFc?.valueWh ?? null)), CHART_COLORS.grid, true, "gridForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_actual"), this._formatWh(negateWh(gridAc?.valueWh ?? null)), CHART_COLORS.grid, false, "gridActual")}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_forecast"), this._formatWh(negateWh(batteryFc?.valueWh ?? null)), CHART_COLORS.battery, true, "batteryForecast")}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_actual"), this._formatWh(negateWh(batteryAc?.valueWh ?? null)), CHART_COLORS.battery, false, "batteryActual")}
+          ${this._isSeriesVisible("raw")
+            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(raw?.valueWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true, "raw")
+            : ""}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.solar"),
+            CHART_COLORS.corrected,
+            this._mergedPart(corrected?.valueWh ?? impact?.correctedWh ?? null, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast")),
+            this._mergedPart(actual?.valueWh ?? null, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production")),
+            "corrected",
+            "actual",
+          )}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.house"),
+            CHART_COLORS.house,
+            this._mergedPart(negateWh(houseFc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast")),
+            this._mergedPart(negateWh(houseAc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual")),
+            "houseForecast",
+            "houseActual",
+          )}
+          ${showDiagnostics
+            ? this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null), impactColor)
+            : ""}
+          ${showDiagnostics
+            ? this._renderMetric(this._t("bias_correction.inspector.factor"), this._formatFactor(impact?.factor ?? trainingSlot?.factor ?? null), impactColor)
+            : ""}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.battery_soc"),
+            CHART_COLORS.battery,
+            this._mergedPart(batterySocFc?.pct ?? null, (v) => this._formatPct(v), this._t("bias_correction.inspector.battery_soc_forecast")),
+            this._mergedPart(batterySocAc?.pct ?? null, (v) => this._formatPct(v), this._t("bias_correction.inspector.battery_soc_actual")),
+            "batterySocForecast",
+            "batterySocActual",
+          )}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.grid"),
+            CHART_COLORS.grid,
+            this._mergedPart(negateWh(gridFc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast")),
+            this._mergedPart(negateWh(gridAc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual")),
+            "gridForecast",
+            "gridActual",
+          )}
+          ${this._renderMergedMetric(
+            this._t("bias_correction.inspector.merged.battery"),
+            CHART_COLORS.battery,
+            this._mergedPart(negateWh(batteryFc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast")),
+            this._mergedPart(negateWh(batteryAc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual")),
+            "batteryForecast",
+            "batteryActual",
+          )}
         </div>
       </div>
-      ${this._renderContributionTable(payload, selectedSlot, trainingSlot)}
+      ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
+    `;
+  }
+
+  /**
+   * The tinted fill that marks a value as forecast (hatched) or actual (flat).
+   * Returns the bare CSS value so it can back either a whole card or a single
+   * value chip inside a merged card.
+   */
+  private _seriesFill(color: string, forecast: boolean): string {
+    return forecast
+      ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 18%, transparent) 0px, color-mix(in srgb, ${color} 18%, transparent) 3px, transparent 3px, transparent 8px)`
+      : `color-mix(in srgb, ${color} 15%, transparent)`;
+  }
+
+  /**
+   * One value inside a merged card, tagged with whether it is present so the
+   * caller can drop the empty half. `title` names the underlying series for the
+   * hover tooltip the merged label no longer spells out.
+   */
+  private _mergedPart(
+    value: number | null,
+    format: (value: number | null) => string,
+    title: string,
+  ): { value: string; present: boolean; title: string } {
+    return {
+      value: format(value),
+      present: value !== null && Number.isFinite(value),
+      title,
+    };
+  }
+
+  /**
+   * A forecast/actual pair drawn as a single card: the forecast value carries
+   * the hatched fill and the actual value the flat fill, so the two read as one
+   * quantity seen twice. When only one side has data the card shows just that
+   * one. The whole card toggles both series at once.
+   */
+  private _renderMergedMetric(
+    label: string,
+    color: string,
+    forecast: { value: string; present: boolean; title: string },
+    actual: { value: string; present: boolean; title: string },
+    forecastSeries: SeriesKey,
+    actualSeries: SeriesKey,
+  ) {
+    // A chip has to stand out against the card's own colour wash, so its fill
+    // runs stronger than the wash: the forecast keeps the hatch, the actual a
+    // flat tint one step darker again.
+    const chipFill = (isForecast: boolean): string =>
+      isForecast
+        ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 42%, transparent) 0px, color-mix(in srgb, ${color} 42%, transparent) 3px, transparent 3px, transparent 7px)`
+        : `color-mix(in srgb, ${color} 34%, transparent)`;
+    const chip = (
+      part: { value: string; title: string },
+      isForecast: boolean,
+    ): TemplateResult => html`
+      <span
+        class="metric-value metric-chip"
+        style=${`background: ${chipFill(isForecast)};`}
+        title=${part.title}
+      >${part.value}</span>
+    `;
+    const chips: TemplateResult[] = [];
+    if (actual.present) chips.push(chip(actual, false));
+    if (forecast.present) chips.push(chip(forecast, true));
+    // Neither side reported: keep a single placeholder so the card still reads.
+    if (chips.length === 0) chips.push(chip(forecast, true));
+
+    const visible =
+      this._isSeriesVisible(forecastSeries) || this._isSeriesVisible(actualSeries);
+    // Faint full-card wash plus a solid left rail, both in the series colour, so
+    // the box is identifiable at a glance without drowning the chips.
+    const cardStyle = `background: color-mix(in srgb, ${color} 12%, transparent); border-left: 3px solid ${color};`;
+    return html`
+      <button
+        class="metric-card legend-toggle merged ${visible ? "" : "hidden-series"}"
+        style=${cardStyle}
+        type="button"
+        aria-pressed=${visible ? "true" : "false"}
+        title=${this._t(
+          visible
+            ? "bias_correction.inspector.legend_hide_series"
+            : "bias_correction.inspector.legend_show_series",
+        )}
+        @click=${() => this._toggleSeriesGroup([forecastSeries, actualSeries], visible)}
+      >
+        <div class="metric-label">${label}</div>
+        <div class="metric-chips">${chips}</div>
+      </button>
     `;
   }
 
@@ -1792,10 +1977,8 @@ export class HelmanSolarInspector extends LitElement {
     series?: SeriesKey,
   ) {
     let background = "";
-    if (color && dashed) {
-      background = `background: repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 18%, transparent) 0px, color-mix(in srgb, ${color} 18%, transparent) 3px, transparent 3px, transparent 8px);`;
-    } else if (color) {
-      background = `background: color-mix(in srgb, ${color} 15%, transparent);`;
+    if (color) {
+      background = `background: ${this._seriesFill(color, dashed === true)};`;
     }
     if (!series) {
       return html`

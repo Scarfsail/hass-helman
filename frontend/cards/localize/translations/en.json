@@ -62,6 +62,13 @@
         "forecast_zero": "Zero forecast",
         "dropped_day": "Dropped day",
         "omitted_slot": "Omitted slot"
+      },
+      "merged": {
+        "solar": "Solar production",
+        "house": "House",
+        "grid": "Grid",
+        "battery": "Battery",
+        "battery_soc": "Battery SoC"
       }
     }
   },
