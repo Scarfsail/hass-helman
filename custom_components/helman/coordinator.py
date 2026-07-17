@@ -1406,7 +1406,22 @@ class HelmanCoordinator:
         self._house_consumption_forecast_current_sensor = sensor
 
     def get_house_consumption_forecast_current_w(self) -> float | None:
-        forecast = self._cached_forecast
+        # Report the same house demand the battery and grid forecasts are built
+        # from: the adjusted forecast, whose nonDeferrable already folds in the
+        # scheduled deferrable appliances (pool, car charging, ...). The raw
+        # deferrableConsumers band is the model's probabilistic account of those
+        # same appliances and must not be added on top, or the recorded history
+        # this sensor feeds would double-count them against solar in the
+        # inspector. Fall back to the unadjusted base load only while the
+        # appliance pipeline is cold — never to base + deferrableConsumers.
+        pipeline = self._cached_appliance_forecast_pipeline
+        forecast: dict[str, Any] | None = None
+        if pipeline is not None and isinstance(
+            pipeline.adjusted_house_forecast, dict
+        ):
+            forecast = pipeline.adjusted_house_forecast
+        if not isinstance(forecast, dict) or forecast.get("status") != "available":
+            forecast = self._cached_forecast
         if not isinstance(forecast, dict):
             return None
         if forecast.get("status") != "available":
@@ -1432,21 +1447,15 @@ class HelmanCoordinator:
             slot_end = slot_start + timedelta(minutes=15)
             if slot_start <= now_local < slot_end:
                 nd = entry.get("nonDeferrable") or {}
-                nd_wh = nd.get("value") if isinstance(nd, dict) else None
-                if nd_wh is None:
+                nd_kwh = nd.get("value") if isinstance(nd, dict) else None
+                if nd_kwh is None:
                     return None
                 try:
-                    nd_wh = float(nd_wh)
+                    nd_kwh = float(nd_kwh)
                 except (TypeError, ValueError):
                     return None
-                deferrable_kwh = sum(
-                    float(c.get("value", 0))
-                    for c in (entry.get("deferrableConsumers") or [])
-                    if isinstance(c, dict) and isinstance(c.get("value"), (int, float))
-                )
-                # Values are kWh per 15-min slot; convert to W: kWh * 1000 / 0.25 h
-                total_kwh = nd_wh + deferrable_kwh
-                return total_kwh * 1000 / 0.25
+                # Value is kWh per 15-min slot; convert to W: kWh * 1000 / 0.25 h
+                return nd_kwh * 1000 / 0.25
         return None
 
     def get_solar_forecast_today_remaining(self) -> float | None:
@@ -1849,6 +1858,15 @@ class HelmanCoordinator:
                 )
             else:
                 await self._storage.async_save_snapshot(house_snapshot)
+            # Warm the appliance pipeline before publishing so the house
+            # consumption sensor reports the adjusted (base + scheduled) demand,
+            # keeping the recorded history it feeds aligned with the battery and
+            # grid forecasts. Never let a pipeline failure block the refresh.
+            await self._async_warm_appliance_pipeline(
+                house_forecast=house_snapshot,
+                solar_snapshot=solar_snapshot,
+                started_at=request_now,
+            )
             self._publish_solar_forecast_entities()
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
@@ -1865,6 +1883,35 @@ class HelmanCoordinator:
             forecast_refreshed=True,
             bundle_ready=bundle_ready,
         )
+
+    async def _async_warm_appliance_pipeline(
+        self,
+        *,
+        house_forecast: dict[str, Any],
+        solar_snapshot: dict[str, Any] | None,
+        started_at: datetime,
+    ) -> None:
+        """Build the appliance forecast pipeline so its adjusted house forecast
+        is available to the house consumption sensor at publish time.
+
+        Best-effort: a missing or unavailable forecast just leaves the pipeline
+        cold, and the sensor falls back to the base load.
+        """
+        if house_forecast.get("status") != "available":
+            return
+        solar_forecast = (
+            _build_corrected_solar_forecast_view(solar_snapshot)
+            if isinstance(solar_snapshot, dict)
+            else {"status": "unavailable", "points": []}
+        )
+        try:
+            await self._async_get_appliance_forecast_pipeline(
+                solar_forecast=solar_forecast,
+                house_forecast=house_forecast,
+                started_at=started_at,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to warm appliance forecast pipeline")
 
     async def _async_refresh_automation_input_bundle(
         self,

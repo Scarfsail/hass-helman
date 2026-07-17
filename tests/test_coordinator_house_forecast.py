@@ -431,6 +431,59 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
             )
         )
 
+    def test_current_w_uses_adjusted_nondeferrable_not_deferrable_band(self) -> None:
+        # The current slot covers 21:16 (the stubbed now); its adjusted
+        # nonDeferrable already carries scheduled appliance demand (0.6 kWh).
+        # The deferrableConsumers band and the unadjusted cache must be ignored.
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._cached_forecast = {
+            "status": "available",
+            "currentSlot": {
+                "timestamp": "2026-03-20T21:15:00+01:00",
+                "nonDeferrable": {"value": 0.2},
+                "deferrableConsumers": [{"value": 0.3}],
+            },
+            "series": [],
+        }
+        coordinator._cached_appliance_forecast_pipeline = types.SimpleNamespace(
+            adjusted_house_forecast={
+                "status": "available",
+                "currentSlot": {
+                    "timestamp": "2026-03-20T21:15:00+01:00",
+                    "nonDeferrable": {"value": 0.6},
+                    "deferrableConsumers": [{"value": 0.9}],
+                },
+                "series": [],
+            }
+        )
+
+        # 0.6 kWh over a 15-min slot -> 0.6 * 1000 / 0.25 = 2400 W.
+        self.assertEqual(
+            coordinator.get_house_consumption_forecast_current_w(),
+            2400.0,
+        )
+
+    def test_current_w_falls_back_to_base_load_when_pipeline_cold(self) -> None:
+        # With no pipeline, the sensor reports the unadjusted base load only,
+        # never base + deferrableConsumers.
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._cached_appliance_forecast_pipeline = None
+        coordinator._cached_forecast = {
+            "status": "available",
+            "currentSlot": {
+                "timestamp": "2026-03-20T21:15:00+01:00",
+                "nonDeferrable": {"value": 0.2},
+                "deferrableConsumers": [{"value": 0.3}],
+            },
+            "series": [],
+        }
+
+        # 0.2 kWh base load only -> 0.2 * 1000 / 0.25 = 800 W (not 2000 W).
+        self.assertEqual(
+            coordinator.get_house_consumption_forecast_current_w(),
+            800.0,
+        )
+
     def test_has_current_slot_forecast_uses_quarter_hour_freshness(self) -> None:
         snapshot = {
             "currentSlot": {
