@@ -55,6 +55,19 @@ import {
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
 
+/** Below this page width the chart opens at the coarser default. */
+const NARROW_VIEWPORT_PX = 768;
+
+/**
+ * The slot width to open at when the card configures no explicit default: a
+ * phone-width page opens at 60 minutes, anything wider (laptop) at 30. 15 is
+ * never auto-chosen — it stays a deliberate pick on the header toggle.
+ */
+function defaultSlotMinutesForViewport(): number {
+  const width = typeof window !== "undefined" ? window.innerWidth : 0;
+  return width > 0 && width < NARROW_VIEWPORT_PX ? 60 : 30;
+}
+
 const CHART_COLORS = {
   raw:            '#64748b',
   corrected:      SOLAR_COLOR,
@@ -280,8 +293,12 @@ export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) daylightThresholdW = 100;
   /** Whether the daylight-only view starts on; the header toggle overrides it. */
   @property({ attribute: false }) daylightOnlyDefault = true;
-  /** Slot width the chart opens at, in minutes; the header toggle overrides it. */
-  @property({ attribute: false }) slotMinutesDefault = 30;
+  /**
+   * Slot width the chart opens at, in minutes; the header toggle overrides it.
+   * When unset the width is chosen from the page width — a phone opens coarser
+   * (60) than a laptop (30) — so this is only for pinning an explicit default.
+   */
+  @property({ attribute: false }) slotMinutesDefault?: number;
 
   @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
@@ -299,6 +316,8 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
 
+  /** Whether the opening slot width has been seeded from config or page width. */
+  private _slotMinutesInitialized = false;
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
   private _lastLayoutForStrip: ChartLayout | null = null;
   private _lastForecastFillFrom = Number.NEGATIVE_INFINITY;
@@ -753,13 +772,18 @@ export class HelmanSolarInspector extends LitElement {
     if (changed.has("daylightOnlyDefault")) {
       this._daylightOnly = this.daylightOnlyDefault;
     }
-    // Seed the slot width from config, snapping stray values onto the offered
-    // grid. As with the daylight default, the runtime toggle touches
+    // Seed the opening slot width once: an explicit config default wins,
+    // otherwise it is chosen from the page width so a phone opens coarser than a
+    // laptop. As with the daylight default, the runtime toggle touches
     // `_slotMinutes` alone, so this never overrides a manual pick.
-    if (changed.has("slotMinutesDefault")) {
-      this._slotMinutes = SLOT_SIZE_OPTIONS.includes(this.slotMinutesDefault as 15 | 30 | 60)
-        ? this.slotMinutesDefault
-        : 30;
+    if (!this._slotMinutesInitialized || changed.has("slotMinutesDefault")) {
+      const explicit = this._explicitSlotDefault();
+      if (explicit !== null) {
+        this._slotMinutes = explicit;
+      } else if (!this._slotMinutesInitialized) {
+        this._slotMinutes = defaultSlotMinutesForViewport();
+      }
+      this._slotMinutesInitialized = true;
     }
     if (changed.has("hass") && this.hass) {
       if (!this._selectedDate) {
@@ -866,6 +890,12 @@ export class HelmanSolarInspector extends LitElement {
           `
         : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
     `;
+  }
+
+  /** The configured opening slot width, or null when the card leaves it to auto. */
+  private _explicitSlotDefault(): number | null {
+    const value = this.slotMinutesDefault;
+    return value != null && SLOT_SIZE_OPTIONS.includes(value as 15 | 30 | 60) ? value : null;
   }
 
   /**
