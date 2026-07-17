@@ -269,6 +269,7 @@
       "next_day": "Další den",
       "refresh": "Obnovit",
       "daylight_only": "Zobrazit jen hodiny se solární energií",
+      "slot_size": "Šířka slotu (minuty)",
       "today": "Dnes",
       "forecast_only": "Pouze prognóza",
       "raw_forecast": "Surová prognóza",

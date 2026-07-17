@@ -16,7 +16,8 @@ import {
 } from "../helman-scheduling/model/schedule-appliance-projection";
 import { buildNormalizedScheduleStructure } from "../helman-scheduling/model/schedule-normalizer";
 import { buildScheduleActionCell } from "../helman-scheduling/model/schedule-hour-bucket-builder";
-import { getScheduleLocalTimeParts } from "../helman-scheduling/model/schedule-time";
+import { getScheduleLocalTimeParts, getScheduleTimeRangeLabels } from "../helman-scheduling/model/schedule-time";
+import { SLOT_MINUTES } from "./chart-stack";
 import { getScheduleActionLabel } from "../helman-scheduling/model/schedule-labels";
 import { getScheduleApplianceActionPresentation } from "../helman-scheduling/model/schedule-appliance-action-presentation";
 import { buildScheduleRangeEditSelectionSummary, buildScheduleRangeEditAuthorshipSummary } from "../helman-scheduling/model/schedule-range-edit-selection-summary";
@@ -73,8 +74,22 @@ export function stripMinutesForSvgX(geometry: ScheduleStripGeometry, svgX: numbe
     return start + ((svgX - geometry.marginLeft) / geometry.plotWidth) * (end - start);
 }
 
-/** A schedule slot placed on the selected day's timeline. */
+/**
+ * One or more schedule slots placed on the selected day's timeline. When the
+ * inspector collapses its slots (30/60 min), contiguous schedule slots that fall
+ * in the same wider bucket merge into one column whose action chips are the
+ * deduped union across them — the same collapsing the scheduling card applies to
+ * its hour rows. A single-slot column carries exactly one slot.
+ */
 interface StripColumn {
+    slots: ScheduleSlot[];
+    startMinutes: number;
+    endMinutes: number;
+    rangeLabel: string;
+}
+
+/** One schedule slot resolved onto the day's minute timeline, before collapsing. */
+interface PlacedSlot {
     slot: ScheduleSlot;
     startMinutes: number;
     endMinutes: number;
@@ -204,6 +219,8 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
     @property({ type: String }) public date = "";
     @property({ type: String }) public timeZone = "UTC";
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
+    /** Inspector slot width, in minutes; wider than 15 collapses action columns. */
+    @property({ attribute: false }) public slotMinutes = SLOT_MINUTES;
     /** Minute-of-day of the inspector's selected slot; its column reads as selected (blue). */
     @property({ attribute: false }) public selectedMinutes: number | null = null;
     /** Minute-of-day under the pointer; its column reads as hovered (orange). */
@@ -269,7 +286,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
 
         const rowCount = Math.max(
             1,
-            ...columns.map((column) => this._visibleActionItems(column.slot).length),
+            ...columns.map((column) => this._visibleActionItems(column.slots).length),
         );
         // Each stacked icon-only chip is ~20px tall with a 2px gap, plus 4px padding.
         const innerHeight = rowCount * 20 + (rowCount - 1) * 2 + 4;
@@ -337,16 +354,16 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         const leftPct = this._fraction(column.startMinutes, geometry) * 100;
         const rightPct = this._fraction(column.endMinutes, geometry) * 100;
         const widthPct = Math.max(0, rightPct - leftPct);
-        const selected = this._selectedSlotIds.includes(column.slot.id);
-        const items = this._visibleActionItems(column.slot);
+        const selected = column.slots.some((slot) => this._selectedSlotIds.includes(slot.id));
+        const items = this._visibleActionItems(column.slots);
         return html`
             <button
                 class=${`slot-col${selected ? " selected" : ""}`}
                 type="button"
                 style=${`left:${leftPct}%;width:${widthPct}%;`}
-                title=${column.slot.rangeLabel}
-                aria-label=${column.slot.rangeLabel}
-                @click=${(event: MouseEvent) => this._handleColumnClick(event, column.slot.id)}
+                title=${column.rangeLabel}
+                aria-label=${column.rangeLabel}
+                @click=${(event: MouseEvent) => this._handleColumnClick(event, column)}
             >
                 ${items.map((item) => this._renderActionItem(item))}
             </button>
@@ -418,10 +435,13 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         `;
     }
 
-    /** Grouped action items for a slot, flattened when the expanded view is on. */
-    private _visibleActionItems(slot: ScheduleSlot): ScheduleTableActionItemModel[] {
-        const displaySlot = this._toDisplaySlot(slot);
-        const cell = buildScheduleActionCell([displaySlot], this._appliances, this._projectionIndex);
+    /**
+     * Grouped action items across a column's slots — the deduped union when the
+     * column collapses several slots — flattened when the expanded view is on.
+     */
+    private _visibleActionItems(slots: readonly ScheduleSlot[]): ScheduleTableActionItemModel[] {
+        const displaySlots = slots.map((slot) => this._toDisplaySlot(slot));
+        const cell = buildScheduleActionCell(displaySlots, this._appliances, this._projectionIndex);
         if (!this._expandedActions) {
             return cell.items;
         }
@@ -460,7 +480,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
 
     /** Schedule slots that start on the selected day, placed on its 0..1440 timeline. */
     private _buildColumns(): StripColumn[] {
-        const columns: StripColumn[] = [];
+        const placed: PlacedSlot[] = [];
         for (const slot of this._normalizedSlots) {
             if (slot.dayKey !== this.date) {
                 continue;
@@ -471,9 +491,67 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
             }
             const startMinutes = startParts.hour * 60 + startParts.minute;
             const endMinutes = this._resolveEndMinutes(slot, startMinutes);
-            columns.push({ slot, startMinutes, endMinutes });
+            placed.push({ slot, startMinutes, endMinutes });
+        }
+        placed.sort((left, right) => left.startMinutes - right.startMinutes);
+        return this._collapseColumns(placed);
+    }
+
+    /**
+     * Merge contiguous slots that share a wider bucket into one column, mirroring
+     * the scheduling card's hour collapsing generalised to the inspector's slot
+     * width. A slot only joins a bucket when it abuts the previous one and stays
+     * inside the bucket's span, so gaps and slots wider than the bucket keep their
+     * own column. At the native width no slot shares a bucket, so nothing merges.
+     */
+    private _collapseColumns(placed: PlacedSlot[]): StripColumn[] {
+        const width = this.slotMinutes;
+        const columns: StripColumn[] = [];
+        let index = 0;
+        while (index < placed.length) {
+            const group = [placed[index]];
+            if (width > SLOT_MINUTES) {
+                const bucket = Math.floor(placed[index].startMinutes / width);
+                let next = index + 1;
+                while (next < placed.length) {
+                    const candidate = placed[next];
+                    const previous = group[group.length - 1];
+                    const sameBucket = Math.floor(candidate.startMinutes / width) === bucket;
+                    const contiguous = candidate.startMinutes === previous.endMinutes;
+                    const withinBucket = candidate.endMinutes <= (bucket + 1) * width;
+                    if (!sameBucket || !contiguous || !withinBucket) {
+                        break;
+                    }
+                    group.push(candidate);
+                    next += 1;
+                }
+                index = next;
+            } else {
+                index += 1;
+            }
+            columns.push(this._mergeGroup(group));
         }
         return columns;
+    }
+
+    private _mergeGroup(group: PlacedSlot[]): StripColumn {
+        const slots = group.map((entry) => entry.slot);
+        const first = group[0];
+        const last = group[group.length - 1];
+        const rangeLabel = slots.length === 1
+            ? first.slot.rangeLabel
+            : getScheduleTimeRangeLabels({
+                startMs: first.slot.startMs,
+                endMs: last.slot.endMs,
+                locale: this._locale,
+                timeZone: this.timeZone,
+            }).rangeLabel;
+        return {
+            slots,
+            startMinutes: first.startMinutes,
+            endMinutes: last.endMinutes,
+            rangeLabel,
+        };
     }
 
     /** End minute-of-day, clamped to midnight when the slot runs into the next day. */
@@ -495,26 +573,32 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         return (geometry.marginLeft + ((clamped - start) / (end - start)) * geometry.plotWidth) / geometry.width;
     }
 
-    private _handleColumnClick(event: MouseEvent, slotId: string): void {
+    private _handleColumnClick(event: MouseEvent, column: StripColumn): void {
+        const slotIds = column.slots.map((slot) => slot.id);
+        if (slotIds.length === 0) {
+            return;
+        }
         if (event.shiftKey || event.ctrlKey || event.metaKey) {
             const next = applyScheduleSlotSelection({
                 orderedSlotIds: this._orderedSlotIds,
                 selectedSlotIds: this._selectedSlotIds,
                 anchorSlotIds: this._selectionAnchorSlotIds,
-                detail: { slotId, shiftKey: event.shiftKey },
+                detail: { slotId: slotIds[0], slotIds, shiftKey: event.shiftKey },
             });
             this._selectedSlotIds = next.selectedSlotIds;
             this._selectionAnchorSlotIds = next.anchorSlotIds;
             return;
         }
-        this._openDialog(slotId);
+        // A collapsed column edits every slot it merges, so a wide-slot edit lands
+        // on the whole bucket at once — the scheduling card's collapsed-hour click.
+        this._openDialog(slotIds);
     }
 
-    private _openDialog(slotId: string): void {
+    private _openDialog(targetSlotIds: string[]): void {
         const selectionIds = resolveScheduleDialogSelectionIds({
             orderedSlotIds: this._orderedSlotIds,
             selectedSlotIds: this._selectedSlotIds,
-            targetSlotIds: [slotId],
+            targetSlotIds,
         });
         const selectedIdSet = new Set(selectionIds);
         const selectedSlots = this._normalizedSlots.filter((slot) => selectedIdSet.has(slot.id));

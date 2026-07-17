@@ -44,6 +44,16 @@ import {
   type TrainingSlotExplainability,
   type ContributionRow,
 } from "./solar-inspector-model.js";
+import {
+  aggregateImpactSeries,
+  aggregateWhSeries,
+  sampleBounds,
+  sampleOnGrid,
+  snapSlotToGrid,
+} from "./slot-aggregation.js";
+
+/** Slot widths the header toggle and card config offer, in minutes. */
+const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
 
 const CHART_COLORS = {
   raw:            '#64748b',
@@ -140,10 +150,10 @@ type ChartStacks = { forecast: StackSet; actual: StackSet };
  * slot has only one vertex and no segment gets drawn across it. Battery SoC
  * needs no such closing: it is an instantaneous reading, not an interval.
  */
-function closeIntervalSeries(points: ChartEntry[]): ChartEntry[] {
+function closeIntervalSeries(points: ChartEntry[], slotMinutes: number): ChartEntry[] {
   if (!points.length) return points;
   const last = points[points.length - 1];
-  const slotEnd = last.minutes + SLOT_MINUTES;
+  const slotEnd = last.minutes + slotMinutes;
   if (slotEnd > MINUTES_PER_DAY) return points;
   return [...points, { ...last, minutes: slotEnd }];
 }
@@ -270,6 +280,8 @@ export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) daylightThresholdW = 100;
   /** Whether the daylight-only view starts on; the header toggle overrides it. */
   @property({ attribute: false }) daylightOnlyDefault = true;
+  /** Slot width the chart opens at, in minutes; the header toggle overrides it. */
+  @property({ attribute: false }) slotMinutesDefault = 30;
 
   @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
@@ -282,6 +294,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _socStripExpanded = true;
   @state() private _exportPriceStripExpanded = true;
   @state() private _daylightOnly = true;
+  @state() private _slotMinutes = 30;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
@@ -325,6 +338,37 @@ export class HelmanSolarInspector extends LitElement {
       border-color: var(--primary-color, #2563eb);
       background: color-mix(in srgb, var(--primary-color, #2563eb) 18%, var(--card-background-color));
       color: var(--primary-color, #2563eb);
+    }
+
+    .slot-size-toggle {
+      display: inline-flex;
+      align-items: stretch;
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .slot-size-button {
+      min-width: 30px;
+      min-height: 36px;
+      padding: 0 6px;
+      border: none;
+      border-left: 1px solid var(--divider-color);
+      background: var(--card-background-color);
+      color: var(--secondary-text-color);
+      font: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .slot-size-button:first-child {
+      border-left: none;
+    }
+
+    .slot-size-button.active {
+      background: color-mix(in srgb, var(--primary-color, #2563eb) 18%, var(--card-background-color));
+      color: var(--primary-color, #2563eb);
+      font-weight: 600;
     }
 
     .icon-button {
@@ -709,6 +753,14 @@ export class HelmanSolarInspector extends LitElement {
     if (changed.has("daylightOnlyDefault")) {
       this._daylightOnly = this.daylightOnlyDefault;
     }
+    // Seed the slot width from config, snapping stray values onto the offered
+    // grid. As with the daylight default, the runtime toggle touches
+    // `_slotMinutes` alone, so this never overrides a manual pick.
+    if (changed.has("slotMinutesDefault")) {
+      this._slotMinutes = SLOT_SIZE_OPTIONS.includes(this.slotMinutesDefault as 15 | 30 | 60)
+        ? this.slotMinutesDefault
+        : 30;
+    }
     if (changed.has("hass") && this.hass) {
       if (!this._selectedDate) {
         this._selectedDate = this._todayIso();
@@ -753,6 +805,16 @@ export class HelmanSolarInspector extends LitElement {
           <div class="day-state">${dayState}</div>
         </div>
         <div class="nav-actions">
+          <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
+            ${SLOT_SIZE_OPTIONS.map((minutes) => html`
+              <button
+                class="slot-size-button ${this._slotMinutes === minutes ? "active" : ""}"
+                type="button"
+                aria-pressed=${this._slotMinutes === minutes ? "true" : "false"}
+                @click=${() => this._setSlotMinutes(minutes)}
+              >${minutes}</button>
+            `)}
+          </div>
           <button
             class="icon-button ${this._daylightOnly ? "active" : ""}"
             title=${this._t("bias_correction.inspector.daylight_only")}
@@ -772,35 +834,85 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderContent(payload: InspectorPayload) {
+    // Everything below renders from the slot-collapsed view; only the daily
+    // totals it carries through are slot-width independent.
+    const view = this._viewForSlot(payload);
     const hasAnySeries =
-      payload.availability.hasRawForecast ||
-      payload.availability.hasCorrectedForecast ||
-      payload.availability.hasActuals ||
-      payload.availability.hasInvalidated;
+      view.availability.hasRawForecast ||
+      view.availability.hasCorrectedForecast ||
+      view.availability.hasActuals ||
+      view.availability.hasInvalidated;
 
-    const stacks = hasAnySeries ? this._buildStacks(payload) : null;
-    const layout = stacks ? this._computeChartLayout(payload, stacks) : null;
+    const stacks = hasAnySeries ? this._buildStacks(view) : null;
+    const layout = stacks ? this._computeChartLayout(view, stacks) : null;
 
     return html`
-      ${!payload.availability.hasProfile
+      ${!view.availability.hasProfile
         ? html`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`
         : ""}
       ${hasAnySeries && stacks && layout
         ? html`
-            <div class="chart-wrap">${this._renderChart(payload, stacks, layout)}</div>
-            ${this._renderScheduleActionsStrip(payload, layout)}
-            ${this._renderExportPriceStrip(payload, layout)}
-            ${this._lastLayoutForStrip && this._socBars(payload).length
-              ? this._renderSocSection(payload, this._lastLayoutForStrip)
+            <div class="chart-wrap">${this._renderChart(view, stacks, layout)}</div>
+            ${this._renderScheduleActionsStrip(view, layout)}
+            ${this._renderExportPriceStrip(view, layout)}
+            ${this._lastLayoutForStrip && this._socBars(view).length
+              ? this._renderSocSection(view, this._lastLayoutForStrip)
               : ""}
             ${this._impactStripVisible && this._lastLayoutForStrip
-              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(payload, this._lastLayoutForStrip)}</div>`
+              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
               : ""}
-            ${this._renderTotals(payload)}
-            ${this._renderSelectedSlotDetails(payload)}
+            ${this._renderTotals(view)}
+            ${this._renderSelectedSlotDetails(view)}
           `
-        : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(payload.date) })}</div>`}
+        : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
     `;
+  }
+
+  /**
+   * Switch the chart's slot width, keeping any selection on the new grid so the
+   * highlight and detail panel stay put rather than clearing on every toggle.
+   */
+  private _setSlotMinutes(minutes: number) {
+    if (this._slotMinutes === minutes) return;
+    if (this._selectedSlot) {
+      const snapped = snapSlotToGrid(this._selectedSlot, minutes);
+      if (snapped !== this._selectedSlot) {
+        this._selectedSlot = snapped;
+        this._selectedTrainingDate = this._resolveSelectedTrainingDate(snapped);
+      }
+    }
+    this._slotMinutes = minutes;
+  }
+
+  /**
+   * The payload re-bucketed to the active slot width. Daily totals, availability
+   * and the 15-minute training explainability are slot-width independent and
+   * carry through untouched; only the time series are collapsed.
+   */
+  private _viewForSlot(payload: InspectorPayload): InspectorPayload {
+    const slot = this._slotMinutes;
+    if (slot <= SLOT_MINUTES) return payload;
+    const s = payload.series;
+    return {
+      ...payload,
+      series: {
+        ...s,
+        raw: aggregateWhSeries(s.raw, slot),
+        corrected: aggregateWhSeries(s.corrected, slot),
+        actual: aggregateWhSeries(s.actual, slot),
+        invalidated: aggregateWhSeries(s.invalidated, slot),
+        impact: aggregateImpactSeries(s.impact, slot),
+        houseForecast: aggregateWhSeries(s.houseForecast, slot),
+        houseActual: aggregateWhSeries(s.houseActual, slot),
+        gridForecast: aggregateWhSeries(s.gridForecast, slot),
+        gridActual: aggregateWhSeries(s.gridActual, slot),
+        batteryForecast: aggregateWhSeries(s.batteryForecast, slot),
+        batteryActual: aggregateWhSeries(s.batteryActual, slot),
+        batterySocForecast: sampleOnGrid(s.batterySocForecast, slot),
+        batterySocActual: sampleOnGrid(s.batterySocActual, slot),
+      },
+      batterySocBounds: sampleBounds(payload.batterySocBounds, slot),
+    };
   }
 
   private _isSeriesVisible(series: SeriesKey) {
@@ -824,7 +936,7 @@ export class HelmanSolarInspector extends LitElement {
 
     const powerFor = (series: SeriesKey, entries: ChartEntry[]) =>
       this._isSeriesVisible(series) ? entries.map((e) => e.powerW) : [];
-    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: SLOT_MINUTES });
+    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: this._slotMinutes });
     // The stacks decide the axis: a band's outer edge is the sum beneath it, so
     // the tallest slot total is what has to fit, not the tallest single series.
     const allPower = [
@@ -844,7 +956,7 @@ export class HelmanSolarInspector extends LitElement {
       ? this._solarWindow(payload)
       : { start: 0, end: MINUTES_PER_DAY };
     const daySpan = dayEndMinutes - dayStartMinutes;
-    const slotWidth = (plotWidth * SLOT_MINUTES) / daySpan;
+    const slotWidth = (plotWidth * this._slotMinutes) / daySpan;
     const xForMinutes = (minutes: number) =>
       margin.left + ((minutes - dayStartMinutes) / daySpan) * plotWidth;
     const yForW = (powerW: number) =>
@@ -893,6 +1005,7 @@ export class HelmanSolarInspector extends LitElement {
         .hass=${this.hass}
         .date=${payload.date}
         .timeZone=${this._haTimeZone() ?? "UTC"}
+        .slotMinutes=${this._slotMinutes}
         .geometry=${{
           width: layout.width,
           marginLeft: layout.margin.left,
@@ -958,9 +1071,9 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _renderHoverHighlight(layout: ChartLayout, y: number, height: number) {
     if (this._hoveredMinutes === null) return "";
-    const start = Math.floor(this._hoveredMinutes / SLOT_MINUTES) * SLOT_MINUTES;
+    const start = Math.floor(this._hoveredMinutes / this._slotMinutes) * this._slotMinutes;
     const x = layout.xForMinutes(start);
-    const w = Math.max(2, layout.xForMinutes(start + SLOT_MINUTES) - x);
+    const w = Math.max(2, layout.xForMinutes(start + this._slotMinutes) - x);
     return svg`
       <rect
         x=${x} y=${y} width=${w} height=${height}
@@ -1114,7 +1227,7 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _forecastFillFrom(stacks: ChartStacks): number {
     const lastActual = lastStackSlot(stacks.actual);
-    return lastActual === null ? Number.NEGATIVE_INFINITY : lastActual + SLOT_MINUTES;
+    return lastActual === null ? Number.NEGATIVE_INFINITY : lastActual + this._slotMinutes;
   }
 
   /** A hidden series yields an empty layer, so toggling it collapses its band. */
@@ -1126,7 +1239,7 @@ export class HelmanSolarInspector extends LitElement {
   ): StackLayer {
     if (!this._isSeriesVisible(key)) return { color, values: new Map() };
     const oriented = consumptionPositive ? asSupplyPositive(points) : points;
-    return { color, values: toSlotMap(toAveragePower(oriented, { bucketMinutes: SLOT_MINUTES })) };
+    return { color, values: toSlotMap(toAveragePower(oriented, { bucketMinutes: this._slotMinutes })) };
   }
 
   /**
@@ -1144,14 +1257,14 @@ export class HelmanSolarInspector extends LitElement {
     variant: "actual" | "forecast",
     fillFrom: number,
   ) {
-    const slots = stackSlots(set);
+    const slots = stackSlots(set, this._slotMinutes);
     if (!slots.length) return "";
     const { xForMinutes, yForW } = layout;
     // Each slot's power is an average over the interval that starts at it, so a
     // band is a run of rectangles, not a sloped ribbon between sample points.
     const stepEdge = (slot: number, level: Map<number, number>) => [
       [xForMinutes(slot), yForW(level.get(slot)!)] as const,
-      [xForMinutes(slot + SLOT_MINUTES), yForW(level.get(slot)!)] as const,
+      [xForMinutes(slot + this._slotMinutes), yForW(level.get(slot)!)] as const,
     ];
     const toPath = (points: readonly (readonly [number, number])[]) =>
       points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
@@ -1289,8 +1402,8 @@ export class HelmanSolarInspector extends LitElement {
     const visible = (series: SeriesKey, points: ChartEntry[]) =>
       this._isSeriesVisible(series) ? points : [];
     const rawPoints = visible("raw", toAveragePower(payload.series.raw));
-    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: SLOT_MINUTES }));
-    const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: SLOT_MINUTES }));
+    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: this._slotMinutes }));
+    const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: this._slotMinutes }));
 
     const linePath = (points: ChartEntry[]) =>
       points
@@ -1304,6 +1417,7 @@ export class HelmanSolarInspector extends LitElement {
     // actuals reach and therefore how much of the forecast reads as history.
     const measured = closeIntervalSeries(
       [...actualPoints, ...invalidatedPoints].sort((a, b) => a.minutes - b.minutes),
+      this._slotMinutes,
     );
 
     return svg`

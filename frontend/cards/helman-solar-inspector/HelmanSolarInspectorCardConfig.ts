@@ -14,4 +14,10 @@ export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {
      * The header toggle still overrides it at runtime. Default: true.
      */
     daylight_only_default?: boolean;
+    /**
+     * Slot width the chart is bucketed into when the card first opens, in
+     * minutes. The header toggle still overrides it at runtime. One of 15, 30 or
+     * 60. Default: 30.
+     */
+    slot_minutes?: 15 | 30 | 60;
 }

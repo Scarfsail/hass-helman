@@ -35,7 +35,7 @@ export function clampToSign(powerW: number, sign: 1 | -1): number {
  * last. Slots with no sample count as zero rather than as a hole, so a band
  * closes down to the baseline instead of bridging the gap at its own height.
  */
-export function stackSlots(set: StackSet): number[] {
+export function stackSlots(set: StackSet, slotMinutes: number = SLOT_MINUTES): number[] {
   let first = Number.POSITIVE_INFINITY;
   let last = Number.NEGATIVE_INFINITY;
   for (const layer of [...set.positive, ...set.negative]) {
@@ -46,7 +46,7 @@ export function stackSlots(set: StackSet): number[] {
   }
   if (!Number.isFinite(first)) return [];
   const slots: number[] = [];
-  for (let m = first; m <= last; m += SLOT_MINUTES) slots.push(m);
+  for (let m = first; m <= last; m += slotMinutes) slots.push(m);
   return slots;
 }
 
