@@ -1754,8 +1754,9 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_build_forecast_rebuild_uses_pinned_inputs_and_composes_grid(self) -> None:
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._hass = SimpleNamespace()
+        coordinator._active_config = {}
         coordinator._appliances_registry = AppliancesRuntimeRegistry()
-        coordinator._build_battery_forecast = AsyncMock(
+        coordinator._build_battery_forecast_sync = Mock(
             return_value={
                 "status": "available",
                 "generatedAt": REFERENCE_TIME.isoformat(),
@@ -1823,16 +1824,19 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             registry=coordinator._appliances_registry,
             schedule_document=_make_schedule_document(),
             inputs={"projection": "bundle"},
-            hass=coordinator._hass,
+            hass=None,
             reference_time=REFERENCE_TIME,
             when_active_hourly_energy_kwh_by_appliance_id=pinned_inputs,
+            vehicle_remaining_capacity_kwh_by_vehicle_id={},
         )
-        coordinator._build_battery_forecast.assert_awaited_once_with(
+        coordinator._build_battery_forecast_sync.assert_called_once_with(
             solar_forecast={"status": "available", "points": []},
             house_forecast=adjusted_house_forecast,
             started_at=REFERENCE_TIME,
             forecast_days=MAX_FORECAST_DAYS,
             schedule_overlay={"overlay": True},
+            live_state=None,
+            actual_history=[],
         )
         self.assertEqual(result.adjusted_house_forecast, adjusted_house_forecast)
         self.assertEqual(result.grid_forecast["currentImportPrice"], 7.0)

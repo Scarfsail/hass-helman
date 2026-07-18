@@ -102,6 +102,16 @@ def _install_import_stubs() -> None:
     recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
+    battery_history_mod = types.ModuleType(
+        "custom_components.helman.battery_actual_history_builder"
+    )
+
+    async def _build_battery_actual_history(*args, **kwargs):
+        return []
+
+    battery_history_mod.build_battery_actual_history = _build_battery_actual_history
+    sys.modules[battery_history_mod.__name__] = battery_history_mod
+
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
     schedule_mod.ScheduleControlConfig = type("ScheduleControlConfig", (), {})
 
@@ -576,8 +586,8 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_get_battery_forecast_reuses_cache_within_ttl(self) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
-        coordinator._build_battery_forecast = build_mock
+        build_mock = Mock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast_sync = build_mock
 
         first = await coordinator._async_get_battery_forecast(
             solar_forecast=_make_solar_forecast(),
@@ -591,12 +601,12 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(first, second)
-        build_mock.assert_awaited_once()
+        build_mock.assert_called_once()
 
     async def test_async_get_battery_forecast_rebuilds_after_ttl_expiry(self) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
-        coordinator._build_battery_forecast = build_mock
+        build_mock = Mock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast_sync = build_mock
 
         await coordinator._async_get_battery_forecast(
             solar_forecast=_make_solar_forecast(),
@@ -609,15 +619,15 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:13:00+01:00"),
         )
 
-        self.assertEqual(build_mock.await_count, 2)
+        self.assertEqual(build_mock.call_count, 2)
 
     async def test_async_get_battery_forecast_rebuilds_when_cached_started_at_is_missing(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
         expected_forecast = _make_battery_forecast()
-        build_mock = AsyncMock(return_value=expected_forecast)
-        coordinator._build_battery_forecast = build_mock
+        build_mock = Mock(return_value=expected_forecast)
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._cached_battery_forecast = _make_battery_forecast(started_at=None)
         coordinator._cached_battery_forecast_expires_at = datetime.fromisoformat(
             "2026-03-20T21:12:00+01:00"
@@ -639,12 +649,12 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(forecast, expected_forecast)
-        build_mock.assert_awaited_once()
+        build_mock.assert_called_once()
 
     async def test_async_get_battery_forecast_rebuilds_when_house_snapshot_changes(self) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
-        coordinator._build_battery_forecast = build_mock
+        build_mock = Mock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast_sync = build_mock
 
         await coordinator._async_get_battery_forecast(
             solar_forecast=_make_solar_forecast(),
@@ -657,12 +667,12 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.await_count, 2)
+        self.assertEqual(build_mock.call_count, 2)
 
     async def test_invalidate_battery_forecast_cache_forces_rebuild(self) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
-        coordinator._build_battery_forecast = build_mock
+        build_mock = Mock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast_sync = build_mock
 
         await coordinator._async_get_battery_forecast(
             solar_forecast=_make_solar_forecast(),
@@ -679,7 +689,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.await_count, 2)
+        self.assertEqual(build_mock.call_count, 2)
 
     async def test_invalidate_battery_forecast_cache_also_clears_projection_cache(self) -> None:
         coordinator = self._make_coordinator()
@@ -705,7 +715,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator = self._make_coordinator()
         plan = _make_projection_plan()
         battery_forecast = _make_battery_forecast()
-        coordinator._build_battery_forecast = AsyncMock(return_value=battery_forecast)
+        coordinator._build_battery_forecast_sync = Mock(return_value=battery_forecast)
 
         with (
             patch.object(
@@ -738,18 +748,19 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             registry=coordinator._appliances_registry,
             schedule_document=_make_schedule_document(),
             inputs=build_input_bundle.return_value,
-            hass=coordinator._hass,
+            hass=None,
             reference_time=REFERENCE_TIME,
             when_active_hourly_energy_kwh_by_appliance_id={},
+            vehicle_remaining_capacity_kwh_by_vehicle_id={},
         )
-        coordinator._build_battery_forecast.assert_awaited_once()
+        coordinator._build_battery_forecast_sync.assert_called_once()
 
     async def test_async_get_appliance_projection_plan_reuses_shared_pipeline_within_slot(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
         first_plan = _make_projection_plan()
-        coordinator._build_battery_forecast = AsyncMock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast_sync = Mock(return_value=_make_battery_forecast())
 
         with (
             patch.object(
@@ -778,15 +789,15 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(second, first_plan)
         self.assertEqual(build_input_bundle.call_count, 1)
         self.assertEqual(build_plan.call_count, 1)
-        coordinator._build_battery_forecast.assert_awaited_once()
+        coordinator._build_battery_forecast_sync.assert_called_once()
 
     async def test_async_get_battery_forecast_rebuilds_when_schedule_slots_change(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        build_mock = Mock(return_value=_make_battery_forecast())
         overlay = object()
-        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._build_battery_forecast_schedule_overlay = Mock(
             return_value=overlay
         )
@@ -817,14 +828,14 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.await_count, 2)
+        self.assertEqual(build_mock.call_count, 2)
 
     async def test_async_get_battery_forecast_reuses_cache_when_schedule_changes_but_execution_disabled(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
-        coordinator._build_battery_forecast = build_mock
+        build_mock = Mock(return_value=_make_battery_forecast())
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._storage.schedule_document = _make_schedule_document(
             execution_enabled=False,
             slots={
@@ -849,13 +860,13 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.await_count, 1)
+        self.assertEqual(build_mock.call_count, 1)
 
     async def test_async_get_battery_forecast_rebuilds_when_schedule_execution_changes(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        build_mock = Mock(return_value=_make_battery_forecast())
         overlay = object()
         first_schedule_document = _make_schedule_document(
             execution_enabled=False,
@@ -869,7 +880,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
             },
         )
-        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._build_battery_forecast_schedule_overlay = Mock(
             side_effect=lambda *, schedule_document, reference_time: (
                 overlay if schedule_document.execution_enabled else None
@@ -892,9 +903,9 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.await_count, 2)
-        self.assertIsNone(build_mock.await_args_list[0].kwargs["schedule_overlay"])
-        self.assertIs(build_mock.await_args_list[1].kwargs["schedule_overlay"], overlay)
+        self.assertEqual(build_mock.call_count, 2)
+        self.assertIsNone(build_mock.call_args_list[0].kwargs["schedule_overlay"])
+        self.assertIs(build_mock.call_args_list[1].kwargs["schedule_overlay"], overlay)
         coordinator._build_battery_forecast_schedule_overlay.assert_called_once_with(
             schedule_document=second_schedule_document,
             reference_time=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
@@ -904,7 +915,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(return_value=_make_battery_forecast())
+        build_mock = Mock(return_value=_make_battery_forecast())
         overlay = object()
         first_schedule_document = _make_schedule_document(
             execution_enabled=True,
@@ -918,7 +929,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
             },
         )
-        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._build_battery_forecast_schedule_overlay = Mock(
             return_value=overlay
         )
@@ -939,7 +950,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.await_count, 1)
+        self.assertEqual(build_mock.call_count, 1)
         coordinator._build_battery_forecast_schedule_overlay.assert_called_once_with(
             schedule_document=first_schedule_document,
             reference_time=REFERENCE_TIME,
@@ -949,7 +960,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(
+        build_mock = Mock(
             side_effect=[
                 _make_battery_forecast(
                     current_soc=49.4,
@@ -972,7 +983,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 ),
             },
         )
-        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._build_battery_forecast_schedule_overlay = Mock(
             return_value=overlay
         )
@@ -985,7 +996,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 coordinator_module,
                 "read_battery_entity_config",
-                return_value=object(),
+                return_value=SimpleNamespace(capacity_entity_id="sensor.battery_capacity"),
             ),
             patch.object(
                 coordinator_module,
@@ -1013,13 +1024,13 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
             )
 
-        self.assertEqual(build_mock.await_count, 2)
+        self.assertEqual(build_mock.call_count, 2)
 
     async def test_async_get_battery_forecast_rebuilds_when_active_target_slot_remains_target(
         self,
     ) -> None:
         coordinator = self._make_coordinator()
-        build_mock = AsyncMock(
+        build_mock = Mock(
             side_effect=[
                 _make_battery_forecast(
                     current_soc=49.4,
@@ -1042,7 +1053,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 ),
             },
         )
-        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._build_battery_forecast_schedule_overlay = Mock(
             return_value=overlay
         )
@@ -1055,7 +1066,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 coordinator_module,
                 "read_battery_entity_config",
-                return_value=object(),
+                return_value=SimpleNamespace(capacity_entity_id="sensor.battery_capacity"),
             ),
             patch.object(
                 coordinator_module,
@@ -1083,7 +1094,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
             )
 
-        self.assertEqual(build_mock.await_count, 2)
+        self.assertEqual(build_mock.call_count, 2)
 
     async def test_async_get_battery_forecast_reuses_cache_when_active_target_signature_matches(
         self,
@@ -1093,7 +1104,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             current_soc=49.4,
             current_remaining_energy_kwh=5.0,
         )
-        build_mock = AsyncMock(return_value=forecast)
+        build_mock = Mock(return_value=forecast)
         overlay = object()
         schedule_document = _make_schedule_document(
             execution_enabled=True,
@@ -1104,7 +1115,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 ),
             },
         )
-        coordinator._build_battery_forecast = build_mock
+        coordinator._build_battery_forecast_sync = build_mock
         coordinator._build_battery_forecast_schedule_overlay = Mock(
             return_value=overlay
         )
@@ -1117,7 +1128,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 coordinator_module,
                 "read_battery_entity_config",
-                return_value=object(),
+                return_value=SimpleNamespace(capacity_entity_id="sensor.battery_capacity"),
             ),
             patch.object(
                 coordinator_module,
@@ -1151,7 +1162,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(first, forecast)
         self.assertIs(second, forecast)
-        self.assertEqual(build_mock.await_count, 1)
+        self.assertEqual(build_mock.call_count, 1)
 
 
 if __name__ == "__main__":
