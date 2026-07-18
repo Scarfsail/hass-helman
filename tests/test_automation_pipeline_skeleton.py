@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 import asyncio
+import concurrent.futures
+import inspect
 import sys
 import types
 import unittest
@@ -340,6 +343,8 @@ from custom_components.helman.automation.pipeline import (
     AutomationRunResult,
     AutomationRunner,
     OptimizerRunSummary,
+    _PipelineExecutionResult,
+    run_optimizer_loop_pure,
 )
 from custom_components.helman.automation.snapshot import (
     OptimizationContext,
@@ -2193,6 +2198,117 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             connection.errors,
             [(1, "not_loaded", "Helman coordinator not available")],
+        )
+
+
+class _RecordingOptimizer:
+    """Deterministic fake optimizer: records the snapshots it is handed and
+    returns a fixed schedule document. Lets the pure loop be exercised without
+    any real optimizer internals (or hass)."""
+
+    def __init__(self, result_document: ScheduleDocument) -> None:
+        self._result_document = result_document
+        self.seen_snapshots: list[OptimizationSnapshot] = []
+
+    def optimize(self, snapshot, config, trace):
+        self.seen_snapshots.append(snapshot)
+        return self._result_document
+
+
+def _summary_signature(summary: OptimizerRunSummary) -> dict[str, object]:
+    # Drop the wall-clock duration, which legitimately differs run to run.
+    return {
+        key: value
+        for key, value in summary.to_dict().items()
+        if key != "durationMs"
+    }
+
+
+def _run_pure_loop(build_snapshot) -> _PipelineExecutionResult:
+    optimizers = [
+        _make_optimizer_instance(optimizer_id="a"),
+        _make_optimizer_instance(optimizer_id="b"),
+    ]
+    with patch.object(
+        pipeline_module,
+        "build_optimizer",
+        return_value=_RecordingOptimizer(_make_schedule_document()),
+    ):
+        return run_optimizer_loop_pure(
+            execution_optimizers=optimizers,
+            baseline_schedule_document=_make_schedule_document(),
+            schedule_document=_make_schedule_document(),
+            initial_snapshot=_make_snapshot(),
+            reference_time=REFERENCE_TIME,
+            control_config=None,
+            appliance_registry=AppliancesRuntimeRegistry(),
+            build_snapshot=build_snapshot,
+        )
+
+
+class RunOptimizerLoopPurityTests(unittest.TestCase):
+    """The optimizer loop is offloaded to an executor thread, so it must be a
+    pure function of its inputs: no ``hass`` access, no ``await``."""
+
+    def test_source_has_no_await_and_no_hass_reference(self) -> None:
+        func = ast.parse(inspect.getsource(run_optimizer_loop_pure)).body[0]
+        self.assertFalse(
+            any(isinstance(node, ast.Await) for node in ast.walk(func)),
+            "run_optimizer_loop_pure must not await",
+        )
+        referenced = {
+            node.id for node in ast.walk(func) if isinstance(node, ast.Name)
+        } | {
+            node.attr for node in ast.walk(func) if isinstance(node, ast.Attribute)
+        }
+        self.assertFalse(
+            any("hass" in name.lower() for name in referenced),
+            "run_optimizer_loop_pure must not touch hass",
+        )
+
+    def test_runs_in_worker_thread_without_hass(self) -> None:
+        rebuilt_documents: list[ScheduleDocument] = []
+
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            rebuilt_documents.append(document)
+            return _make_snapshot(schedule_document=document)
+
+        # Run in a real worker thread with no event loop and no hass in scope —
+        # if the loop reached for either it would fail here.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(_run_pure_loop, build_snapshot).result()
+
+        self.assertIsInstance(result, _PipelineExecutionResult)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
+        # The snapshot is rebuilt once per optimizer via the injected pure builder.
+        self.assertEqual(len(rebuilt_documents), 2)
+
+
+class OptimizerLoopExecutorEquivalenceTests(unittest.IsolatedAsyncioTestCase):
+    """Moving the loop across the executor boundary must not change its result."""
+
+    async def test_executor_hop_matches_inline(self) -> None:
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            return _make_snapshot(schedule_document=document)
+
+        inline_result = _run_pure_loop(build_snapshot)
+
+        loop = asyncio.get_running_loop()
+        executor_result = await loop.run_in_executor(
+            None, lambda: _run_pure_loop(build_snapshot)
+        )
+
+        self.assertEqual(
+            inline_result.working_schedule_document,
+            executor_result.working_schedule_document,
+        )
+        self.assertEqual(
+            [_summary_signature(s) for s in inline_result.optimizers],
+            [_summary_signature(s) for s in executor_result.optimizers],
+        )
+        self.assertEqual(
+            inline_result.trace.to_dict(),
+            executor_result.trace.to_dict(),
         )
 
 
