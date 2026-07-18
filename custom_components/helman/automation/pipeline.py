@@ -39,6 +39,7 @@ from ..scheduling.schedule import (
 
 if TYPE_CHECKING:
     from ..coordinator import HelmanCoordinator
+    from .compute_inputs import ComputeInputs
     from .config import OptimizerInstanceConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -331,11 +332,20 @@ class AutomationRunner:
                             run_started_at=run_started_at,
                         )
                     current_stage = "initial_snapshot"
+                    # Gather the run-invariant live values once; every snapshot
+                    # rebuild in this run reuses them instead of re-reading
+                    # hass.states / the recorder per optimizer iteration.
+                    compute_inputs = (
+                        await self._coordinator._async_gather_compute_inputs(
+                            started_at=active_reference_time,
+                        )
+                    )
                     initial_snapshot = (
                         await self._coordinator._build_automation_snapshot_from_schedule_locked(
                             schedule_document=schedule_document,
                             input_bundle=input_bundle,
                             reference_time=active_reference_time,
+                            compute_inputs=compute_inputs,
                         )
                     )
                     current_stage = "day_context"
@@ -356,6 +366,7 @@ class AutomationRunner:
                             reference_time=active_reference_time,
                             initial_snapshot=initial_snapshot,
                             day_contexts=day_contexts,
+                            compute_inputs=compute_inputs,
                         )
                     except _OptimizerExecutionError as err:
                         latest_trace = err.trace
@@ -435,6 +446,7 @@ class AutomationRunner:
         reference_time: datetime,
         initial_snapshot: OptimizationSnapshot,
         day_contexts: dict,
+        compute_inputs: ComputeInputs | None = None,
     ) -> _PipelineExecutionResult:
         working_schedule_document = schedule_document
         snapshot = initial_snapshot
@@ -475,6 +487,7 @@ class AutomationRunner:
                             input_bundle=input_bundle,
                             reference_time=reference_time,
                             day_contexts=day_contexts,
+                            compute_inputs=compute_inputs,
                         )
                     )
                 except Exception as rebuild_err:
@@ -528,6 +541,7 @@ class AutomationRunner:
                     input_bundle=input_bundle,
                     reference_time=reference_time,
                     day_contexts=day_contexts,
+                    compute_inputs=compute_inputs,
                 )
             except Exception as err:
                 trace.end_step(status="failed")

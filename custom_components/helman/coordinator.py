@@ -2333,6 +2333,7 @@ class HelmanCoordinator:
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
         day_contexts: dict[date, DayContext] | None = None,
+        compute_inputs: ComputeInputs | None = None,
     ) -> OptimizationSnapshot:
         schedule_documents = self._build_forecast_schedule_documents(
             schedule_document=schedule_document
@@ -2347,14 +2348,20 @@ class HelmanCoordinator:
                 input_bundle.when_active_hourly_energy_kwh_by_appliance_id
             ),
             grid_price_forecast=input_bundle.grid_price_forecast,
+            compute_inputs=compute_inputs,
         )
         if rebuild.grid_forecast is None:
             raise RuntimeError("Automation snapshot rebuild is missing grid forecast")
 
-        battery_entity_config = read_battery_entity_config(self._active_config)
-        battery_state = None
-        if battery_entity_config is not None:
-            battery_state = read_battery_live_state(self._hass, battery_entity_config)
+        if compute_inputs is not None:
+            battery_state = compute_inputs.battery_live_state
+        else:
+            battery_entity_config = read_battery_entity_config(self._active_config)
+            battery_state = None
+            if battery_entity_config is not None:
+                battery_state = read_battery_live_state(
+                    self._hass, battery_entity_config
+                )
 
         battery_settings = read_battery_forecast_settings(self._active_config)
         battery_max_charge_power_kw = (

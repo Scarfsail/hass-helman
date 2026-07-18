@@ -586,6 +586,11 @@ class _FakeCoordinator:
     ) -> dict:
         return {}
 
+    async def _async_gather_compute_inputs(
+        self, *, started_at: datetime, live_state=None
+    ):
+        return None
+
     async def _build_automation_snapshot_from_schedule_locked(
         self,
         *,
@@ -593,6 +598,7 @@ class _FakeCoordinator:
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
         day_contexts: dict | None = None,
+        compute_inputs=None,
     ) -> OptimizationSnapshot:
         self.snapshot_calls.append(
             {
