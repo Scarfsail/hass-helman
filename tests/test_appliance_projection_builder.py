@@ -354,6 +354,121 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             ],
         )
 
+    def test_eco_projection_subtracts_concurrent_appliance_demand(self) -> None:
+        # A generic appliance scheduled in the same slot consumes part of the
+        # solar surplus, so the ECO charger should only chase what is left.
+        config = _valid_config()
+        config["appliances"].append(_generic_appliance())
+        registry = build_appliances_runtime_registry(config)
+        inputs = build_projection_input_bundle(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            reference_time=REFERENCE_TIME,
+        )
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:30:00+01:00": ScheduleDomains(
+                        appliances={
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "ECO",
+                                "ecoGear": "6A",
+                            },
+                            "dishwasher": {"on": True},
+                        }
+                    )
+                }
+            ),
+            inputs=inputs,
+        )
+
+        dishwasher_demand = [
+            (point.slot_id, point.energy_kwh)
+            for point in plan.demand_points
+            if point.appliance_id == "dishwasher"
+        ]
+        ev_demand = [
+            (point.slot_id, point.energy_kwh)
+            for point in plan.demand_points
+            if point.appliance_id == "garage-ev"
+        ]
+        # Dishwasher: 1.2 kWh/h over two 15-min slices -> 0.3 kWh each.
+        self.assertEqual(
+            dishwasher_demand,
+            [
+                ("2026-03-20T21:30:00+01:00", 0.3),
+                ("2026-03-20T21:45:00+01:00", 0.3),
+            ],
+        )
+        # EV surplus is now solar - base_house - dishwasher: (2.5-0.4-0.3)=2.1->1.8,
+        # (2.5-0.5-0.3)=1.7 -- i.e. 0.3 less per slice than without the fix.
+        self.assertEqual(
+            ev_demand,
+            [
+                ("2026-03-20T21:30:00+01:00", 1.8),
+                ("2026-03-20T21:45:00+01:00", 1.7),
+            ],
+        )
+
+    def test_eco_projection_floors_at_eco_min_when_concurrent_demand_exceeds_surplus(
+        self,
+    ) -> None:
+        # A large concurrent load drives the true surplus below the ECO gear
+        # floor; the charger stays pinned at the floor (topped up from battery).
+        config = _valid_config()
+        big_load = _generic_appliance()
+        big_load["projection"]["hourly_energy_kwh"] = 9.0
+        config["appliances"].append(big_load)
+        registry = build_appliances_runtime_registry(config)
+        inputs = build_projection_input_bundle(
+            solar_forecast=_make_solar_forecast(),
+            house_forecast=_make_house_forecast(),
+            reference_time=REFERENCE_TIME,
+        )
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    "2026-03-20T21:30:00+01:00": ScheduleDomains(
+                        appliances={
+                            "garage-ev": {
+                                "charge": True,
+                                "vehicleId": "kona",
+                                "useMode": "ECO",
+                                "ecoGear": "6A",
+                            },
+                            "dishwasher": {"on": True},
+                        }
+                    )
+                }
+            ),
+            inputs=inputs,
+        )
+
+        ev_demand = [
+            (point.slot_id, point.energy_kwh)
+            for point in plan.demand_points
+            if point.appliance_id == "garage-ev"
+        ]
+        # 6A floor is 1.4 kW -> 0.35 kWh per 15-min slice; surplus after the big
+        # load is negative, so the charger holds at the floor.
+        self.assertEqual(
+            ev_demand,
+            [
+                ("2026-03-20T21:30:00+01:00", 0.35),
+                ("2026-03-20T21:45:00+01:00", 0.35),
+            ],
+        )
+
     def test_charge_false_produces_no_projection(self) -> None:
         registry = build_appliances_runtime_registry(_valid_config())
         inputs = build_projection_input_bundle(

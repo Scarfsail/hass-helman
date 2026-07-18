@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -141,16 +141,16 @@ def build_appliance_projection_plan(
         else None if reference_time is None else dt_util.as_local(reference_time)
     )
 
+    # EV chargers follow the solar surplus, which is what is left over after
+    # every other appliance scheduled in the same slot has taken its share.
+    # Project the fixed-demand appliances first, then feed their per-slot demand
+    # into the EV pass so the surplus it chases is the true grid surplus.
+    deferred_ev_appliances: list[EvChargerApplianceRuntime] = []
+
     for appliance in registry.appliances:
         if isinstance(appliance, EvChargerApplianceRuntime):
-            if inputs is None:
-                continue
-            result = _build_ev_charger_projection_series(
-                appliance=appliance,
-                schedule_document=schedule_document,
-                inputs=inputs,
-                hass=hass,
-            )
+            deferred_ev_appliances.append(appliance)
+            continue
         elif isinstance(appliance, ClimateApplianceRuntime):
             if active_reference_time is None:
                 raise ValueError(
@@ -181,6 +181,24 @@ def build_appliance_projection_plan(
             )
         else:
             continue
+        series = result.series
+        if not series.points:
+            continue
+        appliances_by_id[appliance.id] = series
+        demand_points.extend(result.demand_points)
+
+    concurrent_demand_kwh_by_slot_id = _aggregate_demand_kwh_by_slot_id(demand_points)
+
+    for appliance in deferred_ev_appliances:
+        if inputs is None:
+            continue
+        result = _build_ev_charger_projection_series(
+            appliance=appliance,
+            schedule_document=schedule_document,
+            inputs=inputs,
+            hass=hass,
+            concurrent_demand_kwh_by_slot_id=concurrent_demand_kwh_by_slot_id,
+        )
         series = result.series
         if not series.points:
             continue
@@ -218,11 +236,13 @@ def _build_ev_charger_projection_series(
     schedule_document: ScheduleDocument,
     inputs: ProjectionInputBundle,
     hass,
+    concurrent_demand_kwh_by_slot_id: Mapping[str, float] | None = None,
 ) -> _ApplianceProjectionBuildResult:
     points: list[ApplianceProjectionPlanPoint] = []
     demand_points: list[ApplianceDemandPoint] = []
     vehicle_charged_kwh: dict[str, float] = {}
     vehicle_remaining_kwh: dict[str, float | None] = {}
+    concurrent_demand_kwh = concurrent_demand_kwh_by_slot_id or {}
 
     for slot_id, domains in sorted(schedule_document.slots.items()):
         action = domains.appliances.get(appliance.id)
@@ -268,6 +288,9 @@ def _build_ev_charger_projection_series(
                 action=action,
                 use_mode=use_mode,
                 slot_slice=slot_slice,
+                concurrent_demand_kwh=concurrent_demand_kwh.get(
+                    format_slot_id(slot_slice.slot_start), 0.0
+                ),
             )
             for slot_slice in slot_slices
         )
@@ -580,6 +603,7 @@ def _calculate_slot_slice_energy(
     action: dict[str, Any],
     use_mode: EvChargerUseModeRuntime,
     slot_slice: _ProjectionSlotSlice,
+    concurrent_demand_kwh: float = 0.0,
 ) -> float:
     effective_max_power_kw = min(
         appliance.max_charging_power_kw,
@@ -595,13 +619,30 @@ def _calculate_slot_slice_energy(
     if eco_min_power_kw is None:
         return 0.0
 
+    # The surplus the charger follows is what solar leaves after the base house
+    # load and every other appliance scheduled in this slot. The ECO gear still
+    # floors the draw, so a surplus below the floor is topped up from battery/grid.
+    available_surplus_kwh = (
+        slot_slice.solar_kwh - slot_slice.baseline_house_kwh - concurrent_demand_kwh
+    )
     return min(
         effective_max_power_kw * slot_slice.duration_hours,
         max(
-            slot_slice.solar_kwh - slot_slice.baseline_house_kwh,
+            available_surplus_kwh,
             eco_min_power_kw * slot_slice.duration_hours,
         ),
     )
+
+
+def _aggregate_demand_kwh_by_slot_id(
+    demand_points: Iterable[ApplianceDemandPoint],
+) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for point in demand_points:
+        totals[point.slot_id] = round(
+            totals.get(point.slot_id, 0.0) + point.energy_kwh, 4
+        )
+    return totals
 
 
 def _cap_slice_energies(
