@@ -346,6 +346,7 @@ from custom_components.helman.automation.snapshot import (
     OptimizationSnapshot,
     snapshot_to_dict,
 )
+from custom_components.helman.automation.compute_inputs import ComputeInputs
 from custom_components.helman.battery_state import BatteryEntityConfig, BatteryLiveState
 from custom_components.helman.const import DOMAIN, MAX_FORECAST_DAYS
 from custom_components.helman.coordinator import HelmanCoordinator
@@ -556,6 +557,9 @@ class _FakeCoordinator:
         self._persist_changed = persist_changed
         self._control_config = control_config
         self._appliances_registry = AppliancesRuntimeRegistry()
+        self._hass = SimpleNamespace(
+            async_add_executor_job=self._async_add_executor_job
+        )
         self.snapshot_calls: list[dict[str, object]] = []
         self.persist_calls: list[dict[str, object]] = []
         self.saved_documents: list[ScheduleDocument] = []
@@ -591,7 +595,12 @@ class _FakeCoordinator:
     ):
         return None
 
-    async def _build_automation_snapshot_from_schedule_locked(
+    @staticmethod
+    async def _async_add_executor_job(func, *args):
+        # Tests run the pure loop inline; production hands it to a worker thread.
+        return func(*args)
+
+    def _build_automation_snapshot_from_schedule_pure(
         self,
         *,
         schedule_document: ScheduleDocument,
@@ -611,6 +620,23 @@ class _FakeCoordinator:
             schedule_document=schedule_document,
             input_bundle=input_bundle,
             reference_time=reference_time,
+        )
+
+    async def _build_automation_snapshot_from_schedule_locked(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        input_bundle: AutomationInputBundle,
+        reference_time: datetime,
+        day_contexts: dict | None = None,
+        compute_inputs=None,
+    ) -> OptimizationSnapshot:
+        return self._build_automation_snapshot_from_schedule_pure(
+            schedule_document=schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
+            day_contexts=day_contexts,
+            compute_inputs=compute_inputs,
         )
 
     async def _persist_automation_result_locked(
@@ -1856,7 +1882,10 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._appliances_registry = AppliancesRuntimeRegistry()
-        coordinator._async_build_forecast_rebuild = AsyncMock(
+        # The async wrapper gathers the run-invariant inputs once, then delegates
+        # to the pure snapshot builder (which reads the battery state from the
+        # gathered ComputeInputs and calls the pure rebuild core).
+        coordinator._build_forecast_rebuild_pure = Mock(
             return_value=coordinator_module._ForecastRebuildSnapshot(
                 adjusted_house_forecast={"status": "available"},
                 battery_forecast={"status": "available"},
@@ -1864,31 +1893,9 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                 grid_forecast={"status": "available", "currentImportPrice": 7.0},
             )
         )
-
-        with (
-            patch.object(
-                coordinator,
-                "_build_forecast_schedule_documents",
-                return_value=coordinator_module._ForecastScheduleDocuments(
-                    forecast_schedule_document=_make_schedule_document(),
-                    projection_schedule_document=_make_schedule_document(),
-                    schedule_execution_enabled=True,
-                ),
-            ),
-            patch.object(
-                coordinator_module,
-                "read_battery_entity_config",
-                return_value=BatteryEntityConfig(
-                    remaining_energy_entity_id="sensor.remaining",
-                    capacity_entity_id="sensor.capacity",
-                    min_soc_entity_id="sensor.min_soc",
-                    max_soc_entity_id="sensor.max_soc",
-                ),
-            ),
-            patch.object(
-                coordinator_module,
-                "read_battery_live_state",
-                return_value=BatteryLiveState(
+        coordinator._async_gather_compute_inputs = AsyncMock(
+            return_value=ComputeInputs(
+                battery_live_state=BatteryLiveState(
                     current_remaining_energy_kwh=7.5,
                     current_soc=50.0,
                     min_soc=10.0,
@@ -1897,6 +1904,16 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=1.5,
                     max_energy_kwh=13.5,
                 ),
+            )
+        )
+
+        with patch.object(
+            coordinator,
+            "_build_forecast_schedule_documents",
+            return_value=coordinator_module._ForecastScheduleDocuments(
+                forecast_schedule_document=_make_schedule_document(),
+                projection_schedule_document=_make_schedule_document(),
+                schedule_execution_enabled=True,
             ),
         ):
             snapshot = await coordinator._build_automation_snapshot_from_schedule_locked(

@@ -2335,10 +2335,38 @@ class HelmanCoordinator:
         day_contexts: dict[date, DayContext] | None = None,
         compute_inputs: ComputeInputs | None = None,
     ) -> OptimizationSnapshot:
+        """Async wrapper: gather the run-invariant live inputs once (unless the
+        caller already has them), then build the snapshot with the pure core."""
+        if compute_inputs is None:
+            compute_inputs = await self._async_gather_compute_inputs(
+                started_at=reference_time
+            )
+        return self._build_automation_snapshot_from_schedule_pure(
+            schedule_document=schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
+            day_contexts=day_contexts,
+            compute_inputs=compute_inputs,
+        )
+
+    def _build_automation_snapshot_from_schedule_pure(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        input_bundle: AutomationInputBundle,
+        reference_time: datetime,
+        day_contexts: dict[date, DayContext] | None = None,
+        compute_inputs: ComputeInputs,
+    ) -> OptimizationSnapshot:
+        """Pure, synchronous snapshot build.
+
+        Every live value comes from ``compute_inputs`` and every helper it calls
+        is hass-free, so this is safe to run in an executor.
+        """
         schedule_documents = self._build_forecast_schedule_documents(
             schedule_document=schedule_document
         )
-        rebuild = await self._async_build_forecast_rebuild(
+        rebuild = self._build_forecast_rebuild_pure(
             solar_forecast=input_bundle.solar_forecast,
             original_house_forecast=input_bundle.original_house_forecast,
             started_at=reference_time,
@@ -2353,15 +2381,7 @@ class HelmanCoordinator:
         if rebuild.grid_forecast is None:
             raise RuntimeError("Automation snapshot rebuild is missing grid forecast")
 
-        if compute_inputs is not None:
-            battery_state = compute_inputs.battery_live_state
-        else:
-            battery_entity_config = read_battery_entity_config(self._active_config)
-            battery_state = None
-            if battery_entity_config is not None:
-                battery_state = read_battery_live_state(
-                    self._hass, battery_entity_config
-                )
+        battery_state = compute_inputs.battery_live_state
 
         battery_settings = read_battery_forecast_settings(self._active_config)
         battery_max_charge_power_kw = (
