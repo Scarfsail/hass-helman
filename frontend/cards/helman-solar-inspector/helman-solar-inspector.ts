@@ -2393,8 +2393,13 @@ export class HelmanSolarInspector extends LitElement {
       this._deselectSlot();
       return;
     }
+    // Snap to the slot the pointer sits *inside* before resolving, so a click
+    // anywhere across a slot's width selects it — the same slot hover highlights.
+    // Resolving the raw pointer minute to the nearest slot *start* instead biased
+    // the right half of every slot onto the next slot's start.
     const minutes = this._minutesForSvgX(layout, svgX);
-    const slot = this._findClosestImpactSlot(minutes, payload.series.impact);
+    const slotStart = Math.floor(minutes / this._slotMinutes) * this._slotMinutes;
+    const slot = this._findClosestImpactSlot(slotStart, payload.series.impact);
     if (slot) {
       this._selectSlot(slot);
     } else {
