@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
@@ -176,6 +177,57 @@ class ConsumptionForecastBuilder:
             reference_time=local_now,
         )
 
+        actual_history = await self._build_actual_history(
+            total_energy_entity_id=total_energy_entity_id,
+            consumers_config=consumers_config,
+            reference_time=local_now,
+        )
+
+        # The remaining work -- fitting the hour-of-week profiles over the full
+        # training window and assembling the forecast series across the whole
+        # horizon -- is pure CPU with no I/O. Run it in the executor so it never
+        # blocks the event loop; this build runs on every slot-aligned refresh.
+        return await self._hass.async_add_executor_job(
+            functools.partial(
+                self._assemble_available_payload,
+                house_rows=house_rows,
+                consumer_histories=consumer_histories,
+                actual_history=actual_history,
+                consumers_config=consumers_config,
+                local_now=local_now,
+                forecast_days=forecast_days,
+                alignment_padding_slots=alignment_padding_slots,
+                training_window_days=training_window_days,
+                min_history_days=min_history_days,
+                history_days=history_days,
+                config_fingerprint=config_fingerprint,
+                canonical_resolution=canonical_resolution,
+                horizon_hours=horizon_hours,
+            )
+        )
+
+    def _assemble_available_payload(
+        self,
+        *,
+        house_rows: list[dict],
+        consumer_histories: list[_ConsumerHistoryData],
+        actual_history: Any,
+        consumers_config: list[dict[str, Any]],
+        local_now: datetime,
+        forecast_days: int,
+        alignment_padding_slots: int,
+        training_window_days: int,
+        min_history_days: int,
+        history_days: int,
+        config_fingerprint: str,
+        canonical_resolution: Any,
+        horizon_hours: int,
+    ) -> dict[str, Any]:
+        """Assemble the ``available`` forecast payload from already-fetched data.
+
+        Pure CPU: runs in a worker thread via ``async_add_executor_job`` and
+        MUST NOT touch ``self._hass`` or perform any I/O.
+        """
         house_by_ts = self._rows_to_dict(house_rows)
         (
             non_deferrable_profile,
@@ -204,12 +256,6 @@ class ConsumptionForecastBuilder:
             consumer_profiles=consumer_profiles,
             forecast_days=forecast_days,
             padding_slots=alignment_padding_slots,
-        )
-
-        actual_history = await self._build_actual_history(
-            total_energy_entity_id=total_energy_entity_id,
-            consumers_config=consumers_config,
-            reference_time=local_now,
         )
 
         return self._make_payload(

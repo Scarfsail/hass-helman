@@ -16,6 +16,11 @@ TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 
 
+async def _inline_executor_job(func, *args):
+    """Run the offloaded callable inline so tests don't need a real executor."""
+    return func(*args)
+
+
 def _install_import_stubs() -> None:
     custom_components_pkg = sys.modules.get("custom_components")
     if custom_components_pkg is None:
@@ -140,6 +145,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             states=SimpleNamespace(get=lambda entity_id: None),
+            async_add_executor_job=_inline_executor_job,
         )
         config = {
             "power_devices": {
@@ -279,6 +285,38 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["currentSlot"]["timestamp"], "2026-03-20T21:15:00+01:00")
 
+    def test_assemble_available_payload_is_pure_no_hass_no_await(self) -> None:
+        """The offloaded assembly must be safe to run in a worker thread:
+        synchronous and never touching ``self._hass``."""
+        import ast
+        import inspect
+        import textwrap
+
+        consumption_module = importlib.import_module(
+            "custom_components.helman.consumption_forecast_builder"
+        )
+        source = textwrap.dedent(
+            inspect.getsource(
+                consumption_module.ConsumptionForecastBuilder._assemble_available_payload
+            )
+        )
+        func = ast.parse(source).body[0]
+        self.assertNotIsInstance(
+            func, ast.AsyncFunctionDef, "assembly must be synchronous"
+        )
+        for node in ast.walk(func):
+            self.assertNotIsInstance(node, ast.Await, "assembly must not await")
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"
+            ):
+                self.assertNotEqual(
+                    node.attr,
+                    "_hass",
+                    "assembly must not touch self._hass (runs off-loop)",
+                )
+
 
 class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
     def _make_builder(self):
@@ -291,6 +329,7 @@ class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             states=SimpleNamespace(get=lambda entity_id: None),
+            async_add_executor_job=_inline_executor_job,
         )
         return (
             consumption_module,
