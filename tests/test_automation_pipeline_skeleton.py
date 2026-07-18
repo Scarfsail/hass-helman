@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 import asyncio
+import concurrent.futures
+import inspect
 import sys
 import types
 import unittest
@@ -340,12 +343,15 @@ from custom_components.helman.automation.pipeline import (
     AutomationRunResult,
     AutomationRunner,
     OptimizerRunSummary,
+    _PipelineExecutionResult,
+    run_optimizer_loop_pure,
 )
 from custom_components.helman.automation.snapshot import (
     OptimizationContext,
     OptimizationSnapshot,
     snapshot_to_dict,
 )
+from custom_components.helman.automation.compute_inputs import ComputeInputs
 from custom_components.helman.battery_state import BatteryEntityConfig, BatteryLiveState
 from custom_components.helman.const import DOMAIN, MAX_FORECAST_DAYS
 from custom_components.helman.coordinator import HelmanCoordinator
@@ -556,6 +562,9 @@ class _FakeCoordinator:
         self._persist_changed = persist_changed
         self._control_config = control_config
         self._appliances_registry = AppliancesRuntimeRegistry()
+        self._hass = SimpleNamespace(
+            async_add_executor_job=self._async_add_executor_job
+        )
         self.snapshot_calls: list[dict[str, object]] = []
         self.persist_calls: list[dict[str, object]] = []
         self.saved_documents: list[ScheduleDocument] = []
@@ -586,13 +595,24 @@ class _FakeCoordinator:
     ) -> dict:
         return {}
 
-    async def _build_automation_snapshot_from_schedule_locked(
+    async def _async_gather_compute_inputs(
+        self, *, started_at: datetime, live_state=None
+    ):
+        return None
+
+    @staticmethod
+    async def _async_add_executor_job(func, *args):
+        # Tests run the pure loop inline; production hands it to a worker thread.
+        return func(*args)
+
+    def _build_automation_snapshot_from_schedule_pure(
         self,
         *,
         schedule_document: ScheduleDocument,
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
         day_contexts: dict | None = None,
+        compute_inputs=None,
     ) -> OptimizationSnapshot:
         self.snapshot_calls.append(
             {
@@ -605,6 +625,23 @@ class _FakeCoordinator:
             schedule_document=schedule_document,
             input_bundle=input_bundle,
             reference_time=reference_time,
+        )
+
+    async def _build_automation_snapshot_from_schedule_locked(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        input_bundle: AutomationInputBundle,
+        reference_time: datetime,
+        day_contexts: dict | None = None,
+        compute_inputs=None,
+    ) -> OptimizationSnapshot:
+        return self._build_automation_snapshot_from_schedule_pure(
+            schedule_document=schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
+            day_contexts=day_contexts,
+            compute_inputs=compute_inputs,
         )
 
     async def _persist_automation_result_locked(
@@ -1754,8 +1791,9 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_build_forecast_rebuild_uses_pinned_inputs_and_composes_grid(self) -> None:
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._hass = SimpleNamespace()
+        coordinator._active_config = {}
         coordinator._appliances_registry = AppliancesRuntimeRegistry()
-        coordinator._build_battery_forecast = AsyncMock(
+        coordinator._build_battery_forecast_sync = Mock(
             return_value={
                 "status": "available",
                 "generatedAt": REFERENCE_TIME.isoformat(),
@@ -1823,16 +1861,19 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             registry=coordinator._appliances_registry,
             schedule_document=_make_schedule_document(),
             inputs={"projection": "bundle"},
-            hass=coordinator._hass,
+            hass=None,
             reference_time=REFERENCE_TIME,
             when_active_hourly_energy_kwh_by_appliance_id=pinned_inputs,
+            vehicle_remaining_capacity_kwh_by_vehicle_id={},
         )
-        coordinator._build_battery_forecast.assert_awaited_once_with(
+        coordinator._build_battery_forecast_sync.assert_called_once_with(
             solar_forecast={"status": "available", "points": []},
             house_forecast=adjusted_house_forecast,
             started_at=REFERENCE_TIME,
             forecast_days=MAX_FORECAST_DAYS,
             schedule_overlay={"overlay": True},
+            live_state=None,
+            actual_history=[],
         )
         self.assertEqual(result.adjusted_house_forecast, adjusted_house_forecast)
         self.assertEqual(result.grid_forecast["currentImportPrice"], 7.0)
@@ -1846,7 +1887,10 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._appliances_registry = AppliancesRuntimeRegistry()
-        coordinator._async_build_forecast_rebuild = AsyncMock(
+        # The async wrapper gathers the run-invariant inputs once, then delegates
+        # to the pure snapshot builder (which reads the battery state from the
+        # gathered ComputeInputs and calls the pure rebuild core).
+        coordinator._build_forecast_rebuild_pure = Mock(
             return_value=coordinator_module._ForecastRebuildSnapshot(
                 adjusted_house_forecast={"status": "available"},
                 battery_forecast={"status": "available"},
@@ -1854,31 +1898,9 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                 grid_forecast={"status": "available", "currentImportPrice": 7.0},
             )
         )
-
-        with (
-            patch.object(
-                coordinator,
-                "_build_forecast_schedule_documents",
-                return_value=coordinator_module._ForecastScheduleDocuments(
-                    forecast_schedule_document=_make_schedule_document(),
-                    projection_schedule_document=_make_schedule_document(),
-                    schedule_execution_enabled=True,
-                ),
-            ),
-            patch.object(
-                coordinator_module,
-                "read_battery_entity_config",
-                return_value=BatteryEntityConfig(
-                    remaining_energy_entity_id="sensor.remaining",
-                    capacity_entity_id="sensor.capacity",
-                    min_soc_entity_id="sensor.min_soc",
-                    max_soc_entity_id="sensor.max_soc",
-                ),
-            ),
-            patch.object(
-                coordinator_module,
-                "read_battery_live_state",
-                return_value=BatteryLiveState(
+        coordinator._async_gather_compute_inputs = AsyncMock(
+            return_value=ComputeInputs(
+                battery_live_state=BatteryLiveState(
                     current_remaining_energy_kwh=7.5,
                     current_soc=50.0,
                     min_soc=10.0,
@@ -1887,6 +1909,16 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=1.5,
                     max_energy_kwh=13.5,
                 ),
+            )
+        )
+
+        with patch.object(
+            coordinator,
+            "_build_forecast_schedule_documents",
+            return_value=coordinator_module._ForecastScheduleDocuments(
+                forecast_schedule_document=_make_schedule_document(),
+                projection_schedule_document=_make_schedule_document(),
+                schedule_execution_enabled=True,
             ),
         ):
             snapshot = await coordinator._build_automation_snapshot_from_schedule_locked(
@@ -2166,6 +2198,117 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             connection.errors,
             [(1, "not_loaded", "Helman coordinator not available")],
+        )
+
+
+class _RecordingOptimizer:
+    """Deterministic fake optimizer: records the snapshots it is handed and
+    returns a fixed schedule document. Lets the pure loop be exercised without
+    any real optimizer internals (or hass)."""
+
+    def __init__(self, result_document: ScheduleDocument) -> None:
+        self._result_document = result_document
+        self.seen_snapshots: list[OptimizationSnapshot] = []
+
+    def optimize(self, snapshot, config, trace):
+        self.seen_snapshots.append(snapshot)
+        return self._result_document
+
+
+def _summary_signature(summary: OptimizerRunSummary) -> dict[str, object]:
+    # Drop the wall-clock duration, which legitimately differs run to run.
+    return {
+        key: value
+        for key, value in summary.to_dict().items()
+        if key != "durationMs"
+    }
+
+
+def _run_pure_loop(build_snapshot) -> _PipelineExecutionResult:
+    optimizers = [
+        _make_optimizer_instance(optimizer_id="a"),
+        _make_optimizer_instance(optimizer_id="b"),
+    ]
+    with patch.object(
+        pipeline_module,
+        "build_optimizer",
+        return_value=_RecordingOptimizer(_make_schedule_document()),
+    ):
+        return run_optimizer_loop_pure(
+            execution_optimizers=optimizers,
+            baseline_schedule_document=_make_schedule_document(),
+            schedule_document=_make_schedule_document(),
+            initial_snapshot=_make_snapshot(),
+            reference_time=REFERENCE_TIME,
+            control_config=None,
+            appliance_registry=AppliancesRuntimeRegistry(),
+            build_snapshot=build_snapshot,
+        )
+
+
+class RunOptimizerLoopPurityTests(unittest.TestCase):
+    """The optimizer loop is offloaded to an executor thread, so it must be a
+    pure function of its inputs: no ``hass`` access, no ``await``."""
+
+    def test_source_has_no_await_and_no_hass_reference(self) -> None:
+        func = ast.parse(inspect.getsource(run_optimizer_loop_pure)).body[0]
+        self.assertFalse(
+            any(isinstance(node, ast.Await) for node in ast.walk(func)),
+            "run_optimizer_loop_pure must not await",
+        )
+        referenced = {
+            node.id for node in ast.walk(func) if isinstance(node, ast.Name)
+        } | {
+            node.attr for node in ast.walk(func) if isinstance(node, ast.Attribute)
+        }
+        self.assertFalse(
+            any("hass" in name.lower() for name in referenced),
+            "run_optimizer_loop_pure must not touch hass",
+        )
+
+    def test_runs_in_worker_thread_without_hass(self) -> None:
+        rebuilt_documents: list[ScheduleDocument] = []
+
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            rebuilt_documents.append(document)
+            return _make_snapshot(schedule_document=document)
+
+        # Run in a real worker thread with no event loop and no hass in scope —
+        # if the loop reached for either it would fail here.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(_run_pure_loop, build_snapshot).result()
+
+        self.assertIsInstance(result, _PipelineExecutionResult)
+        self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
+        # The snapshot is rebuilt once per optimizer via the injected pure builder.
+        self.assertEqual(len(rebuilt_documents), 2)
+
+
+class OptimizerLoopExecutorEquivalenceTests(unittest.IsolatedAsyncioTestCase):
+    """Moving the loop across the executor boundary must not change its result."""
+
+    async def test_executor_hop_matches_inline(self) -> None:
+        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+            return _make_snapshot(schedule_document=document)
+
+        inline_result = _run_pure_loop(build_snapshot)
+
+        loop = asyncio.get_running_loop()
+        executor_result = await loop.run_in_executor(
+            None, lambda: _run_pure_loop(build_snapshot)
+        )
+
+        self.assertEqual(
+            inline_result.working_schedule_document,
+            executor_result.working_schedule_document,
+        )
+        self.assertEqual(
+            [_summary_signature(s) for s in inline_result.optimizers],
+            [_summary_signature(s) for s in executor_result.optimizers],
+        )
+        self.assertEqual(
+            inline_result.trace.to_dict(),
+            executor_result.trace.to_dict(),
         )
 
 

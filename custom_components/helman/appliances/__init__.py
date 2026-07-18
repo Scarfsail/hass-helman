@@ -38,6 +38,7 @@ __all__ = [
     "build_empty_appliance_projections_response",
     "build_empty_appliances_response",
     "build_appliance_projection_plan",
+    "read_vehicle_remaining_capacity_kwh_by_vehicle_id",
     "build_projection_input_bundle",
     "build_appliance_projections_response",
     "aggregate_appliance_demand_by_slot",
@@ -112,6 +113,10 @@ _EXPORTS = {
     ),
     "build_empty_appliances_response": (".dto", "build_empty_appliances_response"),
     "build_appliance_projection_plan": (".projection_builder", "build_appliance_projection_plan"),
+    "read_vehicle_remaining_capacity_kwh_by_vehicle_id": (
+        ".projection_builder",
+        "read_vehicle_remaining_capacity_kwh_by_vehicle_id",
+    ),
     "build_projection_input_bundle": (".projection_builder", "build_projection_input_bundle"),
     "build_appliance_projections_response": (
         ".projection_response",

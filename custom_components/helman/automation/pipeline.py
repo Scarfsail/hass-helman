@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import functools
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -38,7 +39,10 @@ from ..scheduling.schedule import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     from ..coordinator import HelmanCoordinator
+    from .compute_inputs import ComputeInputs
     from .config import OptimizerInstanceConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -331,11 +335,20 @@ class AutomationRunner:
                             run_started_at=run_started_at,
                         )
                     current_stage = "initial_snapshot"
+                    # Gather the run-invariant live values once; every snapshot
+                    # rebuild in this run reuses them instead of re-reading
+                    # hass.states / the recorder per optimizer iteration.
+                    compute_inputs = (
+                        await self._coordinator._async_gather_compute_inputs(
+                            started_at=active_reference_time,
+                        )
+                    )
                     initial_snapshot = (
                         await self._coordinator._build_automation_snapshot_from_schedule_locked(
                             schedule_document=schedule_document,
                             input_bundle=input_bundle,
                             reference_time=active_reference_time,
+                            compute_inputs=compute_inputs,
                         )
                     )
                     current_stage = "day_context"
@@ -356,6 +369,7 @@ class AutomationRunner:
                             reference_time=active_reference_time,
                             initial_snapshot=initial_snapshot,
                             day_contexts=day_contexts,
+                            compute_inputs=compute_inputs,
                         )
                     except _OptimizerExecutionError as err:
                         latest_trace = err.trace
@@ -435,133 +449,44 @@ class AutomationRunner:
         reference_time: datetime,
         initial_snapshot: OptimizationSnapshot,
         day_contexts: dict,
+        compute_inputs: ComputeInputs | None = None,
     ) -> _PipelineExecutionResult:
-        working_schedule_document = schedule_document
-        snapshot = initial_snapshot
-        control_config = self._coordinator._read_schedule_control_config()
-        optimizer_summaries: list[OptimizerRunSummary] = []
-        trace = OptimizerTrace(slot_ids=iter_horizon_slot_ids(reference_time))
-        trace.set_static_rails(
-            _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
-        )
-        for optimizer_config in self._automation_config.execution_optimizers:
-            optimizer_started_at = time.perf_counter()
-            trace.begin_step(optimizer_config.id, optimizer_config.kind)
-            # railsIn is the rail segment the optimizer received (pre-rebuild).
-            trace.set_rails_in(
-                _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
-            )
-            try:
-                optimizer = build_optimizer(
-                    optimizer_config,
-                    control_config=control_config,
-                    appliance_registry=self._coordinator._appliances_registry,
-                )
-                candidate_schedule_document = optimizer.optimize(
-                    snapshot,
-                    optimizer_config,
-                    trace,
-                )
-            except SurplusApplianceSkip as err:
-                try:
-                    working_schedule_document = restore_automation_owned_appliance_actions(
-                        baseline=baseline_schedule_document,
-                        current=working_schedule_document,
-                        appliance_id=err.appliance_id,
-                    )
-                    snapshot = (
-                        await self._coordinator._build_automation_snapshot_from_schedule_locked(
-                            schedule_document=working_schedule_document,
-                            input_bundle=input_bundle,
-                            reference_time=reference_time,
-                            day_contexts=day_contexts,
-                        )
-                    )
-                except Exception as rebuild_err:
-                    trace.end_step(status="failed")
-                    raise _build_optimizer_error(
-                        config=optimizer_config,
-                        duration_ms=_elapsed_ms(optimizer_started_at),
-                        error=str(rebuild_err),
-                        completed_optimizers=tuple(optimizer_summaries),
-                        snapshot=snapshot,
-                        trace=trace,
-                    ) from rebuild_err
-                # Skip discards partial decisions and collapses the column to a
-                # single horizon-wide `skipped` note; the validator exempts it.
-                trace.discard_step_decisions()
-                trace.note_horizon(
-                    code="optimizer_skipped",
-                    params={"applianceId": err.appliance_id, "reason": str(err)},
-                )
-                trace.end_step(status="skipped")
-                optimizer_summaries.append(
-                    _build_optimizer_summary(
-                        optimizer_id=optimizer_config.id,
-                        optimizer_kind=optimizer_config.kind,
-                        status="skipped",
-                        slots_written=0,
-                        duration_ms=_elapsed_ms(optimizer_started_at),
-                        error=str(err),
-                    )
-                )
-                continue
-            except Exception as err:
-                trace.end_step(status="failed")
-                raise _build_optimizer_error(
-                    config=optimizer_config,
-                    duration_ms=_elapsed_ms(optimizer_started_at),
-                    error=str(err),
-                    completed_optimizers=tuple(optimizer_summaries),
-                    snapshot=snapshot,
-                    trace=trace,
-                ) from err
+        """Run the optimizer loop off the event loop.
 
-            previous_schedule_document = working_schedule_document
-            try:
-                working_schedule_document = _coerce_optimizer_result_schedule_document(
-                    candidate_document=candidate_schedule_document,
-                    execution_enabled=working_schedule_document.execution_enabled,
-                )
-                snapshot = await self._coordinator._build_automation_snapshot_from_schedule_locked(
-                    schedule_document=working_schedule_document,
-                    input_bundle=input_bundle,
-                    reference_time=reference_time,
-                    day_contexts=day_contexts,
-                )
-            except Exception as err:
-                trace.end_step(status="failed")
-                raise _build_optimizer_error(
-                    config=optimizer_config,
-                    duration_ms=_elapsed_ms(optimizer_started_at),
-                    error=str(err),
-                    completed_optimizers=tuple(optimizer_summaries),
-                    snapshot=snapshot,
-                    trace=trace,
-                ) from err
-            write_records = _collect_changed_writable_action_records(
-                before_document=previous_schedule_document,
-                after_document=working_schedule_document,
+        The loop is pure CPU (optimizer decisions + per-iteration snapshot
+        rebuilds). The live values it needs are pre-gathered into
+        ``compute_inputs`` on the loop, so the whole loop runs in a single
+        executor hop and never blocks the event loop. I/O (recorder/states and
+        persistence) stays on the loop, before and after this call.
+        """
+        if compute_inputs is None:
+            compute_inputs = await self._coordinator._async_gather_compute_inputs(
+                started_at=reference_time
             )
-            trace.record_writes(write_records)
-            trace.end_step(status="ok")
-            optimizer_summaries.append(
-                _build_optimizer_summary(
-                    optimizer_id=optimizer_config.id,
-                    optimizer_kind=optimizer_config.kind,
-                    status="ok",
-                    slots_written=len(write_records),
-                    duration_ms=_elapsed_ms(optimizer_started_at),
-                )
+        control_config = self._coordinator._read_schedule_control_config()
+
+        def build_snapshot(doc: ScheduleDocument) -> OptimizationSnapshot:
+            # Pure, hass-free: every live value comes from ``compute_inputs``.
+            return self._coordinator._build_automation_snapshot_from_schedule_pure(
+                schedule_document=doc,
+                input_bundle=input_bundle,
+                reference_time=reference_time,
+                day_contexts=day_contexts,
+                compute_inputs=compute_inputs,
             )
-        trace.set_rails_final(
-            _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
-        )
-        return _PipelineExecutionResult(
-            working_schedule_document=working_schedule_document,
-            snapshot=snapshot,
-            optimizers=tuple(optimizer_summaries),
-            trace=trace,
+
+        return await self._coordinator._hass.async_add_executor_job(
+            functools.partial(
+                run_optimizer_loop_pure,
+                execution_optimizers=self._automation_config.execution_optimizers,
+                baseline_schedule_document=baseline_schedule_document,
+                schedule_document=schedule_document,
+                initial_snapshot=initial_snapshot,
+                reference_time=reference_time,
+                control_config=control_config,
+                appliance_registry=self._coordinator._appliances_registry,
+                build_snapshot=build_snapshot,
+            )
         )
 
     async def _async_persist_cleanup_only_locked(
@@ -604,6 +529,139 @@ class AutomationRunner:
         )
         _log_run_result(result=finalized, run_reason=run_reason)
         return finalized
+
+
+def run_optimizer_loop_pure(
+    *,
+    execution_optimizers: "Sequence[OptimizerInstanceConfig]",
+    baseline_schedule_document: ScheduleDocument,
+    schedule_document: ScheduleDocument,
+    initial_snapshot: OptimizationSnapshot,
+    reference_time: datetime,
+    control_config: Any,
+    appliance_registry: Any,
+    build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
+) -> _PipelineExecutionResult:
+    """Pure, synchronous optimizer loop — safe to run in an executor.
+
+    Contains no ``hass`` access and no ``await``. ``build_snapshot`` rebuilds the
+    optimization snapshot from a schedule document using the pre-gathered
+    (hass-free) compute inputs, so every per-iteration rebuild stays pure too.
+    """
+    working_schedule_document = schedule_document
+    snapshot = initial_snapshot
+    optimizer_summaries: list[OptimizerRunSummary] = []
+    trace = OptimizerTrace(slot_ids=iter_horizon_slot_ids(reference_time))
+    trace.set_static_rails(
+        _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
+    )
+    for optimizer_config in execution_optimizers:
+        optimizer_started_at = time.perf_counter()
+        trace.begin_step(optimizer_config.id, optimizer_config.kind)
+        # railsIn is the rail segment the optimizer received (pre-rebuild).
+        trace.set_rails_in(
+            _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
+        )
+        try:
+            optimizer = build_optimizer(
+                optimizer_config,
+                control_config=control_config,
+                appliance_registry=appliance_registry,
+            )
+            candidate_schedule_document = optimizer.optimize(
+                snapshot,
+                optimizer_config,
+                trace,
+            )
+        except SurplusApplianceSkip as err:
+            try:
+                working_schedule_document = restore_automation_owned_appliance_actions(
+                    baseline=baseline_schedule_document,
+                    current=working_schedule_document,
+                    appliance_id=err.appliance_id,
+                )
+                snapshot = build_snapshot(working_schedule_document)
+            except Exception as rebuild_err:
+                trace.end_step(status="failed")
+                raise _build_optimizer_error(
+                    config=optimizer_config,
+                    duration_ms=_elapsed_ms(optimizer_started_at),
+                    error=str(rebuild_err),
+                    completed_optimizers=tuple(optimizer_summaries),
+                    snapshot=snapshot,
+                    trace=trace,
+                ) from rebuild_err
+            # Skip discards partial decisions and collapses the column to a
+            # single horizon-wide `skipped` note; the validator exempts it.
+            trace.discard_step_decisions()
+            trace.note_horizon(
+                code="optimizer_skipped",
+                params={"applianceId": err.appliance_id, "reason": str(err)},
+            )
+            trace.end_step(status="skipped")
+            optimizer_summaries.append(
+                _build_optimizer_summary(
+                    optimizer_id=optimizer_config.id,
+                    optimizer_kind=optimizer_config.kind,
+                    status="skipped",
+                    slots_written=0,
+                    duration_ms=_elapsed_ms(optimizer_started_at),
+                    error=str(err),
+                )
+            )
+            continue
+        except Exception as err:
+            trace.end_step(status="failed")
+            raise _build_optimizer_error(
+                config=optimizer_config,
+                duration_ms=_elapsed_ms(optimizer_started_at),
+                error=str(err),
+                completed_optimizers=tuple(optimizer_summaries),
+                snapshot=snapshot,
+                trace=trace,
+            ) from err
+
+        previous_schedule_document = working_schedule_document
+        try:
+            working_schedule_document = _coerce_optimizer_result_schedule_document(
+                candidate_document=candidate_schedule_document,
+                execution_enabled=working_schedule_document.execution_enabled,
+            )
+            snapshot = build_snapshot(working_schedule_document)
+        except Exception as err:
+            trace.end_step(status="failed")
+            raise _build_optimizer_error(
+                config=optimizer_config,
+                duration_ms=_elapsed_ms(optimizer_started_at),
+                error=str(err),
+                completed_optimizers=tuple(optimizer_summaries),
+                snapshot=snapshot,
+                trace=trace,
+            ) from err
+        write_records = _collect_changed_writable_action_records(
+            before_document=previous_schedule_document,
+            after_document=working_schedule_document,
+        )
+        trace.record_writes(write_records)
+        trace.end_step(status="ok")
+        optimizer_summaries.append(
+            _build_optimizer_summary(
+                optimizer_id=optimizer_config.id,
+                optimizer_kind=optimizer_config.kind,
+                status="ok",
+                slots_written=len(write_records),
+                duration_ms=_elapsed_ms(optimizer_started_at),
+            )
+        )
+    trace.set_rails_final(
+        _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
+    )
+    return _PipelineExecutionResult(
+        working_schedule_document=working_schedule_document,
+        snapshot=snapshot,
+        optimizers=tuple(optimizer_summaries),
+        trace=trace,
+    )
 
 
 def _coerce_optimizer_result_schedule_document(

@@ -72,7 +72,53 @@ class BatteryCapacityForecastBuilder:
         started_at: datetime,
         forecast_days: int = MAX_FORECAST_DAYS,
         schedule_overlay: ScheduleForecastOverlay | None = None,
+        live_state: BatteryLiveState | None = None,
+        actual_history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        """Async entry point.
+
+        Reads the live battery state (``hass.states``) and recorder actual
+        history, then delegates to the pure :meth:`build_with_history` core.
+        Callers that have already gathered these inputs once per run (the
+        automation pipeline) pass them in so the compute path stays off the
+        event loop.
+        """
+        if live_state is None or actual_history is None:
+            entity_config = read_battery_entity_config(self._config)
+            if entity_config is not None:
+                if live_state is None:
+                    live_state = read_battery_live_state(self._hass, entity_config)
+                if actual_history is None and live_state is not None:
+                    actual_history = await self._build_actual_history(
+                        entity_config,
+                        started_at,
+                    )
+        return self.build_with_history(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+            forecast_days=forecast_days,
+            schedule_overlay=schedule_overlay,
+            live_state=live_state,
+            actual_history=actual_history or [],
+        )
+
+    def build_with_history(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+        forecast_days: int = MAX_FORECAST_DAYS,
+        schedule_overlay: ScheduleForecastOverlay | None = None,
+        live_state: BatteryLiveState | None,
+        actual_history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Pure, synchronous forecast core.
+
+        Never touches ``hass`` or the recorder: the live battery state and
+        actual history are supplied by the caller. Safe to run in an executor.
+        """
         horizon_hours = forecast_days * 24
         canonical_slot_count = (
             horizon_hours * 60
@@ -93,7 +139,6 @@ class BatteryCapacityForecastBuilder:
                 horizon_hours=horizon_hours,
             )
 
-        live_state = read_battery_live_state(self._hass, entity_config)
         if live_state is None:
             _LOGGER.warning("Battery forecast unavailable: live_state is None")
             return self._make_payload(
@@ -140,10 +185,6 @@ class BatteryCapacityForecastBuilder:
                 horizon_hours=horizon_hours,
             )
 
-        actual_history = await self._build_actual_history(
-            entity_config,
-            started_at,
-        )
         started_at_local = dt_util.as_local(started_at)
         current_slot_start = get_local_current_slot_start(
             started_at_local,

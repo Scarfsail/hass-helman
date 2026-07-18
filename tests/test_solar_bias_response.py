@@ -123,6 +123,9 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     appliances_mod.build_adjusted_house_forecast = lambda *args, **kwargs: {}
     appliances_mod.build_appliance_projection_plan = lambda *args, **kwargs: {}
+    appliances_mod.read_vehicle_remaining_capacity_kwh_by_vehicle_id = (
+        lambda *args, **kwargs: {}
+    )
     appliances_mod.build_appliance_projections_response = lambda *args, **kwargs: {}
     appliances_mod.build_appliances_response = lambda *args, **kwargs: {}
     appliances_mod.build_appliances_runtime_registry = lambda *args, **kwargs: SimpleNamespace()

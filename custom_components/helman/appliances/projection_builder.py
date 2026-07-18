@@ -127,6 +127,7 @@ def build_appliance_projection_plan(
     hass,
     reference_time: datetime | None = None,
     when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None = None,
+    vehicle_remaining_capacity_kwh_by_vehicle_id: Mapping[str, float | None] | None = None,
 ) -> ApplianceProjectionPlan:
     appliances_by_id: dict[str, ApplianceProjectionSeries] = {}
     demand_points: list[ApplianceDemandPoint] = []
@@ -198,6 +199,9 @@ def build_appliance_projection_plan(
             inputs=inputs,
             hass=hass,
             concurrent_demand_kwh_by_slot_id=concurrent_demand_kwh_by_slot_id,
+            vehicle_remaining_capacity_kwh_by_vehicle_id=(
+                vehicle_remaining_capacity_kwh_by_vehicle_id
+            ),
         )
         series = result.series
         if not series.points:
@@ -237,6 +241,7 @@ def _build_ev_charger_projection_series(
     inputs: ProjectionInputBundle,
     hass,
     concurrent_demand_kwh_by_slot_id: Mapping[str, float] | None = None,
+    vehicle_remaining_capacity_kwh_by_vehicle_id: Mapping[str, float | None] | None = None,
 ) -> _ApplianceProjectionBuildResult:
     points: list[ApplianceProjectionPlanPoint] = []
     demand_points: list[ApplianceDemandPoint] = []
@@ -264,9 +269,17 @@ def _build_ev_charger_projection_series(
             continue
 
         if vehicle.id not in vehicle_remaining_kwh:
-            vehicle_remaining_kwh[vehicle.id] = _read_vehicle_remaining_capacity_kwh(
-                hass=hass, vehicle=vehicle
-            )
+            if (
+                vehicle_remaining_capacity_kwh_by_vehicle_id is not None
+                and vehicle.id in vehicle_remaining_capacity_kwh_by_vehicle_id
+            ):
+                vehicle_remaining_kwh[vehicle.id] = (
+                    vehicle_remaining_capacity_kwh_by_vehicle_id[vehicle.id]
+                )
+            else:
+                vehicle_remaining_kwh[vehicle.id] = (
+                    _read_vehicle_remaining_capacity_kwh(hass=hass, vehicle=vehicle)
+                )
 
         remaining = vehicle_remaining_kwh[vehicle.id]
         charged_so_far = vehicle_charged_kwh.get(vehicle.id, 0.0)
@@ -675,6 +688,26 @@ def _read_vehicle_remaining_capacity_kwh(
         target_soc = 100.0
     pct_remaining = max(0.0, target_soc - current_soc)
     return (pct_remaining / 100.0) * vehicle.battery_capacity_kwh
+
+
+def read_vehicle_remaining_capacity_kwh_by_vehicle_id(
+    hass, registry: AppliancesRuntimeRegistry
+) -> dict[str, float | None]:
+    """Precompute each EV vehicle's remaining charge capacity from ``hass.states``.
+
+    Reads the live SoC / charge-limit entities once on the event loop so the
+    projection compute path can run pure (see ``build_appliance_projection_plan``'s
+    ``vehicle_remaining_capacity_kwh_by_vehicle_id`` parameter).
+    """
+    remaining_by_vehicle_id: dict[str, float | None] = {}
+    for appliance in registry.appliances:
+        if not isinstance(appliance, EvChargerApplianceRuntime):
+            continue
+        for vehicle in appliance.vehicles:
+            remaining_by_vehicle_id[vehicle.id] = _read_vehicle_remaining_capacity_kwh(
+                hass=hass, vehicle=vehicle
+            )
+    return remaining_by_vehicle_id
 
 
 def _read_entity_float(hass, entity_id: str) -> float | None:

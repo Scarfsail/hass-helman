@@ -30,12 +30,14 @@ from .appliances import (
     AppliancesRuntimeRegistry,
     build_adjusted_house_forecast,
     build_appliance_projection_plan,
+    read_vehicle_remaining_capacity_kwh_by_vehicle_id,
     build_appliance_projections_response,
     build_appliances_response,
     build_appliances_runtime_registry,
     build_projection_input_bundle,
     build_empty_appliance_projections_response,
 )
+from .automation.compute_inputs import ComputeInputs
 from .automation.config import AutomationConfig, read_automation_config
 from .automation.day_context import (
     DayContext,
@@ -134,6 +136,11 @@ from .storage import HelmanStorage
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
+# Sentinel distinguishing "battery live state not supplied" from "supplied as
+# None" (None legitimately means the battery is unavailable). Lets a caller that
+# has already read the live state once per run pass it through instead of the
+# callee re-reading hass.states.
+_LIVE_STATE_UNSET: Any = object()
 _UNAVAILABLE_ENTITY_STATES = {"unknown", "unavailable", "none"}
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
@@ -2088,6 +2095,62 @@ class HelmanCoordinator:
             schedule_execution_enabled=schedule_execution_enabled,
         )
 
+    async def _async_gather_compute_inputs(
+        self, *, started_at: datetime, live_state: Any = _LIVE_STATE_UNSET
+    ) -> ComputeInputs:
+        """Read the run-invariant live values a forecast rebuild needs.
+
+        Runs on the event loop (``hass.states`` + recorder), once per run, so
+        the compute path can stay pure. A caller that has already read the live
+        battery state passes it in via ``live_state`` to avoid a second read.
+        See :class:`ComputeInputs`.
+        """
+        entity_config = read_battery_entity_config(self._active_config)
+        battery_live_state = None
+        battery_actual_history: list[dict[str, Any]] = []
+        if entity_config is not None:
+            battery_live_state = (
+                read_battery_live_state(self._hass, entity_config)
+                if live_state is _LIVE_STATE_UNSET
+                else live_state
+            )
+            if battery_live_state is not None:
+                battery_actual_history = await self._async_build_battery_actual_history(
+                    entity_config=entity_config,
+                    started_at=started_at,
+                )
+        return ComputeInputs(
+            battery_live_state=battery_live_state,
+            battery_actual_history=battery_actual_history,
+            vehicle_remaining_capacity_kwh_by_vehicle_id=(
+                read_vehicle_remaining_capacity_kwh_by_vehicle_id(
+                    self._hass, self._appliances_registry
+                )
+            ),
+        )
+
+    async def _async_build_battery_actual_history(
+        self, *, entity_config: Any, started_at: datetime
+    ) -> list[dict[str, Any]]:
+        # Deferred import: keeps the recorder-history module out of coordinator's
+        # top-level imports so test harnesses that stub the battery builder (and
+        # only partially stub recorder_hourly_series) still import the coordinator.
+        from .battery_actual_history_builder import build_battery_actual_history
+
+        try:
+            return await build_battery_actual_history(
+                self._hass,
+                entity_config.capacity_entity_id,
+                started_at,
+                interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to build battery actual history for %s",
+                entity_config.capacity_entity_id,
+            )
+            return []
+
     async def _async_build_forecast_rebuild(
         self,
         *,
@@ -2098,7 +2161,72 @@ class HelmanCoordinator:
         projection_schedule_document: ScheduleDocument,
         when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
         grid_price_forecast: dict[str, Any] | None = None,
+        compute_inputs: ComputeInputs | None = None,
     ) -> _ForecastRebuildSnapshot:
+        """Async wrapper: gather I/O (unless supplied), then run the pure core."""
+        if compute_inputs is None:
+            compute_inputs = await self._async_gather_compute_inputs(
+                started_at=started_at
+            )
+        return self._build_forecast_rebuild_pure(
+            solar_forecast=solar_forecast,
+            original_house_forecast=original_house_forecast,
+            started_at=started_at,
+            forecast_schedule_document=forecast_schedule_document,
+            projection_schedule_document=projection_schedule_document,
+            when_active_hourly_energy_kwh_by_appliance_id=(
+                when_active_hourly_energy_kwh_by_appliance_id
+            ),
+            grid_price_forecast=grid_price_forecast,
+            compute_inputs=compute_inputs,
+        )
+
+    def _build_battery_forecast_sync(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        house_forecast: dict[str, Any],
+        started_at: datetime,
+        forecast_days: int,
+        schedule_overlay: ScheduleForecastOverlay | None,
+        live_state: Any,
+        actual_history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Synchronous battery-forecast seam used by the pure rebuild core.
+
+        The live battery state and recorder history are pre-gathered, so this
+        never touches ``hass`` or the recorder.
+        """
+        return BatteryCapacityForecastBuilder(
+            self._hass,
+            self._active_config,
+        ).build_with_history(
+            solar_forecast=solar_forecast,
+            house_forecast=house_forecast,
+            started_at=started_at,
+            forecast_days=forecast_days,
+            schedule_overlay=schedule_overlay,
+            live_state=live_state,
+            actual_history=actual_history,
+        )
+
+    def _build_forecast_rebuild_pure(
+        self,
+        *,
+        solar_forecast: dict[str, Any],
+        original_house_forecast: dict[str, Any],
+        started_at: datetime,
+        forecast_schedule_document: ScheduleDocument,
+        projection_schedule_document: ScheduleDocument,
+        when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
+        compute_inputs: ComputeInputs,
+        grid_price_forecast: dict[str, Any] | None = None,
+    ) -> _ForecastRebuildSnapshot:
+        """Pure, synchronous forecast rebuild.
+
+        Never touches ``hass`` or the recorder — every live value comes from
+        ``compute_inputs`` — so it is safe to run in an executor.
+        """
         input_bundle = build_projection_input_bundle(
             solar_forecast=solar_forecast,
             house_forecast=original_house_forecast,
@@ -2109,10 +2237,13 @@ class HelmanCoordinator:
             registry=self._appliances_registry,
             schedule_document=projection_schedule_document,
             inputs=input_bundle,
-            hass=self._hass,
+            hass=None,
             reference_time=started_at,
             when_active_hourly_energy_kwh_by_appliance_id=(
                 when_active_hourly_energy_kwh_by_appliance_id
+            ),
+            vehicle_remaining_capacity_kwh_by_vehicle_id=(
+                compute_inputs.vehicle_remaining_capacity_kwh_by_vehicle_id
             ),
         )
         adjusted_house_forecast = build_adjusted_house_forecast(
@@ -2125,12 +2256,14 @@ class HelmanCoordinator:
                 schedule_document=forecast_schedule_document,
                 reference_time=started_at,
             )
-        battery_forecast = await self._build_battery_forecast(
+        battery_forecast = self._build_battery_forecast_sync(
             solar_forecast=solar_forecast,
             house_forecast=adjusted_house_forecast,
             started_at=started_at,
             forecast_days=MAX_FORECAST_DAYS,
             schedule_overlay=schedule_overlay,
+            live_state=compute_inputs.battery_live_state,
+            actual_history=compute_inputs.battery_actual_history,
         )
         grid_forecast = (
             None
@@ -2200,11 +2333,40 @@ class HelmanCoordinator:
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
         day_contexts: dict[date, DayContext] | None = None,
+        compute_inputs: ComputeInputs | None = None,
     ) -> OptimizationSnapshot:
+        """Async wrapper: gather the run-invariant live inputs once (unless the
+        caller already has them), then build the snapshot with the pure core."""
+        if compute_inputs is None:
+            compute_inputs = await self._async_gather_compute_inputs(
+                started_at=reference_time
+            )
+        return self._build_automation_snapshot_from_schedule_pure(
+            schedule_document=schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
+            day_contexts=day_contexts,
+            compute_inputs=compute_inputs,
+        )
+
+    def _build_automation_snapshot_from_schedule_pure(
+        self,
+        *,
+        schedule_document: ScheduleDocument,
+        input_bundle: AutomationInputBundle,
+        reference_time: datetime,
+        day_contexts: dict[date, DayContext] | None = None,
+        compute_inputs: ComputeInputs,
+    ) -> OptimizationSnapshot:
+        """Pure, synchronous snapshot build.
+
+        Every live value comes from ``compute_inputs`` and every helper it calls
+        is hass-free, so this is safe to run in an executor.
+        """
         schedule_documents = self._build_forecast_schedule_documents(
             schedule_document=schedule_document
         )
-        rebuild = await self._async_build_forecast_rebuild(
+        rebuild = self._build_forecast_rebuild_pure(
             solar_forecast=input_bundle.solar_forecast,
             original_house_forecast=input_bundle.original_house_forecast,
             started_at=reference_time,
@@ -2214,14 +2376,12 @@ class HelmanCoordinator:
                 input_bundle.when_active_hourly_energy_kwh_by_appliance_id
             ),
             grid_price_forecast=input_bundle.grid_price_forecast,
+            compute_inputs=compute_inputs,
         )
         if rebuild.grid_forecast is None:
             raise RuntimeError("Automation snapshot rebuild is missing grid forecast")
 
-        battery_entity_config = read_battery_entity_config(self._active_config)
-        battery_state = None
-        if battery_entity_config is not None:
-            battery_state = read_battery_live_state(self._hass, battery_entity_config)
+        battery_state = compute_inputs.battery_live_state
 
         battery_settings = read_battery_forecast_settings(self._active_config)
         battery_max_charge_power_kw = (
@@ -2285,6 +2445,14 @@ class HelmanCoordinator:
         forecast_schedule_document = schedule_documents.forecast_schedule_document
         projection_schedule_document = schedule_documents.projection_schedule_document
         schedule_execution_enabled = schedule_documents.schedule_execution_enabled
+        # Read the live battery state once per run and reuse it for both the
+        # effective-signature cache key and the forecast rebuild's gather.
+        battery_entity_config = read_battery_entity_config(self._active_config)
+        run_live_state = (
+            read_battery_live_state(self._hass, battery_entity_config)
+            if battery_entity_config is not None
+            else None
+        )
         schedule_signature = (
             self._build_battery_forecast_schedule_signature(forecast_schedule_document)
             if schedule_execution_enabled
@@ -2299,6 +2467,7 @@ class HelmanCoordinator:
             self._build_battery_forecast_schedule_effective_signature(
                 schedule_document=forecast_schedule_document,
                 reference_time=started_at,
+                live_state=run_live_state,
             )
         )
         if self._has_valid_battery_forecast_cache(
@@ -2320,6 +2489,10 @@ class HelmanCoordinator:
                 reference_time=started_at,
             )
         )
+        compute_inputs = await self._async_gather_compute_inputs(
+            started_at=started_at,
+            live_state=run_live_state,
+        )
         rebuild = await self._async_build_forecast_rebuild(
             solar_forecast=solar_forecast,
             original_house_forecast=house_forecast,
@@ -2329,6 +2502,7 @@ class HelmanCoordinator:
             when_active_hourly_energy_kwh_by_appliance_id=(
                 history_hourly_energy_kwh_by_appliance_id
             ),
+            compute_inputs=compute_inputs,
         )
         pipeline = _ApplianceForecastPipelineSnapshot(
             started_at=started_at,
@@ -2385,26 +2559,6 @@ class HelmanCoordinator:
         )
         return pipeline.projection_plan
 
-    async def _build_battery_forecast(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        forecast_days: int,
-        schedule_overlay: ScheduleForecastOverlay | None = None,
-    ) -> dict[str, Any]:
-        return await BatteryCapacityForecastBuilder(
-            self._hass,
-            self._active_config,
-        ).build(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-            forecast_days=forecast_days,
-            schedule_overlay=schedule_overlay,
-        )
-
     @staticmethod
     def _build_battery_forecast_schedule_signature(
         schedule_document: ScheduleDocument,
@@ -2452,6 +2606,7 @@ class HelmanCoordinator:
         *,
         schedule_document: ScheduleDocument,
         reference_time: datetime,
+        live_state: Any = _LIVE_STATE_UNSET,
     ) -> tuple[str, str, int | None, str, str] | None:
         if not schedule_document.execution_enabled:
             return None
@@ -2475,7 +2630,8 @@ class HelmanCoordinator:
                 "not_configured",
             )
 
-        live_state = read_battery_live_state(self._hass, battery_entity_config)
+        if live_state is _LIVE_STATE_UNSET:
+            live_state = read_battery_live_state(self._hass, battery_entity_config)
         if live_state is None:
             return (
                 active_slot_id,
