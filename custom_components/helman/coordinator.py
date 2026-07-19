@@ -88,6 +88,7 @@ from .forecast_request import ensure_supported_forecast_request
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_response import build_grid_price_forecast_response
+from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
 from .solar_bias_correction.response import build_bias_correction_payload
@@ -769,66 +770,19 @@ class HelmanCoordinator:
             return title.strip()
         return None
 
-    async def _get_house_device_consumers(self) -> list[dict[str, str]]:
+    async def _get_house_device_consumers(self) -> list[dict[str, Any]]:
         """Individually-measured house devices, from the shared device tree.
 
-        Reuses the very list the power card shows — HA energy prefs resolved into
-        the device tree — rather than a parallel source. Each top-level house
-        consumer node is keyed by its energy stat (``id``) and carries a friendly
-        ``displayName``, so the inspector can split the house actual by the same
-        appliances the card already knows.
-
-        Only top-level nodes are taken: nested sub-meters would double-count
-        against their parent, and the synthetic "unmeasured" node is the residual
-        the breakdown computes itself. External statistics ids (``source:stat``)
-        are skipped — the inspector reads recorder STATE history, which only real
-        entities have — so those loads fall into the unmeasured remainder.
+        Reuses the very tree the power card renders, so the inspector lists the
+        same devices and offers the same control — including offering none where
+        the card resolved no switch. See :mod:`.house_device_consumers`.
         """
         try:
             tree = await self.get_device_tree()
         except Exception:
             _LOGGER.exception("Failed to read device tree for inspector breakdown")
             return []
-        consumers = tree.get("consumers") if isinstance(tree, dict) else None
-        if not isinstance(consumers, list):
-            return []
-        house_node = next(
-            (
-                node
-                for node in consumers
-                if isinstance(node, dict) and node.get("id") == "house"
-            ),
-            None,
-        )
-        if house_node is None:
-            return []
-        result: list[dict[str, str]] = []
-        for child in house_node.get("children") or []:
-            if not isinstance(child, dict):
-                continue
-            if child.get("isUnmeasured") or child.get("isVirtual") or child.get("isSource"):
-                continue
-            energy_entity_id = child.get("id")
-            if (
-                not isinstance(energy_entity_id, str)
-                or "." not in energy_entity_id
-                or ":" in energy_entity_id
-            ):
-                continue
-            label = child.get("displayName") or energy_entity_id
-            switch_entity_id = child.get("switchEntityId")
-            result.append(
-                {
-                    "energy_entity_id": energy_entity_id,
-                    "label": label,
-                    # Carried so the inspector can offer the same control the card
-                    # puts on this device; None for devices with no switch.
-                    "switch_entity_id": (
-                        switch_entity_id if isinstance(switch_entity_id, str) else None
-                    ),
-                }
-            )
-        return result
+        return extract_house_device_consumers(tree)
 
     def _get_battery_soc_entity_id(self) -> str | None:
         entity_config = read_battery_entity_config(self._active_config)
