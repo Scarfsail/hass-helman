@@ -140,14 +140,18 @@ class SolarBiasApplianceComponent:
 
 @dataclass
 class SolarBiasHouseBreakdownPoint:
-    """A slot's house demand split into its base load and each appliance.
+    """A slot's house demand split into each itemised consumer and the remainder.
 
-    The parts reconcile with the matching house series: ``base_wh`` plus the
+    ``unmeasured_wh`` is what no individual meter accounted for — the analogue of
+    the power card's "unmeasured" node, NOT the forecast's non-deferrable base
+    load, which stays a separate concept owned by the house forecast.
+
+    The parts reconcile with the matching house series: ``unmeasured_wh`` plus the
     sum of ``appliances`` equals that slot's houseActual/houseForecast value.
     """
 
     slot: str  # "HH:MM"
-    base_wh: float
+    unmeasured_wh: float
     appliances: list[SolarBiasApplianceComponent]
 
 
@@ -357,7 +361,7 @@ def _inspector_point_payload(point: SolarBiasInspectorPoint) -> dict[str, Any]:
 def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, Any]:
     return {
         "slot": point.slot,
-        "baseWh": point.base_wh,
+        "unmeasuredWh": point.unmeasured_wh,
         "appliances": [
             {"entityId": c.entity_id, "label": c.label, "wh": c.value_wh}
             for c in point.appliances

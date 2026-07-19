@@ -121,10 +121,10 @@ export function aggregateImpactSeries(
 }
 
 /**
- * Sum the house breakdown into wider buckets. Base load and each appliance are
- * additive energy, so they sum the same way the house series they decompose do;
- * appliances are matched across sub-slots by their entity id so a bucket carries
- * one row per appliance regardless of which sub-slots it ran in.
+ * Sum the house breakdown into wider buckets. The unmeasured remainder and each
+ * appliance are additive energy, so they sum the same way the house series they
+ * decompose do; appliances are matched across sub-slots by their entity id so a
+ * bucket carries one row per appliance regardless of which sub-slots it ran in.
  */
 export function aggregateBreakdownSeries(
   points: HouseBreakdownPoint[],
@@ -133,7 +133,7 @@ export function aggregateBreakdownSeries(
   if (slotMinutes <= SLOT_MINUTES) return points;
   const buckets = new Map<
     number,
-    { baseWh: number; appliances: Map<string, ApplianceComponent> }
+    { unmeasuredWh: number; appliances: Map<string, ApplianceComponent> }
   >();
   for (const point of points) {
     const minutes = slotToMinutes(point.slot);
@@ -141,10 +141,10 @@ export function aggregateBreakdownSeries(
     const start = bucketStart(minutes, slotMinutes);
     let bucket = buckets.get(start);
     if (!bucket) {
-      bucket = { baseWh: 0, appliances: new Map() };
+      bucket = { unmeasuredWh: 0, appliances: new Map() };
       buckets.set(start, bucket);
     }
-    if (Number.isFinite(point.baseWh)) bucket.baseWh += point.baseWh;
+    if (Number.isFinite(point.unmeasuredWh)) bucket.unmeasuredWh += point.unmeasuredWh;
     for (const appliance of point.appliances) {
       const existing = bucket.appliances.get(appliance.entityId);
       if (existing) {
@@ -158,7 +158,7 @@ export function aggregateBreakdownSeries(
     .sort((a, b) => a[0] - b[0])
     .map(([start, bucket]) => ({
       slot: minutesToSlot(start),
-      baseWh: bucket.baseWh,
+      unmeasuredWh: bucket.unmeasuredWh,
       appliances: [...bucket.appliances.values()],
     }));
 }

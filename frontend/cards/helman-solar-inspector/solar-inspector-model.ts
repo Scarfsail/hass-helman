@@ -2,7 +2,7 @@ export type InspectorPoint = { timestamp: string; valueWh: number };
 export type ApplianceComponent = { entityId: string; label: string; wh: number };
 export type HouseBreakdownPoint = {
   slot: string;
-  baseWh: number;
+  unmeasuredWh: number;
   appliances: ApplianceComponent[];
 };
 export type FactorPoint = { slot: string; factor: number };

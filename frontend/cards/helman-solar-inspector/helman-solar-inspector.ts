@@ -819,7 +819,7 @@ export class HelmanSolarInspector extends LitElement {
       white-space: nowrap;
     }
 
-    .house-breakdown-row.base .house-breakdown-label {
+    .house-breakdown-row.unmeasured .house-breakdown-label {
       color: var(--secondary-text-color);
       font-style: italic;
     }
@@ -838,7 +838,7 @@ export class HelmanSolarInspector extends LitElement {
       background: #a855f7;
     }
 
-    .house-breakdown-row.base .house-breakdown-bar {
+    .house-breakdown-row.unmeasured .house-breakdown-bar {
       background: color-mix(in srgb, #a855f7 45%, transparent);
     }
 
@@ -1963,27 +1963,34 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The measured house demand for the selected slot split into its base load and
-   * each scheduled appliance, so the single house figure above reads as a sum of
-   * named parts. Every row carries a proportion bar sized to its share of the
-   * slot total, and the parts reconcile with the house-actual value by
-   * construction. Rendered only when the backend supplied a breakdown — appliances
-   * configured and the day elapsed — so a bare house figure simply stands alone.
+   * The measured house demand for the selected slot split into each individually
+   * metered consumer plus whatever no meter accounted for, so the single house
+   * figure above reads as a sum of named parts. Every row carries a proportion bar
+   * sized to its share of the slot total, and the parts reconcile with the
+   * house-actual value by construction. Rendered only when the backend supplied a
+   * breakdown — consumers configured and the day elapsed — so a bare house figure
+   * simply stands alone.
    */
   private _renderHouseBreakdown(breakdown: HouseBreakdownPoint | null) {
     if (!breakdown) return "";
-    const rows: { label: string; wh: number; isBase: boolean }[] = [
+    const rows: { label: string; wh: number; isUnmeasured: boolean }[] = [
       ...breakdown.appliances
         .filter((appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0)
-        .map((appliance) => ({ label: appliance.label, wh: appliance.wh, isBase: false })),
+        .map((appliance) => ({ label: appliance.label, wh: appliance.wh, isUnmeasured: false })),
     ];
-    // Base load anchors the list at the bottom: it is the remainder, not an
-    // appliance, so it reads as the floor the named loads sit on top of. Like the
-    // appliance rows it is dropped when it carries nothing, so an empty slot — or
-    // one whose whole demand is named — shows no dead "0%" row.
-    const baseWh = Number.isFinite(breakdown.baseWh) ? breakdown.baseWh : 0;
-    if (baseWh > 0) {
-      rows.push({ label: this._t("bias_correction.inspector.house_base_load"), wh: baseWh, isBase: true });
+    // The unmeasured remainder anchors the list at the bottom: it is what no meter
+    // claimed, not a consumer, so it reads as the floor the named loads sit on top
+    // of. This is deliberately not the forecast's non-deferrable base load — it is
+    // the same idea as the power card's "unmeasured" node. Like the consumer rows
+    // it is dropped when it carries nothing, so an empty slot — or one whose whole
+    // demand is named — shows no dead "0%" row.
+    const unmeasuredWh = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
+    if (unmeasuredWh > 0) {
+      rows.push({
+        label: this._t("bias_correction.inspector.house_unmeasured"),
+        wh: unmeasuredWh,
+        isUnmeasured: true,
+      });
     }
     const total = rows.reduce((sum, row) => sum + Math.max(0, row.wh), 0);
     if (total <= 0) return "";
@@ -1995,7 +2002,7 @@ export class HelmanSolarInspector extends LitElement {
           ${rows.map((row) => {
             const share = total > 0 ? Math.max(0, row.wh) / total : 0;
             return html`
-              <div class="house-breakdown-row ${row.isBase ? "base" : ""}">
+              <div class="house-breakdown-row ${row.isUnmeasured ? "unmeasured" : ""}">
                 <span class="house-breakdown-label" title=${row.label}>${row.label}</span>
                 <span class="house-breakdown-bar-track">
                   <span

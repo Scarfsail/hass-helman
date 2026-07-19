@@ -1618,13 +1618,15 @@ def _build_house_actual_breakdown(
     consumers: list[dict],
     consumer_slot_maps: list[dict],
 ) -> list[SolarBiasHouseBreakdownPoint]:
-    """Split each house-actual slot into its base load and per-appliance parts.
+    """Split each house-actual slot into per-consumer parts and the remainder.
 
-    Base load is the house total minus the sum of the deferrable appliances that
-    slot, clamped at zero so a meter that momentarily over-reports never shows a
-    negative base. With no consumers configured — or the appliance reads having
-    failed and yielded no maps — the breakdown is empty and the panel falls back
-    to the plain house figure.
+    The remainder is the house total minus every itemised consumer that slot,
+    clamped at zero so a meter that momentarily over-reports never shows a
+    negative figure. It is "what no individual meter accounted for" — deliberately
+    NOT the forecast's non-deferrable base load, which remains a separate concept.
+    With no consumers configured — or the consumer reads having failed and yielded
+    no maps — the breakdown is empty and the panel falls back to the plain house
+    figure.
     """
     if not consumers or len(consumer_slot_maps) != len(consumers):
         return []
@@ -1638,10 +1640,10 @@ def _build_house_actual_breakdown(
         if not isinstance(house_wh, (int, float)):
             continue
         appliances: list[SolarBiasApplianceComponent] = []
-        deferrable_sum = 0.0
+        measured_sum = 0.0
         for consumer, slot_map in zip(consumers, consumer_slot_maps):
             wh = max(0.0, float(slot_map.get(slot, 0.0)))
-            deferrable_sum += wh
+            measured_sum += wh
             appliances.append(
                 SolarBiasApplianceComponent(
                     entity_id=consumer["energy_entity_id"],
@@ -1649,10 +1651,10 @@ def _build_house_actual_breakdown(
                     value_wh=round(wh, 4),
                 )
             )
-        base_wh = round(max(0.0, float(house_wh) - deferrable_sum), 4)
+        unmeasured_wh = round(max(0.0, float(house_wh) - measured_sum), 4)
         points.append(
             SolarBiasHouseBreakdownPoint(
-                slot=slot, base_wh=base_wh, appliances=appliances
+                slot=slot, unmeasured_wh=unmeasured_wh, appliances=appliances
             )
         )
     return points

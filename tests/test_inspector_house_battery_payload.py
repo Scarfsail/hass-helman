@@ -232,7 +232,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         slot = breakdown[0]
         self.assertEqual(slot["slot"], "00:00")
         # House actual is 180 Wh; the two appliances take 80, so base is 100.
-        self.assertEqual(slot["baseWh"], 100.0)
+        self.assertEqual(slot["unmeasuredWh"], 100.0)
         self.assertEqual(
             slot["appliances"],
             [
@@ -241,7 +241,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
             ],
         )
         # Base plus appliances reconciles with the plain house actual figure.
-        total = slot["baseWh"] + sum(a["wh"] for a in slot["appliances"])
+        total = slot["unmeasuredWh"] + sum(a["wh"] for a in slot["appliances"])
         self.assertEqual(total, payload["series"]["houseActual"][0]["valueWh"])
         self.assertTrue(payload["availability"]["hasHouseActualBreakdown"])
 
@@ -274,7 +274,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
             ],
         )
         # House 180 − (30 + 20) = 130 unmeasured remainder.
-        self.assertEqual(slot["baseWh"], 130.0)
+        self.assertEqual(slot["unmeasuredWh"], 130.0)
 
     async def test_house_actual_breakdown_clamps_negative_base(self):
         # Appliances momentarily over-report past the house total: base floors at 0.
@@ -286,7 +286,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         )
 
         slot = payload["series"]["houseActualBreakdown"][0]
-        self.assertEqual(slot["baseWh"], 0.0)
+        self.assertEqual(slot["unmeasuredWh"], 0.0)
         self.assertEqual(slot["appliances"][0]["wh"], 250.0)
 
     async def test_house_actual_breakdown_absent_without_consumers(self):

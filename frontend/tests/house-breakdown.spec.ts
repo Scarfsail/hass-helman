@@ -5,10 +5,14 @@ import { resolve } from "node:path";
  * Coverage for the solar-inspector's house-composition panel.
  *
  * When a slot is selected the inspector splits that slot's measured house demand
- * into its base load and each scheduled appliance — the `houseActualBreakdown`
- * series the backend now serves. This pins that the panel appears on selection,
- * lists one row per appliance plus the base load, sums the appliances above the
- * base, and stays hidden when the backend supplied no breakdown.
+ * into each individually metered consumer plus whatever no meter accounted for —
+ * the `houseActualBreakdown` series the backend serves. This pins that the panel
+ * appears on selection, lists one row per consumer above the unmeasured
+ * remainder, drops rows that drew nothing, and stays hidden when the backend
+ * supplied no breakdown.
+ *
+ * Note the unmeasured remainder is NOT the forecast's non-deferrable base load;
+ * it is the analogue of the power card's "unmeasured" node.
  */
 
 const BUNDLE = resolve(
@@ -27,12 +31,12 @@ type Appliance = { entityId: string; label: string; wh: number };
 
 /**
  * Mount the inspector on a full-day, hour-wide fixture. When `withBreakdown` is
- * set every 15-minute slot carries the same base + appliance split, so the hour
+ * set every 15-minute slot carries the same consumer + remainder split, so the hour
  * bucket the card aggregates to has four times each value.
  */
 async function mountInspector(
     page: Page,
-    options: { withBreakdown: boolean; appliances: Appliance[]; baseWh: number },
+    options: { withBreakdown: boolean; appliances: Appliance[]; unmeasuredWh: number },
 ): Promise<void> {
     await page.evaluate((opts) => {
         const date = "2026-07-18";
@@ -40,7 +44,7 @@ async function mountInspector(
         const houseActual: Array<{ timestamp: string; valueWh: number }> = [];
         const houseActualBreakdown: Array<{
             slot: string;
-            baseWh: number;
+            unmeasuredWh: number;
             appliances: Array<{ entityId: string; label: string; wh: number }>;
         }> = [];
         const impact: Array<{
@@ -51,7 +55,7 @@ async function mountInspector(
             factor: number | null;
         }> = [];
         const slotTotal =
-            opts.baseWh + opts.appliances.reduce((sum, a) => sum + a.wh, 0);
+            opts.unmeasuredWh + opts.appliances.reduce((sum, a) => sum + a.wh, 0);
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
@@ -61,7 +65,7 @@ async function mountInspector(
             if (opts.withBreakdown) {
                 houseActualBreakdown.push({
                     slot: `${hh}:${mm}`,
-                    baseWh: opts.baseWh,
+                    unmeasuredWh: opts.unmeasuredWh,
                     appliances: opts.appliances.map((a) => ({ ...a })),
                 });
             }
@@ -205,7 +209,7 @@ async function selectNoonSlot(page: Page): Promise<void> {
 /** Read the rendered breakdown rows in order. */
 async function breakdownRows(
     page: Page,
-): Promise<Array<{ label: string; value: string; share: string; isBase: boolean }>> {
+): Promise<Array<{ label: string; value: string; share: string; isUnmeasured: boolean }>> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const rows = el.shadowRoot.querySelectorAll(".house-breakdown-row");
@@ -213,7 +217,7 @@ async function breakdownRows(
             label: (row.querySelector(".house-breakdown-label")?.textContent ?? "").trim(),
             value: (row.querySelector(".house-breakdown-value")?.textContent ?? "").trim(),
             share: (row.querySelector(".house-breakdown-share")?.textContent ?? "").trim(),
-            isBase: row.classList.contains("base"),
+            isUnmeasured: row.classList.contains("unmeasured"),
         }));
     });
 }
@@ -224,9 +228,9 @@ const APPLIANCES: Appliance[] = [
 ];
 
 test.describe("solar inspector house composition", () => {
-    test("selecting a slot shows base load plus one row per appliance", async ({ page }) => {
+    test("selecting a slot shows one row per consumer plus the unmeasured remainder", async ({ page }) => {
         await loadCardBundle(page);
-        await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, baseWh: 100 });
+        await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
 
         // No panel until a slot is selected.
         expect(
@@ -239,11 +243,11 @@ test.describe("solar inspector house composition", () => {
         await selectNoonSlot(page);
         const rows = await breakdownRows(page);
 
-        // Appliances first (as given), base load anchored last.
-        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "EV charger", "Base load"]);
-        expect(rows[2].isBase).toBe(true);
+        // Consumers first (as given), the unmeasured remainder anchored last.
+        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "EV charger", "Unmeasured consumption"]);
+        expect(rows[2].isUnmeasured).toBe(true);
 
-        // The hour bucket sums four 15-minute sub-slots: base 400, dishwasher 200,
+        // The hour bucket sums four 15-minute sub-slots: unmeasured 400, dishwasher 200,
         // ev 120 — total 720. Shares round to 56% / 28% / 17%.
         expect(rows[0].value).toBe("0.2 kWh");
         expect(rows[1].value).toBe("0.1 kWh");
@@ -251,20 +255,20 @@ test.describe("solar inspector house composition", () => {
         expect(rows.map((r) => r.share)).toEqual(["28%", "17%", "56%"]);
     });
 
-    test("hides the base-load row when the slot's whole demand is named", async ({ page }) => {
+    test("hides the unmeasured row when the slot's whole demand is metered", async ({ page }) => {
         await loadCardBundle(page);
-        // Base is zero: every watt is a named appliance, so no dead 0% row.
+        // The remainder is zero: every watt is metered, so no dead 0% row.
         await mountInspector(page, {
             withBreakdown: true,
             appliances: APPLIANCES,
-            baseWh: 0,
+            unmeasuredWh: 0,
         });
 
         await selectNoonSlot(page);
         const rows = await breakdownRows(page);
 
         expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "EV charger"]);
-        expect(rows.some((r) => r.isBase)).toBe(false);
+        expect(rows.some((r) => r.isUnmeasured)).toBe(false);
         // Shares are still taken against the slot total, not renormalised.
         expect(rows.map((r) => r.share)).toEqual(["63%", "38%"]);
     });
@@ -277,18 +281,18 @@ test.describe("solar inspector house composition", () => {
                 { entityId: "sensor.dishwasher", label: "Dishwasher", wh: 50 },
                 { entityId: "sensor.ev", label: "EV charger", wh: 0 },
             ],
-            baseWh: 100,
+            unmeasuredWh: 100,
         });
 
         await selectNoonSlot(page);
         const rows = await breakdownRows(page);
 
-        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "Base load"]);
+        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "Unmeasured consumption"]);
     });
 
     test("no composition panel when the backend supplied no breakdown", async ({ page }) => {
         await loadCardBundle(page);
-        await mountInspector(page, { withBreakdown: false, appliances: [], baseWh: 180 });
+        await mountInspector(page, { withBreakdown: false, appliances: [], unmeasuredWh: 180 });
 
         await selectNoonSlot(page);
 
