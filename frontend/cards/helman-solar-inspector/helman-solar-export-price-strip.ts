@@ -6,6 +6,7 @@ import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getScheduleLocalTimeParts } from "../helman-scheduling/model/schedule-time";
+import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
 import {
     stripMinutesForSvgX,
     stripWindow,
@@ -61,7 +62,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     @property({ type: String }) public timeZone = "UTC";
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
     /** Minute-of-day of the selected slot; its price cell reads as selected (blue). */
-    @property({ attribute: false }) public selectedMinutes: number | null = null;
+    /** Minute-of-day of every selected slot; each gets a blue band. */
+    @property({ attribute: false }) public selectedMinutes: number[] = [];
     /** Minute-of-day under the pointer; its price cell reads as hovered (orange). */
     @property({ attribute: false }) public hoverMinutes: number | null = null;
 
@@ -189,7 +191,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     </defs>
                     ${this._renderGuides(geometry, zeroY, yForValue, maxAbs, hasNegative)}
                     ${this._renderBand(columns, this.hoverMinutes, "hover", height, xForMinutes)}
-                    ${this._renderBand(columns, this.selectedMinutes, "selected", height, xForMinutes)}
+                    ${this.selectedMinutes.map((minutes) =>
+                        this._renderBand(columns, minutes, "selected", height, xForMinutes))}
                     <g clip-path="url(#export-price-plot-clip)">
                     ${columns.map((column) => {
                         const positive = column.value >= 0;
@@ -297,8 +300,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
         const minutes = stripMinutesForSvgX(geometry, svgX);
         this.dispatchEvent(
-            new CustomEvent<{ minutes: number | null }>("slot-pick", {
-                detail: { minutes },
+            new CustomEvent<SlotPickDetail>("slot-pick", {
+                detail: { minutes, mode: slotSelectionModeForEvent(event) },
                 bubbles: true,
                 composed: true,
             }),

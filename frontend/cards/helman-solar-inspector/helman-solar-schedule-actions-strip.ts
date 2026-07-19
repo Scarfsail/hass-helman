@@ -22,10 +22,8 @@ import { getScheduleActionLabel } from "../helman-scheduling/model/schedule-labe
 import { getScheduleApplianceActionPresentation } from "../helman-scheduling/model/schedule-appliance-action-presentation";
 import { buildScheduleRangeEditSelectionSummary, buildScheduleRangeEditAuthorshipSummary } from "../helman-scheduling/model/schedule-range-edit-selection-summary";
 import { buildScheduleSlotPatches } from "../helman-scheduling/model/schedule-patch-builder";
-import {
-    applyScheduleSlotSelection,
-    resolveScheduleDialogSelectionIds,
-} from "../helman-scheduling/model/schedule-selection";
+import { resolveScheduleDialogSelectionIds } from "../helman-scheduling/model/schedule-selection";
+import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
 import type {
     ScheduleBackedDisplaySlot,
     ScheduleDialogState,
@@ -81,6 +79,9 @@ export function stripMinutesForSvgX(geometry: ScheduleStripGeometry, svgX: numbe
  * deduped union across them — the same collapsing the scheduling card applies to
  * its hour rows. A single-slot column carries exactly one slot.
  */
+/** Press-and-hold duration that counts as a multi-select gesture, in ms. */
+const LONG_PRESS_MS = 500;
+
 interface StripColumn {
     slots: ScheduleSlot[];
     startMinutes: number;
@@ -208,6 +209,14 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
             box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.55);
         }
 
+        /* The chip layer edits; the column background around it selects. */
+        .slot-actions {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
         .slot-col scheduling-action-chip,
         .slot-col scheduling-appliance-chip {
             flex: 0 0 auto;
@@ -221,15 +230,18 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
     /** Inspector slot width, in minutes; wider than 15 collapses action columns. */
     @property({ attribute: false }) public slotMinutes = SLOT_MINUTES;
-    /** Minute-of-day of the inspector's selected slot; its column reads as selected (blue). */
-    @property({ attribute: false }) public selectedMinutes: number | null = null;
+    /**
+     * Minute-of-day of every slot in the inspector's selection. Columns covering one
+     * read as selected. The strip holds no selection state of its own — a click here
+     * publishes `slot-pick` and comes back down through this property.
+     */
+    @property({ attribute: false }) public selectedMinutes: number[] = [];
     /** Minute-of-day under the pointer; its column reads as hovered (orange). */
     @property({ attribute: false }) public hoverMinutes: number | null = null;
 
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _appliances: ScheduleApplianceMetadata[] = [];
     @state() private _projectionIndex: ScheduleApplianceProjectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-    @state() private _selectedSlotIds: string[] = [];
     @state() private _dialogState: ScheduleDialogState | null = null;
     @state() private _dialogOpen = false;
     @state() private _expandedActions = false;
@@ -241,7 +253,9 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
     private _appliancesRequested = false;
     private _projectionLoadGeneration = 0;
     private _pendingDialogPatches: ScheduleSlotPatch[] | null = null;
-    private _selectionAnchorSlotIds: string[] | null = null;
+    private _longPressTimer: number | null = null;
+    /** Set by a fired long press so the click it precedes doesn't re-select. */
+    private _longPressFired = false;
 
     private _normalizedSlots: ScheduleSlot[] = [];
     private _normalizedFor: { schedule: unknown; timeZone: string } | null = null;
@@ -263,6 +277,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
+        this._cancelLongPress();
         this._emitHover(null);
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = undefined;
@@ -310,7 +325,8 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
                     >
                         <span class="strip-toggle-icon ${this._expandedActions ? "expanded" : ""}">▶</span>
                     </button>
-                    ${this._renderRangeBand(columns, this.selectedMinutes, "selected")}
+                    ${this.selectedMinutes.map((minutes) =>
+                        this._renderRangeBand(columns, minutes, "selected"))}
                     ${this._renderRangeBand(columns, this.hoverMinutes, "hover")}
                     ${columns.map((column) => this._renderColumn(column))}
                 </div>
@@ -354,7 +370,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         const leftPct = this._fraction(column.startMinutes, geometry) * 100;
         const rightPct = this._fraction(column.endMinutes, geometry) * 100;
         const widthPct = Math.max(0, rightPct - leftPct);
-        const selected = column.slots.some((slot) => this._selectedSlotIds.includes(slot.id));
+        const selected = this._isColumnSelected(column);
         const items = this._visibleActionItems(column.slots);
         return html`
             <button
@@ -363,9 +379,17 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
                 style=${`left:${leftPct}%;width:${widthPct}%;`}
                 title=${column.rangeLabel}
                 aria-label=${column.rangeLabel}
+                aria-pressed=${selected ? "true" : "false"}
                 @click=${(event: MouseEvent) => this._handleColumnClick(event, column)}
+                @pointerdown=${(event: PointerEvent) => this._handleColumnPointerDown(event, column)}
+                @pointerup=${() => this._cancelLongPress()}
+                @pointercancel=${() => this._cancelLongPress()}
+                @pointerleave=${() => this._cancelLongPress()}
             >
-                ${items.map((item) => this._renderActionItem(item))}
+                <span
+                    class="slot-actions"
+                    @click=${(event: MouseEvent) => this._handleActionsClick(event, column)}
+                >${items.map((item) => this._renderActionItem(item))}</span>
             </button>
         `;
     }
@@ -573,31 +597,85 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         return (geometry.marginLeft + ((clamped - start) / (end - start)) * geometry.plotWidth) / geometry.width;
     }
 
+    /** A column reads as selected when the inspector's selection covers it. */
+    private _isColumnSelected(column: StripColumn): boolean {
+        return this.selectedMinutes.some(
+            (minutes) => minutes >= column.startMinutes && minutes < column.endMinutes,
+        );
+    }
+
+    /**
+     * Clicking a column's empty area selects it, exactly as clicking the same slot on
+     * any chart does — plain replaces, ctrl/meta toggles, shift extends. The click is
+     * published upward; the inspector owns the selection and sends it back down.
+     */
     private _handleColumnClick(event: MouseEvent, column: StripColumn): void {
+        this._cancelLongPress();
+        if (this._longPressFired) {
+            this._longPressFired = false;
+            return;
+        }
+        this._emitPick(column, slotSelectionModeForEvent(event));
+    }
+
+    /**
+     * A long press is the touch equivalent of ctrl-click: it adds the column to the
+     * selection without a modifier key, and swallows the click that follows.
+     */
+    private _handleColumnPointerDown(event: PointerEvent, column: StripColumn): void {
+        this._cancelLongPress();
+        if (event.button !== 0) {
+            return;
+        }
+        this._longPressFired = false;
+        this._longPressTimer = window.setTimeout(() => {
+            this._longPressTimer = null;
+            this._longPressFired = true;
+            this._emitPick(column, "toggle");
+        }, LONG_PRESS_MS);
+    }
+
+    private _cancelLongPress(): void {
+        if (this._longPressTimer !== null) {
+            window.clearTimeout(this._longPressTimer);
+            this._longPressTimer = null;
+        }
+    }
+
+    /** Publish a column's midpoint so the inspector resolves it to its own slot. */
+    private _emitPick(column: StripColumn, mode: SlotPickDetail["mode"]): void {
+        if (column.slots.length === 0) {
+            return;
+        }
+        this.dispatchEvent(new CustomEvent<SlotPickDetail>("slot-pick", {
+            detail: {
+                minutes: (column.startMinutes + column.endMinutes) / 2,
+                mode,
+            },
+            bubbles: true,
+            composed: true,
+        }));
+    }
+
+    /**
+     * Clicking the action chips edits, rather than selects. The dialog targets the
+     * whole selection when this column is part of it, otherwise just this column —
+     * a collapsed column carrying every slot it merges.
+     */
+    private _handleActionsClick(event: MouseEvent, column: StripColumn): void {
         const slotIds = column.slots.map((slot) => slot.id);
         if (slotIds.length === 0) {
             return;
         }
-        if (event.shiftKey || event.ctrlKey || event.metaKey) {
-            const next = applyScheduleSlotSelection({
-                orderedSlotIds: this._orderedSlotIds,
-                selectedSlotIds: this._selectedSlotIds,
-                anchorSlotIds: this._selectionAnchorSlotIds,
-                detail: { slotId: slotIds[0], slotIds, shiftKey: event.shiftKey },
-            });
-            this._selectedSlotIds = next.selectedSlotIds;
-            this._selectionAnchorSlotIds = next.anchorSlotIds;
-            return;
-        }
-        // A collapsed column edits every slot it merges, so a wide-slot edit lands
-        // on the whole bucket at once — the scheduling card's collapsed-hour click.
+        event.stopPropagation();
+        this._cancelLongPress();
         this._openDialog(slotIds);
     }
 
     private _openDialog(targetSlotIds: string[]): void {
         const selectionIds = resolveScheduleDialogSelectionIds({
             orderedSlotIds: this._orderedSlotIds,
-            selectedSlotIds: this._selectedSlotIds,
+            selectedSlotIds: this._selectedScheduleSlotIds(),
             targetSlotIds,
         });
         const selectedIdSet = new Set(selectionIds);
@@ -734,16 +812,22 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
             locale: this._locale,
         }).slots;
         this._normalizedFor = { schedule, timeZone: this.timeZone };
-        // Drop selection ids no longer present in the schedule.
-        const validIds = new Set(this._normalizedSlots.map((slot) => slot.id));
-        const prunedSelected = this._selectedSlotIds.filter((id) => validIds.has(id));
-        if (prunedSelected.length !== this._selectedSlotIds.length) {
-            this._selectedSlotIds = prunedSelected;
+    }
+
+    /** The schedule slots the inspector's selected minutes cover, in schedule order. */
+    private _selectedScheduleSlotIds(): string[] {
+        if (this.selectedMinutes.length === 0) {
+            return [];
         }
-        this._selectionAnchorSlotIds = this._selectionAnchorSlotIds?.filter((id) => validIds.has(id)) ?? null;
-        if (this._selectionAnchorSlotIds && this._selectionAnchorSlotIds.length === 0) {
-            this._selectionAnchorSlotIds = null;
+        const selected = new Set<string>();
+        for (const column of this._buildColumns()) {
+            if (this._isColumnSelected(column)) {
+                for (const slot of column.slots) {
+                    selected.add(slot.id);
+                }
+            }
         }
+        return this._orderedSlotIds.filter((id) => selected.has(id));
     }
 
     private get _orderedSlotIds(): string[] {

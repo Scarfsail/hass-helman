@@ -55,6 +55,15 @@ import {
   sampleOnGrid,
   snapSlotToGrid,
 } from "./slot-aggregation.js";
+import {
+  EMPTY_SLOT_SELECTION,
+  applySlotSelection,
+  reconcileSlotSelection,
+  slotSelectionModeForEvent,
+  type SlotPickDetail,
+  type SlotSelectionMode,
+  type SlotSelectionState,
+} from "./slot-selection.js";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
@@ -315,7 +324,11 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _payload: InspectorPayload | null = null;
   @state() private _loading = false;
   @state() private _error = "";
-  @state() private _selectedSlot: string | null = null;
+  /**
+   * The one slot selection every surface shares: the charts highlight each selected
+   * slot, and the schedule-actions strip both renders it and bulk-edits it.
+   */
+  @state() private _slotSelection: SlotSelectionState = EMPTY_SLOT_SELECTION;
   @state() private _selectedTrainingDate: string | null = null;
   @state() private _trainingTableCollapsed = true;
   @state() private _impactStripVisible = false;
@@ -1036,14 +1049,14 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _setSlotMinutes(minutes: number) {
     if (this._slotMinutes === minutes) return;
-    if (this._selectedSlot) {
-      const snapped = snapSlotToGrid(this._selectedSlot, minutes);
-      if (snapped !== this._selectedSlot) {
-        this._selectedSlot = snapped;
-        this._selectedTrainingDate = this._resolveSelectedTrainingDate(snapped);
-      }
-    }
     this._slotMinutes = minutes;
+    // Re-grid the whole selection onto the new width, dropping anything it has no
+    // slot for. Distinct slots can snap onto one; reconcile dedupes them.
+    this._applySelection(reconcileSlotSelection(
+      this._orderedSlots(null),
+      this._slotSelection,
+      (slot) => snapSlotToGrid(slot, minutes),
+    ));
   }
 
   /**
@@ -1188,16 +1201,25 @@ export class HelmanSolarInspector extends LitElement {
         }}
         .selectedMinutes=${this._selectedMinutes(payload)}
         .hoverMinutes=${this._hoveredMinutes}
+        @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
+          this._handleStripSlotPick(event, payload)}
         @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
           this._setHoverMinutes(event.detail?.minutes ?? null)}
       ></helman-solar-schedule-actions-strip>
     `;
   }
 
-  /** Minute-of-day of the currently-selected slot, or `null`. */
-  private _selectedMinutes(payload: InspectorPayload): number | null {
-    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
-    return selectedSlot ? slotToMinutes(selectedSlot) : null;
+  /** Minute-of-day of every selected slot, for the strips' bands. */
+  private _selectedMinutes(payload: InspectorPayload): number[] {
+    const minutes: number[] = [];
+    for (const slot of this._slotSelection.selectedSlots) {
+      const resolved = resolveSelectedImpactSlot(payload.series.impact, slot);
+      const value = resolved === null ? null : slotToMinutes(resolved);
+      if (value !== null) {
+        minutes.push(value);
+      }
+    }
+    return minutes;
   }
 
   /**
@@ -1286,7 +1308,7 @@ export class HelmanSolarInspector extends LitElement {
                   endMinutes: layout.dayEndMinutes,
                 }}
                 .hoverMinutes=${this._hoveredMinutes}
-                @slot-pick=${(event: CustomEvent<{ minutes: number | null }>) =>
+                @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
                   this._handleStripSlotPick(event, payload)}
                 @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
                   this._setHoverMinutes(event.detail?.minutes ?? null)}
@@ -1299,7 +1321,7 @@ export class HelmanSolarInspector extends LitElement {
 
   /** Resolve a strip click to the nearest impact slot, or clear the selection. */
   private _handleStripSlotPick(
-    event: CustomEvent<{ minutes: number | null }>,
+    event: CustomEvent<SlotPickDetail>,
     payload: InspectorPayload,
   ) {
     const minutes = event.detail?.minutes ?? null;
@@ -1309,7 +1331,7 @@ export class HelmanSolarInspector extends LitElement {
     }
     const slot = this._findClosestImpactSlot(minutes, payload.series.impact);
     if (slot) {
-      this._selectSlot(slot);
+      this._selectSlot(slot, event.detail?.mode ?? "replace", payload);
     } else {
       this._deselectSlot();
     }
@@ -1341,7 +1363,6 @@ export class HelmanSolarInspector extends LitElement {
     // The strip below renders from the same seam, so its columns turn forecast
     // where the stacks above turn hatched.
     this._lastForecastFillFrom = forecastFillFrom;
-    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
     return svg`
       <svg
         viewBox="0 0 ${layout.width} ${layout.height}"
@@ -1355,7 +1376,7 @@ export class HelmanSolarInspector extends LitElement {
         ${this._renderChartBackground(layout)}
         ${this._plotClipDef("plot-clip-chart", layout, layout.height)}
         ${this._renderHoverHighlight(layout, layout.margin.top, layout.plotHeight)}
-        ${this._renderSlotHighlight(layout, layout.margin.top, layout.plotHeight, selectedSlot)}
+        ${this._renderSlotHighlights(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderLeftAxis(layout)}
         ${this._renderXAxis(layout)}
         <g clip-path="url(#plot-clip-chart)">
@@ -1623,7 +1644,6 @@ export class HelmanSolarInspector extends LitElement {
     const innerHeight = height - padTop - padBottom;
     const yForPct = (pct: number) =>
       padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
-    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
     const barWidth = Math.max(3, layout.slotWidth);
     return svg`
       <svg
@@ -1648,7 +1668,7 @@ export class HelmanSolarInspector extends LitElement {
         ${this._plotClipDef("plot-clip-soc", layout, height)}
         ${this._renderSocGridlines(layout, yForPct)}
         ${this._renderHoverHighlight(layout, 0, height)}
-        ${this._renderSlotHighlight(layout, 0, height, selectedSlot)}
+        ${this._renderSlotHighlights(layout, 0, height)}
         <g clip-path="url(#plot-clip-soc)">
         ${bars.map((bar) => {
           const top = yForPct(bar.pct);
@@ -1784,7 +1804,7 @@ export class HelmanSolarInspector extends LitElement {
       >
         ${this._plotClipDef("plot-clip-impact", layout, stripHeight)}
         ${this._renderHoverHighlight(layout, 0, stripHeight)}
-        ${this._renderSlotHighlight(layout, 0, stripHeight, selectedSlot)}
+        ${this._renderSlotHighlights(layout, 0, stripHeight)}
         <g clip-path="url(#plot-clip-impact)">
         ${payload.series.impact.map((point) => {
           if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
@@ -1832,23 +1852,53 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  private _selectSlot(slot: string, event?: Event) {
-    event?.stopPropagation();
-    const previous = this._selectedSlot;
-    this._selectedSlot = slot;
-    this._selectedTrainingDate = this._resolveSelectedTrainingDate(slot);
-    this._trainingTableCollapsed = true;
-    this.requestUpdate("_selectedSlot", previous);
+  /** The slot the detail panel and training table follow. */
+  private get _selectedSlot(): string | null {
+    return this._slotSelection.focusSlot;
+  }
+
+  /**
+   * The day's impact slots in chronological order — the selection's universe.
+   * Always on the active slot width, so a selection can never hold a slot the
+   * charts aren't drawing.
+   */
+  private _orderedSlots(payload: InspectorPayload | null): string[] {
+    const source = payload ?? (this._payload ? this._viewForSlot(this._payload) : null);
+    return source?.series.impact.map((point) => point.slot) ?? [];
+  }
+
+  private _selectSlot(
+    slot: string,
+    mode: SlotSelectionMode = "replace",
+    payload?: InspectorPayload,
+  ) {
+    this._applySelection(applySlotSelection({
+      orderedSlots: this._orderedSlots(payload ?? null),
+      selection: this._slotSelection,
+      target: slot,
+      mode,
+    }));
   }
 
   private _deselectSlot() {
-    if (this._selectedSlot === null) {
+    this._applySelection(EMPTY_SLOT_SELECTION);
+  }
+
+  /** Commit a selection and re-derive everything that hangs off the focus slot. */
+  private _applySelection(next: SlotSelectionState) {
+    if (next === this._slotSelection) {
       return;
     }
-    const previous = this._selectedSlot;
-    this._selectedSlot = null;
-    this._selectedTrainingDate = null;
-    this.requestUpdate("_selectedSlot", previous);
+    const focusChanged = next.focusSlot !== this._slotSelection.focusSlot;
+    this._slotSelection = next;
+    if (focusChanged) {
+      this._selectedTrainingDate = next.focusSlot === null
+        ? null
+        : this._resolveSelectedTrainingDate(next.focusSlot);
+      if (next.focusSlot !== null) {
+        this._trainingTableCollapsed = true;
+      }
+    }
   }
 
   private _renderTotals(payload: InspectorPayload) {
@@ -2407,13 +2457,13 @@ export class HelmanSolarInspector extends LitElement {
       payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
-        const resolvedSlot = resolveSelectedImpactSlot(
-          payload.series.impact,
-          this._selectedSlot,
+        const reconciled = reconcileSlotSelection(
+          this._orderedSlots(null),
+          this._slotSelection,
         );
-        this._selectedSlot = resolvedSlot;
+        this._slotSelection = reconciled;
         this._selectedTrainingDate = this._resolveSelectedTrainingDate(
-          resolvedSlot,
+          reconciled.focusSlot,
           payload,
           requestedDate,
         );
@@ -2648,10 +2698,17 @@ export class HelmanSolarInspector extends LitElement {
     const slotStart = Math.floor(minutes / this._slotMinutes) * this._slotMinutes;
     const slot = this._findClosestImpactSlot(slotStart, payload.series.impact);
     if (slot) {
-      this._selectSlot(slot);
+      this._selectSlot(slot, slotSelectionModeForEvent(event), payload);
     } else {
       this._deselectSlot();
     }
+  }
+
+  /** One highlight band per selected slot. */
+  private _renderSlotHighlights(layout: ChartLayout, y: number, height: number) {
+    return this._slotSelection.selectedSlots.map(
+      (slot) => this._renderSlotHighlight(layout, y, height, slot),
+    );
   }
 
   private _renderSlotHighlight(
