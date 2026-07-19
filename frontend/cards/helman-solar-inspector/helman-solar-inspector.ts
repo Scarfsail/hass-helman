@@ -2087,14 +2087,12 @@ export class HelmanSolarInspector extends LitElement {
                   this._showMoreInfo(row.entityId);
                 }}
               >
-                <span
-                  class="house-breakdown-control"
-                  @click=${(event: Event) => event.stopPropagation()}
-                >
+                <span class="house-breakdown-control">
                   ${row.switchEntityId
                     ? html`<helman-appliance-switch-badge
                         .hass=${this.hass}
                         .entityId=${row.switchEntityId}
+                        @click=${(event: Event) => event.stopPropagation()}
                       ></helman-appliance-switch-badge>`
                     : ""}
                 </span>

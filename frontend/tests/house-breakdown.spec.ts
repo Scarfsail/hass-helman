@@ -420,6 +420,28 @@ test.describe("solar inspector house composition", () => {
         expect(badges).toEqual([null, "switch.dishwasher", null]);
     });
 
+    test("the control cell is not a dead zone when the consumer has no switch", async ({ page }) => {
+        // Regression: the cell used to swallow clicks unconditionally, so the
+        // leftmost strip of every switch-less row did nothing at all.
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: [{ entityId: "sensor.dishwasher", label: "Dishwasher", wh: 50 }],
+            unmeasuredWh: 0,
+        });
+        await selectNoonSlot(page);
+
+        await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const cell = el.shadowRoot.querySelector(".house-breakdown-control");
+            (cell as HTMLElement).click();
+        });
+
+        expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
+            "sensor.dishwasher",
+        ]);
+    });
+
     test("clicking the control badge opens the switch, not the energy sensor", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, {
