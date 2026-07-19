@@ -479,6 +479,7 @@ class HelmanCoordinator:
             house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             house_deferrable_consumers_provider=self._get_house_deferrable_consumers,
+            house_device_consumers_provider=self._get_house_device_consumers,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
             battery_soc_bounds_provider=self._get_battery_soc_bounds,
             battery_soc_bounds_entity_id_provider=self._get_battery_soc_bounds_entity_ids,
@@ -748,6 +749,56 @@ class HelmanCoordinator:
         return ConsumptionForecastBuilder._read_deferrable_consumers(
             forecast_cfg.get("deferrable_consumers")
         )
+
+    async def _get_house_device_consumers(self) -> list[dict[str, str]]:
+        """Individually-measured house devices, from the shared device tree.
+
+        Reuses the very list the power card shows — HA energy prefs resolved into
+        the device tree — rather than a parallel source. Each top-level house
+        consumer node is keyed by its energy stat (``id``) and carries a friendly
+        ``displayName``, so the inspector can split the house actual by the same
+        appliances the card already knows.
+
+        Only top-level nodes are taken: nested sub-meters would double-count
+        against their parent, and the synthetic "unmeasured" node is the residual
+        the breakdown computes itself. External statistics ids (``source:stat``)
+        are skipped — the inspector reads recorder STATE history, which only real
+        entities have — so those loads fall into the unmeasured remainder.
+        """
+        try:
+            tree = await self.get_device_tree()
+        except Exception:
+            _LOGGER.exception("Failed to read device tree for inspector breakdown")
+            return []
+        consumers = tree.get("consumers") if isinstance(tree, dict) else None
+        if not isinstance(consumers, list):
+            return []
+        house_node = next(
+            (
+                node
+                for node in consumers
+                if isinstance(node, dict) and node.get("id") == "house"
+            ),
+            None,
+        )
+        if house_node is None:
+            return []
+        result: list[dict[str, str]] = []
+        for child in house_node.get("children") or []:
+            if not isinstance(child, dict):
+                continue
+            if child.get("isUnmeasured") or child.get("isVirtual") or child.get("isSource"):
+                continue
+            energy_entity_id = child.get("id")
+            if (
+                not isinstance(energy_entity_id, str)
+                or "." not in energy_entity_id
+                or ":" in energy_entity_id
+            ):
+                continue
+            label = child.get("displayName") or energy_entity_id
+            result.append({"energy_entity_id": energy_entity_id, "label": label})
+        return result
 
     def _get_battery_soc_entity_id(self) -> str | None:
         entity_config = read_battery_entity_config(self._active_config)

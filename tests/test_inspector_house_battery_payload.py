@@ -126,7 +126,9 @@ def _make_cfg():
     )
 
 
-async def _inspector_payload(_history=None, _consumer_slots=None, **service_kwargs):
+async def _inspector_payload(
+    _history=None, _consumer_slot_by_entity=None, **service_kwargs
+):
     hass = SimpleNamespace(
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
@@ -178,8 +180,12 @@ async def _inspector_payload(_history=None, _consumer_slots=None, **service_kwar
             AsyncMock(return_value=BATTERY_SOC_ACTUAL),
         ), patch.object(
             service,
-            "_load_deferrable_consumer_slots_for_date",
-            AsyncMock(return_value=_consumer_slots or []),
+            "_load_consumer_slot_map",
+            AsyncMock(
+                side_effect=lambda entity_id, *a, **kw: dict(
+                    (_consumer_slot_by_entity or {}).get(entity_id, {})
+                )
+            ),
         ):
             return await service.async_get_inspector_day(TARGET_DATE)
     finally:
@@ -215,7 +221,10 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                 {"energy_entity_id": "sensor.dishwasher", "label": "Dishwasher"},
                 {"energy_entity_id": "sensor.ev", "label": "EV charger"},
             ],
-            _consumer_slots=[{"00:00": 50.0}, {"00:00": 30.0}],
+            _consumer_slot_by_entity={
+                "sensor.dishwasher": {"00:00": 50.0},
+                "sensor.ev": {"00:00": 30.0},
+            },
         )
 
         breakdown = payload["series"]["houseActualBreakdown"]
@@ -236,13 +245,44 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(total, payload["series"]["houseActual"][0]["valueWh"])
         self.assertTrue(payload["availability"]["hasHouseActualBreakdown"])
 
+    async def test_house_actual_breakdown_merges_device_tree_consumers(self):
+        # Deferrable appliances lead; device-tree consumers fill in the rest, and
+        # an entity present in both lists appears once (deferrable label wins).
+        async def _devices():
+            return [
+                {"energy_entity_id": "sensor.ev", "label": "EV (tree)"},
+                {"energy_entity_id": "sensor.fridge", "label": "Fridge"},
+            ]
+
+        payload = await _inspector_payload(
+            house_deferrable_consumers_provider=lambda: [
+                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
+            ],
+            house_device_consumers_provider=_devices,
+            _consumer_slot_by_entity={
+                "sensor.ev": {"00:00": 30.0},
+                "sensor.fridge": {"00:00": 20.0},
+            },
+        )
+
+        slot = payload["series"]["houseActualBreakdown"][0]
+        self.assertEqual(
+            slot["appliances"],
+            [
+                {"entityId": "sensor.ev", "label": "EV charger", "wh": 30.0},
+                {"entityId": "sensor.fridge", "label": "Fridge", "wh": 20.0},
+            ],
+        )
+        # House 180 − (30 + 20) = 130 unmeasured remainder.
+        self.assertEqual(slot["baseWh"], 130.0)
+
     async def test_house_actual_breakdown_clamps_negative_base(self):
         # Appliances momentarily over-report past the house total: base floors at 0.
         payload = await _inspector_payload(
             house_deferrable_consumers_provider=lambda: [
                 {"energy_entity_id": "sensor.ev", "label": "EV charger"},
             ],
-            _consumer_slots=[{"00:00": 250.0}],
+            _consumer_slot_by_entity={"sensor.ev": {"00:00": 250.0}},
         )
 
         slot = payload["series"]["houseActualBreakdown"][0]

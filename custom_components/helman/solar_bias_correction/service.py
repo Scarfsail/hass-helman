@@ -69,6 +69,7 @@ class SolarBiasCorrectionService:
         house_forecast_snapshot_provider=None,
         house_energy_entity_id_provider=None,
         house_deferrable_consumers_provider=None,
+        house_device_consumers_provider=None,
         battery_soc_entity_id_provider=None,
         battery_soc_bounds_provider=None,
         battery_soc_bounds_entity_id_provider=None,
@@ -86,6 +87,7 @@ class SolarBiasCorrectionService:
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
         self._house_deferrable_consumers_provider = house_deferrable_consumers_provider
+        self._house_device_consumers_provider = house_device_consumers_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
         self._battery_soc_bounds_provider = battery_soc_bounds_provider
         self._battery_soc_bounds_entity_id_provider = (
@@ -405,12 +407,7 @@ class SolarBiasCorrectionService:
                     ),
                     "battery actual",
                 ),
-                self._guarded_points(
-                    self._load_deferrable_consumer_slots_for_date(
-                        target_date, timezone
-                    ),
-                    "house actual breakdown",
-                ),
+                self._load_house_consumer_breakdown_for_date(target_date, timezone),
             ]
             if need_past
             else []
@@ -425,6 +422,7 @@ class SolarBiasCorrectionService:
         battery_soc_actual_points: list[dict] = []
         grid_actual_points: list[dict] = []
         battery_actual_points: list[dict] = []
+        breakdown_consumers: list[dict] = []
         consumer_slot_maps: list[dict] = []
         if need_past:
             (
@@ -433,8 +431,9 @@ class SolarBiasCorrectionService:
                 battery_soc_actual_points,
                 grid_actual_points,
                 battery_actual_points,
-                consumer_slot_maps,
+                consumer_breakdown,
             ) = gathered[:6]
+            breakdown_consumers, consumer_slot_maps = consumer_breakdown
         battery_snapshot = gathered[-1] if need_future else None
 
         # The breakdown decomposes the house actual already loaded, so it is
@@ -442,7 +441,7 @@ class SolarBiasCorrectionService:
         # appliance reconciles to that slot's houseActual value.
         house_actual_breakdown_points = _build_house_actual_breakdown(
             house_actual_points,
-            self._house_deferrable_consumers(),
+            breakdown_consumers,
             consumer_slot_maps,
         )
 
@@ -751,66 +750,109 @@ class SolarBiasCorrectionService:
             local_now=local_now,
         )
 
-    def _house_deferrable_consumers(self) -> list[dict]:
-        """The configured deferrable appliances: ``energy_entity_id`` + ``label``.
+    @staticmethod
+    def _normalize_consumers(raw_consumers: Any) -> list[dict]:
+        """Coerce a provider's consumer list to ``[{energy_entity_id, label}]``.
 
-        Empty when none are configured or the provider is absent, in which case
-        the house-actual breakdown is simply omitted.
+        Drops anything without a usable entity id and defaults a missing label to
+        the entity id, so callers get a clean, deduplicable list.
         """
-        if self._house_deferrable_consumers_provider is None:
-            return []
-        try:
-            consumers = self._house_deferrable_consumers_provider() or []
-        except Exception:
-            _LOGGER.exception("House deferrable consumers provider failed")
-            return []
         result: list[dict] = []
-        for consumer in consumers:
+        for consumer in raw_consumers or []:
             if not isinstance(consumer, dict):
                 continue
             entity_id = consumer.get("energy_entity_id")
             if not isinstance(entity_id, str) or not entity_id.strip():
                 continue
-            result.append(
-                {
-                    "energy_entity_id": entity_id.strip(),
-                    "label": consumer.get("label", entity_id.strip()),
-                }
-            )
+            eid = entity_id.strip()
+            result.append({"energy_entity_id": eid, "label": consumer.get("label", eid)})
         return result
 
-    async def _load_deferrable_consumer_slots_for_date(
-        self, target_date: date, local_tz: ZoneInfo
-    ) -> list[dict]:
-        """Per-appliance per-slot energy (Wh) for the day, keyed by "HH:MM".
-
-        Returns one ``{slot: wh}`` map per configured consumer, in the same order
-        as :meth:`_house_deferrable_consumers`, so the two zip together when the
-        breakdown is composed. The maps overlap the house-actual read in the same
-        gather, so this adds only the appliance meters, not a serial round-trip.
-        """
-        consumers = self._house_deferrable_consumers()
-        if not consumers:
+    def _house_deferrable_consumers(self) -> list[dict]:
+        """The configured deferrable appliances: ``energy_entity_id`` + ``label``."""
+        if self._house_deferrable_consumers_provider is None:
             return []
+        try:
+            raw = self._house_deferrable_consumers_provider() or []
+        except Exception:
+            _LOGGER.exception("House deferrable consumers provider failed")
+            return []
+        return self._normalize_consumers(raw)
 
-        async def _load(entity_id: str) -> dict[str, float]:
-            by_slot_utc = await self._load_slot_energy_kwh(
-                entity_id, target_date, local_tz
-            )
-            by_slot: dict[str, float] = {}
-            for slot_start_utc, kwh in by_slot_utc.items():
-                slot_local = dt_util.as_local(slot_start_utc)
-                if slot_local.date() != target_date:
-                    continue
-                slot = f"{slot_local.hour:02d}:{slot_local.minute:02d}"
-                by_slot[slot] = kwh * 1000.0
-            return by_slot
+    async def _house_device_consumers(self) -> list[dict]:
+        """Individually-measured house devices from the shared device tree."""
+        if self._house_device_consumers_provider is None:
+            return []
+        try:
+            raw = await self._house_device_consumers_provider() or []
+        except Exception:
+            _LOGGER.exception("House device consumers provider failed")
+            return []
+        return self._normalize_consumers(raw)
 
-        return list(
-            await asyncio.gather(
-                *(_load(consumer["energy_entity_id"]) for consumer in consumers)
+    async def _house_breakdown_consumers(self) -> list[dict]:
+        """The full set the house actual is split by: deferrable appliances first,
+        then any other individually-measured device not already among them.
+
+        Deferrable consumers lead because they are the forecast-facing appliances;
+        device-tree consumers fill in the rest of the metered house. De-duped by
+        entity id so an appliance that is both a scheduled consumer and a tree node
+        appears once, and the base load stays a true remainder rather than
+        double-subtracting it.
+        """
+        deferrable = self._house_deferrable_consumers()
+        device = await self._house_device_consumers()
+        seen = {consumer["energy_entity_id"] for consumer in deferrable}
+        merged = list(deferrable)
+        for consumer in device:
+            if consumer["energy_entity_id"] in seen:
+                continue
+            seen.add(consumer["energy_entity_id"])
+            merged.append(consumer)
+        return merged
+
+    async def _load_consumer_slot_map(
+        self, entity_id: str, target_date: date, local_tz: ZoneInfo
+    ) -> dict[str, float]:
+        """One consumer's per-slot energy (Wh) for the day, keyed by local "HH:MM"."""
+        by_slot_utc = await self._load_slot_energy_kwh(entity_id, target_date, local_tz)
+        by_slot: dict[str, float] = {}
+        for slot_start_utc, kwh in by_slot_utc.items():
+            slot_local = dt_util.as_local(slot_start_utc)
+            if slot_local.date() != target_date:
+                continue
+            slot = f"{slot_local.hour:02d}:{slot_local.minute:02d}"
+            by_slot[slot] = kwh * 1000.0
+        return by_slot
+
+    async def _load_house_consumer_breakdown_for_date(
+        self, target_date: date, local_tz: ZoneInfo
+    ) -> tuple[list[dict], list[dict]]:
+        """The consumer list and its per-slot energy maps, aligned by index.
+
+        Returns ``(consumers, slot_maps)`` from a single source so the compose step
+        never re-reads the list and can zip them safely. The maps overlap the
+        house-actual read in the same gather, so this adds only the appliance
+        meters, not a serial round-trip. Any failure degrades to no breakdown.
+        """
+        try:
+            consumers = await self._house_breakdown_consumers()
+            if not consumers:
+                return [], []
+            slot_maps = list(
+                await asyncio.gather(
+                    *(
+                        self._load_consumer_slot_map(
+                            consumer["energy_entity_id"], target_date, local_tz
+                        )
+                        for consumer in consumers
+                    )
+                )
             )
-        )
+            return consumers, slot_maps
+        except Exception:
+            _LOGGER.exception("Failed to load house consumer breakdown for inspector")
+            return [], []
 
     async def _load_grid_actual_for_date(
         self, target_date: date, local_tz: ZoneInfo, local_now: datetime | None = None
