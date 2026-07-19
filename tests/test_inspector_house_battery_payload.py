@@ -289,6 +289,19 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(slot["unmeasuredWh"], 0.0)
         self.assertEqual(slot["appliances"][0]["wh"], 250.0)
 
+    async def test_house_unmeasured_label_comes_from_the_card_config(self):
+        payload = await _inspector_payload(
+            house_unmeasured_label_provider=lambda: "👻 Nesledovaná spotřeba",
+        )
+
+        self.assertEqual(payload["houseUnmeasuredLabel"], "👻 Nesledovaná spotřeba")
+
+    async def test_house_unmeasured_label_null_when_card_leaves_it_unset(self):
+        # The card falls back to its own localized string in this case.
+        payload = await _inspector_payload(house_unmeasured_label_provider=lambda: "  ")
+
+        self.assertIsNone(payload["houseUnmeasuredLabel"])
+
     async def test_house_actual_breakdown_absent_without_consumers(self):
         payload = await _inspector_payload()
 

@@ -173,6 +173,7 @@ def test_inspector_day_serializes_frontend_contract():
             "hasBatteryForecast": False,
             "hasBatteryActual": False,
         },
+        "houseUnmeasuredLabel": None,
         "batterySocBounds": [],
         "trainingExplainability": None,
     }

@@ -480,6 +480,7 @@ class HelmanCoordinator:
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             house_deferrable_consumers_provider=self._get_house_deferrable_consumers,
             house_device_consumers_provider=self._get_house_device_consumers,
+            house_unmeasured_label_provider=self._get_house_unmeasured_label,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
             battery_soc_bounds_provider=self._get_battery_soc_bounds,
             battery_soc_bounds_entity_id_provider=self._get_battery_soc_bounds_entity_ids,
@@ -749,6 +750,24 @@ class HelmanCoordinator:
         return ConsumptionForecastBuilder._read_deferrable_consumers(
             forecast_cfg.get("deferrable_consumers")
         )
+
+    def _get_house_unmeasured_label(self) -> str | None:
+        """The power card's own title for unmetered house load.
+
+        The inspector's breakdown remainder is the same concept the card shows as
+        its "unmeasured" node, so it reuses the very title the user configured
+        there and the two views name it identically. ``None`` when unset, leaving
+        the inspector its own localized string rather than the card's English
+        default.
+        """
+        power_devices = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("power_devices")
+        )
+        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
+        title = house_config.get("unmeasured_power_title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+        return None
 
     async def _get_house_device_consumers(self) -> list[dict[str, str]]:
         """Individually-measured house devices, from the shared device tree.

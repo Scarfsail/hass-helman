@@ -286,6 +286,12 @@ type InspectorPayload = {
     hasBatteryForecast: boolean;
     hasBatteryActual: boolean;
   };
+  /**
+   * The power card's configured title for unmetered load, reused so the
+   * breakdown's remainder row reads exactly as the card names it. Null when
+   * unconfigured, leaving the card's own localized string.
+   */
+  houseUnmeasuredLabel: string | null;
   /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
   batterySocBounds: SocBoundsPoint[];
   trainingExplainability: TrainingExplainability | null;
@@ -1957,7 +1963,7 @@ export class HelmanSolarInspector extends LitElement {
           )}
         </div>
       </div>
-      ${this._renderHouseBreakdown(houseBreakdown)}
+      ${this._renderHouseBreakdown(houseBreakdown, payload.houseUnmeasuredLabel)}
       ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
     `;
   }
@@ -1970,30 +1976,40 @@ export class HelmanSolarInspector extends LitElement {
    * house-actual value by construction. Rendered only when the backend supplied a
    * breakdown — consumers configured and the day elapsed — so a bare house figure
    * simply stands alone.
+   *
+   * `unmeasuredLabel` is the power card's own configured title for unmetered load,
+   * so both views name the concept identically; it falls back to this card's
+   * localized string when the card leaves it unset.
    */
-  private _renderHouseBreakdown(breakdown: HouseBreakdownPoint | null) {
+  private _renderHouseBreakdown(
+    breakdown: HouseBreakdownPoint | null,
+    unmeasuredLabel: string | null,
+  ) {
     if (!breakdown) return "";
     const rows: { label: string; wh: number; isUnmeasured: boolean }[] = [
       ...breakdown.appliances
         .filter((appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0)
         .map((appliance) => ({ label: appliance.label, wh: appliance.wh, isUnmeasured: false })),
     ];
-    // The unmeasured remainder anchors the list at the bottom: it is what no meter
-    // claimed, not a consumer, so it reads as the floor the named loads sit on top
-    // of. This is deliberately not the forecast's non-deferrable base load — it is
-    // the same idea as the power card's "unmeasured" node. Like the consumer rows
-    // it is dropped when it carries nothing, so an empty slot — or one whose whole
-    // demand is named — shows no dead "0%" row.
+    // What no meter claimed. This is deliberately not the forecast's
+    // non-deferrable base load — it is the same idea as the power card's
+    // "unmeasured" node, so it borrows that node's configured title. Like the
+    // consumer rows it is dropped when it carries nothing, so an empty slot — or
+    // one whose whole demand is metered — shows no dead "0%" row.
     const unmeasuredWh = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
     if (unmeasuredWh > 0) {
       rows.push({
-        label: this._t("bias_correction.inspector.house_unmeasured"),
+        label: unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
         wh: unmeasuredWh,
         isUnmeasured: true,
       });
     }
     const total = rows.reduce((sum, row) => sum + Math.max(0, row.wh), 0);
     if (total <= 0) return "";
+    // Ranked heaviest first so the slot's dominant load reads at a glance. The
+    // remainder sorts by size like any other row rather than being pinned last,
+    // or a large unmetered block would sit below trivial named ones.
+    rows.sort((a, b) => b.wh - a.wh);
 
     return html`
       <div class="house-breakdown">
@@ -2298,6 +2314,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.availability.hasGridActual ??= false;
       payload.availability.hasBatteryForecast ??= false;
       payload.availability.hasBatteryActual ??= false;
+      payload.houseUnmeasuredLabel ??= null;
       payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;

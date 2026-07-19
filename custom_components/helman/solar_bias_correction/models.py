@@ -266,6 +266,10 @@ class SolarBiasInspectorDay:
     is_future: bool
     training_explainability: SolarBiasTrainingExplainability | None = None
     battery_soc_bounds: list[BatterySocBoundsPoint] = field(default_factory=list)
+    #: The power card's configured title for unmetered load; the breakdown reuses
+    #: it so both views name the concept identically. None leaves the card's own
+    #: localized fallback in place.
+    house_unmeasured_label: str | None = None
 
 
 def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
@@ -344,6 +348,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasBatteryForecast": day.availability.has_battery_forecast,
             "hasBatteryActual": day.availability.has_battery_actual,
         },
+        "houseUnmeasuredLabel": day.house_unmeasured_label,
         "batterySocBounds": [
             {"slot": p.slot, "minPct": p.min_pct, "maxPct": p.max_pct}
             for p in day.battery_soc_bounds

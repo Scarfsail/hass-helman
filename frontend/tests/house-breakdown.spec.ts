@@ -7,9 +7,9 @@ import { resolve } from "node:path";
  * When a slot is selected the inspector splits that slot's measured house demand
  * into each individually metered consumer plus whatever no meter accounted for —
  * the `houseActualBreakdown` series the backend serves. This pins that the panel
- * appears on selection, lists one row per consumer above the unmeasured
- * remainder, drops rows that drew nothing, and stays hidden when the backend
- * supplied no breakdown.
+ * appears on selection, ranks every row heaviest first, drops rows that drew
+ * nothing, reuses the power card's configured title for the remainder, and stays
+ * hidden when the backend supplied no breakdown.
  *
  * Note the unmeasured remainder is NOT the forecast's non-deferrable base load;
  * it is the analogue of the power card's "unmeasured" node.
@@ -36,7 +36,13 @@ type Appliance = { entityId: string; label: string; wh: number };
  */
 async function mountInspector(
     page: Page,
-    options: { withBreakdown: boolean; appliances: Appliance[]; unmeasuredWh: number },
+    options: {
+        withBreakdown: boolean;
+        appliances: Appliance[];
+        unmeasuredWh: number;
+        /** The power card's configured title; null falls back to the translation. */
+        unmeasuredLabel?: string | null;
+    },
 ): Promise<void> {
     await page.evaluate((opts) => {
         const date = "2026-07-18";
@@ -135,6 +141,7 @@ async function mountInspector(
                 hasBatteryForecast: false,
                 hasBatteryActual: false,
             },
+            houseUnmeasuredLabel: opts.unmeasuredLabel ?? null,
             batterySocBounds: [],
             trainingExplainability: null,
         };
@@ -243,16 +250,35 @@ test.describe("solar inspector house composition", () => {
         await selectNoonSlot(page);
         const rows = await breakdownRows(page);
 
-        // Consumers first (as given), the unmeasured remainder anchored last.
-        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "EV charger", "Unmeasured consumption"]);
-        expect(rows[2].isUnmeasured).toBe(true);
+        // The hour bucket sums four 15-minute sub-slots: unmeasured 400,
+        // dishwasher 200, ev 120 — total 720. Ranked heaviest first, so the
+        // remainder leads here rather than being pinned last.
+        expect(rows.map((r) => r.label)).toEqual([
+            "Unmeasured consumption",
+            "Dishwasher",
+            "EV charger",
+        ]);
+        expect(rows[0].isUnmeasured).toBe(true);
 
-        // The hour bucket sums four 15-minute sub-slots: unmeasured 400, dishwasher 200,
-        // ev 120 — total 720. Shares round to 56% / 28% / 17%.
-        expect(rows[0].value).toBe("0.2 kWh");
-        expect(rows[1].value).toBe("0.1 kWh");
-        expect(rows[2].value).toBe("0.4 kWh");
-        expect(rows.map((r) => r.share)).toEqual(["28%", "17%", "56%"]);
+        expect(rows.map((r) => r.value)).toEqual(["0.4 kWh", "0.2 kWh", "0.1 kWh"]);
+        expect(rows.map((r) => r.share)).toEqual(["56%", "28%", "17%"]);
+    });
+
+    test("uses the power card's configured unmeasured title when set", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 100,
+            unmeasuredLabel: "👻 Nesledovaná spotřeba",
+        });
+
+        await selectNoonSlot(page);
+        const rows = await breakdownRows(page);
+
+        // The card's own title wins over this card's localized fallback.
+        expect(rows[0].label).toBe("👻 Nesledovaná spotřeba");
+        expect(rows[0].isUnmeasured).toBe(true);
     });
 
     test("hides the unmeasured row when the slot's whole demand is metered", async ({ page }) => {
@@ -287,7 +313,8 @@ test.describe("solar inspector house composition", () => {
         await selectNoonSlot(page);
         const rows = await breakdownRows(page);
 
-        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "Unmeasured consumption"]);
+        // The idle EV is dropped; the rest stay ranked heaviest first.
+        expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Dishwasher"]);
     });
 
     test("no composition panel when the backend supplied no breakdown", async ({ page }) => {
