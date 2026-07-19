@@ -27,7 +27,12 @@ async function loadCardBundle(page: Page): Promise<void> {
     await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
 }
 
-type Appliance = { entityId: string; label: string; wh: number };
+type Appliance = {
+    entityId: string;
+    label: string;
+    wh: number;
+    switchEntityId?: string | null;
+};
 
 /**
  * Mount the inspector on a full-day, hour-wide fixture. When `withBreakdown` is
@@ -51,7 +56,12 @@ async function mountInspector(
         const houseActualBreakdown: Array<{
             slot: string;
             unmeasuredWh: number;
-            appliances: Array<{ entityId: string; label: string; wh: number }>;
+            appliances: Array<{
+                entityId: string;
+                label: string;
+                wh: number;
+                switchEntityId: string | null;
+            }>;
         }> = [];
         const impact: Array<{
             slot: string;
@@ -72,7 +82,10 @@ async function mountInspector(
                 houseActualBreakdown.push({
                     slot: `${hh}:${mm}`,
                     unmeasuredWh: opts.unmeasuredWh,
-                    appliances: opts.appliances.map((a) => ({ ...a })),
+                    appliances: opts.appliances.map((a) => ({
+                        ...a,
+                        switchEntityId: a.switchEntityId ?? null,
+                    })),
                 });
             }
             impact.push({
@@ -146,6 +159,23 @@ async function mountInspector(
             trainingExplainability: null,
         };
 
+        // A state per configured switch so the shared badge has something to show.
+        const states: Record<string, unknown> = {};
+        for (const appliance of opts.appliances) {
+            if (!appliance.switchEntityId) continue;
+            states[appliance.switchEntityId] = {
+                entity_id: appliance.switchEntityId,
+                state: "on",
+                attributes: { friendly_name: appliance.label },
+            };
+        }
+
+        // Capture more-info requests so tests can assert what a click asked for.
+        (window as any).__moreInfo = [];
+        window.addEventListener("hass-more-info", (event: Event) => {
+            (window as any).__moreInfo.push((event as CustomEvent).detail?.entityId);
+        });
+
         const el = document.createElement("helman-solar-inspector") as any;
         el.daylightOnlyDefault = false;
         el.slotMinutesDefault = 60;
@@ -153,6 +183,7 @@ async function mountInspector(
             language: "en",
             config: { time_zone: "UTC" },
             connection: {},
+            states,
             callWS: async (msg: { date: string }) => ({ ...payload, date: msg.date }),
         };
         document.body.appendChild(el);
@@ -315,6 +346,114 @@ test.describe("solar inspector house composition", () => {
 
         // The idle EV is dropped; the rest stay ranked heaviest first.
         expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Dishwasher"]);
+    });
+
+    test("clicking a consumer row opens its energy sensor", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        // Rows are ranked heaviest first: unmeasured, dishwasher, ev.
+        await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const rows = el.shadowRoot.querySelectorAll(".house-breakdown-row");
+            (rows[1] as HTMLElement).click();
+        });
+
+        expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
+            "sensor.dishwasher",
+        ]);
+    });
+
+    test("the unmeasured row is inert — it has no entity behind it", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        const unmeasuredIsClickable = await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const row = el.shadowRoot.querySelector(".house-breakdown-row.unmeasured");
+            (row as HTMLElement).click();
+            return row.classList.contains("clickable");
+        });
+
+        expect(unmeasuredIsClickable).toBe(false);
+        expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([]);
+    });
+
+    test("a consumer with a switch gets the card's control badge", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: [
+                {
+                    entityId: "sensor.dishwasher",
+                    label: "Dishwasher",
+                    wh: 50,
+                    switchEntityId: "switch.dishwasher",
+                },
+                { entityId: "sensor.ev", label: "EV charger", wh: 30 },
+            ],
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        const badges = await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const rows = [...el.shadowRoot.querySelectorAll(".house-breakdown-row")];
+            return rows.map((row) => {
+                const badge = row.querySelector("helman-appliance-switch-badge") as any;
+                return badge ? badge.entityId : null;
+            });
+        });
+
+        // Ranked unmeasured (400), dishwasher (200), ev (120); only the dishwasher
+        // has a switch, and the remainder never does.
+        expect(badges).toEqual([null, "switch.dishwasher", null]);
+    });
+
+    test("clicking the control badge opens the switch, not the energy sensor", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: [
+                {
+                    entityId: "sensor.dishwasher",
+                    label: "Dishwasher",
+                    wh: 50,
+                    switchEntityId: "switch.dishwasher",
+                },
+            ],
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const badge = el.shadowRoot.querySelector("helman-appliance-switch-badge") as any;
+            // Drive the badge's own event: <state-badge> is an HA element that is
+            // not registered in this bare page, so it cannot be clicked directly.
+            badge.dispatchEvent(
+                new CustomEvent("show-more-info", {
+                    bubbles: true,
+                    composed: true,
+                    detail: { entityId: "switch.dishwasher" },
+                }),
+            );
+        });
+
+        // The switch opened, and the row's own energy sensor did not.
+        expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
+            "switch.dishwasher",
+        ]);
     });
 
     test("no composition panel when the backend supplied no breakdown", async ({ page }) => {

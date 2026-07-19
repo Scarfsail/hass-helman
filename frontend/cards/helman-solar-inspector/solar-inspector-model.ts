@@ -1,5 +1,11 @@
 export type InspectorPoint = { timestamp: string; valueWh: number };
-export type ApplianceComponent = { entityId: string; label: string; wh: number };
+export type ApplianceComponent = {
+  entityId: string;
+  label: string;
+  wh: number;
+  /** The device's controlling switch, where the power card knows one. */
+  switchEntityId: string | null;
+};
 export type HouseBreakdownPoint = {
   slot: string;
   unmeasuredWh: number;

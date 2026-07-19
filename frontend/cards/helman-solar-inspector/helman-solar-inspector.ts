@@ -26,6 +26,7 @@ import { BATT_COLOR, GRID_COLOR, SOLAR_COLOR } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
 import "./helman-solar-export-price-strip";
+import "../appliance-switch-badge";
 import {
   findImpactForSlot,
   findPointForSlot,
@@ -810,12 +811,41 @@ export class HelmanSolarInspector extends LitElement {
       gap: 4px;
     }
 
+    /* Control, name, then the figures, with the gauge trailing so the numbers
+       line up in a scannable column rather than sitting past a ragged bar. */
     .house-breakdown-row {
       display: grid;
-      grid-template-columns: minmax(72px, 1.2fr) minmax(48px, 3fr) auto auto;
+      grid-template-columns: 34px minmax(72px, 1.2fr) auto auto minmax(48px, 2fr);
       align-items: center;
       gap: 8px;
+      padding: 1px 2px;
+      border-radius: 4px;
       font-size: 0.82rem;
+    }
+
+    .house-breakdown-row.clickable {
+      cursor: pointer;
+    }
+
+    .house-breakdown-row.clickable:hover,
+    .house-breakdown-row.clickable:focus-visible {
+      background: color-mix(in srgb, var(--primary-text-color) 7%, transparent);
+      outline: none;
+    }
+
+    .house-breakdown-control {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      height: 30px;
+    }
+
+    /* The shared badge sizes itself for the power card's roomier rows; scale it
+       down so a composition row stays compact. */
+    .house-breakdown-control helman-appliance-switch-badge {
+      transform: scale(0.78);
+      transform-origin: center;
     }
 
     .house-breakdown-label {
@@ -1986,10 +2016,24 @@ export class HelmanSolarInspector extends LitElement {
     unmeasuredLabel: string | null,
   ) {
     if (!breakdown) return "";
-    const rows: { label: string; wh: number; isUnmeasured: boolean }[] = [
+    type BreakdownRow = {
+      label: string;
+      wh: number;
+      isUnmeasured: boolean;
+      /** The energy sensor this row measures; null for the remainder. */
+      entityId: string | null;
+      switchEntityId: string | null;
+    };
+    const rows: BreakdownRow[] = [
       ...breakdown.appliances
         .filter((appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0)
-        .map((appliance) => ({ label: appliance.label, wh: appliance.wh, isUnmeasured: false })),
+        .map((appliance) => ({
+          label: appliance.label,
+          wh: appliance.wh,
+          isUnmeasured: false,
+          entityId: appliance.entityId,
+          switchEntityId: appliance.switchEntityId ?? null,
+        })),
     ];
     // What no meter claimed. This is deliberately not the forecast's
     // non-deferrable base load — it is the same idea as the power card's
@@ -2002,6 +2046,8 @@ export class HelmanSolarInspector extends LitElement {
         label: unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
         wh: unmeasuredWh,
         isUnmeasured: true,
+        entityId: null,
+        switchEntityId: null,
       });
     }
     const total = rows.reduce((sum, row) => sum + Math.max(0, row.wh), 0);
@@ -2012,28 +2058,73 @@ export class HelmanSolarInspector extends LitElement {
     rows.sort((a, b) => b.wh - a.wh);
 
     return html`
-      <div class="house-breakdown">
+      <div
+        class="house-breakdown"
+        @show-more-info=${(event: CustomEvent<{ entityId: string }>) => {
+          // The shared switch badge reports its own entity; forward it as the
+          // dialog request HA listens for, same as the power card does.
+          event.stopPropagation();
+          this._showMoreInfo(event.detail?.entityId ?? null);
+        }}
+      >
         <div class="house-breakdown-title">${this._t("bias_correction.inspector.house_composition")}</div>
         <div class="house-breakdown-rows">
           ${rows.map((row) => {
             const share = total > 0 ? Math.max(0, row.wh) / total : 0;
+            // Consumer rows open their energy sensor; the remainder has no entity
+            // behind it, so it stays inert.
+            const clickable = row.entityId !== null;
             return html`
-              <div class="house-breakdown-row ${row.isUnmeasured ? "unmeasured" : ""}">
-                <span class="house-breakdown-label" title=${row.label}>${row.label}</span>
+              <div
+                class="house-breakdown-row ${row.isUnmeasured ? "unmeasured" : ""} ${clickable ? "clickable" : ""}"
+                role=${clickable ? "button" : "presentation"}
+                tabindex=${clickable ? "0" : "-1"}
+                title=${clickable ? row.entityId! : row.label}
+                @click=${() => this._showMoreInfo(row.entityId)}
+                @keydown=${(event: KeyboardEvent) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  this._showMoreInfo(row.entityId);
+                }}
+              >
+                <span
+                  class="house-breakdown-control"
+                  @click=${(event: Event) => event.stopPropagation()}
+                >
+                  ${row.switchEntityId
+                    ? html`<helman-appliance-switch-badge
+                        .hass=${this.hass}
+                        .entityId=${row.switchEntityId}
+                      ></helman-appliance-switch-badge>`
+                    : ""}
+                </span>
+                <span class="house-breakdown-label">${row.label}</span>
+                <span class="house-breakdown-value">${this._formatWh(row.wh)}</span>
+                <span class="house-breakdown-share">${(share * 100).toFixed(0)}%</span>
                 <span class="house-breakdown-bar-track">
                   <span
                     class="house-breakdown-bar"
                     style=${`width: ${(share * 100).toFixed(1)}%;`}
                   ></span>
                 </span>
-                <span class="house-breakdown-value">${this._formatWh(row.wh)}</span>
-                <span class="house-breakdown-share">${(share * 100).toFixed(0)}%</span>
               </div>
             `;
           })}
         </div>
       </div>
     `;
+  }
+
+  /** Ask HA to open an entity's more-info dialog; a no-op without an entity. */
+  private _showMoreInfo(entityId: string | null) {
+    if (!entityId) return;
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        bubbles: true,
+        composed: true,
+        detail: { entityId },
+      }),
+    );
   }
 
   /**

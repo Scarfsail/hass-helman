@@ -6,6 +6,7 @@ import { BatteryDeviceConfig } from "./DeviceConfig";
 import { sharedStyles } from "./shared-styles";
 import { computeDominantSourceColorCached } from "../color-utils";
 import type { NodeType } from "../node-detail/node-detail-types";
+import "../appliance-switch-badge";
 import "../helman-simple/simple-card-solar";
 import "../helman-simple/simple-card-battery";
 import "../helman-simple/simple-card-grid";
@@ -30,12 +31,6 @@ export class PowerDeviceIcon extends LitElement {
             .disabled-icon {
                 color: var(--disabled-text-color);
             }
-            state-badge {
-                cursor: pointer;
-                flex-shrink: 0;
-                position: relative;
-                z-index: 2;
-            }
             .node-icon {
                 flex-shrink: 0;
                 cursor: pointer;
@@ -55,13 +50,14 @@ export class PowerDeviceIcon extends LitElement {
     render(): TemplateResult | typeof nothing {
         const device = this.device;
         if (device.switchEntityId) {
+            // Shared with the solar inspector's composition panel so a device is
+            // controlled identically wherever it appears. The badge emits
+            // `show-more-info` itself, which this card already handles upstream.
             return html`
-                <state-badge
+                <helman-appliance-switch-badge
                     .hass=${this.hass}
-                    .stateObj=${this.hass!.states[device.switchEntityId]}
-                    .stateColor=${true}
-                    @click=${() => this._fireShowMoreInfo(device.switchEntityId!)}
-                ></state-badge>
+                    .entityId=${device.switchEntityId}
+                ></helman-appliance-switch-badge>
             `;
         }
 

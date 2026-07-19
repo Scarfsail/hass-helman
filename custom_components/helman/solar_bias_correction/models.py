@@ -131,11 +131,16 @@ class BatterySocPoint:
 
 @dataclass
 class SolarBiasApplianceComponent:
-    """One deferrable appliance's contribution to a slot's house demand."""
+    """One consumer's contribution to a slot's house demand.
+
+    ``switch_entity_id`` is the device's controlling switch where the power card
+    knows one, so the inspector can offer the very same control; None otherwise.
+    """
 
     entity_id: str
     label: str
     value_wh: float
+    switch_entity_id: str | None = None
 
 
 @dataclass
@@ -368,7 +373,12 @@ def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, A
         "slot": point.slot,
         "unmeasuredWh": point.unmeasured_wh,
         "appliances": [
-            {"entityId": c.entity_id, "label": c.label, "wh": c.value_wh}
+            {
+                "entityId": c.entity_id,
+                "label": c.label,
+                "wh": c.value_wh,
+                "switchEntityId": c.switch_entity_id,
+            }
             for c in point.appliances
         ],
     }

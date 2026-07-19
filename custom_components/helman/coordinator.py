@@ -816,7 +816,18 @@ class HelmanCoordinator:
             ):
                 continue
             label = child.get("displayName") or energy_entity_id
-            result.append({"energy_entity_id": energy_entity_id, "label": label})
+            switch_entity_id = child.get("switchEntityId")
+            result.append(
+                {
+                    "energy_entity_id": energy_entity_id,
+                    "label": label,
+                    # Carried so the inspector can offer the same control the card
+                    # puts on this device; None for devices with no switch.
+                    "switch_entity_id": (
+                        switch_entity_id if isinstance(switch_entity_id, str) else None
+                    ),
+                }
+            )
         return result
 
     def _get_battery_soc_entity_id(self) -> str | None:

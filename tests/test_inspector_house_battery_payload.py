@@ -236,8 +236,18 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             slot["appliances"],
             [
-                {"entityId": "sensor.dishwasher", "label": "Dishwasher", "wh": 50.0},
-                {"entityId": "sensor.ev", "label": "EV charger", "wh": 30.0},
+                {
+                    "entityId": "sensor.dishwasher",
+                    "label": "Dishwasher",
+                    "wh": 50.0,
+                    "switchEntityId": None,
+                },
+                {
+                    "entityId": "sensor.ev",
+                    "label": "EV charger",
+                    "wh": 30.0,
+                    "switchEntityId": None,
+                },
             ],
         )
         # Base plus appliances reconciles with the plain house actual figure.
@@ -250,8 +260,16 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         # an entity present in both lists appears once (deferrable label wins).
         async def _devices():
             return [
-                {"energy_entity_id": "sensor.ev", "label": "EV (tree)"},
-                {"energy_entity_id": "sensor.fridge", "label": "Fridge"},
+                {
+                    "energy_entity_id": "sensor.ev",
+                    "label": "EV (tree)",
+                    "switch_entity_id": "switch.ev",
+                },
+                {
+                    "energy_entity_id": "sensor.fridge",
+                    "label": "Fridge",
+                    "switch_entity_id": "switch.fridge",
+                },
             ]
 
         payload = await _inspector_payload(
@@ -266,11 +284,23 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         )
 
         slot = payload["series"]["houseActualBreakdown"][0]
+        # The EV keeps its deferrable label but adopts the tree's switch, which is
+        # the only place a control is known.
         self.assertEqual(
             slot["appliances"],
             [
-                {"entityId": "sensor.ev", "label": "EV charger", "wh": 30.0},
-                {"entityId": "sensor.fridge", "label": "Fridge", "wh": 20.0},
+                {
+                    "entityId": "sensor.ev",
+                    "label": "EV charger",
+                    "wh": 30.0,
+                    "switchEntityId": "switch.ev",
+                },
+                {
+                    "entityId": "sensor.fridge",
+                    "label": "Fridge",
+                    "wh": 20.0,
+                    "switchEntityId": "switch.fridge",
+                },
             ],
         )
         # House 180 − (30 + 20) = 130 unmeasured remainder.
