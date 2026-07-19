@@ -188,6 +188,96 @@ export function sampleBounds(
   return sampleOnGrid(bounds, slotMinutes);
 }
 
+/**
+ * Collapsing a hand-picked slot selection.
+ *
+ * A multi-slot selection is the same collapse the width buttons do, just over an
+ * arbitrary set of slots instead of a fixed grid, so the rules below match the
+ * bucket versions above one for one: energy sums null-aware, the correction
+ * factor is recomputed from the summed raw and corrected energy rather than
+ * averaged, the breakdown merges per appliance, and SoC — a level, not a flow —
+ * is read at the selection's first slot instead of summed.
+ *
+ * Every function takes `slots` in chronological order and tolerates a selection
+ * with no matching samples by returning null, so the panel renders "—" rather
+ * than a fabricated zero.
+ */
+
+/** Sum a timestamp-keyed Wh series over the selected slots. */
+export function sumWhOverSlots(
+  points: readonly InspectorPoint[],
+  slots: readonly string[],
+): number | null {
+  const wanted = new Set(slots);
+  return sumNullable(
+    points
+      .filter((point) => wanted.has(point.timestamp.slice(11, 16)))
+      .map((point) => point.valueWh),
+  );
+}
+
+/** Sum the correction impact over the selected slots, recomputing the factor. */
+export function aggregateImpactOverSlots(
+  points: readonly ImpactPoint[],
+  slots: readonly string[],
+): ImpactPoint | null {
+  const wanted = new Set(slots);
+  const group = points.filter((point) => wanted.has(point.slot));
+  if (group.length === 0) return null;
+  const rawWh = sumNullable(group.map((p) => p.rawWh));
+  const correctedWh = sumNullable(group.map((p) => p.correctedWh));
+  const impactWh = sumNullable(group.map((p) => p.impactWh));
+  const factor =
+    rawWh !== null && correctedWh !== null && rawWh !== 0 ? correctedWh / rawWh : null;
+  // The slot key names where the selection starts, matching how a wider bucket
+  // is stamped at its own start.
+  return { slot: slots[0] ?? group[0].slot, rawWh, correctedWh, impactWh, factor };
+}
+
+/** Merge the house breakdown over the selected slots, one row per appliance. */
+export function aggregateBreakdownOverSlots(
+  points: readonly HouseBreakdownPoint[],
+  slots: readonly string[],
+): HouseBreakdownPoint | null {
+  const wanted = new Set(slots);
+  const group = points.filter((point) => wanted.has(point.slot));
+  if (group.length === 0) return null;
+  let unmeasuredWh = 0;
+  const appliances = new Map<string, ApplianceComponent>();
+  for (const point of group) {
+    if (Number.isFinite(point.unmeasuredWh)) unmeasuredWh += point.unmeasuredWh;
+    for (const appliance of point.appliances) {
+      const existing = appliances.get(appliance.entityId);
+      if (existing) {
+        existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
+      } else {
+        appliances.set(appliance.entityId, { ...appliance });
+      }
+    }
+  }
+  return {
+    slot: slots[0] ?? group[0].slot,
+    unmeasuredWh,
+    appliances: [...appliances.values()],
+  };
+}
+
+/**
+ * The SoC reading the selection opens on. Summing a level would be meaningless,
+ * so this mirrors `sampleOnGrid`: show the reading at the start, which is the
+ * same one the slot at that time already showed on its own.
+ */
+export function socAtSelectionStart(
+  points: readonly BatterySocPoint[],
+  slots: readonly string[],
+): BatterySocPoint | null {
+  for (const slot of slots) {
+    const found = points.find((point) => point.slot === slot);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** Snap a selected "HH:MM" slot onto the wider grid's bucket start. */
 export function snapSlotToGrid(slot: string, slotMinutes: number): string {
   const minutes = slotToMinutes(slot);

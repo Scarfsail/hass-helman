@@ -60,22 +60,6 @@ export function resolveSelectedImpactSlot(
   return null;
 }
 
-export function findImpactForSlot(
-  impacts: ImpactPoint[],
-  slot: string | null,
-): ImpactPoint | null {
-  if (!slot) return null;
-  return impacts.find((point) => point.slot === slot) ?? null;
-}
-
-export function findPointForSlot(
-  points: InspectorPoint[],
-  slot: string | null,
-): InspectorPoint | null {
-  if (!slot) return null;
-  return points.find((point) => point.timestamp.slice(11, 16) === slot) ?? null;
-}
-
 export function findTrainingSlot(
   explainability: TrainingExplainability | null,
   slot: string | null,
@@ -104,42 +88,5 @@ export function resolveSelectedTrainingDate(
   return null;
 }
 
-export function findHouseBreakdownForSlot(
-  points: HouseBreakdownPoint[],
-  slot: string | null,
-): HouseBreakdownPoint | null {
-  if (!slot) return null;
-  return points.find((point) => point.slot === slot) ?? null;
-}
-
 export type BatterySocPoint = { slot: string; pct: number };
 
-export function findHouseForecastForSlot(
-  points: InspectorPoint[],
-  slot: string | null,
-): InspectorPoint | null {
-  return findPointForSlot(points, slot);
-}
-
-export function findHouseActualForSlot(
-  points: InspectorPoint[],
-  slot: string | null,
-): InspectorPoint | null {
-  return findPointForSlot(points, slot);
-}
-
-export function findBatterySocForecastForSlot(
-  points: BatterySocPoint[],
-  slot: string | null,
-): BatterySocPoint | null {
-  if (!slot) return null;
-  return points.find((p) => p.slot === slot) ?? null;
-}
-
-export function findBatterySocActualForSlot(
-  points: BatterySocPoint[],
-  slot: string | null,
-): BatterySocPoint | null {
-  if (!slot) return null;
-  return points.find((p) => p.slot === slot) ?? null;
-}

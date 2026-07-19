@@ -28,16 +28,9 @@ import "./helman-solar-schedule-actions-strip";
 import "./helman-solar-export-price-strip";
 import "../appliance-switch-badge";
 import {
-  findImpactForSlot,
-  findPointForSlot,
   findTrainingSlot,
   resolveSelectedTrainingDate,
   resolveSelectedImpactSlot,
-  findHouseForecastForSlot,
-  findHouseActualForSlot,
-  findHouseBreakdownForSlot,
-  findBatterySocForecastForSlot,
-  findBatterySocActualForSlot,
   type BatterySocPoint,
   type FactorPoint,
   type HouseBreakdownPoint,
@@ -48,10 +41,15 @@ import {
   type ContributionRow,
 } from "./solar-inspector-model.js";
 import {
+  aggregateBreakdownOverSlots,
   aggregateBreakdownSeries,
+  aggregateImpactOverSlots,
   aggregateImpactSeries,
   aggregateWhSeries,
+  minutesToSlot,
   sampleBounds,
+  socAtSelectionStart,
+  sumWhOverSlots,
   sampleOnGrid,
   snapSlotToGrid,
 } from "./slot-aggregation.js";
@@ -1030,8 +1028,8 @@ export class HelmanSolarInspector extends LitElement {
             ${this._impactStripVisible && this._lastLayoutForStrip
               ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
               : ""}
-            ${this._renderTotals(view)}
             ${this._renderSelectedSlotDetails(view)}
+            ${this._renderTotals(view)}
           `
         : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
     `;
@@ -1946,26 +1944,67 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
+  /** The selection, narrowed to slots the day actually has, in chronological order. */
+  private _selectedSlotsIn(payload: InspectorPayload): string[] {
+    const available = new Set(payload.series.impact.map((point) => point.slot));
+    return this._slotSelection.selectedSlots.filter((slot) => available.has(slot));
+  }
+
+  /**
+   * The selection as the time it actually covers — "13:00 – 14:00" rather than the
+   * bare start of one slot, so the heading says what span its sums are for. Each
+   * slot runs to the next boundary at the active width; adjacent slots merge into
+   * one span, and a selection with gaps lists each run, so the label can never
+   * imply time that isn't selected. Midnight at the end of the day reads "24:00".
+   */
+  private _formatSelectionRange(slots: readonly string[]): string {
+    const runs: Array<[number, number]> = [];
+    for (const slot of slots) {
+      const start = slotToMinutes(slot);
+      if (start === null) continue;
+      const end = start + this._slotMinutes;
+      const last = runs[runs.length - 1];
+      if (last && last[1] === start) {
+        last[1] = end;
+      } else {
+        runs.push([start, end]);
+      }
+    }
+    if (runs.length === 0) return slots.join(", ");
+    return runs
+      .map(([start, end]) => `${minutesToSlot(start)} – ${end >= 24 * 60 ? "24:00" : minutesToSlot(end)}`)
+      .join(", ");
+  }
+
+  /**
+   * The metrics for the whole selection, not just the focus slot: every energy
+   * figure is the sum across the selected slots, aggregated by the same rules the
+   * slot-width buttons use. The training diagnostics below stay on the focus slot
+   * — a correction factor is fitted per slot, so there is nothing to sum.
+   */
   private _renderSelectedSlotDetails(payload: InspectorPayload) {
-    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
-    if (!selectedSlot) return "";
-    const impact = findImpactForSlot(payload.series.impact, selectedSlot);
-    const raw = findPointForSlot(payload.series.raw, selectedSlot);
-    const corrected = findPointForSlot(payload.series.corrected, selectedSlot);
-    const actual = findPointForSlot(payload.series.actual, selectedSlot);
+    const slots = this._selectedSlotsIn(payload);
+    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot)
+      ?? slots[0]
+      ?? null;
+    if (!selectedSlot || slots.length === 0) return "";
+    const impact = aggregateImpactOverSlots(payload.series.impact, slots);
+    const rawWh = sumWhOverSlots(payload.series.raw, slots);
+    const correctedWh = sumWhOverSlots(payload.series.corrected, slots);
+    const actualWh = sumWhOverSlots(payload.series.actual, slots);
     const trainingSlot = findTrainingSlot(payload.trainingExplainability, selectedSlot);
-    const houseFc = findHouseForecastForSlot(payload.series.houseForecast, selectedSlot);
-    const houseAc = findHouseActualForSlot(payload.series.houseActual, selectedSlot);
-    const houseBreakdown = findHouseBreakdownForSlot(
+    const houseFcWh = sumWhOverSlots(payload.series.houseForecast, slots);
+    const houseAcWh = sumWhOverSlots(payload.series.houseActual, slots);
+    const houseBreakdown = aggregateBreakdownOverSlots(
       payload.series.houseActualBreakdown,
-      selectedSlot,
+      slots,
     );
-    const batterySocFc = findBatterySocForecastForSlot(payload.series.batterySocForecast, selectedSlot);
-    const batterySocAc = findBatterySocActualForSlot(payload.series.batterySocActual, selectedSlot);
-    const gridFc = findPointForSlot(payload.series.gridForecast, selectedSlot);
-    const gridAc = findPointForSlot(payload.series.gridActual, selectedSlot);
-    const batteryFc = findPointForSlot(payload.series.batteryForecast, selectedSlot);
-    const batteryAc = findPointForSlot(payload.series.batteryActual, selectedSlot);
+    const batterySocFc = socAtSelectionStart(payload.series.batterySocForecast, slots);
+    const batterySocAc = socAtSelectionStart(payload.series.batterySocActual, slots);
+    const gridFcWh = sumWhOverSlots(payload.series.gridForecast, slots);
+    const gridAcWh = sumWhOverSlots(payload.series.gridActual, slots);
+    const batteryFcWh = sumWhOverSlots(payload.series.batteryForecast, slots);
+    const batteryAcWh = sumWhOverSlots(payload.series.batteryActual, slots);
     const interpolated = trainingSlot?.interpolated === true;
     const anchors = trainingSlot?.interpolationAnchors ?? null;
     const impactColor = (impact?.impactWh ?? null) === null
@@ -1978,7 +2017,9 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <div class="metrics-section">
         <strong>
-          ${this._tFormat("bias_correction.inspector.selected_slot", { slot: selectedSlot })}
+          ${this._tFormat("bias_correction.inspector.selected_slot", {
+            slot: this._formatSelectionRange(slots),
+          })}
           ${interpolated && showDiagnostics
             ? html`<span class="interpolation-note" title=${this._t("bias_correction.inspector.interpolated_explanation")}>
                 ${this._tFormat("bias_correction.inspector.interpolated_from", {
@@ -1993,21 +2034,21 @@ export class HelmanSolarInspector extends LitElement {
           : ""}
         <div class="metric-grid">
           ${this._isSeriesVisible("raw")
-            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(raw?.valueWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true, "raw")
+            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(rawWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true, "raw")
             : ""}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.solar"),
             CHART_COLORS.corrected,
-            this._mergedPart(corrected?.valueWh ?? impact?.correctedWh ?? null, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast")),
-            this._mergedPart(actual?.valueWh ?? null, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production")),
+            this._mergedPart(correctedWh ?? impact?.correctedWh ?? null, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast")),
+            this._mergedPart(actualWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production")),
             "corrected",
             "actual",
           )}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.house"),
             CHART_COLORS.house,
-            this._mergedPart(negateWh(houseFc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast")),
-            this._mergedPart(negateWh(houseAc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual")),
+            this._mergedPart(negateWh(houseFcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast")),
+            this._mergedPart(negateWh(houseAcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual")),
             "houseForecast",
             "houseActual",
           )}
@@ -2028,16 +2069,16 @@ export class HelmanSolarInspector extends LitElement {
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.grid"),
             CHART_COLORS.grid,
-            this._mergedPart(negateWh(gridFc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast")),
-            this._mergedPart(negateWh(gridAc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual")),
+            this._mergedPart(negateWh(gridFcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast")),
+            this._mergedPart(negateWh(gridAcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual")),
             "gridForecast",
             "gridActual",
           )}
           ${this._renderMergedMetric(
             this._t("bias_correction.inspector.merged.battery"),
             CHART_COLORS.battery,
-            this._mergedPart(negateWh(batteryFc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast")),
-            this._mergedPart(negateWh(batteryAc?.valueWh ?? null), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual")),
+            this._mergedPart(negateWh(batteryFcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast")),
+            this._mergedPart(negateWh(batteryAcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual")),
             "batteryForecast",
             "batteryActual",
           )}
