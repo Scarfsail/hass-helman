@@ -1,4 +1,10 @@
 export type InspectorPoint = { timestamp: string; valueWh: number };
+export type ApplianceComponent = { entityId: string; label: string; wh: number };
+export type HouseBreakdownPoint = {
+  slot: string;
+  baseWh: number;
+  appliances: ApplianceComponent[];
+};
 export type FactorPoint = { slot: string; factor: number };
 export type ImpactPoint = {
   slot: string;
@@ -90,6 +96,14 @@ export function resolveSelectedTrainingDate(
     return selectedTrainingDate;
   }
   return null;
+}
+
+export function findHouseBreakdownForSlot(
+  points: HouseBreakdownPoint[],
+  slot: string | null,
+): HouseBreakdownPoint | null {
+  if (!slot) return null;
+  return points.find((point) => point.slot === slot) ?? null;
 }
 
 export type BatterySocPoint = { slot: string; pct: number };

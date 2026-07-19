@@ -130,6 +130,28 @@ class BatterySocPoint:
 
 
 @dataclass
+class SolarBiasApplianceComponent:
+    """One deferrable appliance's contribution to a slot's house demand."""
+
+    entity_id: str
+    label: str
+    value_wh: float
+
+
+@dataclass
+class SolarBiasHouseBreakdownPoint:
+    """A slot's house demand split into its base load and each appliance.
+
+    The parts reconcile with the matching house series: ``base_wh`` plus the
+    sum of ``appliances`` equals that slot's houseActual/houseForecast value.
+    """
+
+    slot: str  # "HH:MM"
+    base_wh: float
+    appliances: list[SolarBiasApplianceComponent]
+
+
+@dataclass
 class BatterySocBoundsPoint:
     """The SoC window the battery was held within over one slot.
 
@@ -182,6 +204,9 @@ class SolarBiasInspectorSeries:
     impact: list[SolarBiasImpactPoint] = field(default_factory=list)
     house_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
     house_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    house_actual_breakdown: list[SolarBiasHouseBreakdownPoint] = field(
+        default_factory=list
+    )
     battery_soc_forecast: list[BatterySocPoint] = field(default_factory=list)
     battery_soc_actual: list[BatterySocPoint] = field(default_factory=list)
     grid_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
@@ -212,6 +237,7 @@ class SolarBiasInspectorAvailability:
     has_invalidated: bool = False
     has_house_forecast: bool = False
     has_house_actual: bool = False
+    has_house_actual_breakdown: bool = False
     has_battery_soc_forecast: bool = False
     has_battery_soc_actual: bool = False
     has_grid_forecast: bool = False
@@ -269,6 +295,9 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "impact": [_impact_point_payload(point) for point in day.series.impact],
             "houseForecast": [_inspector_point_payload(p) for p in day.series.house_forecast],
             "houseActual": [_inspector_point_payload(p) for p in day.series.house_actual],
+            "houseActualBreakdown": [
+                _house_breakdown_payload(p) for p in day.series.house_actual_breakdown
+            ],
             "batterySocForecast": [
                 {"slot": p.slot, "pct": p.pct} for p in day.series.battery_soc_forecast
             ],
@@ -303,6 +332,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasInvalidated": day.availability.has_invalidated,
             "hasHouseForecast": day.availability.has_house_forecast,
             "hasHouseActual": day.availability.has_house_actual,
+            "hasHouseActualBreakdown": day.availability.has_house_actual_breakdown,
             "hasBatterySocForecast": day.availability.has_battery_soc_forecast,
             "hasBatterySocActual": day.availability.has_battery_soc_actual,
             "hasGridForecast": day.availability.has_grid_forecast,
@@ -322,6 +352,17 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
 
 def _inspector_point_payload(point: SolarBiasInspectorPoint) -> dict[str, Any]:
     return {"timestamp": point.timestamp, "valueWh": point.value_wh}
+
+
+def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, Any]:
+    return {
+        "slot": point.slot,
+        "baseWh": point.base_wh,
+        "appliances": [
+            {"entityId": c.entity_id, "label": c.label, "wh": c.value_wh}
+            for c in point.appliances
+        ],
+    }
 
 
 def _impact_point_payload(point: SolarBiasImpactPoint) -> dict[str, Any]:

@@ -1,7 +1,9 @@
 import { SLOT_MINUTES } from "./chart-stack";
 import { slotToMinutes, type SocBoundsPoint } from "./chart-soc";
 import type {
+  ApplianceComponent,
   BatterySocPoint,
+  HouseBreakdownPoint,
   ImpactPoint,
   InspectorPoint,
 } from "./solar-inspector-model";
@@ -116,6 +118,49 @@ export function aggregateImpactSeries(
         rawWh !== null && correctedWh !== null && rawWh !== 0 ? correctedWh / rawWh : null;
       return { slot: minutesToSlot(start), rawWh, correctedWh, impactWh, factor };
     });
+}
+
+/**
+ * Sum the house breakdown into wider buckets. Base load and each appliance are
+ * additive energy, so they sum the same way the house series they decompose do;
+ * appliances are matched across sub-slots by their entity id so a bucket carries
+ * one row per appliance regardless of which sub-slots it ran in.
+ */
+export function aggregateBreakdownSeries(
+  points: HouseBreakdownPoint[],
+  slotMinutes: number,
+): HouseBreakdownPoint[] {
+  if (slotMinutes <= SLOT_MINUTES) return points;
+  const buckets = new Map<
+    number,
+    { baseWh: number; appliances: Map<string, ApplianceComponent> }
+  >();
+  for (const point of points) {
+    const minutes = slotToMinutes(point.slot);
+    if (minutes === null) continue;
+    const start = bucketStart(minutes, slotMinutes);
+    let bucket = buckets.get(start);
+    if (!bucket) {
+      bucket = { baseWh: 0, appliances: new Map() };
+      buckets.set(start, bucket);
+    }
+    if (Number.isFinite(point.baseWh)) bucket.baseWh += point.baseWh;
+    for (const appliance of point.appliances) {
+      const existing = bucket.appliances.get(appliance.entityId);
+      if (existing) {
+        existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
+      } else {
+        bucket.appliances.set(appliance.entityId, { ...appliance });
+      }
+    }
+  }
+  return [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([start, bucket]) => ({
+      slot: minutesToSlot(start),
+      baseWh: bucket.baseWh,
+      appliances: [...bucket.appliances.values()],
+    }));
 }
 
 /**

@@ -16,6 +16,8 @@
       "actual_production": "Actual production",
       "house_forecast": "House forecast",
       "house_actual": "Actual house",
+      "house_composition": "House composition (actual)",
+      "house_base_load": "Base load",
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
       "battery_soc_strip": "Battery state of charge",

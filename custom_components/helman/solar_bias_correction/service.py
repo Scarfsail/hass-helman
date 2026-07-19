@@ -22,9 +22,11 @@ from .models import (
     BatterySocPoint,
     BiasConfig,
     SolarBiasAdjustmentResult,
+    SolarBiasApplianceComponent,
     SolarBiasContributionRow,
     SolarBiasExplainability,
     SolarBiasFactorPoint,
+    SolarBiasHouseBreakdownPoint,
     SolarBiasImpactPoint,
     SolarBiasInspectorAvailability,
     SolarBiasInspectorDay,
@@ -66,6 +68,7 @@ class SolarBiasCorrectionService:
         battery_forecast_history=None,
         house_forecast_snapshot_provider=None,
         house_energy_entity_id_provider=None,
+        house_deferrable_consumers_provider=None,
         battery_soc_entity_id_provider=None,
         battery_soc_bounds_provider=None,
         battery_soc_bounds_entity_id_provider=None,
@@ -82,6 +85,7 @@ class SolarBiasCorrectionService:
         self._battery_forecast_history = battery_forecast_history
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
+        self._house_deferrable_consumers_provider = house_deferrable_consumers_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
         self._battery_soc_bounds_provider = battery_soc_bounds_provider
         self._battery_soc_bounds_entity_id_provider = (
@@ -401,6 +405,12 @@ class SolarBiasCorrectionService:
                     ),
                     "battery actual",
                 ),
+                self._guarded_points(
+                    self._load_deferrable_consumer_slots_for_date(
+                        target_date, timezone
+                    ),
+                    "house actual breakdown",
+                ),
             ]
             if need_past
             else []
@@ -415,6 +425,7 @@ class SolarBiasCorrectionService:
         battery_soc_actual_points: list[dict] = []
         grid_actual_points: list[dict] = []
         battery_actual_points: list[dict] = []
+        consumer_slot_maps: list[dict] = []
         if need_past:
             (
                 house_forecast_history_points,
@@ -422,8 +433,18 @@ class SolarBiasCorrectionService:
                 battery_soc_actual_points,
                 grid_actual_points,
                 battery_actual_points,
-            ) = gathered[:5]
+                consumer_slot_maps,
+            ) = gathered[:6]
         battery_snapshot = gathered[-1] if need_future else None
+
+        # The breakdown decomposes the house actual already loaded, so it is
+        # composed here rather than in its own recorder read: base load plus each
+        # appliance reconciles to that slot's houseActual value.
+        house_actual_breakdown_points = _build_house_actual_breakdown(
+            house_actual_points,
+            self._house_deferrable_consumers(),
+            consumer_slot_maps,
+        )
 
         house_forecast_points: list[dict] = []
         if need_past:
@@ -493,6 +514,7 @@ class SolarBiasCorrectionService:
                 ),
                 house_forecast=_inspector_points_from_raw(house_forecast_points),
                 house_actual=_inspector_points_from_raw(house_actual_points),
+                house_actual_breakdown=house_actual_breakdown_points,
                 battery_soc_forecast=_battery_soc_points_from_raw(battery_soc_forecast_points),
                 battery_soc_actual=_battery_soc_points_from_raw(battery_soc_actual_points),
                 grid_forecast=_inspector_points_from_raw(grid_forecast_points),
@@ -545,6 +567,7 @@ class SolarBiasCorrectionService:
                 has_invalidated=bool(invalidated_points),
                 has_house_forecast=bool(house_forecast_points),
                 has_house_actual=bool(house_actual_points),
+                has_house_actual_breakdown=bool(house_actual_breakdown_points),
                 has_battery_soc_forecast=bool(battery_soc_forecast_points),
                 has_battery_soc_actual=bool(battery_soc_actual_points),
                 has_grid_forecast=bool(grid_forecast_points),
@@ -726,6 +749,67 @@ class SolarBiasCorrectionService:
             {slot: kwh * 1000.0 for slot, kwh in by_slot.items()},
             target_date,
             local_now=local_now,
+        )
+
+    def _house_deferrable_consumers(self) -> list[dict]:
+        """The configured deferrable appliances: ``energy_entity_id`` + ``label``.
+
+        Empty when none are configured or the provider is absent, in which case
+        the house-actual breakdown is simply omitted.
+        """
+        if self._house_deferrable_consumers_provider is None:
+            return []
+        try:
+            consumers = self._house_deferrable_consumers_provider() or []
+        except Exception:
+            _LOGGER.exception("House deferrable consumers provider failed")
+            return []
+        result: list[dict] = []
+        for consumer in consumers:
+            if not isinstance(consumer, dict):
+                continue
+            entity_id = consumer.get("energy_entity_id")
+            if not isinstance(entity_id, str) or not entity_id.strip():
+                continue
+            result.append(
+                {
+                    "energy_entity_id": entity_id.strip(),
+                    "label": consumer.get("label", entity_id.strip()),
+                }
+            )
+        return result
+
+    async def _load_deferrable_consumer_slots_for_date(
+        self, target_date: date, local_tz: ZoneInfo
+    ) -> list[dict]:
+        """Per-appliance per-slot energy (Wh) for the day, keyed by "HH:MM".
+
+        Returns one ``{slot: wh}`` map per configured consumer, in the same order
+        as :meth:`_house_deferrable_consumers`, so the two zip together when the
+        breakdown is composed. The maps overlap the house-actual read in the same
+        gather, so this adds only the appliance meters, not a serial round-trip.
+        """
+        consumers = self._house_deferrable_consumers()
+        if not consumers:
+            return []
+
+        async def _load(entity_id: str) -> dict[str, float]:
+            by_slot_utc = await self._load_slot_energy_kwh(
+                entity_id, target_date, local_tz
+            )
+            by_slot: dict[str, float] = {}
+            for slot_start_utc, kwh in by_slot_utc.items():
+                slot_local = dt_util.as_local(slot_start_utc)
+                if slot_local.date() != target_date:
+                    continue
+                slot = f"{slot_local.hour:02d}:{slot_local.minute:02d}"
+                by_slot[slot] = kwh * 1000.0
+            return by_slot
+
+        return list(
+            await asyncio.gather(
+                *(_load(consumer["energy_entity_id"]) for consumer in consumers)
+            )
         )
 
     async def _load_grid_actual_for_date(
@@ -1484,6 +1568,51 @@ def _slot_energy_points(
         if running_slot_start is not None and slot_local >= running_slot_start:
             continue
         points.append({"timestamp": slot_local.isoformat(), "wh": wh})
+    return points
+
+
+def _build_house_actual_breakdown(
+    house_actual_points: list[dict],
+    consumers: list[dict],
+    consumer_slot_maps: list[dict],
+) -> list[SolarBiasHouseBreakdownPoint]:
+    """Split each house-actual slot into its base load and per-appliance parts.
+
+    Base load is the house total minus the sum of the deferrable appliances that
+    slot, clamped at zero so a meter that momentarily over-reports never shows a
+    negative base. With no consumers configured — or the appliance reads having
+    failed and yielded no maps — the breakdown is empty and the panel falls back
+    to the plain house figure.
+    """
+    if not consumers or len(consumer_slot_maps) != len(consumers):
+        return []
+    points: list[SolarBiasHouseBreakdownPoint] = []
+    for point in house_actual_points:
+        timestamp = point.get("timestamp")
+        if not isinstance(timestamp, str) or len(timestamp) < 16:
+            continue
+        slot = timestamp[11:16]
+        house_wh = point.get("wh")
+        if not isinstance(house_wh, (int, float)):
+            continue
+        appliances: list[SolarBiasApplianceComponent] = []
+        deferrable_sum = 0.0
+        for consumer, slot_map in zip(consumers, consumer_slot_maps):
+            wh = max(0.0, float(slot_map.get(slot, 0.0)))
+            deferrable_sum += wh
+            appliances.append(
+                SolarBiasApplianceComponent(
+                    entity_id=consumer["energy_entity_id"],
+                    label=consumer["label"],
+                    value_wh=round(wh, 4),
+                )
+            )
+        base_wh = round(max(0.0, float(house_wh) - deferrable_sum), 4)
+        points.append(
+            SolarBiasHouseBreakdownPoint(
+                slot=slot, base_wh=base_wh, appliances=appliances
+            )
+        )
     return points
 
 

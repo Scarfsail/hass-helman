@@ -478,6 +478,7 @@ class HelmanCoordinator:
             battery_forecast_history=self._battery_forecast_history,
             house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
+            house_deferrable_consumers_provider=self._get_house_deferrable_consumers,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
             battery_soc_bounds_provider=self._get_battery_soc_bounds,
             battery_soc_bounds_entity_id_provider=self._get_battery_soc_bounds_entity_ids,
@@ -731,6 +732,21 @@ class HelmanCoordinator:
         forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
         return ConsumptionForecastBuilder._read_entity_id(
             forecast_cfg.get("total_energy_entity_id")
+        )
+
+    def _get_house_deferrable_consumers(self) -> list[dict[str, str]]:
+        """The configured deferrable appliances feeding the house forecast.
+
+        Reuses the forecast builder's own reader so the inspector splits the
+        house actual by exactly the consumers the forecast is trained on.
+        """
+        power_devices = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("power_devices")
+        )
+        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
+        forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
+        return ConsumptionForecastBuilder._read_deferrable_consumers(
+            forecast_cfg.get("deferrable_consumers")
         )
 
     def _get_battery_soc_entity_id(self) -> str | None:

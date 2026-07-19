@@ -34,10 +34,12 @@ import {
   resolveSelectedImpactSlot,
   findHouseForecastForSlot,
   findHouseActualForSlot,
+  findHouseBreakdownForSlot,
   findBatterySocForecastForSlot,
   findBatterySocActualForSlot,
   type BatterySocPoint,
   type FactorPoint,
+  type HouseBreakdownPoint,
   type ImpactPoint,
   type InspectorPoint,
   type TrainingExplainability,
@@ -45,6 +47,7 @@ import {
   type ContributionRow,
 } from "./solar-inspector-model.js";
 import {
+  aggregateBreakdownSeries,
   aggregateImpactSeries,
   aggregateWhSeries,
   sampleBounds,
@@ -249,6 +252,7 @@ type InspectorPayload = {
     impact: ImpactPoint[];
     houseForecast: InspectorPoint[];
     houseActual: InspectorPoint[];
+    houseActualBreakdown: HouseBreakdownPoint[];
     batterySocForecast: BatterySocPoint[];
     batterySocActual: BatterySocPoint[];
     gridForecast: InspectorPoint[];
@@ -778,6 +782,78 @@ export class HelmanSolarInspector extends LitElement {
     .contribution-row.selected td {
       background: rgba(21, 101, 192, 0.12);
     }
+
+    .house-breakdown {
+      display: grid;
+      gap: 6px;
+      padding: 8px 10px;
+      border: 1px solid var(--divider-color);
+      border-left: 3px solid #a855f7;
+      border-radius: 6px;
+      background: color-mix(in srgb, #a855f7 8%, transparent);
+    }
+
+    .house-breakdown-title {
+      color: var(--secondary-text-color);
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+
+    .house-breakdown-rows {
+      display: grid;
+      gap: 4px;
+    }
+
+    .house-breakdown-row {
+      display: grid;
+      grid-template-columns: minmax(72px, 1.2fr) minmax(48px, 3fr) auto auto;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+    }
+
+    .house-breakdown-label {
+      color: var(--primary-text-color);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .house-breakdown-row.base .house-breakdown-label {
+      color: var(--secondary-text-color);
+      font-style: italic;
+    }
+
+    .house-breakdown-bar-track {
+      height: 8px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
+      overflow: hidden;
+    }
+
+    .house-breakdown-bar {
+      display: block;
+      height: 100%;
+      border-radius: 4px;
+      background: #a855f7;
+    }
+
+    .house-breakdown-row.base .house-breakdown-bar {
+      background: color-mix(in srgb, #a855f7 45%, transparent);
+    }
+
+    .house-breakdown-value {
+      color: var(--primary-text-color);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .house-breakdown-share {
+      min-width: 2.6em;
+      text-align: right;
+      color: var(--secondary-text-color);
+      font-variant-numeric: tabular-nums;
+    }
   `;
 
   protected disconnectedCallback() {
@@ -954,6 +1030,7 @@ export class HelmanSolarInspector extends LitElement {
         impact: aggregateImpactSeries(s.impact, slot),
         houseForecast: aggregateWhSeries(s.houseForecast, slot),
         houseActual: aggregateWhSeries(s.houseActual, slot),
+        houseActualBreakdown: aggregateBreakdownSeries(s.houseActualBreakdown, slot),
         gridForecast: aggregateWhSeries(s.gridForecast, slot),
         gridActual: aggregateWhSeries(s.gridActual, slot),
         batteryForecast: aggregateWhSeries(s.batteryForecast, slot),
@@ -1793,6 +1870,10 @@ export class HelmanSolarInspector extends LitElement {
     const trainingSlot = findTrainingSlot(payload.trainingExplainability, selectedSlot);
     const houseFc = findHouseForecastForSlot(payload.series.houseForecast, selectedSlot);
     const houseAc = findHouseActualForSlot(payload.series.houseActual, selectedSlot);
+    const houseBreakdown = findHouseBreakdownForSlot(
+      payload.series.houseActualBreakdown,
+      selectedSlot,
+    );
     const batterySocFc = findBatterySocForecastForSlot(payload.series.batterySocForecast, selectedSlot);
     const batterySocAc = findBatterySocActualForSlot(payload.series.batterySocActual, selectedSlot);
     const gridFc = findPointForSlot(payload.series.gridForecast, selectedSlot);
@@ -1876,7 +1957,59 @@ export class HelmanSolarInspector extends LitElement {
           )}
         </div>
       </div>
+      ${this._renderHouseBreakdown(houseBreakdown)}
       ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
+    `;
+  }
+
+  /**
+   * The measured house demand for the selected slot split into its base load and
+   * each scheduled appliance, so the single house figure above reads as a sum of
+   * named parts. Every row carries a proportion bar sized to its share of the
+   * slot total, and the parts reconcile with the house-actual value by
+   * construction. Rendered only when the backend supplied a breakdown — appliances
+   * configured and the day elapsed — so a bare house figure simply stands alone.
+   */
+  private _renderHouseBreakdown(breakdown: HouseBreakdownPoint | null) {
+    if (!breakdown) return "";
+    const rows: { label: string; wh: number; isBase: boolean }[] = [
+      ...breakdown.appliances
+        .filter((appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0)
+        .map((appliance) => ({ label: appliance.label, wh: appliance.wh, isBase: false })),
+    ];
+    // Base load anchors the list at the bottom: it is the remainder, not an
+    // appliance, so it reads as the floor the named loads sit on top of. Like the
+    // appliance rows it is dropped when it carries nothing, so an empty slot — or
+    // one whose whole demand is named — shows no dead "0%" row.
+    const baseWh = Number.isFinite(breakdown.baseWh) ? breakdown.baseWh : 0;
+    if (baseWh > 0) {
+      rows.push({ label: this._t("bias_correction.inspector.house_base_load"), wh: baseWh, isBase: true });
+    }
+    const total = rows.reduce((sum, row) => sum + Math.max(0, row.wh), 0);
+    if (total <= 0) return "";
+
+    return html`
+      <div class="house-breakdown">
+        <div class="house-breakdown-title">${this._t("bias_correction.inspector.house_composition")}</div>
+        <div class="house-breakdown-rows">
+          ${rows.map((row) => {
+            const share = total > 0 ? Math.max(0, row.wh) / total : 0;
+            return html`
+              <div class="house-breakdown-row ${row.isBase ? "base" : ""}">
+                <span class="house-breakdown-label" title=${row.label}>${row.label}</span>
+                <span class="house-breakdown-bar-track">
+                  <span
+                    class="house-breakdown-bar"
+                    style=${`width: ${(share * 100).toFixed(1)}%;`}
+                  ></span>
+                </span>
+                <span class="house-breakdown-value">${this._formatWh(row.wh)}</span>
+                <span class="house-breakdown-share">${(share * 100).toFixed(0)}%</span>
+              </div>
+            `;
+          })}
+        </div>
+      </div>
     `;
   }
 
@@ -2137,6 +2270,7 @@ export class HelmanSolarInspector extends LitElement {
       });
       payload.series.houseForecast ??= [];
       payload.series.houseActual ??= [];
+      payload.series.houseActualBreakdown ??= [];
       payload.series.batterySocForecast ??= [];
       payload.series.batterySocActual ??= [];
       payload.series.gridForecast ??= [];

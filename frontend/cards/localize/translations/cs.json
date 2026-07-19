@@ -291,6 +291,8 @@
       "selected_slot": "Vybraný slot: {slot}",
       "house_forecast": "Predikce spotřeby",
       "house_actual": "Skutečná spotřeba",
+      "house_composition": "Složení spotřeby (skutečné)",
+      "house_base_load": "Základní spotřeba",
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
       "battery_soc_strip": "Stav nabití baterie",

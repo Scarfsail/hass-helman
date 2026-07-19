@@ -126,7 +126,7 @@ def _make_cfg():
     )
 
 
-async def _inspector_payload(_history=None, **service_kwargs):
+async def _inspector_payload(_history=None, _consumer_slots=None, **service_kwargs):
     hass = SimpleNamespace(
         config=SimpleNamespace(time_zone="Europe/Prague"),
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
@@ -176,6 +176,10 @@ async def _inspector_payload(_history=None, **service_kwargs):
             service,
             "_load_battery_soc_actual_for_date",
             AsyncMock(return_value=BATTERY_SOC_ACTUAL),
+        ), patch.object(
+            service,
+            "_load_deferrable_consumer_slots_for_date",
+            AsyncMock(return_value=_consumer_slots or []),
         ):
             return await service.async_get_inspector_day(TARGET_DATE)
     finally:
@@ -204,6 +208,52 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         # totals
         self.assertEqual(payload["totals"]["houseForecastWh"], 200.0)
         self.assertEqual(payload["totals"]["houseActualWh"], 180.0)
+
+    async def test_house_actual_breakdown_splits_base_and_appliances(self):
+        payload = await _inspector_payload(
+            house_deferrable_consumers_provider=lambda: [
+                {"energy_entity_id": "sensor.dishwasher", "label": "Dishwasher"},
+                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
+            ],
+            _consumer_slots=[{"00:00": 50.0}, {"00:00": 30.0}],
+        )
+
+        breakdown = payload["series"]["houseActualBreakdown"]
+        self.assertEqual(len(breakdown), 1)
+        slot = breakdown[0]
+        self.assertEqual(slot["slot"], "00:00")
+        # House actual is 180 Wh; the two appliances take 80, so base is 100.
+        self.assertEqual(slot["baseWh"], 100.0)
+        self.assertEqual(
+            slot["appliances"],
+            [
+                {"entityId": "sensor.dishwasher", "label": "Dishwasher", "wh": 50.0},
+                {"entityId": "sensor.ev", "label": "EV charger", "wh": 30.0},
+            ],
+        )
+        # Base plus appliances reconciles with the plain house actual figure.
+        total = slot["baseWh"] + sum(a["wh"] for a in slot["appliances"])
+        self.assertEqual(total, payload["series"]["houseActual"][0]["valueWh"])
+        self.assertTrue(payload["availability"]["hasHouseActualBreakdown"])
+
+    async def test_house_actual_breakdown_clamps_negative_base(self):
+        # Appliances momentarily over-report past the house total: base floors at 0.
+        payload = await _inspector_payload(
+            house_deferrable_consumers_provider=lambda: [
+                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
+            ],
+            _consumer_slots=[{"00:00": 250.0}],
+        )
+
+        slot = payload["series"]["houseActualBreakdown"][0]
+        self.assertEqual(slot["baseWh"], 0.0)
+        self.assertEqual(slot["appliances"][0]["wh"], 250.0)
+
+    async def test_house_actual_breakdown_absent_without_consumers(self):
+        payload = await _inspector_payload()
+
+        self.assertEqual(payload["series"]["houseActualBreakdown"], [])
+        self.assertFalse(payload["availability"]["hasHouseActualBreakdown"])
 
     async def test_battery_soc_bounds_fall_back_to_live_values_per_slot(self):
         payload = await _inspector_payload(
