@@ -77,7 +77,11 @@ export class PowerDevice extends LitElement {
                 position: relative;
             }
             .deviceContent {
-                background-color: #050505;
+                /* The node color washed over the near-black surface, so a box
+                   reads as solar/battery/grid/house at a glance. --device-tint
+                   is already translucent (the tree ships an alpha channel), and
+                   color-mix knocks it back further to keep the text legible. */
+                background-color: color-mix(in srgb, var(--device-tint, transparent) 35%, #050505);
                 display: flex;
                 align-items: center;
                 flex-basis: 100%;
@@ -179,7 +183,7 @@ export class PowerDevice extends LitElement {
         // Determine the color for history bars
         const historyBarColor = device.color ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
-                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap(this.device.color ? {'--device-shadow-color': this.device.color} : {})}>
+                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap(this.device.color ? {'--device-shadow-color': this.device.color, '--device-tint': this.device.color} : {})}>
                     <power-device-history-bars 
                         .device=${this.device}
                         .historyToRender=${[...historyToRender]}

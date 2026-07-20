@@ -12,6 +12,16 @@ from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 
+# The node colors the card draws its glow and tint from. These mirror the
+# palette in frontend/cards/color-utils.ts — the source of truth for what a
+# solar/grid/battery/house color *is* — with a `60` alpha so the card gets a
+# translucent accent rather than a flat fill. Keep the two in sync; the same
+# nodes appear in the solar inspector, which reads color-utils directly.
+SOLAR_NODE_COLOR = "#facc1560"
+GRID_NODE_COLOR = "#38bdf860"
+BATTERY_NODE_COLOR = "#22c55e60"
+HOUSE_NODE_COLOR = "#a855f760"
+
 
 @dataclass
 class DeviceNodeDTO:
@@ -96,7 +106,7 @@ class HelmanTreeBuilder:
                 solar_config,
                 source_type="solar",
                 value_type="default",
-                color="#FDD83560",
+                color=SOLAR_NODE_COLOR,
                 icon="mdi:solar-power",
             ))
 
@@ -106,7 +116,7 @@ class HelmanTreeBuilder:
                 battery_config,
                 source_type="battery",
                 value_type="negative",
-                color="#66BB6A60",
+                color=BATTERY_NODE_COLOR,
                 icon="mdi:battery",
             ))
 
@@ -116,7 +126,7 @@ class HelmanTreeBuilder:
                 grid_config,
                 source_type="grid",
                 value_type="negative",
-                color="#42A5F560",
+                color=GRID_NODE_COLOR,
                 icon="mdi:transmission-tower-export",
             ))
 
@@ -140,7 +150,7 @@ class HelmanTreeBuilder:
                 labels=[],
                 label_badge_texts=[],
                 source_config=house_config,
-                color="#FFAB9160",
+                color=HOUSE_NODE_COLOR,
                 icon="mdi:home",
                 compact=True,
                 show_additional_info=True,
@@ -158,7 +168,7 @@ class HelmanTreeBuilder:
                 battery_config["entities"]["power"],
                 battery_config,
                 value_type="positive",
-                color="#66BB6A60",
+                color=BATTERY_NODE_COLOR,
                 icon="mdi:battery",
             ))
 
@@ -167,7 +177,7 @@ class HelmanTreeBuilder:
                 grid_config["entities"]["power"],
                 grid_config,
                 value_type="positive",
-                color="#42A5F560",
+                color=GRID_NODE_COLOR,
                 icon="mdi:transmission-tower-import",
             ))
 
