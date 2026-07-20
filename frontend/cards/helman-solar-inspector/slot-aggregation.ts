@@ -19,7 +19,7 @@ import type {
  */
 
 /** Minute-of-day from an ISO-ish "…THH:MM…" timestamp; null if unparseable. */
-function timestampMinutes(timestamp: string): number | null {
+export function timestampMinutes(timestamp: string): number | null {
   const match = /T(\d{2}):(\d{2})/.exec(timestamp);
   if (!match) return null;
   return Number(match[1]) * 60 + Number(match[2]);
@@ -77,6 +77,48 @@ export function aggregateWhSeries(
   return [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([, bucket]) => ({ timestamp: bucket.timestamp, valueWh: bucket.valueWh }));
+}
+
+/**
+ * How far the actuals reach, as the end minute of their last measured 15-minute
+ * slot. Taken across every actual series so one lagging feed cannot pull the
+ * others out of alignment.
+ */
+export function actualsCoverUntil(
+  series: readonly (readonly InspectorPoint[])[],
+): number | null {
+  let latest: number | null = null;
+  for (const points of series) {
+    for (const point of points) {
+      const minutes = timestampMinutes(point.timestamp);
+      if (minutes === null) continue;
+      if (latest === null || minutes > latest) latest = minutes;
+    }
+  }
+  return latest === null ? null : latest + SLOT_MINUTES;
+}
+
+/**
+ * Drop the buckets the actuals only partly cover.
+ *
+ * Inside the slot we are still living through, a wider bucket holds measurements
+ * for the minutes that have passed and nothing for the rest, so summing it
+ * produces a short column that reads as a real shortfall against the forecast.
+ * A bucket only counts as measured once the actuals reach its end; the ones that
+ * do not are dropped, which leaves the forecast to draw them as what they still
+ * are — a projection.
+ */
+export function dropPartialBuckets<T>(
+  points: readonly T[],
+  slotMinutes: number,
+  coverUntil: number | null,
+  minutesOf: (point: T) => number | null,
+): T[] {
+  if (coverUntil === null) return [];
+  return points.filter((point) => {
+    const start = minutesOf(point);
+    return start !== null && start + slotMinutes <= coverUntil;
+  });
 }
 
 /** Null-aware sum: null when every contributor is null, else the finite total. */

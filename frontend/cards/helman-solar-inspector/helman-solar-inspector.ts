@@ -50,8 +50,11 @@ import {
   type ContributionRow,
 } from "./solar-inspector-model.js";
 import {
+  actualsCoverUntil,
   aggregateBreakdownOverSlots,
   aggregateBreakdownSeries,
+  dropPartialBuckets,
+  timestampMinutes,
   aggregateImpactOverSlots,
   aggregateImpactSeries,
   aggregateWhSeries,
@@ -1076,22 +1079,34 @@ export class HelmanSolarInspector extends LitElement {
     const slot = this._slotMinutes;
     if (slot <= SLOT_MINUTES) return payload;
     const s = payload.series;
+    // A wider bucket is only history once the measurements span all of it; the
+    // slot we are still inside would otherwise sum a part-hour of actuals into a
+    // full-hour column and read as a collapse against the forecast.
+    const coverUntil = actualsCoverUntil([
+      s.actual, s.invalidated, s.houseActual, s.gridActual, s.batteryActual,
+    ]);
+    const measured = (points: InspectorPoint[]) =>
+      dropPartialBuckets(aggregateWhSeries(points, slot), slot, coverUntil, (p) =>
+        timestampMinutes(p.timestamp));
     return {
       ...payload,
       series: {
         ...s,
         raw: aggregateWhSeries(s.raw, slot),
         corrected: aggregateWhSeries(s.corrected, slot),
-        actual: aggregateWhSeries(s.actual, slot),
-        invalidated: aggregateWhSeries(s.invalidated, slot),
+        actual: measured(s.actual),
+        invalidated: measured(s.invalidated),
         impact: aggregateImpactSeries(s.impact, slot),
         houseForecast: aggregateWhSeries(s.houseForecast, slot),
-        houseActual: aggregateWhSeries(s.houseActual, slot),
-        houseActualBreakdown: aggregateBreakdownSeries(s.houseActualBreakdown, slot),
+        houseActual: measured(s.houseActual),
+        houseActualBreakdown: dropPartialBuckets(
+          aggregateBreakdownSeries(s.houseActualBreakdown, slot),
+          slot, coverUntil, (p) => slotToMinutes(p.slot),
+        ),
         gridForecast: aggregateWhSeries(s.gridForecast, slot),
-        gridActual: aggregateWhSeries(s.gridActual, slot),
+        gridActual: measured(s.gridActual),
         batteryForecast: aggregateWhSeries(s.batteryForecast, slot),
-        batteryActual: aggregateWhSeries(s.batteryActual, slot),
+        batteryActual: measured(s.batteryActual),
         batterySocForecast: sampleOnGrid(s.batterySocForecast, slot),
         batterySocActual: sampleOnGrid(s.batterySocActual, slot),
       },
@@ -1316,6 +1331,7 @@ export class HelmanSolarInspector extends LitElement {
                   endMinutes: layout.dayEndMinutes,
                 }}
                 .hoverMinutes=${this._hoveredMinutes}
+                .slotMinutes=${this._slotMinutes}
                 @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
                   this._handleStripSlotPick(event, payload)}
                 @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>

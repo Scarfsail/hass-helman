@@ -67,6 +67,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     @property({ attribute: false }) public selectedMinutes: number[] = [];
     /** Minute-of-day under the pointer; its price cell reads as hovered (orange). */
     @property({ attribute: false }) public hoverMinutes: number | null = null;
+    /** The chart's active slot width, so the seam lands on the same grid it does. */
+    @property({ type: Number }) public slotMinutes = 15;
 
     @state() private _forecast: ForecastPayload | null = null;
 
@@ -143,9 +145,15 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     }
 
     /**
-     * Minute-of-day the day turns from measured into upcoming: the current wall
-     * clock when the selected day is today, otherwise the whole day is past
-     * (an earlier day) or entirely upcoming (a later day).
+     * Minute-of-day the day turns from measured into upcoming: the start of the
+     * slot we are currently inside when the selected day is today, otherwise the
+     * whole day is past (an earlier day) or entirely upcoming (a later day).
+     *
+     * The seam snaps back to the slot start rather than sitting on the exact
+     * minute because a slot only counts as measured once it has fully elapsed —
+     * the same rule the chart above applies to its actuals. Splitting the price
+     * mid-column would claim part of a slot as history while the chart still
+     * draws that slot as a projection.
      */
     private _seamMinutes(): number {
         const now = getScheduleLocalTimeParts(Date.now(), this.timeZone);
@@ -153,7 +161,9 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             return MINUTES_PER_DAY;
         }
         if (now.dayKey === this.date) {
-            return now.hour * 60 + now.minute;
+            const minutes = now.hour * 60 + now.minute;
+            const slot = this.slotMinutes > 0 ? this.slotMinutes : 15;
+            return Math.floor(minutes / slot) * slot;
         }
         return this.date < now.dayKey ? MINUTES_PER_DAY : 0;
     }
