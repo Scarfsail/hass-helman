@@ -1,6 +1,82 @@
+import { css, unsafeCSS } from 'lit-element';
+
+/**
+ * The single source of truth for every color that carries domain meaning:
+ * what a power source is, which way energy moves, whether a price is good.
+ *
+ * Home Assistant has no opinion about any of these, so we own them outright.
+ * Colors HA *does* own — --success-color, --error-color, --warning-color,
+ * --primary-color, --divider-color — deliberately stay out of this file: they
+ * belong to the user's theme and cards should read them straight from there.
+ */
+
 export const SOLAR_COLOR = '#facc15'; // yellow-400
 export const GRID_COLOR  = '#38bdf8'; // sky-400
 export const BATT_COLOR  = '#22c55e'; // green-500
+export const HOUSE_COLOR = '#a855f7'; // purple-500
+
+/** Which way the grid is flowing. Distinct from GRID_COLOR, which is the node itself. */
+export const GRID_IMPORT_COLOR = '#2563eb'; // blue-600
+export const GRID_EXPORT_COLOR = '#7dd3fc'; // sky-300
+
+/** Export price above/below the threshold that makes exporting worthwhile. */
+export const PRICE_POSITIVE_COLOR = '#8d6e63'; // brown-400
+export const PRICE_NEGATIVE_COLOR = '#6d4c41'; // brown-600
+
+/** Uncorrected forecast, drawn behind the corrected one. */
+export const FORECAST_RAW_COLOR = '#64748b'; // slate-500
+
+/** Hover and slot selection across every chart and strip. */
+export const SELECTION_COLOR = '#f59e0b'; // amber-500
+
+/**
+ * Battery direction in charts. Kept as our own values rather than HA's
+ * --success-color/--error-color: a plotted series needs a hue we control for
+ * legibility against the plot background, and themes ship greens too dark for
+ * it. Status chips and outcome text are chrome and do use the HA vars.
+ */
+export const CHARGE_COLOR    = '#16a34a'; // green-600
+export const DISCHARGE_COLOR = '#dc2626'; // red-600
+
+/** Nothing happening: idle battery, blend with no active source, unknown node. */
+export const NEUTRAL_COLOR       = '#6b7280'; // gray-500
+export const NEUTRAL_LIGHT_COLOR = '#9ca3af'; // gray-400
+
+/**
+ * The palette as CSS custom properties.
+ *
+ * Custom properties set on one element's :host do not reach a sibling custom
+ * element's shadow tree, so every card that wants these has to include this
+ * block in its own `static styles`. Without it a `var(--helman-solar)` in
+ * another card silently falls through to whatever fallback is written inline.
+ *
+ * Values here are opaque by design. Transparency belongs to the component that
+ * needs it — `color-mix(in srgb, var(--helman-solar) 24%, transparent)` in CSS,
+ * or withAlpha() in chart code that builds fill strings in JS.
+ */
+export const helmanColorVars = css`
+    :host {
+        --helman-solar: ${unsafeCSS(SOLAR_COLOR)};
+        --helman-grid: ${unsafeCSS(GRID_COLOR)};
+        --helman-battery: ${unsafeCSS(BATT_COLOR)};
+        --helman-house: ${unsafeCSS(HOUSE_COLOR)};
+
+        --helman-grid-import: ${unsafeCSS(GRID_IMPORT_COLOR)};
+        --helman-grid-export: ${unsafeCSS(GRID_EXPORT_COLOR)};
+
+        --helman-price-positive: ${unsafeCSS(PRICE_POSITIVE_COLOR)};
+        --helman-price-negative: ${unsafeCSS(PRICE_NEGATIVE_COLOR)};
+
+        --helman-forecast-raw: ${unsafeCSS(FORECAST_RAW_COLOR)};
+        --helman-selection: ${unsafeCSS(SELECTION_COLOR)};
+
+        --helman-charge: ${unsafeCSS(CHARGE_COLOR)};
+        --helman-discharge: ${unsafeCSS(DISCHARGE_COLOR)};
+
+        --helman-neutral: ${unsafeCSS(NEUTRAL_COLOR)};
+        --helman-neutral-light: ${unsafeCSS(NEUTRAL_LIGHT_COLOR)};
+    }
+`;
 
 /** Adds a two-digit alpha channel to a hex color value. */
 export function withAlpha(hex: string, alphaHex: string): string {
@@ -20,7 +96,7 @@ export function canonicalSourceColor(sourceType: string | null | undefined, fall
         case 'solar':   return SOLAR_COLOR;
         case 'grid':    return GRID_COLOR;
         case 'battery': return BATT_COLOR;
-        default:        return fallback ?? '#6b7280';
+        default:        return fallback ?? NEUTRAL_COLOR;
     }
 }
 
@@ -76,7 +152,7 @@ export function computeSourceColorCached(node: CachingNode): string | undefined 
 /** Weighted RGB average of hex color values. Returns gray if no active inputs. */
 export function blendHex(colors: { hex: string; weight: number }[]): string {
     const active = colors.filter(c => c.weight > 0);
-    if (active.length === 0) return '#6b7280';
+    if (active.length === 0) return NEUTRAL_COLOR;
     if (active.length === 1) return active[0].hex;
     const total = active.reduce((s, c) => s + c.weight, 0);
     let r = 0, g = 0, b = 0;
