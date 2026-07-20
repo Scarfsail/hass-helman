@@ -32,6 +32,16 @@ function bucketStart(minutes: number, slotMinutes: number): number {
   return Math.floor(minutes / slotMinutes) * slotMinutes;
 }
 
+/**
+ * The "HH:MM" slot key a timestamped sample belongs to.
+ *
+ * Series are keyed by timestamp and slots by time-of-day, so this is the one
+ * rule that joins them; every lookup across the two must agree on it.
+ */
+export function slotKey(timestamp: string): string {
+  return timestamp.slice(11, 16);
+}
+
 /** "HH:MM" for a minute-of-day. */
 export function minutesToSlot(minutes: number): string {
   const clamped = Math.max(0, Math.floor(minutes));
@@ -255,7 +265,7 @@ export function sumWhOverSlots(
   const wanted = new Set(slots);
   return sumNullable(
     points
-      .filter((point) => wanted.has(point.timestamp.slice(11, 16)))
+      .filter((point) => wanted.has(slotKey(point.timestamp)))
       .map((point) => point.valueWh),
   );
 }
@@ -361,7 +371,7 @@ export function houseSourceMixBySlot(
     for (const point of points) {
       const value = point.valueWh;
       if (!Number.isFinite(value)) continue;
-      map.set(point.timestamp.slice(11, 16), value);
+      map.set(slotKey(point.timestamp), value);
     }
     return map;
   };

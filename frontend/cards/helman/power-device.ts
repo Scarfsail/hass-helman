@@ -210,6 +210,7 @@ export class PowerDevice extends LitElement {
                                 .powerValue=${this.device.powerValue ?? 0}
                                 .powerSensorId=${this.device.powerSensorId ?? undefined}
                                 .compact=${this.device.compact ?? false}
+                                .valueKind=${this.device.valueKind ?? "power"}
                                 .currentParentPower=${this.currentParentPower}
                                 @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
                             ></power-device-power-display>

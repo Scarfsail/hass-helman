@@ -2072,13 +2072,10 @@ export class HelmanSolarInspector extends LitElement {
     // the mix is a house-level property, so it is derived once and then rescaled
     // per consumer rather than recomputed box by box.
     const mixes = houseSourceMixBySlot(native, barSlots);
-    // The card speaks watts, so each sample's energy becomes the average power it
-    // was drawn at. Samples are uniform, so this is a pure change of unit — the
-    // bars keep their shape and the figures stay comparable with the power card's.
-    const hoursPerBar = SLOT_MINUTES / 60;
-    // The figures above the bars summarise the whole selection, so they average
-    // over its full span rather than over one sample.
-    const selectionHours = Math.max(1, slots.length) * (this._slotMinutes / 60);
+    // Every box reads the same series over the same samples; only which part it
+    // asks for differs.
+    const barsFor = (entityId: string | null | undefined) =>
+      consumerBarsOverSlots(native.houseActualBreakdown, barSlots, entityId, mixes);
 
     const consumers = breakdown.appliances.filter(
       (appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0,
@@ -2099,9 +2096,7 @@ export class HelmanSolarInspector extends LitElement {
         appliance.wh,
         appliance.switchEntityId ?? null,
         false,
-        consumerBarsOverSlots(native.houseActualBreakdown, barSlots, appliance.entityId, mixes),
-        hoursPerBar,
-        selectionHours,
+        barsFor(appliance.entityId),
       ),
     );
     if (unmeasuredWh > 0) {
@@ -2112,9 +2107,7 @@ export class HelmanSolarInspector extends LitElement {
           unmeasuredWh,
           null,
           true,
-          consumerBarsOverSlots(native.houseActualBreakdown, barSlots, null, mixes),
-          hoursPerBar,
-          selectionHours,
+          barsFor(null),
         ),
       );
     }
@@ -2123,13 +2116,10 @@ export class HelmanSolarInspector extends LitElement {
     // or a large unmetered block would sit below trivial named ones.
     nodes.sort((a, b) => (b.powerValue ?? 0) - (a.powerValue ?? 0));
 
-    // The house's own per-slot power. Handing it down as the parent scales every
-    // box's bars against the house exactly as the power card scales a child
+    // The house's own per-sample energy. Handing it down as the parent scales
+    // every box's bars against the house exactly as the power card scales a child
     // against its parent, and gives each box its share-of-parent figure.
-    const houseBars = consumerBarsOverSlots(
-      native.houseActualBreakdown, barSlots, undefined, mixes,
-    );
-    const houseHistory = houseBars.values.map((wh) => wh / hoursPerBar);
+    const houseBars = barsFor(undefined);
 
     return html`
       <!-- No more-info handler here: power-device already turns its children's
@@ -2141,8 +2131,8 @@ export class HelmanSolarInspector extends LitElement {
         <power-devices-container
           .hass=${this.hass}
           .devices=${nodes}
-          .currentParentPower=${total / selectionHours}
-          .parentPowerHistory=${houseHistory}
+          .currentParentPower=${total}
+          .parentPowerHistory=${houseBars.values}
           .historyBuckets=${barSlots.length}
           .historyBucketDuration=${SLOT_MINUTES * 60}
           .devices_full_width=${true}
@@ -2167,8 +2157,6 @@ export class HelmanSolarInspector extends LitElement {
     switchEntityId: string | null,
     isUnmeasured: boolean,
     bars: ReturnType<typeof consumerBarsOverSlots>,
-    hoursPerBar: number,
-    selectionHours: number,
   ): DeviceNode {
     const node = new DeviceNode(
       entityId ?? "house-unmeasured",
@@ -2179,16 +2167,13 @@ export class HelmanSolarInspector extends LitElement {
     );
     node.displayName = label;
     node.isUnmeasured = isUnmeasured;
-    node.powerValue = wh / selectionHours;
-    node.powerHistory = bars.values.map((slotWh) => slotWh / hoursPerBar);
-    node.sourcePowerHistory = bars.sourceHistory.map((mix) => {
-      if (!mix) return {};
-      const scaled: Record<string, { power: number; color: string }> = {};
-      for (const [sourceId, part] of Object.entries(mix)) {
-        scaled[sourceId] = { power: part.power / hoursPerBar, color: part.color };
-      }
-      return scaled;
-    });
+    // Energy throughout — the selection's total on the box, each sample's own on
+    // the bars — so the figures are the Wh the breakdown actually reports and no
+    // unit conversion sits between the data and what is drawn.
+    node.valueKind = "energy";
+    node.powerValue = wh;
+    node.powerHistory = bars.values;
+    node.sourcePowerHistory = bars.sourceHistory.map((mix) => mix ?? {});
     node.hideChildren = true;
     node.hideChildrenIndicator = true;
     return node;

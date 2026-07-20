@@ -1,7 +1,7 @@
 import { LitElement, TemplateResult, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import { sharedStyles } from "./shared-styles";
-import { formatPower } from "../power-format";
+import { formatValue, type ValueKind } from "../power-format";
 
 @customElement("power-device-power-display")
 export class PowerDevicePowerDisplay extends LitElement {
@@ -9,6 +9,9 @@ export class PowerDevicePowerDisplay extends LitElement {
     @property({ type: String }) public powerSensorId?: string;
     @property({ type: Boolean }) public compact = false;
     @property({ type: Number }) public currentParentPower?: number;
+    /** Whether `powerValue` is watts or watt-hours. The share is a ratio either
+     *  way, so only the formatting of the figure itself changes. */
+    @property({ type: String }) public valueKind: ValueKind = "power";
 
     private _showMoreInfo(entityId: string) {
         const event = new CustomEvent("show-more-info", {
@@ -63,7 +66,7 @@ export class PowerDevicePowerDisplay extends LitElement {
             ? () => this._showMoreInfo(this.powerSensorId!)
             : () => { }; // No-op if no sensor
 
-        const { value: powerValue, unit: powerUnit } = formatPower(currentPower);
+        const { value: powerValue, unit: powerUnit } = formatValue(currentPower, this.valueKind);
 
         return html`<div class="powerDisplay ${this.powerSensorId ? 'has-sensor' : ''}" @click=${onPowerClick}>
                         <div class="powerValue">${powerValue} <span class="units">${powerUnit}</span></div>

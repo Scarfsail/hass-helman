@@ -1,5 +1,6 @@
 import { DeviceConfig } from "./DeviceConfig";
 import { ValueType } from "../helman-api";
+import type { ValueKind } from "../power-format";
 
 export class DeviceNode {
     constructor(id: string, name: string, powerSensorId: string | null, switchEntityId: string | null, historyBuckets: number, deviceConfig?: DeviceConfig) {
@@ -38,6 +39,10 @@ export class DeviceNode {
     public icon?: string;
     public sortChildrenByPower?: boolean;
     public deviceConfig?: DeviceConfig;
+    // What powerValue/powerHistory carry. The power card reads live sensors and
+    // leaves this at watts; the solar inspector builds nodes from a past slot's
+    // energy and sets "energy" so the box is labelled in Wh.
+    public valueKind?: ValueKind;
     public compact?: boolean; // Indicates if the device should be displayed in a compact mode
     public children_full_width?: boolean; // Indicates if the device should take full width in the UI
     public show_additional_info?: boolean; // Indicates if additional info should be shown in the UI

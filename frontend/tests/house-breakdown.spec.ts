@@ -364,9 +364,9 @@ test.describe("solar inspector house composition", () => {
         // The remainder leads and carries no energy sensor of its own.
         expect(rows[0].hasSensor).toBe(false);
 
-        // The card speaks watts: the hour's energy as the average power it was
-        // drawn at, with each box's share of the house beside it.
-        expect(rows.map((r) => r.power)).toEqual(["400 W", "200 W", "120 W"]);
+        // The boxes report the selection's energy, with each one's share of the
+        // house beside it.
+        expect(rows.map((r) => r.power)).toEqual(["400 Wh", "200 Wh", "120 Wh"]);
         expect(rows.map((r) => r.share)).toEqual(["56%", "28%", "17%"]);
     });
 
