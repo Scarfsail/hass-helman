@@ -183,7 +183,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         /* The multi-select for bulk editing (shift/ctrl-click): a solid outline so
            it stays legible over the selection/hover bands drawn behind it. */
         .slot-col.selected {
-            box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.9);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-grid-import) 90%, transparent);
             border-radius: 4px;
         }
 
@@ -200,13 +200,13 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         }
 
         .range-band.selected {
-            background: rgba(37, 99, 235, 0.13);
-            box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.5);
+            background: color-mix(in srgb, var(--helman-grid-import) 13%, transparent);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-grid-import) 50%, transparent);
         }
 
         .range-band.hover {
-            background: rgba(245, 158, 11, 0.14);
-            box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.55);
+            background: color-mix(in srgb, var(--helman-selection) 14%, transparent);
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-selection) 55%, transparent);
         }
 
         /* The chip layer edits; the column background around it selects. */

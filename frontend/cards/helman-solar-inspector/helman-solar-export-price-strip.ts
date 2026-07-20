@@ -197,8 +197,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     ${columns.map((column) => {
                         const positive = column.value >= 0;
                         const color = positive
-                            ? "var(--forecast-price-positive, #8d6e63)"
-                            : "var(--forecast-price-negative, #6d4c41)";
+                            ? "var(--helman-price-positive)"
+                            : "var(--helman-price-negative)";
                         const valueY = yForValue(column.value);
                         const top = Math.min(zeroY, valueY);
                         const barHeight = Math.max(1, Math.abs(valueY - zeroY));
@@ -275,8 +275,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         }
         const x = xForMinutes(column.startMinutes);
         const width = Math.max(2, xForMinutes(column.endMinutes) - x);
-        const fill = kind === "hover" ? "rgba(245,158,11,0.14)" : "rgba(37,99,235,0.13)";
-        const stroke = kind === "hover" ? "#f59e0b" : "#2563eb";
+        const fill = kind === "hover" ? "color-mix(in srgb, var(--helman-selection) 14%, transparent)" : "color-mix(in srgb, var(--helman-grid-import) 13%, transparent)";
+        const stroke = kind === "hover" ? "var(--helman-selection)" : "var(--helman-grid-import)";
         const strokeOpacity = kind === "hover" ? "0.55" : "0.5";
         return svg`
             <rect

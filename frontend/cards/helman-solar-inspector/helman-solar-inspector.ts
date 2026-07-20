@@ -22,7 +22,16 @@ import {
   type SocBoundsPoint,
   type SocDirection,
 } from "./chart-soc";
-import { BATT_COLOR, GRID_COLOR, SOLAR_COLOR } from "../color-utils";
+import {
+  BATT_COLOR,
+  CHARGE_COLOR,
+  DISCHARGE_COLOR,
+  FORECAST_RAW_COLOR,
+  GRID_COLOR,
+  HOUSE_COLOR,
+  NEUTRAL_LIGHT_COLOR,
+  SOLAR_COLOR,
+} from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
 import "./helman-solar-export-price-strip";
@@ -80,14 +89,14 @@ function defaultSlotMinutesForViewport(): number {
 }
 
 const CHART_COLORS = {
-  raw:            '#64748b',
+  raw:            FORECAST_RAW_COLOR,
   corrected:      SOLAR_COLOR,
   actual:         SOLAR_COLOR,
-  house:          '#a855f7',
+  house:          HOUSE_COLOR,
   battery:        BATT_COLOR,
   grid:           GRID_COLOR,
-  impactPositive: '#16a34a',
-  impactNegative: '#dc2626',
+  impactPositive: CHARGE_COLOR,
+  impactNegative: DISCHARGE_COLOR,
 } as const;
 
 type SeriesKey =
@@ -133,9 +142,9 @@ const MINUTES_PER_DAY = 1440;
 
 /** What the battery is doing over a slot, read off the SoC it moves through. */
 const SOC_COLORS = {
-  charging:    '#16a34a',
-  discharging: '#dc2626',
-  idle:        '#9ca3af',
+  charging:    CHARGE_COLOR,
+  discharging: DISCHARGE_COLOR,
+  idle:        NEUTRAL_LIGHT_COLOR,
 } as const satisfies Record<SocDirection, string>;
 
 /** The SoC strip's own geometry; it borrows only the x scale from the chart. */
@@ -514,9 +523,9 @@ export class HelmanSolarInspector extends LitElement {
       white-space: nowrap;
       background: linear-gradient(
         90deg,
-        color-mix(in srgb, #ef4444 8%, transparent),
+        color-mix(in srgb, var(--helman-discharge) 8%, transparent),
         color-mix(in srgb, var(--card-background-color) 90%, transparent),
-        color-mix(in srgb, #22c55e 8%, transparent)
+        color-mix(in srgb, var(--helman-charge) 8%, transparent)
       );
       box-shadow: inset 0 0 0 1px var(--divider-color);
       font-variant-numeric: tabular-nums;
@@ -545,8 +554,8 @@ export class HelmanSolarInspector extends LitElement {
       left: 50%;
       background: linear-gradient(
         90deg,
-        color-mix(in srgb, #22c55e 60%, transparent),
-        color-mix(in srgb, #22c55e 25%, transparent)
+        color-mix(in srgb, var(--helman-charge) 60%, transparent),
+        color-mix(in srgb, var(--helman-charge) 25%, transparent)
       );
       border-radius: 0 4px 4px 0;
     }
@@ -555,8 +564,8 @@ export class HelmanSolarInspector extends LitElement {
       right: 50%;
       background: linear-gradient(
         270deg,
-        color-mix(in srgb, #ef4444 60%, transparent),
-        color-mix(in srgb, #ef4444 25%, transparent)
+        color-mix(in srgb, var(--helman-discharge) 60%, transparent),
+        color-mix(in srgb, var(--helman-discharge) 25%, transparent)
       );
       border-radius: 4px 0 0 4px;
     }
@@ -806,9 +815,9 @@ export class HelmanSolarInspector extends LitElement {
       gap: 6px;
       padding: 8px 10px;
       border: 1px solid var(--divider-color);
-      border-left: 3px solid #a855f7;
+      border-left: 3px solid var(--helman-house);
       border-radius: 6px;
-      background: color-mix(in srgb, #a855f7 8%, transparent);
+      background: color-mix(in srgb, var(--helman-house) 8%, transparent);
     }
 
     .house-breakdown-title {
@@ -882,11 +891,11 @@ export class HelmanSolarInspector extends LitElement {
       display: block;
       height: 100%;
       border-radius: 4px;
-      background: #a855f7;
+      background: var(--helman-house);
     }
 
     .house-breakdown-row.unmeasured .house-breakdown-bar {
-      background: color-mix(in srgb, #a855f7 45%, transparent);
+      background: color-mix(in srgb, var(--helman-house) 45%, transparent);
     }
 
     .house-breakdown-value {
@@ -1270,8 +1279,8 @@ export class HelmanSolarInspector extends LitElement {
     return svg`
       <rect
         x=${x} y=${y} width=${w} height=${height}
-        fill="rgba(245,158,11,0.14)"
-        stroke="#f59e0b" stroke-width="1" stroke-opacity="0.55"
+        fill="color-mix(in srgb, var(--helman-selection) 14%, transparent)"
+        stroke="var(--helman-selection)" stroke-width="1" stroke-opacity="0.55"
         rx="1"
         pointer-events="none"
       ></rect>
@@ -1619,7 +1628,7 @@ export class HelmanSolarInspector extends LitElement {
           ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForW(rawPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.raw}></circle>`
           : ""}
       ${invalidatedPoints.map((entry) => svg`
-        <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="#9ca3af" opacity="0.55">
+        <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="var(--helman-neutral-light)" opacity="0.55">
           <title>${this._t("bias_correction.inspector.invalidated_production")}</title>
         </circle>
       `)}
@@ -1819,7 +1828,7 @@ export class HelmanSolarInspector extends LitElement {
           const positive = point.impactWh >= 0;
           const selected = selectedSlot === point.slot;
           const fill = untrained
-            ? "#9ca3af"
+            ? "var(--helman-neutral-light)"
             : interpolated
               ? positive ? "url(#impact-interpolated-positive)" : "url(#impact-interpolated-negative)"
               : positive ? CHART_COLORS.impactPositive : CHART_COLORS.impactNegative;
@@ -2769,8 +2778,8 @@ export class HelmanSolarInspector extends LitElement {
     return svg`
       <rect
         x=${x} y=${y} width=${w} height=${height}
-        fill="rgba(37,99,235,0.13)"
-        stroke="#2563eb" stroke-width="1" stroke-opacity="0.5"
+        fill="color-mix(in srgb, var(--helman-grid-import) 13%, transparent)"
+        stroke="var(--helman-grid-import)" stroke-width="1" stroke-opacity="0.5"
         rx="1"
         pointer-events="none"
       ></rect>
