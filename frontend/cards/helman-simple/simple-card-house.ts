@@ -55,8 +55,8 @@ export class SimpleCardHouse extends LitElement {
             animation: house-glow 2.4s ease-in-out infinite;
         }
         @keyframes house-glow {
-            0%, 100% { filter: drop-shadow(0 0 4px var(--simple-card-warm-color-44)); }
-            50%       { filter: drop-shadow(0 0 14px var(--simple-card-warm-color-99)) drop-shadow(0 0 24px var(--simple-card-warm-color-44)); }
+            0%, 100% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--simple-card-warm-color) 27%, transparent)); }
+            50%       { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--simple-card-warm-color) 60%, transparent)) drop-shadow(0 0 24px color-mix(in srgb, var(--simple-card-warm-color) 27%, transparent)); }
         }
         .roof {
             fill: var(--simple-card-neutral-stroke-soft);
@@ -76,7 +76,7 @@ export class SimpleCardHouse extends LitElement {
         }
         .door.active {
             fill: var(--simple-card-surface-dark-soft);
-            stroke: var(--simple-card-warm-color-88);
+            stroke: color-mix(in srgb, var(--simple-card-warm-color) 53%, transparent);
         }
         .window {
             fill: var(--simple-card-surface-dark);

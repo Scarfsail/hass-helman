@@ -1,40 +1,36 @@
 import { css, unsafeCSS } from "lit-element";
 import { SIMPLE_CARD_COLORS } from "./simple-card-colors";
 
-const solar = unsafeCSS(SIMPLE_CARD_COLORS.source.solar);
-const grid = unsafeCSS(SIMPLE_CARD_COLORS.source.grid);
-const battery = unsafeCSS(SIMPLE_CARD_COLORS.source.battery);
+const { source, neutral, state } = SIMPLE_CARD_COLORS;
+const v = (color: string) => unsafeCSS(color);
 
+/**
+ * Every var here is generated from SIMPLE_CARD_COLORS so a color is written
+ * down exactly once. Values are opaque: components that need transparency
+ * apply it themselves with color-mix(), rather than the palette shipping a
+ * pre-baked variant per alpha step.
+ */
 export const simpleCardSharedStyles = css`
     :host {
-        --simple-card-source-solar: ${solar};
-        --simple-card-source-solar-99: ${solar}99;
-        --simple-card-source-grid: ${grid};
-        --simple-card-source-grid-99: ${grid}99;
-        --simple-card-source-battery: ${battery};
-        --simple-card-source-battery-88: ${battery}88;
+        --simple-card-source-solar: ${v(source.solar)};
+        --simple-card-source-grid: ${v(source.grid)};
+        --simple-card-source-battery: ${v(source.battery)};
 
-        --simple-card-neutral-stroke: #6b7280;
-        --simple-card-neutral-stroke-soft: #4b5563;
-        --simple-card-surface-dark: #1f2937;
-        --simple-card-surface-dark-soft: #2d3748;
-        --simple-card-surface-mid: #374151;
-        --simple-card-surface-light: #9ca3af;
-        --simple-card-surface-lightest: #d1d5db;
-        --simple-card-label-color: #6b7280;
+        --simple-card-neutral-stroke: ${v(neutral.stroke)};
+        --simple-card-neutral-stroke-soft: ${v(neutral.strokeSoft)};
+        --simple-card-surface-dark: ${v(neutral.surfaceDark)};
+        --simple-card-surface-dark-soft: ${v(neutral.surfaceDarkSoft)};
+        --simple-card-surface-mid: ${v(neutral.surfaceMid)};
+        --simple-card-surface-light: ${v(neutral.surfaceLight)};
+        --simple-card-surface-lightest: ${v(neutral.surfaceLightest)};
+        --simple-card-label-color: ${v(neutral.label)};
 
-        --simple-card-warning-color: #f97316;
-        --simple-card-warning-color-88: #f9731688;
-        --simple-card-danger-color: #ef4444;
-        --simple-card-danger-color-88: #ef444488;
-        --simple-card-warm-color: #fde68a;
-        --simple-card-warm-color-44: #fde68a44;
-        --simple-card-warm-color-66: #fde68a66;
-        --simple-card-warm-color-88: #fde68a88;
-        --simple-card-warm-color-99: #fde68a99;
-        --simple-card-warm-soft-color: #fef08a;
-        --simple-card-solar-glow-color: #fde047;
-        --simple-card-grid-accent: #7dd3fc;
+        --simple-card-warning-color: ${v(state.warning)};
+        --simple-card-danger-color: ${v(state.danger)};
+        --simple-card-warm-color: ${v(state.warm)};
+        --simple-card-warm-soft-color: ${v(state.warmSoft)};
+        --simple-card-solar-glow-color: ${v(state.solarGlow)};
+        --simple-card-grid-accent: ${v(state.gridAccent)};
     }
 
     .power-label {

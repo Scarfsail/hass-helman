@@ -39,7 +39,7 @@ export class SimpleCardSolar extends LitElement {
         }
         .core.active {
             fill: var(--simple-card-source-solar);
-            filter: drop-shadow(0 0 10px var(--simple-card-solar-glow-color)) drop-shadow(0 0 20px var(--simple-card-source-solar-99));
+            filter: drop-shadow(0 0 10px var(--simple-card-solar-glow-color)) drop-shadow(0 0 20px color-mix(in srgb, var(--simple-card-source-solar) 60%, transparent));
         }
         .ray {
             fill: var(--simple-card-neutral-stroke);

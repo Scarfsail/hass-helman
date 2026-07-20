@@ -72,15 +72,15 @@ export class SimpleCardBattery extends LitElement {
         }
         @keyframes cover-pulse {
             0%, 100% { filter: drop-shadow(0 0 3px var(--pulse-color, var(--simple-card-source-battery))); }
-            50%       { filter: drop-shadow(0 0 10px var(--pulse-color, var(--simple-card-source-battery))) drop-shadow(0 0 18px var(--pulse-color-soft, var(--simple-card-source-battery-88))); }
+            50%       { filter: drop-shadow(0 0 10px var(--pulse-color, var(--simple-card-source-battery))) drop-shadow(0 0 18px var(--pulse-color-soft, color-mix(in srgb, var(--simple-card-source-battery) 53%, transparent))); }
         }
         @keyframes cover-low-pulse {
             0%, 100% { filter: drop-shadow(0 0 3px var(--simple-card-danger-color)); }
-            50%       { filter: drop-shadow(0 0 10px var(--simple-card-danger-color)) drop-shadow(0 0 18px var(--simple-card-danger-color-88)); }
+            50%       { filter: drop-shadow(0 0 10px var(--simple-card-danger-color)) drop-shadow(0 0 18px color-mix(in srgb, var(--simple-card-danger-color) 53%, transparent)); }
         }
         @keyframes cover-orange-pulse {
             0%, 100% { filter: drop-shadow(0 0 3px var(--simple-card-warning-color)); }
-            50%       { filter: drop-shadow(0 0 10px var(--simple-card-warning-color)) drop-shadow(0 0 18px var(--simple-card-warning-color-88)); }
+            50%       { filter: drop-shadow(0 0 10px var(--simple-card-warning-color)) drop-shadow(0 0 18px color-mix(in srgb, var(--simple-card-warning-color) 53%, transparent)); }
         }
 
         .battery-terminal {

@@ -25,7 +25,7 @@ export class SimpleCardGrid extends LitElement {
         svg { overflow: hidden; }
 
         .pole { fill: var(--simple-card-neutral-stroke); transition: fill 0.6s; }
-        .pole.import, .pole.export { fill: var(--simple-card-source-grid); filter: drop-shadow(0 0 6px var(--simple-card-source-grid-99)); }
+        .pole.import, .pole.export { fill: var(--simple-card-source-grid); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--simple-card-source-grid) 60%, transparent)); }
 
         .wire { stroke: var(--simple-card-neutral-stroke-soft); stroke-width: 1.5; fill: none; transition: stroke 0.6s; }
         /* wire color when active is set dynamically via sourceColor prop */
