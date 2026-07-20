@@ -1,5 +1,7 @@
 import { SLOT_MINUTES } from "./chart-stack";
 import { slotToMinutes, type SocBoundsPoint } from "./chart-soc";
+import { nodeAccentColor } from "../color-utils";
+import type { BucketSourceMix } from "../shared/power-history-bars";
 import type {
   ApplianceComponent,
   BatterySocPoint,
@@ -302,6 +304,148 @@ export function aggregateBreakdownOverSlots(
     unmeasuredWh,
     appliances: [...appliances.values()],
   };
+}
+
+/**
+ * The native 15-minute slots a selection covers, in order.
+ *
+ * A selection is expressed on whatever grid the chart is drawn at, so at hour
+ * width one selected slot is four real samples. Bars are meant to show the shape
+ * of consumption *within* the selection, so they read off the native grid the
+ * backend serves rather than the width the chart happens to use — selecting one
+ * hour gives four bars, not one.
+ */
+export function expandSlotsToNative(
+  slots: readonly string[],
+  slotMinutes: number,
+): string[] {
+  const native: string[] = [];
+  for (const slot of slots) {
+    const start = slotToMinutes(slot);
+    if (start === null) continue;
+    for (let m = start; m < start + Math.max(SLOT_MINUTES, slotMinutes); m += SLOT_MINUTES) {
+      native.push(minutesToSlot(m));
+    }
+  }
+  return native;
+}
+
+/**
+ * Which sources fed the house in each selected slot.
+ *
+ * The power card colours a consumer's bars from live source-ratio sensors, but
+ * those are a few minutes of in-memory buffer — nothing survives for a slot the
+ * inspector is looking back at. What does survive is this day's own per-slot
+ * energy, so the same split is reconstructed from it: the grid and battery
+ * meters say exactly how much each delivered, and solar takes the remainder.
+ *
+ * Deriving solar as the remainder rather than reading the production series
+ * keeps the three parts summing to the house total by construction — production
+ * that went to export or into the battery never reaches the house and must not
+ * colour its bars.
+ *
+ * The result is a house-level mix: within one slot every consumer is shown the
+ * same proportions, because the house draws from one blended bus and no
+ * per-appliance source attribution is recorded anywhere.
+ */
+export function houseSourceMixBySlot(
+  series: {
+    houseActual: readonly InspectorPoint[];
+    gridActual: readonly InspectorPoint[];
+    batteryActual: readonly InspectorPoint[];
+  },
+  slots: readonly string[],
+): Map<string, BucketSourceMix> {
+  const bySlot = (points: readonly InspectorPoint[]) => {
+    const map = new Map<string, number>();
+    for (const point of points) {
+      const value = point.valueWh;
+      if (!Number.isFinite(value)) continue;
+      map.set(point.timestamp.slice(11, 16), value);
+    }
+    return map;
+  };
+  const house = bySlot(series.houseActual);
+  const grid = bySlot(series.gridActual);
+  const battery = bySlot(series.batteryActual);
+
+  const mixes = new Map<string, BucketSourceMix>();
+  for (const slot of slots) {
+    const houseWh = house.get(slot);
+    if (houseWh === undefined || houseWh <= 0) continue;
+    // Positive grid is export and positive battery is charge, so the flows that
+    // reach the house are the negated sides. Clamped, and capped at the house
+    // total so a meter that over-reports cannot push solar negative.
+    const fromGrid = Math.min(houseWh, Math.max(0, -(grid.get(slot) ?? 0)));
+    const fromBattery = Math.min(houseWh - fromGrid, Math.max(0, -(battery.get(slot) ?? 0)));
+    const fromSolar = Math.max(0, houseWh - fromGrid - fromBattery);
+    const mix: BucketSourceMix = {};
+    // nodeAccentColor, not the raw palette value: these are backgrounds drawn
+    // behind text, and it is what the power card's own bars are painted with, so
+    // both views read at the same strength.
+    if (fromSolar > 0) mix.solar = { power: fromSolar, color: nodeAccentColor("solar") };
+    if (fromBattery > 0) mix.battery = { power: fromBattery, color: nodeAccentColor("battery") };
+    if (fromGrid > 0) mix.grid = { power: fromGrid, color: nodeAccentColor("grid") };
+    if (Object.keys(mix).length > 0) mixes.set(slot, mix);
+  }
+  return mixes;
+}
+
+/**
+ * One consumer's per-slot energy across the selection, as bar values paired with
+ * the slot's source mix scaled to that consumer's share.
+ *
+ * Slots the consumer did not run in still yield a zero-height bar, so the row
+ * keeps the selection's time axis and reads as "when did this run", not just
+ * "how much".
+ */
+export function consumerBarsOverSlots(
+  points: readonly HouseBreakdownPoint[],
+  slots: readonly string[],
+  /** An appliance's energy sensor, `null` for the unmetered remainder, or
+   *  `undefined` for the whole house — every part summed. */
+  entityId: string | null | undefined,
+  mixes: Map<string, BucketSourceMix>,
+): { values: number[]; sourceHistory: (BucketSourceMix | undefined)[] } {
+  const bySlot = new Map(points.map((point) => [point.slot, point]));
+  const values: number[] = [];
+  const sourceHistory: (BucketSourceMix | undefined)[] = [];
+  const finite = (value: number) => (Number.isFinite(value) ? Math.max(0, value) : 0);
+  for (const slot of slots) {
+    const point = bySlot.get(slot);
+    let wh = 0;
+    if (point) {
+      if (entityId === undefined) {
+        wh =
+          finite(point.unmeasuredWh) +
+          point.appliances.reduce((sum, a) => sum + finite(a.wh), 0);
+      } else if (entityId === null) {
+        wh = finite(point.unmeasuredWh);
+      } else {
+        const appliance = point.appliances.find((a) => a.entityId === entityId);
+        wh = appliance ? finite(appliance.wh) : 0;
+      }
+    }
+    values.push(wh);
+    // The house mix is a set of proportions; rescaling it to this consumer's own
+    // energy keeps each segment's height meaningful against the bar it sits in.
+    const houseMix = mixes.get(slot);
+    if (!houseMix || wh <= 0) {
+      sourceHistory.push(undefined);
+      continue;
+    }
+    const houseTotal = Object.values(houseMix).reduce((sum, part) => sum + part.power, 0);
+    if (houseTotal <= 0) {
+      sourceHistory.push(undefined);
+      continue;
+    }
+    const scaled: BucketSourceMix = {};
+    for (const [sourceId, part] of Object.entries(houseMix)) {
+      scaled[sourceId] = { power: (part.power / houseTotal) * wh, color: part.color };
+    }
+    sourceHistory.push(scaled);
+  }
+  return { values, sourceHistory };
 }
 
 /**

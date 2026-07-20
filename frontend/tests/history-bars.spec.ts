@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 /**
  * Regression guard for the history-bar source-attribution colours.
  *
- * `power-device-history-bars` paints each consumer's past power as a stacked bar,
+ * `helman-power-history-bars` paints each consumer's past power as a stacked bar,
  * split by which source (solar/battery/grid) fed it in that bucket. When a bucket
  * has no source attribution it falls back to the node's own `historyBarColor`.
  *
@@ -30,7 +30,7 @@ async function loadCardBundle(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() =>
-        !!customElements.get("power-device-history-bars"),
+        !!customElements.get("helman-power-history-bars"),
     );
 }
 
@@ -41,12 +41,12 @@ async function renderSegmentColours(
         historyToRender: number[];
         maxHistoryPower: number;
         historyBarColor: string;
-        sourcePowerHistory: Array<Record<string, { power: number; color: string }>>;
+        sourceHistory: Array<Record<string, { power: number; color: string }>>;
     },
 ): Promise<string[]> {
     return page.evaluate(async (o) => {
-        const el = document.createElement("power-device-history-bars") as any;
-        el.device = { isSource: false, sourcePowerHistory: o.sourcePowerHistory };
+        const el = document.createElement("helman-power-history-bars") as any;
+        el.sourceHistory = o.sourceHistory;
         el.historyToRender = o.historyToRender;
         el.maxHistoryPower = o.maxHistoryPower;
         el.historyBarColor = o.historyBarColor;
@@ -59,7 +59,7 @@ async function renderSegmentColours(
     }, opts);
 }
 
-test.describe("power-device-history-bars source attribution", () => {
+test.describe("helman-power-history-bars source attribution", () => {
     test.beforeEach(async ({ page }) => {
         await loadCardBundle(page);
     });
@@ -71,7 +71,7 @@ test.describe("power-device-history-bars source attribution", () => {
             historyToRender: [1000, 1000, 1000],
             maxHistoryPower: 1000,
             historyBarColor: FALLBACK_RGB,
-            sourcePowerHistory: [
+            sourceHistory: [
                 { solar: { power: 1000, color: SOLAR } },
                 { solar: { power: 1000, color: SOLAR } },
                 { solar: { power: 1000, color: SOLAR } },
@@ -93,7 +93,7 @@ test.describe("power-device-history-bars source attribution", () => {
             historyToRender: [1000, 1000],
             maxHistoryPower: 1000,
             historyBarColor: FALLBACK_RGB,
-            sourcePowerHistory: [{}, {}],
+            sourceHistory: [{}, {}],
         });
 
         expect(colours).toEqual([FALLBACK_RGB, FALLBACK_RGB]);

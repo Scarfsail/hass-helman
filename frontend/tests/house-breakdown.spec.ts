@@ -47,12 +47,18 @@ async function mountInspector(
         unmeasuredWh: number;
         /** The power card's configured title; null falls back to the translation. */
         unmeasuredLabel?: string | null;
+        /** Net grid energy per 15-min slot: positive exports, negative imports. */
+        gridWh?: number;
+        /** Net battery energy per 15-min slot: positive charges, negative discharges. */
+        batteryWh?: number;
     },
 ): Promise<void> {
     await page.evaluate((opts) => {
         const date = "2026-07-18";
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
         const houseActual: Array<{ timestamp: string; valueWh: number }> = [];
+        const gridActual: Array<{ timestamp: string; valueWh: number }> = [];
+        const batteryActual: Array<{ timestamp: string; valueWh: number }> = [];
         const houseActualBreakdown: Array<{
             slot: string;
             unmeasuredWh: number;
@@ -78,6 +84,12 @@ async function mountInspector(
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
             corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v });
             houseActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: slotTotal });
+            if (opts.gridWh !== undefined) {
+                gridActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: opts.gridWh });
+            }
+            if (opts.batteryWh !== undefined) {
+                batteryActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: opts.batteryWh });
+            }
             if (opts.withBreakdown) {
                 houseActualBreakdown.push({
                     slot: `${hh}:${mm}`,
@@ -123,9 +135,9 @@ async function mountInspector(
                 batterySocForecast: [],
                 batterySocActual: [],
                 gridForecast: [],
-                gridActual: [],
+                gridActual,
                 batteryForecast: [],
-                batteryActual: [],
+                batteryActual,
             },
             totals: {
                 rawWh: null,
@@ -244,19 +256,79 @@ async function selectNoonSlot(page: Page): Promise<void> {
     });
 }
 
-/** Read the rendered breakdown rows in order. */
-async function breakdownRows(
+/**
+ * Read the rendered composition boxes in order.
+ *
+ * The panel renders the power card's own `power-device` boxes, so everything is
+ * reached through their shadow roots exactly as it is on the card itself.
+ */
+async function breakdownBoxes(
     page: Page,
-): Promise<Array<{ label: string; value: string; share: string; isUnmeasured: boolean }>> {
+): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null }>> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const rows = el.shadowRoot.querySelectorAll(".house-breakdown-row");
-        return [...rows].map((row) => ({
-            label: (row.querySelector(".house-breakdown-label")?.textContent ?? "").trim(),
-            value: (row.querySelector(".house-breakdown-value")?.textContent ?? "").trim(),
-            share: (row.querySelector(".house-breakdown-share")?.textContent ?? "").trim(),
-            isUnmeasured: row.classList.contains("unmeasured"),
-        }));
+        const container = el.shadowRoot
+            .querySelector(".house-breakdown")
+            ?.querySelector("power-devices-container");
+        const devices = container?.shadowRoot?.querySelectorAll("power-device") ?? [];
+        return [...devices].map((device: any) => {
+            const content = device.shadowRoot.querySelector(".deviceContent");
+            const display = content.querySelector("power-device-power-display");
+            const badge = content
+                .querySelector("power-device-icon")
+                ?.shadowRoot?.querySelector("helman-appliance-switch-badge") as any;
+            return {
+                label: (content.querySelector(".deviceName")?.textContent ?? "").trim(),
+                power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
+                    .replace(/\s+/g, " ")
+                    .trim(),
+                share: (display?.shadowRoot?.querySelector(".powerValue + div")?.textContent ?? "").trim(),
+                hasSensor: !!display?.shadowRoot?.querySelector(".powerDisplay.has-sensor"),
+                switchEntityId: badge ? badge.entityId : null,
+            };
+        });
+    });
+}
+
+/** Click a composition box's power figure — the card's own more-info affordance. */
+async function clickBoxPower(page: Page, index: number): Promise<void> {
+    await page.evaluate((i) => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const container = el.shadowRoot
+            .querySelector(".house-breakdown")
+            .querySelector("power-devices-container");
+        const device = container.shadowRoot.querySelectorAll("power-device")[i] as any;
+        const display = device.shadowRoot
+            .querySelector(".deviceContent")
+            .querySelector("power-device-power-display");
+        (display.shadowRoot.querySelector(".powerDisplay") as HTMLElement).click();
+    }, index);
+}
+
+// The bars are painted with nodeAccentColor — the palette value at the alpha the
+// power card draws its own backgrounds at, not the full-strength hue.
+const SOLAR_RGB = "rgba(250, 204, 21, 0.376)"; // nodeAccentColor("solar")
+const GRID_RGB = "rgba(56, 189, 248, 0.376)"; // nodeAccentColor("grid")
+const BATTERY_RGB = "rgba(34, 197, 94, 0.376)"; // nodeAccentColor("battery")
+
+/** The distinct segment colours painted across the first composition box's bars. */
+async function barSegmentColours(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const container = el.shadowRoot
+            .querySelector(".house-breakdown")
+            .querySelector("power-devices-container");
+        const device = container.shadowRoot.querySelector("power-device") as any;
+        const bars = device.shadowRoot
+            .querySelector(".deviceContent")
+            .querySelector("helman-power-history-bars");
+        const segments = bars?.shadowRoot?.querySelectorAll(".historyBarSegment") ?? [];
+        const seen: string[] = [];
+        for (const s of segments) {
+            const colour = getComputedStyle(s as HTMLElement).backgroundColor;
+            if (!seen.includes(colour)) seen.push(colour);
+        }
+        return seen;
     });
 }
 
@@ -266,7 +338,7 @@ const APPLIANCES: Appliance[] = [
 ];
 
 test.describe("solar inspector house composition", () => {
-    test("selecting a slot shows one row per consumer plus the unmeasured remainder", async ({ page }) => {
+    test("selecting a slot shows one box per consumer plus the unmeasured remainder", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
 
@@ -279,7 +351,7 @@ test.describe("solar inspector house composition", () => {
         ).toBe(false);
 
         await selectNoonSlot(page);
-        const rows = await breakdownRows(page);
+        const rows = await breakdownBoxes(page);
 
         // The hour bucket sums four 15-minute sub-slots: unmeasured 400,
         // dishwasher 200, ev 120 — total 720. Ranked heaviest first, so the
@@ -289,9 +361,12 @@ test.describe("solar inspector house composition", () => {
             "Dishwasher",
             "EV charger",
         ]);
-        expect(rows[0].isUnmeasured).toBe(true);
+        // The remainder leads and carries no energy sensor of its own.
+        expect(rows[0].hasSensor).toBe(false);
 
-        expect(rows.map((r) => r.value)).toEqual(["0.4 kWh", "0.2 kWh", "0.1 kWh"]);
+        // The card speaks watts: the hour's energy as the average power it was
+        // drawn at, with each box's share of the house beside it.
+        expect(rows.map((r) => r.power)).toEqual(["400 W", "200 W", "120 W"]);
         expect(rows.map((r) => r.share)).toEqual(["56%", "28%", "17%"]);
     });
 
@@ -305,14 +380,14 @@ test.describe("solar inspector house composition", () => {
         });
 
         await selectNoonSlot(page);
-        const rows = await breakdownRows(page);
+        const rows = await breakdownBoxes(page);
 
         // The card's own title wins over this card's localized fallback.
         expect(rows[0].label).toBe("👻 Nesledovaná spotřeba");
-        expect(rows[0].isUnmeasured).toBe(true);
+        expect(rows[0].hasSensor).toBe(false);
     });
 
-    test("hides the unmeasured row when the slot's whole demand is metered", async ({ page }) => {
+    test("hides the unmeasured box when the slot's whole demand is metered", async ({ page }) => {
         await loadCardBundle(page);
         // The remainder is zero: every watt is metered, so no dead 0% row.
         await mountInspector(page, {
@@ -322,11 +397,11 @@ test.describe("solar inspector house composition", () => {
         });
 
         await selectNoonSlot(page);
-        const rows = await breakdownRows(page);
+        const rows = await breakdownBoxes(page);
 
         expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "EV charger"]);
-        expect(rows.some((r) => r.isUnmeasured)).toBe(false);
-        // Shares are still taken against the slot total, not renormalised.
+        expect(rows.every((r) => r.hasSensor)).toBe(true);
+        // Shares are still taken against the house total, not renormalised.
         expect(rows.map((r) => r.share)).toEqual(["63%", "38%"]);
     });
 
@@ -342,13 +417,13 @@ test.describe("solar inspector house composition", () => {
         });
 
         await selectNoonSlot(page);
-        const rows = await breakdownRows(page);
+        const rows = await breakdownBoxes(page);
 
         // The idle EV is dropped; the rest stay ranked heaviest first.
         expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Dishwasher"]);
     });
 
-    test("clicking a consumer row opens its energy sensor", async ({ page }) => {
+    test("clicking a consumer box opens its energy sensor", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, {
             withBreakdown: true,
@@ -357,19 +432,15 @@ test.describe("solar inspector house composition", () => {
         });
         await selectNoonSlot(page);
 
-        // Rows are ranked heaviest first: unmeasured, dishwasher, ev.
-        await page.evaluate(() => {
-            const el = document.querySelector("helman-solar-inspector") as any;
-            const rows = el.shadowRoot.querySelectorAll(".house-breakdown-row");
-            (rows[1] as HTMLElement).click();
-        });
+        // Boxes are ranked heaviest first: unmeasured, dishwasher, ev.
+        await clickBoxPower(page, 1);
 
         expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
             "sensor.dishwasher",
         ]);
     });
 
-    test("the unmeasured row is inert — it has no entity behind it", async ({ page }) => {
+    test("the unmeasured box is inert — it has no entity behind it", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, {
             withBreakdown: true,
@@ -378,14 +449,10 @@ test.describe("solar inspector house composition", () => {
         });
         await selectNoonSlot(page);
 
-        const unmeasuredIsClickable = await page.evaluate(() => {
-            const el = document.querySelector("helman-solar-inspector") as any;
-            const row = el.shadowRoot.querySelector(".house-breakdown-row.unmeasured");
-            (row as HTMLElement).click();
-            return row.classList.contains("clickable");
-        });
+        // The remainder sorts first here; clicking its figure must do nothing.
+        await clickBoxPower(page, 0);
 
-        expect(unmeasuredIsClickable).toBe(false);
+        expect((await breakdownBoxes(page))[0].hasSensor).toBe(false);
         expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([]);
     });
 
@@ -406,40 +473,11 @@ test.describe("solar inspector house composition", () => {
         });
         await selectNoonSlot(page);
 
-        const badges = await page.evaluate(() => {
-            const el = document.querySelector("helman-solar-inspector") as any;
-            const rows = [...el.shadowRoot.querySelectorAll(".house-breakdown-row")];
-            return rows.map((row) => {
-                const badge = row.querySelector("helman-appliance-switch-badge") as any;
-                return badge ? badge.entityId : null;
-            });
-        });
+        const badges = (await breakdownBoxes(page)).map((row) => row.switchEntityId);
 
         // Ranked unmeasured (400), dishwasher (200), ev (120); only the dishwasher
         // has a switch, and the remainder never does.
         expect(badges).toEqual([null, "switch.dishwasher", null]);
-    });
-
-    test("the control cell is not a dead zone when the consumer has no switch", async ({ page }) => {
-        // Regression: the cell used to swallow clicks unconditionally, so the
-        // leftmost strip of every switch-less row did nothing at all.
-        await loadCardBundle(page);
-        await mountInspector(page, {
-            withBreakdown: true,
-            appliances: [{ entityId: "sensor.dishwasher", label: "Dishwasher", wh: 50 }],
-            unmeasuredWh: 0,
-        });
-        await selectNoonSlot(page);
-
-        await page.evaluate(() => {
-            const el = document.querySelector("helman-solar-inspector") as any;
-            const cell = el.shadowRoot.querySelector(".house-breakdown-control");
-            (cell as HTMLElement).click();
-        });
-
-        expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
-            "sensor.dishwasher",
-        ]);
     });
 
     test("clicking the control badge opens the switch, not the energy sensor", async ({ page }) => {
@@ -460,7 +498,19 @@ test.describe("solar inspector house composition", () => {
 
         await page.evaluate(() => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            const badge = el.shadowRoot.querySelector("helman-appliance-switch-badge") as any;
+            const devices = el.shadowRoot
+                .querySelector(".house-breakdown")
+                .querySelector("power-devices-container")
+                .shadowRoot.querySelectorAll("power-device");
+            // The remainder outranks the dishwasher here, so find the box that
+            // actually carries a badge rather than assuming a position.
+            const badge = [...devices]
+                .map((device: any) =>
+                    device.shadowRoot
+                        .querySelector("power-device-icon")
+                        ?.shadowRoot?.querySelector("helman-appliance-switch-badge"),
+                )
+                .find(Boolean) as any;
             // Drive the badge's own event: <state-badge> is an HA element that is
             // not registered in this bare page, so it cannot be clicked directly.
             badge.dispatchEvent(
@@ -491,4 +541,81 @@ test.describe("solar inspector house composition", () => {
             }),
         ).toBe(false);
     });
+
+    /**
+     * Each row carries the power card's bar picture: one bar per slot of the
+     * selection, split by the source that fed the house then. Nothing records a
+     * per-appliance source split, so the mix is derived from the day's own grid
+     * and battery meters and solar takes the remainder — which makes the sign
+     * conventions (grid positive = export, battery positive = charge) the part
+     * worth pinning.
+     */
+    test("bars are coloured by the source that fed the house in the slot", async ({ page }) => {
+        await loadCardBundle(page);
+        // 80 Wh a slot, all of it imported from the grid: grid is negative.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 0,
+            gridWh: -80,
+        });
+
+        await selectNoonSlot(page);
+
+        expect(await barSegmentColours(page)).toEqual([GRID_RGB]);
+    });
+
+    test("battery discharge colours the bars", async ({ page }) => {
+        await loadCardBundle(page);
+        // 80 Wh a slot, half from the battery discharging, the rest unaccounted
+        // for by either meter — so it must read as solar.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 0,
+            batteryWh: -40,
+        });
+
+        await selectNoonSlot(page);
+
+        // Solar first, then battery — the order houseSourceMixBySlot builds them in.
+        expect(await barSegmentColours(page)).toEqual([SOLAR_RGB, BATTERY_RGB]);
+    });
+
+    test("a charging battery is not a source — it consumes, it does not feed", async ({ page }) => {
+        await loadCardBundle(page);
+        // Positive battery energy is charging. It takes energy off the bus rather
+        // than putting any on it, so the house's 80 Wh is left entirely to solar;
+        // a flipped sign here would paint the bars battery-green instead.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 0,
+            batteryWh: 40,
+        });
+
+        await selectNoonSlot(page);
+
+        expect(await barSegmentColours(page)).toEqual([SOLAR_RGB]);
+    });
+
+    test("solar takes the remainder rather than the raw production series", async ({ page }) => {
+        await loadCardBundle(page);
+        // Everything the house drew came off the meters, so nothing is left for
+        // solar even though the fixture's production series is non-zero: energy
+        // that went to export or into the battery never reached the house.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 0,
+            gridWh: -40,
+            batteryWh: -40,
+        });
+
+        await selectNoonSlot(page);
+
+        expect(await barSegmentColours(page)).toEqual([BATTERY_RGB, GRID_RGB]);
+    });
+
+
 });

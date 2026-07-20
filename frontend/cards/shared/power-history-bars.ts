@@ -1,12 +1,27 @@
 import { LitElement, TemplateResult, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
-import { DeviceNode } from "./DeviceNode";
+
+/**
+ * A row of vertical bars: one bar per time bucket, each bar's height scaled
+ * against a shared maximum and split into the energy sources that fed it.
+ *
+ * Deliberately knows nothing about where the buckets came from. The power card
+ * feeds it a live rolling buffer of watts; the solar inspector feeds it per-slot
+ * historical energy. Both are "a value per bucket plus how it was sourced", so
+ * both get the same picture out of it.
+ */
+
+/** How one source contributed to a single bucket. */
+export type SourceContribution = { power: number; color: string };
+
+/** The per-source split of one bucket, keyed by source id. */
+export type BucketSourceMix = { [sourceId: string]: SourceContribution };
 
 type BarSegment = { heightPct: number; color: string };
 type Bar = { heightPct: number; segments: BarSegment[] };
 
-@customElement("power-device-history-bars")
-export class PowerDeviceHistoryBars extends LitElement {
+@customElement("helman-power-history-bars")
+export class HelmanPowerHistoryBars extends LitElement {
     static get styles() {
         return css`
             .historyContainer {
@@ -20,7 +35,6 @@ export class PowerDeviceHistoryBars extends LitElement {
                 align-items: flex-end;
                 pointer-events: none;
                 overflow: hidden;
-                //border-radius: 10px;
                 z-index: 1;
             }
             .historyBarContainer {
@@ -34,35 +48,38 @@ export class PowerDeviceHistoryBars extends LitElement {
         `;
     }
 
-    @property({ attribute: false }) public device!: DeviceNode;
+    /** One value per bucket, oldest first. */
     @property({ attribute: false }) public historyToRender!: number[];
+    /** The value a full-height bar represents; shared across sibling rows. */
     @property({ type: Number }) public maxHistoryPower!: number;
+    /** Painted when a bucket has no source split to show. */
     @property({ type: String }) public historyBarColor!: string;
+    /** Per-bucket source split, index-aligned with `historyToRender`. Omit for a flat bar. */
+    @property({ attribute: false }) public sourceHistory?: (BucketSourceMix | undefined)[];
 
     @state() private _bars: Bar[] = [];
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         if (!changedProperties.has('historyToRender')
             && !changedProperties.has('maxHistoryPower')
-            && !changedProperties.has('device')
+            && !changedProperties.has('sourceHistory')
             && !changedProperties.has('historyBarColor')) {
             return;
         }
 
         const hist = this.historyToRender ?? [];
         const max = this.maxHistoryPower;
-        const sourcePerBucket = this.device.sourcePowerHistory;
-        const isSource = this.device.isSource;
+        const sourcePerBucket = this.sourceHistory;
         const fallbackColor = this.historyBarColor;
 
         const bars: Bar[] = new Array(hist.length);
         for (let i = 0; i < hist.length; i++) {
             const p = hist[i];
             const heightPct = max > 0 ? Math.min(100, (p / max) * 100) : 0;
-            const sourceHistory = !isSource ? sourcePerBucket?.[i] : undefined;
+            const sourceMix = sourcePerBucket?.[i];
             const segments: BarSegment[] = [];
-            if (sourceHistory) {
-                for (const s of Object.values(sourceHistory)) {
+            if (sourceMix) {
+                for (const s of Object.values(sourceMix)) {
                     if (p > 0) {
                         segments.push({ heightPct: (s.power / p) * 100, color: s.color });
                     }

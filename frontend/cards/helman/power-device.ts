@@ -7,7 +7,7 @@ import { nodeAccentColor } from "../color-utils";
 import { DeviceNode } from "./DeviceNode";
 import "./power-device";
 import "./power-devices-container";
-import "./power-device-history-bars";
+import "../shared/power-history-bars";
 import "./power-device-icon";
 import "./power-device-power-display";
 import "./power-device-info";
@@ -190,12 +190,12 @@ export class PowerDevice extends LitElement {
         const historyBarColor = nodeColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
                 <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap(nodeColor ? {'--device-shadow-color': nodeColor, '--device-tint': nodeColor} : {})}>
-                    <power-device-history-bars 
-                        .device=${this.device}
+                    <helman-power-history-bars
                         .historyToRender=${[...historyToRender]}
                         .maxHistoryPower=${maxHistoryPower}
-                        .historyBarColor=${historyBarColor}>
-                    </power-device-history-bars>
+                        .historyBarColor=${historyBarColor}
+                        .sourceHistory=${device.isSource ? undefined : device.sourcePowerHistory}>
+                    </helman-power-history-bars>
                     <div class="deviceInfo" style="display: flex; flex-direction: column;flex-basis: 100%;">
                         <div style="display: flex; flex-direction: row;flex-basis: 100%;align-items: center; ">
                             <power-device-icon 

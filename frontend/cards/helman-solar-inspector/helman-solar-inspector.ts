@@ -1,4 +1,4 @@
-import { LitElement, css, html, svg, type TemplateResult } from "lit";
+import { LitElement, css, html, svg, unsafeCSS, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
@@ -31,11 +31,13 @@ import {
   HOUSE_COLOR,
   NEUTRAL_LIGHT_COLOR,
   SOLAR_COLOR,
+  nodeAccentColor,
 } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
 import "./helman-solar-export-price-strip";
-import "../appliance-switch-badge";
+import "../helman/power-devices-container";
+import { DeviceNode } from "../helman/DeviceNode";
 import {
   findTrainingSlot,
   resolveSelectedTrainingDate,
@@ -53,6 +55,9 @@ import {
   actualsCoverUntil,
   aggregateBreakdownOverSlots,
   aggregateBreakdownSeries,
+  consumerBarsOverSlots,
+  expandSlotsToNative,
+  houseSourceMixBySlot,
   dropPartialBuckets,
   timestampMinutes,
   aggregateImpactOverSlots,
@@ -822,97 +827,17 @@ export class HelmanSolarInspector extends LitElement {
       border-left: 3px solid var(--helman-house);
       border-radius: 6px;
       background: color-mix(in srgb, var(--helman-house) 8%, transparent);
+      /* Every box here is a breakdown of the house, so it carries the house
+         tint — the same declaration the power card's house section makes. The
+         boxes set no --device-tint of their own, so power-device's fallback
+         inherits this one across the shadow boundary. */
+      --device-tint: ${unsafeCSS(nodeAccentColor("house"))};
     }
 
     .house-breakdown-title {
       color: var(--secondary-text-color);
       font-size: 0.78rem;
       font-weight: 600;
-    }
-
-    .house-breakdown-rows {
-      display: grid;
-      gap: 4px;
-    }
-
-    /* Control, name, then the figures, with the gauge trailing so the numbers
-       line up in a scannable column rather than sitting past a ragged bar. */
-    .house-breakdown-row {
-      display: grid;
-      grid-template-columns: 34px minmax(72px, 1.2fr) auto auto minmax(48px, 2fr);
-      align-items: center;
-      gap: 8px;
-      padding: 1px 2px;
-      border-radius: 4px;
-      font-size: 0.82rem;
-    }
-
-    .house-breakdown-row.clickable {
-      cursor: pointer;
-    }
-
-    .house-breakdown-row.clickable:hover,
-    .house-breakdown-row.clickable:focus-visible {
-      background: color-mix(in srgb, var(--primary-text-color) 7%, transparent);
-      outline: none;
-    }
-
-    .house-breakdown-control {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 34px;
-      height: 30px;
-    }
-
-    /* The shared badge sizes itself for the power card's roomier rows; scale it
-       down so a composition row stays compact. */
-    .house-breakdown-control helman-appliance-switch-badge {
-      transform: scale(0.78);
-      transform-origin: center;
-    }
-
-    .house-breakdown-label {
-      color: var(--primary-text-color);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .house-breakdown-row.unmeasured .house-breakdown-label {
-      color: var(--secondary-text-color);
-      font-style: italic;
-    }
-
-    .house-breakdown-bar-track {
-      height: 8px;
-      border-radius: 4px;
-      background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-      overflow: hidden;
-    }
-
-    .house-breakdown-bar {
-      display: block;
-      height: 100%;
-      border-radius: 4px;
-      background: var(--helman-house);
-    }
-
-    .house-breakdown-row.unmeasured .house-breakdown-bar {
-      background: color-mix(in srgb, var(--helman-house) 45%, transparent);
-    }
-
-    .house-breakdown-value {
-      color: var(--primary-text-color);
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-    }
-
-    .house-breakdown-share {
-      min-width: 2.6em;
-      text-align: right;
-      color: var(--secondary-text-color);
-      font-variant-numeric: tabular-nums;
     }
   `];
 
@@ -2109,7 +2034,11 @@ export class HelmanSolarInspector extends LitElement {
           )}
         </div>
       </div>
-      ${this._renderHouseBreakdown(houseBreakdown, payload.houseUnmeasuredLabel)}
+      ${this._renderHouseBreakdown(
+        houseBreakdown,
+        payload.houseUnmeasuredLabel,
+        slots,
+      )}
       ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
     `;
   }
@@ -2130,103 +2059,139 @@ export class HelmanSolarInspector extends LitElement {
   private _renderHouseBreakdown(
     breakdown: HouseBreakdownPoint | null,
     unmeasuredLabel: string | null,
+    slots: readonly string[],
   ) {
     if (!breakdown) return "";
-    type BreakdownRow = {
-      label: string;
-      wh: number;
-      isUnmeasured: boolean;
-      /** The energy sensor this row measures; null for the remainder. */
-      entityId: string | null;
-      switchEntityId: string | null;
-    };
-    const rows: BreakdownRow[] = [
-      ...breakdown.appliances
-        .filter((appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0)
-        .map((appliance) => ({
-          label: appliance.label,
-          wh: appliance.wh,
-          isUnmeasured: false,
-          entityId: appliance.entityId,
-          switchEntityId: appliance.switchEntityId ?? null,
-        })),
-    ];
+    // Bars read off the backend's native 15-minute grid rather than the width the
+    // chart is drawn at, so selecting one hour shows the four samples inside it —
+    // the shape of the consumption, not a single flat block.
+    const native = this._payload?.series;
+    if (!native) return "";
+    const barSlots = expandSlotsToNative(slots, this._slotMinutes);
+    // How the house was fed in each of those samples, shared by every consumer:
+    // the mix is a house-level property, so it is derived once and then rescaled
+    // per consumer rather than recomputed box by box.
+    const mixes = houseSourceMixBySlot(native, barSlots);
+    // The card speaks watts, so each sample's energy becomes the average power it
+    // was drawn at. Samples are uniform, so this is a pure change of unit — the
+    // bars keep their shape and the figures stay comparable with the power card's.
+    const hoursPerBar = SLOT_MINUTES / 60;
+    // The figures above the bars summarise the whole selection, so they average
+    // over its full span rather than over one sample.
+    const selectionHours = Math.max(1, slots.length) * (this._slotMinutes / 60);
+
+    const consumers = breakdown.appliances.filter(
+      (appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0,
+    );
     // What no meter claimed. This is deliberately not the forecast's
     // non-deferrable base load — it is the same idea as the power card's
     // "unmeasured" node, so it borrows that node's configured title. Like the
-    // consumer rows it is dropped when it carries nothing, so an empty slot — or
-    // one whose whole demand is metered — shows no dead "0%" row.
+    // consumer boxes it is dropped when it carries nothing, so an empty slot — or
+    // one whose whole demand is metered — shows no dead box.
     const unmeasuredWh = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
-    if (unmeasuredWh > 0) {
-      rows.push({
-        label: unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
-        wh: unmeasuredWh,
-        isUnmeasured: true,
-        entityId: null,
-        switchEntityId: null,
-      });
-    }
-    const total = rows.reduce((sum, row) => sum + Math.max(0, row.wh), 0);
+    const total = consumers.reduce((sum, c) => sum + c.wh, 0) + Math.max(0, unmeasuredWh);
     if (total <= 0) return "";
+
+    const nodes: DeviceNode[] = consumers.map((appliance) =>
+      this._breakdownNode(
+        appliance.entityId,
+        appliance.label,
+        appliance.wh,
+        appliance.switchEntityId ?? null,
+        false,
+        consumerBarsOverSlots(native.houseActualBreakdown, barSlots, appliance.entityId, mixes),
+        hoursPerBar,
+        selectionHours,
+      ),
+    );
+    if (unmeasuredWh > 0) {
+      nodes.push(
+        this._breakdownNode(
+          null,
+          unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
+          unmeasuredWh,
+          null,
+          true,
+          consumerBarsOverSlots(native.houseActualBreakdown, barSlots, null, mixes),
+          hoursPerBar,
+          selectionHours,
+        ),
+      );
+    }
     // Ranked heaviest first so the slot's dominant load reads at a glance. The
-    // remainder sorts by size like any other row rather than being pinned last,
+    // remainder sorts by size like any other box rather than being pinned last,
     // or a large unmetered block would sit below trivial named ones.
-    rows.sort((a, b) => b.wh - a.wh);
+    nodes.sort((a, b) => (b.powerValue ?? 0) - (a.powerValue ?? 0));
+
+    // The house's own per-slot power. Handing it down as the parent scales every
+    // box's bars against the house exactly as the power card scales a child
+    // against its parent, and gives each box its share-of-parent figure.
+    const houseBars = consumerBarsOverSlots(
+      native.houseActualBreakdown, barSlots, undefined, mixes,
+    );
+    const houseHistory = houseBars.values.map((wh) => wh / hoursPerBar);
 
     return html`
-      <div
-        class="house-breakdown"
-        @show-more-info=${(event: CustomEvent<{ entityId: string }>) => {
-          // The shared switch badge reports its own entity; forward it as the
-          // dialog request HA listens for, same as the power card does.
-          event.stopPropagation();
-          this._showMoreInfo(event.detail?.entityId ?? null);
-        }}
-      >
+      <!-- No more-info handler here: power-device already turns its children's
+           \`show-more-info\` into the \`hass-more-info\` request HA listens for, and
+           that bubbles composed straight out of this card. Re-handling it would
+           open every dialog twice. -->
+      <div class="house-breakdown">
         <div class="house-breakdown-title">${this._t("bias_correction.inspector.house_composition")}</div>
-        <div class="house-breakdown-rows">
-          ${rows.map((row) => {
-            const share = total > 0 ? Math.max(0, row.wh) / total : 0;
-            // Consumer rows open their energy sensor; the remainder has no entity
-            // behind it, so it stays inert.
-            const clickable = row.entityId !== null;
-            return html`
-              <div
-                class="house-breakdown-row ${row.isUnmeasured ? "unmeasured" : ""} ${clickable ? "clickable" : ""}"
-                role=${clickable ? "button" : "presentation"}
-                tabindex=${clickable ? "0" : "-1"}
-                title=${clickable ? row.entityId! : row.label}
-                @click=${() => this._showMoreInfo(row.entityId)}
-                @keydown=${(event: KeyboardEvent) => {
-                  if (event.key !== "Enter" && event.key !== " ") return;
-                  event.preventDefault();
-                  this._showMoreInfo(row.entityId);
-                }}
-              >
-                <span class="house-breakdown-control">
-                  ${row.switchEntityId
-                    ? html`<helman-appliance-switch-badge
-                        .hass=${this.hass}
-                        .entityId=${row.switchEntityId}
-                        @click=${(event: Event) => event.stopPropagation()}
-                      ></helman-appliance-switch-badge>`
-                    : ""}
-                </span>
-                <span class="house-breakdown-label">${row.label}</span>
-                <span class="house-breakdown-value">${this._formatWh(row.wh)}</span>
-                <span class="house-breakdown-share">${(share * 100).toFixed(0)}%</span>
-                <span class="house-breakdown-bar-track">
-                  <span
-                    class="house-breakdown-bar"
-                    style=${`width: ${(share * 100).toFixed(1)}%;`}
-                  ></span>
-                </span>
-              </div>
-            `;
-          })}
-        </div>
+        <power-devices-container
+          .hass=${this.hass}
+          .devices=${nodes}
+          .currentParentPower=${total / selectionHours}
+          .parentPowerHistory=${houseHistory}
+          .historyBuckets=${barSlots.length}
+          .historyBucketDuration=${SLOT_MINUTES * 60}
+          .devices_full_width=${true}
+        ></power-devices-container>
       </div>
     `;
+  }
+
+  /**
+   * One breakdown consumer as a power-card device node.
+   *
+   * The node carries no `sourceType`, so it draws no glow of its own and inherits
+   * the house tint the panel sets — the same way the power card's own house
+   * children do. Its energy sensor stands in as the power sensor so clicking the
+   * box opens the entity behind it; the unmetered remainder has none and so stays
+   * inert, exactly as it did before.
+   */
+  private _breakdownNode(
+    entityId: string | null,
+    label: string,
+    wh: number,
+    switchEntityId: string | null,
+    isUnmeasured: boolean,
+    bars: ReturnType<typeof consumerBarsOverSlots>,
+    hoursPerBar: number,
+    selectionHours: number,
+  ): DeviceNode {
+    const node = new DeviceNode(
+      entityId ?? "house-unmeasured",
+      label,
+      entityId,
+      switchEntityId,
+      bars.values.length,
+    );
+    node.displayName = label;
+    node.isUnmeasured = isUnmeasured;
+    node.powerValue = wh / selectionHours;
+    node.powerHistory = bars.values.map((slotWh) => slotWh / hoursPerBar);
+    node.sourcePowerHistory = bars.sourceHistory.map((mix) => {
+      if (!mix) return {};
+      const scaled: Record<string, { power: number; color: string }> = {};
+      for (const [sourceId, part] of Object.entries(mix)) {
+        scaled[sourceId] = { power: part.power / hoursPerBar, color: part.color };
+      }
+      return scaled;
+    });
+    node.hideChildren = true;
+    node.hideChildrenIndicator = true;
+    return node;
   }
 
   /** Ask HA to open an entity's more-info dialog; a no-op without an entity. */
