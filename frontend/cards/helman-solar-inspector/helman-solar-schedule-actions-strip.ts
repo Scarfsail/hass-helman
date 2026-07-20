@@ -38,7 +38,7 @@ import type {
 import "../helman-scheduling/components/scheduling-action-chip";
 import "../helman-scheduling/components/scheduling-appliance-chip";
 import "../helman-scheduling/dialogs/scheduling-range-edit-dialog";
-import { helmanColorVars } from "../color-utils";
+import { helmanColorVars } from "../color-vars";
 
 const MINUTES_PER_DAY = 1440;
 

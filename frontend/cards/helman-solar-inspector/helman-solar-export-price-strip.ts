@@ -12,7 +12,7 @@ import {
     stripWindow,
     type ScheduleStripGeometry,
 } from "./helman-solar-schedule-actions-strip";
-import { helmanColorVars } from "../color-utils";
+import { helmanColorVars } from "../color-vars";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -211,8 +211,9 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                             <rect
                                 x=${left + 0.25} y=${top}
                                 width=${width} height=${barHeight}
-                                fill=${color} fill-opacity=${future ? 0.4 : 0.85}
-                                stroke=${color} stroke-width=${future ? 0.9 : 0}
+                                style="fill: ${color}; stroke: ${color};"
+                                fill-opacity=${future ? 0.4 : 0.85}
+                                stroke-width=${future ? 0.9 : 0}
                                 stroke-dasharray=${future ? "2 2" : ""}
                             >
                                 <title>${this._formatMinutes(column.startMinutes)} ${column.value.toFixed(1)} ${unit}</title>
@@ -282,8 +283,8 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         return svg`
             <rect
                 x=${x} y="0" width=${width} height=${height}
-                fill=${fill}
-                stroke=${stroke} stroke-width="1" stroke-opacity=${strokeOpacity}
+                style="fill: ${fill}; stroke: ${stroke};"
+                stroke-width="1" stroke-opacity=${strokeOpacity}
                 rx="1"
                 pointer-events="none"
             ></rect>

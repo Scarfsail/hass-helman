@@ -1,5 +1,3 @@
-import { css, unsafeCSS } from 'lit-element';
-
 /**
  * The single source of truth for every color that carries domain meaning:
  * what a power source is, which way energy moves, whether a price is good.
@@ -42,41 +40,6 @@ export const DISCHARGE_COLOR = '#dc2626'; // red-600
 export const NEUTRAL_COLOR       = '#6b7280'; // gray-500
 export const NEUTRAL_LIGHT_COLOR = '#9ca3af'; // gray-400
 
-/**
- * The palette as CSS custom properties.
- *
- * Custom properties set on one element's :host do not reach a sibling custom
- * element's shadow tree, so every card that wants these has to include this
- * block in its own `static styles`. Without it a `var(--helman-solar)` in
- * another card silently falls through to whatever fallback is written inline.
- *
- * Values here are opaque by design. Transparency belongs to the component that
- * needs it — `color-mix(in srgb, var(--helman-solar) 24%, transparent)` in CSS,
- * or withAlpha() in chart code that builds fill strings in JS.
- */
-export const helmanColorVars = css`
-    :host {
-        --helman-solar: ${unsafeCSS(SOLAR_COLOR)};
-        --helman-grid: ${unsafeCSS(GRID_COLOR)};
-        --helman-battery: ${unsafeCSS(BATT_COLOR)};
-        --helman-house: ${unsafeCSS(HOUSE_COLOR)};
-
-        --helman-grid-import: ${unsafeCSS(GRID_IMPORT_COLOR)};
-        --helman-grid-export: ${unsafeCSS(GRID_EXPORT_COLOR)};
-
-        --helman-price-positive: ${unsafeCSS(PRICE_POSITIVE_COLOR)};
-        --helman-price-negative: ${unsafeCSS(PRICE_NEGATIVE_COLOR)};
-
-        --helman-forecast-raw: ${unsafeCSS(FORECAST_RAW_COLOR)};
-        --helman-selection: ${unsafeCSS(SELECTION_COLOR)};
-
-        --helman-charge: ${unsafeCSS(CHARGE_COLOR)};
-        --helman-discharge: ${unsafeCSS(DISCHARGE_COLOR)};
-
-        --helman-neutral: ${unsafeCSS(NEUTRAL_COLOR)};
-        --helman-neutral-light: ${unsafeCSS(NEUTRAL_LIGHT_COLOR)};
-    }
-`;
 
 /** Adds a two-digit alpha channel to a hex color value. */
 export function withAlpha(hex: string, alphaHex: string): string {

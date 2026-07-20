@@ -31,7 +31,6 @@ import {
   HOUSE_COLOR,
   NEUTRAL_LIGHT_COLOR,
   SOLAR_COLOR,
-  helmanColorVars,
 } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
@@ -72,6 +71,7 @@ import {
   type SlotSelectionMode,
   type SlotSelectionState,
 } from "./slot-selection.js";
+import { helmanColorVars } from "../color-vars";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
@@ -1280,8 +1280,8 @@ export class HelmanSolarInspector extends LitElement {
     return svg`
       <rect
         x=${x} y=${y} width=${w} height=${height}
-        fill="color-mix(in srgb, var(--helman-selection) 14%, transparent)"
-        stroke="var(--helman-selection)" stroke-width="1" stroke-opacity="0.55"
+        style="fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection);"
+        stroke-width="1" stroke-opacity="0.55"
         rx="1"
         pointer-events="none"
       ></rect>
@@ -1629,7 +1629,7 @@ export class HelmanSolarInspector extends LitElement {
           ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForW(rawPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.raw}></circle>`
           : ""}
       ${invalidatedPoints.map((entry) => svg`
-        <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" fill="var(--helman-neutral-light)" opacity="0.55">
+        <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" style="fill: var(--helman-neutral-light);" opacity="0.55">
           <title>${this._t("bias_correction.inspector.invalidated_production")}</title>
         </circle>
       `)}
@@ -1838,9 +1838,8 @@ export class HelmanSolarInspector extends LitElement {
           const strokeWidth = selected ? "1.5" : "0";
           return svg`
             <rect x=${x} y=${y} width=${w} height=${h}
-                  fill=${fill} fill-opacity=${fillOpacity}
-                  stroke=${strokeColor} stroke-width=${strokeWidth}
-                  style="pointer-events: none;">
+                  fill-opacity=${fillOpacity} stroke-width=${strokeWidth}
+                  style="fill: ${fill}; stroke: ${strokeColor}; pointer-events: none;">
               <title>${point.slot} ${this._formatSignedWh(point.impactWh)}</title>
             </rect>
           `;
@@ -2779,8 +2778,8 @@ export class HelmanSolarInspector extends LitElement {
     return svg`
       <rect
         x=${x} y=${y} width=${w} height=${height}
-        fill="color-mix(in srgb, var(--helman-grid-import) 13%, transparent)"
-        stroke="var(--helman-grid-import)" stroke-width="1" stroke-opacity="0.5"
+        style="fill: color-mix(in srgb, var(--helman-grid-import) 13%, transparent); stroke: var(--helman-grid-import);"
+        stroke-width="1" stroke-opacity="0.5"
         rx="1"
         pointer-events="none"
       ></rect>

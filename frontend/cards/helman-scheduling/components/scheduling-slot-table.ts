@@ -47,7 +47,7 @@ import type {
     ScheduleSlotToggleDetail,
 } from "../schedule-types";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
-import { helmanColorVars } from "../../color-utils";
+import { helmanColorVars, helmanMetricVars } from "../../color-vars";
 
 const ZERO_KWH_DISPLAY_THRESHOLD = GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KWH;
 
@@ -125,16 +125,12 @@ function _getCenterOriginDirection(value: number): "negative" | "positive" | nul
 export class SchedulingSlotTable extends LitElement {
     static styles = [
         helmanColorVars,
+        helmanMetricVars,
         schedulingSharedStyles,
         css`
             :host {
                 --schedule-table-disclosure-width: 16px;
                 --schedule-table-metric-column-width: 82px;
-                /* canonical metric palette, shared with the automation inspector */
-                --m-surplus: var(--helman-solar);
-                --m-soc: var(--helman-battery);
-                --m-import: var(--helman-grid-import);
-                --m-export: var(--helman-grid-export);
             }
             .metric-surplus { --m: var(--m-surplus); }
             .metric-soc { --m: var(--m-soc); }

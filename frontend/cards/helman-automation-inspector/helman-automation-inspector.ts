@@ -13,7 +13,7 @@ import {
     type CellView,
     type RailDelta,
 } from "./automation-inspector-model";
-import { helmanColorVars } from "../color-utils";
+import { helmanColorVars, helmanMetricVars } from "../color-vars";
 
 interface SelectedCell {
     stepIndex: number;
@@ -404,15 +404,9 @@ export class HelmanAutomationInspector extends LitElement {
         return slotId.slice(11, 16);
     }
 
-    static styles = [helmanColorVars, css`
+    static styles = [helmanColorVars, helmanMetricVars, css`
         :host {
             display: block; font-size: 13px;
-            /* Canonical metric palette (falls back when the app-level tokens
-               from the other cards are not in scope). */
-            --m-surplus: var(--helman-solar);
-            --m-soc: var(--helman-battery);
-            --m-import: var(--helman-grid-import);
-            --m-export: var(--helman-grid-export);
         }
         .metric-surplus { --m: var(--m-surplus); }
         .metric-soc { --m: var(--m-soc); }
