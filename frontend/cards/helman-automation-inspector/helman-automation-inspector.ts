@@ -408,10 +408,10 @@ export class HelmanAutomationInspector extends LitElement {
             display: block; font-size: 13px;
             /* Canonical metric palette (falls back when the app-level tokens
                from the other cards are not in scope). */
-            --m-surplus: var(--simple-card-source-solar, #facc15);
-            --m-soc: var(--simple-card-source-battery, #22c55e);
-            --m-import: var(--forecast-grid-import, #2563eb);
-            --m-export: var(--forecast-grid-export, #7dd3fc);
+            --m-surplus: var(--helman-solar);
+            --m-soc: var(--helman-battery);
+            --m-import: var(--helman-grid-import);
+            --m-export: var(--helman-grid-export);
         }
         .metric-surplus { --m: var(--m-surplus); }
         .metric-soc { --m: var(--m-soc); }
@@ -425,8 +425,8 @@ export class HelmanAutomationInspector extends LitElement {
         }
         .header-info { display: flex; gap: 10px; align-items: center; }
         .outcome { font-weight: 600; }
-        .outcome.ok { color: var(--success-color, #16a34a); }
-        .outcome.warn { color: var(--warning-color, #d97706); }
+        .outcome.ok { color: var(--success-color, #2e7d32); }
+        .outcome.warn { color: var(--warning-color, #c27c0e); }
         .duration { color: var(--secondary-text-color); }
         .header-actions { display: flex; gap: 10px; align-items: center; }
         .filter { display: flex; gap: 4px; align-items: center; color: var(--secondary-text-color); }
@@ -489,19 +489,19 @@ export class HelmanAutomationInspector extends LitElement {
         .cell.metric-edge-soc { box-shadow: inset 3px 0 0 -1px var(--m-soc); }
         .cell.metric-edge-import { box-shadow: inset 3px 0 0 -1px var(--m-import); }
         .cell.metric-edge-export { box-shadow: inset 3px 0 0 -1px var(--m-export); }
-        .cell-applied { color: var(--success-color, #16a34a); font-weight: 700; }
-        .cell-blocked { color: var(--warning-color, #d97706); }
+        .cell-applied { color: var(--success-color, #2e7d32); font-weight: 700; }
+        .cell-blocked { color: var(--warning-color, #c27c0e); }
         .cell-rejected { color: var(--secondary-text-color); }
-        .cell-unexplained { color: var(--error-color, #dc2626); font-weight: 700; }
+        .cell-unexplained { color: var(--error-color, #c62828); font-weight: 700; }
         .cell-out_of_scope, .cell-derived { color: var(--disabled-text-color, #bbb); }
         .cell.selected { outline: 2px solid var(--primary-color); }
         .cell.sibling { background: color-mix(in srgb, var(--primary-color) 12%, transparent); }
         .badge {
             font-size: 10px; border-radius: 4px; padding: 0 4px; color: #fff;
         }
-        .badge.skipped { background: var(--warning-color, #d97706); }
-        .badge.failed { background: var(--error-color, #dc2626); }
-        .badge.incomplete { background: var(--warning-color, #d97706); }
+        .badge.skipped { background: var(--warning-color, #c27c0e); }
+        .badge.failed { background: var(--error-color, #c62828); }
+        .badge.incomplete { background: var(--warning-color, #c27c0e); }
         .popover-backdrop {
             position: fixed; inset: 0; background: rgba(0,0,0,0.2); z-index: 10;
         }

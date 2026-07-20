@@ -187,7 +187,7 @@ export const schedulingSharedStyles = css`
     }
 
     .action-tone-discharge {
-        --schedule-action-tone-accent: var(--schedule-action-discharge-color, var(--warning-color, #a16207));
+        --schedule-action-tone-accent: var(--schedule-action-discharge-color, var(--warning-color, #c27c0e));
     }
 
     .action-tone-stop {

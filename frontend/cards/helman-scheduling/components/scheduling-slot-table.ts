@@ -129,10 +129,10 @@ export class SchedulingSlotTable extends LitElement {
                 --schedule-table-disclosure-width: 16px;
                 --schedule-table-metric-column-width: 82px;
                 /* canonical metric palette, shared with the automation inspector */
-                --m-surplus: var(--simple-card-source-solar, #facc15);
-                --m-soc: var(--simple-card-source-battery, #22c55e);
-                --m-import: var(--forecast-grid-import, #2563eb);
-                --m-export: var(--forecast-grid-export, #7dd3fc);
+                --m-surplus: var(--helman-solar);
+                --m-soc: var(--helman-battery);
+                --m-import: var(--helman-grid-import);
+                --m-export: var(--helman-grid-export);
             }
             .metric-surplus { --m: var(--m-surplus); }
             .metric-soc { --m: var(--m-soc); }
@@ -494,38 +494,38 @@ export class SchedulingSlotTable extends LitElement {
             .day-aggregate-gauge.battery {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 10%, transparent),
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 5%, transparent)
+                    color-mix(in srgb, var(--helman-battery) 10%, transparent),
+                    color-mix(in srgb, var(--helman-battery) 5%, transparent)
                 );
-                color: color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 26%, var(--primary-text-color));
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 14%, var(--divider-color));
+                color: color-mix(in srgb, var(--helman-battery) 26%, var(--primary-text-color));
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-battery) 14%, var(--divider-color));
                 text-shadow: none;
             }
 
             .day-aggregate-gauge.battery .day-aggregate-gauge-fill {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 34%, white 4%),
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 22%, transparent)
+                    color-mix(in srgb, var(--helman-battery) 34%, white 4%),
+                    color-mix(in srgb, var(--helman-battery) 22%, transparent)
                 );
             }
 
             .day-aggregate-gauge.solar {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 8%, #171613),
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 4%, #0b0b0a)
+                    color-mix(in srgb, var(--helman-solar) 8%, #171613),
+                    color-mix(in srgb, var(--helman-solar) 4%, #0b0b0a)
                 );
-                color: color-mix(in srgb, white 72%, var(--simple-card-source-solar, #facc15));
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--simple-card-source-solar, #facc15) 10%, #25231f);
+                color: color-mix(in srgb, white 72%, var(--helman-solar));
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-solar) 10%, #25231f);
                 text-shadow: none;
             }
 
             .day-aggregate-gauge.solar .day-aggregate-gauge-fill {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 24%, #2d2500),
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 16%, #131000)
+                    color-mix(in srgb, var(--helman-solar) 24%, #2d2500),
+                    color-mix(in srgb, var(--helman-solar) 16%, #131000)
                 );
             }
 
@@ -533,12 +533,12 @@ export class SchedulingSlotTable extends LitElement {
                 direction: ltr;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 8%, #10151d),
-                    color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 4%, #06090d),
-                    color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 8%, #10151d)
+                    color-mix(in srgb, var(--helman-grid) 8%, #10151d),
+                    color-mix(in srgb, var(--helman-grid) 4%, #06090d),
+                    color-mix(in srgb, var(--helman-grid) 8%, #10151d)
                 );
                 color: color-mix(in srgb, var(--primary-text-color) 76%, transparent);
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 9%, #1c2430);
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-grid) 9%, #1c2430);
                 text-shadow: none;
             }
 
@@ -568,8 +568,8 @@ export class SchedulingSlotTable extends LitElement {
                 inset: 0 auto 0 50%;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-grid-accent, #7dd3fc) 42%, white 2%),
-                    color-mix(in srgb, var(--simple-card-grid-accent, #7dd3fc) 20%, transparent)
+                    color-mix(in srgb, var(--helman-grid-export) 42%, white 2%),
+                    color-mix(in srgb, var(--helman-grid-export) 20%, transparent)
                 );
                 border-radius: 0 4px 4px 0;
             }
@@ -602,7 +602,7 @@ export class SchedulingSlotTable extends LitElement {
             }
 
             .day-aggregate-gauge-pair .day-aggregate-gauge-value.export {
-                color: color-mix(in srgb, var(--simple-card-grid-accent, #7dd3fc) 52%, var(--primary-text-color));
+                color: color-mix(in srgb, var(--helman-grid-export) 52%, var(--primary-text-color));
                 text-align: right;
             }
 
@@ -615,12 +615,12 @@ export class SchedulingSlotTable extends LitElement {
                 direction: ltr;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--forecast-price-negative, #6d4c41) 8%, transparent),
+                    color-mix(in srgb, var(--helman-price-negative) 8%, transparent),
                     color-mix(in srgb, var(--card-background-color) 94%, transparent),
-                    color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 8%, transparent)
+                    color-mix(in srgb, var(--helman-price-positive) 8%, transparent)
                 );
                 color: color-mix(in srgb, var(--primary-text-color) 76%, transparent);
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 12%, var(--divider-color));
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-price-positive) 12%, var(--divider-color));
                 text-shadow: none;
             }
 
@@ -629,8 +629,8 @@ export class SchedulingSlotTable extends LitElement {
                 left: auto;
                 background: linear-gradient(
                     270deg,
-                    color-mix(in srgb, var(--forecast-price-negative, #6d4c41) 40%, white 2%),
-                    color-mix(in srgb, var(--forecast-price-negative, #6d4c41) 18%, transparent)
+                    color-mix(in srgb, var(--helman-price-negative) 40%, white 2%),
+                    color-mix(in srgb, var(--helman-price-negative) 18%, transparent)
                 );
                 border-radius: 4px 0 0 4px;
             }
@@ -639,8 +639,8 @@ export class SchedulingSlotTable extends LitElement {
                 inset: 0 auto 0 auto;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 40%, white 2%),
-                    color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 18%, transparent)
+                    color-mix(in srgb, var(--helman-price-positive) 40%, white 2%),
+                    color-mix(in srgb, var(--helman-price-positive) 18%, transparent)
                 );
                 border-radius: 0 4px 4px 0;
             }
@@ -658,12 +658,12 @@ export class SchedulingSlotTable extends LitElement {
             }
 
             .day-aggregate-price-pair .day-aggregate-gauge-value.negative {
-                color: color-mix(in srgb, var(--forecast-price-negative, #6d4c41) 62%, var(--primary-text-color));
+                color: color-mix(in srgb, var(--helman-price-negative) 62%, var(--primary-text-color));
                 text-align: left;
             }
 
             .day-aggregate-price-pair .day-aggregate-gauge-value.positive {
-                color: color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 62%, var(--primary-text-color));
+                color: color-mix(in srgb, var(--helman-price-positive) 62%, var(--primary-text-color));
                 text-align: right;
             }
 
@@ -1060,11 +1060,11 @@ export class SchedulingSlotTable extends LitElement {
             .slot-forecast-gauge.battery {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 16%, transparent),
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 8%, transparent)
+                    color-mix(in srgb, var(--helman-battery) 16%, transparent),
+                    color-mix(in srgb, var(--helman-battery) 8%, transparent)
                 );
-                color: color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 34%, var(--primary-text-color));
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 20%, var(--divider-color));
+                color: color-mix(in srgb, var(--helman-battery) 34%, var(--primary-text-color));
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-battery) 20%, var(--divider-color));
                 text-shadow:
                     0 0 1px rgba(255, 255, 255, 0.55),
                     0 1px 1px rgba(24, 44, 28, 0.12);
@@ -1073,27 +1073,27 @@ export class SchedulingSlotTable extends LitElement {
             .slot-forecast-gauge.battery .slot-forecast-gauge-fill {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 66%, white 8%),
-                    color-mix(in srgb, var(--simple-card-source-battery, #22c55e) 44%, transparent)
+                    color-mix(in srgb, var(--helman-battery) 66%, white 8%),
+                    color-mix(in srgb, var(--helman-battery) 44%, transparent)
                 );
             }
 
             .slot-forecast-gauge.solar {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 12%, #201f1c),
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 6%, #0f0f0e)
+                    color-mix(in srgb, var(--helman-solar) 12%, #201f1c),
+                    color-mix(in srgb, var(--helman-solar) 6%, #0f0f0e)
                 );
-                color: color-mix(in srgb, white 90%, var(--simple-card-source-solar, #facc15));
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--simple-card-source-solar, #facc15) 14%, #2d2b26);
+                color: color-mix(in srgb, white 90%, var(--helman-solar));
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-solar) 14%, #2d2b26);
                 text-shadow: none;
             }
 
             .slot-forecast-gauge.solar .slot-forecast-gauge-fill {
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 44%, #332c00),
-                    color-mix(in srgb, var(--simple-card-source-solar, #facc15) 32%, #1c1800)
+                    color-mix(in srgb, var(--helman-solar) 44%, #332c00),
+                    color-mix(in srgb, var(--helman-solar) 32%, #1c1800)
                 );
             }
 
@@ -1101,12 +1101,12 @@ export class SchedulingSlotTable extends LitElement {
                 direction: ltr;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 13%, #141b25),
-                    color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 6%, #070b10),
-                    color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 13%, #141b25)
+                    color-mix(in srgb, var(--helman-grid) 13%, #141b25),
+                    color-mix(in srgb, var(--helman-grid) 6%, #070b10),
+                    color-mix(in srgb, var(--helman-grid) 13%, #141b25)
                 );
                 color: color-mix(in srgb, var(--primary-text-color) 92%, transparent);
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--simple-card-source-grid, #38bdf8) 13%, #232d39);
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-grid) 13%, #232d39);
                 text-shadow:
                     0 0 1px rgba(255, 255, 255, 0.55),
                     0 1px 1px rgba(24, 32, 52, 0.1);
@@ -1147,8 +1147,8 @@ export class SchedulingSlotTable extends LitElement {
                 inset: 0 auto 0 50%;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--simple-card-grid-accent, #7dd3fc) 74%, white 6%),
-                    color-mix(in srgb, var(--simple-card-grid-accent, #7dd3fc) 46%, transparent)
+                    color-mix(in srgb, var(--helman-grid-export) 74%, white 6%),
+                    color-mix(in srgb, var(--helman-grid-export) 46%, transparent)
                 );
                 border-radius: 0 4px 4px 0;
             }
@@ -1177,12 +1177,12 @@ export class SchedulingSlotTable extends LitElement {
                 direction: ltr;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--forecast-price-negative, #6d4c41) 12%, transparent),
+                    color-mix(in srgb, var(--helman-price-negative) 12%, transparent),
                     color-mix(in srgb, var(--card-background-color) 88%, transparent),
-                    color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 12%, transparent)
+                    color-mix(in srgb, var(--helman-price-positive) 12%, transparent)
                 );
                 color: color-mix(in srgb, var(--primary-text-color) 92%, transparent);
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 18%, var(--divider-color));
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-price-positive) 18%, var(--divider-color));
                 text-shadow:
                     0 0 1px rgba(255, 255, 255, 0.55),
                     0 1px 1px rgba(36, 24, 20, 0.12);
@@ -1202,8 +1202,8 @@ export class SchedulingSlotTable extends LitElement {
                 left: auto;
                 background: linear-gradient(
                     270deg,
-                    color-mix(in srgb, var(--forecast-price-negative, #6d4c41) 84%, white 6%),
-                    color-mix(in srgb, var(--forecast-price-negative, #6d4c41) 46%, transparent)
+                    color-mix(in srgb, var(--helman-price-negative) 84%, white 6%),
+                    color-mix(in srgb, var(--helman-price-negative) 46%, transparent)
                 );
                 border-radius: 4px 0 0 4px;
             }
@@ -1212,8 +1212,8 @@ export class SchedulingSlotTable extends LitElement {
                 inset: 0 auto 0 50%;
                 background: linear-gradient(
                     90deg,
-                    color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 84%, white 6%),
-                    color-mix(in srgb, var(--forecast-price-positive, #8d6e63) 46%, transparent)
+                    color-mix(in srgb, var(--helman-price-positive) 84%, white 6%),
+                    color-mix(in srgb, var(--helman-price-positive) 46%, transparent)
                 );
                 border-radius: 0 4px 4px 0;
             }
