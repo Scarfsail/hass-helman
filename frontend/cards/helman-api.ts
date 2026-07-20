@@ -42,7 +42,6 @@ export interface DeviceNodeDTO extends DeviceNodeDTOBase {
     isUnmeasured: boolean;
     labels: string[];
     labelBadgeTexts: string[];
-    color: string | null;
     icon: string | null;
     compact: boolean;
     showAdditionalInfo: boolean;

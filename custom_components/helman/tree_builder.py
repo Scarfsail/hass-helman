@@ -12,17 +12,6 @@ from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
 
-# The node colors the card draws its glow and tint from. These mirror the
-# palette in frontend/cards/color-utils.ts — the source of truth for what a
-# solar/grid/battery/house color *is* — with a `60` alpha so the card gets a
-# translucent accent rather than a flat fill. Keep the two in sync; the same
-# nodes appear in the solar inspector, which reads color-utils directly.
-SOLAR_NODE_COLOR = "#facc1560"
-GRID_NODE_COLOR = "#38bdf860"
-BATTERY_NODE_COLOR = "#22c55e60"
-HOUSE_NODE_COLOR = "#a855f760"
-
-
 @dataclass
 class DeviceNodeDTO:
     id: str
@@ -36,7 +25,6 @@ class DeviceNodeDTO:
     labels: list[str]
     label_badge_texts: list[str]
     source_config: dict | None
-    color: str | None
     icon: str | None
     compact: bool
     show_additional_info: bool
@@ -61,7 +49,6 @@ class DeviceNodeDTO:
             "labels": self.labels,
             "labelBadgeTexts": self.label_badge_texts,
             "sourceConfig": self.source_config,
-            "color": self.color,
             "icon": self.icon,
             "compact": self.compact,
             "showAdditionalInfo": self.show_additional_info,
@@ -106,7 +93,6 @@ class HelmanTreeBuilder:
                 solar_config,
                 source_type="solar",
                 value_type="default",
-                color=SOLAR_NODE_COLOR,
                 icon="mdi:solar-power",
             ))
 
@@ -116,7 +102,6 @@ class HelmanTreeBuilder:
                 battery_config,
                 source_type="battery",
                 value_type="negative",
-                color=BATTERY_NODE_COLOR,
                 icon="mdi:battery",
             ))
 
@@ -126,7 +111,6 @@ class HelmanTreeBuilder:
                 grid_config,
                 source_type="grid",
                 value_type="negative",
-                color=GRID_NODE_COLOR,
                 icon="mdi:transmission-tower-export",
             ))
 
@@ -150,7 +134,7 @@ class HelmanTreeBuilder:
                 labels=[],
                 label_badge_texts=[],
                 source_config=house_config,
-                color=HOUSE_NODE_COLOR,
+                source_type="house",
                 icon="mdi:home",
                 compact=True,
                 show_additional_info=True,
@@ -167,8 +151,8 @@ class HelmanTreeBuilder:
             consumers.append(self._make_consumer_node(
                 battery_config["entities"]["power"],
                 battery_config,
+                source_type="battery",
                 value_type="positive",
-                color=BATTERY_NODE_COLOR,
                 icon="mdi:battery",
             ))
 
@@ -176,8 +160,8 @@ class HelmanTreeBuilder:
             consumers.append(self._make_consumer_node(
                 grid_config["entities"]["power"],
                 grid_config,
+                source_type="grid",
                 value_type="positive",
-                color=GRID_NODE_COLOR,
                 icon="mdi:transmission-tower-import",
             ))
 
@@ -205,7 +189,6 @@ class HelmanTreeBuilder:
         config: dict,
         source_type: str,
         value_type: Literal["default", "positive", "negative"],
-        color: str,
         icon: str,
     ) -> DeviceNodeDTO:
         return DeviceNodeDTO(
@@ -220,7 +203,6 @@ class HelmanTreeBuilder:
             labels=[],
             label_badge_texts=[],
             source_config=config,
-            color=color,
             icon=icon,
             compact=True,
             show_additional_info=True,
@@ -236,8 +218,8 @@ class HelmanTreeBuilder:
         self,
         entity_id: str,
         config: dict,
+        source_type: str,
         value_type: Literal["default", "positive", "negative"],
-        color: str,
         icon: str,
     ) -> DeviceNodeDTO:
         return DeviceNodeDTO(
@@ -252,7 +234,6 @@ class HelmanTreeBuilder:
             labels=[],
             label_badge_texts=[],
             source_config=config,
-            color=color,
             icon=icon,
             compact=True,
             show_additional_info=True,
@@ -260,6 +241,7 @@ class HelmanTreeBuilder:
             hide_children=False,
             hide_children_indicator=False,
             sort_children_by_power=False,
+            source_type=source_type,
         )
 
     def _build_house_children(
@@ -378,7 +360,6 @@ class HelmanTreeBuilder:
                 labels=labels,
                 label_badge_texts=label_badge_texts,
                 source_config=None,
-                color=None,
                 icon=icon,
                 compact=False,
                 show_additional_info=False,
@@ -421,7 +402,6 @@ class HelmanTreeBuilder:
                 labels=[],
                 label_badge_texts=[],
                 source_config=None,
-                color=None,
                 icon=None,
                 compact=False,
                 show_additional_info=False,

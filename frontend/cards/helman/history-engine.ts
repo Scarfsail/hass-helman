@@ -1,7 +1,7 @@
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { HistoryPayload, applyValueType } from "../helman-api";
 import { DeviceNode } from "./DeviceNode";
-import { canonicalSourceColor } from "../color-utils";
+import { nodeAccentColor } from "../color-utils";
 
 export class HistoryEngine {
     private _interval?: number;
@@ -50,7 +50,7 @@ export class HistoryEngine {
                     const ratioHistory = entity_history[src.ratioSensorId];
                     const ratio = (ratioHistory?.[i] ?? 0) / 100;
                     if (ratio > 0 && consumerPower > 0) {
-                        bucket[src.id] = { power: consumerPower * ratio, color: src.color || canonicalSourceColor(src.sourceType) };
+                        bucket[src.id] = { power: consumerPower * ratio, color: nodeAccentColor(src.sourceType) };
                     }
                 }
                 node.sourcePowerHistory.push(bucket);
@@ -122,7 +122,7 @@ export class HistoryEngine {
                     for (const src of sourceNodes) {
                         if (!src.ratioSensorId) continue;
                         const ratio = parseFloat(hass.states[src.ratioSensorId]?.state ?? '0') / 100;
-                        if (ratio > 0) bucket[src.id] = { power: powerVal * ratio, color: src.color || canonicalSourceColor(src.sourceType) };
+                        if (ratio > 0) bucket[src.id] = { power: powerVal * ratio, color: nodeAccentColor(src.sourceType) };
                     }
                 }
                 node.sourcePowerHistory[node.sourcePowerHistory.length - 1] = bucket;

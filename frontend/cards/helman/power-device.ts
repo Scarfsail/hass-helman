@@ -3,6 +3,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
+import { nodeAccentColor } from "../color-utils";
 import { DeviceNode } from "./DeviceNode";
 import "./power-device";
 import "./power-devices-container";
@@ -79,8 +80,8 @@ export class PowerDevice extends LitElement {
             .deviceContent {
                 /* The node color washed over the near-black surface, so a box
                    reads as solar/battery/grid/house at a glance. --device-tint
-                   is already translucent (the tree ships an alpha channel), and
-                   color-mix knocks it back further to keep the text legible. */
+                   is already translucent (see nodeAccentColor), and color-mix
+                   knocks it back further to keep the text legible. */
                 background-color: color-mix(in srgb, var(--device-tint, transparent) 35%, #050505);
                 display: flex;
                 align-items: center;
@@ -180,10 +181,12 @@ export class PowerDevice extends LitElement {
         const maxHistoryPower = this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : Math.max(...historyToRender);
         const childrenToRender = device.children;
 
-        // Determine the color for history bars
-        const historyBarColor = device.color ?? 'rgba(var(--rgb-accent-color), 0.13)';
+        // Only the typed top-level nodes carry a domain color; house children,
+        // unmeasured and virtual groups stay on the accent and get no glow.
+        const nodeColor = device.sourceType ? nodeAccentColor(device.sourceType) : undefined;
+        const historyBarColor = nodeColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
-                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap(this.device.color ? {'--device-shadow-color': this.device.color, '--device-tint': this.device.color} : {})}>
+                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap(nodeColor ? {'--device-shadow-color': nodeColor, '--device-tint': nodeColor} : {})}>
                     <power-device-history-bars 
                         .device=${this.device}
                         .historyToRender=${[...historyToRender]}

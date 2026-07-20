@@ -53,14 +53,34 @@ export function withAlpha(hex: string, alphaHex: string): string {
     return `${normalizedHex}${normalizedAlpha}`;
 }
 
-/** Returns the canonical color for a source node based on its sourceType. */
+/**
+ * The color of a top-level node, from its sourceType alone.
+ *
+ * This is the only place a node's color comes from — the tree the backend ships
+ * carries no color of its own, so there is nothing to disagree with. Nodes with
+ * no sourceType (house children, unmeasured, virtual groups) are not
+ * domain-colored and get the neutral.
+ */
 export function canonicalSourceColor(sourceType: string | null | undefined, fallback?: string): string {
     switch (sourceType) {
         case 'solar':   return SOLAR_COLOR;
         case 'grid':    return GRID_COLOR;
         case 'battery': return BATT_COLOR;
+        case 'house':   return HOUSE_COLOR;
         default:        return fallback ?? NEUTRAL_COLOR;
     }
+}
+
+/**
+ * The card's node color as it gets *painted* — glow, box tint, history bars.
+ *
+ * Translucent by design: these are backgrounds, drawn behind text and stacked
+ * with each other, and the full-strength palette value overwhelms both. Use
+ * this rather than alpha-ing canonicalSourceColor at the call site, so every
+ * surface that means "this is solar" agrees on how strong that reads.
+ */
+export function nodeAccentColor(sourceType: string | null | undefined): string {
+    return withAlpha(canonicalSourceColor(sourceType), '60');
 }
 
 /** Compute the color of the dominant (highest-power) source from the latest history bucket. No blending. */

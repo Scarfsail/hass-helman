@@ -12,7 +12,6 @@ export class DeviceNode {
         this.historyBuckets = historyBuckets;
         this.powerHistory = [];
         this.valueType = 'default';
-        this.color = undefined;
         this.isSource = false;
         this.icon = undefined;
         this.deviceConfig = deviceConfig;
@@ -32,7 +31,6 @@ export class DeviceNode {
     public isUnmeasured: boolean = false; // Indicates if this node represents unmeasured power
     public valueType: ValueType;
 
-    public color?: string;
     public sourcePowerHistory?: { [sourceName: string]: { power: number; color: string } }[];
     public isSource: boolean;
     public sourceType?: string | null;

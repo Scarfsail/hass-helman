@@ -9,7 +9,6 @@ export function hydrateNode(dto: DeviceNodeDTO, historyBuckets: number): DeviceN
     node.valueType = dto.valueType;
     node.labels = dto.labels;
     if (dto.labelBadgeTexts.length > 0) node.customLabelTexts = dto.labelBadgeTexts;
-    if (dto.color) node.color = dto.color;
     if (dto.icon) node.icon = dto.icon;
     node.compact = dto.compact;
     node.show_additional_info = dto.showAdditionalInfo;
