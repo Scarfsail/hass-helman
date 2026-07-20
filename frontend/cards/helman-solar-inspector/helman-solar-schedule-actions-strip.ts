@@ -38,6 +38,7 @@ import type {
 import "../helman-scheduling/components/scheduling-action-chip";
 import "../helman-scheduling/components/scheduling-appliance-chip";
 import "../helman-scheduling/dialogs/scheduling-range-edit-dialog";
+import { helmanColorVars } from "../color-utils";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -118,7 +119,7 @@ const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
  */
 @customElement("helman-solar-schedule-actions-strip")
 export class HelmanSolarScheduleActionsStrip extends LitElement {
-    static styles = css`
+    static styles = [helmanColorVars, css`
         :host {
             display: block;
             width: 100%;
@@ -221,7 +222,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
         .slot-col scheduling-appliance-chip {
             flex: 0 0 auto;
         }
-    `;
+    `];
 
     @property({ attribute: false }) public hass?: HomeAssistant;
     /** Selected inspector day, `YYYY-MM-DD`. */

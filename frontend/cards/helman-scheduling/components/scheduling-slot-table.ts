@@ -47,6 +47,7 @@ import type {
     ScheduleSlotToggleDetail,
 } from "../schedule-types";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
+import { helmanColorVars } from "../../color-utils";
 
 const ZERO_KWH_DISPLAY_THRESHOLD = GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KWH;
 
@@ -123,6 +124,7 @@ function _getCenterOriginDirection(value: number): "negative" | "positive" | nul
 @customElement("scheduling-slot-table")
 export class SchedulingSlotTable extends LitElement {
     static styles = [
+        helmanColorVars,
         schedulingSharedStyles,
         css`
             :host {

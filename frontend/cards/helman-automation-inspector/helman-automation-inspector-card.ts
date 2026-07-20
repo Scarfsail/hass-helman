@@ -3,7 +3,6 @@ import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import type { HelmanAutomationInspectorCardConfig } from "./HelmanAutomationInspectorCardConfig";
-import { helmanColorVars } from "../color-utils";
 import "./helman-automation-inspector";
 
 @customElement("helman-automation-inspector-card")
@@ -25,7 +24,7 @@ export class HelmanAutomationInspectorCard extends LitElement implements Lovelac
         };
     }
 
-    static styles = [helmanColorVars, css`
+    static styles = css`
         :host { display: block; }
         ha-card { overflow: hidden; }
         ha-card.transparent {
@@ -36,7 +35,7 @@ export class HelmanAutomationInspectorCard extends LitElement implements Lovelac
         .card-content {
             padding: 12px;
         }
-    `];
+    `;
 
     private _config!: HelmanAutomationInspectorCardConfig;
 

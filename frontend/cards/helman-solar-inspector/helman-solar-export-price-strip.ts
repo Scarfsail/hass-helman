@@ -12,6 +12,7 @@ import {
     stripWindow,
     type ScheduleStripGeometry,
 } from "./helman-solar-schedule-actions-strip";
+import { helmanColorVars } from "../color-utils";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -38,7 +39,7 @@ interface PriceColumn {
  */
 @customElement("helman-solar-export-price-strip")
 export class HelmanSolarExportPriceStrip extends LitElement {
-    static styles = css`
+    static styles = [helmanColorVars, css`
         :host {
             display: block;
             width: 100%;
@@ -54,7 +55,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             min-width: 360px;
             height: ${PRICE_STRIP.height}px;
         }
-    `;
+    `];
 
     @property({ attribute: false }) public hass?: HomeAssistant;
     /** Selected inspector day, `YYYY-MM-DD`. */

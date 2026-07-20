@@ -31,6 +31,7 @@ import {
   HOUSE_COLOR,
   NEUTRAL_LIGHT_COLOR,
   SOLAR_COLOR,
+  helmanColorVars,
 } from "../color-utils";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
@@ -358,7 +359,7 @@ export class HelmanSolarInspector extends LitElement {
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
 
-  static styles = css`
+  static styles = [helmanColorVars, css`
     :host {
       display: block;
       width: 100%;
@@ -910,7 +911,7 @@ export class HelmanSolarInspector extends LitElement {
       color: var(--secondary-text-color);
       font-variant-numeric: tabular-nums;
     }
-  `;
+  `];
 
   protected disconnectedCallback() {
     super.disconnectedCallback();

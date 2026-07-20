@@ -13,6 +13,7 @@ import {
     type CellView,
     type RailDelta,
 } from "./automation-inspector-model";
+import { helmanColorVars } from "../color-utils";
 
 interface SelectedCell {
     stepIndex: number;
@@ -403,7 +404,7 @@ export class HelmanAutomationInspector extends LitElement {
         return slotId.slice(11, 16);
     }
 
-    static styles = css`
+    static styles = [helmanColorVars, css`
         :host {
             display: block; font-size: 13px;
             /* Canonical metric palette (falls back when the app-level tokens
@@ -539,7 +540,7 @@ export class HelmanAutomationInspector extends LitElement {
         .write { margin-top: 8px; font-size: 12px; }
         .write code { background: var(--secondary-background-color, #f5f5f5); padding: 0 4px; border-radius: 4px; }
         .reason-code { margin-top: 8px; color: var(--disabled-text-color, #999); font-size: 11px; font-family: monospace; }
-    `;
+    `];
 }
 
 function fmt(value: number | null): string {

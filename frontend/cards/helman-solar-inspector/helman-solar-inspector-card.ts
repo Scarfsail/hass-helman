@@ -3,7 +3,6 @@ import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import type { HelmanSolarInspectorCardConfig } from "./HelmanSolarInspectorCardConfig";
-import { helmanColorVars } from "../color-utils";
 import "./helman-solar-inspector";
 
 @customElement("helman-solar-inspector-card")
@@ -44,7 +43,7 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
         };
     }
 
-    static styles = [helmanColorVars, css`
+    static styles = css`
         :host { display: block; }
         ha-card { overflow: hidden; }
         ha-card.transparent {
@@ -55,7 +54,7 @@ export class HelmanSolarInspectorCard extends LitElement implements LovelaceCard
         .card-content {
             padding: 12px;
         }
-    `];
+    `;
 
     private _config!: HelmanSolarInspectorCardConfig;
 

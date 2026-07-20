@@ -76,7 +76,6 @@ import type {
     ScheduleTimelineModel,
 } from "./schedule-types";
 import { schedulingSharedStyles } from "./styles/scheduling-shared-styles";
-import { helmanColorVars } from "../color-utils";
 
 const EMPTY_SCHEDULE_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
     schedule: null,
@@ -108,7 +107,6 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     }
 
     static styles = [
-        helmanColorVars,
         schedulingSharedStyles,
         css`
             :host {
