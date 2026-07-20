@@ -1,4 +1,5 @@
-import { LitElement, css, html, nothing } from "lit-element";
+import { LitElement, css, html, nothing, unsafeCSS } from "lit-element";
+import { nodeAccentColor } from "../color-utils";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { DeviceNode } from "./DeviceNode";
@@ -60,6 +61,12 @@ export class PowerHouseDevicesSection extends LitElement {
     static get styles() {
         return css`
             .house-section {
+                /* Everything in this section is a breakdown of the house box, so
+                   it carries the house tint. The rows are untyped nodes and set
+                   no --device-tint of their own, so power-device's fallback
+                   inherits this one — custom properties cross shadow boundaries.
+                   Tint only: the glow stays on the top-level boxes. */
+                --device-tint: ${unsafeCSS(nodeAccentColor('house'))};
                 border: 1px solid var(--ha-card-border-color, var(--divider-color, #444));
                 border-radius: 10px;
                 padding-left: 6px;

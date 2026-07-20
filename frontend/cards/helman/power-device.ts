@@ -181,8 +181,11 @@ export class PowerDevice extends LitElement {
         const maxHistoryPower = this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : Math.max(...historyToRender);
         const childrenToRender = device.children;
 
-        // Only the typed top-level nodes carry a domain color; house children,
-        // unmeasured and virtual groups stay on the accent and get no glow.
+        // Only the typed top-level nodes carry a domain color of their own.
+        // Untyped nodes (house children, unmeasured, virtual groups) get no glow
+        // and keep the accent bars, but leaving --device-tint unset lets them
+        // inherit their section's tint — that's how the house breakdown picks up
+        // the house color.
         const nodeColor = device.sourceType ? nodeAccentColor(device.sourceType) : undefined;
         const historyBarColor = nodeColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
