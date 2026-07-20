@@ -51,6 +51,8 @@ async function mountInspector(
         gridWh?: number;
         /** Net battery energy per 15-min slot: positive charges, negative discharges. */
         batteryWh?: number;
+        /** Daily solar-production total, in Wh. */
+        actualTotalWh?: number;
     },
 ): Promise<void> {
     await page.evaluate((opts) => {
@@ -142,7 +144,7 @@ async function mountInspector(
             totals: {
                 rawWh: null,
                 correctedWh: null,
-                actualWh: null,
+                actualWh: opts.actualTotalWh ?? null,
                 houseForecastWh: null,
                 houseActualWh: null,
                 gridForecastWh: null,
@@ -617,5 +619,51 @@ test.describe("solar inspector house composition", () => {
         expect(await barSegmentColours(page)).toEqual([BATTERY_RGB, GRID_RGB]);
     });
 
+    /**
+     * Every energy figure on the card goes through the one `formatEnergy`, so a
+     * quantity reads the same in the daily totals as it does on a composition
+     * box. The unit switches at 1 kWh, which is what keeps small consumers
+     * legible rather than rounding them all away to "0.0 kWh".
+     */
+    test("energy figures are formatted the same everywhere", async ({ page }) => {
+        await loadCardBundle(page);
+        const dailySolarTotal = () =>
+            page.evaluate(() => {
+                const el = document.querySelector("helman-solar-inspector") as any;
+                const sections = el.shadowRoot.querySelectorAll(".metrics-section");
+                const cards = [...sections[sections.length - 1].querySelectorAll(".metric-card")];
+                const solar = cards.find((c) => /Solar production/.test(c.textContent ?? ""));
+                return (solar?.querySelector(".metric-value")?.textContent ?? "").trim();
+            });
 
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 100,
+            actualTotalWh: 24500,
+        });
+        await selectNoonSlot(page);
+
+        // Above the threshold a total reads in kWh...
+        expect(await dailySolarTotal()).toBe("24.5 kWh");
+
+        // ...and below it in Wh. This is the case that regressed: the card used to
+        // force kWh on every figure, rendering this same total as "0.6 kWh".
+        await page.evaluate(() => document.querySelector("helman-solar-inspector")!.remove());
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 100,
+            actualTotalWh: 640,
+        });
+        await selectNoonSlot(page);
+
+        expect(await dailySolarTotal()).toBe("640 Wh");
+        // The composition boxes agree, being fed by the same formatter.
+        expect((await breakdownBoxes(page)).map((r) => r.power)).toEqual([
+            "400 Wh",
+            "200 Wh",
+            "120 Wh",
+        ]);
+    });
 });

@@ -33,6 +33,7 @@ import {
   SOLAR_COLOR,
   nodeAccentColor,
 } from "../color-utils";
+import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
 import "./helman-solar-export-price-strip";
@@ -2643,15 +2644,27 @@ export class HelmanSolarInspector extends LitElement {
     return this._payload?.timezone ?? this.hass?.config?.time_zone;
   }
 
+  /**
+   * Energy for display. Every figure on this card — summary metrics, the
+   * contribution table, the composition boxes — goes through `formatEnergy`, so a
+   * quantity reads the same wherever it appears and small values stay legible
+   * instead of rounding away to "0.0 kWh".
+   *
+   * These wrappers own only what `formatEnergy` deliberately does not: what a
+   * missing reading looks like, and whether a gain is written with its sign.
+   */
   private _formatWh(value: number | null) {
-    if (value === null) return this._t("bias_correction.inspector.actual_not_available");
-    return `${(value / 1000).toFixed(1)} kWh`;
+    if (value === null || !Number.isFinite(value)) {
+      return this._t("bias_correction.inspector.actual_not_available");
+    }
+    return formatEnergy(value).display;
   }
 
   private _formatSignedWh(value: number | null) {
     if (value === null || !Number.isFinite(value)) return this._t("bias_correction.inspector.actual_not_available");
+    // formatEnergy carries a minus of its own; only a gain needs marking.
     const sign = value > 0 ? "+" : "";
-    return `${sign}${value.toFixed(0)} Wh`;
+    return `${sign}${formatEnergy(value).display}`;
   }
 
   private _formatFactor(value: number | null) {
