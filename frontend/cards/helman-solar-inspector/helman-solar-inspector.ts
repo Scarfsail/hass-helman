@@ -2096,6 +2096,7 @@ export class HelmanSolarInspector extends LitElement {
         appliance.label,
         appliance.wh,
         appliance.switchEntityId ?? null,
+        appliance.powerEntityId ?? null,
         false,
         barsFor(appliance.entityId),
       ),
@@ -2106,6 +2107,7 @@ export class HelmanSolarInspector extends LitElement {
           null,
           unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
           unmeasuredWh,
+          null,
           null,
           true,
           barsFor(null),
@@ -2147,22 +2149,24 @@ export class HelmanSolarInspector extends LitElement {
    *
    * The node carries no `sourceType`, so it draws no glow of its own and inherits
    * the house tint the panel sets — the same way the power card's own house
-   * children do. Its energy sensor stands in as the power sensor so clicking the
-   * box opens the entity behind it; the unmetered remainder has none and so stays
-   * inert, exactly as it did before.
+   * children do. Clicking the box opens the device's live power (W) sensor — the
+   * very entity the power card reads — falling back to the energy stat only where
+   * the tree resolved no power sensor; the unmetered remainder has neither and so
+   * stays inert, exactly as it did before.
    */
   private _breakdownNode(
     entityId: string | null,
     label: string,
     wh: number,
     switchEntityId: string | null,
+    powerEntityId: string | null,
     isUnmeasured: boolean,
     bars: ReturnType<typeof consumerBarsOverSlots>,
   ): DeviceNode {
     const node = new DeviceNode(
       entityId ?? "house-unmeasured",
       label,
-      entityId,
+      powerEntityId ?? entityId,
       switchEntityId,
       bars.values.length,
     );

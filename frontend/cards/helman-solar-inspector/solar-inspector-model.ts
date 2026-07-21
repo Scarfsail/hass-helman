@@ -5,6 +5,12 @@ export type ApplianceComponent = {
   wh: number;
   /** The device's controlling switch, where the power card knows one. */
   switchEntityId: string | null;
+  /**
+   * The device's live power (W) sensor, where the power card knows one — the
+   * entity a box opens on click. Falls back to {@link entityId} (the energy
+   * stat) only where the tree resolved no power sensor.
+   */
+  powerEntityId: string | null;
 };
 export type HouseBreakdownPoint = {
   slot: string;

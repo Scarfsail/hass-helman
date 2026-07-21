@@ -29,9 +29,10 @@ def _is_readable_entity_id(value: Any) -> bool:
 def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
     """The house's top-level measured consumers, as the power card knows them.
 
-    Each entry is ``{energy_entity_id, label, switch_entity_id}``, taken verbatim
-    from the tree node: its ``id`` is the device's energy stat, ``displayName``
-    the name the card shows, and ``switchEntityId`` the control the card offers —
+    Each entry is ``{energy_entity_id, label, switch_entity_id, power_entity_id}``,
+    taken verbatim from the tree node: its ``id`` is the device's energy stat,
+    ``displayName`` the name the card shows, ``switchEntityId`` the control the card
+    offers, and ``powerSensorId`` the live power sensor the card reads — each
     ``None`` when the tree resolved none, which is the card's own behaviour.
 
     Only top-level house children are returned. Nested sub-meters are already
@@ -64,12 +65,16 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
         if not _is_readable_entity_id(energy_entity_id):
             continue
         switch_entity_id = child.get("switchEntityId")
+        power_entity_id = child.get("powerSensorId")
         result.append(
             {
                 "energy_entity_id": energy_entity_id,
                 "label": child.get("displayName") or energy_entity_id,
                 "switch_entity_id": (
                     switch_entity_id if isinstance(switch_entity_id, str) and switch_entity_id else None
+                ),
+                "power_entity_id": (
+                    power_entity_id if _is_readable_entity_id(power_entity_id) else None
                 ),
             }
         )

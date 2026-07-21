@@ -135,12 +135,17 @@ class SolarBiasApplianceComponent:
 
     ``switch_entity_id`` is the device's controlling switch where the power card
     knows one, so the inspector can offer the very same control; None otherwise.
+
+    ``entity_id`` is the device's energy stat (the series the breakdown is summed
+    from); ``power_entity_id`` is the live power sensor the power card reads, where
+    the tree knows one, so clicking a box opens the same W sensor the card does.
     """
 
     entity_id: str
     label: str
     value_wh: float
     switch_entity_id: str | None = None
+    power_entity_id: str | None = None
 
 
 @dataclass
@@ -378,6 +383,7 @@ def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, A
                 "label": c.label,
                 "wh": c.value_wh,
                 "switchEntityId": c.switch_entity_id,
+                "powerEntityId": c.power_entity_id,
             }
             for c in point.appliances
         ],

@@ -241,12 +241,14 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "label": "Dishwasher",
                     "wh": 50.0,
                     "switchEntityId": None,
+                    "powerEntityId": None,
                 },
                 {
                     "entityId": "sensor.ev",
                     "label": "EV charger",
                     "wh": 30.0,
                     "switchEntityId": None,
+                    "powerEntityId": None,
                 },
             ],
         )
@@ -264,11 +266,13 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "energy_entity_id": "sensor.ev",
                     "label": "EV (tree)",
                     "switch_entity_id": "switch.ev",
+                    "power_entity_id": "sensor.ev_power",
                 },
                 {
                     "energy_entity_id": "sensor.fridge",
                     "label": "Fridge",
                     "switch_entity_id": "switch.fridge",
+                    "power_entity_id": "sensor.fridge_power",
                 },
             ]
 
@@ -284,8 +288,8 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         )
 
         slot = payload["series"]["houseActualBreakdown"][0]
-        # The EV keeps its deferrable label but adopts the tree's switch, which is
-        # the only place a control is known.
+        # The EV keeps its deferrable label but adopts the tree's switch and power
+        # sensor, which is the only place either is known.
         self.assertEqual(
             slot["appliances"],
             [
@@ -294,12 +298,14 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "label": "EV charger",
                     "wh": 30.0,
                     "switchEntityId": "switch.ev",
+                    "powerEntityId": "sensor.ev_power",
                 },
                 {
                     "entityId": "sensor.fridge",
                     "label": "Fridge",
                     "wh": 20.0,
                     "switchEntityId": "switch.fridge",
+                    "powerEntityId": "sensor.fridge_power",
                 },
             ],
         )

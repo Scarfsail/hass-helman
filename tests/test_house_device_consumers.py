@@ -47,9 +47,15 @@ def _node(node_id, **overrides):
 
 class TestHouseDeviceConsumers(unittest.TestCase):
 
-    def test_switch_is_carried_verbatim_from_the_tree(self):
+    def test_switch_and_power_sensor_carried_verbatim_from_the_tree(self):
         tree = _tree(
-            [_node("sensor.dishwasher_energy", switchEntityId="switch.dishwasher")]
+            [
+                _node(
+                    "sensor.dishwasher_energy",
+                    switchEntityId="switch.dishwasher",
+                    powerSensorId="sensor.dishwasher_power",
+                )
+            ]
         )
 
         self.assertEqual(
@@ -59,9 +65,28 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                     "energy_entity_id": "sensor.dishwasher_energy",
                     "label": "sensor.dishwasher_energy",
                     "switch_entity_id": "switch.dishwasher",
+                    "power_entity_id": "sensor.dishwasher_power",
                 }
             ],
         )
+
+    def test_no_power_sensor_on_the_card_means_none_here(self):
+        # A power sensor is never inferred: a node the tree resolved none for, or
+        # one whose id is an external statistic the recorder holds no state for,
+        # must yield None rather than a guessed entity.
+        tree = _tree(
+            [
+                _node("sensor.a_energy"),
+                _node("sensor.b_energy", powerSensorId=""),
+                _node("sensor.c_energy", powerSensorId="source:stat"),
+            ]
+        )
+
+        result = extract(tree)
+
+        self.assertEqual(len(result), 3)
+        for consumer in result:
+            self.assertIsNone(consumer["power_entity_id"], consumer["energy_entity_id"])
 
     def test_no_switch_on_the_card_means_no_switch_here(self):
         # The contract that matters: a node the tree resolved no switch for must

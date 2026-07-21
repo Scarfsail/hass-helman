@@ -32,6 +32,7 @@ type Appliance = {
     label: string;
     wh: number;
     switchEntityId?: string | null;
+    powerEntityId?: string | null;
 };
 
 /**
@@ -69,6 +70,7 @@ async function mountInspector(
                 label: string;
                 wh: number;
                 switchEntityId: string | null;
+                powerEntityId: string | null;
             }>;
         }> = [];
         const impact: Array<{
@@ -99,6 +101,7 @@ async function mountInspector(
                     appliances: opts.appliances.map((a) => ({
                         ...a,
                         switchEntityId: a.switchEntityId ?? null,
+                        powerEntityId: a.powerEntityId ?? null,
                     })),
                 });
             }
@@ -425,11 +428,19 @@ test.describe("solar inspector house composition", () => {
         expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Dishwasher"]);
     });
 
-    test("clicking a consumer box opens its energy sensor", async ({ page }) => {
+    test("clicking a consumer box opens its power sensor — the one the card reads", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, {
             withBreakdown: true,
-            appliances: APPLIANCES,
+            appliances: [
+                {
+                    entityId: "sensor.dishwasher",
+                    label: "Dishwasher",
+                    wh: 50,
+                    powerEntityId: "sensor.dishwasher_power",
+                },
+                { entityId: "sensor.ev", label: "EV charger", wh: 30 },
+            ],
             unmeasuredWh: 100,
         });
         await selectNoonSlot(page);
@@ -438,7 +449,24 @@ test.describe("solar inspector house composition", () => {
         await clickBoxPower(page, 1);
 
         expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
-            "sensor.dishwasher",
+            "sensor.dishwasher_power",
+        ]);
+    });
+
+    test("clicking a consumer box falls back to its energy sensor when the tree knows no power sensor", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: APPLIANCES,
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        // The EV carries no power sensor, so its box opens the energy stat behind it.
+        await clickBoxPower(page, 2);
+
+        expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
+            "sensor.ev",
         ]);
     });
 
