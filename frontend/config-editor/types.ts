@@ -8,6 +8,9 @@ export interface HomeAssistantLike {
   callWS<T = unknown>(message: Record<string, unknown>): Promise<T>;
   states: Record<string, unknown>;
   localize?: (key: string) => string | undefined;
+  // Lazily loads a frontend translation fragment (e.g. "config") so reused HA
+  // components such as the condition builder show their own localized text.
+  loadFragmentTranslation?: (fragment: string) => Promise<unknown>;
   language?: string;
   locale?: {
     language?: string;

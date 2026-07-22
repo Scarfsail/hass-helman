@@ -96,6 +96,12 @@ const APPLIANCE_ICON_SELECTOR = {
   icon: {},
 } as const;
 
+// DUMMY: reuse Home Assistant's visual condition builder. Value is not persisted
+// yet — this only proves the editor renders and round-trips inside our panel.
+const OPTIMIZER_CONDITION_SELECTOR = {
+  condition: {},
+} as const;
+
 interface YamlEditorValueChangedDetail {
   value: unknown;
   isValid: boolean;
@@ -546,6 +552,25 @@ export class HelmanConfigEditorPanel extends LitElement {
       gap: 14px;
     }
 
+    details.condition-section {
+      border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
+      border-radius: 8px;
+      background: var(--secondary-background-color, rgba(255, 255, 255, 0.04));
+    }
+
+    details.condition-section > summary {
+      cursor: pointer;
+      padding: 12px 14px;
+      font-weight: var(--ha-font-weight-medium, 500);
+      list-style: revert;
+    }
+
+    details.condition-section > .condition-body {
+      padding: 0 14px 14px;
+      display: grid;
+      gap: 10px;
+    }
+
     .tab-icon {
       flex-shrink: 0;
       width: 16px;
@@ -896,6 +921,7 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _applianceYamlErrors: Partial<Record<number, string>> = {};
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
+  private _configFragmentRequested = false;
 
   get hass(): HomeAssistantLike | undefined {
     return this._hass;
@@ -906,6 +932,17 @@ export class HelmanConfigEditorPanel extends LitElement {
     this._hass = hass;
     if (hass && !this._localize) {
       this._localize = getLocalizeFunction(hass);
+    }
+    // Reused HA components (e.g. the condition builder) localize via
+    // hass.localize, but the "config" fragment is only lazy-loaded on the
+    // config panel. Request it once so their labels aren't blank here.
+    if (
+      hass &&
+      !this._configFragmentRequested &&
+      typeof hass.loadFragmentTranslation === "function"
+    ) {
+      this._configFragmentRequested = true;
+      void hass.loadFragmentTranslation("config").then(() => this.requestUpdate());
     }
     this.requestUpdate("hass", oldValue);
   }
@@ -2040,6 +2077,43 @@ export class HelmanConfigEditorPanel extends LitElement {
     return this._renderUnsupportedAutomationOptimizerCard(optimizerObject, index, total);
   }
 
+  // Renders Home Assistant's visual condition builder for an optimizer, backed by
+  // the config document at automation.optimizers[index].condition. The value is a
+  // list of conditions (ANDed at execution time). The section is collapsed while
+  // empty so the builder does not dominate every card.
+  private _renderOptimizerConditionSection(index: number): TemplateResult {
+    const path: PathSegment[] = ["automation", "optimizers", index, "condition"];
+    const conditions = asJsonArray(this._getValue(path)) ?? [];
+    return html`
+      <details class="condition-section" ?open=${conditions.length > 0}>
+        <summary>${this._t("editor.fields.execution_conditions")}</summary>
+        <div class="condition-body">
+          <ha-selector
+            .hass=${this.hass}
+            .narrow=${this.narrow ?? false}
+            .selector=${OPTIMIZER_CONDITION_SELECTOR}
+            .value=${conditions}
+            @value-changed=${(event: Event) => {
+              const value = (event as CustomEvent<{ value?: unknown }>).detail?.value;
+              this._setOptimizerCondition(path, value);
+            }}
+          ></ha-selector>
+          <div class="helper">${this._t("editor.helpers.execution_conditions")}</div>
+        </div>
+      </details>
+    `;
+  }
+
+  private _setOptimizerCondition(path: PathSegment[], value: unknown): void {
+    this._applyMutation((draft) => {
+      if (!Array.isArray(value) || value.length === 0) {
+        unsetValueAtPath(draft, path);
+        return;
+      }
+      setValueAtPath(draft, path, value as JsonValue);
+    });
+  }
+
   private _renderAutomationEnabledField(): TemplateResult {
     const checked = this._getAutomationEnabled();
 
@@ -2134,6 +2208,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               <div class="helper">${this._t("editor.helpers.export_price_action")}</div>
             </div>
           </div>
+          ${this._renderOptimizerConditionSection(index)}
         </div>
       </details>
     `;
@@ -2260,6 +2335,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               ? this._renderSurplusClimateModeField(paramsPath, climateModeFieldState)
               : this._renderSurplusApplianceActionField(action)}
           </div>
+          ${this._renderOptimizerConditionSection(index)}
         </div>
       </details>
     `;
@@ -2426,6 +2502,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               <div class="helper">${this._t("editor.helpers.charge_hold_action")}</div>
             </div>
           </div>
+          ${this._renderOptimizerConditionSection(index)}
         </div>
       </details>
     `;
@@ -2487,6 +2564,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               "editor.help.charge_from_grid_max_target_soc",
             )}
           </div>
+          ${this._renderOptimizerConditionSection(index)}
         </div>
       </details>
     `;
@@ -2610,6 +2688,7 @@ export class HelmanConfigEditorPanel extends LitElement {
               { min: 0 },
             )}
           </div>
+          ${this._renderOptimizerConditionSection(index)}
         </div>
       </details>
     `;
