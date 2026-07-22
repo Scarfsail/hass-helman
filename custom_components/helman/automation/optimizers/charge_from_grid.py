@@ -73,6 +73,9 @@ class ChargeFromGridOptimizer:
     ) -> ScheduleDocument:
         del config
         trace = trace or NULL_TRACE
+        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
+            self.id, True
+        )
         # Only band-relative rationales are non-derivable; every other horizon
         # slot is "not considered" and left to a frontend default (D).
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
@@ -131,6 +134,7 @@ class ChargeFromGridOptimizer:
                     horizon_start=horizon_start,
                     horizon_end=horizon_end,
                     emit=emit,
+                    condition_met=condition_met,
                 )
 
         emit.flush()
@@ -152,6 +156,7 @@ class ChargeFromGridOptimizer:
         horizon_start: datetime,
         horizon_end: datetime,
         emit: "_ChargeFromGridEmission",
+        condition_met: bool,
     ) -> None:
         expensive_window = [
             format_slot_id(expensive_band.start),
@@ -208,6 +213,7 @@ class ChargeFromGridOptimizer:
                     kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                     target_soc=target_soc,
                     set_by="automation",
+                    condition_met=condition_met,
                 ),
                 appliances=dict(current_domains.appliances),
             )

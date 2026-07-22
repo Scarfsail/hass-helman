@@ -40,6 +40,9 @@ class ExportPriceOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
+        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
+            self.id, True
+        )
         threshold = _read_threshold(config)
         action = _read_action(config)
         # `price_not_below_threshold` (rejected) is a frontend derivation rule
@@ -94,6 +97,7 @@ class ExportPriceOptimizer:
                 inverter=ScheduleAction(
                     kind=SCHEDULE_ACTION_STOP_EXPORT,
                     set_by="automation",
+                    condition_met=condition_met,
                 ),
                 appliances=dict(current_domains.appliances),
             )

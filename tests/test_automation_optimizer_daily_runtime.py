@@ -154,6 +154,7 @@ def _make_snapshot(
     runtime_by_date: dict[str, dict[date, float]] | None = None,
     schedule_document: ScheduleDocument | None = None,
     classification: str = "tight",
+    condition_met_by_optimizer_id: dict[str, bool] | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances((appliance,))
     return OptimizationSnapshot(
@@ -178,6 +179,7 @@ def _make_snapshot(
             when_active_hourly_energy_kwh_by_appliance_id=when_active or {},
             runtime_hours_by_appliance_id_by_local_date=runtime_by_date or {},
             day_contexts={DAY: _day_context(classification)},
+            condition_met_by_optimizer_id=condition_met_by_optimizer_id or {},
         ),
     )
 
@@ -240,6 +242,29 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
         self.assertEqual(set(placed), cheap)
         for action in placed.values():
             self.assertEqual(action, {"on": True, "setBy": "automation"})
+
+    def test_places_candidate_actions_when_condition_not_met(self) -> None:
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        result = build_daily_runtime_optimizer(
+            cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
+        ).optimize(
+            _make_snapshot(
+                appliance=appliance,
+                export_points=_export_points(cheap),
+                condition_met_by_optimizer_id={cfg.id: False},
+            ),
+            cfg,
+        )
+        placed = _placed_slots(result, appliance.id)
+        # Still placed (for display/promotion), but marked candidate.
+        self.assertEqual(set(placed), cheap)
+        for action in placed.values():
+            self.assertEqual(
+                action,
+                {"on": True, "setBy": "automation", "conditionMet": False},
+            )
 
     def test_manual_runtime_reduces_remaining_budget(self) -> None:
         appliance = _generic()

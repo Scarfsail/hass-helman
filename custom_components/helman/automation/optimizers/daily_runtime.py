@@ -87,6 +87,9 @@ class DailyRuntimeOptimizer:
     ) -> ScheduleDocument:
         del config
         trace = trace or NULL_TRACE
+        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
+            self.id, True
+        )
         # Slots outside the daily window are "not considered" — left to a
         # frontend default (D); only the placement/ranking rationale is emitted.
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
@@ -176,7 +179,7 @@ class DailyRuntimeOptimizer:
                 current_domains = updated.slots.get(slot_id, ScheduleDomains())
                 updated_appliances = dict(current_domains.appliances)
                 updated_appliances[appliance_id] = stamp_automation_appliance_action(
-                    self.config.authored_action
+                    self.config.authored_action, condition_met=condition_met
                 )
                 updated.slots[slot_id] = ScheduleDomains(
                     inverter=current_domains.inverter,

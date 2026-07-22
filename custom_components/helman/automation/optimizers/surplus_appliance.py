@@ -74,6 +74,9 @@ class SurplusApplianceOptimizer:
 
         del config
         trace = trace or NULL_TRACE
+        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
+            self.id, True
+        )
         # `surplus_insufficient` (rejected) is a frontend derivation rule (D)
         # over the availableSurplusKwh rail vs demand; leave those slots to it.
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
@@ -143,7 +146,9 @@ class SurplusApplianceOptimizer:
 
             updated_appliances = dict(current_domains.appliances)
             updated_appliances[self.target.appliance.id] = (
-                stamp_automation_appliance_action(self.target.authored_action)
+                stamp_automation_appliance_action(
+                    self.target.authored_action, condition_met=condition_met
+                )
             )
             updated_schedule_document.slots[slot_id] = ScheduleDomains(
                 inverter=current_domains.inverter,
