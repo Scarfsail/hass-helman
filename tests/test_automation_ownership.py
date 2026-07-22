@@ -73,12 +73,18 @@ from custom_components.helman.const import (  # noqa: E402
 from custom_components.helman.automation.ownership import (  # noqa: E402
     merge_automation_result,
     strip_automation_owned_actions,
+    strip_candidate_actions,
+)
+from custom_components.helman.const import (  # noqa: E402
+    SCHEDULE_ACTION_STOP_CHARGING,
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleActionError,
     ScheduleDocument,
     ScheduleDomains,
+    action_from_dict,
+    action_to_dict,
     schedule_document_to_dict,
 )
 
@@ -303,6 +309,74 @@ class MergeAutomationResultTests(unittest.TestCase):
                     }
                 ),
             )
+
+
+class ConditionMetSerializationTests(unittest.TestCase):
+    def test_condition_met_defaults_true_and_is_omitted(self) -> None:
+        action = ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING, set_by="automation")
+        self.assertTrue(action.condition_met)
+        self.assertNotIn("conditionMet", action_to_dict(action))
+
+    def test_candidate_action_round_trips(self) -> None:
+        action = ScheduleAction(
+            kind=SCHEDULE_ACTION_STOP_CHARGING,
+            set_by="automation",
+            condition_met=False,
+        )
+        payload = action_to_dict(action)
+        self.assertIs(payload["conditionMet"], False)
+        self.assertFalse(action_from_dict(payload).condition_met)
+
+
+class StripCandidateActionsTests(unittest.TestCase):
+    def test_strips_candidate_inverter_and_appliance_keeps_committed(self) -> None:
+        document = _doc(
+            slots={
+                SLOT_ID: ScheduleDomains(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_STOP_CHARGING,
+                        set_by="automation",
+                        condition_met=False,
+                    ),
+                    appliances={
+                        "ac": {"on": True, "setBy": "automation", "conditionMet": False},
+                        "pump": {"on": True, "setBy": "automation"},
+                    },
+                ),
+                NEXT_SLOT_ID: ScheduleDomains(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_STOP_CHARGING,
+                        set_by="automation",
+                    ),
+                ),
+            }
+        )
+
+        stripped = strip_candidate_actions(document)
+
+        # candidate inverter -> empty, committed inverter preserved
+        self.assertEqual(stripped.slots[SLOT_ID].inverter.kind, "empty")
+        self.assertEqual(
+            stripped.slots[NEXT_SLOT_ID].inverter.kind, SCHEDULE_ACTION_STOP_CHARGING
+        )
+        # candidate appliance dropped, committed appliance kept
+        self.assertNotIn("ac", stripped.slots[SLOT_ID].appliances)
+        self.assertIn("pump", stripped.slots[SLOT_ID].appliances)
+
+    def test_drops_slot_when_only_candidates(self) -> None:
+        document = _doc(
+            slots={
+                SLOT_ID: ScheduleDomains(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_STOP_CHARGING,
+                        set_by="automation",
+                        condition_met=False,
+                    ),
+                )
+            }
+        )
+
+        self.assertEqual(strip_candidate_actions(document).slots, {})
 
 
 if __name__ == "__main__":

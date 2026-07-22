@@ -54,6 +54,7 @@ from .automation.ownership import (
     has_automation_owned_actions,
     merge_automation_result,
     strip_automation_owned_actions,
+    strip_candidate_actions,
 )
 from .automation.snapshot import OptimizationContext, OptimizationSnapshot
 from .automation.triggers import AutomationTriggerCoordinator
@@ -2155,14 +2156,20 @@ class HelmanCoordinator:
         )
 
     async def _async_gather_compute_inputs(
-        self, *, started_at: datetime, live_state: Any = _LIVE_STATE_UNSET
+        self,
+        *,
+        started_at: datetime,
+        live_state: Any = _LIVE_STATE_UNSET,
+        include_condition_flags: bool = False,
     ) -> ComputeInputs:
         """Read the run-invariant live values a forecast rebuild needs.
 
         Runs on the event loop (``hass.states`` + recorder), once per run, so
         the compute path can stay pure. A caller that has already read the live
         battery state passes it in via ``live_state`` to avoid a second read.
-        See :class:`ComputeInputs`.
+        ``include_condition_flags`` evaluates optimizer execution conditions —
+        only the automation pipeline needs them; forecast/projection paths skip
+        the work. See :class:`ComputeInputs`.
         """
         entity_config = read_battery_entity_config(self._active_config)
         battery_live_state = None
@@ -2188,6 +2195,8 @@ class HelmanCoordinator:
             ),
             condition_met_by_optimizer_id=(
                 await self._async_evaluate_optimizer_conditions()
+                if include_condition_flags
+                else {}
             ),
         )
 
@@ -2509,7 +2518,8 @@ class HelmanCoordinator:
         caller already has them), then build the snapshot with the pure core."""
         if compute_inputs is None:
             compute_inputs = await self._async_gather_compute_inputs(
-                started_at=reference_time
+                started_at=reference_time,
+                include_condition_flags=True,
             )
         return self._build_automation_snapshot_from_schedule_pure(
             schedule_document=schedule_document,
@@ -2533,8 +2543,13 @@ class HelmanCoordinator:
         Every live value comes from ``compute_inputs`` and every helper it calls
         is hass-free, so this is safe to run in an executor.
         """
+        # Resource accounting sees only committed actions: candidate actions
+        # (placed by optimizers whose execution condition is not met) are
+        # stripped here so their demand/battery draw frees up for downstream
+        # optimizers. They remain in ``snapshot.schedule`` for display and
+        # execution/promotion.
         schedule_documents = self._build_forecast_schedule_documents(
-            schedule_document=schedule_document
+            schedule_document=strip_candidate_actions(schedule_document)
         )
         rebuild = self._build_forecast_rebuild_pure(
             solar_forecast=input_bundle.solar_forecast,

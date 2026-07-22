@@ -62,6 +62,7 @@ class ScheduleActionDict(TypedDict):
     kind: ScheduleActionKind
     targetSoc: NotRequired[int]
     setBy: NotRequired[ScheduleActionSetBy]
+    conditionMet: NotRequired[bool]
 
 
 class ScheduleDomainsDict(TypedDict):
@@ -85,6 +86,11 @@ class ScheduleAction:
     kind: ScheduleActionKind
     target_soc: int | None = None
     set_by: ScheduleActionSetBy | None = None
+    # False marks a "candidate" action: placed by an optimizer whose execution
+    # condition is currently not met. Candidates are excluded from resource
+    # accounting (demand/battery forecast) and are not executed, but remain in
+    # the schedule for display and promotion. Default True == committed.
+    condition_met: bool = True
 
 
 EMPTY_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
@@ -197,7 +203,12 @@ def action_from_dict(data: Mapping[str, Any]) -> ScheduleAction:
     except ValueError as err:
         raise ScheduleActionError(str(err)) from err
 
-    action = ScheduleAction(kind=kind, target_soc=target_soc, set_by=set_by)
+    action = ScheduleAction(
+        kind=kind,
+        target_soc=target_soc,
+        set_by=set_by,
+        condition_met=_read_condition_met(data),
+    )
     _validate_action(
         action=action,
         has_target_soc=has_target_soc,
@@ -213,6 +224,8 @@ def action_to_dict(action: ScheduleAction) -> ScheduleActionDict:
         payload["targetSoc"] = action.target_soc
     if action.set_by is not None:
         payload["setBy"] = action.set_by
+    if not action.condition_met:
+        payload["conditionMet"] = False
     return payload
 
 
@@ -808,7 +821,14 @@ def _coerce_schedule_action(value: Any) -> ScheduleAction:
     except ValueError as err:
         raise ScheduleActionError(str(err)) from err
 
-    action = ScheduleAction(kind=kind, target_soc=raw_target_soc, set_by=set_by)
+    action = ScheduleAction(
+        kind=kind,
+        target_soc=raw_target_soc,
+        set_by=set_by,
+        condition_met=bool(
+            getattr(value, "condition_met", getattr(value, "conditionMet", True))
+        ),
+    )
     _validate_action(
         action=action,
         has_target_soc=has_target_soc,
@@ -856,6 +876,16 @@ def _read_target_soc(data: Mapping[str, Any]) -> tuple[bool, int | None]:
         raise ScheduleActionError("targetSoc must be an integer")
 
     return True, raw_target_soc
+
+
+def _read_condition_met(data: Mapping[str, Any]) -> bool:
+    if "conditionMet" in data:
+        raw = data["conditionMet"]
+    elif "condition_met" in data:
+        raw = data["condition_met"]
+    else:
+        return True
+    return raw if isinstance(raw, bool) else True
 
 
 def _read_action_set_by(data: Mapping[str, Any]) -> ScheduleActionSetBy | None:

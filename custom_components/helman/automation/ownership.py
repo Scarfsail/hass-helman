@@ -224,7 +224,50 @@ def _schedule_actions_match(
 
 def stamp_automation_appliance_action(
     action: Mapping[str, object],
+    *,
+    condition_met: bool = True,
 ) -> dict[str, object]:
     stamped = {str(key): value for key, value in action.items()}
     stamped["setBy"] = "automation"
+    if not condition_met:
+        stamped["conditionMet"] = False
     return stamped
+
+
+def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
+    """Return a copy with candidate (condition-not-met) actions removed.
+
+    Candidates are placed by optimizers whose execution condition is currently
+    not met. They stay in the working schedule for display, execution gating,
+    and promotion, but must not consume resources — so this "committed" view is
+    what the forecast rebuild (demand + battery) accounts for.
+    """
+    from ..scheduling.schedule import (
+        ScheduleAction,
+        ScheduleDocument,
+        ScheduleDomains,
+        is_default_domains,
+    )
+
+    stripped_slots: dict[str, ScheduleDomains] = {}
+    for slot_id, domains in doc.slots.items():
+        stripped_domains = ScheduleDomains(
+            inverter=(
+                ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
+                if not domains.inverter.condition_met
+                else domains.inverter
+            ),
+            appliances={
+                appliance_id: dict(action)
+                for appliance_id, action in domains.appliances.items()
+                if action.get("conditionMet") is not False
+            },
+        )
+        if is_default_domains(stripped_domains):
+            continue
+        stripped_slots[slot_id] = stripped_domains
+
+    return ScheduleDocument(
+        execution_enabled=doc.execution_enabled,
+        slots=stripped_slots,
+    )

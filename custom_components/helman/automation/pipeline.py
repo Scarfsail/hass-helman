@@ -341,6 +341,7 @@ class AutomationRunner:
                     compute_inputs = (
                         await self._coordinator._async_gather_compute_inputs(
                             started_at=active_reference_time,
+                            include_condition_flags=True,
                         )
                     )
                     initial_snapshot = (
@@ -461,7 +462,8 @@ class AutomationRunner:
         """
         if compute_inputs is None:
             compute_inputs = await self._coordinator._async_gather_compute_inputs(
-                started_at=reference_time
+                started_at=reference_time,
+                include_condition_flags=True,
             )
         control_config = self._coordinator._read_schedule_control_config()
 

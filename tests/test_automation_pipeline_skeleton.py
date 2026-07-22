@@ -596,7 +596,7 @@ class _FakeCoordinator:
         return {}
 
     async def _async_gather_compute_inputs(
-        self, *, started_at: datetime, live_state=None
+        self, *, started_at: datetime, live_state=None, include_condition_flags=False
     ):
         return None
 

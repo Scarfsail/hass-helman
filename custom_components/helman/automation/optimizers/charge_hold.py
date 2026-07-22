@@ -86,6 +86,12 @@ class ChargeHoldOptimizer:
     ) -> ScheduleDocument:
         del config
         trace = trace or NULL_TRACE
+        # When this optimizer's execution condition is not met, its actions are
+        # placed as candidates: still scheduled (for display/promotion) but
+        # excluded from resource accounting and not executed.
+        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
+            self.id, True
+        )
         updated = ScheduleDocument(
             execution_enabled=snapshot.schedule.execution_enabled,
             slots=deepcopy(snapshot.schedule.slots),
@@ -178,6 +184,7 @@ class ChargeHoldOptimizer:
                     inverter=ScheduleAction(
                         kind=SCHEDULE_ACTION_STOP_CHARGING,
                         set_by="automation",
+                        condition_met=condition_met,
                     ),
                     appliances=dict(current_domains.appliances),
                 )
