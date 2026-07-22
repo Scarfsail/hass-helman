@@ -2239,12 +2239,23 @@ class HelmanCoordinator:
         self, *, optimizer_id: str, condition_config: list[dict[str, Any]]
     ) -> Any:
         from homeassistant.helpers import condition as ha_condition
+        from homeassistant.helpers import config_validation as cv
 
         try:
-            validated = [
-                await ha_condition.async_validate_condition_config(self._hass, entry)
-                for entry in condition_config
-            ]
+            validated = []
+            for entry in condition_config:
+                # cv.CONDITION_SCHEMA coerces built-in literals (e.g. a ``time``
+                # condition's "18:00:00" -> datetime.time). async_validate alone
+                # only coerces state/numeric_state, so a bare ``time`` literal
+                # would survive as a str and HA would misread it as an entity id.
+                # async_validate_condition_config then resolves platform/async
+                # conditions (device, etc.).
+                coerced = cv.CONDITION_SCHEMA(dict(entry))
+                validated.append(
+                    await ha_condition.async_validate_condition_config(
+                        self._hass, coerced
+                    )
+                )
             return await ha_condition.async_conditions_from_config(
                 self._hass, validated, _LOGGER, f"optimizer:{optimizer_id}"
             )
