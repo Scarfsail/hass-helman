@@ -31,6 +31,11 @@ class OptimizerInstanceConfig:
     kind: str
     enabled: bool = True
     params: dict[str, Any] = field(default_factory=dict)
+    # Optional user-authored execution condition (Home Assistant condition
+    # config, a list ANDed at evaluation time). None means "always met". The
+    # condition schema itself is validated by HA at evaluation time, not here;
+    # this reader only checks the outer shape.
+    condition: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -192,12 +197,42 @@ def _read_optimizer(
         kind=kind,
         path=f"{path}.params",
     )
+    condition = _read_optimizer_condition(
+        data.get("condition", _MISSING),
+        path=f"{path}.condition",
+    )
     return OptimizerInstanceConfig(
         id=optimizer_id,
         kind=kind,
         enabled=enabled,
         params=params,
+        condition=condition,
     )
+
+
+def _read_optimizer_condition(
+    value: object,
+    *,
+    path: str,
+) -> tuple[dict[str, Any], ...] | None:
+    if value is _MISSING or value is None:
+        return None
+    if not isinstance(value, list):
+        _raise_config_error(
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be a list of conditions",
+        )
+    conditions: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            _raise_config_error(
+                path=f"{path}[{index}]",
+                code="invalid_type",
+                message=f"{path}[{index}] must be an object",
+            )
+        conditions.append({str(key): entry for key, entry in item.items()})
+    return tuple(conditions) or None
 
 
 def _read_optimizer_params(

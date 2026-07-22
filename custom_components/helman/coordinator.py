@@ -38,7 +38,11 @@ from .appliances import (
     build_empty_appliance_projections_response,
 )
 from .automation.compute_inputs import ComputeInputs
-from .automation.config import AutomationConfig, read_automation_config
+from .automation.config import (
+    AutomationConfig,
+    OptimizerInstanceConfig,
+    read_automation_config,
+)
 from .automation.day_context import (
     DayContext,
     FrozenDayContext,
@@ -353,6 +357,10 @@ class HelmanCoordinator:
         self._automation_input_bundle: AutomationInputBundle | None = None
         self._day_context_store = DayContextStore(hass)
         self._last_automation_run_result: AutomationRunResult | None = None
+        # optimizer_id -> (condition_config, built ConditionChecker | None).
+        # Cached across runs; rebuilt when an optimizer's condition changes and
+        # unloaded when it is removed or on shutdown.
+        self._optimizer_condition_checkers: dict[str, tuple[Any, Any]] = {}
         self._automation_triggers = AutomationTriggerCoordinator(
             create_task=self._create_task,
             run_callback=self._async_run_automation_trigger_request,
@@ -2178,7 +2186,107 @@ class HelmanCoordinator:
                     self._hass, self._appliances_registry
                 )
             ),
+            condition_met_by_optimizer_id=(
+                await self._async_evaluate_optimizer_conditions()
+            ),
         )
+
+    async def _async_evaluate_optimizer_conditions(self) -> dict[str, bool]:
+        """Evaluate every optimizer's execution condition against live state.
+
+        Runs on the event loop (conditions read ``hass.states``) so the result
+        can be frozen into ``ComputeInputs`` for the pure optimizer loop. Only
+        optimizers that declare a condition appear in the map; a missing id means
+        "always met". Fail-closed: a build/eval error counts as not met.
+        """
+        automation_config = read_automation_config(self._active_config)
+        if automation_config is None:
+            self._prune_optimizer_condition_checkers(active_ids=set())
+            return {}
+
+        results: dict[str, bool] = {}
+        active_ids: set[str] = set()
+        for optimizer in automation_config.optimizers:
+            if not optimizer.condition:
+                continue
+            active_ids.add(optimizer.id)
+            checker = await self._ensure_optimizer_condition_checker(optimizer)
+            results[optimizer.id] = self._evaluate_optimizer_condition(
+                checker, optimizer.id
+            )
+        self._prune_optimizer_condition_checkers(active_ids=active_ids)
+        return results
+
+    async def _ensure_optimizer_condition_checker(
+        self, optimizer: "OptimizerInstanceConfig"
+    ) -> Any:
+        cached = self._optimizer_condition_checkers.get(optimizer.id)
+        if cached is not None and cached[0] == optimizer.condition:
+            return cached[1]
+        if cached is not None:
+            self._unload_optimizer_condition_checker(cached[1])
+        checker = await self._build_optimizer_condition_checker(
+            optimizer_id=optimizer.id,
+            condition_config=list(optimizer.condition or ()),
+        )
+        self._optimizer_condition_checkers[optimizer.id] = (
+            optimizer.condition,
+            checker,
+        )
+        return checker
+
+    async def _build_optimizer_condition_checker(
+        self, *, optimizer_id: str, condition_config: list[dict[str, Any]]
+    ) -> Any:
+        from homeassistant.helpers import condition as ha_condition
+
+        try:
+            validated = [
+                await ha_condition.async_validate_condition_config(self._hass, entry)
+                for entry in condition_config
+            ]
+            return await ha_condition.async_conditions_from_config(
+                self._hass, validated, _LOGGER, f"optimizer:{optimizer_id}"
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to build execution condition for optimizer %s; "
+                "treating as not met",
+                optimizer_id,
+            )
+            return None
+
+    def _evaluate_optimizer_condition(
+        self, checker: Any, optimizer_id: str
+    ) -> bool:
+        if checker is None:
+            return False
+        try:
+            return bool(checker.async_check())
+        except Exception:
+            _LOGGER.debug(
+                "Execution condition for optimizer %s could not be evaluated; "
+                "treating as not met",
+                optimizer_id,
+                exc_info=True,
+            )
+            return False
+
+    def _prune_optimizer_condition_checkers(self, *, active_ids: set[str]) -> None:
+        for optimizer_id in list(self._optimizer_condition_checkers):
+            if optimizer_id in active_ids:
+                continue
+            _config, checker = self._optimizer_condition_checkers.pop(optimizer_id)
+            self._unload_optimizer_condition_checker(checker)
+
+    @staticmethod
+    def _unload_optimizer_condition_checker(checker: Any) -> None:
+        if checker is None:
+            return
+        try:
+            checker.async_unload()
+        except Exception:
+            _LOGGER.debug("Failed to unload condition checker", exc_info=True)
 
     async def _async_build_battery_actual_history(
         self, *, entity_config: Any, started_at: datetime
@@ -2476,6 +2584,9 @@ class HelmanCoordinator:
                     input_bundle.runtime_hours_by_appliance_id_by_local_date
                 ),
                 day_contexts=dict(day_contexts) if day_contexts else {},
+                condition_met_by_optimizer_id=dict(
+                    compute_inputs.condition_met_by_optimizer_id
+                ),
             ),
         )
 
@@ -3648,6 +3759,7 @@ class HelmanCoordinator:
             solar_bias_scheduler.cancel()
             self._solar_bias_scheduler = None
         await self._automation_triggers.async_shutdown()
+        self._prune_optimizer_condition_checkers(active_ids=set())
         await self._schedule_executor.async_unload()
         self._invalidate_battery_forecast_cache()
 

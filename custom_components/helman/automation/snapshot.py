@@ -45,6 +45,10 @@ class OptimizationContext:
     # A3/A4 — frozen per-calendar-day context, keyed by local date. Attached by
     # the coordinator once per run. Read-only for optimizers.
     day_contexts: dict[date, "DayContext"] = field(default_factory=dict)
+    # Per-optimizer execution-condition result for this run (True == met). An
+    # optimizer id absent from the map is treated as always met. Read-only for
+    # optimizers.
+    condition_met_by_optimizer_id: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -108,6 +112,9 @@ def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:
                 local_date.isoformat(): day_context.to_dict()
                 for local_date, day_context in snapshot.context.day_contexts.items()
             },
+            "conditionMetByOptimizerId": dict(
+                snapshot.context.condition_met_by_optimizer_id
+            ),
         },
     }
 

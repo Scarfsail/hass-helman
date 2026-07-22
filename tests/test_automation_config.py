@@ -104,6 +104,54 @@ class AutomationConfigTests(unittest.TestCase):
             ["alpha", "beta"],
         )
 
+    def test_optimizer_condition_defaults_to_none(self) -> None:
+        self._set_known_kinds("alpha")
+        parsed = AutomationConfig.from_dict(
+            {"optimizers": [{"id": "a", "kind": "alpha"}]}
+        )
+
+        self.assertIsNone(parsed.optimizers[0].condition)
+
+    def test_parses_optimizer_condition_list(self) -> None:
+        self._set_known_kinds("alpha")
+        condition = [
+            {"condition": "numeric_state", "entity_id": "sensor.x", "above": 10}
+        ]
+        parsed = AutomationConfig.from_dict(
+            {"optimizers": [{"id": "a", "kind": "alpha", "condition": condition}]}
+        )
+
+        self.assertEqual(
+            parsed.optimizers[0].condition,
+            ({"condition": "numeric_state", "entity_id": "sensor.x", "above": 10},),
+        )
+
+    def test_empty_optimizer_condition_list_is_none(self) -> None:
+        self._set_known_kinds("alpha")
+        parsed = AutomationConfig.from_dict(
+            {"optimizers": [{"id": "a", "kind": "alpha", "condition": []}]}
+        )
+
+        self.assertIsNone(parsed.optimizers[0].condition)
+
+    def test_rejects_non_list_optimizer_condition(self) -> None:
+        self._set_known_kinds("alpha")
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {"optimizers": [{"id": "a", "kind": "alpha", "condition": "nope"}]}
+            )
+
+        self.assertEqual(ctx.exception.path, "automation.optimizers[0].condition")
+
+    def test_rejects_non_object_condition_entry(self) -> None:
+        self._set_known_kinds("alpha")
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {"optimizers": [{"id": "a", "kind": "alpha", "condition": ["nope"]}]}
+            )
+
+        self.assertEqual(ctx.exception.path, "automation.optimizers[0].condition[0]")
+
     def test_preserves_explicit_top_level_enabled_false(self) -> None:
         self._set_known_kinds("alpha")
         parsed = AutomationConfig.from_dict(

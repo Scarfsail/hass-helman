@@ -29,3 +29,7 @@ class ComputeInputs:
     vehicle_remaining_capacity_kwh_by_vehicle_id: dict[str, float | None] = field(
         default_factory=dict
     )
+    # Per-optimizer execution-condition result, evaluated once per run against
+    # current live state (fail-closed on error). Absent id == always met. Frozen
+    # here so the pure optimizer loop can read it without touching ``hass``.
+    condition_met_by_optimizer_id: dict[str, bool] = field(default_factory=dict)
