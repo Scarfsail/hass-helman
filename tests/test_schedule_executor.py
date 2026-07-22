@@ -254,6 +254,33 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
+    async def test_reconcile_skips_candidate_inverter_action(self) -> None:
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_STOP_CHARGING,
+                        set_by="automation",
+                        condition_met=False,
+                    )
+                },
+            ),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        # Candidate action is stripped from the committed view -> not applied.
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(
+            executor.runtime.last_applied_action.kind, SCHEDULE_ACTION_EMPTY
+        )
+
     async def test_reconcile_uses_select_service_for_stop_discharging(self) -> None:
         executor, hass, _store = _build_executor(
             entity_id="select.mode",

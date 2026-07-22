@@ -677,6 +677,38 @@ def is_default_domains(domains: ScheduleDomains) -> bool:
     return domains.inverter.kind == SCHEDULE_ACTION_EMPTY and not domains.appliances
 
 
+def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
+    """Return a copy with candidate (condition-not-met) actions removed.
+
+    Candidates are placed by optimizers whose execution condition is currently
+    not met. They stay in the stored schedule for display and promotion, but
+    must not consume resources (forecast rebuild) nor be executed — callers use
+    this "committed" view for both.
+    """
+    stripped_slots: dict[str, ScheduleDomains] = {}
+    for slot_id, domains in doc.slots.items():
+        stripped_domains = ScheduleDomains(
+            inverter=(
+                ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
+                if not domains.inverter.condition_met
+                else domains.inverter
+            ),
+            appliances={
+                appliance_id: dict(action)
+                for appliance_id, action in domains.appliances.items()
+                if action.get("conditionMet") is not False
+            },
+        )
+        if is_default_domains(stripped_domains):
+            continue
+        stripped_slots[slot_id] = stripped_domains
+
+    return ScheduleDocument(
+        execution_enabled=doc.execution_enabled,
+        slots=stripped_slots,
+    )
+
+
 def validate_schedule_domains(
     *,
     domains: ScheduleDomains,

@@ -49,6 +49,7 @@ from .schedule import (
     format_slot_id,
     parse_slot_id,
     prune_expired_slots,
+    strip_candidate_actions,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -493,9 +494,15 @@ class ScheduleExecutor:
                 self.reset_runtime()
                 return
 
+            # Execute only committed actions: candidate actions (placed by
+            # optimizers whose execution condition is not met) are stripped so
+            # they are neither applied nor treated as the last scheduled state.
+            # They remain in the stored document for display and promotion.
+            committed_document = strip_candidate_actions(schedule_document)
+
             current_slot_id = format_slot_id(build_horizon_start(request_now))
             active_slot = find_active_slot(
-                stored_slots=schedule_document.slots,
+                stored_slots=committed_document.slots,
                 reference_time=request_now,
             )
             active_action = (
@@ -503,7 +510,7 @@ class ScheduleExecutor:
             )
             active_actions = {} if active_slot is None else dict(active_slot.domains.appliances)
             last_scheduled_actions = _build_last_scheduled_appliance_actions(
-                stored_slots=schedule_document.slots,
+                stored_slots=committed_document.slots,
                 reference_time=request_now,
             )
 

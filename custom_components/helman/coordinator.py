@@ -54,7 +54,6 @@ from .automation.ownership import (
     has_automation_owned_actions,
     merge_automation_result,
     strip_automation_owned_actions,
-    strip_candidate_actions,
 )
 from .automation.snapshot import OptimizationContext, OptimizationSnapshot
 from .automation.triggers import AutomationTriggerCoordinator
@@ -121,6 +120,7 @@ from .scheduling.schedule import (
     schedule_document_from_dict,
     schedule_document_to_dict,
     slot_to_dict,
+    strip_candidate_actions,
     with_slot_set_by,
     validate_slot_patch_request,
 )

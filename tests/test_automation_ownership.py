@@ -73,7 +73,6 @@ from custom_components.helman.const import (  # noqa: E402
 from custom_components.helman.automation.ownership import (  # noqa: E402
     merge_automation_result,
     strip_automation_owned_actions,
-    strip_candidate_actions,
 )
 from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_ACTION_STOP_CHARGING,
@@ -86,6 +85,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     action_from_dict,
     action_to_dict,
     schedule_document_to_dict,
+    strip_candidate_actions,
 )
 
 
