@@ -574,6 +574,9 @@ export interface TraceStepDTO {
     writes: TraceWriteDTO[];
     decisions: TraceDecisionDTO[];
     notes: TraceNoteDTO[];
+    /** False when this optimizer's execution condition is not met, so its
+     * placements are candidates (tentative, won't execute). Omitted when met. */
+    conditionMet?: boolean;
 }
 
 export interface TraceStaticRailsDTO {

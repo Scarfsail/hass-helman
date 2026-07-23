@@ -475,6 +475,10 @@
           "title": "Blokováno (uživatel)",
           "detail": "Uživatelská akce na {domain} blokuje tento zápis."
         },
+        "condition_unmet": {
+          "title": "Nespustí se — podmínka nesplněna",
+          "detail": "Umístěno jako kandidát pouze pro zobrazení; nespustí se, protože podmínka spuštění této automatizace není aktuálně splněna."
+        },
         "optimizer_skipped": {
           "title": "Optimalizátor přeskočen",
           "detail": "Tento optimalizátor byl v tomto běhu přeskočen."

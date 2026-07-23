@@ -201,6 +201,10 @@
           "title": "Blocked (user)",
           "detail": "A user-owned action on {domain} blocks this write."
         },
+        "condition_unmet": {
+          "title": "Won't run — condition not met",
+          "detail": "Placed as a candidate for display only; it will not execute because this automation's execution condition is not currently met."
+        },
         "optimizer_skipped": {
           "title": "Optimizer skipped",
           "detail": "This optimizer was skipped this run."

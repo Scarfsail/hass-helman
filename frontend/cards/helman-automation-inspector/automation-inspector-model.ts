@@ -219,13 +219,46 @@ export class AutomationInspectorModel {
         slotIndex: number,
         localize: LocalizeFunction,
     ): FormattedReason {
-        const decision = this._steps[stepIndex].decisionBySlot.get(slotId);
-        return this._formatReason(
+        const entry = this._steps[stepIndex];
+        const decision = entry.decisionBySlot.get(slotId);
+        const reason = this._formatReason(
             decision?.reason?.code ?? "unexplained",
             decision?.reason?.params ?? {},
             slotIndex,
             localize,
         );
+        return this._decorateForConditionUnmet(
+            reason,
+            entry.step,
+            decision?.outcome,
+            localize,
+        );
+    }
+
+    /**
+     * When an optimizer's execution condition is not met, every action it placed
+     * is a candidate — kept for display but never executed. The raw placement
+     * reason ("placed to meet daily runtime") reads as planned-for-execution, so
+     * lead the explanation with the condition caveat, keeping the original reason
+     * after it. Only ``applied`` placements need it; rejections/out-of-scope
+     * decisions describe why nothing was placed and stay as-is.
+     */
+    private _decorateForConditionUnmet(
+        reason: FormattedReason,
+        step: TraceStepDTO,
+        outcome: string | undefined,
+        localize: LocalizeFunction,
+    ): FormattedReason {
+        if (step.conditionMet !== false || outcome !== "applied") {
+            return reason;
+        }
+        const title = localize("automation.inspector.reason.condition_unmet.title");
+        const caveat = localize("automation.inspector.reason.condition_unmet.detail");
+        return {
+            ...reason,
+            title: title || reason.title,
+            detail: reason.detail ? `${caveat} ${reason.detail}` : caveat,
+        };
     }
 
     railValue(rail: (number | null)[] | undefined, slotIndex: number): number | null {
@@ -304,10 +337,17 @@ export class AutomationInspectorModel {
 
         if (decision) {
             const code = decision.reason?.code ?? "unexplained";
+            // A placement made while the optimizer's execution condition is unmet
+            // is a candidate that won't run — show it as blocked, not green
+            // "applied", so the glyph matches the "won't execute" explanation.
+            const conditionUnmet =
+                entry.step.conditionMet === false && decision.outcome === "applied";
             const state: CellState =
                 code === "unexplained"
                     ? "unexplained"
-                    : (decision.outcome as CellState);
+                    : conditionUnmet
+                        ? "blocked"
+                        : (decision.outcome as CellState);
             const siblings: number[] = [];
             for (const sid of decision.slotIds) {
                 const idx = this._slotIndex(sid);
@@ -316,10 +356,15 @@ export class AutomationInspectorModel {
             return {
                 state,
                 outcome: decision.outcome,
-                reason: this._formatReason(
-                    code,
-                    decision.reason?.params ?? {},
-                    slotIndex,
+                reason: this._decorateForConditionUnmet(
+                    this._formatReason(
+                        code,
+                        decision.reason?.params ?? {},
+                        slotIndex,
+                        localize,
+                    ),
+                    entry.step,
+                    decision.outcome,
                     localize,
                 ),
                 siblingSlotIndices: siblings,
