@@ -12,6 +12,9 @@ export interface ScheduleActionPresentation {
     icon: string;
     label: string;
     toneClass: ScheduleActionToneClass;
+    // Candidate = placed by an optimizer whose execution condition is not met.
+    // Rendered muted; excluded from resource accounting and not executed.
+    isCandidate: boolean;
 }
 
 export function getScheduleActionPresentation(
@@ -24,6 +27,7 @@ export function getScheduleActionPresentation(
         icon: _getScheduleActionIcon(action.kind),
         label: getScheduleActionLabel(action, localize, labelVariant),
         toneClass: `action-tone-${tone}`,
+        isCandidate: action.conditionMet === false,
     };
 }
 

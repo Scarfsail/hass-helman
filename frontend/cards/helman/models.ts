@@ -23,9 +23,14 @@ export interface HelmanSchedulePatch {
 }
 
 export function cloneHelmanScheduleAction(action: HelmanScheduleAction): HelmanScheduleAction {
-    return action.targetSoc === undefined
-        ? { kind: action.kind }
-        : { kind: action.kind, targetSoc: action.targetSoc };
+    const cloned: HelmanScheduleAction = { kind: action.kind };
+    if (action.targetSoc !== undefined) {
+        cloned.targetSoc = action.targetSoc;
+    }
+    if (action.conditionMet !== undefined) {
+        cloned.conditionMet = action.conditionMet;
+    }
+    return cloned;
 }
 
 export function cloneHelmanScheduleApplianceAction(

@@ -205,9 +205,14 @@ export interface ScheduleSlotPatch {
 }
 
 export function cloneScheduleInverterAction(action: ScheduleInverterAction): ScheduleInverterAction {
-    return action.targetSoc === undefined
-        ? { kind: action.kind }
-        : { kind: action.kind, targetSoc: action.targetSoc };
+    const cloned: ScheduleInverterAction = { kind: action.kind };
+    if (action.targetSoc !== undefined) {
+        cloned.targetSoc = action.targetSoc;
+    }
+    if (action.conditionMet !== undefined) {
+        cloned.conditionMet = action.conditionMet;
+    }
+    return cloned;
 }
 
 export function cloneScheduleApplianceAction(
@@ -277,7 +282,10 @@ export function isScheduleBackedDisplaySlot(
 }
 
 export function getScheduleActionIdentityKey(action: ScheduleInverterAction): string {
-    return `${action.kind}:${action.targetSoc ?? ""}`;
+    // Include candidacy so a committed and a candidate action of the same kind
+    // render as separate (solid vs muted) chips rather than merging.
+    const candidate = action.conditionMet === false ? "candidate" : "";
+    return `${action.kind}:${action.targetSoc ?? ""}:${candidate}`;
 }
 
 export function getScheduleApplianceActionIdentityKey(

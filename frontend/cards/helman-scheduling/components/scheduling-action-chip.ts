@@ -80,6 +80,17 @@ export class SchedulingActionChip extends LitElement {
                 text-overflow: ellipsis;
             }
 
+            /* Candidate: planned but its execution condition is not currently
+               met — muted, with a dashed outline to read as "tentative". */
+            .chip.candidate {
+                opacity: 0.5;
+                border-style: dashed;
+            }
+
+            .chip.candidate .chip-icon {
+                opacity: 0.85;
+            }
+
             :host([icononly]) .chip {
                 justify-content: center;
                 padding-left: 4px;
@@ -108,7 +119,8 @@ export class SchedulingActionChip extends LitElement {
         const presentation = getScheduleActionPresentation(this.action, this.localize, this.labelVariant);
         const runtimeStateClass = this.surface === "runtime" ? ` runtime-${this.runtimeState}` : "";
         const authorshipClass = this._buildAuthorshipClass();
-        const classes = `chip action ${presentation.toneClass}${this.size === "compact" ? " compact" : ""}${this.interactive ? " selectable" : ""}${this.selected ? " selected" : ""}${this.surface === "runtime" ? " runtime-surface" : ""}${runtimeStateClass}${authorshipClass}`;
+        const candidateClass = presentation.isCandidate ? " candidate" : "";
+        const classes = `chip action ${presentation.toneClass}${this.size === "compact" ? " compact" : ""}${this.interactive ? " selectable" : ""}${this.selected ? " selected" : ""}${this.surface === "runtime" ? " runtime-surface" : ""}${runtimeStateClass}${authorshipClass}${candidateClass}`;
         return html`
             <span class=${classes} title=${this.titleText}>
                 <ha-icon class="chip-icon" .icon=${presentation.icon} aria-hidden="true"></ha-icon>

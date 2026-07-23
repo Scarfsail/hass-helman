@@ -38,9 +38,10 @@ export function extractScheduleSlotAssignments(
 }
 
 export function stripScheduleInverterSetBy(action: ScheduleActionDTO): ScheduleAction {
-    return action.targetSoc === undefined
-        ? { kind: action.kind }
-        : { kind: action.kind, targetSoc: action.targetSoc };
+    // Strip only setBy; keep kind/targetSoc/conditionMet so candidate actions
+    // still render muted in the plan.
+    const { setBy: _ignoredSetBy, ...valueAction } = action;
+    return valueAction;
 }
 
 export function stripScheduleApplianceSetBy(

@@ -280,6 +280,9 @@ export interface ScheduleActionDTO {
     kind: ScheduleActionKind;
     targetSoc?: number;
     setBy?: ScheduleSetBy;
+    // False marks a "candidate": placed by an optimizer whose execution
+    // condition is not currently met. Rendered muted; not executed.
+    conditionMet?: boolean;
 }
 
 export type EvChargerUseMode = "Fast" | "ECO";
@@ -291,16 +294,19 @@ export interface ScheduleEvChargerActionDTO {
     useMode?: EvChargerUseMode;
     ecoGear?: string;
     setBy?: ScheduleSetBy;
+    conditionMet?: boolean;
 }
 
 export interface ScheduleGenericApplianceActionDTO {
     on: boolean;
     setBy?: ScheduleSetBy;
+    conditionMet?: boolean;
 }
 
 export interface ScheduleClimateApplianceActionDTO {
     mode: ClimateApplianceMode;
     setBy?: ScheduleSetBy;
+    conditionMet?: boolean;
 }
 
 export type ScheduleApplianceActionDTO =

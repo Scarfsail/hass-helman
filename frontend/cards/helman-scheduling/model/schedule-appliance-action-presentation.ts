@@ -14,9 +14,22 @@ export interface ScheduleApplianceActionPresentation {
     icon: string;
     label: string;
     toneClass: ScheduleApplianceActionToneClass;
+    // Candidate = placed by an optimizer whose execution condition is not met.
+    isCandidate: boolean;
 }
 
-export function getScheduleApplianceActionPresentation({
+export function getScheduleApplianceActionPresentation(args: {
+    appliance: Pick<ScheduleApplianceMetadata, "kind" | "icon">;
+    action: ScheduleApplianceAction | null;
+    localize: LocalizeFunction;
+}): ScheduleApplianceActionPresentation {
+    return {
+        ..._getBaseApplianceActionPresentation(args),
+        isCandidate: args.action !== null && args.action.conditionMet === false,
+    };
+}
+
+function _getBaseApplianceActionPresentation({
     appliance,
     action,
     localize,
@@ -24,7 +37,7 @@ export function getScheduleApplianceActionPresentation({
     appliance: Pick<ScheduleApplianceMetadata, "kind" | "icon">;
     action: ScheduleApplianceAction | null;
     localize: LocalizeFunction;
-}): ScheduleApplianceActionPresentation {
+}): Omit<ScheduleApplianceActionPresentation, "isCandidate"> {
     if (action === null) {
         return {
             icon: appliance.icon,
@@ -86,7 +99,7 @@ function _getEvChargerActionPresentation(
     icon: string,
     action: Extract<ScheduleApplianceAction, { charge: boolean }>,
     localize: LocalizeFunction,
-): ScheduleApplianceActionPresentation {
+): Omit<ScheduleApplianceActionPresentation, "isCandidate"> {
     const modeLabel = _buildEvModeLabel(action, localize);
     return {
         icon,

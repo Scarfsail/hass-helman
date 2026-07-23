@@ -86,6 +86,17 @@ export class SchedulingApplianceChip extends LitElement {
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
+
+            /* Candidate: planned but its execution condition is not currently
+               met — muted with a dashed outline to read as "tentative". */
+            .chip.candidate {
+                opacity: 0.5;
+                border-style: dashed;
+            }
+
+            .chip.candidate .chip-icon {
+                opacity: 0.85;
+            }
         `,
     ];
 
@@ -144,6 +155,7 @@ export class SchedulingApplianceChip extends LitElement {
             ...this._buildAuthorshipClasses(),
             this.size === "compact" ? "compact" : "",
             projectionBadge === null ? "" : "has-badge",
+            presentation.isCandidate ? "candidate" : "",
         ].filter((className) => className.length > 0).join(" ");
         return html`
             <span class=${classes} title=${this._buildChipTitle(projectionBadge)}>
