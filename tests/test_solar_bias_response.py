@@ -152,6 +152,9 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
         "custom_components.helman.automation.config"
     )
     automation_config_mod.AutomationConfig = type("AutomationConfig", (), {})
+    automation_config_mod.OptimizerInstanceConfig = type(
+        "OptimizerInstanceConfig", (), {}
+    )
     automation_config_mod.read_automation_config = lambda config: None
     sys.modules[automation_config_mod.__name__] = automation_config_mod
 
@@ -329,6 +332,7 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     schedule_mod.schedule_document_from_dict = lambda raw_document: raw_document
     schedule_mod.schedule_document_to_dict = lambda doc: {}
     schedule_mod.slot_to_dict = lambda slot, runtime=None: {}
+    schedule_mod.strip_candidate_actions = lambda doc: doc
     schedule_mod.validate_slot_patch_request = (
         lambda slots, reference_time, battery_soc_bounds: None
     )
