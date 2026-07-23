@@ -10,6 +10,7 @@ import {
 import type {
     ScheduleApplianceAction,
     ScheduleApplianceRuntime,
+    ScheduleInverterAction,
     ScheduleInverterRuntime,
     ScheduleSlot,
 } from "../schedule-types";
@@ -158,7 +159,14 @@ function _buildInverterIssue({
     localize: LocalizeFunction;
 }): ScheduleRuntimeComplianceIssue | null {
     const actorLabel = localize("scheduling.now.actor.inverter");
-    const expectedLabel = getScheduleActionLabel(slot.assignments.inverter.action, localize);
+    // A candidate action (execution condition not met) is expected NOT to run,
+    // so the executor doing nothing / restoring normal is on-plan — treat it
+    // exactly like an empty slot for compliance.
+    const plannedAction: ScheduleInverterAction =
+        slot.assignments.inverter.action.conditionMet === false
+            ? { kind: "empty" }
+            : slot.assignments.inverter.action;
+    const expectedLabel = getScheduleActionLabel(plannedAction, localize);
     if (runtime === null) {
         return _createIssue({
             key: "inverter:missing",
@@ -178,12 +186,12 @@ function _buildInverterIssue({
     }
 
     const isSkippedNoop = runtime.actionKind === "noop" && runtime.outcome === "skipped";
-    if (slot.assignments.inverter.action.kind === "empty" && isSkippedNoop) {
+    if (plannedAction.kind === "empty" && isSkippedNoop) {
         return null;
     }
 
     if (
-        slot.assignments.inverter.action.kind === "empty"
+        plannedAction.kind === "empty"
         && (runtime.actionKind === "slot_stop" || runtime.actionKind === "apply")
         && runtime.outcome === "success"
         && runtime.executedAction?.kind === "normal"
@@ -192,7 +200,7 @@ function _buildInverterIssue({
     }
 
     if (runtime.executedAction) {
-        if (areScheduleActionsEqual(slot.assignments.inverter.action, runtime.executedAction)) {
+        if (areScheduleActionsEqual(plannedAction, runtime.executedAction)) {
             return null;
         }
 
@@ -214,7 +222,7 @@ function _buildInverterIssue({
 
     if (
         runtime.reason === "target_soc_reached"
-        && isTargetScheduleAction(slot.assignments.inverter.action)
+        && isTargetScheduleAction(plannedAction)
     ) {
         return null;
     }
@@ -265,7 +273,12 @@ function _buildApplianceIssue({
         });
     }
 
-    const plannedEnabled = isScheduleApplianceActionEnabled(plannedAction) === true;
+    // A candidate action (execution condition not met) is expected NOT to run,
+    // so treat it as not-enabled: the executor leaving the appliance off is
+    // on-plan.
+    const plannedIsCandidate = plannedAction?.conditionMet === false;
+    const plannedEnabled =
+        !plannedIsCandidate && isScheduleApplianceActionEnabled(plannedAction) === true;
     const isSkippedNoop = runtime.outcome === "skipped" && runtime.actionKind === "noop";
     if (plannedEnabled && runtime.actionKind === "slot_stop") {
         return _createIssue({
