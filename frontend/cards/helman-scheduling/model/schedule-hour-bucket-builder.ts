@@ -493,6 +493,7 @@ function _buildDistinctApplianceItems(
             action: entry.action,
             slotId: entry.slotId,
         });
+        const isCandidate = entry.action.conditionMet === false;
         const existing = itemsByKey.get(key);
         if (existing) {
             existing.projectionBadge = mergeScheduleApplianceProjectionBadges(
@@ -503,6 +504,9 @@ function _buildDistinctApplianceItems(
                 existing.authorship,
                 summarizeScheduleAuthorship([entry.authorship]),
             ]);
+            // Stays a candidate only while every folded occurrence is one; a
+            // single committed slot makes the appliance's chip read as active.
+            existing.isCandidate = existing.isCandidate && isCandidate;
             continue;
         }
 
@@ -519,6 +523,7 @@ function _buildDistinctApplianceItems(
             firstSlotId: entry.slotId,
             projectionBadge,
             authorship: summarizeScheduleAuthorship([entry.authorship]),
+            isCandidate,
         } satisfies ScheduleTableApplianceActionItemModel;
         itemsByKey.set(key, item);
         items.push(item);
@@ -543,6 +548,7 @@ function _buildApplianceSummaryItem(
             items.map((item) => item.projectionBadge),
         ),
         authorship: mergeScheduleAuthorshipSummaries(items.map((item) => item.authorship)),
+        isCandidate: items.every((item) => item.isCandidate),
     };
 }
 

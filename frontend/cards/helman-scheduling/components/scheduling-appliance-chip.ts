@@ -107,6 +107,12 @@ export class SchedulingApplianceChip extends LitElement {
     @property({ type: String }) public size: "compact" | "regular" = "regular";
     @property({ type: Boolean }) public iconOnly = false;
     @property({ type: Boolean }) public summary = false;
+    /**
+     * Candidate summary: every folded appliance's execution condition is unmet,
+     * so the summary chip reads muted/tentative. Only consulted for `summary`
+     * chips; a single appliance chip derives this from its own action instead.
+     */
+    @property({ type: Boolean }) public isCandidate = false;
     @property({ attribute: false }) public authorship: ScheduleActionAuthorshipSummary | null = null;
     @property({ type: String }) public titleText = "";
 
@@ -121,6 +127,7 @@ export class SchedulingApplianceChip extends LitElement {
                 ...this._buildAuthorshipClasses(),
                 this.size === "compact" ? "compact" : "",
                 projectionBadge === null ? "" : "has-badge",
+                this.isCandidate ? "candidate" : "",
             ].filter((className) => className.length > 0).join(" ");
             return html`
                 <span class=${classes} title=${this._buildChipTitle(projectionBadge)}>

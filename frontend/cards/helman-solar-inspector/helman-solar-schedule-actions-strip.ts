@@ -443,6 +443,7 @@ export class HelmanSolarScheduleActionsStrip extends LitElement {
                     size="compact"
                     ?iconOnly=${true}
                     ?summary=${true}
+                    ?isCandidate=${item.isCandidate}
                 ></scheduling-appliance-chip>
             `;
         }

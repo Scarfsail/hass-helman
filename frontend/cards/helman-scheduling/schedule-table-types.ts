@@ -95,6 +95,9 @@ export interface ScheduleTableApplianceActionItemModel {
     firstSlotId: string;
     projectionBadge: ScheduleApplianceProjectionBadge | null;
     authorship: ScheduleActionAuthorshipSummary;
+    // Candidate = every folded action for this appliance has its execution
+    // condition unmet (conditionMet === false), so it renders muted/tentative.
+    isCandidate: boolean;
 }
 
 export interface ScheduleTableApplianceSummaryActionItemModel {
@@ -104,6 +107,9 @@ export interface ScheduleTableApplianceSummaryActionItemModel {
     items: ScheduleTableApplianceActionItemModel[];
     projectionBadge: Extract<ScheduleApplianceProjectionBadge, { kind: "energy" }> | null;
     authorship: ScheduleActionAuthorshipSummary;
+    // Candidate = every folded appliance is a candidate, so the summary chip
+    // reads as tentative just like a single candidate appliance chip.
+    isCandidate: boolean;
 }
 
 export type ScheduleTableActionItemModel =
