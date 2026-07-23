@@ -64,6 +64,13 @@ class ScheduleExecutorDependencies:
     read_schedule_control_config: Callable[[], ScheduleControlConfig | None]
     read_battery_state: Callable[[], BatteryLiveState | None]
     read_appliances_registry: Callable[[], AppliancesRuntimeRegistry]
+    # Pre-execution reality check: given the reconcile time, returns True if the
+    # plan is stale and current conditions differ from it — in which case a
+    # re-plan has been triggered and execution should defer this cycle. Optional
+    # so tests can omit it (defaults to "never defer").
+    check_reality_and_maybe_replan: Callable[[datetime], Awaitable[bool]] | None = (
+        None
+    )
 
 
 @dataclass
@@ -486,6 +493,14 @@ class ScheduleExecutor:
         del reason
 
         request_now = reference_time or dt_util.now()
+        # Reality check before execution: if the plan is stale and conditions
+        # have changed since it was built, a re-plan is triggered and we defer
+        # this cycle. Execution itself never re-checks conditions — it always
+        # trusts the plan's condition_met. Done outside the lock (it doesn't
+        # touch the schedule; the re-plan it may trigger needs the lock later).
+        check_reality = self._dependencies.check_reality_and_maybe_replan
+        if check_reality is not None and await check_reality(request_now):
+            return
         async with self._dependencies.schedule_lock:
             schedule_document = await self._load_pruned_schedule_document_locked(
                 reference_time=request_now

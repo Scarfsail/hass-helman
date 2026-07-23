@@ -6,6 +6,7 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -201,6 +202,7 @@ def _build_executor(
     document: ScheduleDocument,
     control_config: ScheduleControlConfig | None = None,
     battery_state: BatteryLiveState | None = None,
+    check_reality_and_maybe_replan=None,
 ) -> tuple[ScheduleExecutor, FakeHass, FakeScheduleStore]:
     states = {} if state is None else {entity_id: state}
     hass = FakeHass(states)
@@ -215,6 +217,7 @@ def _build_executor(
                 or _build_control_config(entity_id),
                 read_battery_state=lambda: battery_state,
                 read_appliances_registry=lambda: AppliancesRuntimeRegistry(),
+                check_reality_and_maybe_replan=check_reality_and_maybe_replan,
             ),
         )
     return executor, hass, store
@@ -252,6 +255,51 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
+        self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
+
+    async def test_reconcile_defers_when_reality_check_requests_replan(self) -> None:
+        check = AsyncMock(return_value=True)
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            ),
+            check_reality_and_maybe_replan=check,
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        # Reality check deferred: a re-plan was triggered, nothing executed.
+        check.assert_awaited_once()
+        self.assertEqual(hass.services.calls, [])
+
+    async def test_reconcile_executes_when_reality_check_allows(self) -> None:
+        check = AsyncMock(return_value=False)
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Normal",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            ),
+            check_reality_and_maybe_replan=check,
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+
+        check.assert_awaited_once()
         self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
     async def test_reconcile_skips_candidate_inverter_action(self) -> None:

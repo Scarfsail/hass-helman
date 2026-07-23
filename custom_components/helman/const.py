@@ -43,13 +43,13 @@ SCHEDULE_ACTION_KINDS = {
     SCHEDULE_ACTION_STOP_EXPORT,
 }
 SCHEDULE_EXECUTOR_INTERVAL_SECONDS = 30
-# How often the coordinator re-checks optimizer execution conditions against the
-# map the current plan was built with, to trigger a fast re-plan when one flips.
-AUTOMATION_CONDITION_CHECK_INTERVAL_SECONDS = 30
-# Freshness window: a plan younger than this is trusted as-is; no re-plan is
-# triggered even if a condition appears to have changed (avoids churn right
-# after planning; short staleness on live signals is acceptable).
-AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS = 10
+# Freshness window for the pre-execution reality check: when the current plan is
+# younger than this, the executor trusts its condition_met stamps as-is. Only
+# when the plan is older does the executor re-evaluate conditions and, if any
+# result differs from the plan, defer execution and re-plan first. Must comfort-
+# ably exceed a re-plan's duration so the re-plan -> execute hop settles inside
+# the window and does not bounce back and forth.
+AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS = 30
 CONSUMPTION_TOTAL_ENTITY_ID = "sensor.helman_consumption_total"
 PRODUCTION_TOTAL_ENTITY_ID = "sensor.helman_production_total"
 HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS = 14
