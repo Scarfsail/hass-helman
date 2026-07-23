@@ -19,6 +19,7 @@ class EvChargerScheduleActionDict(TypedDict):
     useMode: NotRequired[str]
     ecoGear: NotRequired[str]
     setBy: NotRequired[ScheduleActionSetBy]
+    conditionMet: NotRequired[bool]
 
 
 def normalize_ev_charger_schedule_action(
@@ -34,7 +35,7 @@ def normalize_ev_charger_schedule_action(
     unsupported_keys = sorted(
         str(key)
         for key in value.keys()
-        if key not in {"charge", "vehicleId", "useMode", "ecoGear", "setBy"}
+        if key not in {"charge", "vehicleId", "useMode", "ecoGear", "setBy", "conditionMet"}
     )
     if unsupported_keys:
         raise ValueError(
@@ -61,6 +62,7 @@ def normalize_ev_charger_schedule_action(
         value.get("setBy"),
         path=f"{context}.setBy",
     )
+    condition_not_met = value.get("conditionMet") is False
 
     if not charge:
         if use_mode is not None:
@@ -80,6 +82,8 @@ def normalize_ev_charger_schedule_action(
             payload["vehicleId"] = vehicle_id
         if set_by is not None:
             payload["setBy"] = set_by
+        if condition_not_met:
+            payload["conditionMet"] = False
         return payload
 
     if vehicle_id is None:
@@ -119,6 +123,8 @@ def normalize_ev_charger_schedule_action(
         }
         if set_by is not None:
             payload["setBy"] = set_by
+        if condition_not_met:
+            payload["conditionMet"] = False
         return payload
 
     payload = {
@@ -128,6 +134,8 @@ def normalize_ev_charger_schedule_action(
     }
     if set_by is not None:
         payload["setBy"] = set_by
+    if condition_not_met:
+        payload["conditionMet"] = False
     return payload
 
 

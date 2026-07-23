@@ -17,6 +17,7 @@ from ..schedule_action_metadata import (
 class ClimateApplianceScheduleActionDict(TypedDict):
     mode: str
     setBy: NotRequired[ScheduleActionSetBy]
+    conditionMet: NotRequired[bool]
 
 
 def normalize_climate_appliance_schedule_action(
@@ -30,7 +31,7 @@ def normalize_climate_appliance_schedule_action(
         raise ValueError(f"{context} must be an object")
 
     unsupported_keys = sorted(
-        str(key) for key in value.keys() if key not in {"mode", "setBy"}
+        str(key) for key in value.keys() if key not in {"mode", "setBy", "conditionMet"}
     )
     if unsupported_keys:
         raise ValueError(
@@ -56,10 +57,13 @@ def normalize_climate_appliance_schedule_action(
         value.get("setBy"),
         path=f"{context}.setBy",
     )
+    condition_not_met = value.get("conditionMet") is False
     if stop_mode is not None and normalized_mode == stop_mode:
         payload: ClimateApplianceScheduleActionDict = {"mode": normalized_mode}
         if set_by is not None:
             payload["setBy"] = set_by
+        if condition_not_met:
+            payload["conditionMet"] = False
         return payload
 
     if normalized_mode not in supported_modes:
@@ -74,4 +78,6 @@ def normalize_climate_appliance_schedule_action(
     payload = {"mode": normalized_mode}
     if set_by is not None:
         payload["setBy"] = set_by
+    if condition_not_met:
+        payload["conditionMet"] = False
     return payload

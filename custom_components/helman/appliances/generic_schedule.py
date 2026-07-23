@@ -14,6 +14,7 @@ from ..schedule_action_metadata import (
 class GenericApplianceScheduleActionDict(TypedDict):
     on: bool
     setBy: NotRequired[ScheduleActionSetBy]
+    conditionMet: NotRequired[bool]
 
 
 def normalize_generic_appliance_schedule_action(
@@ -28,7 +29,7 @@ def normalize_generic_appliance_schedule_action(
         raise ValueError(f"{context} must be an object")
 
     unsupported_keys = sorted(
-        str(key) for key in value.keys() if key not in {"on", "setBy"}
+        str(key) for key in value.keys() if key not in {"on", "setBy", "conditionMet"}
     )
     if unsupported_keys:
         raise ValueError(
@@ -45,4 +46,6 @@ def normalize_generic_appliance_schedule_action(
     )
     if set_by is not None:
         payload["setBy"] = set_by
+    if value.get("conditionMet") is False:
+        payload["conditionMet"] = False
     return payload

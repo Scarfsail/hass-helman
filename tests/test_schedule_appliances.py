@@ -354,6 +354,34 @@ class ScheduleApplianceTests(unittest.TestCase):
             {"dishwasher": {"on": True}},
         )
 
+    def test_generic_action_preserves_condition_met_candidate(self) -> None:
+        # Regression: normalization rejected/dropped conditionMet, so a candidate
+        # appliance action failed to persist and the old committed plan stayed
+        # live (the executor kept running the appliance).
+        slot = slot_from_dict(
+            _slot_payload(
+                appliances={
+                    "dishwasher": {
+                        "on": True,
+                        "setBy": "automation",
+                        "conditionMet": False,
+                    }
+                }
+            )
+        )
+
+        normalized = normalize_slot_patch_request(
+            slots=[slot],
+            reference_time=REFERENCE_TIME,
+            battery_soc_bounds=None,
+            appliances_registry=_registry(config=_valid_config(include_generic=True)),
+        )
+
+        self.assertEqual(
+            normalized[0].domains.appliances,
+            {"dishwasher": {"on": True, "setBy": "automation", "conditionMet": False}},
+        )
+
     def test_appliance_actions_preserve_set_by(self) -> None:
         slot = slot_from_dict(
             _slot_payload(
