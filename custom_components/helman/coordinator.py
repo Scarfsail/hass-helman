@@ -2642,6 +2642,13 @@ class HelmanCoordinator:
             schedule_document = await self._load_pruned_schedule_document_locked(
                 reference_time=started_at
             )
+        # Candidate actions (placed by optimizers whose execution condition is
+        # not met) are kept in the stored schedule for display/promotion but must
+        # not consume resources. Strip them here so the per-appliance projection,
+        # the adjusted house forecast, and the battery/grid simulation this
+        # pipeline builds all exclude their demand — matching the candidate-free
+        # view the automation optimization snapshot already accounts against.
+        schedule_document = strip_candidate_actions(schedule_document)
         schedule_documents = self._build_forecast_schedule_documents(
             schedule_document=schedule_document
         )
