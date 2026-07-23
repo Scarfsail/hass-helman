@@ -322,6 +322,7 @@ def with_slot_set_by(
                 kind=slot.domains.inverter.kind,
                 target_soc=slot.domains.inverter.target_soc,
                 set_by=slot.domains.inverter.set_by or set_by,
+                condition_met=slot.domains.inverter.condition_met,
             ),
             appliances=with_appliance_schedule_actions_set_by(
                 slot.domains.appliances,

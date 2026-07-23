@@ -206,6 +206,27 @@ class MergeAutomationResultTests(unittest.TestCase):
         self.assertEqual(merged.slots[SLOT_ID].inverter.kind, SCHEDULE_ACTION_STOP_CHARGING)
         self.assertEqual(merged.slots[SLOT_ID].inverter.set_by, "automation")
 
+    def test_merge_preserves_candidate_inverter_condition_met(self) -> None:
+        # Regression: merge rebuilt the ScheduleAction and dropped condition_met,
+        # persisting candidate holds as committed so the executor applied them.
+        merged = merge_automation_result(
+            baseline=_doc(execution_enabled=True),
+            automation_result=_doc(
+                execution_enabled=True,
+                slots={
+                    SLOT_ID: ScheduleDomains(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_CHARGING,
+                            set_by="automation",
+                            condition_met=False,
+                        ),
+                    )
+                },
+            ),
+        )
+
+        self.assertFalse(merged.slots[SLOT_ID].inverter.condition_met)
+
     def test_merge_writes_new_automation_owned_appliance_action_beside_user_inverter(
         self,
     ) -> None:

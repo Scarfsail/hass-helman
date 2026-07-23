@@ -163,6 +163,7 @@ def _merge_inverter_action(
         kind=automation_result.kind,
         target_soc=automation_result.target_soc,
         set_by="automation",
+        condition_met=automation_result.condition_met,
     )
 
 
