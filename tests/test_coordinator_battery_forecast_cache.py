@@ -151,6 +151,7 @@ def _install_import_stubs() -> None:
     schedule_mod.prune_expired_slots = (
         lambda stored_slots, reference_time: stored_slots
     )
+    schedule_mod.strip_candidate_actions = lambda doc: doc
     schedule_mod.read_schedule_control_config = lambda config: None
     schedule_mod.schedule_document_from_dict = (
         lambda raw_document: raw_document if raw_document is not None else ScheduleDocument()

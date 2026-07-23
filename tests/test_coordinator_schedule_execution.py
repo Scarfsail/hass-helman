@@ -463,6 +463,63 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator._schedule_executor = executor
         return coordinator, storage, executor
 
+    async def test_condition_check_triggers_replan_on_flip(self) -> None:
+        from datetime import timedelta
+
+        import homeassistant.util.dt as dt_util
+
+        coordinator, _s, _e = self._build_coordinator(
+            schedule_document={"executionEnabled": True, "slots": {}}
+        )
+        coordinator._last_automation_plan_at = dt_util.now() - timedelta(seconds=60)
+        coordinator._last_plan_condition_map = {"opt": True}
+        coordinator._async_evaluate_optimizer_conditions = AsyncMock(
+            return_value={"opt": False}
+        )
+        coordinator._automation_triggers.request_debounced = AsyncMock()
+
+        await coordinator._async_check_condition_replan()
+
+        coordinator._automation_triggers.request_debounced.assert_awaited_once()
+
+    async def test_condition_check_no_replan_when_unchanged(self) -> None:
+        from datetime import timedelta
+
+        import homeassistant.util.dt as dt_util
+
+        coordinator, _s, _e = self._build_coordinator(
+            schedule_document={"executionEnabled": True, "slots": {}}
+        )
+        coordinator._last_automation_plan_at = dt_util.now() - timedelta(seconds=60)
+        coordinator._last_plan_condition_map = {"opt": True}
+        coordinator._async_evaluate_optimizer_conditions = AsyncMock(
+            return_value={"opt": True}
+        )
+        coordinator._automation_triggers.request_debounced = AsyncMock()
+
+        await coordinator._async_check_condition_replan()
+
+        coordinator._automation_triggers.request_debounced.assert_not_awaited()
+
+    async def test_condition_check_skips_within_freshness_window(self) -> None:
+        import homeassistant.util.dt as dt_util
+
+        coordinator, _s, _e = self._build_coordinator(
+            schedule_document={"executionEnabled": True, "slots": {}}
+        )
+        coordinator._last_automation_plan_at = dt_util.now()  # just planned
+        coordinator._last_plan_condition_map = {"opt": True}
+        coordinator._async_evaluate_optimizer_conditions = AsyncMock(
+            return_value={"opt": False}
+        )
+        coordinator._automation_triggers.request_debounced = AsyncMock()
+
+        await coordinator._async_check_condition_replan()
+
+        # Fresh plan: neither re-evaluates nor triggers.
+        coordinator._async_evaluate_optimizer_conditions.assert_not_awaited()
+        coordinator._automation_triggers.request_debounced.assert_not_awaited()
+
     async def test_normalize_schedule_document_resets_legacy_schedule_without_slot_minutes(
         self,
     ) -> None:

@@ -71,6 +71,8 @@ from .battery_state import (
     read_battery_soc_bounds_config,
 )
 from .const import (
+    AUTOMATION_CONDITION_CHECK_INTERVAL_SECONDS,
+    AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS,
     BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
     CONSUMPTION_TOTAL_ENTITY_ID,
     DEFAULT_FORECAST_DAYS,
@@ -362,6 +364,11 @@ class HelmanCoordinator:
         # Cached across runs; rebuilt when an optimizer's condition changes and
         # unloaded when it is removed or on shutdown.
         self._optimizer_condition_checkers: dict[str, tuple[Any, Any]] = {}
+        # Plan-freshness bookkeeping for the fast condition re-plan (phase 3b):
+        # the condition map the current plan was built from, and when.
+        self._last_automation_plan_at: datetime | None = None
+        self._last_plan_condition_map: dict[str, bool] = {}
+        self._unsub_condition_check: Callable[[], None] | None = None
         self._automation_triggers = AutomationTriggerCoordinator(
             create_task=self._create_task,
             run_callback=self._async_run_automation_trigger_request,
@@ -403,6 +410,13 @@ class HelmanCoordinator:
 
     def _set_last_automation_run_result(self, result: AutomationRunResult) -> None:
         self._last_automation_run_result = deepcopy(result)
+        # Record the condition map + time this plan was built from, so the
+        # condition-check poll can detect a flip and trigger a fast re-plan.
+        if result.ran_automation and result.snapshot is not None:
+            self._last_automation_plan_at = result.snapshot.context.now
+            self._last_plan_condition_map = dict(
+                result.snapshot.context.condition_met_by_optimizer_id
+            )
 
     @staticmethod
     def collect_qualifying_nodes(tree: dict) -> dict[str, str | None]:
@@ -603,6 +617,7 @@ class HelmanCoordinator:
         ):
             self._cached_solar_forecast = None
         self._start_forecast_refresh()
+        self._start_condition_check()
 
         await self._async_normalize_schedule_document()
         automation_config = read_automation_config(self._active_config)
@@ -3410,6 +3425,54 @@ class HelmanCoordinator:
             self._unsub_forecast_refresh()
             self._unsub_forecast_refresh = None
 
+    def _start_condition_check(self) -> None:
+        """Poll optimizer execution conditions for fast re-planning (phase 3b).
+
+        Between slot-aligned plans, re-evaluate the conditions and, if one has
+        flipped versus the map the current plan was built from, trigger a
+        debounced re-plan so candidates promote (or committed actions demote)
+        within seconds instead of at the next 15-minute plan.
+        """
+        if self._unsub_condition_check is not None:
+            return
+
+        @callback
+        def _on_condition_check_interval(_now: datetime) -> None:
+            self._create_tracked_refresh_task(self._async_check_condition_replan())
+
+        self._unsub_condition_check = async_track_time_interval(
+            self._hass,
+            _on_condition_check_interval,
+            timedelta(seconds=AUTOMATION_CONDITION_CHECK_INTERVAL_SECONDS),
+        )
+
+    def _stop_condition_check(self) -> None:
+        if self._unsub_condition_check is not None:
+            self._unsub_condition_check()
+            self._unsub_condition_check = None
+
+    async def _async_check_condition_replan(self) -> None:
+        """Re-evaluate conditions and request a re-plan when one has flipped."""
+        plan_at = self._last_automation_plan_at
+        if plan_at is None:
+            return
+        # Freshness window: trust a just-built plan as-is (avoids churn right
+        # after planning; brief staleness on live signals is acceptable).
+        age = (dt_util.now() - plan_at).total_seconds()
+        if age < AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS:
+            return
+        try:
+            current_map = await self._async_evaluate_optimizer_conditions()
+        except Exception:
+            _LOGGER.debug("Condition re-check failed; skipping", exc_info=True)
+            return
+        if current_map == self._last_plan_condition_map:
+            return
+        # A condition result flipped vs the plan. Request a debounced re-plan
+        # (no forecast refresh — presence/temperature don't move the forecast);
+        # the runner re-evaluates and re-stamps candidates/committed actions.
+        await self._automation_triggers.request_debounced(reason="condition_changed")
+
     def _collect_power_sensor_ids(self, tree: dict) -> list[str]:
         """Collect all unique power_sensor_id values from the tree dict."""
         ids: set[str] = set()
@@ -3779,6 +3842,7 @@ class HelmanCoordinator:
         """Clean up event listeners and stop the tick."""
         self._stop_tick()
         self._stop_forecast_refresh()
+        self._stop_condition_check()
         await self._async_cancel_refresh_tasks()
         solar_bias_scheduler = getattr(self, "_solar_bias_scheduler", None)
         if solar_bias_scheduler is not None:
