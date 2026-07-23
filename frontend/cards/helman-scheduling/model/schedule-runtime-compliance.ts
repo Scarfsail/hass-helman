@@ -101,7 +101,11 @@ export function buildScheduleRuntimeComplianceModel({
     });
     for (const applianceId of sortedApplianceIds) {
         const appliance = getScheduleApplianceById(appliances, applianceId);
-        const plannedAction = slot.assignments.appliances[applianceId]?.action ?? null;
+        const rawPlannedAction = slot.assignments.appliances[applianceId]?.action ?? null;
+        // A candidate (execution condition not met) is expected NOT to run, so
+        // treat it as "no planned action": on-plan unless it actually ran.
+        const plannedAction =
+            rawPlannedAction?.conditionMet === false ? null : rawPlannedAction;
         const runtime = slot.runtime.appliances[applianceId] ?? null;
         if (plannedAction === null) {
             const unexpectedIssue = runtime
@@ -273,12 +277,7 @@ function _buildApplianceIssue({
         });
     }
 
-    // A candidate action (execution condition not met) is expected NOT to run,
-    // so treat it as not-enabled: the executor leaving the appliance off is
-    // on-plan.
-    const plannedIsCandidate = plannedAction?.conditionMet === false;
-    const plannedEnabled =
-        !plannedIsCandidate && isScheduleApplianceActionEnabled(plannedAction) === true;
+    const plannedEnabled = isScheduleApplianceActionEnabled(plannedAction) === true;
     const isSkippedNoop = runtime.outcome === "skipped" && runtime.actionKind === "noop";
     if (plannedEnabled && runtime.actionKind === "slot_stop") {
         return _createIssue({
