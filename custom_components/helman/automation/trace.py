@@ -98,6 +98,11 @@ class _MutableStep:
     kind: str
     status: str = "ok"
     complete: bool = True
+    # False when this optimizer carries an execution condition that is NOT met:
+    # its placements are candidates (kept for display, excluded from resource
+    # accounting, never executed). The frontend explains its actions as tentative
+    # rather than as planned-for-execution. Defaults True (no condition / met).
+    condition_met: bool = True
     rails_in: dict[str, list[float | None]] = field(default_factory=dict)
     writes: list[TraceWrite] = field(default_factory=list)
     decisions: list[TraceDecision] = field(default_factory=list)
@@ -107,7 +112,7 @@ class _MutableStep:
     derivable: set[str] = field(default_factory=set)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "optimizerId": self.optimizer_id,
             "kind": self.kind,
             "status": self.status,
@@ -117,6 +122,11 @@ class _MutableStep:
             "decisions": [decision.to_dict() for decision in self.decisions],
             "notes": [note.to_dict() for note in self.notes],
         }
+        # Serialized only when the condition is unmet, to stay compact and keep
+        # existing fixtures (which never set it) unchanged.
+        if not self.condition_met:
+            payload["conditionMet"] = False
+        return payload
 
 
 class OptimizerTrace:
@@ -151,6 +161,16 @@ class OptimizerTrace:
 
     def begin_step(self, optimizer_id: str, kind: str) -> None:
         self._current = _MutableStep(optimizer_id=optimizer_id, kind=kind)
+
+    def set_condition_met(self, condition_met: bool) -> None:
+        """Record whether the current step's execution condition is met.
+
+        Called by the optimizer loop once per step. ``False`` marks every
+        placement this step makes as a candidate (condition not met), which the
+        frontend surfaces as tentative in the run explanation.
+        """
+        if self._current is not None:
+            self._current.condition_met = condition_met
 
     def set_rails_in(self, rails: dict[str, list[float | None]]) -> None:
         if self._current is not None:

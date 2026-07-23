@@ -560,6 +560,14 @@ def run_optimizer_loop_pure(
     for optimizer_config in execution_optimizers:
         optimizer_started_at = time.perf_counter()
         trace.begin_step(optimizer_config.id, optimizer_config.kind)
+        # Stamp the step with its execution-condition state so the run
+        # explanation can present this optimizer's placements as candidates
+        # (tentative, won't execute) rather than as planned-for-execution.
+        trace.set_condition_met(
+            snapshot.context.condition_met_by_optimizer_id.get(
+                optimizer_config.id, True
+            )
+        )
         # railsIn is the rail segment the optimizer received (pre-rebuild).
         trace.set_rails_in(
             _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
