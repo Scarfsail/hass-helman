@@ -169,6 +169,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
     schedule_mod.ScheduleControlConfig = type("ScheduleControlConfig", (), {})
+    schedule_mod.strip_candidate_actions = lambda doc: doc
     schedule_mod.ScheduleAction = type("ScheduleAction", (), {})
     schedule_mod.ScheduleDocument = type(
         "ScheduleDocument",
