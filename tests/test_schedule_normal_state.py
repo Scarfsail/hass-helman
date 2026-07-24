@@ -175,6 +175,54 @@ class BuildControllableEntitiesTests(unittest.TestCase):
             ],
         )
 
+    def test_inverter_carries_the_option_each_action_kind_selects(self) -> None:
+        entities = build_controllable_entities(
+            control_config=_control_config(),
+            registry=_registry(),
+        )
+
+        self.assertEqual(
+            entities[0]["actionOptions"],
+            {
+                "normal": "Normal",
+                "stop_charging": "Stop Charging",
+                "stop_discharging": "Stop Discharging",
+                "charge_to_target_soc": "Charge To Target",
+                "discharge_to_target_soc": "Discharge To Target",
+                "stop_export": "Stop Export",
+            },
+        )
+
+    def test_inverter_omits_action_kinds_without_a_configured_option(self) -> None:
+        entities = build_controllable_entities(
+            control_config=ScheduleControlConfig(
+                mode_entity_id="select.inverter_mode",
+                normal_option="Normal",
+                stop_charging_option="Stop Charging",
+                stop_discharging_option="Stop Discharging",
+            ),
+            registry=_registry(),
+        )
+
+        self.assertEqual(
+            entities[0]["actionOptions"],
+            {
+                "normal": "Normal",
+                "stop_charging": "Stop Charging",
+                "stop_discharging": "Stop Discharging",
+            },
+        )
+
+    def test_appliances_carry_no_action_options(self) -> None:
+        entities = build_controllable_entities(
+            control_config=_control_config(),
+            registry=_registry(),
+        )
+
+        self.assertTrue(
+            all("actionOptions" not in entity for entity in entities[1:])
+        )
+
     def test_omits_the_inverter_when_it_is_not_configured(self) -> None:
         entities = build_controllable_entities(
             control_config=None,

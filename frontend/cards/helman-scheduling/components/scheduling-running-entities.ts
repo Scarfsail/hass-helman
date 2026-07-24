@@ -4,15 +4,26 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import { getSharedHelmanStore } from "../../helman/store";
 import type { LocalizeFunction } from "../../localize/localize";
-import type { RunningEntity } from "../model/running-entities";
+import type {
+    ControllableEntityStateView,
+    ControllableEntityStatus,
+} from "../model/controllable-entity-status";
+import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
+import { getScheduleActionLabel } from "../model/schedule-labels";
+import { formatScheduleTime } from "../model/schedule-time";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
+import "./scheduling-action-chip";
+import "./scheduling-appliance-chip";
 
 /**
- * The list of entities Helman can drive that are currently running.
+ * Every entity Helman can drive, with what it is doing and what it will do.
  *
  * Shown whether or not execution is enabled, so the card always answers "what
- * is on right now?". Each row opens that entity's more-info dialog, which is
- * where the user turns it off by hand.
+ * is on right now?" -- and, with execution on, "until when?" for what is
+ * running and "from when?" for what is not. Entities at rest are listed too,
+ * muted and last, so the list doubles as the roster of controllable hardware.
+ * Each row opens that entity's more-info dialog, which is where the user turns
+ * it off by hand.
  *
  * The bulk "turn everything to normal" action appears only while execution is
  * disabled: with execution enabled the schedule owns these entities and would
@@ -31,7 +42,7 @@ export class SchedulingRunningEntities extends LitElement {
                 gap: 12px;
                 width: 100%;
                 min-height: 28px;
-                padding: 1px 4px;
+                padding: 2px 4px;
                 background: none;
                 border: none;
                 border-radius: 4px;
@@ -45,6 +56,16 @@ export class SchedulingRunningEntities extends LitElement {
             .entity-row:hover,
             .entity-row:focus-visible {
                 background: var(--secondary-background-color);
+            }
+
+            /* At rest: still listed, but it should not compete with whatever is
+               actually running. */
+            .entity-row.at-rest {
+                color: var(--secondary-text-color);
+            }
+
+            .entity-row.at-rest state-badge {
+                opacity: 0.6;
             }
 
             .entity-row state-badge {
@@ -62,10 +83,46 @@ export class SchedulingRunningEntities extends LitElement {
                 white-space: nowrap;
             }
 
-            .entity-state {
+            /* One line, read left to right: where the entity is now, and what
+               the schedule turns it into next. The states are icons only -- the
+               row is a glance, and their colours already carry the meaning.
+
+               Fixed column tracks rather than content-sized ones, so the three
+               parts line up down the whole list: a row with nothing scheduled
+               fills only the first column and its icon stays under the other
+               rows' current states instead of drifting under their end states. */
+            .entity-status {
+                display: grid;
+                grid-template-columns:
+                    var(--schedule-status-column)
+                    var(--schedule-status-arrow-column)
+                    var(--schedule-status-column);
                 flex: 0 0 auto;
+                align-items: center;
+                gap: 4px;
                 color: var(--secondary-text-color);
-                text-align: end;
+                font-size: 0.74rem;
+                line-height: 1.2;
+                white-space: nowrap;
+
+                --schedule-status-column: 76px;
+                --schedule-status-arrow-column: 10px;
+            }
+
+            /* Both cells hang off the right edge of their column, so the icons
+               form two clean vertical lines and a longer time label grows
+               leftwards into the gap instead of pushing its icon along. */
+            .status-cell {
+                display: flex;
+                align-items: center;
+                justify-self: end;
+                gap: 4px;
+                min-width: 0;
+            }
+
+            .status-arrow {
+                justify-self: center;
+                opacity: 0.7;
             }
 
             .actions {
@@ -94,8 +151,9 @@ export class SchedulingRunningEntities extends LitElement {
 
     @property({ attribute: false }) public hass?: HomeAssistant;
     @property({ attribute: false }) public localize!: LocalizeFunction;
-    @property({ attribute: false }) public entities: readonly RunningEntity[] = [];
+    @property({ attribute: false }) public entities: readonly ControllableEntityStatus[] = [];
     @property({ type: Boolean }) public executionEnabled = false;
+    @property({ type: Number }) public nowMs = Date.now();
 
     @state() private _restoring = false;
 
@@ -104,10 +162,12 @@ export class SchedulingRunningEntities extends LitElement {
             return nothing;
         }
 
+        const hasRunning = this.entities.some((entity) => !entity.isNormal);
+
         return html`
             ${this.entities.map((entity) => html`
                 <button
-                    class="entity-row"
+                    class="entity-row ${entity.isNormal ? "at-rest" : ""}"
                     type="button"
                     @click=${() => this._handleShowMoreInfo(entity.entityId)}
                 >
@@ -121,14 +181,11 @@ export class SchedulingRunningEntities extends LitElement {
                         .stateObj=${entity.stateObj}
                         .stateColor=${true}
                     ></state-badge>
-                    <span class="entity-name">${this._buildEntityName(entity)}</span>
-                    <span class="entity-state">
-                        ${this.hass?.formatEntityState(entity.stateObj)
-                            ?? entity.stateObj.state}
-                    </span>
+                    <span class="entity-name">${entity.name}</span>
+                    ${this._renderStatus(entity)}
                 </button>
             `)}
-            ${this.executionEnabled ? nothing : html`
+            ${this.executionEnabled || !hasRunning ? nothing : html`
                 <div class="actions">
                     <button
                         class="restore-button"
@@ -145,13 +202,102 @@ export class SchedulingRunningEntities extends LitElement {
         `;
     }
 
-    private _buildEntityName(entity: RunningEntity): string {
-        // The Helman-configured name is what the user named the appliance in
-        // this integration, so it is the more meaningful label here; the
-        // entity's own friendly name is the fallback.
-        return entity.name
-            || entity.stateObj.attributes.friendly_name
-            || entity.entityId;
+    /**
+     * `{from} [now] → {when} [next]`, on one line.
+     *
+     * The leading time is the moment the entity entered its current state, so
+     * it only appears for something that is actually running -- "at rest since"
+     * is not what the user came here for. The trailing half is whatever the
+     * schedule does next, and drops out when the schedule leaves the entity
+     * alone for the rest of the horizon.
+     *
+     * With execution disabled the schedule drives nothing, so neither time
+     * means anything and the row falls back to the current state alone.
+     */
+    private _renderStatus(entity: ControllableEntityStatus) {
+        const next = this.executionEnabled ? entity.next : null;
+        const since = this.executionEnabled && entity.sinceMs !== null
+            ? this._formatMoment(entity.sinceMs)
+            : null;
+
+        return html`
+            <span class="entity-status">
+                <span class="status-cell current">
+                    ${since === null ? nothing : html`<span>${since}</span>`}
+                    ${this._renderStateChip(entity.current)}
+                </span>
+                ${next === null ? nothing : html`
+                    <span class="status-arrow" aria-hidden="true">→</span>
+                    <span class="status-cell next">
+                        <span>${this._formatMoment(next.atMs)}</span>
+                        ${this._renderStateChip(next.view)}
+                    </span>
+                `}
+            </span>
+        `;
+    }
+
+    /**
+     * A state as its slot-editor chip, icon only.
+     *
+     * The label the chip would have shown moves into the tooltip: with no text
+     * on the row at all, hovering has to be able to name what an icon means.
+     */
+    private _renderStateChip(view: ControllableEntityStateView) {
+        if (view.domain === "inverter") {
+            return html`
+                <scheduling-action-chip
+                    .action=${view.action}
+                    .localize=${this.localize}
+                    .labelVariant=${"table"}
+                    .titleText=${getScheduleActionLabel(view.action, this.localize)}
+                    size="compact"
+                    ?iconOnly=${true}
+                ></scheduling-action-chip>
+            `;
+        }
+
+        return html`
+            <scheduling-appliance-chip
+                .appliance=${view.appliance}
+                .action=${view.action}
+                .localize=${this.localize}
+                .titleText=${getScheduleApplianceActionPresentation({
+                    appliance: view.appliance,
+                    action: view.action,
+                    localize: this.localize,
+                }).label}
+                size="compact"
+                ?iconOnly=${true}
+            ></scheduling-appliance-chip>
+        `;
+    }
+
+    /**
+     * A time of day, dated only when it is not today: "18:00" is unambiguous
+     * within the day and reads better than a full timestamp on every row.
+     */
+    private _formatMoment(atMs: number): string {
+        const locale = this.hass?.locale?.language ?? "cs";
+        const timeZone = this.hass?.config?.time_zone ?? "UTC";
+        const timeLabel = formatScheduleTime(atMs, locale, timeZone);
+        if (this._isSameLocalDay(atMs, timeZone)) {
+            return timeLabel;
+        }
+
+        const dayLabel = new Date(atMs).toLocaleDateString(locale, {
+            timeZone,
+            weekday: "short",
+        });
+        return `${dayLabel} ${timeLabel}`;
+    }
+
+    private _isSameLocalDay(atMs: number, timeZone: string): boolean {
+        // Comparing rendered dates keeps the check in the user's zone without a
+        // second date-math path.
+        const options: Intl.DateTimeFormatOptions = { timeZone, year: "numeric", month: "2-digit", day: "2-digit" };
+        return new Date(atMs).toLocaleDateString("en-CA", options)
+            === new Date(this.nowMs).toLocaleDateString("en-CA", options);
     }
 
     private _handleShowMoreInfo(entityId: string): void {

@@ -12,8 +12,16 @@ inverter, and off for every appliance regardless of kind.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
+from ..const import (
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_STOP_EXPORT,
+)
 from .actuation import ScheduleActuator
 from .schedule import ScheduleControlConfig
 
@@ -34,12 +42,19 @@ class ControllableEntityDict(TypedDict):
     non-normal exactly when its live state differs from it, which lets the card
     filter the list straight from ``hass.states`` and stay reactive without
     asking the backend again.
+
+    ``actionOptions`` maps schedule action kinds to the inverter mode option
+    each one selects. The card needs it in both directions: to label the live
+    inverter mode with the same chip the slot editor uses, and to project a
+    scheduled action onto the entity state it will produce. Only the inverter
+    carries it -- appliance states follow from their action shape.
     """
 
     kind: str
     name: str
     entityId: str
     normalState: str
+    actionOptions: NotRequired[dict[str, str]]
 
 
 class NonNormalEntityDict(ControllableEntityDict):
@@ -79,6 +94,7 @@ def build_controllable_entities(
                 name="Inverter",
                 entityId=control_config.mode_entity_id,
                 normalState=control_config.normal_option,
+                actionOptions=_build_inverter_action_options(control_config),
             )
         )
 
@@ -100,6 +116,30 @@ def build_controllable_entities(
         )
 
     return entities
+
+
+def _build_inverter_action_options(
+    control_config: ScheduleControlConfig,
+) -> dict[str, str]:
+    """The inverter mode option each schedule action kind selects.
+
+    Actions the installation has no option configured for are left out rather
+    than mapped to a placeholder, so the card can tell "not available here"
+    apart from "selects this option".
+    """
+    options = {
+        SCHEDULE_ACTION_NORMAL: control_config.normal_option,
+        SCHEDULE_ACTION_STOP_CHARGING: control_config.stop_charging_option,
+        SCHEDULE_ACTION_STOP_DISCHARGING: control_config.stop_discharging_option,
+        SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: (
+            control_config.charge_to_target_soc_option
+        ),
+        SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: (
+            control_config.discharge_to_target_soc_option
+        ),
+        SCHEDULE_ACTION_STOP_EXPORT: control_config.stop_export_option,
+    }
+    return {kind: option for kind, option in options.items() if option}
 
 
 def build_non_normal_entities(

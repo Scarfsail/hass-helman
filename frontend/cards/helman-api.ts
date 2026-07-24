@@ -387,12 +387,18 @@ export interface SetScheduleExecutionResponse {
  * The card filters these against live `hass.states`, so it reacts to entity
  * state changes without asking the backend again: an entity is non-normal
  * exactly when its state differs from `normalState`.
+ *
+ * `actionOptions` maps schedule action kinds to the inverter mode option each
+ * one selects; only the inverter carries it. It is what lets the card label the
+ * live inverter mode with the slot editor's chip, and project a scheduled
+ * action onto the entity state it will produce.
  */
 export interface ControllableEntityDTO {
     kind: string;
     name: string;
     entityId: string;
     normalState: string;
+    actionOptions?: Record<string, string>;
 }
 
 export interface GetControllableEntitiesRequest {

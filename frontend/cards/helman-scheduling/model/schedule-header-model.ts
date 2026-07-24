@@ -26,20 +26,25 @@ export const EMPTY_SCHEDULE_HEADER_MODEL: ScheduleHeaderModel = {
 export function buildScheduleHeaderModel({
     snapshot,
     runningCount,
+    controllableCount,
     runningExpanded,
     localize,
 }: {
     snapshot: ScheduleOwnerSnapshot;
     runningCount: number;
+    controllableCount: number;
     runningExpanded: boolean;
     localize: LocalizeFunction;
 }): ScheduleHeaderModel {
     return {
-        // The header doubles as the disclosure for the running-entity list, so
-        // it states the count rather than a static caption.
-        runningLabel: `${localize("scheduling.running.label")}: ${runningCount}`,
+        // The header doubles as the disclosure for the entity list, so it
+        // states counts rather than a static caption: what is on, against how
+        // much there is to be on, which is what the expanded list shows.
+        runningLabel: `${localize("scheduling.running.label")}: ${runningCount} / ${controllableCount}`,
         runningExpanded,
-        runningToggleDisabled: runningCount === 0,
+        // The list is worth opening even with nothing running: it is also the
+        // roster of what Helman can drive, and what each one will do next.
+        runningToggleDisabled: controllableCount === 0,
         executionEnabled: snapshot.schedule?.executionEnabled ?? false,
         refreshDisabled: snapshot.loading || snapshot.refreshing || snapshot.togglingExecution,
         toggleDisabled: snapshot.schedule === null || snapshot.loading || snapshot.togglingExecution,

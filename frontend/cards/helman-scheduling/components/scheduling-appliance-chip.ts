@@ -178,7 +178,13 @@ export class SchedulingApplianceChip extends LitElement {
                     `}
                 </span>
                 ${this.iconOnly ? nothing : html`
-                    <span class="chip-label">${this.appliance.name} · ${presentation.label}</span>
+                    <!--
+                        The action alone, matching the slot editor's option
+                        pills. Every place this chip appears already names the
+                        appliance next to it -- a dialog panel heading or a list
+                        row -- so repeating it here only crowded the label.
+                    -->
+                    <span class="chip-label">${presentation.label}</span>
                 `}
             </span>
         `;

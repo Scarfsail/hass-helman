@@ -17,6 +17,21 @@ export interface ScheduleVehicleOption {
     name: string;
 }
 
+/**
+ * The entities that carry an appliance's state.
+ *
+ * `primary` is the entity whose state decides whether the appliance is running
+ * -- the same one the backend lists as controllable -- so it doubles as the key
+ * that links a controllable entity back to its appliance. The EV charger's mode
+ * selects are secondary: they refine how a running charger is described, but
+ * never decide whether it is running.
+ */
+export interface ScheduleApplianceControlEntityIds {
+    primary: string;
+    useMode?: string;
+    ecoGear?: string;
+}
+
 export interface ScheduleApplianceMetadataBase {
     id: string;
     name: string;
@@ -24,6 +39,7 @@ export interface ScheduleApplianceMetadataBase {
     icon: string;
     order: number;
     supportsAuthoring: boolean;
+    controlEntityIds: ScheduleApplianceControlEntityIds | null;
 }
 
 export interface ScheduleEvChargerCapabilities {
@@ -101,6 +117,11 @@ function _normalizeApplianceMetadata(
             icon: appliance.metadata.icon,
             order,
             supportsAuthoring: true,
+            controlEntityIds: {
+                primary: appliance.controls.charge.entityId,
+                useMode: appliance.controls.useMode.entityId,
+                ecoGear: appliance.controls.ecoGear.entityId,
+            },
             maxChargingPowerKw: appliance.metadata.maxChargingPowerKw,
             scheduleCapabilities: _cloneEvChargerScheduleCapabilities(appliance.metadata.scheduleCapabilities),
             vehicles: appliance.vehicles
@@ -117,6 +138,7 @@ function _normalizeApplianceMetadata(
             icon: appliance.metadata.icon,
             order,
             supportsAuthoring: appliance.metadata.scheduleCapabilities.onOffToggle,
+            controlEntityIds: { primary: appliance.controls.switch.entityId },
             scheduleCapabilities: _cloneGenericScheduleCapabilities(appliance.metadata.scheduleCapabilities),
         };
     }
@@ -129,6 +151,7 @@ function _normalizeApplianceMetadata(
             icon: appliance.metadata.icon,
             order,
             supportsAuthoring: appliance.metadata.scheduleCapabilities.modes.length > 0,
+            controlEntityIds: { primary: appliance.controls.climate.entityId },
             scheduleCapabilities: _cloneClimateScheduleCapabilities(appliance.metadata.scheduleCapabilities),
         };
     }
@@ -140,6 +163,7 @@ function _normalizeApplianceMetadata(
         icon: _extractUnknownApplianceIcon(appliance),
         order,
         supportsAuthoring: false,
+        controlEntityIds: null,
     };
 }
 
@@ -179,6 +203,9 @@ function _isEvChargerApplianceMetadata(
         && Array.isArray(appliance.metadata?.scheduleCapabilities?.ecoGears)
         && typeof appliance.metadata?.scheduleCapabilities?.chargeToggle === "boolean"
         && typeof appliance.metadata?.scheduleCapabilities?.requiresVehicleSelection === "boolean"
+        && typeof appliance.controls?.charge?.entityId === "string"
+        && typeof appliance.controls?.useMode?.entityId === "string"
+        && typeof appliance.controls?.ecoGear?.entityId === "string"
         && Array.isArray(appliance.vehicles);
 }
 

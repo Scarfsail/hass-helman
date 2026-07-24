@@ -9,9 +9,9 @@ import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
 import type { ControllableEntityDTO } from "../helman-api";
 import {
-    buildRunningEntities,
-    type RunningEntity,
-} from "./model/running-entities";
+    buildControllableEntityStatuses,
+    type ControllableEntityStatus,
+} from "./model/controllable-entity-status";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import type { HelmanSchedulingCardConfig } from "./HelmanSchedulingCardConfig";
 import "./components/scheduling-card-header";
@@ -390,6 +390,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
             return html`<ha-card class=${this._config?.transparent_background ? "transparent" : ""}></ha-card>`;
         }
 
+        const controllableEntityStatuses = this._controllableEntityStatuses;
+
         return html`
             <ha-card
                 class=${this._config?.transparent_background ? "transparent" : ""}
@@ -405,7 +407,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                 <div class="card-content">
                     ${this._config.show_header ? html`
                         <scheduling-card-header
-                            .model=${this._buildHeaderModel()}
+                            .model=${this._buildHeaderModel(controllableEntityStatuses)}
                         ></scheduling-card-header>
                     ` : nothing}
 
@@ -413,8 +415,9 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                         <scheduling-running-entities
                             .hass=${this._hass}
                             .localize=${this._localize}
-                            .entities=${this._runningEntities}
+                            .entities=${controllableEntityStatuses}
                             .executionEnabled=${this._ownerSnapshot.schedule?.executionEnabled ?? false}
+                            .nowMs=${this._nowMs}
                         ></scheduling-running-entities>
                     ` : nothing}
 
@@ -930,26 +933,33 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         return Math.max(0, Math.floor(value));
     }
 
-    private _buildHeaderModel(): ScheduleHeaderModel {
+    private _buildHeaderModel(
+        controllableEntityStatuses: readonly ControllableEntityStatus[],
+    ): ScheduleHeaderModel {
         return buildScheduleHeaderModel({
             snapshot: this._ownerSnapshot,
-            runningCount: this._runningEntities.length,
+            runningCount: controllableEntityStatuses.filter((status) => !status.isNormal).length,
+            controllableCount: controllableEntityStatuses.length,
             runningExpanded: this._runningExpanded,
             localize: this._localize,
         });
     }
 
     /**
-     * The entities Helman can drive that are currently running.
+     * Every entity Helman can drive, with its live state and next change.
      *
      * The controllable set is fetched once per connection; this recomputes the
-     * running subset from live `hass.states` on every render, so the header
-     * count and the list stay current without polling.
+     * statuses from live `hass.states` on every render, so the header count and
+     * the list stay current without polling.
      */
-    private get _runningEntities(): RunningEntity[] {
-        return buildRunningEntities({
+    private get _controllableEntityStatuses(): ControllableEntityStatus[] {
+        return buildControllableEntityStatuses({
             controllableEntities: this._controllableEntities,
+            appliances: this._appliances,
             states: this._hass?.states,
+            slots: this._normalizedSchedule.slots,
+            nowMs: this._nowMs,
+            executionEnabled: this._ownerSnapshot.schedule?.executionEnabled ?? false,
         });
     }
 
