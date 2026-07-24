@@ -210,10 +210,15 @@ export class SchedulingNonNormalState extends LitElement {
                     type="button"
                     @click=${() => this._handleShowMoreInfo(entity.entityId)}
                 >
+                    <!--
+                        stateColor must be a property binding: state-badge
+                        declares it with attribute: false, so a bare attribute
+                        is ignored and the icon stays uncoloured.
+                    -->
                     <state-badge
                         .hass=${this.hass}
                         .stateObj=${entity.stateObj}
-                        stateColor
+                        .stateColor=${true}
                     ></state-badge>
                     <span class="entity-name">${this._buildEntityName(entity)}</span>
                     <span class="entity-state">
