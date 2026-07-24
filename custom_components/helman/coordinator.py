@@ -1798,23 +1798,11 @@ class HelmanCoordinator:
                 await self._schedule_executor.async_stop()
                 return False
 
-            try:
-                await self._schedule_executor.async_restore_normal(
-                    reason="disable_request"
-                )
-            except ScheduleError as err:
-                _LOGGER.warning(
-                    "Failed to disable schedule execution while restoring normal mode: %s (%s); keeping execution enabled",
-                    err,
-                    err.code,
-                )
-                self._schedule_executor.clear_appliance_memories()
-                await self._schedule_executor.async_start()
-                await self._schedule_executor.async_reconcile_safely(
-                    reason="disable_restore_failed",
-                    reference_time=request_now,
-                )
-                raise
+            # Disabling execution is passive: Helman stops touching hardware and
+            # leaves the inverter and every appliance exactly as they are. The
+            # user restores normal state explicitly, whenever they choose, via
+            # the scheduling card. Disabling therefore cannot fail and never
+            # rolls back.
             await self._schedule_executor.async_stop()
 
             async with self._schedule_lock:

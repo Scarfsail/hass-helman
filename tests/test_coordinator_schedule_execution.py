@@ -825,7 +825,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("execution_unavailable", captured.output[0])
 
-    async def test_disable_restores_normal_before_persisting_false(self) -> None:
+    async def test_disable_leaves_hardware_untouched(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": True,
@@ -852,10 +852,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        self.assertEqual(
-            executor.events,
-            ["restore:disable_request", "stop"],
-        )
+        self.assertEqual(executor.events, ["stop"])
 
     async def test_disable_invalidates_battery_forecast_cache(self) -> None:
         coordinator, _storage, _executor = self._build_coordinator(
@@ -876,7 +873,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         invalidate_cache.assert_called_once_with()
 
-    async def test_disable_failure_keeps_enabled_true(self) -> None:
+    async def test_disable_cannot_fail_and_never_restores_normal(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": True,
@@ -886,42 +883,27 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
         )
+        # Restoring normal mode is no longer part of disabling, so an executor
+        # that would fail to restore is irrelevant: disabling still succeeds.
         executor.restore_error = ScheduleExecutionUnavailableError("boom")
 
-        with self.assertLogs(
-            "custom_components.helman.coordinator", level="WARNING"
-        ) as captured:
-            with self.assertRaises(ScheduleExecutionUnavailableError):
-                await coordinator.set_schedule_execution(
-                    enabled=False,
-                    reference_time=REFERENCE_TIME,
-                )
+        enabled = await coordinator.set_schedule_execution(
+            enabled=False,
+            reference_time=REFERENCE_TIME,
+        )
 
+        self.assertFalse(enabled)
         self.assertEqual(
             storage.schedule_document,
             {
-                "executionEnabled": True,
+                "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
                 },
             },
         )
-        self.assertEqual(
-            executor.events,
-            [
-                "restore:disable_request",
-                "clear_appliance_memories",
-                "start",
-                "safe_reconcile:disable_restore_failed",
-            ],
-        )
-        self.assertEqual(len(captured.output), 1)
-        self.assertIn(
-            "Failed to disable schedule execution while restoring normal mode",
-            captured.output[0],
-        )
-        self.assertIn("execution_unavailable", captured.output[0])
+        self.assertEqual(executor.events, ["stop"])
 
     async def test_schedule_executor_battery_state_logs_detailed_issue_once(self) -> None:
         storage = FakeStorage(
