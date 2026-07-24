@@ -109,15 +109,23 @@ export class SchedulingRunningEntities extends LitElement {
                 --schedule-status-arrow-column: 10px;
             }
 
-            /* Both cells hang off the right edge of their column, so the icons
-               form two clean vertical lines and a longer time label grows
-               leftwards into the gap instead of pushing its icon along. */
+            /* Both cells hug the arrow, icon innermost: the current state ends
+               its column and the next state starts its own, so the two icons
+               form clean vertical lines and a longer time label grows outwards
+               into the slack instead of pushing its icon along. */
             .status-cell {
                 display: flex;
                 align-items: center;
-                justify-self: end;
                 gap: 4px;
                 min-width: 0;
+            }
+
+            .status-cell.current {
+                justify-self: end;
+            }
+
+            .status-cell.next {
+                justify-self: start;
             }
 
             .status-arrow {
@@ -229,8 +237,8 @@ export class SchedulingRunningEntities extends LitElement {
                 ${next === null ? nothing : html`
                     <span class="status-arrow" aria-hidden="true">→</span>
                     <span class="status-cell next">
-                        <span>${this._formatMoment(next.atMs)}</span>
                         ${this._renderStateChip(next.view)}
+                        <span>${this._formatMoment(next.atMs)}</span>
                     </span>
                 `}
             </span>
