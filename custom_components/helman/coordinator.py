@@ -628,7 +628,7 @@ class HelmanCoordinator:
             await self._async_cleanup_automation_owned_actions_if_needed(
                 reference_time=reference_time,
             )
-        await self._async_reconcile_schedule_execution_if_enabled(
+        await self._async_reconcile_schedule_execution(
             reason="startup",
             reference_time=reference_time,
         )
@@ -1686,7 +1686,7 @@ class HelmanCoordinator:
         reference_time: datetime,
     ) -> None:
         self._invalidate_battery_forecast_cache()
-        await self._async_reconcile_schedule_execution_if_enabled(
+        await self._async_reconcile_schedule_execution(
             reason=reason,
             reference_time=reference_time,
         )
@@ -1788,16 +1788,21 @@ class HelmanCoordinator:
                     )
                 return True
 
-            if not was_enabled:
-                await self._schedule_executor.async_stop()
-                return False
-
             # Disabling execution is passive: Helman stops touching hardware and
             # leaves the inverter and every appliance exactly as they are. The
             # user restores normal state explicitly, whenever they choose, via
             # the scheduling card. Disabling therefore cannot fail and never
             # rolls back.
-            await self._schedule_executor.async_stop()
+            #
+            # The executor keeps running so its tick still drives the
+            # pre-execution reality check; it just stops applying anything.
+            # Runtime status is dropped right away so the card does not keep
+            # showing what was executing a moment ago.
+            await self._schedule_executor.async_start()
+            self._schedule_executor.reset_runtime()
+
+            if not was_enabled:
+                return False
 
             async with self._schedule_lock:
                 latest_document = await self._load_pruned_schedule_document_locked(
@@ -1846,25 +1851,19 @@ class HelmanCoordinator:
             self._invalidate_battery_forecast_cache()
             return True
 
-    async def _async_reconcile_schedule_execution_if_enabled(
+    async def _async_reconcile_schedule_execution(
         self,
         *,
         reason: str,
         reference_time: datetime | None = None,
     ) -> None:
+        # The executor keeps running whether or not execution is enabled: its
+        # tick drives the pre-execution reality check, which keeps the plan in
+        # sync with current conditions even when nothing is applied. Whether
+        # anything is actually applied is decided inside the reconcile, and
+        # ultimately by the actuation gate.
         request_now = reference_time or dt_util.now()
         async with self._schedule_execution_lock:
-            async with self._schedule_lock:
-                execution_enabled = (
-                    await self._load_pruned_schedule_document_locked(
-                        reference_time=request_now
-                    )
-                ).execution_enabled
-
-            if not execution_enabled:
-                await self._schedule_executor.async_stop()
-                return
-
             await self._schedule_executor.async_start()
             await self._schedule_executor.async_reconcile_safely(
                 reason=reason,

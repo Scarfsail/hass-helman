@@ -6,13 +6,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..scheduling.runtime_status import (
     ApplianceRuntimeStatus,
     RuntimeActionKind,
     RuntimeOutcome,
+)
+from ..scheduling.actuation import (
+    ScheduleActuator,
+    ScheduleExecutionDisabledError,
 )
 from ..scheduling.schedule import ScheduleError, ScheduleExecutionUnavailableError
 from .climate_appliance import ClimateApplianceRuntime
@@ -53,8 +56,8 @@ class SwitchEntityController:
         self.entity_id = entity_id
         self._description = description
 
-    def read_state(self, hass: HomeAssistant) -> Any:
-        state = hass.states.get(self.entity_id)
+    def read_state(self, actuator: ScheduleActuator) -> Any:
+        state = actuator.read_state(self.entity_id)
         if state is None:
             raise ScheduleExecutionUnavailableError(
                 f"{self._description} '{self.entity_id}' is not available"
@@ -75,27 +78,29 @@ class SwitchEntityController:
     def is_on(state: Any) -> bool:
         return getattr(state, "state", None) == "on"
 
-    async def async_turn_on(self, hass: HomeAssistant) -> None:
+    async def async_turn_on(self, actuator: ScheduleActuator) -> None:
         try:
-            await hass.services.async_call(
+            await actuator.async_call(
                 "switch",
                 "turn_on",
                 {"entity_id": self.entity_id},
-                blocking=True,
             )
+        except ScheduleExecutionDisabledError:
+            raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
                 f"Failed to turn on {self._description.lower()} '{self.entity_id}'"
             ) from err
 
-    async def async_turn_off(self, hass: HomeAssistant) -> None:
+    async def async_turn_off(self, actuator: ScheduleActuator) -> None:
         try:
-            await hass.services.async_call(
+            await actuator.async_call(
                 "switch",
                 "turn_off",
                 {"entity_id": self.entity_id},
-                blocking=True,
             )
+        except ScheduleExecutionDisabledError:
+            raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
                 f"Failed to turn off {self._description.lower()} '{self.entity_id}'"
@@ -116,8 +121,8 @@ class SelectEntityController:
         self.entity_id = entity_id
         self.service_domain = domain
 
-    def read_state(self, hass: HomeAssistant) -> Any:
-        state = hass.states.get(self.entity_id)
+    def read_state(self, actuator: ScheduleActuator) -> Any:
+        state = actuator.read_state(self.entity_id)
         if state is None:
             raise ScheduleExecutionUnavailableError(
                 f"EV select entity '{self.entity_id}' is not available"
@@ -167,17 +172,18 @@ class SelectEntityController:
 
     async def async_select_option(
         self,
-        hass: HomeAssistant,
+        actuator: ScheduleActuator,
         *,
         option: str,
     ) -> None:
         try:
-            await hass.services.async_call(
+            await actuator.async_call(
                 self.service_domain,
                 "select_option",
                 {"entity_id": self.entity_id, "option": option},
-                blocking=True,
             )
+        except ScheduleExecutionDisabledError:
+            raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
                 f"Failed to apply EV select option '{option}' to '{self.entity_id}'"
@@ -193,8 +199,8 @@ class ClimateEntityController:
             )
         self.entity_id = entity_id
 
-    def read_state(self, hass: HomeAssistant) -> Any:
-        state = hass.states.get(self.entity_id)
+    def read_state(self, actuator: ScheduleActuator) -> Any:
+        state = actuator.read_state(self.entity_id)
         if state is None:
             raise ScheduleExecutionUnavailableError(
                 f"Climate entity '{self.entity_id}' is not available"
@@ -241,17 +247,18 @@ class ClimateEntityController:
 
     async def async_set_hvac_mode(
         self,
-        hass: HomeAssistant,
+        actuator: ScheduleActuator,
         *,
         hvac_mode: str,
     ) -> None:
         try:
-            await hass.services.async_call(
+            await actuator.async_call(
                 "climate",
                 "set_hvac_mode",
                 {"entity_id": self.entity_id, "hvac_mode": hvac_mode},
-                blocking=True,
             )
+        except ScheduleExecutionDisabledError:
+            raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
                 f"Failed to apply climate HVAC mode '{hvac_mode}' to "
@@ -262,13 +269,13 @@ class ClimateEntityController:
 class EvChargerExecutor:
     def __init__(
         self,
-        hass: HomeAssistant,
+        actuator: ScheduleActuator,
         *,
         charge_on_wait_seconds: float = 30.0,
         poll_interval_seconds: float = _CHARGE_POLL_INTERVAL_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
-        self._hass = hass
+        self._actuator = actuator
         self._charge_on_wait_seconds = charge_on_wait_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
@@ -383,9 +390,9 @@ class EvChargerExecutor:
                 appliance.charge_entity_id,
                 description="EV charge entity",
             )
-            charge_state = switch_controller.read_state(self._hass)
+            charge_state = switch_controller.read_state(self._actuator)
             if not switch_controller.is_on(charge_state):
-                await switch_controller.async_turn_on(self._hass)
+                await switch_controller.async_turn_on(self._actuator)
                 await self._async_wait_until_charge_on(
                     switch_controller=switch_controller
                 )
@@ -393,22 +400,22 @@ class EvChargerExecutor:
             use_mode = action.get("useMode")
             if use_mode is not None:
                 mode_controller = SelectEntityController(appliance.use_mode_entity_id)
-                mode_state = mode_controller.read_state(self._hass)
+                mode_state = mode_controller.read_state(self._actuator)
                 mode_controller.validate_option(mode_state, use_mode)
                 if getattr(mode_state, "state", None) != use_mode:
                     await mode_controller.async_select_option(
-                        self._hass,
+                        self._actuator,
                         option=use_mode,
                     )
 
             eco_gear = action.get("ecoGear")
             if eco_gear is not None:
                 eco_controller = SelectEntityController(appliance.eco_gear_entity_id)
-                eco_state = eco_controller.read_state(self._hass)
+                eco_state = eco_controller.read_state(self._actuator)
                 eco_controller.validate_option(eco_state, eco_gear)
                 if getattr(eco_state, "state", None) != eco_gear:
                     await eco_controller.async_select_option(
-                        self._hass,
+                        self._actuator,
                         option=eco_gear,
                     )
         except ScheduleError as err:
@@ -437,9 +444,9 @@ class EvChargerExecutor:
                 appliance.charge_entity_id,
                 description="EV charge entity",
             )
-            charge_state = switch_controller.read_state(self._hass)
+            charge_state = switch_controller.read_state(self._actuator)
             if switch_controller.is_on(charge_state):
-                await switch_controller.async_turn_off(self._hass)
+                await switch_controller.async_turn_off(self._actuator)
         except ScheduleError as err:
             return _build_runtime_status(
                 action_kind=action_kind,
@@ -459,14 +466,14 @@ class EvChargerExecutor:
         *,
         switch_controller: SwitchEntityController,
     ) -> None:
-        state = switch_controller.read_state(self._hass)
+        state = switch_controller.read_state(self._actuator)
         if switch_controller.is_on(state):
             return
 
         deadline = asyncio.get_running_loop().time() + self._charge_on_wait_seconds
         while asyncio.get_running_loop().time() < deadline:
             await self._sleep(self._poll_interval_seconds)
-            state = switch_controller.read_state(self._hass)
+            state = switch_controller.read_state(self._actuator)
             if switch_controller.is_on(state):
                 return
 
@@ -494,8 +501,8 @@ class EvChargerExecutor:
 
 
 class GenericApplianceExecutor:
-    def __init__(self, hass: HomeAssistant) -> None:
-        self._hass = hass
+    def __init__(self, actuator: ScheduleActuator) -> None:
+        self._actuator = actuator
 
     async def async_execute(
         self,
@@ -608,11 +615,11 @@ class GenericApplianceExecutor:
                 appliance.switch_entity_id,
                 description="Appliance switch entity",
             )
-            switch_state = switch_controller.read_state(self._hass)
+            switch_state = switch_controller.read_state(self._actuator)
             if enabled and not switch_controller.is_on(switch_state):
-                await switch_controller.async_turn_on(self._hass)
+                await switch_controller.async_turn_on(self._actuator)
             if not enabled and switch_controller.is_on(switch_state):
-                await switch_controller.async_turn_off(self._hass)
+                await switch_controller.async_turn_off(self._actuator)
         except ScheduleError as err:
             return _build_runtime_status(
                 action_kind=action_kind,
@@ -641,8 +648,8 @@ class GenericApplianceExecutor:
 
 
 class ClimateApplianceExecutor:
-    def __init__(self, hass: HomeAssistant) -> None:
-        self._hass = hass
+    def __init__(self, actuator: ScheduleActuator) -> None:
+        self._actuator = actuator
 
     async def async_execute(
         self,
@@ -763,11 +770,11 @@ class ClimateApplianceExecutor:
             )
         try:
             climate_controller = ClimateEntityController(appliance.climate_entity_id)
-            climate_state = climate_controller.read_state(self._hass)
+            climate_state = climate_controller.read_state(self._actuator)
             climate_controller.validate_hvac_mode(climate_state, hvac_mode)
             if getattr(climate_state, "state", None) != hvac_mode:
                 await climate_controller.async_set_hvac_mode(
-                    self._hass,
+                    self._actuator,
                     hvac_mode=hvac_mode,
                 )
         except ScheduleError as err:
@@ -825,20 +832,20 @@ def _build_runtime_status(
 class AppliancesExecutor:
     def __init__(
         self,
-        hass: HomeAssistant,
+        actuator: ScheduleActuator,
         *,
         charge_on_wait_seconds: float = 30.0,
         poll_interval_seconds: float = _CHARGE_POLL_INTERVAL_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
-        self._climate_executor = ClimateApplianceExecutor(hass)
+        self._climate_executor = ClimateApplianceExecutor(actuator)
         self._ev_executor = EvChargerExecutor(
-            hass,
+            actuator,
             charge_on_wait_seconds=charge_on_wait_seconds,
             poll_interval_seconds=poll_interval_seconds,
             sleep=sleep,
         )
-        self._generic_executor = GenericApplianceExecutor(hass)
+        self._generic_executor = GenericApplianceExecutor(actuator)
 
     async def async_execute(
         self,

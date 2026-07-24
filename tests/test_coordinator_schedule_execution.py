@@ -852,7 +852,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        self.assertEqual(executor.events, ["stop"])
+        # The executor keeps running (its tick still drives the reality check);
+        # only the runtime status is dropped.
+        self.assertEqual(executor.events, ["start", "reset_runtime"])
 
     async def test_disable_invalidates_battery_forecast_cache(self) -> None:
         coordinator, _storage, _executor = self._build_coordinator(
@@ -903,7 +905,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        self.assertEqual(executor.events, ["stop"])
+        # The executor keeps running (its tick still drives the reality check);
+        # only the runtime status is dropped.
+        self.assertEqual(executor.events, ["start", "reset_runtime"])
 
     async def test_schedule_executor_battery_state_logs_detailed_issue_once(self) -> None:
         storage = FakeStorage(
@@ -1133,7 +1137,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             events.append(("reconcile", coordinator._schedule_lock.locked()))
 
         coordinator._invalidate_battery_forecast_cache = invalidate_cache
-        coordinator._async_reconcile_schedule_execution_if_enabled = reconcile
+        coordinator._async_reconcile_schedule_execution = reconcile
 
         async with coordinator._schedule_lock:
             changed = await coordinator._persist_automation_result_locked(

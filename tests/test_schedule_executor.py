@@ -257,6 +257,35 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
+    async def test_reconcile_touches_nothing_while_execution_is_disabled(self) -> None:
+        # The restart-while-disabled guarantee: a plan is present and the
+        # executor keeps ticking, but no service call is ever made.
+        check = AsyncMock(return_value=False)
+        executor, hass, _store = _build_executor(
+            entity_id="input_select.mode",
+            state=FakeState(
+                "Stop Charging",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=False,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                },
+            ),
+            check_reality_and_maybe_replan=check,
+        )
+
+        for _ in range(3):
+            await executor.async_reconcile(
+                reason="interval", reference_time=REFERENCE_TIME
+            )
+
+        self.assertEqual(hass.services.calls, [])
+        self.assertIsNone(executor.runtime.last_applied_option)
+        # The reality check still runs, so the plan stays in sync with reality.
+        self.assertEqual(check.await_count, 3)
+
     async def test_reconcile_defers_when_reality_check_requests_replan(self) -> None:
         check = AsyncMock(return_value=True)
         executor, hass, _store = _build_executor(

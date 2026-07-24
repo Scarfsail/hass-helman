@@ -29,6 +29,7 @@ from ..const import (
     SCHEDULE_EXECUTOR_INTERVAL_SECONDS,
 )
 from .action_resolution import resolve_executed_schedule_action
+from .actuation import ScheduleActuator, ScheduleExecutionDisabledError
 from .runtime_status import (
     ActiveSlotRuntimeStatus,
     InverterRuntimeStatus,
@@ -113,8 +114,8 @@ class ModeEntityController:
             )
         return cls(entity_id=entity_id, service_domain=domain)
 
-    def read_state(self, hass: HomeAssistant) -> Any:
-        state = hass.states.get(self.entity_id)
+    def read_state(self, actuator: ScheduleActuator) -> Any:
+        state = actuator.read_state(self.entity_id)
         if state is None:
             raise ScheduleExecutionUnavailableError(
                 f"Schedule mode entity '{self.entity_id}' is not available"
@@ -165,17 +166,18 @@ class ModeEntityController:
 
     async def async_select_option(
         self,
-        hass: HomeAssistant,
+        actuator: ScheduleActuator,
         *,
         option: str,
     ) -> None:
         try:
-            await hass.services.async_call(
+            await actuator.async_call(
                 self.service_domain,
                 "select_option",
                 {"entity_id": self.entity_id, "option": option},
-                blocking=True,
             )
+        except ScheduleExecutionDisabledError:
+            raise
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
                 f"Failed to apply schedule mode option '{option}' to "
@@ -184,8 +186,10 @@ class ModeEntityController:
 
 
 class InverterExecutor:
-    def __init__(self, hass: HomeAssistant, runtime: ScheduleExecutionRuntime) -> None:
-        self._hass = hass
+    def __init__(
+        self, actuator: ScheduleActuator, runtime: ScheduleExecutionRuntime
+    ) -> None:
+        self._actuator = actuator
         self._runtime = runtime
 
     def validate_control_entity(
@@ -194,7 +198,7 @@ class InverterExecutor:
         control_config: ScheduleControlConfig,
     ) -> tuple[ModeEntityController, Any]:
         controller = ModeEntityController.from_entity_id(control_config.mode_entity_id)
-        state = controller.read_state(self._hass)
+        state = controller.read_state(self._actuator)
         controller.validate_option(state, control_config.normal_option)
         controller.validate_option(state, control_config.stop_charging_option)
         controller.validate_option(state, control_config.stop_discharging_option)
@@ -407,7 +411,7 @@ class InverterExecutor:
 
         current_option = getattr(state, "state", None)
         if current_option != desired_option:
-            await controller.async_select_option(self._hass, option=desired_option)
+            await controller.async_select_option(self._actuator, option=desired_option)
 
         self._runtime.last_applied_entity_id = control_config.mode_entity_id
         self._runtime.last_applied_option = desired_option
@@ -424,9 +428,18 @@ class ScheduleExecutor:
     ) -> None:
         self._hass = hass
         self._dependencies = dependencies
+        # The gate every hardware write goes through. It reads the persisted
+        # flag fresh on each call, so a schedule saved by anyone -- the user,
+        # automation, a restore -- takes effect immediately.
+        self._actuator = ScheduleActuator(
+            hass,
+            is_execution_enabled=(
+                lambda: dependencies.load_schedule_document().execution_enabled
+            ),
+        )
         self._runtime = ScheduleExecutionRuntime()
-        self._inverter_executor = InverterExecutor(hass, self._runtime)
-        self._appliances_executor = AppliancesExecutor(hass)
+        self._inverter_executor = InverterExecutor(self._actuator, self._runtime)
+        self._appliances_executor = AppliancesExecutor(self._actuator)
         self._unsub_interval: Callable[[], None] | None = None
         self._reconcile_tasks: set[asyncio.Task[Any]] = set()
         self._stopped = True
@@ -440,7 +453,7 @@ class ScheduleExecutor:
 
     def reset_runtime(self) -> None:
         self._runtime = ScheduleExecutionRuntime()
-        self._inverter_executor = InverterExecutor(self._hass, self._runtime)
+        self._inverter_executor = InverterExecutor(self._actuator, self._runtime)
 
     async def async_start(self) -> None:
         self._stopped = False
