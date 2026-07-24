@@ -480,7 +480,6 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._cached_battery_forecast_expires_at = None
         coordinator._cached_battery_forecast_house_generated_at = None
         coordinator._cached_battery_forecast_solar_signature = None
-        coordinator._cached_battery_forecast_schedule_execution_enabled = None
         coordinator._cached_battery_forecast_schedule_signature = None
         coordinator._cached_battery_forecast_schedule_effective_signature = None
         coordinator._cached_appliance_projection_plan = None
@@ -639,7 +638,6 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._cached_battery_forecast_solar_signature = (
             coordinator._build_battery_forecast_solar_signature(_make_solar_forecast())
         )
-        coordinator._cached_battery_forecast_schedule_execution_enabled = False
         coordinator._cached_battery_forecast_schedule_signature = ()
         coordinator._cached_battery_forecast_schedule_effective_signature = None
 
@@ -681,7 +679,6 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=REFERENCE_TIME,
         )
         coordinator._invalidate_battery_forecast_cache()
-        self.assertIsNone(coordinator._cached_battery_forecast_schedule_execution_enabled)
         self.assertIsNone(coordinator._cached_battery_forecast_schedule_signature)
         self.assertIsNone(coordinator._cached_battery_forecast_schedule_effective_signature)
         await coordinator._async_get_battery_forecast(
@@ -831,9 +828,11 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(build_mock.call_count, 2)
 
-    async def test_async_get_battery_forecast_reuses_cache_when_schedule_changes_but_execution_disabled(
+    async def test_async_get_battery_forecast_rebuilds_when_schedule_changes_while_execution_disabled(
         self,
     ) -> None:
+        # The plan drives the forecast regardless of the execution flag, so a
+        # changed schedule must invalidate the cache even with execution off.
         coordinator = self._make_coordinator()
         build_mock = Mock(return_value=_make_battery_forecast())
         coordinator._build_battery_forecast_sync = build_mock
@@ -861,11 +860,13 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.call_count, 1)
+        self.assertEqual(build_mock.call_count, 2)
 
-    async def test_async_get_battery_forecast_rebuilds_when_schedule_execution_changes(
+    async def test_async_get_battery_forecast_reuses_cache_when_only_execution_flag_changes(
         self,
     ) -> None:
+        # Toggling execution no longer changes what the forecast simulates, so
+        # an otherwise identical schedule keeps the cached result.
         coordinator = self._make_coordinator()
         build_mock = Mock(return_value=_make_battery_forecast())
         overlay = object()
@@ -883,9 +884,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._build_battery_forecast_sync = build_mock
         coordinator._build_battery_forecast_schedule_overlay = Mock(
-            side_effect=lambda *, schedule_document, reference_time: (
-                overlay if schedule_document.execution_enabled else None
-            )
+            return_value=overlay
         )
         coordinator._read_schedule_control_config = Mock(
             return_value=_make_control_config()
@@ -904,13 +903,9 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.call_count, 2)
-        self.assertIsNone(build_mock.call_args_list[0].kwargs["schedule_overlay"])
-        self.assertIs(build_mock.call_args_list[1].kwargs["schedule_overlay"], overlay)
-        coordinator._build_battery_forecast_schedule_overlay.assert_called_once_with(
-            schedule_document=second_schedule_document,
-            reference_time=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
-        )
+        self.assertEqual(build_mock.call_count, 1)
+        # Even with execution disabled, the first build overlays the plan.
+        self.assertIs(build_mock.call_args_list[0].kwargs["schedule_overlay"], overlay)
 
     async def test_async_get_battery_forecast_reuses_cache_with_matching_schedule_state(
         self,

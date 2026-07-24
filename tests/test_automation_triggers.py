@@ -623,7 +623,9 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator._automation_triggers.request_debounced.assert_not_awaited()
 
-    async def test_startup_refresh_does_not_cleanup_when_execution_disabled(self) -> None:
+    async def test_startup_refresh_still_runs_automation_when_execution_disabled(
+        self,
+    ) -> None:
         coordinator, _storage, _executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": False,
@@ -647,7 +649,11 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        coordinator._automation_triggers.request_debounced.assert_not_awaited()
+        # Execution being off no longer suppresses the automation run.
+        coordinator._automation_triggers.request_debounced.assert_awaited_once_with(
+            reason="startup",
+            reference_time=REFERENCE_TIME,
+        )
 
     async def test_startup_refresh_schedules_cleanup_when_automation_disabled(
         self,
@@ -709,7 +715,7 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(enabled)
         coordinator._automation_triggers.request_immediate.assert_not_awaited()
 
-    async def test_disable_transition_strips_automation_owned_actions_once(self) -> None:
+    async def test_disable_transition_keeps_automation_owned_actions(self) -> None:
         coordinator, storage, _executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": True,
@@ -731,6 +737,8 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
+        # Automation keeps planning while execution is off, so its actions stay
+        # in the document for the card and the inspectors to display.
         self.assertFalse(enabled)
         self.assertEqual(
             storage.schedule_document,
@@ -738,10 +746,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(
+                        SCHEDULE_ACTION_STOP_CHARGING,
+                        set_by="automation",
+                    ),
                     NEXT_SLOT_ID: _domains_payload(
                         SCHEDULE_ACTION_STOP_CHARGING,
                         set_by="user",
-                    )
+                    ),
                 },
             },
         )

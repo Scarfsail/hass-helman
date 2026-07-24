@@ -280,7 +280,6 @@ class _ApplianceForecastPipelineSnapshot:
 class _ForecastScheduleDocuments:
     forecast_schedule_document: ScheduleDocument
     projection_schedule_document: ScheduleDocument
-    schedule_execution_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -335,7 +334,6 @@ class HelmanCoordinator:
         self._cached_battery_forecast_expires_at: datetime | None = None
         self._cached_battery_forecast_house_generated_at: str | None = None
         self._cached_battery_forecast_solar_signature: tuple[Any, ...] | None = None
-        self._cached_battery_forecast_schedule_execution_enabled: bool | None = None
         self._cached_battery_forecast_schedule_signature: (
             tuple[tuple[str, str, int | None], ...] | None
         ) = None
@@ -623,21 +621,17 @@ class HelmanCoordinator:
         automation_config = read_automation_config(self._active_config)
         if automation_config is None:
             automation_config = AutomationConfig(enabled=False)
-        if (
-            self._load_schedule_document().execution_enabled
-            and not (
-                automation_config.enabled and automation_config.execution_optimizers
-            )
-        ):
+        # Stale automation-owned actions are stripped when automation itself is
+        # off. This is independent of execution_enabled: with execution off the
+        # optimizers still plan, so their actions stay.
+        if not (automation_config.enabled and automation_config.execution_optimizers):
             await self._async_cleanup_automation_owned_actions_if_needed(
-                execution_enabled=True,
                 reference_time=reference_time,
             )
-        if self._load_schedule_document().execution_enabled:
-            await self._async_reconcile_schedule_execution_if_enabled(
-                reason="startup",
-                reference_time=reference_time,
-            )
+        await self._async_reconcile_schedule_execution_if_enabled(
+            reason="startup",
+            reference_time=reference_time,
+        )
         self._create_tracked_refresh_task(
             self._async_refresh_forecast_and_request_automation(reason="startup")
         )
@@ -1810,32 +1804,33 @@ class HelmanCoordinator:
                     reference_time=request_now
                 )
                 if latest_document.execution_enabled:
+                    # Keep the plan intact: automation keeps planning while
+                    # execution is off, so the card and the inspectors show what
+                    # Helman would be doing. Only the apply step is suppressed.
                     await self._save_schedule_document(
-                        self._build_cleaned_automation_schedule_document(
-                            schedule_document=latest_document,
+                        ScheduleDocument(
                             execution_enabled=False,
+                            slots=latest_document.slots,
                         )
                     )
                     self._invalidate_battery_forecast_cache()
 
             return False
 
+    @staticmethod
     def _build_cleaned_automation_schedule_document(
-        self,
         *,
         schedule_document: ScheduleDocument,
-        execution_enabled: bool,
     ) -> ScheduleDocument:
         cleaned_document = strip_automation_owned_actions(schedule_document)
         return ScheduleDocument(
-            execution_enabled=execution_enabled,
+            execution_enabled=schedule_document.execution_enabled,
             slots=cleaned_document.slots,
         )
 
     async def _async_cleanup_automation_owned_actions_if_needed(
         self,
         *,
-        execution_enabled: bool,
         reference_time: datetime,
     ) -> bool:
         async with self._schedule_lock:
@@ -1844,7 +1839,6 @@ class HelmanCoordinator:
             )
             cleaned_document = self._build_cleaned_automation_schedule_document(
                 schedule_document=schedule_document,
-                execution_enabled=execution_enabled,
             )
             if cleaned_document == schedule_document:
                 return False
@@ -2021,9 +2015,6 @@ class HelmanCoordinator:
                 reference_time=request_now
             )
 
-        if not schedule_document.execution_enabled:
-            return
-
         if not (automation_config.enabled and automation_config.execution_optimizers):
             if not has_automation_owned_actions(schedule_document):
                 return
@@ -2145,17 +2136,14 @@ class HelmanCoordinator:
         *,
         schedule_document: ScheduleDocument,
     ) -> _ForecastScheduleDocuments:
-        forecast_schedule_document = self._build_battery_forecast_schedule_document(
-            schedule_document=schedule_document
-        )
-        schedule_execution_enabled = forecast_schedule_document.execution_enabled
-        projection_schedule_document = (
-            schedule_document if schedule_execution_enabled else ScheduleDocument()
-        )
+        # The plan drives the forecast whether or not execution is enabled: with
+        # execution off the schedule still shows what Helman would do, and the
+        # forecast has to reflect that plan rather than an empty one.
         return _ForecastScheduleDocuments(
-            forecast_schedule_document=forecast_schedule_document,
-            projection_schedule_document=projection_schedule_document,
-            schedule_execution_enabled=schedule_execution_enabled,
+            forecast_schedule_document=self._build_battery_forecast_schedule_document(
+                schedule_document=schedule_document
+            ),
+            projection_schedule_document=schedule_document,
         )
 
     async def _async_gather_compute_inputs(
@@ -2432,12 +2420,10 @@ class HelmanCoordinator:
             house_forecast=original_house_forecast,
             demand_points=projection_plan.demand_points,
         )
-        schedule_overlay = None
-        if forecast_schedule_document.execution_enabled:
-            schedule_overlay = self._build_battery_forecast_schedule_overlay(
-                schedule_document=forecast_schedule_document,
-                reference_time=started_at,
-            )
+        schedule_overlay = self._build_battery_forecast_schedule_overlay(
+            schedule_document=forecast_schedule_document,
+            reference_time=started_at,
+        )
         battery_forecast = self._build_battery_forecast_sync(
             solar_forecast=solar_forecast,
             house_forecast=adjusted_house_forecast,
@@ -2642,7 +2628,6 @@ class HelmanCoordinator:
         )
         forecast_schedule_document = schedule_documents.forecast_schedule_document
         projection_schedule_document = schedule_documents.projection_schedule_document
-        schedule_execution_enabled = schedule_documents.schedule_execution_enabled
         # Read the live battery state once per run and reuse it for both the
         # effective-signature cache key and the forecast rebuild's gather.
         battery_entity_config = read_battery_entity_config(self._active_config)
@@ -2651,10 +2636,8 @@ class HelmanCoordinator:
             if battery_entity_config is not None
             else None
         )
-        schedule_signature = (
-            self._build_battery_forecast_schedule_signature(forecast_schedule_document)
-            if schedule_execution_enabled
-            else ()
+        schedule_signature = self._build_battery_forecast_schedule_signature(
+            forecast_schedule_document
         )
         appliance_schedule_signature = (
             self._build_appliance_projection_schedule_signature(
@@ -2672,7 +2655,6 @@ class HelmanCoordinator:
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
-            schedule_execution_enabled=schedule_execution_enabled,
             schedule_signature=schedule_signature,
             appliance_schedule_signature=appliance_schedule_signature,
             schedule_effective_signature=schedule_effective_signature,
@@ -2714,7 +2696,6 @@ class HelmanCoordinator:
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
-            schedule_execution_enabled=schedule_execution_enabled,
             schedule_signature=schedule_signature,
             appliance_schedule_signature=appliance_schedule_signature,
             schedule_effective_signature=schedule_effective_signature,
@@ -2775,9 +2756,6 @@ class HelmanCoordinator:
         *,
         schedule_document: ScheduleDocument,
     ) -> ScheduleDocument:
-        if not schedule_document.execution_enabled:
-            return schedule_document
-
         control_config = self._read_schedule_control_config()
         if control_config is None:
             return schedule_document
@@ -2806,9 +2784,6 @@ class HelmanCoordinator:
         reference_time: datetime,
         live_state: Any = _LIVE_STATE_UNSET,
     ) -> tuple[str, str, int | None, str, str] | None:
-        if not schedule_document.execution_enabled:
-            return None
-
         active_slot_id = format_slot_id(build_horizon_start(reference_time))
         active_domains = schedule_document.slots.get(active_slot_id)
         active_action = None if active_domains is None else active_domains.inverter
@@ -2857,9 +2832,6 @@ class HelmanCoordinator:
         schedule_document: ScheduleDocument,
         reference_time: datetime,
     ) -> ScheduleForecastOverlay | None:
-        if not schedule_document.execution_enabled:
-            return None
-
         from .scheduling.forecast_overlay import build_schedule_forecast_overlay
 
         return build_schedule_forecast_overlay(
@@ -2873,7 +2845,6 @@ class HelmanCoordinator:
         self._cached_battery_forecast_expires_at = None
         self._cached_battery_forecast_house_generated_at = None
         self._cached_battery_forecast_solar_signature = None
-        self._cached_battery_forecast_schedule_execution_enabled = None
         self._cached_battery_forecast_schedule_signature = None
         self._cached_battery_forecast_schedule_effective_signature = None
         self._invalidate_appliance_projection_cache()
@@ -2892,7 +2863,6 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
-        schedule_execution_enabled: bool,
         schedule_signature: tuple[tuple[str, str, int | None], ...],
         appliance_schedule_signature: tuple[
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
@@ -2941,12 +2911,6 @@ class HelmanCoordinator:
         ):
             return False
 
-        if (
-            self._cached_battery_forecast_schedule_execution_enabled
-            != schedule_execution_enabled
-        ):
-            return False
-
         if self._cached_battery_forecast_schedule_signature != schedule_signature:
             return False
 
@@ -2971,7 +2935,6 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
-        schedule_execution_enabled: bool,
         schedule_signature: tuple[tuple[str, str, int | None], ...],
         appliance_schedule_signature: tuple[
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
@@ -2990,9 +2953,6 @@ class HelmanCoordinator:
         )
         self._cached_battery_forecast_solar_signature = (
             self._build_battery_forecast_solar_signature(solar_forecast)
-        )
-        self._cached_battery_forecast_schedule_execution_enabled = (
-            schedule_execution_enabled
         )
         self._cached_battery_forecast_schedule_signature = schedule_signature
         self._cached_battery_forecast_schedule_effective_signature = (

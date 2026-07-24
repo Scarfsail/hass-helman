@@ -788,7 +788,9 @@ class AutomationRunResultSerializationTests(unittest.TestCase):
 
 
 class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_returns_execution_disabled_when_execution_flag_is_off(self) -> None:
+    async def test_run_plans_normally_when_execution_flag_is_off(self) -> None:
+        # execution_enabled gates only the apply step: optimizers still run and
+        # persist their plan so the card and the inspectors can display it.
         coordinator = _FakeCoordinator(
             schedule_document=_make_schedule_document(execution_enabled=False),
             bundle=_make_automation_bundle(),
@@ -801,12 +803,11 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         ).run(reference_time=REFERENCE_TIME)
 
         payload = result.to_dict()
-        self.assertFalse(payload["ranAutomation"])
-        self.assertEqual(payload["reason"], "execution_disabled")
-        self.assertIsNone(payload["snapshot"])
-        self.assertEqual(payload["optimizers"], [])
+        self.assertTrue(payload["ranAutomation"])
+        self.assertIsNotNone(payload["snapshot"])
+        self.assertEqual(len(payload["optimizers"]), 1)
         self.assertIsInstance(payload["durationMs"], int)
-        self.assertEqual(coordinator.snapshot_calls, [])
+        self.assertNotEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_automation_disabled_when_config_disabled(self) -> None:
         coordinator = _FakeCoordinator(
@@ -1918,7 +1919,6 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             return_value=coordinator_module._ForecastScheduleDocuments(
                 forecast_schedule_document=_make_schedule_document(),
                 projection_schedule_document=_make_schedule_document(),
-                schedule_execution_enabled=True,
             ),
         ):
             snapshot = await coordinator._build_automation_snapshot_from_schedule_locked(

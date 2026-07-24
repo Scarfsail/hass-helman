@@ -293,14 +293,10 @@ class AutomationRunner:
                 schedule_document = strip_automation_owned_actions(
                     baseline_schedule_document
                 )
-                if not baseline_schedule_document.execution_enabled:
-                    result = AutomationRunResult.skipped(reason="execution_disabled")
-                    return self._finalize_result(
-                        result=result,
-                        run_reason=run_reason,
-                        run_started_at=run_started_at,
-                    )
-
+                # ``execution_enabled`` gates only the apply step, not planning.
+                # Optimizers run, stamp condition_met and persist their actions
+                # whether or not Helman is allowed to touch hardware, so the
+                # card and the inspectors always show the current plan.
                 if not self._automation_config.enabled:
                     current_stage = "cleanup_persist"
                     cleanup_outcome = await self._async_persist_cleanup_only_locked(
