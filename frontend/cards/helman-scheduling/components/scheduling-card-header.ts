@@ -1,6 +1,5 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
-import { nothing } from "lit-html";
 import {
     EMPTY_SCHEDULE_HEADER_MODEL,
     type ScheduleHeaderModel,
@@ -19,9 +18,54 @@ export class SchedulingCardHeader extends LitElement {
                 gap: 8px 12px;
             }
 
-            .header-status {
-                flex: 1 1 160px;
+            .running-toggle {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                flex: 1 1 auto;
                 min-width: 0;
+                padding: 0;
+                background: none;
+                border: none;
+                color: var(--secondary-text-color);
+                font: inherit;
+                font-size: 0.84rem;
+                text-align: start;
+                cursor: pointer;
+                transition: color 120ms ease;
+            }
+
+            .running-toggle[disabled] {
+                cursor: default;
+            }
+
+            .running-toggle:not([disabled]):hover {
+                color: var(--primary-color);
+            }
+
+            .running-toggle-icon {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 18px;
+                width: 18px;
+                height: 18px;
+                border-radius: 999px;
+                font-size: 0.82rem;
+                font-weight: 700;
+                line-height: 1;
+                transition: background-color 120ms ease;
+            }
+
+            .running-toggle:not([disabled]):hover .running-toggle-icon {
+                background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+            }
+
+            .running-toggle-label {
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
 
             .header-controls {
@@ -49,9 +93,20 @@ export class SchedulingCardHeader extends LitElement {
     render() {
         return html`
             <div class="header-row">
-                ${this.model.statusText === null
-                    ? nothing
-                    : html`<div class="header-status muted">${this.model.statusText}</div>`}
+                <button
+                    class="running-toggle"
+                    type="button"
+                    ?disabled=${this.model.runningToggleDisabled}
+                    aria-expanded=${this.model.runningExpanded ? "true" : "false"}
+                    @click=${this._handleToggleRunning}
+                >
+                    <span class="running-toggle-icon" aria-hidden="true">
+                        ${this.model.runningToggleDisabled
+                            ? ""
+                            : this.model.runningExpanded ? "−" : "+"}
+                    </span>
+                    <span class="running-toggle-label">${this.model.runningLabel}</span>
+                </button>
                 <div class="header-controls">
                     <button
                         class="icon-button"
@@ -75,6 +130,13 @@ export class SchedulingCardHeader extends LitElement {
                 </div>
             </div>
         `;
+    }
+
+    private _handleToggleRunning(): void {
+        this.dispatchEvent(new CustomEvent("toggle-running-entities", {
+            bubbles: true,
+            composed: true,
+        }));
     }
 
     private _handleRefresh(): void {

@@ -7,10 +7,15 @@ import type { AutomationRunPayload, ForecastPayload, SchedulePayload } from "../
 import { AutomationInspectorModel } from "../helman-automation-inspector/automation-inspector-model";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
+import type { ControllableEntityDTO } from "../helman-api";
+import {
+    buildRunningEntities,
+    type RunningEntity,
+} from "./model/running-entities";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import type { HelmanSchedulingCardConfig } from "./HelmanSchedulingCardConfig";
 import "./components/scheduling-card-header";
-import "./components/scheduling-non-normal-state";
+import "./components/scheduling-running-entities";
 import "./components/scheduling-slot-table";
 import "./dialogs/scheduling-range-edit-dialog";
 import {
@@ -152,6 +157,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     private _pendingDialogPatches: ScheduleSlotPatch[] | null = null;
     private _selectionAnchorSlotIds: string[] | null = null;
     private _appliancesRequested = false;
+    private _controllableEntitiesRequested = false;
 
     @state() private _hass?: HomeAssistant;
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
@@ -168,6 +174,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     @state() private _nowMs = Date.now();
     @state() private _invalidScheduleAuthorship = false;
     @state() private _automationModel: AutomationInspectorModel | null = null;
+    @state() private _controllableEntities: ControllableEntityDTO[] = [];
+    @state() private _runningExpanded = false;
 
     private _automationRequested = false;
 
@@ -186,6 +194,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
             this._syncScheduleOwner();
             void this._loadAppliances();
             void this._loadAutomationTrace();
+            void this._loadControllableEntities();
         }
 
         this.requestUpdate("hass", previous);
@@ -210,6 +219,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         this._syncScheduleOwner();
         void this._loadAppliances();
         void this._loadAutomationTrace();
+        void this._loadControllableEntities();
     }
 
     private async _loadAutomationTrace(): Promise<void> {
@@ -385,6 +395,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                 class=${this._config?.transparent_background ? "transparent" : ""}
                 @refresh-schedule=${this._handleRefresh}
                 @toggle-schedule-execution=${this._handleToggleExecution}
+                @toggle-running-entities=${this._handleToggleRunningEntities}
                 @toggle-schedule-slot-selection=${this._handleToggleSlotSelection}
                 @toggle-schedule-day-expansion=${this._handleToggleDayExpansion}
                 @toggle-schedule-hour-expansion=${this._handleToggleHourExpansion}
@@ -398,11 +409,14 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                         ></scheduling-card-header>
                     ` : nothing}
 
-                    <scheduling-non-normal-state
-                        .hass=${this._hass}
-                        .localize=${this._localize}
-                        .executionEnabled=${this._ownerSnapshot.schedule?.executionEnabled ?? false}
-                    ></scheduling-non-normal-state>
+                    ${this._runningExpanded ? html`
+                        <scheduling-running-entities
+                            .hass=${this._hass}
+                            .localize=${this._localize}
+                            .entities=${this._runningEntities}
+                            .executionEnabled=${this._ownerSnapshot.schedule?.executionEnabled ?? false}
+                        ></scheduling-running-entities>
+                    ` : nothing}
 
                     ${this._renderInlineError()}
                     ${this._renderApplianceError()}
@@ -632,6 +646,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         this._expandedHourKeys = [];
         this._expandedApplianceActions = false;
         this._appliancesRequested = false;
+        this._controllableEntitiesRequested = false;
+        this._controllableEntities = [];
         this._automationRequested = false;
         this._automationModel = null;
         this._nowMs = Date.now();
@@ -917,10 +933,55 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     private _buildHeaderModel(): ScheduleHeaderModel {
         return buildScheduleHeaderModel({
             snapshot: this._ownerSnapshot,
+            runningCount: this._runningEntities.length,
+            runningExpanded: this._runningExpanded,
             localize: this._localize,
-            locale: this._locale,
-            timeZone: this._hass?.config.time_zone ?? "UTC",
         });
+    }
+
+    /**
+     * The entities Helman can drive that are currently running.
+     *
+     * The controllable set is fetched once per connection; this recomputes the
+     * running subset from live `hass.states` on every render, so the header
+     * count and the list stay current without polling.
+     */
+    private get _runningEntities(): RunningEntity[] {
+        return buildRunningEntities({
+            controllableEntities: this._controllableEntities,
+            states: this._hass?.states,
+        });
+    }
+
+    private async _loadControllableEntities(): Promise<void> {
+        const hass = this._hass;
+        // The controllable set only changes with the config, so fetch it once
+        // per connection rather than on every hass update.
+        if (!hass || this._controllableEntitiesRequested) {
+            return;
+        }
+
+        this._controllableEntitiesRequested = true;
+        try {
+            const payload = await getSharedHelmanStore(hass).getControllableEntities();
+            if (this._hass?.connection !== hass.connection) {
+                return;
+            }
+            this._controllableEntities = payload.entities;
+        } catch {
+            // An empty list is the safe outcome: the header simply reports zero
+            // rather than surfacing an error the user cannot act on.
+            if (this._hass?.connection !== hass.connection) {
+                return;
+            }
+            this._controllableEntitiesRequested = false;
+            this._controllableEntities = [];
+        }
+    }
+
+    private _handleToggleRunningEntities(event: CustomEvent): void {
+        event.stopPropagation();
+        this._runningExpanded = !this._runningExpanded;
     }
 
     private get _localize(): LocalizeFunction {

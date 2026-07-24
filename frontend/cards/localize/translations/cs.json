@@ -49,10 +49,6 @@
     "execution": {
       "toggle": "Vykonávat akce"
     },
-    "status": {
-      "refreshing": "Obnovuje se…",
-      "updated": "Aktualizováno"
-    },
     "day": {
       "today": "Dnes",
       "tomorrow": "Zítra"
@@ -259,8 +255,8 @@
       "unknown": "Nepodařilo se načíst nebo upravit rozvrh.",
       "showing_last_good": "Zobrazuji poslední známý rozvrh."
     },
-    "normal_state": {
-      "title": "Mimo klidový stav",
+    "running": {
+      "label": "Běží",
       "restore_all": "Vrátit vše do normálu",
       "restoring": "Vracím do normálu…"
     }
