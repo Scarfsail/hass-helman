@@ -84,6 +84,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_schedule)
     async_register_command(hass, ws_set_schedule)
     async_register_command(hass, ws_set_schedule_execution)
+    async_register_command(hass, ws_get_controllable_entities)
+    async_register_command(hass, ws_restore_normal_state)
     async_register_command(hass, ws_get_appliances)
     async_register_command(hass, ws_get_appliance_projections)
     async_register_command(hass, ws_get_device_tree)
@@ -310,6 +312,48 @@ async def ws_set_schedule_execution(
         return
 
     connection.send_result(msg["id"], {"success": True, "executionEnabled": enabled})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_controllable_entities",
+})
+@callback
+def ws_get_controllable_entities(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """List what Helman can drive, plus each entity's resting state."""
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    connection.send_result(
+        msg["id"], {"entities": coordinator.get_controllable_entities()}
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/restore_normal_state",
+})
+@websocket_api.async_response
+async def ws_restore_normal_state(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Put everything back to rest, on explicit user request.
+
+    Best effort: whatever fails stays listed by get_non_normal_entities.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    restored = await coordinator.async_restore_normal_state()
+    connection.send_result(msg["id"], {"restored": restored})
 
 
 @websocket_api.websocket_command({

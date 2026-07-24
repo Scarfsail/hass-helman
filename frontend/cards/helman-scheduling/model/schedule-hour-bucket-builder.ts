@@ -121,7 +121,7 @@ export function buildScheduleTableRows({
                         slot.isCurrent
                         && isScheduleBackedDisplaySlot(slot)
                         && runtimeCompliance !== null
-                        && runtimeCompliance.state !== "on_plan"
+                        && _hasComplianceDetail(runtimeCompliance)
                     ) {
                         rows.push(_buildDetailRow({
                             ownerRowId: childRow.rowId,
@@ -137,7 +137,7 @@ export function buildScheduleTableRows({
                     currentSlot
                     && isScheduleBackedDisplaySlot(currentSlot)
                     && hourRow.runtimeCompliance !== null
-                    && hourRow.runtimeCompliance.state !== "on_plan"
+                    && _hasComplianceDetail(hourRow.runtimeCompliance)
                 ) {
                     rows.push(_buildDetailRow({
                         ownerRowId: hourRow.rowId,
@@ -175,7 +175,7 @@ export function buildScheduleTableRows({
                 slot.isCurrent
                 && isScheduleBackedDisplaySlot(slot)
                 && runtimeCompliance !== null
-                && runtimeCompliance.state !== "on_plan"
+                && _hasComplianceDetail(runtimeCompliance)
             ) {
                 rows.push(_buildDetailRow({
                     ownerRowId: slotRow.rowId,
@@ -670,6 +670,19 @@ function _buildDetailRow({
         variant,
     };
 }
+
+/**
+ * Whether a compliance result warrants the expandable detail row.
+ *
+ * Neither being on plan nor having execution disabled is a discrepancy worth
+ * explaining -- in both cases the detail row would be empty.
+ */
+function _hasComplianceDetail(
+    compliance: ScheduleRuntimeComplianceModel,
+): boolean {
+    return compliance.state !== "on_plan" && compliance.state !== "execution_disabled";
+}
+
 
 function _buildCurrentRuntimeCompliance({
     slots,

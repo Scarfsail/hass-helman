@@ -381,6 +381,36 @@ export interface SetScheduleExecutionResponse {
     executionEnabled: boolean;
 }
 
+/**
+ * An entity Helman can drive, plus the state that counts as "at rest".
+ *
+ * The card filters these against live `hass.states`, so it reacts to entity
+ * state changes without asking the backend again: an entity is non-normal
+ * exactly when its state differs from `normalState`.
+ */
+export interface ControllableEntityDTO {
+    kind: string;
+    name: string;
+    entityId: string;
+    normalState: string;
+}
+
+export interface GetControllableEntitiesRequest {
+    type: "helman/get_controllable_entities";
+}
+
+export interface ControllableEntitiesPayload {
+    entities: ControllableEntityDTO[];
+}
+
+export interface RestoreNormalStateRequest {
+    type: "helman/restore_normal_state";
+}
+
+export interface RestoreNormalStateResponse {
+    restored: number;
+}
+
 export interface EntityReferenceDTO {
     entityId: string;
 }

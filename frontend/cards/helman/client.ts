@@ -2,6 +2,10 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type {
     ApplianceProjectionsPayload,
     AppliancesPayload,
+    ControllableEntitiesPayload,
+    GetControllableEntitiesRequest,
+    RestoreNormalStateRequest,
+    RestoreNormalStateResponse,
     GetApplianceProjectionsRequest,
     GetAppliancesRequest,
     GetScheduleRequest,
@@ -46,6 +50,20 @@ export class HelmanClient {
             enabled,
         };
         return this._hass.callWS<SetScheduleExecutionResponse>(request);
+    }
+
+    public getControllableEntities(): Promise<ControllableEntitiesPayload> {
+        const request: GetControllableEntitiesRequest = {
+            type: "helman/get_controllable_entities",
+        };
+        return this._hass.callWS<ControllableEntitiesPayload>(request);
+    }
+
+    public restoreNormalState(): Promise<RestoreNormalStateResponse> {
+        const request: RestoreNormalStateRequest = {
+            type: "helman/restore_normal_state",
+        };
+        return this._hass.callWS<RestoreNormalStateResponse>(request);
     }
 
     public getAppliances(): Promise<AppliancesPayload> {

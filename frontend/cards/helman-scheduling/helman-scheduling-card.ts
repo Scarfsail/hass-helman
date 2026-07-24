@@ -10,6 +10,7 @@ import { getSharedHelmanStore } from "../helman/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import type { HelmanSchedulingCardConfig } from "./HelmanSchedulingCardConfig";
 import "./components/scheduling-card-header";
+import "./components/scheduling-non-normal-state";
 import "./components/scheduling-slot-table";
 import "./dialogs/scheduling-range-edit-dialog";
 import {
@@ -396,6 +397,12 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                             .model=${this._buildHeaderModel()}
                         ></scheduling-card-header>
                     ` : nothing}
+
+                    <scheduling-non-normal-state
+                        .hass=${this._hass}
+                        .localize=${this._localize}
+                        .executionEnabled=${this._ownerSnapshot.schedule?.executionEnabled ?? false}
+                    ></scheduling-non-normal-state>
 
                     ${this._renderInlineError()}
                     ${this._renderApplianceError()}

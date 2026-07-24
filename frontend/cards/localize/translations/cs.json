@@ -164,7 +164,7 @@
       "reason": "Důvod",
       "compliance_ok": "Podle plánu",
       "compliance_off": "Mimo plán",
-      "execution_disabled": "Provádění je vypnuté",
+      "execution_disabled": "Provádění je vypnuté – plán se zobrazuje, ale neprovádí",
       "runtime_unavailable": "Stav běhu není k dispozici.",
       "actor": {
         "inverter": "Střídač"
@@ -258,6 +258,11 @@
       "appliances_unavailable": "Metadata spotřebičů se nepodařilo načíst.",
       "unknown": "Nepodařilo se načíst nebo upravit rozvrh.",
       "showing_last_good": "Zobrazuji poslední známý rozvrh."
+    },
+    "normal_state": {
+      "title": "Mimo klidový stav",
+      "restore_all": "Vrátit vše do normálu",
+      "restoring": "Vracím do normálu…"
     }
   },
   "bias_correction": {

@@ -54,6 +54,10 @@ export function buildScheduleRuntimeComplianceModel({
     executionEnabled: boolean;
     localize: LocalizeFunction;
 }): ScheduleRuntimeComplianceModel {
+    // With execution disabled the plan is still built and still shown; nothing
+    // is applied, so there is no plan-vs-actual to compare. This is a statement
+    // of fact rather than a problem, so it carries no issues and no detail row
+    // -- the slot's scheduled actions remain visible in the table as usual.
     if (!executionEnabled) {
         return {
             state: "execution_disabled",

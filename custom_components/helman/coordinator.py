@@ -132,6 +132,12 @@ from .scheduling.runtime_status import (
     schedule_execution_status_to_dict,
 )
 from .scheduling.action_resolution import resolve_executed_schedule_action
+from .scheduling.actuation import OverrideScheduleActuator
+from .scheduling.normal_state import (
+    ControllableEntityDict,
+    async_restore_normal_state as async_apply_normal_state,
+    build_controllable_entities,
+)
 from .scheduling.schedule_executor import (
     ScheduleExecutor,
     ScheduleExecutorDependencies,
@@ -1244,6 +1250,36 @@ class HelmanCoordinator:
             _LOGGER.warning("Schedule execution control config unavailable: %s", issue)
             self._last_schedule_control_config_issue = issue
         return None
+
+    def get_controllable_entities(self) -> list[ControllableEntityDict]:
+        """List what Helman can drive, plus each entity's resting state.
+
+        The card filters this against live entity state, so it reacts to state
+        changes without asking the backend again.
+        """
+        self._refresh_climate_appliance_capabilities()
+        return build_controllable_entities(
+            control_config=self._read_schedule_control_config(),
+            registry=self._appliances_registry,
+        )
+
+    async def async_restore_normal_state(self) -> int:
+        """Put everything back to rest, on explicit user request.
+
+        This is the one path allowed to actuate while execution is disabled --
+        the user asked for it from the card -- so it uses an override actuator
+        rather than the gated one. It is best effort: whatever fails stays
+        listed for the user to retry or handle individually.
+        """
+        self._refresh_climate_appliance_capabilities()
+        restored = await async_apply_normal_state(
+            actuator=OverrideScheduleActuator(self._hass),
+            control_config=self._read_schedule_control_config(),
+            registry=self._appliances_registry,
+        )
+        # Whatever the executor remembered about appliance state is stale now.
+        self._schedule_executor.clear_appliance_memories()
+        return restored
 
     def _refresh_climate_appliance_capabilities(self) -> None:
         refreshed_appliances = []

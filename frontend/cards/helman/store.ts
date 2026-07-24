@@ -2,6 +2,8 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type {
     ApplianceProjectionsPayload,
     AppliancesPayload,
+    ControllableEntitiesPayload,
+    RestoreNormalStateResponse,
     SchedulePayload,
     SetScheduleExecutionResponse,
     SetScheduleResponse,
@@ -20,6 +22,8 @@ export interface HelmanStore {
     getSchedule(): Promise<SchedulePayload>;
     applySchedulePatches(patches: readonly HelmanSchedulePatch[]): Promise<SetScheduleResponse>;
     setScheduleExecution(enabled: boolean): Promise<SetScheduleExecutionResponse>;
+    getControllableEntities(): Promise<ControllableEntitiesPayload>;
+    restoreNormalState(): Promise<RestoreNormalStateResponse>;
     getAppliances(): Promise<AppliancesPayload>;
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
 }
@@ -61,6 +65,14 @@ class HelmanStoreImpl implements HelmanStore {
 
     public setScheduleExecution(enabled: boolean): Promise<SetScheduleExecutionResponse> {
         return this._client.setScheduleExecution(enabled);
+    }
+
+    public getControllableEntities(): Promise<ControllableEntitiesPayload> {
+        return this._client.getControllableEntities();
+    }
+
+    public restoreNormalState(): Promise<RestoreNormalStateResponse> {
+        return this._client.restoreNormalState();
     }
 
     public getAppliances(): Promise<AppliancesPayload> {
