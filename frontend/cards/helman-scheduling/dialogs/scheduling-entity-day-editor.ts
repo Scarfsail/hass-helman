@@ -355,13 +355,20 @@ export class SchedulingEntityDayEditor extends LitElement {
                     @click=${this._requestClose}
                 ></ha-icon-button>
                 <!--
-                    Clicking anything that is not the edit panel, a block row or
-                    the band ends the edit session. The block keeps whatever the
-                    session did to it: the draft is the only edit buffer, and
-                    Save and Cancel are the only places it is committed or
+                    Pressing anything that is not the edit panel, the block list
+                    or the band ends the edit session. The block keeps whatever
+                    the session did to it: the draft is the only edit buffer,
+                    and Save and Cancel are the only places it is committed or
                     thrown away.
+
+                    On pointerdown rather than click: a click is retargeted to
+                    the nearest common ancestor when its element is re-rendered
+                    between press and release, which selecting or dragging a
+                    block does -- so the click for "I picked this block" arrived
+                    here looking like "I clicked the dialog background" and
+                    closed the panel it had just opened.
                 -->
-                <div class="dialog-content" @click=${this._handleContentClick}>
+                <div class="dialog-content" @pointerdown=${this._handleContentPointerDown}>
                     ${this._renderDaySwitcher(day)}
                     ${this.scheduleChanged ? html`
                         <div class="stale-banner">
@@ -747,7 +754,7 @@ export class SchedulingEntityDayEditor extends LitElement {
      * Anything outside the edit panel, the block list and the band ends the
      * session. What the session already wrote into the draft stays there.
      */
-    private _handleContentClick(event: MouseEvent): void {
+    private _handleContentPointerDown(event: PointerEvent): void {
         if (this._editing === null) {
             return;
         }

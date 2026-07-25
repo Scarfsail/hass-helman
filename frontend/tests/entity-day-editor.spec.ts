@@ -271,6 +271,19 @@ test.describe("entity day editor", () => {
         ]);
     });
 
+    test("clicking a block on the band opens the panel and keeps it open", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        // The press re-renders the segment, so the release retargets its click
+        // to the dialog body. That click must not read as "clicked outside".
+        await page.locator("scheduling-entity-day-band .segment").nth(1).click();
+
+        expect(await editingRange(page)).toBe(
+            `${Date.parse(`${DAY_ONE}T17:00:00Z`)}|${Date.parse(`${DAY_ONE}T19:00:00Z`)}`,
+        );
+    });
+
     test("dragging the middle of a block moves it whole", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);

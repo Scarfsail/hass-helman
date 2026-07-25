@@ -318,22 +318,6 @@ export class SchedulingEntityDayBand extends LitElement {
 
     @state() private _drag: DragSession | null = null;
 
-    /** Whether the current drag actually moved anything, for click suppression. */
-    private _dragMoved = false;
-
-    /**
-     * Swallow the click that ends a drag.
-     *
-     * The pointerup lands after the segment has been re-rendered, so the
-     * browser retargets the click to the dialog body -- where it reads as
-     * "clicked outside" and would close the editor the drag just opened.
-     */
-    private readonly _swallowClick = (event: MouseEvent): void => {
-        event.stopPropagation();
-        event.preventDefault();
-        this._removeClickSwallow();
-    };
-
     private readonly _handlePointerMove = (event: PointerEvent): void => {
         const drag = this._drag;
         if (drag === null || event.pointerId !== drag.pointerId) {
@@ -343,9 +327,6 @@ export class SchedulingEntityDayBand extends LitElement {
         event.preventDefault();
         const pointerMs = this._snapMs(this._readPointerMs(event, drag.trackRect));
         const range = this._resolveDragRange(drag, pointerMs);
-        this._dragMoved = this._dragMoved
-            || range.startMs !== drag.originStartMs
-            || range.endMs !== drag.originEndMs;
         this.dispatchEvent(new CustomEvent<EntityDayBandRangeChangeDetail>("entity-day-band-range-change", {
             bubbles: true,
             composed: true,
@@ -364,7 +345,6 @@ export class SchedulingEntityDayBand extends LitElement {
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this._endDrag();
-        this._removeClickSwallow();
     }
 
     render() {
@@ -620,7 +600,6 @@ export class SchedulingEntityDayBand extends LitElement {
             trackRect,
             pointerId: event.pointerId,
         };
-        this._dragMoved = false;
         window.addEventListener("pointermove", this._handlePointerMove);
         window.addEventListener("pointerup", this._handlePointerUp);
         window.addEventListener("pointercancel", this._handlePointerUp);
@@ -661,20 +640,6 @@ export class SchedulingEntityDayBand extends LitElement {
         window.removeEventListener("pointermove", this._handlePointerMove);
         window.removeEventListener("pointerup", this._handlePointerUp);
         window.removeEventListener("pointercancel", this._handlePointerUp);
-
-        if (!this._dragMoved) {
-            return;
-        }
-
-        this._dragMoved = false;
-        window.addEventListener("click", this._swallowClick, { capture: true });
-        // A drag that ends without a click must not leave the swallow armed for
-        // the user's next, unrelated click.
-        setTimeout(() => this._removeClickSwallow(), 0);
-    }
-
-    private _removeClickSwallow(): void {
-        window.removeEventListener("click", this._swallowClick, { capture: true });
     }
 
     private _readTrackRect(): DOMRect | null {
