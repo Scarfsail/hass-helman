@@ -409,6 +409,24 @@ export interface ControllableEntitiesPayload {
     entities: ControllableEntityDTO[];
 }
 
+export interface GetEntityActualHistoryRequest {
+    type: "helman/get_entity_actual_history";
+}
+
+/** One elapsed slot an entity spent away from its resting state. */
+export interface EntityActualHistorySlotDTO {
+    /** Local ISO start of the slot, on the schedule's own grid. */
+    slot: string;
+    /** The entity state it spent most of that slot in. */
+    state: string;
+    /** Share of the slot it was away from rest, 0-1. */
+    ratio: number;
+}
+
+export interface EntityActualHistoryPayload {
+    entities: Record<string, EntityActualHistorySlotDTO[]>;
+}
+
 export interface RestoreNormalStateRequest {
     type: "helman/restore_normal_state";
 }

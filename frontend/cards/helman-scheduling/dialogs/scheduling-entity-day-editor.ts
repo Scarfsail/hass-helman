@@ -24,6 +24,7 @@ import type {
 } from "../model/entity-day-schedule-model";
 import {
     areEntityScheduleLanesDirty,
+    buildEntityActualSegments,
     buildEntityScheduleBlocks,
     buildEntityScheduleBoundaryOptions,
     buildEntityScheduleDays,
@@ -682,6 +683,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             icon: this.appliance?.icon ?? this.entityIcon,
             appliance: this.appliance,
             isAvailable: true,
+            actualSlots: [],
         }];
     }
 
@@ -792,6 +794,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             appliance: lane.appliance,
             isAvailable: lane.isAvailable,
             blocks: this._dayBlocks(day, lane),
+            actualSegments: buildEntityActualSegments({ actualSlots: lane.actualSlots, day }),
         }));
     }
 

@@ -3,6 +3,7 @@ import type {
     ApplianceProjectionsPayload,
     AppliancesPayload,
     ControllableEntitiesPayload,
+    EntityActualHistoryPayload,
     RestoreNormalStateResponse,
     SchedulePayload,
     SetScheduleExecutionResponse,
@@ -23,6 +24,7 @@ export interface HelmanStore {
     applySchedulePatches(patches: readonly HelmanSchedulePatch[]): Promise<SetScheduleResponse>;
     setScheduleExecution(enabled: boolean): Promise<SetScheduleExecutionResponse>;
     getControllableEntities(): Promise<ControllableEntitiesPayload>;
+    getEntityActualHistory(): Promise<EntityActualHistoryPayload>;
     restoreNormalState(): Promise<RestoreNormalStateResponse>;
     getAppliances(): Promise<AppliancesPayload>;
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
@@ -69,6 +71,10 @@ class HelmanStoreImpl implements HelmanStore {
 
     public getControllableEntities(): Promise<ControllableEntitiesPayload> {
         return this._client.getControllableEntities();
+    }
+
+    public getEntityActualHistory(): Promise<EntityActualHistoryPayload> {
+        return this._client.getEntityActualHistory();
     }
 
     public restoreNormalState(): Promise<RestoreNormalStateResponse> {

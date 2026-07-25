@@ -7,9 +7,10 @@ import type { AutomationRunPayload, ForecastPayload, SchedulePayload } from "../
 import { AutomationInspectorModel } from "../helman-automation-inspector/automation-inspector-model";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
-import type { ControllableEntityDTO } from "../helman-api";
+import type { ControllableEntityDTO, EntityActualHistorySlotDTO } from "../helman-api";
 import {
     buildControllableEntityStatuses,
+    resolveScheduleActionFromEntityState,
     type ControllableEntityStatus,
 } from "./model/controllable-entity-status";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
@@ -24,6 +25,7 @@ import type { EntityScheduleSaveDetail } from "./dialogs/scheduling-entity-day-e
 import {
     buildElapsedScheduleSlots,
     getEntityScheduleTargetKey,
+    type EntityActualSlot,
     type EntityScheduleLane,
     type EntityScheduleTarget,
 } from "./model/entity-day-schedule-model";
@@ -203,6 +205,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
      */
     @state() private _entityEditorSlots: ScheduleSlot[] = [];
     @state() private _entityEditorForecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
+    /** What each controllable entity really did earlier today, by entity id. */
+    @state() private _entityActualHistory: Record<string, EntityActualHistorySlotDTO[]> = {};
 
     private _automationRequested = false;
 
@@ -653,6 +657,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         }
 
         this._seedEntityEditorSlots();
+        void this._loadEntityActualHistory();
         this._entityEditorTarget = event.detail.target;
         this._entityEditorName = event.detail.name;
         this._entityEditorScheduleChanged = false;
@@ -690,6 +695,34 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         // the same update, so `closed` would never fire and the history entry it
         // pushed would go unconsumed -- swallowing the user's next Back press.
         this._entityEditorOpen = false;
+    }
+
+    /**
+     * What the entities really did earlier today, fetched when the editor opens.
+     *
+     * Read from the recorder rather than from the schedule, which keeps no
+     * record of elapsed slots -- and which would answer a different question
+     * anyway: the past is what ran, not what was planned to.
+     *
+     * Failure is silent on purpose: the editor is perfectly usable with the
+     * morning blank, and an error banner over a schedule the user came to edit
+     * would be louder than the loss.
+     */
+    private async _loadEntityActualHistory(): Promise<void> {
+        const hass = this._hass;
+        this._entityActualHistory = {};
+        if (!hass) {
+            return;
+        }
+
+        try {
+            const payload = await getSharedHelmanStore(hass).getEntityActualHistory();
+            if (this._hass?.connection === hass.connection) {
+                this._entityActualHistory = payload.entities;
+            }
+        } catch (error) {
+            console.warn("helman-scheduling: failed to load entity history", error);
+        }
     }
 
     /**
@@ -759,6 +792,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                         ?? "mdi:flash-outline",
                     appliance,
                     isAvailable: status.isAvailable,
+                    actualSlots: this._buildLaneActualSlots(status.entityId),
                 }];
             })
             .sort((left, right) => {
@@ -768,6 +802,32 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
 
                 return left.name.localeCompare(right.name, this._locale);
             });
+    }
+
+    /**
+     * One entity's elapsed runs, as actions on the schedule's grid.
+     *
+     * The recorder speaks in entity states; everything the editor draws speaks
+     * in schedule actions, so the translation happens here, once, where the
+     * entity's own definition of its states is still at hand.
+     */
+    private _buildLaneActualSlots(entityId: string): EntityActualSlot[] {
+        const history = this._entityActualHistory[entityId];
+        const entity = this._controllableEntities.find(
+            (candidate) => candidate.entityId === entityId,
+        );
+        if (history === undefined || entity === undefined) {
+            return [];
+        }
+
+        const slotDurationMs = (this._normalizedSchedule.granularityMinutes ?? 60) * 60_000;
+        return history.flatMap((entry) => {
+            const startMs = new Date(entry.slot).getTime();
+            const action = resolveScheduleActionFromEntityState({ entity, state: entry.state });
+            return Number.isNaN(startMs) || action === null
+                ? []
+                : [{ startMs, endMs: startMs + slotDurationMs, action, ratio: entry.ratio }];
+        });
     }
 
     private get _entityEditorAppliance(): ScheduleApplianceMetadata | null {

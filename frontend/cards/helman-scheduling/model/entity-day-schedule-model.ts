@@ -46,6 +46,33 @@ export interface EntityScheduleLane {
     appliance: ScheduleApplianceMetadata | null;
     /** The entity cannot be read right now; its schedule is still editable. */
     isAvailable: boolean;
+    /** What the entity actually did earlier today, per elapsed slot. */
+    actualSlots: readonly EntityActualSlot[];
+}
+
+/** One elapsed slot the entity spent doing something, as the recorder saw it. */
+export interface EntityActualSlot {
+    startMs: number;
+    endMs: number;
+    action: EntityScheduleAction;
+    /** Share of the slot it was actually away from rest, 0-1. */
+    ratio: number;
+}
+
+/**
+ * A run that already happened: adjacent elapsed slots doing the same thing.
+ *
+ * Kept apart from `EntityScheduleBlock` because it is a different fact and
+ * takes different rules -- it is measured rather than planned, it has no
+ * author, and there is nothing about it left to edit.
+ */
+export interface EntityActualSegment {
+    key: string;
+    startMs: number;
+    endMs: number;
+    action: EntityScheduleAction;
+    /** How long the entity was really running inside the segment. */
+    activeMs: number;
 }
 
 /** Every lane's pending edits, keyed by lane key. */
@@ -369,6 +396,55 @@ export function buildEntityScheduleBlocks({
     }
 
     return blocks;
+}
+
+/**
+ * The entity's elapsed runs, merged and clipped to one day.
+ *
+ * Merging on the action means a run that changed nothing about itself reads as
+ * one bar, and a run still going meets its scheduled continuation at the
+ * current slot boundary with no seam -- which is the point of drawing the past
+ * on the same axis at all.
+ */
+export function buildEntityActualSegments({
+    actualSlots,
+    day,
+}: {
+    actualSlots: readonly EntityActualSlot[];
+    day: EntityScheduleDay;
+}): EntityActualSegment[] {
+    const segments: EntityActualSegment[] = [];
+    const ordered = [...actualSlots]
+        .filter((slot) => slot.startMs < day.endMs && slot.endMs > day.startMs)
+        .sort((left, right) => left.startMs - right.startMs);
+
+    for (const slot of ordered) {
+        if (isEntityScheduleActionEmpty(slot.action)) {
+            continue;
+        }
+
+        const previous = segments[segments.length - 1];
+        const activeMs = (slot.endMs - slot.startMs) * slot.ratio;
+        if (
+            previous !== undefined
+            && previous.endMs === slot.startMs
+            && areEntityScheduleActionsEqual(previous.action, slot.action)
+        ) {
+            previous.endMs = slot.endMs;
+            previous.activeMs += activeMs;
+            continue;
+        }
+
+        segments.push({
+            key: `actual:${slot.startMs}`,
+            startMs: slot.startMs,
+            endMs: slot.endMs,
+            action: cloneEntityScheduleAction(slot.action),
+            activeMs,
+        });
+    }
+
+    return segments;
 }
 
 /** The blocks overlapping one day, clipped to it. */

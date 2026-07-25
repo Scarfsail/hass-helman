@@ -83,6 +83,7 @@ from .const import (
     MAX_FORECAST_DAYS,
     PRODUCTION_TOTAL_ENTITY_ID,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_SLOT_MINUTES,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_STOP_EXPORT,
 )
@@ -132,6 +133,7 @@ from .scheduling.runtime_status import (
     schedule_execution_status_to_dict,
 )
 from .scheduling.action_resolution import resolve_executed_schedule_action
+from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_history
 from .scheduling.actuation import OverrideScheduleActuator
 from .scheduling.normal_state import (
     ControllableEntityDict,
@@ -1262,6 +1264,27 @@ class HelmanCoordinator:
             control_config=self._read_schedule_control_config(),
             registry=self._appliances_registry,
         )
+
+    async def async_get_entity_actual_history(
+        self,
+    ) -> dict[str, list[ActualHistorySlot]]:
+        """What each controllable entity actually did earlier today.
+
+        Queried per entity rather than in one sweep because that is how the
+        recorder answers, and the set is small: it is the same roster the card
+        already lists.
+        """
+        reference_time = dt_util.utcnow()
+        history: dict[str, list[ActualHistorySlot]] = {}
+        for entity in self.get_controllable_entities():
+            history[entity["entityId"]] = await build_entity_actual_history(
+                self._hass,
+                entity_id=entity["entityId"],
+                normal_state=entity["normalState"],
+                reference_time=reference_time,
+                interval_minutes=SCHEDULE_SLOT_MINUTES,
+            )
+        return history
 
     async def async_restore_normal_state(self) -> int:
         """Put everything back to rest, on explicit user request.

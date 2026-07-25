@@ -4,6 +4,8 @@ import { nothing } from "lit-html";
 import { helmanColorVars } from "../../color-vars";
 import type { LocalizeFunction } from "../../localize/localize";
 import type {
+    EntityActualSegment,
+    EntityScheduleAction,
     EntityScheduleBlock,
     EntityScheduleDay,
     EntityScheduleTarget,
@@ -33,6 +35,8 @@ export interface EntityDayBandLane {
     target: EntityScheduleTarget;
     appliance: ScheduleApplianceMetadata | null;
     blocks: readonly EntityScheduleBlock[];
+    /** What the entity really did earlier today, already merged into runs. */
+    actualSegments: readonly EntityActualSegment[];
     isAvailable: boolean;
 }
 
@@ -361,6 +365,20 @@ export class SchedulingEntityDayBand extends LitElement {
                 cursor: pointer;
             }
 
+            /* What already happened: flat, quiet and untouchable. No stripes and
+               no authorship bar -- nobody "set" the past, it simply is -- and no
+               hit area, so pressing it selects the lane like the bare track. */
+            .segment.actual {
+                background: color-mix(in srgb, var(--schedule-action-tone-accent, var(--primary-color)) 22%, transparent);
+                box-shadow: none;
+                opacity: 0.85;
+                pointer-events: none;
+            }
+
+            .segment.actual ha-icon {
+                opacity: 0.6;
+            }
+
             .segment ha-icon {
                 --mdc-icon-size: 14px;
                 pointer-events: none;
@@ -628,6 +646,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     anywhere means "this entity", exactly as its name does.
                 -->
                 <div class="track" @click=${(event: Event) => this._handleTrackClick(event, lane.key)}>
+                    ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment))}
                     ${this._renderGaps(lane)}
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected))}
                     ${this._renderPastOverlay()}
@@ -688,6 +707,28 @@ export class SchedulingEntityDayBand extends LitElement {
         this._emitGapSelect(laneKey, startMs, gap.endMs);
     }
 
+    /**
+     * A run that already happened.
+     *
+     * Drawn flat and inert: it is measured rather than planned, so it carries no
+     * authorship bar, no handles and no hit area -- pressing it falls through to
+     * the track, which selects the lane. It sits in the same tone as the action
+     * it was, so a run that is still going reads as one bar across the now-line.
+     */
+    private _renderActualSegment(lane: EntityDayBandLane, segment: EntityActualSegment) {
+        const presentation = this._getPresentation(lane, segment);
+        const title = `${lane.name} · ${presentation.label} · ${this._formatRange(segment)}`;
+        return html`
+            <span
+                class=${`segment actual ${presentation.toneClass}`}
+                title=${title}
+                style=${`left: ${this._toPercent(segment.startMs)}%; width: ${this._toSpanPercent(segment.startMs, segment.endMs)}%`}
+            >
+                <ha-icon .icon=${presentation.icon}></ha-icon>
+            </span>
+        `;
+    }
+
     private _renderSegment(lane: EntityDayBandLane, block: EntityScheduleBlock, laneSelected: boolean) {
         const presentation = this._getPresentation(lane, block);
         const editing = laneSelected && this._isEditing(block);
@@ -746,20 +787,27 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * How long this entity is scheduled to run today.
+     * How long this entity runs today, the whole day through.
      *
      * The blocks say when; this says how much, which is the number a person
      * actually holds an opinion about ("the boiler only needs three hours").
+     * It counts the hours already run as well as the ones still scheduled --
+     * a day is not two days -- with the split in the tooltip, because adding a
+     * measured past to a planned future hides which half is which.
      */
     private _renderLaneTotal(lane: EntityDayBandLane) {
-        const totalMs = lane.blocks.reduce((total, block) => total + (block.endMs - block.startMs), 0);
-        if (totalMs <= 0) {
+        const plannedMs = lane.blocks.reduce((total, block) => total + (block.endMs - block.startMs), 0);
+        const actualMs = lane.actualSegments.reduce((total, segment) => total + segment.activeMs, 0);
+        if (plannedMs + actualMs <= 0) {
             return nothing;
         }
 
-        const hours = totalMs / 3_600_000;
-        const label = `${hours.toLocaleString(this.locale, { maximumFractionDigits: 1 })} h`;
-        return html`<span class="lane-total">${label}</span>`;
+        const format = (ms: number): string =>
+            `${(ms / 3_600_000).toLocaleString(this.locale, { maximumFractionDigits: 1 })} h`;
+        const title = actualMs > 0 && plannedMs > 0
+            ? `${format(actualMs)} + ${format(plannedMs)}`
+            : "";
+        return html`<span class="lane-total" title=${title}>${format(plannedMs + actualMs)}</span>`;
     }
 
     private _renderPastOverlay() {
@@ -959,21 +1007,21 @@ export class SchedulingEntityDayBand extends LitElement {
         return Math.max(Math.min(Math.abs(value) / max, 1) * 100, MIN_BAR_PCT);
     }
 
-    private _getPresentation(lane: EntityDayBandLane, block: EntityScheduleBlock) {
-        if (lane.target.kind === "inverter" && isEntityInverterAction(block.action)) {
-            return getScheduleActionPresentation(block.action, this.localize);
+    private _getPresentation(lane: EntityDayBandLane, run: { action: EntityScheduleAction }) {
+        if (lane.target.kind === "inverter" && isEntityInverterAction(run.action)) {
+            return getScheduleActionPresentation(run.action, this.localize);
         }
 
         return getScheduleApplianceActionPresentation({
             appliance: lane.appliance ?? { kind: "generic", icon: lane.icon },
-            action: block.action === null || isEntityInverterAction(block.action) ? null : block.action,
+            action: run.action === null || isEntityInverterAction(run.action) ? null : run.action,
             localize: this.localize,
         });
     }
 
-    private _formatRange(block: EntityScheduleBlock): string {
+    private _formatRange(run: { startMs: number; endMs: number }): string {
         const format = (atMs: number): string => formatScheduleTime(atMs, this.locale, this.timeZone);
-        return `${format(block.startMs)}–${format(block.endMs)}`;
+        return `${format(run.startMs)}–${format(run.endMs)}`;
     }
 
     private _toPercent(atMs: number): number {

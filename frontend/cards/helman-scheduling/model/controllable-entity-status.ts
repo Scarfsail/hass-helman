@@ -343,6 +343,8 @@ function _buildLiveApplianceAction({
             return { charge };
         }
 
+        // Only the live view can say which mode a running charger is in: it
+        // reads the charger's own selects, which the recorder is not asked for.
         const controls = appliance?.controlEntityIds ?? null;
         const useMode = _readOptionalState(states, controls?.useMode);
         const ecoGear = _readOptionalState(states, controls?.ecoGear);
@@ -547,6 +549,36 @@ function _projectedApplianceAction(
     action: ScheduleApplianceAction | null,
 ): ScheduleApplianceAction | null {
     return action !== null && action.conditionMet !== false ? action : null;
+}
+
+/**
+ * The schedule action that would have produced an entity state.
+ *
+ * Read in the opposite direction from the rest of this module -- state to
+ * action rather than action to state -- because that is how the past has to be
+ * read: the recorder kept what the entity was, and the card draws actions.
+ */
+export function resolveScheduleActionFromEntityState({
+    entity,
+    state,
+}: {
+    entity: ControllableEntityDTO;
+    state: string;
+}): ScheduleInverterAction | ScheduleApplianceAction | null {
+    if (entity.kind === "inverter") {
+        const kind = _resolveInverterActionKind(entity, state);
+        return kind === null ? null : { kind };
+    }
+
+    if (entity.kind === "climate") {
+        return { mode: state };
+    }
+
+    if (entity.kind === "ev_charger") {
+        return { charge: state === "on" };
+    }
+
+    return { on: state === "on" };
 }
 
 function _buildFallbackApplianceDescriptor(

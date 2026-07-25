@@ -85,6 +85,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_set_schedule)
     async_register_command(hass, ws_set_schedule_execution)
     async_register_command(hass, ws_get_controllable_entities)
+    async_register_command(hass, ws_get_entity_actual_history)
     async_register_command(hass, ws_restore_normal_state)
     async_register_command(hass, ws_get_appliances)
     async_register_command(hass, ws_get_appliance_projections)
@@ -331,6 +332,31 @@ def ws_get_controllable_entities(
 
     connection.send_result(
         msg["id"], {"entities": coordinator.get_controllable_entities()}
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_entity_actual_history",
+})
+@websocket_api.async_response
+async def ws_get_entity_actual_history(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Report what each controllable entity actually did earlier today.
+
+    The schedule keeps no record of elapsed slots, so the card cannot draw the
+    morning from it. This reads the recorder instead, which also answers the
+    better question: not what was planned, but what really ran.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    connection.send_result(
+        msg["id"], {"entities": await coordinator.async_get_entity_actual_history()}
     )
 
 

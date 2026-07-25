@@ -119,6 +119,7 @@ async function mountEditor(
                     icon: "mdi:solar-power",
                     appliance: null,
                     isAvailable: true,
+                    actualSlots: [],
                 },
                 {
                     key: "appliance:boiler",
@@ -127,6 +128,7 @@ async function mountEditor(
                     icon: "mdi:water-boiler",
                     appliance: boiler,
                     isAvailable: true,
+                    actualSlots: [],
                 },
                 {
                     key: "appliance:pump",
@@ -135,8 +137,23 @@ async function mountEditor(
                     icon: "mdi:pump",
                     appliance: pump,
                     isAvailable: false,
+                    actualSlots: [],
                 },
             ];
+            // The boiler really ran 07:00-09:00, and the inverter charged for
+            // half of 09:00 before stopping.
+            el.lanes[1].actualSlots = [7, 8].map((hour) => ({
+                startMs: Date.parse(`${dayOne}T0${hour}:00:00Z`),
+                endMs: Date.parse(`${dayOne}T0${hour + 1}:00:00Z`),
+                action: { on: true },
+                ratio: 1,
+            }));
+            el.lanes[0].actualSlots = [{
+                startMs: Date.parse(`${dayOne}T09:00:00Z`),
+                endMs: Date.parse(`${dayOne}T10:00:00Z`),
+                action: { kind: "charge_to_target_soc" },
+                ratio: 0.5,
+            }];
         }
         if (pruned) {
             const elapsed = slots.filter((slot) => slot.dayKey === dayOne && slot.endMs <= nowMs);
@@ -729,6 +746,49 @@ test.describe("entity day editor", () => {
             expect(await typeSoc("8")).toBe("8");
             expect(await typeSoc("")).toBe("");
             expect(await typeSoc("05")).toBe("05");
+        });
+
+        /**
+         * The past is a different fact from the plan: measured, authorless and
+         * finished. It is drawn on the same axis so a run still going meets its
+         * scheduled continuation, but it must not become something to edit.
+         */
+        test("what really ran is drawn behind the now-line, and counts", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            const lanes = await page.evaluate(() => {
+                const el = document.querySelector("scheduling-entity-day-editor") as any;
+                const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+                return [...band.shadowRoot.querySelectorAll(".lane")].map((lane: Element) => ({
+                    key: lane.getAttribute("data-lane"),
+                    // Two elapsed hours merge into one run.
+                    actual: [...lane.querySelectorAll(".segment.actual")].map((segment: Element) => ({
+                        left: Math.round(parseFloat((segment as HTMLElement).style.left)),
+                        width: Math.round(parseFloat((segment as HTMLElement).style.width)),
+                        editable: !(getComputedStyle(segment).pointerEvents === "none"),
+                    })),
+                    total: lane.querySelector(".lane-total")?.textContent?.trim() ?? null,
+                    totalTitle: lane.querySelector(".lane-total")?.getAttribute("title") ?? null,
+                }));
+            });
+
+            const boiler = lanes.find((lane) => lane.key === "appliance:boiler")!;
+            // 07:00-09:00 is one run of two hours, starting seven twenty-fourths in.
+            expect(boiler.actual).toHaveLength(1);
+            expect(boiler.actual[0].left).toBe(29);
+            expect(boiler.actual[0].width).toBe(8);
+            expect(boiler.actual[0].editable).toBe(false);
+            // Two hours really run, plus the four this fixture still holds in
+            // the schedule (the morning block as well as the evening one --
+            // today's elapsed slots are pruned in production, not here).
+            expect(boiler.total).toBe("6 h");
+            expect(boiler.totalTitle).toBe("2 h + 4 h");
+
+            // Half an hour of charging is half an hour, however wide it is drawn.
+            const inverter = lanes.find((lane) => lane.key === "inverter")!;
+            expect(inverter.actual).toHaveLength(1);
+            expect(inverter.total).toBe("0,5 h");
         });
 
         test("an entity that cannot be reached is still a lane", async ({ page }) => {

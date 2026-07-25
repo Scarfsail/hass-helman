@@ -3,6 +3,8 @@ import type {
     ApplianceProjectionsPayload,
     AppliancesPayload,
     ControllableEntitiesPayload,
+    EntityActualHistoryPayload,
+    GetEntityActualHistoryRequest,
     GetControllableEntitiesRequest,
     RestoreNormalStateRequest,
     RestoreNormalStateResponse,
@@ -57,6 +59,13 @@ export class HelmanClient {
             type: "helman/get_controllable_entities",
         };
         return this._hass.callWS<ControllableEntitiesPayload>(request);
+    }
+
+    public getEntityActualHistory(): Promise<EntityActualHistoryPayload> {
+        const request: GetEntityActualHistoryRequest = {
+            type: "helman/get_entity_actual_history",
+        };
+        return this._hass.callWS<EntityActualHistoryPayload>(request);
     }
 
     public restoreNormalState(): Promise<RestoreNormalStateResponse> {
