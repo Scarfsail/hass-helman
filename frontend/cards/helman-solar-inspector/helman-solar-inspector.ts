@@ -35,7 +35,7 @@ import {
 } from "../color-utils";
 import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import "./helman-solar-schedule-actions-strip";
+import "./helman-solar-schedule-band-strip";
 import "./helman-solar-export-price-strip";
 import "../helman/power-devices-container";
 import { DeviceNode } from "../helman/DeviceNode";
@@ -351,6 +351,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _impactStripVisible = false;
   @state() private _socStripExpanded = true;
   @state() private _exportPriceStripExpanded = true;
+  @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
   @state() private _chartWidth = 720;
@@ -1134,9 +1135,36 @@ export class HelmanSolarInspector extends LitElement {
     return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
   }
 
+  /**
+   * The schedule row under the charts: one track per entity, behind a collapse
+   * toggle that starts expanded.
+   *
+   * `helman-solar-schedule-actions-strip` used to hold this place with a column
+   * of action icons per slot. It is left in the tree unmounted -- nothing
+   * imports it, so it is not in the bundle -- because it answers a different
+   * question well ("what is happening at 14:00", across the whole house, in one
+   * row) and may yet come back as a choice.
+   */
   private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
     return html`
-      <helman-solar-schedule-actions-strip
+      <div class="strip-section">
+        <button
+          class="strip-collapse-toggle"
+          type="button"
+          aria-expanded=${this._scheduleBandExpanded ? "true" : "false"}
+          @click=${() => { this._scheduleBandExpanded = !this._scheduleBandExpanded; }}
+        >
+          <span class="strip-collapse-icon ${this._scheduleBandExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.scheduled_actions")}
+        </button>
+        ${this._scheduleBandExpanded ? this._renderScheduleBand(payload, layout) : ""}
+      </div>
+    `;
+  }
+
+  private _renderScheduleBand(payload: InspectorPayload, layout: ChartLayout) {
+    return html`
+      <helman-solar-schedule-band-strip
         .hass=${this.hass}
         .date=${payload.date}
         .timeZone=${this._haTimeZone() ?? "UTC"}
@@ -1150,13 +1178,12 @@ export class HelmanSolarInspector extends LitElement {
         }}
         .selectedMinutes=${this._selectedMinutes(payload)}
         .hoverMinutes=${this._hoveredMinutes}
-        @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
-          this._handleStripSlotPick(event, payload)}
         @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
           this._setHoverMinutes(event.detail?.minutes ?? null)}
-      ></helman-solar-schedule-actions-strip>
+      ></helman-solar-schedule-band-strip>
     `;
   }
+
 
   /** Minute-of-day of every selected slot, for the strips' bands. */
   private _selectedMinutes(payload: InspectorPayload): number[] {

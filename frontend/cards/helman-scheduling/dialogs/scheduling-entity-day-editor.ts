@@ -24,7 +24,6 @@ import type {
 } from "../model/entity-day-schedule-model";
 import {
     areEntityScheduleLanesDirty,
-    buildEntityActualSegments,
     buildEntityScheduleBlocks,
     buildEntityScheduleBoundaryOptions,
     buildEntityScheduleDays,
@@ -38,6 +37,7 @@ import {
     selectEntityScheduleDayBlocks,
     selectEntityScheduleSlotsInRange,
 } from "../model/entity-day-schedule-model";
+import { buildEntityDayBandLanes } from "../model/entity-lane-source";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
 import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
 import { formatScheduleTime } from "../model/schedule-time";
@@ -405,6 +405,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .day=${day}
                         .lanes=${bandLanes}
                         .selectedLaneKey=${this._selectedLaneKey}
+                        .laneLabels=${"track"}
                         .forecastPoints=${this.forecastPoints}
                         .priceUnit=${this.priceUnit}
                         .nowMs=${this.nowMs}
@@ -789,16 +790,13 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _buildBandLanes(day: EntityScheduleDay): EntityDayBandLane[] {
-        return this._lanes.map((lane) => ({
-            key: lane.key,
-            name: lane.name,
-            icon: lane.icon,
-            target: lane.target,
-            appliance: lane.appliance,
-            isAvailable: lane.isAvailable,
-            blocks: this._dayBlocks(day, lane),
-            actualSegments: buildEntityActualSegments({ actualSlots: lane.actualSlots, day }),
-        }));
+        return buildEntityDayBandLanes({
+            lanes: this._lanes,
+            slots: this._baselineSlots,
+            day,
+            drafts: this._drafts,
+            nowMs: this.nowMs,
+        });
     }
 
     /**
