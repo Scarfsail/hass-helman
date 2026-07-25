@@ -1,7 +1,7 @@
 import { LitElement, TemplateResult, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import { DeviceNode } from "./DeviceNode";
+import { DeviceNode, isNodeVisible } from "./DeviceNode";
 
 function sortDevicesByPowerAndName(devices: DeviceNode[]): DeviceNode[] {
     return [...devices].sort((a, b) => {
@@ -87,6 +87,11 @@ export class PowerDevicesContainer extends LitElement {
             devicesToRender = this.devices;
         }
         
+        // Drop the nodes that would render nothing before taking the top N, so the
+        // cut spends its slots on rows the user actually sees. Sorting ranks by
+        // history sum while visibility asks about the current value, so a node can
+        // win a slot and then paint nothing — that is the gap this closes.
+        devicesToRender = devicesToRender.filter(isNodeVisible);
         if (this.show_only_top_children && this.show_only_top_children > 0) {
             devicesToRender = devicesToRender.slice(0, this.show_only_top_children);
         }

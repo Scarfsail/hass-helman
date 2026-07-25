@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
+from statistics import median
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 from zoneinfo import ZoneInfo
 
@@ -159,6 +160,9 @@ _LIVE_STATE_UNSET: Any = object()
 _UNAVAILABLE_ENTITY_STATES = {"unknown", "unavailable", "none"}
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
+# How far back the unmeasured remainder looks when smoothing away meter skew.
+# See _smooth_unmeasured for why the raw remainder cannot be published as-is.
+_UNMEASURED_SMOOTHING_WINDOW_S = 15.0
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
@@ -314,6 +318,7 @@ class HelmanCoordinator:
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
         self._unmeasured_sensors: dict[str, Any] = {}
+        self._unmeasured_raw_history: dict[str, deque] = {}
         self._consumption_total_sensor = None
         self._production_total_sensor = None
         self._async_add_entities: Callable | None = None
@@ -3564,6 +3569,10 @@ class HelmanCoordinator:
         self._virtual_sensor_ids.add(PRODUCTION_TOTAL_ENTITY_ID)
 
         self._unmeasured_entity_id_map = self._collect_unmeasured_entity_id_map(tree)
+        # The smoothing windows belong to the tree they were filled from: a rebuild
+        # can drop or re-parent a node, and a stale window would then smooth the
+        # new node's remainder with readings from a different set of children.
+        self._unmeasured_raw_history = {}
 
         # Create deques for all power sensors (real + virtual unmeasured) plus virtual totals
         self._power_history = {
@@ -3839,8 +3848,31 @@ class HelmanCoordinator:
                         and not c.get("isUnmeasured")
                         and c.get("powerSensorId")
                     )
-                    result[node["id"]] = max(0.0, parent_power - measured_sum)
+                    result[node["id"]] = self._smooth_unmeasured(
+                        node["id"], parent_power - measured_sum
+                    )
             self._traverse_for_unmeasured(children, result)
+
+    def _smooth_unmeasured(self, node_id: str, raw_watts: float) -> float:
+        """Median of the last few raw remainders, floored at zero.
+
+        The remainder is a difference between readings taken at different
+        moments: the house meter reports several times a second, each circuit
+        meter only every 7-18 s. Its jitter is therefore of the same order as
+        the remainder itself once the circuits cover most of the house, and
+        flooring the raw difference pinned the published value to a hard 0 for
+        a large share of the time — the card then dropped the row entirely.
+        Taking the median first lets the symmetric skew cancel out; a house
+        whose circuits genuinely account for everything still settles on 0.
+        """
+        bucket_duration = self._active_config.get("history_bucket_duration", 5) or 1
+        maxlen = max(1, round(_UNMEASURED_SMOOTHING_WINDOW_S / bucket_duration))
+        window = self._unmeasured_raw_history.get(node_id)
+        if window is None or window.maxlen != maxlen:
+            window = deque(window or (), maxlen=maxlen)
+            self._unmeasured_raw_history[node_id] = window
+        window.append(raw_watts)
+        return max(0.0, median(window))
 
     async def async_unload(self) -> None:
         """Clean up event listeners and stop the tick."""
@@ -3859,6 +3891,7 @@ class HelmanCoordinator:
         self._battery_time_to_full = None
         self._battery_time_to_empty = None
         self._unmeasured_sensors = {}
+        self._unmeasured_raw_history = {}
         self._consumption_total_sensor = None
         self._production_total_sensor = None
         self._source_ratio_sensors = {}

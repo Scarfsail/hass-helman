@@ -4,7 +4,7 @@ import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { nodeAccentColor } from "../color-utils";
-import { DeviceNode } from "./DeviceNode";
+import { DeviceNode, isNodeVisible } from "./DeviceNode";
 import "./power-device";
 import "./power-devices-container";
 import "../shared/power-history-bars";
@@ -158,8 +158,8 @@ export class PowerDevice extends LitElement {
 
     render() {
         const device = this.device;
-        if (device.isUnmeasured && (device.powerValue == undefined || device.powerValue < 1)) {
-            return nothing; // Do not render unmeasured devices with power < 1W
+        if (!isNodeVisible(device)) {
+            return nothing; // Containers filter these out too; this is the last guard.
         }
 
         const isExpanded = !this._childrenCollapsed && device.children.length > 0;

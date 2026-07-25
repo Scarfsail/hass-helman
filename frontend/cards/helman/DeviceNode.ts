@@ -60,3 +60,15 @@ export class DeviceNode {
     public _cachedBlendedBucketRef?: object;
     public _cachedBlendedColor?: string;
 }
+
+/** Whether a node earns a row at all.
+ *
+ * An unmeasured node is a remainder, so below 1 W there is nothing left to
+ * report and it is dropped. Callers that limit how many rows they show must ask
+ * this BEFORE they take their top N — a hidden node that keeps its slot renders
+ * as a hole where a real device could have gone.
+ */
+export function isNodeVisible(node: DeviceNode): boolean {
+    if (!node.isUnmeasured) return true;
+    return node.powerValue !== undefined && node.powerValue >= 1;
+}
