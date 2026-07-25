@@ -36,6 +36,7 @@ import {
 import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-actions-strip";
+import "./helman-solar-schedule-band-strip";
 import "./helman-solar-export-price-strip";
 import "../helman/power-devices-container";
 import { DeviceNode } from "../helman/DeviceNode";
@@ -149,6 +150,12 @@ type StrokeStyle = { width: number; opacity: number };
 const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
 
 const MINUTES_PER_DAY = 1440;
+
+/**
+ * Which schedule row goes under the charts: the per-entity band, or the older
+ * strip of action icons. See `_renderScheduleActionsStrip`.
+ */
+const SCHEDULE_ROW_STYLE: "band" | "icons" = "band";
 
 /** What the battery is doing over a slot, read off the SoC it moves through. */
 const SOC_COLORS = {
@@ -1134,7 +1141,44 @@ export class HelmanSolarInspector extends LitElement {
     return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
   }
 
+  /**
+   * The schedule row under the charts.
+   *
+   * Two of them exist: the per-entity band, and the older strip of action icons
+   * it replaced. The strip is kept wired rather than deleted -- it answers a
+   * different question ("what is happening at 14:00", across the whole house,
+   * in one row) and may yet come back as a choice. Flipping this constant is
+   * the whole switch.
+   */
   private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
+    return SCHEDULE_ROW_STYLE === "band"
+      ? this._renderScheduleBandStrip(payload, layout)
+      : this._renderScheduleIconStrip(payload, layout);
+  }
+
+  private _renderScheduleBandStrip(payload: InspectorPayload, layout: ChartLayout) {
+    return html`
+      <helman-solar-schedule-band-strip
+        .hass=${this.hass}
+        .date=${payload.date}
+        .timeZone=${this._haTimeZone() ?? "UTC"}
+        .slotMinutes=${this._slotMinutes}
+        .geometry=${{
+          width: layout.width,
+          marginLeft: layout.margin.left,
+          plotWidth: layout.plotWidth,
+          startMinutes: layout.dayStartMinutes,
+          endMinutes: layout.dayEndMinutes,
+        }}
+        .selectedMinutes=${this._selectedMinutes(payload)}
+        .hoverMinutes=${this._hoveredMinutes}
+        @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
+          this._setHoverMinutes(event.detail?.minutes ?? null)}
+      ></helman-solar-schedule-band-strip>
+    `;
+  }
+
+  private _renderScheduleIconStrip(payload: InspectorPayload, layout: ChartLayout) {
     return html`
       <helman-solar-schedule-actions-strip
         .hass=${this.hass}
