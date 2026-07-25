@@ -33,9 +33,16 @@ async function loadCardBundle(page: Page): Promise<void> {
  */
 async function mountEditor(
     page: Page,
-    options: { neighbour?: boolean; straddling?: boolean; multiLane?: boolean } = {},
+    options: {
+        neighbour?: boolean;
+        straddling?: boolean;
+        multiLane?: boolean;
+        /** Today as the backend serves it: elapsed slots pruned, then padded
+         *  back to midnight by the card, with forecast for those hours. */
+        pruned?: boolean;
+    } = {},
 ): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling, multiLane }) => {
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling, multiLane, pruned }) => {
         const buildSlot = (dayKey: string, hour: number) => {
             const startMs = Date.parse(`${dayKey}T${String(hour).padStart(2, "0")}:00:00Z`);
             const endMs = startMs + 3_600_000;
@@ -131,6 +138,21 @@ async function mountEditor(
                 },
             ];
         }
+        if (pruned) {
+            const elapsed = slots.filter((slot) => slot.dayKey === dayOne && slot.endMs <= nowMs);
+            for (const slot of elapsed) {
+                slot.id = `elapsed:${new Date(slot.startMs).toISOString()}`;
+                slot.assignments = {
+                    inverter: { action: { kind: "empty" }, setBy: null },
+                    appliances: {},
+                };
+            }
+            el.forecastPoints = new Map(slots.map((slot) => [
+                slot.id,
+                { socPct: 40 + (slot.index % 12) * 4, solarWh: slot.index * 90, price: 2 },
+            ]));
+        }
+
         el.slots = slots;
         el.entityName = "Boiler";
         el.currentDayKey = dayOne;
@@ -146,6 +168,7 @@ async function mountEditor(
         neighbour: options.neighbour ?? false,
         straddling: options.straddling ?? false,
         multiLane: options.multiLane ?? false,
+        pruned: options.pruned ?? false,
     });
 
     await page.waitForFunction(() => {
@@ -542,6 +565,47 @@ test.describe("entity day editor", () => {
 
         // 05:00-07:00 is the optimizer's, 17:00-19:00 the user's.
         expect(authorship).toEqual(["automation", "user"]);
+    });
+
+    /**
+     * The card pads today back to midnight so the forecast rows can show the
+     * hours that have gone. Those slots hold no schedule and must stay inert:
+     * the day is only wider to look at, not wider to write.
+     */
+    test("padded elapsed hours are drawn but stay unwritable", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { pruned: true });
+
+        const band = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const bandEl = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const track = bandEl.shadowRoot.querySelector(".track") as HTMLElement;
+            const overlay = bandEl.shadowRoot.querySelector(".past-overlay") as HTMLElement;
+            return {
+                contextRows: bandEl.shadowRoot.querySelectorAll(".context-row").length,
+                // The elapsed hours carry forecast bars of their own.
+                barsBeforeNow: [...bandEl.shadowRoot.querySelectorAll(".context-bar")]
+                    .filter((bar: Element) => parseFloat((bar as HTMLElement).style.left) < 40).length,
+                pastWidthPct: (overlay.getBoundingClientRect().width / track.getBoundingClientRect().width) * 100,
+            };
+        });
+
+        expect(band.contextRows).toBe(3);
+        expect(band.barsBeforeNow).toBeGreaterThan(0);
+        // Ten of twenty-four hours have gone.
+        expect(band.pastWidthPct).toBeGreaterThan(40);
+        expect(band.pastWidthPct).toBeLessThan(43);
+
+        // The morning run went with the pruning, so the evening one is the only
+        // block left -- and nothing behind the boundary is on offer for it.
+        await expect(page.locator(".block-row")).toHaveCount(1);
+        await page.locator(".block-row").first().locator(".block-main").click();
+        const options = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const select = el.shadowRoot.querySelector(".edit-panel select") as HTMLSelectElement;
+            return [...select.options].map((option) => Number(option.value));
+        });
+        expect(Math.min(...options)).toBe(Date.parse(`${DAY_ONE}T10:00:00Z`));
     });
 
     test("a past block cannot be edited from the band either", async ({ page }) => {

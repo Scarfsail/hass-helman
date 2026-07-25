@@ -15,7 +15,11 @@ import {
     getScheduleApplianceActionIdentityKey,
 } from "../schedule-types";
 import { buildScheduleSlotPatches } from "./schedule-patch-builder";
-import { formatScheduleDayLabel, getScheduleLocalTimeParts } from "./schedule-time";
+import {
+    formatScheduleDayLabel,
+    getScheduleLocalTimeParts,
+    getScheduleTimeRangeLabels,
+} from "./schedule-time";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_SLOT_DURATION_MS = 60 * 60 * 1000;
@@ -181,6 +185,60 @@ export function readEntityScheduleDraftAction(
     draft: EntityScheduleDraft,
 ): EntityScheduleAction {
     return slot.id in draft ? draft[slot.id] : readEntityScheduleAction(slot, target);
+}
+
+/**
+ * The hours of today that have already gone, as empty slots.
+ *
+ * The schedule prunes what has elapsed, so its earliest slot is the one running
+ * now -- which is why a day opens with a blank left half and a run that started
+ * at 06:00 appears to start at the current slot. These stand in for the hours
+ * before it, carrying no action and no author: they exist so the forecast rows
+ * can plot what actually happened and so the day reads as a day.
+ *
+ * They are inert by construction. Every write path clamps to `editableFromMs`,
+ * which is derived from the clock rather than from the array, and each of these
+ * ends before it.
+ */
+export function buildElapsedScheduleSlots({
+    slots,
+    timeZone,
+    locale,
+}: {
+    slots: readonly ScheduleSlot[];
+    timeZone: string;
+    locale: string;
+}): ScheduleSlot[] {
+    const firstSlot = [...slots].sort((left, right) => left.startMs - right.startMs)[0];
+    if (firstSlot === undefined) {
+        return [];
+    }
+
+    const durationMs = _resolveSlotDurationMs(slots);
+    const dayStartMs = _resolveLocalDayStartMs(firstSlot.startMs, timeZone);
+    const elapsed: ScheduleSlot[] = [];
+    for (let startMs = dayStartMs; startMs < firstSlot.startMs; startMs += durationMs) {
+        const endMs = Math.min(startMs + durationMs, firstSlot.startMs);
+        const labels = getScheduleTimeRangeLabels({ startMs, endMs, locale, timeZone });
+        elapsed.push({
+            // Marked as its own kind of id: these are the editor's own
+            // scaffolding and must never be mistaken for a slot the backend
+            // knows about.
+            id: `elapsed:${new Date(startMs).toISOString()}`,
+            index: elapsed.length,
+            startMs,
+            endMs,
+            dayKey: firstSlot.dayKey,
+            timeLabel: labels.timeLabel,
+            endLabel: labels.endLabel,
+            rangeLabel: labels.rangeLabel,
+            assignments: { inverter: { action: { kind: "empty" }, setBy: null }, appliances: {} },
+            runtime: null,
+            isCurrent: false,
+        });
+    }
+
+    return elapsed;
 }
 
 /**

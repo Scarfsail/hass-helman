@@ -22,6 +22,7 @@ import "./dialogs/scheduling-range-edit-dialog";
 import type { OpenEntityScheduleDetail } from "./components/scheduling-running-entities";
 import type { EntityScheduleSaveDetail } from "./dialogs/scheduling-entity-day-editor";
 import {
+    buildElapsedScheduleSlots,
     getEntityScheduleTargetKey,
     type EntityScheduleLane,
     type EntityScheduleTarget,
@@ -70,6 +71,7 @@ import {
     getSlotForecastProjectionKey,
     materializeSlotForecastMap,
     type SlotForecastMap,
+    type SlotForecastPoint,
     type SlotForecastProjection,
 } from "./model/slot-forecast-model";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "./schedule-owner";
@@ -83,9 +85,11 @@ import {
 import type {
     NormalizedScheduleModel,
     ScheduleDialogOpenDetail,
+    ScheduleDisplaySlot,
     ScheduleDialogState,
     ScheduleOwnerSnapshot,
     ScheduleRangeEditIntent,
+    ScheduleSlot,
     ScheduleSlotPatch,
     ScheduleSlotToggleDetail,
     ScheduleTimelineModel,
@@ -189,6 +193,16 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     @state() private _entityEditorName = "";
     @state() private _entityEditorOpen = false;
     @state() private _entityEditorScheduleChanged = false;
+    /**
+     * The editor's own view of the schedule: today padded back to midnight, and
+     * the forecast points that go with it.
+     *
+     * Snapshotted when the dialog opens, like the editor's own baseline, and
+     * kept out of the card's shared slot array so the table and the timeline
+     * keep showing the horizon alone.
+     */
+    @state() private _entityEditorSlots: ScheduleSlot[] = [];
+    @state() private _entityEditorForecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
 
     private _automationRequested = false;
 
@@ -483,8 +497,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                     .target=${this._entityEditorTarget}
                     .appliance=${this._entityEditorAppliance}
                     .lanes=${this._buildEntityEditorLanes(controllableEntityStatuses)}
-                    .slots=${this._normalizedSchedule.slots}
-                    .forecastPoints=${this._slotForecastMap.points}
+                    .slots=${this._entityEditorSlots}
+                    .forecastPoints=${this._entityEditorForecastPoints}
                     .entityName=${this._entityEditorName}
                     .entityIcon=${this._entityEditorAppliance?.icon ?? "mdi:flash-outline"}
                     .currentDayKey=${this._normalizedSchedule.currentDayKey}
@@ -638,6 +652,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
             return;
         }
 
+        this._seedEntityEditorSlots();
         this._entityEditorTarget = event.detail.target;
         this._entityEditorName = event.detail.name;
         this._entityEditorScheduleChanged = false;
@@ -649,6 +664,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         this._entityEditorOpen = false;
         this._entityEditorTarget = null;
         this._entityEditorScheduleChanged = false;
+        this._entityEditorSlots = [];
+        this._entityEditorForecastPoints = new Map();
     }
 
     /**
@@ -673,6 +690,43 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         // the same update, so `closed` would never fire and the history entry it
         // pushed would go unconsumed -- swallowing the user's next Back press.
         this._entityEditorOpen = false;
+    }
+
+    /**
+     * Today back to midnight, with the forecast for the hours that have gone.
+     *
+     * The elapsed slots hold no schedule -- the backend prunes them -- so they
+     * are forecast-only as far as the projection is concerned, which is exactly
+     * what they are: hours with weather and prices but nothing left to edit.
+     */
+    private _seedEntityEditorSlots(): void {
+        const scheduleSlots = this._normalizedSchedule.slots;
+        const elapsedSlots = buildElapsedScheduleSlots({
+            slots: scheduleSlots,
+            timeZone: this._hass?.config.time_zone ?? "UTC",
+            locale: this._locale,
+        });
+        this._entityEditorSlots = [...elapsedSlots, ...scheduleSlots];
+        this._entityEditorForecastPoints = this._buildElapsedForecastPoints(elapsedSlots);
+    }
+
+    private _buildElapsedForecastPoints(
+        elapsedSlots: readonly ScheduleSlot[],
+    ): ReadonlyMap<string, SlotForecastPoint> {
+        if (elapsedSlots.length === 0) {
+            return this._slotForecastMap.points;
+        }
+
+        const displaySlots: ScheduleDisplaySlot[] = elapsedSlots.map((slot) => ({
+            ...slot,
+            source: "forecast_only",
+            scheduleSlot: null,
+        }));
+        const projection = buildSlotForecastProjection(this._forecast, displaySlots);
+        return new Map([
+            ...materializeSlotForecastMap(projection, displaySlots).points,
+            ...this._slotForecastMap.points,
+        ]);
     }
 
     /**
