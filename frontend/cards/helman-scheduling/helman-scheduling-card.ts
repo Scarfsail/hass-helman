@@ -17,8 +17,13 @@ import type { HelmanSchedulingCardConfig } from "./HelmanSchedulingCardConfig";
 import "./components/scheduling-card-header";
 import "./components/scheduling-running-entities";
 import "./components/scheduling-slot-table";
+import "./dialogs/scheduling-entity-day-editor";
 import "./dialogs/scheduling-range-edit-dialog";
+import type { OpenEntityScheduleDetail } from "./components/scheduling-running-entities";
+import type { EntityScheduleSaveDetail } from "./dialogs/scheduling-entity-day-editor";
+import type { EntityScheduleTarget } from "./model/entity-day-schedule-model";
 import {
+    getScheduleApplianceById,
     normalizeScheduleApplianceMetadata,
     type ScheduleApplianceMetadata,
 } from "./model/schedule-appliance-metadata";
@@ -176,6 +181,10 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     @state() private _automationModel: AutomationInspectorModel | null = null;
     @state() private _controllableEntities: ControllableEntityDTO[] = [];
     @state() private _runningExpanded = false;
+    @state() private _entityEditorTarget: EntityScheduleTarget | null = null;
+    @state() private _entityEditorName = "";
+    @state() private _entityEditorOpen = false;
+    @state() private _entityEditorScheduleChanged = false;
 
     private _automationRequested = false;
 
@@ -309,6 +318,13 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                 this._dialogOpen = false;
                 this._pendingDialogPatches = null;
             }
+
+            // The entity editor holds a whole day of unsaved work, so a refresh
+            // underneath it is reported rather than acted on: closing would
+            // throw the draft away, and re-seeding would rewrite it.
+            if (this._entityEditorOpen) {
+                this._entityEditorScheduleChanged = true;
+            }
         }
 
         if (!this._invalidScheduleAuthorship && (scheduleChanged || nowChanged)) {
@@ -403,6 +419,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                 @toggle-schedule-hour-expansion=${this._handleToggleHourExpansion}
                 @toggle-schedule-action-view=${this._handleToggleActionView}
                 @open-schedule-dialog=${this._handleOpenDialog}
+                @open-entity-schedule=${this._handleOpenEntityEditor}
             >
                 <div class="card-content">
                     ${this._config.show_header ? html`
@@ -453,6 +470,27 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                     @closed=${this._handleDialogClosed}
                     @schedule-dialog-submit=${this._handleDialogSubmit}
                 ></scheduling-range-edit-dialog>
+            ` : nothing}
+
+            ${this._entityEditorTarget ? html`
+                <scheduling-entity-day-editor
+                    .open=${this._entityEditorOpen}
+                    .localize=${this._localize}
+                    .target=${this._entityEditorTarget}
+                    .appliance=${this._entityEditorAppliance}
+                    .slots=${this._normalizedSchedule.slots}
+                    .forecastPoints=${this._slotForecastMap.points}
+                    .entityName=${this._entityEditorName}
+                    .entityIcon=${this._entityEditorAppliance?.icon ?? "mdi:flash-outline"}
+                    .currentDayKey=${this._normalizedSchedule.currentDayKey}
+                    .locale=${this._locale}
+                    .timeZone=${this._hass.config.time_zone ?? "UTC"}
+                    .nowMs=${this._nowMs}
+                    .busy=${this._ownerSnapshot.writing}
+                    .scheduleChanged=${this._entityEditorScheduleChanged}
+                    @closed=${this._handleEntityEditorClosed}
+                    @entity-schedule-save=${this._handleEntityEditorSave}
+                ></scheduling-entity-day-editor>
             ` : nothing}
         `;
     }
@@ -589,6 +627,54 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         this._dialogOpen = true;
     }
 
+    private _handleOpenEntityEditor(event: CustomEvent<OpenEntityScheduleDetail>): void {
+        event.stopPropagation();
+        if (this._normalizedSchedule.slots.length === 0) {
+            return;
+        }
+
+        this._entityEditorTarget = event.detail.target;
+        this._entityEditorName = event.detail.name;
+        this._entityEditorScheduleChanged = false;
+        this._entityEditorOpen = true;
+    }
+
+    private _handleEntityEditorClosed(event: Event): void {
+        event.stopPropagation();
+        this._entityEditorOpen = false;
+        this._entityEditorTarget = null;
+        this._entityEditorScheduleChanged = false;
+    }
+
+    /**
+     * The day's draft, as one write.
+     *
+     * The dialog stays open until the write settles so a failure lands on the
+     * card's error banner with the draft still on screen, rather than closing
+     * over a change that never happened.
+     */
+    private async _handleEntityEditorSave(event: CustomEvent<EntityScheduleSaveDetail>): Promise<void> {
+        event.stopPropagation();
+        const patches = event.detail.patches;
+        if (patches.length > 0) {
+            await this._scheduleOwner?.applySchedulePatches(patches);
+            if (this._ownerSnapshot.error !== null) {
+                return;
+            }
+        }
+
+        this._entityEditorOpen = false;
+        this._entityEditorTarget = null;
+        this._entityEditorScheduleChanged = false;
+    }
+
+    private get _entityEditorAppliance(): ScheduleApplianceMetadata | null {
+        const target = this._entityEditorTarget;
+        return target === null || target.kind === "inverter"
+            ? null
+            : getScheduleApplianceById(this._appliances, target.applianceId);
+    }
+
     private async _handleDialogClosed(event: Event): Promise<void> {
         event.stopPropagation();
         const pendingPatches = this._pendingDialogPatches;
@@ -631,6 +717,10 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         this._selectedSlotIds = [];
         this._dialogState = null;
         this._dialogOpen = false;
+        this._entityEditorTarget = null;
+        this._entityEditorName = "";
+        this._entityEditorOpen = false;
+        this._entityEditorScheduleChanged = false;
         this._forecast = null;
         this._appliances = [];
         this._appliancesError = null;

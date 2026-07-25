@@ -1,6 +1,7 @@
 import type { HassEntity } from "home-assistant-js-websocket";
 import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import type { ControllableEntityDTO } from "../../helman-api";
+import type { EntityScheduleTarget } from "./entity-day-schedule-model";
 import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
 import type {
     ScheduleApplianceAction,
@@ -66,6 +67,12 @@ export interface ControllableEntityStatus {
      * anything, so announcing a change would be a lie.
      */
     next: ControllableEntityTransition | null;
+    /**
+     * The entity's lane in the schedule, or null when it has none the card can
+     * author -- an appliance whose metadata is missing or that does not support
+     * authoring is still worth listing, but not worth offering an editor for.
+     */
+    scheduleTarget: EntityScheduleTarget | null;
 }
 
 /**
@@ -151,12 +158,26 @@ export function buildControllableEntityStatuses({
                     nowMs,
                 })
                 : null,
+            scheduleTarget: _resolveScheduleTarget(entity, appliance),
         });
     }
 
     // Whatever is doing something comes first: the list answers "what is on
     // right now?" before it answers "what else could be".
     return statuses.sort((left, right) => Number(left.isNormal) - Number(right.isNormal));
+}
+
+function _resolveScheduleTarget(
+    entity: ControllableEntityDTO,
+    appliance: ScheduleApplianceMetadata | null,
+): EntityScheduleTarget | null {
+    if (entity.kind === "inverter") {
+        return { kind: "inverter" };
+    }
+
+    return appliance !== null && appliance.supportsAuthoring
+        ? { kind: "appliance", applianceId: appliance.id }
+        : null;
 }
 
 function _buildLiveStateView({

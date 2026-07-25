@@ -8,12 +8,19 @@ import type {
     ControllableEntityStateView,
     ControllableEntityStatus,
 } from "../model/controllable-entity-status";
+import type { EntityScheduleTarget } from "../model/entity-day-schedule-model";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
 import { getScheduleActionLabel } from "../model/schedule-labels";
 import { formatScheduleTime } from "../model/schedule-time";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import "./scheduling-action-chip";
 import "./scheduling-appliance-chip";
+
+export interface OpenEntityScheduleDetail {
+    entityId: string;
+    name: string;
+    target: EntityScheduleTarget;
+}
 
 /**
  * Every entity Helman can drive, with what it is doing and what it will do.
@@ -22,8 +29,9 @@ import "./scheduling-appliance-chip";
  * is on right now?" -- and, with execution on, "until when?" for what is
  * running and "from when?" for what is not. Entities at rest are listed too,
  * muted and last, so the list doubles as the roster of controllable hardware.
- * Each row opens that entity's more-info dialog, which is where the user turns
- * it off by hand.
+ * A row has two halves: the icon and name open that entity's more-info dialog,
+ * which is where the user turns it off by hand, and the now/next states open
+ * that entity's own schedule editor.
  *
  * The bulk "turn everything to normal" action appears only while execution is
  * disabled: with execution enabled the schedule owns these entities and would
@@ -35,27 +43,57 @@ export class SchedulingRunningEntities extends LitElement {
         schedulingSharedStyles,
         css`
             /* Mirrors a native entity row, tightened: this is a compact status
-               list rather than the card's primary content. */
+               list rather than the card's primary content.
+
+               The row is a container rather than a button because it holds two
+               separate targets: the identity opens more-info, the status opens
+               the schedule editor. Nesting those inside one button would be
+               invalid and would leave the inner target unreachable by keyboard. */
             .entity-row {
                 display: flex;
                 align-items: center;
                 gap: 12px;
                 width: 100%;
                 min-height: 28px;
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-size: 0.9rem;
+            }
+
+            .row-target {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                min-width: 0;
                 padding: 2px 4px;
                 background: none;
                 border: none;
                 border-radius: 4px;
-                color: var(--primary-text-color);
+                color: inherit;
                 font: inherit;
-                font-size: 0.9rem;
                 text-align: start;
                 cursor: pointer;
             }
 
-            .entity-row:hover,
-            .entity-row:focus-visible {
+            .row-target.identity {
+                flex: 1 1 auto;
+            }
+
+            .row-target.status {
+                flex: 0 0 auto;
+            }
+
+            .row-target:hover,
+            .row-target:focus-visible {
                 background: var(--secondary-background-color);
+            }
+
+            /* Not every entity has a schedule lane the card can author; those
+               rows keep the status as plain text rather than a dead button. */
+            .row-static {
+                display: flex;
+                align-items: center;
+                padding: 2px 4px;
             }
 
             /* At rest: still listed, but it should not compete with whatever is
@@ -174,24 +212,38 @@ export class SchedulingRunningEntities extends LitElement {
 
         return html`
             ${this.entities.map((entity) => html`
-                <button
-                    class="entity-row ${entity.isNormal ? "at-rest" : ""}"
-                    type="button"
-                    @click=${() => this._handleShowMoreInfo(entity.entityId)}
-                >
-                    <!--
-                        stateColor must be a property binding: state-badge
-                        declares it with attribute: false, so a bare attribute
-                        is ignored and the icon stays uncoloured.
-                    -->
-                    <state-badge
-                        .hass=${this.hass}
-                        .stateObj=${entity.stateObj}
-                        .stateColor=${true}
-                    ></state-badge>
-                    <span class="entity-name">${entity.name}</span>
-                    ${this._renderStatus(entity)}
-                </button>
+                <div class="entity-row ${entity.isNormal ? "at-rest" : ""}">
+                    <button
+                        class="row-target identity"
+                        type="button"
+                        @click=${() => this._handleShowMoreInfo(entity.entityId)}
+                    >
+                        <!--
+                            stateColor must be a property binding: state-badge
+                            declares it with attribute: false, so a bare attribute
+                            is ignored and the icon stays uncoloured.
+                        -->
+                        <state-badge
+                            .hass=${this.hass}
+                            .stateObj=${entity.stateObj}
+                            .stateColor=${true}
+                        ></state-badge>
+                        <span class="entity-name">${entity.name}</span>
+                    </button>
+                    ${entity.scheduleTarget === null ? html`
+                        <span class="row-static">${this._renderStatus(entity)}</span>
+                    ` : html`
+                        <button
+                            class="row-target status"
+                            type="button"
+                            title=${this.localize("scheduling.entity_editor.open")}
+                            aria-label=${`${entity.name}: ${this.localize("scheduling.entity_editor.open")}`}
+                            @click=${() => this._handleOpenEntitySchedule(entity)}
+                        >
+                            ${this._renderStatus(entity)}
+                        </button>
+                    `}
+                </div>
             `)}
             ${this.executionEnabled || !hasRunning ? nothing : html`
                 <div class="actions">
@@ -306,6 +358,29 @@ export class SchedulingRunningEntities extends LitElement {
         const options: Intl.DateTimeFormatOptions = { timeZone, year: "numeric", month: "2-digit", day: "2-digit" };
         return new Date(atMs).toLocaleDateString("en-CA", options)
             === new Date(this.nowMs).toLocaleDateString("en-CA", options);
+    }
+
+    /**
+     * The status half of the row opens that one entity's schedule.
+     *
+     * Splitting the row this way keeps the icon and the name meaning "tell me
+     * about this entity" while the now/next states -- which are schedule facts
+     * -- lead to where the schedule is edited.
+     */
+    private _handleOpenEntitySchedule(entity: ControllableEntityStatus): void {
+        if (entity.scheduleTarget === null) {
+            return;
+        }
+
+        this.dispatchEvent(new CustomEvent<OpenEntityScheduleDetail>("open-entity-schedule", {
+            bubbles: true,
+            composed: true,
+            detail: {
+                entityId: entity.entityId,
+                name: entity.name,
+                target: entity.scheduleTarget,
+            },
+        }));
     }
 
     private _handleShowMoreInfo(entityId: string): void {
