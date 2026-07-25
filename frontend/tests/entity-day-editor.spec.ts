@@ -781,7 +781,6 @@ test.describe("entity day editor", () => {
                     actual: [...lane.querySelectorAll(".segment.actual")].map((segment: Element) => ({
                         left: Math.round(parseFloat((segment as HTMLElement).style.left)),
                         width: Math.round(parseFloat((segment as HTMLElement).style.width)),
-                        editable: !(getComputedStyle(segment).pointerEvents === "none"),
                     })),
                     total: lane.querySelector(".lane-total")?.textContent?.trim() ?? null,
                     totalTitle: lane.querySelector(".lane-total")?.getAttribute("title") ?? null,
@@ -793,7 +792,11 @@ test.describe("entity day editor", () => {
             expect(boiler.actual).toHaveLength(1);
             expect(boiler.actual[0].left).toBe(29);
             expect(boiler.actual[0].width).toBe(8);
-            expect(boiler.actual[0].editable).toBe(false);
+
+            // Pointing at it is allowed; editing it is not -- there is nothing
+            // left to change about an hour that has gone.
+            await page.locator('.lane[data-lane="appliance:boiler"] .segment.actual').click();
+            expect(await editingRange(page)).toBeNull();
             // Two hours really run, plus the four this fixture still holds in
             // the schedule (the morning block as well as the evening one --
             // today's elapsed slots are pruned in production, not here).
@@ -840,6 +843,31 @@ test.describe("entity day editor", () => {
             // The boiler's morning run continues into what it really did at
             // 07:00 -- same action, so no cut: that seam has to read as one bar.
             expect(marked.boiler.every((segment) => !segment.changed)).toBe(true);
+        });
+
+        /**
+         * A run you cannot point at cannot tell you what it was, so the past
+         * keeps its hit area: hovering names it, pressing selects its lane.
+         */
+        test("what really ran names itself on hover and selects its lane", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            const segment = page.locator('.lane[data-lane="appliance:boiler"] .segment.actual');
+            await expect(segment).toHaveAttribute(
+                "title",
+                // Two whole hours really run, said in the same words the
+                // scheduled runs use.
+                "Boiler · scheduling.appliance.generic.action.on · 07:00–09:00 (2 h)",
+            );
+
+            await segment.click();
+            const selected = await page.evaluate(() => {
+                const el = document.querySelector("scheduling-entity-day-editor") as any;
+                const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+                return band.shadowRoot.querySelector(".lane.selected")?.getAttribute("data-lane");
+            });
+            expect(selected).toBe("appliance:boiler");
         });
 
         test("an entity that cannot be reached is still a lane", async ({ page }) => {

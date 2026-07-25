@@ -366,14 +366,16 @@ export class SchedulingEntityDayBand extends LitElement {
                 cursor: pointer;
             }
 
-            /* What already happened: flat, quiet and untouchable. No stripes and
-               no authorship bar -- nobody "set" the past, it simply is -- and no
-               hit area, so pressing it selects the lane like the bare track. */
+            /* What already happened: flat and quiet. No stripes and no
+               authorship bar -- nobody "set" the past, it simply is -- and
+               nothing to drag. It does keep its hit area, because a run you
+               cannot point at cannot tell you what it was; pressing it selects
+               its lane, exactly as the bare track does. */
             .segment.actual {
                 background: color-mix(in srgb, var(--schedule-action-tone-accent, var(--primary-color)) 22%, transparent);
                 box-shadow: none;
                 opacity: 0.85;
-                pointer-events: none;
+                cursor: pointer;
             }
 
             .segment.actual ha-icon {
@@ -782,12 +784,15 @@ export class SchedulingEntityDayBand extends LitElement {
         changeBoundaries: ReadonlySet<number>,
     ) {
         const presentation = this._getPresentation(lane, segment);
-        const title = `${lane.name} · ${presentation.label} · ${this._formatRange(segment)}`;
+        // The hours it really ran, which is not the width when it spent only
+        // part of a slot doing it.
+        const title = `${lane.name} · ${presentation.label} · ${this._formatRange(segment, segment.activeMs)}`;
         return html`
             <span
                 class=${`segment actual ${presentation.toneClass}${changeBoundaries.has(segment.startMs) ? " changed" : ""}`}
                 title=${title}
                 style=${`left: ${this._toPercent(segment.startMs)}%; width: ${this._toSpanPercent(segment.startMs, segment.endMs)}%`}
+                @click=${() => this._emitLaneSelect(lane.key)}
             >
                 <ha-icon .icon=${presentation.icon}></ha-icon>
             </span>
@@ -873,8 +878,7 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
-        const format = (ms: number): string =>
-            `${(ms / 3_600_000).toLocaleString(this.locale, { maximumFractionDigits: 1 })} h`;
+        const format = (ms: number): string => this._formatHours(ms);
         const title = actualMs > 0 && plannedMs > 0
             ? `${format(actualMs)} + ${format(plannedMs)}`
             : "";
@@ -1104,9 +1108,21 @@ export class SchedulingEntityDayBand extends LitElement {
         });
     }
 
-    private _formatRange(run: { startMs: number; endMs: number }): string {
+    /**
+     * "08:00-12:00 (4 h)".
+     *
+     * The span answers when, the total answers how much -- and for a run that
+     * really happened those are different questions, since it can have spent
+     * only part of a slot running.
+     */
+    private _formatRange(run: { startMs: number; endMs: number }, totalMs?: number): string {
         const format = (atMs: number): string => formatScheduleTime(atMs, this.locale, this.timeZone);
-        return `${format(run.startMs)}–${format(run.endMs)}`;
+        return `${format(run.startMs)}–${format(run.endMs)} (${this._formatHours(totalMs ?? run.endMs - run.startMs)})`;
+    }
+
+    private _formatHours(durationMs: number): string {
+        const hours = durationMs / 3_600_000;
+        return `${hours.toLocaleString(this.locale, { maximumFractionDigits: 1 })} h`;
     }
 
     private _toPercent(atMs: number): number {
