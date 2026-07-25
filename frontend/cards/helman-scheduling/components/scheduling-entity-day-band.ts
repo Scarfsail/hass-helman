@@ -59,6 +59,18 @@ export interface EntityScheduleRange {
     endMs: number;
 }
 
+/** A stretch of the day the host wants marked, and why. */
+export interface EntityDayBandHighlight {
+    startMs: number;
+    endMs: number;
+    kind: "selected" | "hover";
+}
+
+export interface EntityDayBandTimeHoverDetail {
+    /** Where the pointer is on the time axis, or null when it has left. */
+    atMs: number | null;
+}
+
 type DragMode = "start" | "end" | "move";
 
 interface DragSession {
@@ -89,6 +101,14 @@ interface DragSession {
  * Blocks are draggable: the edges resize, the middle moves. A drag stops at a
  * neighbouring block rather than eating it, so nothing the user was not
  * touching can disappear.
+ *
+ * It also serves as a read-only readout wherever else the day is worth showing.
+ * In that mode it authors nothing and answers nothing: it reports which run was
+ * pressed and where the pointer is, and the host decides what those mean. The
+ * geometry bends to fit -- the tracks can span a slice of the day rather than
+ * all of it, drop the forecast rows and the axis, and carry their names inside
+ * themselves -- because a band next to somebody else's chart has to share that
+ * chart's axis to be worth putting there.
  */
 @customElement("scheduling-entity-day-band")
 export class SchedulingEntityDayBand extends LitElement {
@@ -105,6 +125,12 @@ export class SchedulingEntityDayBand extends LitElement {
                 align-items: center;
                 gap: 2px 8px;
                 touch-action: pan-y;
+            }
+
+            /* No gutter at all: the tracks are the whole width, which is what
+               lets a host line them up with a chart of its own. */
+            .band.labels-in-track {
+                grid-template-columns: 1fr;
             }
 
             .row-label {
@@ -241,13 +267,65 @@ export class SchedulingEntityDayBand extends LitElement {
                 display: contents;
             }
 
+            /* Slimmer where the host is stacking rows between charts, taller
+               where the track is the control surface and has to be grabbable. */
             .track {
                 position: relative;
-                height: 30px;
+                height: var(--entity-day-band-track-height, 30px);
                 border: 1px solid var(--divider-color);
                 border-radius: 6px;
                 background: var(--card-background-color);
                 overflow: hidden;
+            }
+
+            /* The lane's name floating at the head of its own track. Inert, so
+               the run underneath is still what the pointer finds; the gradient
+               is what keeps the name readable when there is one. */
+            .track-label {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                z-index: 3;
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                max-width: min(45%, 180px);
+                padding: 0 14px 0 5px;
+                background: linear-gradient(
+                    to right,
+                    var(--card-background-color) 0%,
+                    color-mix(in srgb, var(--card-background-color) 85%, transparent) 70%,
+                    transparent 100%
+                );
+                color: var(--primary-text-color);
+                font-size: 0.68rem;
+                pointer-events: none;
+            }
+
+            .track-label ha-icon {
+                flex: 0 0 auto;
+                --mdc-icon-size: 13px;
+            }
+
+            /* A stretch of time the host is asking about, in the colours the
+               rest of the surface uses for the same two questions. */
+            .time-highlight {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                border-radius: 4px;
+                pointer-events: none;
+            }
+
+            .time-highlight.selected {
+                background: color-mix(in srgb, var(--helman-grid-import) 13%, transparent);
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-grid-import) 50%, transparent);
+            }
+
+            .time-highlight.hover {
+                background: color-mix(in srgb, var(--helman-selection) 14%, transparent);
+                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-selection) 55%, transparent);
             }
 
             /* Muting the unselected lanes is what makes the selected one a
@@ -303,6 +381,12 @@ export class SchedulingEntityDayBand extends LitElement {
 
             .segment.dragging {
                 cursor: grabbing;
+            }
+
+            /* Nothing here can be taken hold of, but everything can be asked
+               about: a press hands the run to the host. */
+            .band.readonly .segment {
+                cursor: pointer;
             }
 
             /* Who put the run here, in the colours the rest of the card uses
@@ -489,6 +573,45 @@ export class SchedulingEntityDayBand extends LitElement {
     @property({ type: String }) public hoveredBlockKey: string | null = null;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
+    /**
+     * Nothing here can be authored: no gaps to press, no handles, no drags.
+     *
+     * The runs stay live targets, though. A read-only band is still the
+     * quickest way to say "that one" -- it just hands the question to whoever
+     * is hosting it rather than answering it in place.
+     */
+    @property({ type: Boolean }) public readonly = false;
+    /**
+     * The slice of the day the tracks span, when the host is aligning them to
+     * something else. Defaults to the whole day.
+     *
+     * A host that crops its charts to daylight has to crop the band the same
+     * way or the two stop being the same axis, which is the only reason to put
+     * them next to each other.
+     */
+    @property({ type: Number }) public windowStartMs: number | null = null;
+    @property({ type: Number }) public windowEndMs: number | null = null;
+    /** Draw the battery/solar/price rows, or leave the context to the host. */
+    @property({ type: Boolean }) public showForecastRows = true;
+    /** Draw the hour ticks, or leave the axis to the host's own chart. */
+    @property({ type: Boolean }) public showAxis = true;
+    /**
+     * Where a lane says its name: in a column beside the tracks, or inside the
+     * track itself.
+     *
+     * In-track labels are what a host with no room for a label column gets --
+     * giving one up is what lets the tracks line up with a chart above.
+     */
+    @property({ type: String }) public laneLabels: "column" | "track" = "column";
+    /**
+     * Stretches of the day to wash, whatever it is that makes them special.
+     *
+     * The band is told which times matter rather than working it out: what
+     * counts as selected is the host's question, and the same mark serves a
+     * chart's selected slot, a hovered hour, and -- eventually -- the block
+     * under the pointer in the list beside it.
+     */
+    @property({ attribute: false }) public highlightRanges: readonly EntityDayBandHighlight[] = [];
 
     @state() private _drag: DragSession | null = null;
     /**
@@ -522,6 +645,8 @@ export class SchedulingEntityDayBand extends LitElement {
     };
 
     private _lastDragRange: EntityScheduleRange | null = null;
+    /** The last hover announced, so a pointer crossing rows says it once. */
+    private _lastHoverMs: number | null = null;
 
     private readonly _handlePointerUp = (event: PointerEvent): void => {
         if (this._drag !== null && event.pointerId !== this._drag.pointerId) {
@@ -546,22 +671,55 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         const hasSelection = this.lanes.some((lane) => lane.key === this.selectedLaneKey);
+        const inTrackLabels = this.laneLabels === "track";
+        const classes = [
+            "band",
+            hasSelection ? "has-selection" : "",
+            inTrackLabels ? "labels-in-track" : "",
+            this.readonly ? "readonly" : "",
+        ].filter((value) => value.length > 0).join(" ");
         return html`
-            <div class=${`band${hasSelection ? " has-selection" : ""}`}>
-                ${this._renderSocRow()}
-                ${this._renderSolarRow()}
-                ${this._renderPriceRow()}
+            <div
+                class=${classes}
+                @mousemove=${this._handleTimeHover}
+                @mouseleave=${() => this._emitTimeHover(null)}
+            >
+                ${this.showForecastRows ? html`
+                    ${this._renderSocRow()}
+                    ${this._renderSolarRow()}
+                    ${this._renderPriceRow()}
+                ` : nothing}
                 ${this.lanes.map((lane) => this._renderLane(lane))}
-                <span></span>
-                <div class="axis">
-                    ${AXIS_HOURS.map((hour) => html`
-                        <span class="axis-tick" style=${`left: ${(hour / 24) * 100}%`}>
-                            ${String(hour).padStart(2, "0")}
-                        </span>
-                    `)}
-                </div>
+                ${this.showAxis ? html`
+                    ${inTrackLabels ? nothing : html`<span></span>`}
+                    <div class="axis">
+                        ${this._renderAxisTicks()}
+                    </div>
+                ` : nothing}
             </div>
         `;
+    }
+
+    /**
+     * The hour ticks that fall inside the window.
+     *
+     * Cropping to daylight drops the ones that scrolled off rather than
+     * squeezing all eight into what is left -- a "00" at the left edge of a
+     * band that starts at 04:00 is worse than no tick at all.
+     */
+    private _renderAxisTicks() {
+        return AXIS_HOURS.flatMap((hour) => {
+            const atMs = this.day.startMs + hour * 3_600_000;
+            if (atMs < this._windowStartMs || atMs > this._windowEndMs) {
+                return [];
+            }
+
+            return [html`
+                <span class="axis-tick" style=${`left: ${this._toPercent(atMs)}%`}>
+                    ${String(hour).padStart(2, "0")}
+                </span>
+            `];
+        });
     }
 
     /**
@@ -691,31 +849,58 @@ export class SchedulingEntityDayBand extends LitElement {
             selected ? "selected" : "",
             lane.isAvailable ? "" : "unavailable",
         ].filter((value) => value.length > 0).join(" ");
+        const inTrackLabels = this.laneLabels === "track";
         return html`
             <div class=${classes} data-lane=${lane.key}>
-                <button
-                    class="row-label lane-label"
-                    type="button"
-                    aria-pressed=${selected}
-                    title=${lane.name}
-                    @click=${() => this._emitLaneSelect(lane.key)}
-                >
-                    <ha-icon .icon=${lane.icon}></ha-icon>
-                    <span class="lane-name">${lane.name}</span>
-                    ${this._renderLaneTotal(lane)}
-                </button>
+                ${inTrackLabels ? nothing : html`
+                    <button
+                        class="row-label lane-label"
+                        type="button"
+                        aria-pressed=${selected}
+                        title=${lane.name}
+                        @click=${() => this._emitLaneSelect(lane.key)}
+                    >
+                        <ha-icon .icon=${lane.icon}></ha-icon>
+                        <span class="lane-name">${lane.name}</span>
+                        ${this._renderLaneTotal(lane)}
+                    </button>
+                `}
                 <!--
                     Bare track: the elapsed stretch carries no gap button, so a
                     press there would otherwise do nothing. Pressing a lane
                     anywhere means "this entity", exactly as its name does.
                 -->
-                <div class="track" @click=${(event: Event) => this._handleTrackClick(event, lane.key)}>
+                <div
+                    class="track"
+                    title=${inTrackLabels ? lane.name : nothing}
+                    @click=${(event: Event) => this._handleTrackClick(event, lane.key)}
+                >
                     ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment, changeBoundaries))}
                     ${this._renderGaps(lane)}
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
                     ${this._renderRowOverlays()}
+                    ${inTrackLabels ? this._renderTrackLabel(lane) : nothing}
                 </div>
             </div>
+        `;
+    }
+
+    /**
+     * The lane's name inside its own track, for hosts with no label column.
+     *
+     * It floats over whatever is there rather than pushing the track's start to
+     * the right, because the track's start is a time and moving it would put the
+     * whole band out of step with the chart it is aligned to. The gradient
+     * behind it is what keeps it readable when an early run happens to sit
+     * underneath, and it takes no pointer events, so the run it covers is still
+     * the thing being pointed at.
+     */
+    private _renderTrackLabel(lane: EntityDayBandLane) {
+        return html`
+            <span class="track-label">
+                <ha-icon .icon=${lane.icon}></ha-icon>
+                <span class="lane-name">${lane.name}</span>
+            </span>
         `;
     }
 
@@ -725,6 +910,10 @@ export class SchedulingEntityDayBand extends LitElement {
      * then".
      */
     private _renderGaps(lane: EntityDayBandLane) {
+        if (this.readonly) {
+            return nothing;
+        }
+
         const gaps: { startMs: number; endMs: number }[] = [];
         let cursorMs = Math.max(this.day.startMs, this.day.editableFromMs);
         for (const block of lane.blocks) {
@@ -743,7 +932,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 type="button"
                 title=${this.localize("scheduling.entity_editor.add_block")}
                 aria-label=${this.localize("scheduling.entity_editor.add_block")}
-                style=${`left: ${this._toPercent(gap.startMs)}%; width: ${this._toSpanPercent(gap.startMs, gap.endMs)}%`}
+                style=${`left: ${this._toPercent(gap.startMs)}%; width: ${this._toWidthPercent(gap.startMs, gap.endMs)}%`}
                 @click=${(event: MouseEvent) => this._handleGapClick(event, lane.key, gap)}
             ></button>
         `);
@@ -791,7 +980,7 @@ export class SchedulingEntityDayBand extends LitElement {
             <span
                 class=${`segment actual ${presentation.toneClass}${changeBoundaries.has(segment.startMs) ? " changed" : ""}`}
                 title=${title}
-                style=${`left: ${this._toPercent(segment.startMs)}%; width: ${this._toSpanPercent(segment.startMs, segment.endMs)}%`}
+                style=${`left: ${this._toPercent(segment.startMs)}%; width: ${this._toWidthPercent(segment.startMs, segment.endMs)}%`}
                 @click=${() => this._emitLaneSelect(lane.key)}
             >
                 <ha-icon .icon=${presentation.icon}></ha-icon>
@@ -807,10 +996,13 @@ export class SchedulingEntityDayBand extends LitElement {
     ) {
         const presentation = this._getPresentation(lane, block);
         const editing = laneSelected && this._isEditing(block);
-        const widthPct = this._toSpanPercent(block.startMs, block.endMs);
+        const widthPct = this._toWidthPercent(block.startMs, block.endMs);
         // Handles only on the lane being edited: eight tracks' worth of grips
         // would be noise, and a muted lane is context, not a control.
-        const resizable = laneSelected && !block.isPast && this._isWideEnoughToResize(widthPct);
+        const resizable = laneSelected
+            && !this.readonly
+            && !block.isPast
+            && this._isWideEnoughToResize(widthPct);
         const classes = [
             "segment",
             presentation.toneClass,
@@ -955,8 +1147,51 @@ export class SchedulingEntityDayBand extends LitElement {
      * gets to decide.
      */
     private _renderRowOverlays() {
-        return html`${this._renderPastOverlay()}${this._renderNowMarker()}`;
+        return html`${this._renderHighlights()}${this._renderPastOverlay()}${this._renderNowMarker()}`;
     }
+
+    /**
+     * The stretches the host asked to have marked.
+     *
+     * Behind the runs rather than over them: a highlight says which slice of
+     * time is in question, and burying the answer under it would defeat the
+     * asking. Inert, so pointing at a marked hour still reaches whatever is
+     * drawn there.
+     */
+    private _renderHighlights() {
+        return this.highlightRanges.map((range) => {
+            const widthPct = this._toWidthPercent(range.startMs, range.endMs);
+            return widthPct <= 0 ? nothing : html`
+                <span
+                    class=${`time-highlight ${range.kind}`}
+                    style=${`left: ${this._toPercent(range.startMs)}%; width: ${widthPct}%`}
+                ></span>
+            `;
+        });
+    }
+
+    /**
+     * Where the pointer is on the time axis, for whoever is drawing the same
+     * hours elsewhere.
+     *
+     * Measured against a track rather than the band, because a label column is
+     * not part of the axis: a pointer over an entity's name is not over a time.
+     * Any track will do -- they all span the same window -- so the first one
+     * answers for the stack, including for the gaps between rows.
+     */
+    private readonly _handleTimeHover = (event: MouseEvent): void => {
+        const rect = this._readTrackRect(this.lanes[0]?.key ?? "");
+        if (rect === null || rect.width <= 0) {
+            return;
+        }
+
+        const ratio = (event.clientX - rect.left) / rect.width;
+        this._emitTimeHover(
+            ratio < 0 || ratio > 1
+                ? null
+                : this._windowStartMs + ratio * (this._windowEndMs - this._windowStartMs),
+        );
+    };
 
     private _renderPastOverlay() {
         const boundaryMs = Math.min(Math.max(this.day.editableFromMs, this.day.startMs), this.day.endMs);
@@ -967,7 +1202,7 @@ export class SchedulingEntityDayBand extends LitElement {
         return html`
             <span
                 class="past-overlay"
-                style=${`width: ${this._toSpanPercent(this.day.startMs, boundaryMs)}%`}
+                style=${`width: ${this._toWidthPercent(this.day.startMs, boundaryMs)}%`}
             ></span>
         `;
     }
@@ -1000,7 +1235,7 @@ export class SchedulingEntityDayBand extends LitElement {
         block: EntityScheduleBlock,
         mode: DragMode,
     ): void {
-        if (block.isPast || event.button !== 0) {
+        if (this.readonly || block.isPast || event.button !== 0) {
             return;
         }
 
@@ -1100,11 +1335,11 @@ export class SchedulingEntityDayBand extends LitElement {
 
     private _readPointerMs(event: { clientX: number }, trackRect: DOMRect): number {
         if (trackRect.width <= 0) {
-            return this.day.startMs;
+            return this._windowStartMs;
         }
 
         const ratio = (event.clientX - trackRect.left) / trackRect.width;
-        return this.day.startMs + ratio * (this.day.endMs - this.day.startMs);
+        return this._windowStartMs + ratio * (this._windowEndMs - this._windowStartMs);
     }
 
     /** The nearest slot boundary: a block never starts mid-slot. */
@@ -1184,22 +1419,39 @@ export class SchedulingEntityDayBand extends LitElement {
         return `${hours.toLocaleString(this.locale, { maximumFractionDigits: 1 })} h`;
     }
 
-    private _toPercent(atMs: number): number {
-        return this._toSpanPercent(this.day.startMs, atMs);
+    /** The span the tracks are drawn across: the whole day, or the host's crop. */
+    private get _windowStartMs(): number {
+        return this.windowStartMs ?? this.day.startMs;
     }
 
-    private _toSpanPercent(startMs: number, endMs: number): number {
-        const durationMs = this.day.endMs - this.day.startMs;
+    private get _windowEndMs(): number {
+        return this.windowEndMs ?? this.day.endMs;
+    }
+
+    /**
+     * A moment's place along the track, clamped to the window's own edges.
+     *
+     * Widths are the difference between two of these rather than a duration
+     * scaled on its own, so a run that starts before the window or ends after
+     * it is cropped to what is visible instead of overflowing by however much
+     * of it fell outside.
+     */
+    private _toPercent(atMs: number): number {
+        const durationMs = this._windowEndMs - this._windowStartMs;
         if (durationMs <= 0) {
             return 0;
         }
 
-        return Math.max(0, Math.min((endMs - startMs) / durationMs, 1)) * 100;
+        return Math.max(0, Math.min((atMs - this._windowStartMs) / durationMs, 1)) * 100;
+    }
+
+    private _toWidthPercent(startMs: number, endMs: number): number {
+        return Math.max(0, this._toPercent(endMs) - this._toPercent(startMs));
     }
 
     private _toSlotWidthPercent(slot: { startMs: number; endMs: number | null }): number {
         const endMs = slot.endMs ?? slot.startMs;
-        return endMs <= slot.startMs ? 0 : this._toSpanPercent(slot.startMs, endMs);
+        return endMs <= slot.startMs ? 0 : this._toWidthPercent(slot.startMs, endMs);
     }
 
     private _emitBlockSelect(laneKey: string, block: EntityScheduleBlock): void {
@@ -1220,6 +1472,19 @@ export class SchedulingEntityDayBand extends LitElement {
             bubbles: true,
             composed: true,
             detail: { laneKey },
+        }));
+    }
+
+    private _emitTimeHover(atMs: number | null): void {
+        if (atMs === this._lastHoverMs) {
+            return;
+        }
+
+        this._lastHoverMs = atMs;
+        this.dispatchEvent(new CustomEvent<EntityDayBandTimeHoverDetail>("entity-day-band-time-hover", {
+            bubbles: true,
+            composed: true,
+            detail: { atMs },
         }));
     }
 
