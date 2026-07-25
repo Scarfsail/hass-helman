@@ -80,17 +80,6 @@ export class SchedulingActionChip extends LitElement {
                 text-overflow: ellipsis;
             }
 
-            /* Candidate: planned but its execution condition is not currently
-               met — muted, with a dashed outline to read as "tentative". */
-            .chip.candidate {
-                opacity: 0.5;
-                border-style: dashed;
-            }
-
-            .chip.candidate .chip-icon {
-                opacity: 0.85;
-            }
-
             :host([icononly]) .chip {
                 justify-content: center;
                 padding-left: 4px;

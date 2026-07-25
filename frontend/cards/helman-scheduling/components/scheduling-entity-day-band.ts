@@ -416,8 +416,8 @@ export class SchedulingEntityDayBand extends LitElement {
             /* Who put the run here, in the colours the rest of the card uses
                for it: a bar under the whole segment, so the answer is legible
                on a 30px track without competing with the tone that says what
-               the run does. The optimizer's runs keep their stripes too --
-               reading the same fact twice is what makes it quick. */
+               the run does. The bar carries authorship alone -- the fill is
+               left free to say something else. */
             .segment.authorship-user {
                 --schedule-authorship-color: var(--schedule-authorship-user-color, #c49012);
             }
@@ -434,7 +434,12 @@ export class SchedulingEntityDayBand extends LitElement {
                 box-shadow: inset 0 -3px 0 var(--schedule-authorship-color, transparent);
             }
 
-            .segment.automation {
+            /* Candidate: planned, but its execution condition is not currently
+               met, so nothing will run unless that changes. Hatched rather
+               than merely faded -- a 30px track has no room for a dashed
+               outline, and "provisional" has to survive being 20px wide. The
+               chips in the list use dashed + muted for the same fact. */
+            .segment.candidate {
                 background:
                     repeating-linear-gradient(
                         135deg,
@@ -1054,7 +1059,7 @@ export class SchedulingEntityDayBand extends LitElement {
             "segment",
             presentation.toneClass,
             `authorship-${block.authorship}`,
-            block.authorship === "user" ? "" : "automation",
+            presentation.isCandidate ? "candidate" : "",
             block.isDirty ? "dirty" : "",
             block.isPast ? "past" : "",
             editing ? "editing" : "",

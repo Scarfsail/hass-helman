@@ -257,6 +257,29 @@ export const schedulingSharedStyles = css`
             0 0 20px color-mix(in srgb, var(--schedule-authorship-color, transparent) 20%, transparent);
     }
 
+    /* Candidate: planned, but its execution condition is not currently met, so
+       nothing will run unless that changes. Muted and dashed, plus the same
+       135deg hatch the day band puts on a candidate segment -- one texture for
+       one fact, whichever surface it is read on. The hatch is layered over the
+       tone background, so the chip keeps the colour that says what it does.
+       Placed after the selection rules so selecting a candidate does not paint
+       the hatch away. */
+    .chip.action.candidate {
+        opacity: 0.5;
+        border-style: dashed;
+        background:
+            repeating-linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--schedule-action-tone-accent, var(--primary-color)) 30%, transparent) 0 6px,
+                transparent 6px 12px
+            ),
+            var(--schedule-action-tone-bg, color-mix(in srgb, var(--primary-color) 16%, transparent));
+    }
+
+    .chip.action.candidate .chip-icon {
+        opacity: 0.85;
+    }
+
     .compact-action-options {
         display: flex;
         flex-wrap: wrap;
