@@ -31,8 +31,11 @@ async function loadCardBundle(page: Page): Promise<void> {
  * Two days of hourly slots with the boiler already scheduled twice: a past run
  * the automation owns and an evening run the user owns.
  */
-async function mountEditor(page: Page, options: { neighbour?: boolean } = {}): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour }) => {
+async function mountEditor(
+    page: Page,
+    options: { neighbour?: boolean; straddling?: boolean } = {},
+): Promise<void> {
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling }) => {
         const buildSlot = (dayKey: string, hour: number) => {
             const startMs = Date.parse(`${dayKey}T${String(hour).padStart(2, "0")}:00:00Z`);
             const endMs = startMs + 3_600_000;
@@ -70,6 +73,9 @@ async function mountEditor(page: Page, options: { neighbour?: boolean } = {}): P
             if (hour === 17 || hour === 18) {
                 slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
             }
+            if (straddling && (hour === 10 || hour === 11)) {
+                slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
+            }
             if (neighbour && hour === 21) {
                 slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
             }
@@ -102,7 +108,13 @@ async function mountEditor(page: Page, options: { neighbour?: boolean } = {}): P
         el.nowMs = nowMs;
         el.open = true;
         document.body.appendChild(el);
-    }, { dayOne: DAY_ONE, dayTwo: DAY_TWO, nowMs: NOW_MS, neighbour: options.neighbour ?? false });
+    }, {
+        dayOne: DAY_ONE,
+        dayTwo: DAY_TWO,
+        nowMs: NOW_MS,
+        neighbour: options.neighbour ?? false,
+        straddling: options.straddling ?? false,
+    });
 
     await page.waitForFunction(() => {
         const el = document.querySelector("scheduling-entity-day-editor") as any;
@@ -268,6 +280,31 @@ test.describe("entity day editor", () => {
         expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
             `${DAY_ONE}T19:00:00.000Z`,
             `${DAY_ONE}T20:00:00.000Z`,
+        ]);
+    });
+
+    test("editing a block that is already running keeps its running part", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { straddling: true });
+
+        // 10:00-12:00 spans "now" (10:30): the 10:00 slot is already running.
+        expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
+            "05:00–07:00",
+            "10:00–12:00",
+            "17:00–19:00",
+        ]);
+
+        await page.locator(".block-row").nth(1).locator("button").first().click();
+
+        // The session starts at the first slot the user may still write, and
+        // the block stays whole in the list rather than losing its past half.
+        expect(await editingRange(page)).toBe(
+            `${Date.parse(`${DAY_ONE}T11:00:00Z`)}|${Date.parse(`${DAY_ONE}T12:00:00Z`)}`,
+        );
+        expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
+            "05:00–07:00",
+            "10:00–12:00",
+            "17:00–19:00",
         ]);
     });
 

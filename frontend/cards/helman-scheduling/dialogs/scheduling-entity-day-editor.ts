@@ -872,16 +872,33 @@ export class SchedulingEntityDayEditor extends LitElement {
         });
     }
 
+    /**
+     * Open a session over the part of a block the user may still change.
+     *
+     * A block that is already running starts in the past; the session begins at
+     * the first editable slot instead, so the pickers have that start to offer
+     * and the running part stays exactly as scheduled.
+     */
     private _beginEdit(
         originalSlotIds: readonly string[],
         startMs: number,
         endMs: number,
         action: EntityScheduleAction,
     ): void {
+        const day = this._selectedDay();
+        if (day === null) {
+            return;
+        }
+
+        const editableStartMs = Math.max(startMs, day.editableFromMs);
+        if (editableStartMs >= endMs) {
+            return;
+        }
+
         this._draftBeforeEdit = { ...this._draft };
         this._updateEditSession({
             originalSlotIds: [...originalSlotIds],
-            startMs,
+            startMs: editableStartMs,
             endMs,
             action: sanitizeEntityScheduleAction(action),
             valid: true,
@@ -952,17 +969,30 @@ export class SchedulingEntityDayEditor extends LitElement {
         base: EntityScheduleDraft,
         slotIds: readonly string[],
     ): EntityScheduleDraft {
-        if (this.target === null) {
+        const day = this._selectedDay();
+        if (this.target === null || day === null) {
             return base;
         }
 
         const emptyAction = getEmptyEntityScheduleAction(this.target);
+        const editableSlotIds = new Set(this._editableSlotIds(day));
         const next: EntityScheduleDraft = { ...base };
         for (const slotId of slotIds) {
-            next[slotId] = emptyAction;
+            // A slot that is already running or past cannot be rewritten, so
+            // clearing it would only make the block vanish from the view while
+            // the schedule kept it.
+            if (editableSlotIds.has(slotId)) {
+                next[slotId] = emptyAction;
+            }
         }
 
         return next;
+    }
+
+    private _editableSlotIds(day: EntityScheduleDay): string[] {
+        return day.slots
+            .filter((slot) => slot.startMs >= day.editableFromMs)
+            .map((slot) => slot.id);
     }
 
     /** The first slot start of the day with nothing scheduled on it. */
