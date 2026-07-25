@@ -275,9 +275,6 @@
       "previous_day": "Předchozí den",
       "next_day": "Další den",
       "schedule_changed": "Rozvrh se mezitím změnil. Uložení přepíše načtené změny pro toto zařízení.",
-      "discard_question": "Zahodit neuložené změny?",
-      "keep_editing": "Pokračovat v úpravách",
-      "discard": "Zahodit",
       "edit_hint": "Táhnutím v grafu blok posunete, za okraje ho zkrátíte nebo prodloužíte."
     }
   },

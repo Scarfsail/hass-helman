@@ -62,8 +62,8 @@ export interface EntityScheduleSaveDetail {
  *
  * The whole day is drafted locally and written as a single batch on Save, so
  * moving three blocks around is one schedule write and one automation re-run
- * rather than three of each. Nothing here is applied until Save; closing with
- * unsaved work asks first.
+ * rather than three of each. Nothing is applied until Save, so Cancel is a
+ * plain close -- there is nothing to undo.
  */
 @customElement("scheduling-entity-day-editor")
 export class SchedulingEntityDayEditor extends LitElement {
@@ -242,7 +242,6 @@ export class SchedulingEntityDayEditor extends LitElement {
     @state() private _draft: EntityScheduleDraft = {};
     @state() private _dayIndex = 0;
     @state() private _editing: EntityScheduleEditSession | null = null;
-    @state() private _confirmDiscard = false;
 
     private _draftBeforeEdit: EntityScheduleDraft = {};
     private _historyEntryActive = false;
@@ -263,30 +262,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         this._clearHistoryEntry();
-        // The entry is already gone; a draft worth keeping has to put one back
-        // so a second Back does not skip past the dialog.
-        if (this._isDirty()) {
-            this._pushHistoryEntry();
-            this._confirmDiscard = true;
-            return;
-        }
-
         this._close();
-    };
-
-    /**
-     * A fallback Escape guard.
-     *
-     * `preventScrimClose` already makes the current `ha-dialog` swallow Escape
-     * before it reaches here, which is what keeps a draft alive. This stays for
-     * a dialog implementation that lets the key through: Escape must ask about
-     * unsaved work rather than discard it.
-     */
-    private readonly _handleKeyDown = (event: KeyboardEvent): void => {
-        if (event.key === "Escape" && this.open) {
-            event.stopPropagation();
-            this._requestClose();
-        }
     };
 
     connectedCallback(): void {
@@ -338,22 +314,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                 width="large"
                 .heading=${this.entityName}
                 .headerTitle=${this.entityName}
-                .preventScrimClose=${true}
                 @closed=${this._onClosed}
-                @keydown=${this._handleKeyDown}
             >
-                <!--
-                    Own close button rather than the dialog's default one: the
-                    default closes declaratively, which would drop an unsaved
-                    day without asking. Everything that closes this dialog has
-                    to go through the discard guard.
-                -->
-                <ha-icon-button
-                    slot="headerNavigationIcon"
-                    .label=${this.localize("scheduling.dialog.cancel")}
-                    .path=${"M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"}
-                    @click=${this._requestClose}
-                ></ha-icon-button>
                 <!--
                     Pressing anything that is not the edit panel, the block list
                     or the band ends the edit session. The block keeps whatever
@@ -401,24 +363,12 @@ export class SchedulingEntityDayEditor extends LitElement {
                 </div>
 
                 <ha-dialog-footer slot="footer">
-                    ${this._confirmDiscard ? html`
-                        <span slot="secondaryAction" class="field-help">
-                            ${this.localize("scheduling.entity_editor.discard_question")}
-                        </span>
-                        <ha-button slot="secondaryAction" .appearance=${"plain"} @click=${this._handleKeepEditing}>
-                            ${this.localize("scheduling.entity_editor.keep_editing")}
-                        </ha-button>
-                        <ha-button slot="primaryAction" @click=${this._handleDiscard}>
-                            ${this.localize("scheduling.entity_editor.discard")}
-                        </ha-button>
-                    ` : html`
-                        <ha-button slot="secondaryAction" .appearance=${"plain"} @click=${this._requestClose}>
-                            ${this.localize("scheduling.dialog.cancel")}
-                        </ha-button>
-                        <ha-button slot="primaryAction" ?disabled=${!this._canSave()} @click=${this._handleSave}>
-                            ${this.localize("scheduling.entity_editor.save")}
-                        </ha-button>
-                    `}
+                    <ha-button slot="secondaryAction" .appearance=${"plain"} @click=${this._close}>
+                        ${this.localize("scheduling.dialog.cancel")}
+                    </ha-button>
+                    <ha-button slot="primaryAction" ?disabled=${!this._canSave()} @click=${this._handleSave}>
+                        ${this.localize("scheduling.entity_editor.save")}
+                    </ha-button>
                 </ha-dialog-footer>
             </ha-dialog>
         `;
@@ -628,7 +578,6 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._draft = {};
         this._draftBeforeEdit = {};
         this._editing = null;
-        this._confirmDiscard = false;
         this._dayIndex = this._resolveInitialDayIndex();
     }
 
@@ -1097,29 +1046,16 @@ export class SchedulingEntityDayEditor extends LitElement {
         }));
     }
 
-    private _requestClose = (): void => {
-        if (this._isDirty()) {
-            this._confirmDiscard = true;
-            return;
-        }
-
-        this._close();
-    };
-
-    private _handleKeepEditing(): void {
-        this._confirmDiscard = false;
-    }
-
-    private _handleDiscard(): void {
-        this._draft = {};
-        this._editing = null;
-        this._confirmDiscard = false;
-        this._close();
-    }
-
-    private _close(): void {
+    /**
+     * Cancel and Save are the only ways out, and Cancel just closes.
+     *
+     * The draft lives and dies with the dialog, so leaving without saving
+     * changes nothing -- which is what every other dialog does, and what makes
+     * a confirmation prompt here pointless friction.
+     */
+    private _close = (): void => {
         this.open = false;
-    }
+    };
 
     private _onClosed(): void {
         if (this._canConsumeCurrentHistoryEntry()) {
