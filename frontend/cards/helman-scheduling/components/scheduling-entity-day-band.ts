@@ -33,6 +33,10 @@ export interface EntityDayBandGapSelectDetail {
     startMs: number;
 }
 
+export interface EntityDayBandBlockHoverDetail {
+    blockKey: string | null;
+}
+
 export interface EntityDayBandRangeChangeDetail {
     startMs: number;
     endMs: number;
@@ -229,6 +233,12 @@ export class SchedulingEntityDayBand extends LitElement {
                 box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color) 40%, transparent);
             }
 
+            /* Mirrors the hover on this block's list row. */
+            .segment.hovered:not(.editing) {
+                outline: 2px solid color-mix(in srgb, var(--primary-color) 55%, transparent);
+                outline-offset: -2px;
+            }
+
             .segment.past {
                 opacity: 0.45;
                 cursor: default;
@@ -313,6 +323,8 @@ export class SchedulingEntityDayBand extends LitElement {
     /** The range being edited, highlighted here and moved by dragging. */
     @property({ attribute: false }) public editingRange: EntityScheduleRange | null = null;
     @property({ type: Number }) public nowMs = Date.now();
+    /** The block the pointer is over, wherever it was pointed at. */
+    @property({ type: String }) public hoveredBlockKey: string | null = null;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
 
@@ -499,6 +511,7 @@ export class SchedulingEntityDayBand extends LitElement {
             block.isDirty ? "dirty" : "",
             block.isPast ? "past" : "",
             editing ? "editing" : "",
+            this.hoveredBlockKey === block.key ? "hovered" : "",
             this._drag !== null && editing ? "dragging" : "",
         ].filter((value) => value.length > 0).join(" ");
         const title = `${presentation.label} · ${this._formatRange(block)}`;
@@ -514,6 +527,8 @@ export class SchedulingEntityDayBand extends LitElement {
                 style=${`left: ${this._toPercent(block.startMs)}%; width: ${widthPct}%`}
                 @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, block, "move")}
                 @click=${() => this._emitBlockSelect(block)}
+                @mouseenter=${() => this._emitBlockHover(block.key)}
+                @mouseleave=${() => this._emitBlockHover(null)}
             >
                 ${resizable ? html`
                     <span
@@ -748,6 +763,14 @@ export class SchedulingEntityDayBand extends LitElement {
             bubbles: true,
             composed: true,
             detail: { blockKey: block.key },
+        }));
+    }
+
+    private _emitBlockHover(blockKey: string | null): void {
+        this.dispatchEvent(new CustomEvent<EntityDayBandBlockHoverDetail>("entity-day-band-block-hover", {
+            bubbles: true,
+            composed: true,
+            detail: { blockKey },
         }));
     }
 

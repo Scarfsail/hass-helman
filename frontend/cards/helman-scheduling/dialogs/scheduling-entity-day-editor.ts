@@ -140,15 +140,41 @@ export class SchedulingEntityDayEditor extends LitElement {
             .block-row {
                 display: flex;
                 align-items: center;
-                gap: 10px;
-                padding: 4px 6px;
+                gap: 4px;
+                padding: 0 4px;
                 border: 1px solid transparent;
                 border-radius: 8px;
+            }
+
+            .block-main {
+                display: flex;
+                flex: 1 1 auto;
+                align-items: center;
+                gap: 10px;
+                min-width: 0;
+                padding: 5px 4px;
+                border: none;
+                border-radius: 6px;
+                background: none;
+                color: inherit;
+                font: inherit;
+                text-align: start;
+                cursor: pointer;
+            }
+
+            .block-main:disabled {
+                cursor: default;
             }
 
             .block-row.editing {
                 border-color: color-mix(in srgb, var(--primary-color) 44%, var(--divider-color));
                 background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+            }
+
+            /* Hover is mirrored between this row and its segment on the band, so
+               pointing at either one says which run the other means. */
+            .block-row.hovered:not(.editing) {
+                background: var(--secondary-background-color);
             }
 
             .block-row.past {
@@ -242,6 +268,8 @@ export class SchedulingEntityDayEditor extends LitElement {
     @state() private _draft: EntityScheduleDraft = {};
     @state() private _dayIndex = 0;
     @state() private _editing: EntityScheduleEditSession | null = null;
+    /** The block the pointer is over, in either the list or the band. */
+    @state() private _hoveredBlockKey: string | null = null;
 
     private _draftBeforeEdit: EntityScheduleDraft = {};
     private _historyEntryActive = false;
@@ -353,6 +381,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                             startMs: this._editing.startMs,
                             endMs: this._editing.endMs,
                         }}
+                        .hoveredBlockKey=${this._hoveredBlockKey}
+                        @entity-day-band-block-hover=${this._handleBandBlockHover}
                         @entity-day-band-block-select=${this._handleBandBlockSelect}
                         @entity-day-band-gap-select=${this._handleBandGapSelect}
                         @entity-day-band-range-change=${this._handleBandRangeChange}
@@ -442,22 +472,34 @@ export class SchedulingEntityDayEditor extends LitElement {
         editingBlockKey: string | null,
     ) {
         const editing = editingBlockKey === block.key;
-        const classes = `block-row${editing ? " editing" : ""}${block.isPast ? " past" : ""}`;
+        const classes = [
+            "block-row",
+            editing ? "editing" : "",
+            block.isPast ? "past" : "",
+            this._hoveredBlockKey === block.key ? "hovered" : "",
+        ].filter((value) => value.length > 0).join(" ");
+        // The row itself selects the block -- a pencil next to something that is
+        // already one click away is a button that only says "yes, really".
+        // Remove stays its own button because it is the destructive one.
         return html`
-            <div class=${classes}>
-                <span class="block-range">${this._formatBlockRange(day, block)}</span>
-                <span class="block-action">${this._renderActionChip(block.action)}</span>
-                <span class="block-authorship">${this._authorshipLabel(block)}</span>
+            <div
+                class=${classes}
+                @mouseenter=${() => this._setHoveredBlock(block.key)}
+                @mouseleave=${() => this._setHoveredBlock(null)}
+            >
+                <button
+                    class="block-main"
+                    type="button"
+                    ?disabled=${block.isPast}
+                    aria-pressed=${editing}
+                    @click=${() => this._handleEditBlock(block)}
+                >
+                    <span class="block-range">${this._formatBlockRange(day, block)}</span>
+                    <span class="block-action">${this._renderActionChip(block.action)}</span>
+                    <span class="block-authorship">${this._authorshipLabel(block)}</span>
+                </button>
                 <span class="block-buttons">
                     ${block.isPast ? nothing : html`
-                        <button
-                            class="icon-button"
-                            type="button"
-                            aria-label=${this.localize("scheduling.entity_editor.edit_block")}
-                            @click=${() => this._handleEditBlock(block)}
-                        >
-                            <ha-icon icon="mdi:pencil-outline"></ha-icon>
-                        </button>
                         <button
                             class="icon-button"
                             type="button"
@@ -682,6 +724,15 @@ export class SchedulingEntityDayEditor extends LitElement {
         if (block !== undefined) {
             this._handleEditBlock(block);
         }
+    }
+
+    private _handleBandBlockHover(event: CustomEvent<{ blockKey: string | null }>): void {
+        event.stopPropagation();
+        this._setHoveredBlock(event.detail.blockKey);
+    }
+
+    private _setHoveredBlock(blockKey: string | null): void {
+        this._hoveredBlockKey = blockKey;
     }
 
     /** A drag on the band moves or resizes the block being edited. */

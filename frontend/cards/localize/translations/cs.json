@@ -266,7 +266,6 @@
       "blocks": "Naplánované bloky",
       "no_blocks": "V tento den není nic naplánováno.",
       "add_block": "Přidat blok",
-      "edit_block": "Upravit blok",
       "remove_block": "Odebrat blok",
       "from": "Od",
       "to": "Do",
@@ -275,7 +274,7 @@
       "previous_day": "Předchozí den",
       "next_day": "Další den",
       "schedule_changed": "Rozvrh se mezitím změnil. Uložení přepíše načtené změny pro toto zařízení.",
-      "edit_hint": "Táhnutím v grafu blok posunete, za okraje ho zkrátíte nebo prodloužíte."
+      "edit_hint": "Klepnutím vyberte blok. Táhnutím v grafu ho posunete, za okraje zkrátíte nebo prodloužíte."
     }
   },
   "bias_correction": {

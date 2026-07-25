@@ -321,6 +321,32 @@ test.describe("entity day editor", () => {
         );
     });
 
+    test("hovering either the row or its segment highlights both", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        // Which block is highlighted, by index, on each side.
+        const highlighted = () => page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const indexOf = (nodes: NodeListOf<Element>, selector: string) =>
+                [...nodes].findIndex((node) => node.matches(selector));
+            return {
+                row: indexOf(el.shadowRoot.querySelectorAll(".block-row"), ".hovered"),
+                segment: indexOf(band.shadowRoot.querySelectorAll(".segment"), ".hovered"),
+            };
+        });
+
+        await page.locator(".block-row").nth(1).hover();
+        expect(await highlighted()).toEqual({ row: 1, segment: 1 });
+
+        await page.locator("scheduling-entity-day-band .segment").nth(1).hover();
+        expect(await highlighted()).toEqual({ row: 1, segment: 1 });
+
+        await page.locator(".day-switcher").hover();
+        expect(await highlighted()).toEqual({ row: -1, segment: -1 });
+    });
+
     test("dragging the middle of a block moves it whole", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
