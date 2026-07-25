@@ -80,13 +80,23 @@ export class SchedulingEntityActionEditor extends LitElement {
     @property({ attribute: false }) public target!: EntityScheduleTarget;
     @property({ attribute: false }) public appliance: ScheduleApplianceMetadata | null = null;
     @property({ attribute: false }) public action: EntityScheduleAction = null;
+    /**
+     * Identifies the edit this component is serving; changing it reloads the
+     * controls from `action`.
+     *
+     * The action alone cannot say that: the parent echoes back a rebuilt action
+     * after every keystroke here, so re-seeding from it would fight the person
+     * typing -- emptying the field would refill it with the `0` the empty string
+     * parses to, and `05` would be rewritten to `5` mid-entry.
+     */
+    @property({ type: Number }) public sessionKey = 0;
 
     @state() private _actionKind: ScheduleAction["kind"] | null = null;
     @state() private _targetSocInput = "";
 
     protected willUpdate(changedProperties: PropertyValues<this>): void {
         super.willUpdate(changedProperties);
-        if (!changedProperties.has("action") && !changedProperties.has("target")) {
+        if (!changedProperties.has("sessionKey") && !changedProperties.has("target")) {
             return;
         }
 

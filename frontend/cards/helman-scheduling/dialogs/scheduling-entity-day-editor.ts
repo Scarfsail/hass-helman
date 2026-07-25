@@ -9,6 +9,8 @@ import "./scheduling-entity-action-editor";
 import type {
     EntityDayBandBlockSelectDetail,
     EntityDayBandGapSelectDetail,
+    EntityDayBandLane,
+    EntityDayBandLaneSelectDetail,
     EntityDayBandRangeChangeDetail,
 } from "../components/scheduling-entity-day-band";
 import type {
@@ -16,17 +18,20 @@ import type {
     EntityScheduleBlock,
     EntityScheduleDay,
     EntityScheduleDraft,
+    EntityScheduleDrafts,
+    EntityScheduleLane,
     EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
 import {
+    areEntityScheduleLanesDirty,
     buildEntityScheduleBlocks,
     buildEntityScheduleBoundaryOptions,
     buildEntityScheduleDays,
-    buildEntitySchedulePatches,
+    buildEntityScheduleLanePatches,
     getEmptyEntityScheduleAction,
+    getEntityScheduleTargetKey,
     isEntityInverterAction,
     isEntityScheduleActionEmpty,
-    isEntityScheduleDraftDirty,
     resolveEntityScheduleRangeLimits,
     sanitizeEntityScheduleAction,
     selectEntityScheduleDayBlocks,
@@ -58,12 +63,19 @@ export interface EntityScheduleSaveDetail {
 }
 
 /**
- * One entity's schedule, one day at a time.
+ * The house's schedule, one day at a time, one entity at a time.
+ *
+ * Every controllable entity gets a track on a shared time axis, because when to
+ * run one thing is a question about what everything else is doing. Exactly one
+ * of them is selected: the block list and the action editor below are about that
+ * lane alone, so the editing model stays the simple single-entity one and the
+ * other lanes are read-only context until they are clicked.
  *
  * The whole day is drafted locally and written as a single batch on Save, so
  * moving three blocks around is one schedule write and one automation re-run
- * rather than three of each. Nothing is applied until Save, so Cancel is a
- * plain close -- there is nothing to undo.
+ * rather than three of each -- and edits to several entities still leave as one
+ * write. Nothing is applied until Save, so Cancel is a plain close: there is
+ * nothing to undo.
  */
 @customElement("scheduling-entity-day-editor")
 export class SchedulingEntityDayEditor extends LitElement {
@@ -77,9 +89,15 @@ export class SchedulingEntityDayEditor extends LitElement {
                 display: flex;
                 flex-direction: column;
                 gap: 14px;
-                width: min(880px, calc(100vw - 48px));
+                width: min(960px, calc(100vw - 48px));
                 max-width: 100%;
                 padding-top: 4px;
+            }
+
+            /* Nothing selected: the stack is still readable as the day's plan,
+               and this says how to get an editor back. */
+            .select-hint {
+                padding: 6px 2px;
             }
 
             .day-switcher {
@@ -241,8 +259,11 @@ export class SchedulingEntityDayEditor extends LitElement {
     ];
 
     @property({ attribute: false }) public localize!: LocalizeFunction;
+    /** The lane selected when the dialog opens: the row the user pressed. */
     @property({ attribute: false }) public target: EntityScheduleTarget | null = null;
     @property({ attribute: false }) public appliance: ScheduleApplianceMetadata | null = null;
+    /** Every controllable entity with an authorable lane, in display order. */
+    @property({ attribute: false }) public lanes: readonly EntityScheduleLane[] = [];
     @property({ attribute: false }) public slots: readonly ScheduleSlot[] = [];
     @property({ attribute: false }) public forecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
     @property({ type: String }) public entityName = "";
@@ -265,13 +286,18 @@ export class SchedulingEntityDayEditor extends LitElement {
      * only overwrite this entity's own lane.
      */
     @state() private _baselineSlots: ScheduleSlot[] = [];
-    @state() private _draft: EntityScheduleDraft = {};
+    /** Pending edits per lane; every lane keeps its own until Save. */
+    @state() private _drafts: EntityScheduleDrafts = {};
+    /** The lane being edited, or null when the user clicked away from all of them. */
+    @state() private _selectedLaneKey: string | null = null;
     @state() private _dayIndex = 0;
     @state() private _editing: EntityScheduleEditSession | null = null;
     /** The block the pointer is over, in either the list or the band. */
     @state() private _hoveredBlockKey: string | null = null;
 
     private _draftBeforeEdit: EntityScheduleDraft = {};
+    /** Bumped per edit session, so the action editor knows a new one began. */
+    private _editSessionId = 0;
     private _historyEntryActive = false;
     private _historyEntryId: number | null = null;
     private _ignoreNextPopstate = false;
@@ -313,10 +339,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         super.willUpdate(changedProperties);
         // Seed once per opening: later slot updates are the refresh case, which
         // the stale banner reports instead of applying.
-        if (changedProperties.has("open") && this.open) {
-            this._seedFromSlots();
-        }
-        if (changedProperties.has("target") && this.open) {
+        if (this.open && (changedProperties.has("open") || changedProperties.has("target"))) {
             this._seedFromSlots();
         }
     }
@@ -329,19 +352,26 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     render() {
-        const day = this._selectedDay();
-        if (this.target === null || day === null) {
+        // Days and per-lane blocks are each derived from the whole slot array,
+        // so they are built once here and passed down rather than recomputed by
+        // every renderer that needs them -- during a drag this runs per frame.
+        const days = this._days();
+        const day = this._selectedDay(days);
+        if (this._lanes.length === 0 || day === null) {
             return nothing;
         }
 
-        const blocks = this._dayBlocks(day);
+        const bandLanes = this._buildBandLanes(day);
+        const selectedLane = this._selectedLane;
+        const blocks = bandLanes.find((lane) => lane.key === selectedLane?.key)?.blocks ?? [];
         const editingBlockKey = this._resolveEditingBlockKey(blocks);
+        const heading = selectedLane?.name ?? this.localize("scheduling.entity_editor.title");
         return html`
             <ha-dialog
                 .open=${this.open}
                 width="large"
-                .heading=${this.entityName}
-                .headerTitle=${this.entityName}
+                .heading=${heading}
+                .headerTitle=${heading}
                 @closed=${this._onClosed}
             >
                 <!--
@@ -359,7 +389,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     closed the panel it had just opened.
                 -->
                 <div class="dialog-content" @pointerdown=${this._handleContentPointerDown}>
-                    ${this._renderDaySwitcher(day)}
+                    ${this._renderDaySwitcher(day, days)}
                     ${this.scheduleChanged ? html`
                         <div class="stale-banner">
                             <ha-icon icon="mdi:alert-outline"></ha-icon>
@@ -370,9 +400,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                     <scheduling-entity-day-band
                         .localize=${this.localize}
                         .day=${day}
-                        .blocks=${blocks}
-                        .target=${this.target}
-                        .appliance=${this.appliance}
+                        .lanes=${bandLanes}
+                        .selectedLaneKey=${this._selectedLaneKey}
                         .forecastPoints=${this.forecastPoints}
                         .nowMs=${this.nowMs}
                         .locale=${this.locale}
@@ -384,12 +413,20 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .hoveredBlockKey=${this._hoveredBlockKey}
                         @entity-day-band-block-hover=${this._handleBandBlockHover}
                         @entity-day-band-block-select=${this._handleBandBlockSelect}
+                        @entity-day-band-lane-select=${this._handleBandLaneSelect}
+                        @entity-day-band-context-select=${this._handleBandContextSelect}
                         @entity-day-band-gap-select=${this._handleBandGapSelect}
                         @entity-day-band-range-change=${this._handleBandRangeChange}
                     ></scheduling-entity-day-band>
 
-                    ${this._renderBlockList(day, blocks, editingBlockKey)}
-                    ${this._renderEditPanel(day, blocks)}
+                    ${selectedLane === null ? html`
+                        <div class="field-help select-hint">
+                            ${this.localize("scheduling.entity_editor.select_entity")}
+                        </div>
+                    ` : html`
+                        ${this._renderBlockList(day, selectedLane, blocks, editingBlockKey)}
+                        ${this._renderEditPanel(day, selectedLane, blocks)}
+                    `}
                 </div>
 
                 <ha-dialog-footer slot="footer">
@@ -404,8 +441,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    private _renderDaySwitcher(day: EntityScheduleDay) {
-        const days = this._days();
+    private _renderDaySwitcher(day: EntityScheduleDay, days: readonly EntityScheduleDay[]) {
         return html`
             <div class="day-switcher">
                 <button
@@ -443,21 +479,24 @@ export class SchedulingEntityDayEditor extends LitElement {
 
     private _renderBlockList(
         day: EntityScheduleDay,
+        lane: EntityScheduleLane,
         blocks: readonly EntityScheduleBlock[],
         editingBlockKey: string | null,
     ) {
         return html`
             <div class="block-list">
-                <div class="field-label">${this.localize("scheduling.entity_editor.blocks")}</div>
+                <div class="field-label">
+                    ${this.localize("scheduling.entity_editor.blocks")} · ${lane.name}
+                </div>
                 ${blocks.length === 0 ? html`
                     <div class="field-help">${this.localize("scheduling.entity_editor.no_blocks")}</div>
-                ` : blocks.map((block) => this._renderBlockRow(day, block, editingBlockKey))}
+                ` : blocks.map((block) => this._renderBlockRow(day, lane, block, editingBlockKey))}
                 <div>
                     <button
                         class="link-button"
                         type="button"
-                        ?disabled=${this._findFreeStartMs(day) === null}
-                        @click=${() => this._handleAddBlock(day)}
+                        ?disabled=${this._findFreeStartMs(day, blocks) === null}
+                        @click=${() => this._handleAddBlock(day, lane)}
                     >
                         ${this.localize("scheduling.entity_editor.add_block")}
                     </button>
@@ -468,6 +507,7 @@ export class SchedulingEntityDayEditor extends LitElement {
 
     private _renderBlockRow(
         day: EntityScheduleDay,
+        lane: EntityScheduleLane,
         block: EntityScheduleBlock,
         editingBlockKey: string | null,
     ) {
@@ -495,7 +535,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     @click=${() => this._handleEditBlock(block)}
                 >
                     <span class="block-range">${this._formatBlockRange(day, block)}</span>
-                    <span class="block-action">${this._renderActionChip(block.action)}</span>
+                    <span class="block-action">${this._renderActionChip(lane, block.action)}</span>
                     <span class="block-authorship">${this._authorshipLabel(block)}</span>
                 </button>
                 <span class="block-buttons">
@@ -514,9 +554,13 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    private _renderEditPanel(day: EntityScheduleDay, blocks: readonly EntityScheduleBlock[]) {
+    private _renderEditPanel(
+        day: EntityScheduleDay,
+        lane: EntityScheduleLane,
+        blocks: readonly EntityScheduleBlock[],
+    ) {
         const editing = this._editing;
-        if (editing === null || this.target === null) {
+        if (editing === null) {
             return nothing;
         }
 
@@ -564,9 +608,10 @@ export class SchedulingEntityDayEditor extends LitElement {
 
                 <scheduling-entity-action-editor
                     .localize=${this.localize}
-                    .target=${this.target}
-                    .appliance=${this.appliance}
+                    .target=${lane.target}
+                    .appliance=${lane.appliance}
                     .action=${editing.action}
+                    .sessionKey=${this._editSessionId}
                     @entity-action-change=${this._handleActionChange}
                 ></scheduling-entity-action-editor>
 
@@ -580,8 +625,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    private _renderActionChip(action: EntityScheduleAction) {
-        if (this.target?.kind === "inverter" && isEntityInverterAction(action)) {
+    private _renderActionChip(lane: EntityScheduleLane, action: EntityScheduleAction) {
+        if (lane.target.kind === "inverter" && isEntityInverterAction(action)) {
             return html`
                 <scheduling-action-chip
                     .action=${action}
@@ -594,11 +639,11 @@ export class SchedulingEntityDayEditor extends LitElement {
         const applianceAction = action === null || isEntityInverterAction(action)
             ? null
             : action as ScheduleApplianceAction;
-        const appliance = this.appliance ?? {
+        const appliance = lane.appliance ?? {
             id: "unknown",
-            name: this.entityName,
+            name: lane.name,
             kind: "generic",
-            icon: this.entityIcon,
+            icon: lane.icon,
         };
         return html`
             <scheduling-appliance-chip
@@ -615,27 +660,80 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
+    /**
+     * Every lane to stack, falling back to the single target the dialog was
+     * opened with when the card has not supplied a roster.
+     */
+    private get _lanes(): EntityScheduleLane[] {
+        if (this.lanes.length > 0) {
+            return [...this.lanes];
+        }
+
+        if (this.target === null) {
+            return [];
+        }
+
+        return [{
+            key: getEntityScheduleTargetKey(this.target),
+            target: this.target,
+            name: this.entityName,
+            icon: this.appliance?.icon ?? this.entityIcon,
+            appliance: this.appliance,
+            isAvailable: true,
+        }];
+    }
+
+    private get _selectedLane(): EntityScheduleLane | null {
+        return this._lanes.find((lane) => lane.key === this._selectedLaneKey) ?? null;
+    }
+
+    /** The selected lane's pending edits. */
+    private get _draft(): EntityScheduleDraft {
+        return this._selectedLaneKey === null
+            ? {}
+            : this._drafts[this._selectedLaneKey] ?? {};
+    }
+
+    private _setDraft(draft: EntityScheduleDraft): void {
+        if (this._selectedLaneKey === null) {
+            return;
+        }
+
+        this._drafts = { ...this._drafts, [this._selectedLaneKey]: draft };
+    }
+
+    private _laneDrafts(): { target: EntityScheduleTarget; draft: EntityScheduleDraft }[] {
+        return this._lanes.flatMap((lane) => {
+            const draft = this._drafts[lane.key];
+            return draft === undefined ? [] : [{ target: lane.target, draft }];
+        });
+    }
+
     private _seedFromSlots(): void {
         this._baselineSlots = [...this.slots];
-        this._draft = {};
+        this._drafts = {};
         this._draftBeforeEdit = {};
         this._editing = null;
+        this._selectedLaneKey = this.target === null
+            ? this._lanes[0]?.key ?? null
+            : getEntityScheduleTargetKey(this.target);
         this._dayIndex = this._resolveInitialDayIndex();
     }
 
     /**
-     * The day worth opening on: the one holding the entity's next scheduled
-     * change, which is what the user tapped on to get here.
+     * The day worth opening on: the one holding the selected entity's next
+     * scheduled change, which is what the user tapped on to get here.
      */
     private _resolveInitialDayIndex(): number {
         const days = this._days();
-        if (days.length === 0) {
+        const lane = this._selectedLane;
+        if (days.length === 0 || lane === null) {
             return 0;
         }
 
         const blocks = buildEntityScheduleBlocks({
             slots: this._baselineSlots,
-            target: this.target ?? { kind: "inverter" },
+            target: lane.target,
             draft: {},
             nowMs: this.nowMs,
         });
@@ -663,8 +761,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         });
     }
 
-    private _selectedDay(): EntityScheduleDay | null {
-        const days = this._days();
+    private _selectedDay(days: readonly EntityScheduleDay[] = this._days()): EntityScheduleDay | null {
         if (days.length === 0) {
             return null;
         }
@@ -672,20 +769,45 @@ export class SchedulingEntityDayEditor extends LitElement {
         return days[Math.min(Math.max(this._dayIndex, 0), days.length - 1)];
     }
 
-    private _dayBlocks(day: EntityScheduleDay): EntityScheduleBlock[] {
-        if (this.target === null) {
-            return [];
-        }
-
+    private _dayBlocks(day: EntityScheduleDay, lane: EntityScheduleLane): EntityScheduleBlock[] {
         return selectEntityScheduleDayBlocks(
             buildEntityScheduleBlocks({
                 slots: this._baselineSlots,
-                target: this.target,
-                draft: this._draft,
+                target: lane.target,
+                draft: this._drafts[lane.key] ?? {},
                 nowMs: this.nowMs,
             }),
             day,
         );
+    }
+
+    private _buildBandLanes(day: EntityScheduleDay): EntityDayBandLane[] {
+        return this._lanes.map((lane) => ({
+            key: lane.key,
+            name: lane.name,
+            icon: lane.icon,
+            target: lane.target,
+            appliance: lane.appliance,
+            isAvailable: lane.isAvailable,
+            blocks: this._dayBlocks(day, lane),
+        }));
+    }
+
+    /**
+     * Move the editor to another entity.
+     *
+     * The open session ends here rather than travelling: it holds a range and an
+     * action that only mean anything for the lane they were opened on. What it
+     * already wrote stays in that lane's draft, which is what Save reads.
+     */
+    private _selectLane(laneKey: string | null): void {
+        if (this._selectedLaneKey === laneKey) {
+            return;
+        }
+
+        this._commitEditSession();
+        this._hoveredBlockKey = null;
+        this._selectedLaneKey = laneKey;
     }
 
     /** The block the edit session currently covers, for highlighting. */
@@ -715,15 +837,28 @@ export class SchedulingEntityDayEditor extends LitElement {
 
     private _handleBandBlockSelect(event: CustomEvent<EntityDayBandBlockSelectDetail>): void {
         event.stopPropagation();
+        this._selectLane(event.detail.laneKey);
         const day = this._selectedDay();
-        if (day === null) {
+        const lane = this._selectedLane;
+        if (day === null || lane === null) {
             return;
         }
 
-        const block = this._dayBlocks(day).find((candidate) => candidate.key === event.detail.blockKey);
+        const block = this._dayBlocks(day, lane).find((candidate) => candidate.key === event.detail.blockKey);
         if (block !== undefined) {
             this._handleEditBlock(block);
         }
+    }
+
+    private _handleBandLaneSelect(event: CustomEvent<EntityDayBandLaneSelectDetail>): void {
+        event.stopPropagation();
+        this._selectLane(event.detail.laneKey);
+    }
+
+    /** The forecast rows are about the day, not about any one entity. */
+    private _handleBandContextSelect(event: Event): void {
+        event.stopPropagation();
+        this._selectLane(null);
     }
 
     private _handleBandBlockHover(event: CustomEvent<{ blockKey: string | null }>): void {
@@ -774,19 +909,28 @@ export class SchedulingEntityDayEditor extends LitElement {
 
     private _handleBandGapSelect(event: CustomEvent<EntityDayBandGapSelectDetail>): void {
         event.stopPropagation();
+        this._selectLane(event.detail.laneKey);
         const day = this._selectedDay();
-        if (day !== null) {
-            this._beginEdit([], event.detail.startMs, this._resolveDefaultEndMs(day, event.detail.startMs), this._buildDefaultAction());
+        const lane = this._selectedLane;
+        if (day !== null && lane !== null) {
+            // The default hour is cut short by the end of the free stretch: a
+            // new block must not be born overlapping the next one.
+            this._beginEdit(
+                [],
+                event.detail.startMs,
+                Math.min(this._resolveDefaultEndMs(day, event.detail.startMs), event.detail.limitMs),
+                this._buildDefaultAction(lane),
+            );
         }
     }
 
-    private _handleAddBlock(day: EntityScheduleDay): void {
-        const startMs = this._findFreeStartMs(day);
+    private _handleAddBlock(day: EntityScheduleDay, lane: EntityScheduleLane): void {
+        const startMs = this._findFreeStartMs(day, this._dayBlocks(day, lane));
         if (startMs === null) {
             return;
         }
 
-        this._beginEdit([], startMs, this._resolveDefaultEndMs(day, startMs), this._buildDefaultAction());
+        this._beginEdit([], startMs, this._resolveDefaultEndMs(day, startMs), this._buildDefaultAction(lane));
     }
 
     /**
@@ -807,7 +951,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
-        this._draft = this._clearSlots(this._draft, block.slotIds);
+        this._setDraft(this._clearSlots(this._draft, block.slotIds));
     }
 
     private _handleRemoveEditedBlock(): void {
@@ -818,7 +962,7 @@ export class SchedulingEntityDayEditor extends LitElement {
 
         // Back to the pre-edit draft minus the block: whatever the session did
         // to the range goes away with it.
-        this._draft = this._clearSlots(this._draftBeforeEdit, editing.originalSlotIds);
+        this._setDraft(this._clearSlots(this._draftBeforeEdit, editing.originalSlotIds));
         this._editing = null;
         this._draftBeforeEdit = {};
     }
@@ -831,18 +975,29 @@ export class SchedulingEntityDayEditor extends LitElement {
     /**
      * Move the block's start, dragging the end with it when it would overtake
      * it, so the block keeps its length instead of collapsing.
+     *
+     * The end it drags along stops at the neighbour, exactly as a drag on the
+     * band does. Bounding only by the end of the day would make this picker the
+     * back door that eats the next block.
      */
     private _handleStartChange(event: Event): void {
         const editing = this._editing;
         const day = this._selectedDay();
-        if (editing === null || day === null) {
+        const lane = this._selectedLane;
+        if (editing === null || day === null || lane === null) {
             return;
         }
 
+        const limits = resolveEntityScheduleRangeLimits({
+            blocks: this._dayBlocks(day, lane),
+            day,
+            startMs: editing.startMs,
+            endMs: editing.endMs,
+        });
         const startMs = Number((event.currentTarget as HTMLSelectElement).value);
         const endMs = startMs < editing.endMs
             ? editing.endMs
-            : Math.min(startMs + (editing.endMs - editing.startMs), day.endMs);
+            : Math.min(startMs + (editing.endMs - editing.startMs), limits.maxMs);
         this._updateEditSession({ ...editing, startMs, endMs });
     }
 
@@ -896,6 +1051,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         this._draftBeforeEdit = { ...this._draft };
+        this._editSessionId += 1;
         this._updateEditSession({
             originalSlotIds: [...originalSlotIds],
             startMs: editableStartMs,
@@ -914,13 +1070,13 @@ export class SchedulingEntityDayEditor extends LitElement {
      */
     private _updateEditSession(session: EntityScheduleEditSession): void {
         this._editing = session;
-        this._draft = this._applyRange({
+        this._setDraft(this._applyRange({
             base: this._draftBeforeEdit,
             clearSlotIds: session.originalSlotIds,
             startMs: session.startMs,
             endMs: session.endMs,
             action: session.valid ? session.action : null,
-        });
+        }));
     }
 
     private _commitEditSession(): void {
@@ -946,11 +1102,12 @@ export class SchedulingEntityDayEditor extends LitElement {
         action: EntityScheduleAction;
     }): EntityScheduleDraft {
         const day = this._selectedDay();
-        if (day === null || this.target === null) {
+        const lane = this._selectedLane;
+        if (day === null || lane === null) {
             return base;
         }
 
-        const emptyAction = getEmptyEntityScheduleAction(this.target);
+        const emptyAction = getEmptyEntityScheduleAction(lane.target);
         const next = this._clearSlots(base, clearSlotIds);
         const rangeAction = isEntityScheduleActionEmpty(action) ? emptyAction : action;
         for (const slot of selectEntityScheduleSlotsInRange({ day, startMs, endMs })) {
@@ -970,11 +1127,12 @@ export class SchedulingEntityDayEditor extends LitElement {
         slotIds: readonly string[],
     ): EntityScheduleDraft {
         const day = this._selectedDay();
-        if (this.target === null || day === null) {
+        const lane = this._selectedLane;
+        if (lane === null || day === null) {
             return base;
         }
 
-        const emptyAction = getEmptyEntityScheduleAction(this.target);
+        const emptyAction = getEmptyEntityScheduleAction(lane.target);
         const editableSlotIds = new Set(this._editableSlotIds(day));
         const next: EntityScheduleDraft = { ...base };
         for (const slotId of slotIds) {
@@ -996,8 +1154,10 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     /** The first slot start of the day with nothing scheduled on it. */
-    private _findFreeStartMs(day: EntityScheduleDay): number | null {
-        const blocks = this._dayBlocks(day);
+    private _findFreeStartMs(
+        day: EntityScheduleDay,
+        blocks: readonly EntityScheduleBlock[],
+    ): number | null {
         const candidates = buildEntityScheduleBoundaryOptions({ day })
             .filter((ms) => ms >= day.editableFromMs && ms < day.endMs);
         return candidates.find(
@@ -1018,12 +1178,12 @@ export class SchedulingEntityDayEditor extends LitElement {
      * obvious "run it" for each lane, so adding a block and pressing Done is a
      * complete action rather than an empty one.
      */
-    private _buildDefaultAction(): EntityScheduleAction {
-        if (this.target?.kind === "inverter") {
+    private _buildDefaultAction(lane: EntityScheduleLane): EntityScheduleAction {
+        if (lane.target.kind === "inverter") {
             return { kind: "charge_to_target_soc", targetSoc: 100 };
         }
 
-        const appliance = this.appliance;
+        const appliance = lane.appliance;
         if (appliance?.kind === "ev_charger") {
             return { charge: true };
         }
@@ -1068,8 +1228,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _isDirty(): boolean {
-        return this.target !== null
-            && isEntityScheduleDraftDirty(this._baselineSlots, this.target, this._draft);
+        return areEntityScheduleLanesDirty(this._baselineSlots, this._laneDrafts(), this.nowMs);
     }
 
     private _canSave(): boolean {
@@ -1079,17 +1238,25 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _handleSave(): void {
-        if (this.target === null || !this._canSave()) {
+        if (!this._canSave()) {
             return;
         }
 
         this._commitEditSession();
-        const patches = buildEntitySchedulePatches({
+        // Every lane's draft in one batch: a slot two entities both changed has
+        // to leave as a single patch, or one of the two edits is lost.
+        const patches = buildEntityScheduleLanePatches({
             slots: this._baselineSlots,
-            target: this.target,
-            draft: this._draft,
+            lanes: this._laneDrafts(),
             nowMs: this.nowMs,
         });
+        // Nothing writable left -- the drafted slots elapsed between the press
+        // and here. Stay open rather than close as if the day had been saved;
+        // Save disables itself as soon as the next tick re-reads the drafts.
+        if (patches.length === 0) {
+            return;
+        }
+
         this.dispatchEvent(new CustomEvent<EntityScheduleSaveDetail>("entity-schedule-save", {
             bubbles: true,
             composed: true,

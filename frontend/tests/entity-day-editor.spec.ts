@@ -33,9 +33,9 @@ async function loadCardBundle(page: Page): Promise<void> {
  */
 async function mountEditor(
     page: Page,
-    options: { neighbour?: boolean; straddling?: boolean } = {},
+    options: { neighbour?: boolean; straddling?: boolean; multiLane?: boolean } = {},
 ): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling }) => {
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling, multiLane }) => {
         const buildSlot = (dayKey: string, hour: number) => {
             const startMs = Date.parse(`${dayKey}T${String(hour).padStart(2, "0")}:00:00Z`);
             const endMs = startMs + 3_600_000;
@@ -87,10 +87,7 @@ async function mountEditor(
             saved.push((event as CustomEvent).detail.patches);
         });
 
-        const el = document.createElement("scheduling-entity-day-editor") as any;
-        el.localize = (key: string) => key;
-        el.target = { kind: "appliance", applianceId: "boiler" };
-        el.appliance = {
+        const boiler = {
             id: "boiler",
             name: "Boiler",
             kind: "generic",
@@ -100,6 +97,40 @@ async function mountEditor(
             controlEntityIds: { primary: "switch.boiler" },
             scheduleCapabilities: { onOffToggle: true },
         };
+        const pump = { ...boiler, id: "pump", name: "Pump", icon: "mdi:pump", order: 1 };
+
+        const el = document.createElement("scheduling-entity-day-editor") as any;
+        el.localize = (key: string) => key;
+        el.target = { kind: "appliance", applianceId: "boiler" };
+        el.appliance = boiler;
+        if (multiLane) {
+            el.lanes = [
+                {
+                    key: "inverter",
+                    target: { kind: "inverter" },
+                    name: "Inverter",
+                    icon: "mdi:solar-power",
+                    appliance: null,
+                    isAvailable: true,
+                },
+                {
+                    key: "appliance:boiler",
+                    target: { kind: "appliance", applianceId: "boiler" },
+                    name: "Boiler",
+                    icon: "mdi:water-boiler",
+                    appliance: boiler,
+                    isAvailable: true,
+                },
+                {
+                    key: "appliance:pump",
+                    target: { kind: "appliance", applianceId: "pump" },
+                    name: "Pump",
+                    icon: "mdi:pump",
+                    appliance: pump,
+                    isAvailable: false,
+                },
+            ];
+        }
         el.slots = slots;
         el.entityName = "Boiler";
         el.currentDayKey = dayOne;
@@ -114,6 +145,7 @@ async function mountEditor(
         nowMs: NOW_MS,
         neighbour: options.neighbour ?? false,
         straddling: options.straddling ?? false,
+        multiLane: options.multiLane ?? false,
     });
 
     await page.waitForFunction(() => {
@@ -144,17 +176,22 @@ async function editingRange(page: Page): Promise<string | null> {
     });
 }
 
-/** Page x for a moment on the band's track. */
-async function trackPoint(page: Page, atMs: number): Promise<{ x: number; y: number }> {
-    return page.evaluate((ms) => {
+/** Page x for a moment on a lane's track, defaulting to the first lane. */
+async function trackPoint(
+    page: Page,
+    atMs: number,
+    laneKey?: string,
+): Promise<{ x: number; y: number }> {
+    return page.evaluate(({ ms, lane }) => {
         const el = document.querySelector("scheduling-entity-day-editor") as any;
         const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
-        const track = band.shadowRoot.querySelector(".track") as HTMLElement;
+        const selector = lane === undefined ? ".track" : `.lane[data-lane="${lane}"] .track`;
+        const track = band.shadowRoot.querySelector(selector) as HTMLElement;
         const rect = track.getBoundingClientRect();
         const day = band.day;
         const ratio = (ms - day.startMs) / (day.endMs - day.startMs);
         return { x: rect.left + ratio * rect.width, y: rect.top + rect.height / 2 };
-    }, atMs);
+    }, { ms: atMs, lane: laneKey });
 }
 
 async function savedPatches(page: Page) {
@@ -415,11 +452,215 @@ test.describe("entity day editor", () => {
         ]);
     });
 
+    /**
+     * The "from" picker moves the end along with the start, and that end has to
+     * stop at the neighbour exactly as a drag does -- otherwise the picker is
+     * the back door that overwrites the block next door.
+     */
+    test("moving a block's start with the picker still stops at the neighbour", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { neighbour: true });
+
+        await page.locator(".block-row").nth(1).locator(".block-main").click();
+        await page.locator(".edit-panel select").first()
+            .selectOption(String(Date.parse(`${DAY_ONE}T20:00:00Z`)));
+
+        // 20:00 + the block's two hours would reach 22:00, over the neighbour
+        // that starts at 21:00. It is cut to 21:00 instead.
+        expect(await editingRange(page)).toBe(
+            `${Date.parse(`${DAY_ONE}T20:00:00Z`)}|${Date.parse(`${DAY_ONE}T21:00:00Z`)}`,
+        );
+
+        await page.locator("ha-button[slot=primaryAction]").click();
+        const [patches] = await savedPatches(page);
+        expect(patches.map((patch: { id: string }) => patch.id)).not.toContain(
+            `${DAY_ONE}T21:00:00.000Z`,
+        );
+    });
+
+    /**
+     * A running block starts in the past but the session only owns the part
+     * still ahead, so a drag has to move that part -- carrying the elapsed hours
+     * along would stretch the block by however much of it had already happened.
+     */
+    test("dragging a running block moves only the part still ahead", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { straddling: true });
+
+        // The block runs 08:00-12:00 and it is 10:30, so the session is
+        // 10:00-12:00. One hour to the right must land on 11:00-13:00.
+        const from = await trackPoint(page, Date.parse(`${DAY_ONE}T11:00:00Z`));
+        const to = await trackPoint(page, Date.parse(`${DAY_ONE}T12:00:00Z`));
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, { steps: 6 });
+        await page.mouse.up();
+
+        expect(await editingRange(page)).toBe(
+            `${Date.parse(`${DAY_ONE}T11:00:00Z`)}|${Date.parse(`${DAY_ONE}T13:00:00Z`)}`,
+        );
+    });
+
+    /**
+     * Save must not offer to write a draft that has since elapsed: the patch
+     * builder would drop every slot, and the dialog would close over an empty
+     * batch as if the day had been saved.
+     */
+    test("a draft whose slots elapse stops being savable", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const point = await trackPoint(page, Date.parse(`${DAY_ONE}T11:00:00Z`));
+        await page.mouse.click(point.x, point.y);
+        // `ha-button` is not a native control here, so ask for the attribute
+        // the disabled binding actually sets.
+        const saveDisabled = () => page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            return el.shadowRoot.querySelector("ha-button[slot=primaryAction]").hasAttribute("disabled");
+        });
+        expect(await saveDisabled()).toBe(false);
+
+        // Time moves past the drafted block, as the card's clock tick would.
+        await page.evaluate((nowMs) => {
+            (document.querySelector("scheduling-entity-day-editor") as any).nowMs = nowMs;
+        }, Date.parse(`${DAY_ONE}T12:30:00Z`));
+
+        expect(await saveDisabled()).toBe(true);
+    });
+
     test("a past block cannot be edited from the band either", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
+        // Pressing it is allowed -- that is how its lane gets selected -- but it
+        // opens no session, because none of its slots can still be written.
         const pastSegment = page.locator("scheduling-entity-day-band .segment").first();
-        await expect(pastSegment).toBeDisabled();
+        await expect(pastSegment).toHaveClass(/\bpast\b/);
+        await pastSegment.click();
+        expect(await editingRange(page)).toBeNull();
+    });
+
+    /**
+     * With every controllable entity stacked on one axis, the thing that can
+     * quietly go wrong is ownership: which lane an edit lands in, and whether
+     * two lanes that touched the same slot both survive the save.
+     */
+    test.describe("with every entity stacked", () => {
+        const laneState = (page: Page) => page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            return {
+                lanes: [...band.shadowRoot.querySelectorAll(".lane")].map((lane: Element) => ({
+                    key: lane.getAttribute("data-lane"),
+                    selected: lane.classList.contains("selected"),
+                })),
+                blockListLabel: el.shadowRoot.querySelector(".block-list .field-label")
+                    ?.textContent?.trim() ?? null,
+            };
+        });
+
+        test("opens on the entity that was clicked, with the others as context", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            const state = await laneState(page);
+            expect(state.lanes).toEqual([
+                { key: "inverter", selected: false },
+                { key: "appliance:boiler", selected: true },
+                { key: "appliance:pump", selected: false },
+            ]);
+            expect(state.blockListLabel).toContain("Boiler");
+        });
+
+        test("clicking another lane's track moves the editor to that entity", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            // The inverter's whole day is free, so this is a gap: it selects the
+            // lane and opens a session on it in one press.
+            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
+            await page.mouse.click(point.x, point.y);
+
+            const state = await laneState(page);
+            expect(state.lanes.find((lane) => lane.selected)?.key).toBe("inverter");
+            expect(state.blockListLabel).toContain("Inverter");
+            expect(await editingRange(page)).not.toBeNull();
+        });
+
+        /**
+         * Two lanes writing one slot must arrive as one patch. A patch carries
+         * the slot's whole set of user domains, so sending one per lane would
+         * make the last one win and drop the other entity's edit.
+         */
+        test("edits on two entities leave in a single patch per slot", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            const inverterPoint = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
+            await page.mouse.click(inverterPoint.x, inverterPoint.y);
+            const boilerPoint = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:boiler");
+            await page.mouse.click(boilerPoint.x, boilerPoint.y);
+
+            await page.locator("ha-button[slot=primaryAction]").click();
+            const [patches] = await savedPatches(page);
+            // Both blocks start where the pointer landed, so both land on the
+            // 13:00 slot -- and it is patched once, carrying both lanes.
+            expect(patches).toHaveLength(1);
+            expect(patches[0].id).toBe(`${DAY_ONE}T13:00:00.000Z`);
+            expect(patches[0].domains.inverter.kind).toBe("charge_to_target_soc");
+            expect(patches[0].domains.appliances.boiler).toEqual({ on: true });
+        });
+
+        test("pressing a lane's elapsed stretch selects it, like its name does", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            // 03:00 is behind the editable boundary, so there is no gap button
+            // there and the press lands on the bare track.
+            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T03:00:00Z`), "inverter");
+            await page.mouse.click(point.x, point.y);
+
+            const state = await laneState(page);
+            expect(state.lanes.find((lane) => lane.selected)?.key).toBe("inverter");
+            expect(await editingRange(page)).toBeNull();
+        });
+
+        /**
+         * The parent echoes a rebuilt action back after every keystroke, so the
+         * SoC field must not re-seed itself from it: it would refill an emptied
+         * field with the 0 that "" parses to, and rewrite 05 to 5 mid-entry.
+         */
+        test("typing a target SoC is not undone by the action echoing back", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
+            await page.mouse.click(point.x, point.y);
+
+            const typeSoc = (value: string) => page.evaluate((next) => {
+                const el = document.querySelector("scheduling-entity-day-editor") as any;
+                const editor = el.shadowRoot.querySelector("scheduling-entity-action-editor") as any;
+                const field = editor.shadowRoot.querySelector("ha-textfield") as any;
+                field.value = next;
+                field.dispatchEvent(new Event("input", { bubbles: true }));
+                return el.updateComplete.then(() => editor.updateComplete).then(() => field.value);
+            }, value);
+
+            expect(await typeSoc("8")).toBe("8");
+            expect(await typeSoc("")).toBe("");
+            expect(await typeSoc("05")).toBe("05");
+        });
+
+        test("an entity that cannot be reached is still a lane", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:pump");
+            await page.mouse.click(point.x, point.y);
+
+            const state = await laneState(page);
+            expect(state.lanes.find((lane) => lane.selected)?.key).toBe("appliance:pump");
+            expect(state.blockListLabel).toContain("Pump");
+        });
     });
 });

@@ -274,7 +274,9 @@
       "previous_day": "Předchozí den",
       "next_day": "Další den",
       "schedule_changed": "Rozvrh se mezitím změnil. Uložení přepíše načtené změny pro toto zařízení.",
-      "edit_hint": "Klepnutím vyberte blok. Táhnutím v grafu ho posunete, za okraje zkrátíte nebo prodloužíte."
+      "edit_hint": "Klepnutím vyberte blok. Táhnutím v grafu ho posunete, za okraje zkrátíte nebo prodloužíte.",
+      "title": "Plán zařízení",
+      "select_entity": "Vyberte zařízení kliknutím na jeho pruh nebo na jeho blok."
     }
   },
   "bias_correction": {

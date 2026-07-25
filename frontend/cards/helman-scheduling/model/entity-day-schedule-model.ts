@@ -1,5 +1,7 @@
+import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
 import type {
     ScheduleApplianceAction,
+    ScheduleApplianceEditIntent,
     ScheduleInverterAction,
     ScheduleRangeEditIntent,
     ScheduleSetBy,
@@ -22,6 +24,28 @@ const FALLBACK_SLOT_DURATION_MS = 60 * 60 * 1000;
 export type EntityScheduleTarget =
     | { kind: "inverter" }
     | { kind: "appliance"; applianceId: string };
+
+/** A stable identity for a target, usable as an object key and a DOM id. */
+export function getEntityScheduleTargetKey(target: EntityScheduleTarget): string {
+    return target.kind === "inverter" ? "inverter" : `appliance:${target.applianceId}`;
+}
+
+/**
+ * One controllable entity as a row of the editor: its lane in the schedule plus
+ * what it takes to label and render it.
+ */
+export interface EntityScheduleLane {
+    key: string;
+    target: EntityScheduleTarget;
+    name: string;
+    icon: string;
+    appliance: ScheduleApplianceMetadata | null;
+    /** The entity cannot be read right now; its schedule is still editable. */
+    isAvailable: boolean;
+}
+
+/** Every lane's pending edits, keyed by lane key. */
+export type EntityScheduleDrafts = Record<string, EntityScheduleDraft>;
 
 /**
  * One entity's action in one slot.
@@ -159,14 +183,6 @@ export function readEntityScheduleDraftAction(
     return slot.id in draft ? draft[slot.id] : readEntityScheduleAction(slot, target);
 }
 
-export function isEntityScheduleDraftDirty(
-    slots: readonly ScheduleSlot[],
-    target: EntityScheduleTarget,
-    draft: EntityScheduleDraft,
-): boolean {
-    return slots.some((slot) => _isSlotDirty(slot, target, draft));
-}
-
 /**
  * The schedule split into days, each with its clock-time bounds.
  *
@@ -202,11 +218,12 @@ export function buildEntityScheduleDays({
         daySlots.push(slot);
     }
 
-    const dayKeys = [...slotsByDayKey.keys()];
-    return dayKeys.map((dayKey, index) => {
-        const daySlots = slotsByDayKey.get(dayKey) ?? [];
+    const days = [...slotsByDayKey.entries()];
+    return days.map(([dayKey, daySlots], index) => {
         const startMs = _resolveLocalDayStartMs(daySlots[0].startMs, timeZone);
-        const nextDaySlots = slotsByDayKey.get(dayKeys[index + 1]);
+        // A day ends where the next one's slots begin, so a schedule that stops
+        // mid-day does not claim the hours it has no slots for.
+        const nextDaySlots = days[index + 1]?.[1];
         const endMs = nextDaySlots === undefined
             ? startMs + DAY_MS
             : _resolveLocalDayStartMs(nextDaySlots[0].startMs, timeZone);
@@ -413,18 +430,44 @@ export function buildEntitySchedulePatches({
     draft: EntityScheduleDraft;
     nowMs: number;
 }): ScheduleSlotPatch[] {
+    return buildEntityScheduleLanePatches({ slots, lanes: [{ target, draft }], nowMs });
+}
+
+/**
+ * Every lane's draft as one batch of slot patches.
+ *
+ * A patch carries the slot's whole set of user domains, so two lanes that both
+ * changed the same slot have to arrive as one patch built from both -- sending
+ * one patch per lane would make the last one win and silently drop the other
+ * entity's edit. Slots are therefore grouped by their combined intent, not by
+ * one lane's action.
+ */
+export function buildEntityScheduleLanePatches({
+    slots,
+    lanes,
+    nowMs,
+}: {
+    slots: readonly ScheduleSlot[];
+    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[];
+    nowMs: number;
+}): ScheduleSlotPatch[] {
     const editableFromMs = _resolveEditableFromMs(slots, nowMs);
-    const groups = new Map<string, { action: EntityScheduleAction; slots: ScheduleSlot[] }>();
+    const groups = new Map<string, { intent: ScheduleRangeEditIntent; slots: ScheduleSlot[] }>();
     for (const slot of slots) {
-        if (slot.startMs < editableFromMs || !_isSlotDirty(slot, target, draft)) {
+        if (slot.startMs < editableFromMs) {
             continue;
         }
 
-        const action = readEntityScheduleDraftAction(slot, target, draft);
-        const key = getEntityScheduleActionKey(action);
+        const dirtyLanes = lanes.filter((lane) => _isSlotDirty(slot, lane.target, lane.draft));
+        if (dirtyLanes.length === 0) {
+            continue;
+        }
+
+        const intent = _buildCombinedEditIntent(slot, dirtyLanes);
+        const key = _getEditIntentKey(intent);
         const group = groups.get(key);
         if (group === undefined) {
-            groups.set(key, { action, slots: [slot] });
+            groups.set(key, { intent, slots: [slot] });
             continue;
         }
 
@@ -434,9 +477,59 @@ export function buildEntitySchedulePatches({
     return [...groups.values()]
         .flatMap((group) => buildScheduleSlotPatches({
             selectedSlots: group.slots,
-            result: _buildEntityEditIntent(target, group.action),
+            result: group.intent,
         }))
         .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+/**
+ * Some lane's draft differs from the saved schedule *in a slot that can still
+ * be written*.
+ *
+ * The elapsed slots are filtered out here exactly as they are when the patches
+ * are built, so "there is something to save" and "saving produces a patch"
+ * cannot disagree. Without that, a draft whose slots quietly elapsed would keep
+ * Save enabled and then close the dialog over an empty batch, as if the day had
+ * been written.
+ */
+export function areEntityScheduleLanesDirty(
+    slots: readonly ScheduleSlot[],
+    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[],
+    nowMs: number,
+): boolean {
+    const editableFromMs = _resolveEditableFromMs(slots, nowMs);
+    return slots.some((slot) => slot.startMs >= editableFromMs
+        && lanes.some((lane) => _isSlotDirty(slot, lane.target, lane.draft)));
+}
+
+function _buildCombinedEditIntent(
+    slot: ScheduleSlot,
+    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[],
+): ScheduleRangeEditIntent {
+    let inverter: ScheduleRangeEditIntent["inverter"] = { kind: "keep" };
+    const appliances: Record<string, ScheduleApplianceEditIntent> = {};
+    for (const lane of lanes) {
+        const laneIntent = _buildEntityEditIntent(
+            lane.target,
+            readEntityScheduleDraftAction(slot, lane.target, lane.draft),
+        );
+        if (laneIntent.inverter.kind !== "keep") {
+            inverter = laneIntent.inverter;
+        }
+
+        Object.assign(appliances, laneIntent.appliances);
+    }
+
+    return { inverter, appliances };
+}
+
+/** Two slots share a patch group only when they are being written identically. */
+function _getEditIntentKey(intent: ScheduleRangeEditIntent): string {
+    const appliances = Object.keys(intent.appliances)
+        .sort()
+        .map((applianceId) => `${applianceId}=${JSON.stringify(intent.appliances[applianceId])}`)
+        .join(",");
+    return `${JSON.stringify(intent.inverter)}|${appliances}`;
 }
 
 function _buildEntityEditIntent(

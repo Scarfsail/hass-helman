@@ -21,7 +21,11 @@ import "./dialogs/scheduling-entity-day-editor";
 import "./dialogs/scheduling-range-edit-dialog";
 import type { OpenEntityScheduleDetail } from "./components/scheduling-running-entities";
 import type { EntityScheduleSaveDetail } from "./dialogs/scheduling-entity-day-editor";
-import type { EntityScheduleTarget } from "./model/entity-day-schedule-model";
+import {
+    getEntityScheduleTargetKey,
+    type EntityScheduleLane,
+    type EntityScheduleTarget,
+} from "./model/entity-day-schedule-model";
 import {
     getScheduleApplianceById,
     normalizeScheduleApplianceMetadata,
@@ -478,6 +482,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                     .localize=${this._localize}
                     .target=${this._entityEditorTarget}
                     .appliance=${this._entityEditorAppliance}
+                    .lanes=${this._buildEntityEditorLanes(controllableEntityStatuses)}
                     .slots=${this._normalizedSchedule.slots}
                     .forecastPoints=${this._slotForecastMap.points}
                     .entityName=${this._entityEditorName}
@@ -663,9 +668,52 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
             }
         }
 
+        // Close the way Cancel does and let `closed` tear the rest down:
+        // dropping the target here too would remove the dialog from the DOM in
+        // the same update, so `closed` would never fire and the history entry it
+        // pushed would go unconsumed -- swallowing the user's next Back press.
         this._entityEditorOpen = false;
-        this._entityEditorTarget = null;
-        this._entityEditorScheduleChanged = false;
+    }
+
+    /**
+     * The editor's roster of tracks: every controllable entity whose lane the
+     * card can author.
+     *
+     * Ordered inverter first and then by name rather than by what happens to be
+     * running, because these are stacked timelines -- a row that moves between
+     * refreshes is a row nobody can point at.
+     */
+    private _buildEntityEditorLanes(
+        statuses: readonly ControllableEntityStatus[],
+    ): EntityScheduleLane[] {
+        return statuses
+            .flatMap((status) => {
+                const target = status.scheduleTarget;
+                if (target === null) {
+                    return [];
+                }
+
+                const appliance = target.kind === "inverter"
+                    ? null
+                    : getScheduleApplianceById(this._appliances, target.applianceId);
+                return [{
+                    key: getEntityScheduleTargetKey(target),
+                    target,
+                    name: status.name,
+                    icon: (status.stateObj.attributes.icon as string | undefined)
+                        ?? appliance?.icon
+                        ?? "mdi:flash-outline",
+                    appliance,
+                    isAvailable: status.isAvailable,
+                }];
+            })
+            .sort((left, right) => {
+                if ((left.target.kind === "inverter") !== (right.target.kind === "inverter")) {
+                    return left.target.kind === "inverter" ? -1 : 1;
+                }
+
+                return left.name.localeCompare(right.name, this._locale);
+            });
     }
 
     private get _entityEditorAppliance(): ScheduleApplianceMetadata | null {

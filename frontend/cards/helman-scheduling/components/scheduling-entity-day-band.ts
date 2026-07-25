@@ -25,16 +25,35 @@ const MIN_BAR_PCT = 8;
 /** Segments narrower than this are move-only: two edge handles would not fit. */
 const MIN_RESIZABLE_WIDTH_PX = 34;
 
+/** One entity's row of the band: its schedule for the day, already clipped. */
+export interface EntityDayBandLane {
+    key: string;
+    name: string;
+    icon: string;
+    target: EntityScheduleTarget;
+    appliance: ScheduleApplianceMetadata | null;
+    blocks: readonly EntityScheduleBlock[];
+    isAvailable: boolean;
+}
+
 export interface EntityDayBandBlockSelectDetail {
+    laneKey: string;
     blockKey: string;
 }
 
 export interface EntityDayBandGapSelectDetail {
+    laneKey: string;
     startMs: number;
+    /** Where the free stretch ends, so the new block stops short of it. */
+    limitMs: number;
 }
 
 export interface EntityDayBandBlockHoverDetail {
     blockKey: string | null;
+}
+
+export interface EntityDayBandLaneSelectDetail {
+    laneKey: string;
 }
 
 export interface EntityDayBandRangeChangeDetail {
@@ -50,6 +69,7 @@ export interface EntityScheduleRange {
 type DragMode = "start" | "end" | "move";
 
 interface DragSession {
+    laneKey: string;
     mode: DragMode;
     /** The block's range when the drag began; every update derives from it. */
     originStartMs: number;
@@ -63,12 +83,15 @@ interface DragSession {
 }
 
 /**
- * One day of one entity's schedule as a clock-time band.
+ * One day of every controllable entity's schedule, as a stack of clock-time
+ * tracks over a shared battery/solar/price chart.
  *
- * The point of the band over a list of rows is that a whole day fits at once,
- * and that battery, solar and price sit directly under the blocks -- for a
- * single appliance the only real question is *when*, and that question is
- * answered by the forecast, not by the schedule.
+ * All the entities share one time axis on purpose: the question this editor
+ * answers is *when*, and "when" is only answerable against the forecast and
+ * against what everything else in the house is already doing. One lane is the
+ * selected one -- it is the only one the block list and the editor below are
+ * about -- and the rest are muted so the stack still reads as context rather
+ * than as seven equal things.
  *
  * Blocks are draggable: the edges resize, the middle moves. A drag stops at a
  * neighbouring block rather than eating it, so nothing the user was not
@@ -80,11 +103,70 @@ export class SchedulingEntityDayBand extends LitElement {
         helmanColorVars,
         schedulingSharedStyles,
         css`
+            /* A label column beside a single shared time column: every lane and
+               every context row is the same span of the same day, so they have
+               to line up to the pixel. */
             .band {
-                display: flex;
-                flex-direction: column;
-                gap: 2px;
+                display: grid;
+                grid-template-columns: minmax(96px, 156px) 1fr;
+                align-items: center;
+                gap: 2px 8px;
                 touch-action: pan-y;
+            }
+
+            .row-label {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                min-width: 0;
+                color: var(--secondary-text-color);
+                font-size: 0.72rem;
+            }
+
+            .row-label.context {
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                font-size: 0.6rem;
+            }
+
+            .lane-label {
+                padding: 0 2px;
+                border: none;
+                border-radius: 6px;
+                background: none;
+                color: var(--secondary-text-color);
+                font: inherit;
+                font-size: 0.72rem;
+                text-align: start;
+                cursor: pointer;
+            }
+
+            .lane-label ha-icon {
+                flex: 0 0 auto;
+                --mdc-icon-size: 15px;
+            }
+
+            .lane-name {
+                flex: 1 1 auto;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .lane-total {
+                flex: 0 0 auto;
+                font-size: 0.66rem;
+                font-variant-numeric: tabular-nums;
+                opacity: 0.75;
+            }
+
+            .lane.selected .lane-label {
+                color: var(--primary-text-color);
+                font-weight: 600;
+            }
+
+            .lane.unavailable .lane-name {
+                font-style: italic;
             }
 
             .context-row {
@@ -93,6 +175,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 border-radius: 4px;
                 background: var(--secondary-background-color);
                 overflow: hidden;
+                cursor: default;
             }
 
             /* Price gets more room: it is drawn around a zero line, so each
@@ -152,24 +235,37 @@ export class SchedulingEntityDayBand extends LitElement {
                 vector-effect: non-scaling-stroke;
             }
 
-            .context-label {
-                position: absolute;
-                top: 1px;
-                left: 4px;
-                color: var(--secondary-text-color);
-                font-size: 0.6rem;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                pointer-events: none;
+            /* The lane rows are laid out by the grid, so the row wrapper only
+               exists to carry the selected/muted state down to both cells. */
+            .lane {
+                display: contents;
             }
 
             .track {
                 position: relative;
-                height: 40px;
+                height: 30px;
                 border: 1px solid var(--divider-color);
                 border-radius: 6px;
                 background: var(--card-background-color);
                 overflow: hidden;
+            }
+
+            /* Muting the unselected lanes is what makes the selected one a
+               foreground: they stay legible as context, but they do not compete
+               with the row the editor below is about. With nothing selected
+               there is no foreground to protect, so the day reads at full
+               strength as the plan for the whole house. */
+            .band.has-selection .lane:not(.selected) .track {
+                opacity: 0.45;
+            }
+
+            .band.has-selection .lane:not(.selected) .track:hover {
+                opacity: 0.75;
+            }
+
+            .lane.selected .track {
+                border-color: color-mix(in srgb, var(--primary-color) 55%, var(--divider-color));
+                box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color) 30%, transparent);
             }
 
             .gap,
@@ -241,11 +337,11 @@ export class SchedulingEntityDayBand extends LitElement {
 
             .segment.past {
                 opacity: 0.45;
-                cursor: default;
+                cursor: pointer;
             }
 
             .segment ha-icon {
-                --mdc-icon-size: 16px;
+                --mdc-icon-size: 14px;
                 pointer-events: none;
             }
 
@@ -316,12 +412,12 @@ export class SchedulingEntityDayBand extends LitElement {
 
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public day!: EntityScheduleDay;
-    @property({ attribute: false }) public blocks: readonly EntityScheduleBlock[] = [];
-    @property({ attribute: false }) public target!: EntityScheduleTarget;
-    @property({ attribute: false }) public appliance: ScheduleApplianceMetadata | null = null;
+    @property({ attribute: false }) public lanes: readonly EntityDayBandLane[] = [];
     @property({ attribute: false }) public forecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
-    /** The range being edited, highlighted here and moved by dragging. */
+    /** The range being edited on the selected lane, highlighted and draggable. */
     @property({ attribute: false }) public editingRange: EntityScheduleRange | null = null;
+    /** The lane the block list and the editor below are about. */
+    @property({ type: String }) public selectedLaneKey: string | null = null;
     @property({ type: Number }) public nowMs = Date.now();
     /** The block the pointer is over, wherever it was pointed at. */
     @property({ type: String }) public hoveredBlockKey: string | null = null;
@@ -329,6 +425,12 @@ export class SchedulingEntityDayBand extends LitElement {
     @property({ type: String }) public timeZone = "UTC";
 
     @state() private _drag: DragSession | null = null;
+    /**
+     * The track's width, measured after each update rather than while
+     * rendering: reading it per segment forces a synchronous layout for every
+     * block of every lane, and during a drag that happens at pointer rate.
+     */
+    @state() private _trackWidthPx = 0;
 
     private readonly _handlePointerMove = (event: PointerEvent): void => {
         const drag = this._drag;
@@ -339,12 +441,21 @@ export class SchedulingEntityDayBand extends LitElement {
         event.preventDefault();
         const pointerMs = this._snapMs(this._readPointerMs(event, drag.trackRect));
         const range = this._resolveDragRange(drag, pointerMs);
+        // Ranges are snapped to whole slots, so most pointer moves land where
+        // the last one did. Announcing those rebuilds the draft for nothing.
+        if (range.startMs === this._lastDragRange?.startMs && range.endMs === this._lastDragRange.endMs) {
+            return;
+        }
+
+        this._lastDragRange = range;
         this.dispatchEvent(new CustomEvent<EntityDayBandRangeChangeDetail>("entity-day-band-range-change", {
             bubbles: true,
             composed: true,
             detail: range,
         }));
     };
+
+    private _lastDragRange: EntityScheduleRange | null = null;
 
     private readonly _handlePointerUp = (event: PointerEvent): void => {
         if (this._drag !== null && event.pointerId !== this._drag.pointerId) {
@@ -359,22 +470,23 @@ export class SchedulingEntityDayBand extends LitElement {
         this._endDrag();
     }
 
+    updated(): void {
+        this._trackWidthPx = this._readTrackRect(this.lanes[0]?.key ?? "")?.width ?? 0;
+    }
+
     render() {
         if (!this.day) {
             return nothing;
         }
 
+        const hasSelection = this.lanes.some((lane) => lane.key === this.selectedLaneKey);
         return html`
-            <div class="band">
+            <div class=${`band${hasSelection ? " has-selection" : ""}`}>
                 ${this._renderSocRow()}
                 ${this._renderSolarRow()}
                 ${this._renderPriceRow()}
-                <div class="track">
-                    ${this._renderGaps()}
-                    ${this.blocks.map((block) => this._renderSegment(block))}
-                    ${this._renderPastOverlay()}
-                    ${this._renderNowMarker()}
-                </div>
+                ${this.lanes.map((lane) => this._renderLane(lane))}
+                <span></span>
                 <div class="axis">
                     ${AXIS_HOURS.map((hour) => html`
                         <span class="axis-tick" style=${`left: ${(hour / 24) * 100}%`}>
@@ -407,12 +519,12 @@ export class SchedulingEntityDayBand extends LitElement {
         const line = points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
         const area = `${points[0].x.toFixed(2)},100 ${line} ${points[points.length - 1].x.toFixed(2)},100`;
         return html`
-            <div class="context-row">
+            <span class="row-label context">${this.localize("scheduling.forecast.battery_label")}</span>
+            <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
                 <svg class="soc-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
                     <polygon class="soc-fill" points=${area}></polygon>
                     <polyline class="soc-line" points=${line}></polyline>
                 </svg>
-                <span class="context-label">${this.localize("scheduling.forecast.battery_label")}</span>
             </div>
         `;
     }
@@ -425,14 +537,14 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         return html`
-            <div class="context-row">
+            <span class="row-label context">${this.localize("scheduling.forecast.solar_label")}</span>
+            <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
                 ${values.map(({ slot, value }) => value === 0 ? nothing : html`
                     <span
                         class="context-bar solar"
                         style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
                     ></span>
                 `)}
-                <span class="context-label">${this.localize("scheduling.forecast.solar_label")}</span>
             </div>
         `;
     }
@@ -446,7 +558,8 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         return html`
-            <div class="context-row price">
+            <span class="row-label context">${this.localize("scheduling.forecast.price_label")}</span>
+            <div class="context-row price" @pointerdown=${this._handleContextPointerDown}>
                 <span class="zero-line"></span>
                 ${values.map(({ slot, value }) => {
                     if (value === 0) {
@@ -464,7 +577,41 @@ export class SchedulingEntityDayBand extends LitElement {
                         ></span>
                     `;
                 })}
-                <span class="context-label">${this.localize("scheduling.forecast.price_label")}</span>
+            </div>
+        `;
+    }
+
+    private _renderLane(lane: EntityDayBandLane) {
+        const selected = lane.key === this.selectedLaneKey;
+        const classes = [
+            "lane",
+            selected ? "selected" : "",
+            lane.isAvailable ? "" : "unavailable",
+        ].filter((value) => value.length > 0).join(" ");
+        return html`
+            <div class=${classes} data-lane=${lane.key}>
+                <button
+                    class="row-label lane-label"
+                    type="button"
+                    aria-pressed=${selected}
+                    title=${lane.name}
+                    @click=${() => this._emitLaneSelect(lane.key)}
+                >
+                    <ha-icon .icon=${lane.icon}></ha-icon>
+                    <span class="lane-name">${lane.name}</span>
+                    ${this._renderLaneTotal(lane)}
+                </button>
+                <!--
+                    Bare track: the elapsed stretch carries no gap button, so a
+                    press there would otherwise do nothing. Pressing a lane
+                    anywhere means "this entity", exactly as its name does.
+                -->
+                <div class="track" @click=${(event: Event) => this._handleTrackClick(event, lane.key)}>
+                    ${this._renderGaps(lane)}
+                    ${lane.blocks.map((block) => this._renderSegment(lane, block, selected))}
+                    ${this._renderPastOverlay()}
+                    ${this._renderNowMarker()}
+                </div>
             </div>
         `;
     }
@@ -474,10 +621,10 @@ export class SchedulingEntityDayBand extends LitElement {
      * there -- pointing at an empty evening is the fastest way to say "run it
      * then".
      */
-    private _renderGaps() {
+    private _renderGaps(lane: EntityDayBandLane) {
         const gaps: { startMs: number; endMs: number }[] = [];
         let cursorMs = Math.max(this.day.startMs, this.day.editableFromMs);
-        for (const block of this.blocks) {
+        for (const block of lane.blocks) {
             if (block.startMs > cursorMs) {
                 gaps.push({ startMs: cursorMs, endMs: block.startMs });
             }
@@ -494,16 +641,39 @@ export class SchedulingEntityDayBand extends LitElement {
                 title=${this.localize("scheduling.entity_editor.add_block")}
                 aria-label=${this.localize("scheduling.entity_editor.add_block")}
                 style=${`left: ${this._toPercent(gap.startMs)}%; width: ${this._toSpanPercent(gap.startMs, gap.endMs)}%`}
-                @click=${() => this._emitGapSelect(gap.startMs)}
+                @click=${(event: MouseEvent) => this._handleGapClick(event, lane.key, gap)}
             ></button>
         `);
     }
 
-    private _renderSegment(block: EntityScheduleBlock) {
-        const presentation = this._getPresentation(block);
-        const editing = this._isEditing(block);
+    /**
+     * A new block starts where the pointer landed, not where the free stretch
+     * began -- on a day with one block in it the gap is most of the day, and
+     * "add a block" has to mean "here".
+     */
+    private _handleGapClick(
+        event: MouseEvent,
+        laneKey: string,
+        gap: { startMs: number; endMs: number },
+    ): void {
+        const trackRect = this._readTrackRect(laneKey);
+        const stepMs = this._resolveStepMs();
+        const startMs = trackRect === null
+            ? gap.startMs
+            : Math.min(
+                Math.max(this._snapMs(this._readPointerMs(event, trackRect)), gap.startMs),
+                Math.max(gap.endMs - stepMs, gap.startMs),
+            );
+        this._emitGapSelect(laneKey, startMs, gap.endMs);
+    }
+
+    private _renderSegment(lane: EntityDayBandLane, block: EntityScheduleBlock, laneSelected: boolean) {
+        const presentation = this._getPresentation(lane, block);
+        const editing = laneSelected && this._isEditing(block);
         const widthPct = this._toSpanPercent(block.startMs, block.endMs);
-        const resizable = !block.isPast && this._isWideEnoughToResize(widthPct);
+        // Handles only on the lane being edited: eight tracks' worth of grips
+        // would be noise, and a muted lane is context, not a control.
+        const resizable = laneSelected && !block.isPast && this._isWideEnoughToResize(widthPct);
         const classes = [
             "segment",
             presentation.toneClass,
@@ -511,40 +681,63 @@ export class SchedulingEntityDayBand extends LitElement {
             block.isDirty ? "dirty" : "",
             block.isPast ? "past" : "",
             editing ? "editing" : "",
-            this.hoveredBlockKey === block.key ? "hovered" : "",
+            laneSelected && this.hoveredBlockKey === block.key ? "hovered" : "",
             this._drag !== null && editing ? "dragging" : "",
         ].filter((value) => value.length > 0).join(" ");
-        const title = `${presentation.label} · ${this._formatRange(block)}`;
+        const title = `${lane.name} · ${presentation.label} · ${this._formatRange(block)}`;
 
         return html`
+            <!--
+                An elapsed block is a live button, not a disabled one: pressing
+                it selects its lane, the same as pressing the lane's name or its
+                empty track, and simply opens no edit session. Marking it
+                disabled would make the oldest part of the day a dead zone --
+                and would lie, since the press does do something.
+            -->
             <button
                 class=${classes}
                 type="button"
-                ?disabled=${block.isPast}
                 title=${title}
                 aria-label=${title}
                 aria-pressed=${editing}
                 style=${`left: ${this._toPercent(block.startMs)}%; width: ${widthPct}%`}
-                @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, block, "move")}
-                @click=${() => this._emitBlockSelect(block)}
-                @mouseenter=${() => this._emitBlockHover(block.key)}
+                @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, lane, block, "move")}
+                @click=${() => this._emitBlockSelect(lane.key, block)}
+                @mouseenter=${() => this._emitBlockHover(laneSelected ? block.key : null)}
                 @mouseleave=${() => this._emitBlockHover(null)}
             >
                 ${resizable ? html`
                     <span
                         class="handle start"
-                        @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, block, "start")}
+                        @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, lane, block, "start")}
                     ></span>
                 ` : nothing}
                 <ha-icon .icon=${presentation.icon}></ha-icon>
                 ${resizable ? html`
                     <span
                         class="handle end"
-                        @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, block, "end")}
+                        @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, lane, block, "end")}
                     ></span>
                 ` : nothing}
             </button>
         `;
+    }
+
+    /**
+     * How long this entity is scheduled to run today.
+     *
+     * The blocks say when; this says how much, which is the number a person
+     * actually holds an opinion about ("the boiler only needs three hours").
+     */
+    private _renderLaneTotal(lane: EntityDayBandLane) {
+        const totalMs = lane.blocks.reduce((total, block) => total + (block.endMs - block.startMs), 0);
+        if (totalMs <= 0) {
+            return nothing;
+        }
+
+        const hours = totalMs / 3_600_000;
+        const label = `${hours.toLocaleString(this.locale, { maximumFractionDigits: 1 })} h`;
+        return html`<span class="lane-total">${label}</span>`;
     }
 
     private _renderPastOverlay() {
@@ -578,13 +771,14 @@ export class SchedulingEntityDayBand extends LitElement {
     /**
      * Begin a drag.
      *
-     * The block is selected first, so a drag on a block that was not being
-     * edited edits it, and the travel limits are frozen here: they come from
-     * where the neighbours are *now*, and the block being dragged changes
-     * identity as it moves.
+     * The block is selected first -- which also selects its lane -- so a drag on
+     * a block that was not being edited edits it. The travel limits are frozen
+     * here: they come from where that lane's neighbours are *now*, and the block
+     * being dragged changes identity as it moves.
      */
     private _handleSegmentPointerDown(
         event: PointerEvent,
+        lane: EntityDayBandLane,
         block: EntityScheduleBlock,
         mode: DragMode,
     ): void {
@@ -594,22 +788,29 @@ export class SchedulingEntityDayBand extends LitElement {
 
         event.stopPropagation();
         event.preventDefault();
-        this._emitBlockSelect(block);
+        this._emitBlockSelect(lane.key, block);
 
-        const trackRect = this._readTrackRect();
+        const trackRect = this._readTrackRect(lane.key);
         if (trackRect === null) {
             return;
         }
 
+        // A block that is already running starts in the past, but the session
+        // the editor opened only owns the part still ahead. Dragging has to move
+        // that part: taking the block's own start as the origin would carry the
+        // elapsed hours along, and the clamp to the editable boundary would then
+        // stretch the block by however much of it had already happened.
+        const originStartMs = Math.max(block.startMs, this.day.editableFromMs);
         this._drag = {
+            laneKey: lane.key,
             mode,
-            originStartMs: block.startMs,
+            originStartMs,
             originEndMs: block.endMs,
             grabMs: this._snapMs(this._readPointerMs(event, trackRect)),
             ...resolveEntityScheduleRangeLimits({
-                blocks: this.blocks,
+                blocks: lane.blocks,
                 day: this.day,
-                startMs: block.startMs,
+                startMs: originStartMs,
                 endMs: block.endMs,
             }),
             trackRect,
@@ -619,6 +820,22 @@ export class SchedulingEntityDayBand extends LitElement {
         window.addEventListener("pointerup", this._handlePointerUp);
         window.addEventListener("pointercancel", this._handlePointerUp);
     }
+
+    /** Only presses that missed a gap or a segment; those speak for themselves. */
+    private _handleTrackClick(event: Event, laneKey: string): void {
+        if (event.target === event.currentTarget) {
+            this._emitLaneSelect(laneKey);
+        }
+    }
+
+    /** Pressing the forecast rows is how the user says "none of them". */
+    private _handleContextPointerDown = (event: PointerEvent): void => {
+        event.stopPropagation();
+        this.dispatchEvent(new CustomEvent("entity-day-band-context-select", {
+            bubbles: true,
+            composed: true,
+        }));
+    };
 
     private _resolveDragRange(drag: DragSession, pointerMs: number): EntityDayBandRangeChangeDetail {
         const stepMs = this._resolveStepMs();
@@ -652,17 +869,18 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         this._drag = null;
+        this._lastDragRange = null;
         window.removeEventListener("pointermove", this._handlePointerMove);
         window.removeEventListener("pointerup", this._handlePointerUp);
         window.removeEventListener("pointercancel", this._handlePointerUp);
     }
 
-    private _readTrackRect(): DOMRect | null {
-        const track = this.renderRoot.querySelector(".track");
+    private _readTrackRect(laneKey: string): DOMRect | null {
+        const track = this.renderRoot.querySelector(`.lane[data-lane="${laneKey}"] .track`);
         return track === null ? null : track.getBoundingClientRect();
     }
 
-    private _readPointerMs(event: PointerEvent, trackRect: DOMRect): number {
+    private _readPointerMs(event: { clientX: number }, trackRect: DOMRect): number {
         if (trackRect.width <= 0) {
             return this.day.startMs;
         }
@@ -692,8 +910,8 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     private _isWideEnoughToResize(widthPct: number): boolean {
-        const trackWidth = this._readTrackRect()?.width ?? 0;
-        return trackWidth === 0 || (widthPct / 100) * trackWidth >= MIN_RESIZABLE_WIDTH_PX;
+        return this._trackWidthPx === 0
+            || (widthPct / 100) * this._trackWidthPx >= MIN_RESIZABLE_WIDTH_PX;
     }
 
     private _isEditing(block: EntityScheduleBlock): boolean {
@@ -719,13 +937,13 @@ export class SchedulingEntityDayBand extends LitElement {
         return Math.max(Math.min(Math.abs(value) / max, 1) * 100, MIN_BAR_PCT);
     }
 
-    private _getPresentation(block: EntityScheduleBlock) {
-        if (this.target.kind === "inverter" && isEntityInverterAction(block.action)) {
+    private _getPresentation(lane: EntityDayBandLane, block: EntityScheduleBlock) {
+        if (lane.target.kind === "inverter" && isEntityInverterAction(block.action)) {
             return getScheduleActionPresentation(block.action, this.localize);
         }
 
         return getScheduleApplianceActionPresentation({
-            appliance: this.appliance ?? { kind: "generic", icon: "mdi:flash-outline" },
+            appliance: lane.appliance ?? { kind: "generic", icon: lane.icon },
             action: block.action === null || isEntityInverterAction(block.action) ? null : block.action,
             localize: this.localize,
         });
@@ -754,15 +972,24 @@ export class SchedulingEntityDayBand extends LitElement {
         return endMs <= slot.startMs ? 0 : this._toSpanPercent(slot.startMs, endMs);
     }
 
-    private _emitBlockSelect(block: EntityScheduleBlock): void {
+    private _emitBlockSelect(laneKey: string, block: EntityScheduleBlock): void {
         if (block.isPast) {
+            this._emitLaneSelect(laneKey);
             return;
         }
 
         this.dispatchEvent(new CustomEvent<EntityDayBandBlockSelectDetail>("entity-day-band-block-select", {
             bubbles: true,
             composed: true,
-            detail: { blockKey: block.key },
+            detail: { laneKey, blockKey: block.key },
+        }));
+    }
+
+    private _emitLaneSelect(laneKey: string): void {
+        this.dispatchEvent(new CustomEvent<EntityDayBandLaneSelectDetail>("entity-day-band-lane-select", {
+            bubbles: true,
+            composed: true,
+            detail: { laneKey },
         }));
     }
 
@@ -774,11 +1001,11 @@ export class SchedulingEntityDayBand extends LitElement {
         }));
     }
 
-    private _emitGapSelect(startMs: number): void {
+    private _emitGapSelect(laneKey: string, startMs: number, limitMs: number): void {
         this.dispatchEvent(new CustomEvent<EntityDayBandGapSelectDetail>("entity-day-band-gap-select", {
             bubbles: true,
             composed: true,
-            detail: { startMs },
+            detail: { laneKey, startMs, limitMs },
         }));
     }
 }
