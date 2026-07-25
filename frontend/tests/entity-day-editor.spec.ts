@@ -83,6 +83,14 @@ async function mountEditor(
             if (straddling && hour >= 8 && hour <= 11) {
                 slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
             }
+            if (multiLane && hour === 20) {
+                slot.assignments.inverter = { action: { kind: "stop_charging" }, setBy: "automation" };
+            }
+            if (multiLane && hour === 21) {
+                // Same tone as the run before it, different action: only the
+                // icon says they are not one run.
+                slot.assignments.inverter = { action: { kind: "stop_export" }, setBy: "automation" };
+            }
             if (neighbour && hour === 21) {
                 slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
             }
@@ -792,10 +800,46 @@ test.describe("entity day editor", () => {
             expect(boiler.total).toBe("6 h");
             expect(boiler.totalTitle).toBe("2 h + 4 h");
 
-            // Half an hour of charging is half an hour, however wide it is drawn.
+            // Half an hour of charging is half an hour, however wide it is
+            // drawn -- plus the two hours this lane holds in the evening.
             const inverter = lanes.find((lane) => lane.key === "inverter")!;
             expect(inverter.actual).toHaveLength(1);
-            expect(inverter.total).toBe("0,5 h");
+            expect(inverter.total).toBe("2,5 h");
+            expect(inverter.totalTitle).toBe("0,5 h + 2 h");
+        });
+
+        /**
+         * Runs of the same kind share a colour, so where one becomes another
+         * with no gap the change is invisible -- and when it happened is the
+         * one thing a strip of time exists to say.
+         */
+        test("a run becoming a different one is cut where it changes", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            const marked = await page.evaluate(() => {
+                const el = document.querySelector("scheduling-entity-day-editor") as any;
+                const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+                const read = (laneKey: string) => [...band.shadowRoot
+                    .querySelectorAll(`.lane[data-lane="${laneKey}"] .segment`)]
+                    .map((segment: Element) => ({
+                        left: Math.round(parseFloat((segment as HTMLElement).style.left)),
+                        changed: segment.classList.contains("changed"),
+                    }));
+                return { inverter: read("inverter"), boiler: read("appliance:boiler") };
+            });
+
+            // The 09:00 charge it really ran and the 20:00 block both follow a
+            // gap; 21:00 follows a run it differs from.
+            expect(marked.inverter).toEqual([
+                { left: 38, changed: false },
+                { left: 83, changed: false },
+                { left: 88, changed: true },
+            ]);
+
+            // The boiler's morning run continues into what it really did at
+            // 07:00 -- same action, so no cut: that seam has to read as one bar.
+            expect(marked.boiler.every((segment) => !segment.changed)).toBe(true);
         });
 
         test("an entity that cannot be reached is still a lane", async ({ page }) => {

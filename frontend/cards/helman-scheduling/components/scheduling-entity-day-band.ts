@@ -11,6 +11,7 @@ import type {
     EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
 import {
+    areEntityScheduleActionsEqual,
     isEntityInverterAction,
     resolveEntityScheduleRangeLimits,
 } from "../model/entity-day-schedule-model";
@@ -379,6 +380,19 @@ export class SchedulingEntityDayBand extends LitElement {
                 opacity: 0.6;
             }
 
+            /* The moment the setting changed, on a seam that would otherwise be
+               invisible. Drawn from the text colour so it reads as a cut in
+               both themes rather than as a black line that only suits one. */
+            .segment.changed::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                width: 2px;
+                background: color-mix(in srgb, var(--primary-text-color) 65%, transparent);
+            }
+
             .segment ha-icon {
                 --mdc-icon-size: 14px;
                 pointer-events: none;
@@ -637,8 +651,39 @@ export class SchedulingEntityDayBand extends LitElement {
         `;
     }
 
+    /**
+     * Where one run becomes a different one with no gap between them.
+     *
+     * Two runs that touch are only distinguishable by their icon, and actions
+     * of the same kind share a colour -- stopping the export looks exactly like
+     * stopping the charge. Without a mark, the moment the setting changed is
+     * invisible, which is the one thing a strip of time is there to show.
+     *
+     * Runs that touch and agree are deliberately left unmarked: that is the
+     * still-running case, where the past meeting its scheduled continuation has
+     * to read as one bar.
+     */
+    private _resolveChangeBoundaries(lane: EntityDayBandLane): Set<number> {
+        const runs = [...lane.actualSegments, ...lane.blocks]
+            .sort((left, right) => left.startMs - right.startMs);
+        const boundaries = new Set<number>();
+        for (let index = 1; index < runs.length; index += 1) {
+            const previous = runs[index - 1];
+            const run = runs[index];
+            if (
+                previous.endMs === run.startMs
+                && !areEntityScheduleActionsEqual(previous.action, run.action)
+            ) {
+                boundaries.add(run.startMs);
+            }
+        }
+
+        return boundaries;
+    }
+
     private _renderLane(lane: EntityDayBandLane) {
         const selected = lane.key === this.selectedLaneKey;
+        const changeBoundaries = this._resolveChangeBoundaries(lane);
         const classes = [
             "lane",
             selected ? "selected" : "",
@@ -663,9 +708,9 @@ export class SchedulingEntityDayBand extends LitElement {
                     anywhere means "this entity", exactly as its name does.
                 -->
                 <div class="track" @click=${(event: Event) => this._handleTrackClick(event, lane.key)}>
-                    ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment))}
+                    ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment, changeBoundaries))}
                     ${this._renderGaps(lane)}
-                    ${lane.blocks.map((block) => this._renderSegment(lane, block, selected))}
+                    ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
                     ${this._renderRowOverlays()}
                 </div>
             </div>
@@ -731,12 +776,16 @@ export class SchedulingEntityDayBand extends LitElement {
      * the track, which selects the lane. It sits in the same tone as the action
      * it was, so a run that is still going reads as one bar across the now-line.
      */
-    private _renderActualSegment(lane: EntityDayBandLane, segment: EntityActualSegment) {
+    private _renderActualSegment(
+        lane: EntityDayBandLane,
+        segment: EntityActualSegment,
+        changeBoundaries: ReadonlySet<number>,
+    ) {
         const presentation = this._getPresentation(lane, segment);
         const title = `${lane.name} · ${presentation.label} · ${this._formatRange(segment)}`;
         return html`
             <span
-                class=${`segment actual ${presentation.toneClass}`}
+                class=${`segment actual ${presentation.toneClass}${changeBoundaries.has(segment.startMs) ? " changed" : ""}`}
                 title=${title}
                 style=${`left: ${this._toPercent(segment.startMs)}%; width: ${this._toSpanPercent(segment.startMs, segment.endMs)}%`}
             >
@@ -745,7 +794,12 @@ export class SchedulingEntityDayBand extends LitElement {
         `;
     }
 
-    private _renderSegment(lane: EntityDayBandLane, block: EntityScheduleBlock, laneSelected: boolean) {
+    private _renderSegment(
+        lane: EntityDayBandLane,
+        block: EntityScheduleBlock,
+        laneSelected: boolean,
+        changeBoundaries: ReadonlySet<number>,
+    ) {
         const presentation = this._getPresentation(lane, block);
         const editing = laneSelected && this._isEditing(block);
         const widthPct = this._toSpanPercent(block.startMs, block.endMs);
@@ -760,6 +814,7 @@ export class SchedulingEntityDayBand extends LitElement {
             block.isDirty ? "dirty" : "",
             block.isPast ? "past" : "",
             editing ? "editing" : "",
+            changeBoundaries.has(block.startMs) ? "changed" : "",
             laneSelected && this.hoveredBlockKey === block.key ? "hovered" : "",
             this._drag !== null && editing ? "dragging" : "",
         ].filter((value) => value.length > 0).join(" ");
