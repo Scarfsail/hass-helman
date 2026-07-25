@@ -74,10 +74,6 @@ export class PowerHouseDevicesSection extends LitElement {
                 padding-bottom: 6px;
                 margin-top: 0px;
             }
-            .toggle-row {
-                text-align: center;
-                cursor: pointer;
-            }
             .categories-row {
                 display: flex;
                 align-items: center;
@@ -107,6 +103,10 @@ export class PowerHouseDevicesSection extends LitElement {
             button.chip:hover {
                 border-color: var(--primary-color);
                 color: var(--primary-text-color);
+            }
+            button.chip.show-toggle {
+                /* Sits on the left of the row; the grouping chips stay right. */
+                margin-right: auto;
             }
             button.chip.active {
                 background: var(--primary-color);
@@ -217,18 +217,32 @@ export class PowerHouseDevicesSection extends LitElement {
         const devicesToShow = activeCat ? (this._groupedDevices ?? filtered) : filtered;
     const showTop = activeCat ? 0 : (this._showAll ? 0 : this.initial_show_only_top_children);
 
+        const canToggleShowAll = !activeCat
+            && this.initial_show_only_top_children > 0
+            && filtered.length > this.initial_show_only_top_children;
+
         return html`
             <div class="house-section">
-                ${categories.length > 0 ? html`
+                ${canToggleShowAll || categories.length > 0 ? html`
                     <div class="categories-row">
-                        <div class="categories-title">${this.uiConfig?.groups_title ?? this._localize?.('house_section.group_by') ?? 'Seskupit podle'}</div>
-                        <div>
-                            ${categories.map((c) => {
-                                const active = this._activeCategory === c;
-                                return html`<button class="chip ${active ? 'active' : ''}"
-                                    @click=${() => { this._activeCategory = active ? undefined : c; }}>${c}</button>`;
-                            })}
-                        </div>
+                        ${canToggleShowAll ? html`
+                            <button class="chip show-toggle"
+                                @click=${() => { this._showAll = !this._showAll; }}>
+                                ${this._showAll
+                                    ? (this._localize?.('house_section.show_less') ?? 'Méně')
+                                    : (this._localize?.('house_section.show_more') ?? 'Více')}
+                            </button>
+                        ` : nothing}
+                        ${categories.length > 0 ? html`
+                            <div class="categories-title">${this.uiConfig?.groups_title ?? this._localize?.('house_section.group_by') ?? 'Seskupit podle'}</div>
+                            <div>
+                                ${categories.map((c) => {
+                                    const active = this._activeCategory === c;
+                                    return html`<button class="chip ${active ? 'active' : ''}"
+                                        @click=${() => { this._activeCategory = active ? undefined : c; }}>${c}</button>`;
+                                })}
+                            </div>
+                        ` : nothing}
                     </div>
                 ` : nothing}
 
@@ -243,8 +257,6 @@ export class PowerHouseDevicesSection extends LitElement {
                     .sortChildrenByPower=${this.sortChildrenByPower}
                     .show_only_top_children=${showTop}
                 ></power-devices-container>
-
-                ${!activeCat ? html`<div class="toggle-row" @click=${() => { this._showAll = !this._showAll; }}>...</div>` : nothing}
             </div>
         `;
     }

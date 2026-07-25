@@ -74,6 +74,10 @@
       }
     }
   },
+  "house_section": {
+    "show_more": "More",
+    "show_less": "Less"
+  },
   "automation": {
     "inspector": {
       "loading": "Loading last automation run…",

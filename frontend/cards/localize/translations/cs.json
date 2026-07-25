@@ -4,7 +4,9 @@
   },
   "house_section": {
     "group_by": "Seskupit podle",
-    "others": "Ostatní"
+    "others": "Ostatní",
+    "show_more": "Více",
+    "show_less": "Méně"
   },
   "node_detail": {
     "close": "Zavřít",
