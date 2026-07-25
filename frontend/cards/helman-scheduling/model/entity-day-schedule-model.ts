@@ -478,19 +478,35 @@ function _isSlotDirty(
 }
 
 /**
- * The start of the slot containing now, or the schedule start when now is
- * behind it. Past slots are read-only, and the running slot counts as past:
- * rewriting it cannot change what is already happening.
+ * The first moment the user may still write: the start of the slot that is
+ * running right now.
+ *
+ * The running slot is editable, not read-only. "Start it now" is the most
+ * common thing to want from this editor, and at 09:15 that means a block from
+ * 09:00 -- the backend's write horizon begins at the same floored boundary, and
+ * a write reconciles the active slot immediately, so the block really does
+ * start. Only slots that have fully elapsed are beyond reach.
  */
 function _resolveEditableFromMs(slots: readonly ScheduleSlot[], nowMs: number): number {
-    let editableFromMs = Number.POSITIVE_INFINITY;
+    let currentStartMs: number | null = null;
+    let nextStartMs = Number.POSITIVE_INFINITY;
     for (const slot of slots) {
+        const endMs = slot.endMs ?? Number.POSITIVE_INFINITY;
+        if (slot.startMs <= nowMs && endMs > nowMs) {
+            currentStartMs = Math.max(currentStartMs ?? slot.startMs, slot.startMs);
+            continue;
+        }
+
         if (slot.startMs > nowMs) {
-            editableFromMs = Math.min(editableFromMs, slot.startMs);
+            nextStartMs = Math.min(nextStartMs, slot.startMs);
         }
     }
 
-    return Number.isFinite(editableFromMs) ? editableFromMs : nowMs;
+    if (currentStartMs !== null) {
+        return currentStartMs;
+    }
+
+    return Number.isFinite(nextStartMs) ? nextStartMs : nowMs;
 }
 
 function _resolveSlotDurationMs(slots: readonly ScheduleSlot[]): number {

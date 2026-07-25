@@ -73,7 +73,7 @@ async function mountEditor(
             if (hour === 17 || hour === 18) {
                 slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
             }
-            if (straddling && (hour === 10 || hour === 11)) {
+            if (straddling && hour >= 8 && hour <= 11) {
                 slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
             }
             if (neighbour && hour === 21) {
@@ -287,24 +287,43 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page, { straddling: true });
 
-        // 10:00-12:00 spans "now" (10:30): the 10:00 slot is already running.
+        // 08:00-12:00 spans "now" (10:30), so 08:00-10:00 has already elapsed.
         expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
             "05:00–07:00",
-            "10:00–12:00",
+            "08:00–12:00",
             "17:00–19:00",
         ]);
 
         await page.locator(".block-row").nth(1).locator("button").first().click();
 
-        // The session starts at the first slot the user may still write, and
-        // the block stays whole in the list rather than losing its past half.
+        // The session starts at the running slot, and the block stays whole in
+        // the list rather than losing the hours it has already run.
         expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T11:00:00Z`)}|${Date.parse(`${DAY_ONE}T12:00:00Z`)}`,
+            `${Date.parse(`${DAY_ONE}T10:00:00Z`)}|${Date.parse(`${DAY_ONE}T12:00:00Z`)}`,
         );
         expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
             "05:00–07:00",
-            "10:00–12:00",
+            "08:00–12:00",
             "17:00–19:00",
+        ]);
+    });
+
+    test("a new block can start in the slot that is running now", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await page.locator(".block-list .link-button").click();
+
+        // 10:30 sits inside the 10:00 slot, and "start it now" means 10:00 --
+        // the backend's write horizon begins at the same floored boundary.
+        expect(await editingRange(page)).toBe(
+            `${Date.parse(`${DAY_ONE}T10:00:00Z`)}|${Date.parse(`${DAY_ONE}T11:00:00Z`)}`,
+        );
+
+        await page.locator("ha-button[slot=primaryAction]").click();
+        const [patches] = await savedPatches(page);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
+            `${DAY_ONE}T10:00:00.000Z`,
         ]);
     });
 
