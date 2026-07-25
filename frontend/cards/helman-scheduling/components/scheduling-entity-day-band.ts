@@ -308,6 +308,30 @@ export class SchedulingEntityDayBand extends LitElement {
                 --mdc-icon-size: 13px;
             }
 
+            /* The lane under edit, said the same way the label column said it. */
+            .lane.selected .track-label {
+                font-weight: 600;
+            }
+
+            .lane.unavailable .track-label .lane-name {
+                font-style: italic;
+            }
+
+            /* A chart row's name sits on the row's own colour, and reads as a
+               caption rather than as a thing on the chart. */
+            .context-row .track-label {
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                color: var(--secondary-text-color);
+                font-size: 0.58rem;
+                background: linear-gradient(
+                    to right,
+                    var(--secondary-background-color) 0%,
+                    color-mix(in srgb, var(--secondary-background-color) 85%, transparent) 70%,
+                    transparent 100%
+                );
+            }
+
             /* A stretch of time the host is asking about, in the colours the
                rest of the surface uses for the same two questions. */
             .time-highlight {
@@ -723,6 +747,25 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
+     * A forecast row's name, wherever this band puts names.
+     *
+     * The context rows follow the lanes rather than keeping a column of their
+     * own: a gutter that exists only for three chart names is a gutter, and the
+     * stack reads as one thing when every row is labelled the same way.
+     */
+    private _renderContextHeading(labelKey: string) {
+        return this.laneLabels === "track"
+            ? nothing
+            : html`<span class="row-label context">${this.localize(labelKey)}</span>`;
+    }
+
+    private _renderContextTrackLabel(labelKey: string) {
+        return this.laneLabels === "track"
+            ? html`<span class="track-label context">${this.localize(labelKey)}</span>`
+            : nothing;
+    }
+
+    /**
      * Battery state of charge as a line across the day.
      *
      * A percentage is a level, not a quantity, so it gets a line on a fixed
@@ -743,7 +786,7 @@ export class SchedulingEntityDayBand extends LitElement {
         const line = points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
         const area = `${points[0].x.toFixed(2)},100 ${line} ${points[points.length - 1].x.toFixed(2)},100`;
         return html`
-            <span class="row-label context">${this.localize("scheduling.forecast.battery_label")}</span>
+            ${this._renderContextHeading("scheduling.forecast.battery_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
                 <svg class="soc-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
                     <polygon class="soc-fill" points=${area}></polygon>
@@ -751,6 +794,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 </svg>
                 ${this._renderSlotHits("battery")}
                 ${this._renderRowOverlays()}
+                ${this._renderContextTrackLabel("scheduling.forecast.battery_label")}
             </div>
         `;
     }
@@ -763,7 +807,7 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         return html`
-            <span class="row-label context">${this.localize("scheduling.forecast.solar_label")}</span>
+            ${this._renderContextHeading("scheduling.forecast.solar_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
                 ${values.map(({ slot, value }) => value === 0 ? nothing : html`
                     <span
@@ -773,6 +817,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 `)}
                 ${this._renderSlotHits("solar")}
                 ${this._renderRowOverlays()}
+                ${this._renderContextTrackLabel("scheduling.forecast.solar_label")}
             </div>
         `;
     }
@@ -786,7 +831,7 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         return html`
-            <span class="row-label context">${this.localize("scheduling.forecast.price_label")}</span>
+            ${this._renderContextHeading("scheduling.forecast.price_label")}
             <div class="context-row price" @pointerdown=${this._handleContextPointerDown}>
                 <span class="zero-line"></span>
                 ${values.map(({ slot, value }) => {
@@ -807,6 +852,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 })}
                 ${this._renderSlotHits("price")}
                 ${this._renderRowOverlays()}
+                ${this._renderContextTrackLabel("scheduling.forecast.price_label")}
             </div>
         `;
     }
@@ -900,6 +946,7 @@ export class SchedulingEntityDayBand extends LitElement {
             <span class="track-label">
                 <ha-icon .icon=${lane.icon}></ha-icon>
                 <span class="lane-name">${lane.name}</span>
+                ${this._renderLaneTotal(lane)}
             </span>
         `;
     }

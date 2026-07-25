@@ -358,6 +358,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _impactStripVisible = false;
   @state() private _socStripExpanded = true;
   @state() private _exportPriceStripExpanded = true;
+  @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
   @state() private _chartWidth = 720;
@@ -1156,7 +1157,25 @@ export class HelmanSolarInspector extends LitElement {
       : this._renderScheduleIconStrip(payload, layout);
   }
 
+  /** The per-entity band, behind a collapse toggle that starts expanded. */
   private _renderScheduleBandStrip(payload: InspectorPayload, layout: ChartLayout) {
+    return html`
+      <div class="strip-section">
+        <button
+          class="strip-collapse-toggle"
+          type="button"
+          aria-expanded=${this._scheduleBandExpanded ? "true" : "false"}
+          @click=${() => { this._scheduleBandExpanded = !this._scheduleBandExpanded; }}
+        >
+          <span class="strip-collapse-icon ${this._scheduleBandExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.scheduled_actions")}
+        </button>
+        ${this._scheduleBandExpanded ? this._renderScheduleBand(payload, layout) : ""}
+      </div>
+    `;
+  }
+
+  private _renderScheduleBand(payload: InspectorPayload, layout: ChartLayout) {
     return html`
       <helman-solar-schedule-band-strip
         .hass=${this.hass}
