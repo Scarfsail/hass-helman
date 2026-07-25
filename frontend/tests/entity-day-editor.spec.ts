@@ -528,6 +528,22 @@ test.describe("entity day editor", () => {
         expect(await saveDisabled()).toBe(true);
     });
 
+    test("each run on the strip carries who put it there", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const authorship = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            return [...band.shadowRoot.querySelectorAll(".segment")]
+                .map((segment: Element) => /authorship-(user|automation|mixed)\b/
+                    .exec(segment.className)?.[1] ?? null);
+        });
+
+        // 05:00-07:00 is the optimizer's, 17:00-19:00 the user's.
+        expect(authorship).toEqual(["automation", "user"]);
+    });
+
     test("a past block cannot be edited from the band either", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);

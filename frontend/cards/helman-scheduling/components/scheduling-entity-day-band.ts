@@ -305,9 +305,28 @@ export class SchedulingEntityDayBand extends LitElement {
                 cursor: grabbing;
             }
 
+            /* Who put the run here, in the colours the rest of the card uses
+               for it: a bar under the whole segment, so the answer is legible
+               on a 30px track without competing with the tone that says what
+               the run does. The optimizer's runs keep their stripes too --
+               reading the same fact twice is what makes it quick. */
+            .segment.authorship-user {
+                --schedule-authorship-color: var(--schedule-authorship-user-color, #c49012);
+            }
+
+            .segment.authorship-automation {
+                --schedule-authorship-color: var(--schedule-authorship-automation-color, #2563eb);
+            }
+
+            .segment.authorship-mixed {
+                --schedule-authorship-color: var(--schedule-authorship-mixed-color, #ea7a18);
+            }
+
+            .segment {
+                box-shadow: inset 0 -3px 0 var(--schedule-authorship-color, transparent);
+            }
+
             .segment.automation {
-                /* Owned by the optimizer: striped, so "I did not put this here"
-                   is visible without reading the block list. */
                 background:
                     repeating-linear-gradient(
                         135deg,
@@ -326,7 +345,9 @@ export class SchedulingEntityDayBand extends LitElement {
                 z-index: 2;
                 outline: 2px solid var(--primary-color);
                 outline-offset: -2px;
-                box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color) 40%, transparent);
+                box-shadow:
+                    inset 0 -3px 0 var(--schedule-authorship-color, transparent),
+                    0 0 0 1px color-mix(in srgb, var(--primary-color) 40%, transparent);
             }
 
             /* Mirrors the hover on this block's list row. */
@@ -677,6 +698,7 @@ export class SchedulingEntityDayBand extends LitElement {
         const classes = [
             "segment",
             presentation.toneClass,
+            `authorship-${block.authorship}`,
             block.authorship === "user" ? "" : "automation",
             block.isDirty ? "dirty" : "",
             block.isPast ? "past" : "",

@@ -9,7 +9,9 @@ import type {
     ControllableEntityStatus,
 } from "../model/controllable-entity-status";
 import type { EntityScheduleTarget } from "../model/entity-day-schedule-model";
+import type { ScheduleSetBy } from "../schedule-types";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
+import { summarizeScheduleAuthorship } from "../model/schedule-authorship";
 import { getScheduleActionLabel } from "../model/schedule-labels";
 import { formatScheduleTime } from "../model/schedule-time";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
@@ -319,13 +321,18 @@ export class SchedulingRunningEntities extends LitElement {
      * on the row at all, hovering has to be able to name what an icon means.
      */
     private _renderStateChip(view: ControllableEntityStateView) {
+        // Decorated with who put it there, in the same colours the slot editor
+        // uses: on a row that is otherwise all icons, "the optimizer decided
+        // this" and "I decided this" have to be tellable apart at a glance.
+        const authorship = summarizeScheduleAuthorship([view.setBy]);
         if (view.domain === "inverter") {
             return html`
                 <scheduling-action-chip
                     .action=${view.action}
+                    .authorship=${authorship}
                     .localize=${this.localize}
                     .labelVariant=${"table"}
-                    .titleText=${getScheduleActionLabel(view.action, this.localize)}
+                    .titleText=${this._buildChipTitle(getScheduleActionLabel(view.action, this.localize), view.setBy)}
                     size="compact"
                     ?iconOnly=${true}
                 ></scheduling-action-chip>
@@ -336,16 +343,34 @@ export class SchedulingRunningEntities extends LitElement {
             <scheduling-appliance-chip
                 .appliance=${view.appliance}
                 .action=${view.action}
+                .authorship=${authorship}
                 .localize=${this.localize}
-                .titleText=${getScheduleApplianceActionPresentation({
+                .titleText=${this._buildChipTitle(getScheduleApplianceActionPresentation({
                     appliance: view.appliance,
                     action: view.action,
                     localize: this.localize,
-                }).label}
+                }).label, view.setBy)}
                 size="compact"
                 ?iconOnly=${true}
             ></scheduling-appliance-chip>
         `;
+    }
+
+    /**
+     * The chip's tooltip, naming who scheduled the state.
+     *
+     * The ring says it in colour, which has to be learned; the words are what
+     * make it answerable the first time.
+     */
+    private _buildChipTitle(label: string, setBy: ScheduleSetBy | null): string {
+        if (setBy === null) {
+            return label;
+        }
+
+        const author = setBy === "user"
+            ? this.localize("scheduling.authorship.set_by_user")
+            : this.localize("scheduling.authorship.set_by_automation");
+        return `${label} · ${author}`;
     }
 
     /**

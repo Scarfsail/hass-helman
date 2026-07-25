@@ -13,6 +13,7 @@ import type {
     EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
 import { isEntityInverterAction } from "../model/entity-day-schedule-model";
+import { summarizeScheduleAuthorship } from "../model/schedule-authorship";
 import type {
     ScheduleApplianceMetadata,
     ScheduleClimateApplianceMetadata,
@@ -258,13 +259,9 @@ export class SchedulingEntityActionEditor extends LitElement {
      * put the block there.
      */
     private _authorshipSummary(): ScheduleActionAuthorshipSummary {
-        return {
-            state: this.authorship,
-            counts: {
-                user: this.authorship === "automation" ? 0 : 1,
-                automation: this.authorship === "user" ? 0 : 1,
-            },
-        };
+        return summarizeScheduleAuthorship(
+            this.authorship === "mixed" ? ["user", "automation"] : [this.authorship],
+        );
     }
 
     private _emitChange(action: EntityScheduleAction, valid: boolean): void {

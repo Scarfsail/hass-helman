@@ -7,6 +7,7 @@ import type {
     ScheduleApplianceAction,
     ScheduleActionKind,
     ScheduleInverterAction,
+    ScheduleSetBy,
     ScheduleSlot,
 } from "../schedule-types";
 import {
@@ -33,11 +34,17 @@ export type ControllableApplianceDescriptor = Pick<
  * chips, so the two always read in the same vocabulary.
  */
 export type ControllableEntityStateView =
-    | { domain: "inverter"; action: ScheduleInverterAction }
+    | { domain: "inverter"; action: ScheduleInverterAction; setBy: ScheduleSetBy | null }
     | {
         domain: "appliance";
         appliance: ControllableApplianceDescriptor;
         action: ScheduleApplianceAction | null;
+        /**
+         * Who put this state in the schedule, or null when the schedule has no
+         * say in it -- an entity at rest with nothing scheduled, or one somebody
+         * switched on by hand.
+         */
+        setBy: ScheduleSetBy | null;
     };
 
 /** The next scheduled state change, and what the entity changes into. */
@@ -144,6 +151,11 @@ export function buildControllableEntityStatuses({
                 state: stateObj.state,
                 states,
                 activeSlot,
+                setBy: _readAssignmentSetBy({
+                    entity,
+                    applianceId: appliance?.id ?? null,
+                    slot: activeSlot,
+                }),
                 unscheduled: executionEnabled
                     && isNormal
                     && _readCommittedApplianceAction(activeSlot, appliance?.id ?? null) === null,
@@ -207,6 +219,7 @@ function _buildLiveStateView({
     state,
     states,
     activeSlot,
+    setBy,
     unscheduled,
 }: {
     entity: ControllableEntityDTO;
@@ -214,18 +227,23 @@ function _buildLiveStateView({
     state: string;
     states: HomeAssistant["states"];
     activeSlot: ScheduleSlot | null;
+    setBy: ScheduleSetBy | null;
     unscheduled: boolean;
 }): ControllableEntityStateView {
     if (entity.kind === "inverter") {
         return {
             domain: "inverter",
             action: _buildLiveInverterAction({ entity, state, activeSlot }),
+            setBy,
         };
     }
 
     return {
         domain: "appliance",
         appliance: appliance ?? _buildFallbackApplianceDescriptor(entity),
+        // Nothing scheduled means nobody authored what the entity is doing, so
+        // the chip is left undecorated rather than credited to the schedule.
+        setBy: unscheduled ? null : setBy,
         // An appliance sitting at rest with nothing scheduled for it is not
         // being "turned off" -- the schedule simply has no opinion, which is
         // what the slot editor calls "no action". Say that instead of restating
@@ -377,7 +395,13 @@ function _resolveNextTransition({
 
         return {
             atMs: slot.startMs,
-            view: _buildScheduledStateView({ entity, appliance, action, projectedState }),
+            view: _buildScheduledStateView({
+                entity,
+                appliance,
+                action,
+                projectedState,
+                setBy: _readAssignmentSetBy({ entity, applianceId, slot }),
+            }),
         };
     }
 
@@ -397,11 +421,13 @@ function _buildScheduledStateView({
     appliance,
     action,
     projectedState,
+    setBy,
 }: {
     entity: ControllableEntityDTO;
     appliance: ScheduleApplianceMetadata | null;
     action: ScheduleInverterAction | ScheduleApplianceAction | null;
     projectedState: string;
+    setBy: ScheduleSetBy | null;
 }): ControllableEntityStateView {
     if (entity.kind === "inverter") {
         const kind = _resolveInverterActionKind(entity, projectedState) ?? "normal";
@@ -411,14 +437,40 @@ function _buildScheduledStateView({
             action: inverterAction !== null && inverterAction.kind === kind && inverterAction.targetSoc !== undefined
                 ? { kind, targetSoc: inverterAction.targetSoc }
                 : { kind },
+            setBy,
         };
     }
 
+    const projectedAction = _projectedApplianceAction(action as ScheduleApplianceAction | null);
     return {
         domain: "appliance",
         appliance: appliance ?? _buildFallbackApplianceDescriptor(entity),
-        action: _projectedApplianceAction(action as ScheduleApplianceAction | null),
+        action: projectedAction,
+        setBy: projectedAction === null ? null : setBy,
     };
+}
+
+/** Who authored this entity's action in a slot, if anyone did. */
+function _readAssignmentSetBy({
+    entity,
+    applianceId,
+    slot,
+}: {
+    entity: ControllableEntityDTO;
+    applianceId: string | null;
+    slot: ScheduleSlot | null;
+}): ScheduleSetBy | null {
+    if (slot === null) {
+        return null;
+    }
+
+    if (entity.kind === "inverter") {
+        return slot.assignments.inverter.setBy;
+    }
+
+    return applianceId === null
+        ? null
+        : slot.assignments.appliances[applianceId]?.setBy ?? null;
 }
 
 function _readScheduledAction({
