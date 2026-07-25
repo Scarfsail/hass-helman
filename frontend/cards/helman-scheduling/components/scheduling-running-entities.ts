@@ -102,6 +102,17 @@ export class SchedulingRunningEntities extends LitElement {
                 color: var(--secondary-text-color);
             }
 
+            /* Configured but unreachable: dimmer still, and its state is a word
+               rather than a chip -- there is no state to draw. */
+            .entity-row.unavailable state-badge,
+            .entity-row.unavailable .entity-name {
+                opacity: 0.6;
+            }
+
+            .unavailable {
+                font-style: italic;
+            }
+
             .entity-row.at-rest state-badge {
                 opacity: 0.6;
             }
@@ -212,7 +223,7 @@ export class SchedulingRunningEntities extends LitElement {
 
         return html`
             ${this.entities.map((entity) => html`
-                <div class="entity-row ${entity.isNormal ? "at-rest" : ""}">
+                <div class="entity-row ${entity.isNormal ? "at-rest" : ""} ${entity.isAvailable ? "" : "unavailable"}">
                     <button
                         class="row-target identity"
                         type="button"
@@ -283,8 +294,12 @@ export class SchedulingRunningEntities extends LitElement {
         return html`
             <span class="entity-status">
                 <span class="status-cell current">
-                    ${since === null ? nothing : html`<span>${since}</span>`}
-                    ${this._renderStateChip(entity.current)}
+                    ${entity.current === null ? html`
+                        <span class="unavailable">${this.localize("scheduling.running.unavailable")}</span>
+                    ` : html`
+                        ${since === null ? nothing : html`<span>${since}</span>`}
+                        ${this._renderStateChip(entity.current)}
+                    `}
                 </span>
                 ${next === null ? nothing : html`
                     <span class="status-arrow" aria-hidden="true">→</span>

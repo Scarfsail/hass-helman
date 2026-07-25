@@ -50,9 +50,18 @@ export interface ControllableEntityStatus {
     entityId: string;
     name: string;
     stateObj: HassEntity;
+    /**
+     * The entity's state can be read right now.
+     *
+     * An unreachable appliance is still listed: it is configured hardware, and
+     * its schedule is stored data that stays editable while the thing itself is
+     * offline. What cannot be shown for it is what it is doing.
+     */
+    isAvailable: boolean;
     /** The entity sits in its resting state, so it is not doing anything. */
     isNormal: boolean;
-    current: ControllableEntityStateView;
+    /** What the entity is doing, or null when its state cannot be read. */
+    current: ControllableEntityStateView | null;
     /**
      * When the entity entered its current state, from the entity itself.
      * Only resolved while execution is enabled and the entity is non-normal:
@@ -83,8 +92,10 @@ export interface ControllableEntityStatus {
  * this resolves it against live `hass.states` on every update, which is what
  * keeps the card reactive without polling.
  *
- * Entities that cannot be read are left out rather than guessed at: an
- * unavailable entity is not something the user can act on from the card.
+ * Everything configured is listed, including entities that are currently
+ * unreachable -- the list doubles as the roster of controllable hardware, and a
+ * missing row reads as "not configured". Only an entity Home Assistant does not
+ * know at all is left out, because there is nothing to render it from.
  */
 export function buildControllableEntityStatuses({
     controllableEntities,
@@ -115,24 +126,29 @@ export function buildControllableEntityStatuses({
     const statuses: ControllableEntityStatus[] = [];
     for (const entity of controllableEntities) {
         const stateObj = states[entity.entityId];
-        if (!stateObj || UNAVAILABLE_STATES.has(stateObj.state)) {
+        if (!stateObj) {
             continue;
         }
 
         const appliance = entity.kind === "inverter"
             ? null
             : appliancesByEntityId.get(entity.entityId) ?? null;
-        const isNormal = stateObj.state === entity.normalState;
-        const current = _buildLiveStateView({
-            entity,
-            appliance,
-            state: stateObj.state,
-            states,
-            activeSlot,
-            unscheduled: executionEnabled
-                && isNormal
-                && _readCommittedApplianceAction(activeSlot, appliance?.id ?? null) === null,
-        });
+        const isAvailable = !UNAVAILABLE_STATES.has(stateObj.state);
+        // An entity nobody can read is not "running", so it sorts with the ones
+        // at rest rather than pushing itself to the top of the list.
+        const isNormal = !isAvailable || stateObj.state === entity.normalState;
+        const current = isAvailable
+            ? _buildLiveStateView({
+                entity,
+                appliance,
+                state: stateObj.state,
+                states,
+                activeSlot,
+                unscheduled: executionEnabled
+                    && isNormal
+                    && _readCommittedApplianceAction(activeSlot, appliance?.id ?? null) === null,
+            })
+            : null;
 
         statuses.push({
             entityId: entity.entityId,
@@ -143,6 +159,7 @@ export function buildControllableEntityStatuses({
                 || (stateObj.attributes.friendly_name as string | undefined)
                 || entity.entityId,
             stateObj,
+            isAvailable,
             isNormal,
             current,
             sinceMs: executionEnabled && !isNormal
@@ -153,7 +170,11 @@ export function buildControllableEntityStatuses({
                     entity,
                     appliance,
                     applianceId: appliance?.id ?? null,
-                    currentState: stateObj.state,
+                    // An unreadable entity is assumed to be at rest, so "next"
+                    // answers "when will the schedule next do something with
+                    // it?" rather than treating unavailability as a state the
+                    // schedule is about to change.
+                    currentState: isAvailable ? stateObj.state : entity.normalState,
                     slots,
                     nowMs,
                 })

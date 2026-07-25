@@ -258,7 +258,8 @@
     "running": {
       "label": "Běží",
       "restore_all": "Vrátit vše do normálu",
-      "restoring": "Vracím do normálu…"
+      "restoring": "Vracím do normálu…",
+      "unavailable": "nedostupné"
     },
     "entity_editor": {
       "open": "Upravit rozvrh tohoto zařízení",
