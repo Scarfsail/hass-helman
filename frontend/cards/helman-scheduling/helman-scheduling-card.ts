@@ -10,7 +10,6 @@ import { getSharedHelmanStore } from "../helman/store";
 import type { ControllableEntityDTO, EntityActualHistorySlotDTO } from "../helman-api";
 import {
     buildControllableEntityStatuses,
-    resolveScheduleActionFromEntityState,
     type ControllableEntityStatus,
 } from "./model/controllable-entity-status";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
@@ -22,13 +21,14 @@ import "./dialogs/scheduling-entity-day-editor";
 import "./dialogs/scheduling-range-edit-dialog";
 import type { OpenEntityScheduleDetail } from "./components/scheduling-running-entities";
 import type { EntityScheduleSaveDetail } from "./dialogs/scheduling-entity-day-editor";
-import {
-    buildElapsedScheduleSlots,
-    getEntityScheduleTargetKey,
-    type EntityActualSlot,
-    type EntityScheduleLane,
-    type EntityScheduleTarget,
+import type {
+    EntityScheduleLane,
+    EntityScheduleTarget,
 } from "./model/entity-day-schedule-model";
+import {
+    buildEntityScheduleDayView,
+    buildEntityScheduleLanes,
+} from "./model/entity-lane-source";
 import {
     getScheduleApplianceById,
     normalizeScheduleApplianceMetadata,
@@ -87,7 +87,6 @@ import {
 import type {
     NormalizedScheduleModel,
     ScheduleDialogOpenDetail,
-    ScheduleDisplaySlot,
     ScheduleDialogState,
     ScheduleOwnerSnapshot,
     ScheduleRangeEditIntent,
@@ -726,108 +725,28 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
         }
     }
 
-    /**
-     * Today back to midnight, with the forecast for the hours that have gone.
-     *
-     * The elapsed slots hold no schedule -- the backend prunes them -- so they
-     * are forecast-only as far as the projection is concerned, which is exactly
-     * what they are: hours with weather and prices but nothing left to edit.
-     */
     private _seedEntityEditorSlots(): void {
-        const scheduleSlots = this._normalizedSchedule.slots;
-        const elapsedSlots = buildElapsedScheduleSlots({
-            slots: scheduleSlots,
+        const view = buildEntityScheduleDayView({
+            scheduleSlots: this._normalizedSchedule.slots,
             timeZone: this._hass?.config.time_zone ?? "UTC",
             locale: this._locale,
+            forecast: this._forecast,
+            baseForecastPoints: this._slotForecastMap.points,
         });
-        this._entityEditorSlots = [...elapsedSlots, ...scheduleSlots];
-        this._entityEditorForecastPoints = this._buildElapsedForecastPoints(elapsedSlots);
+        this._entityEditorSlots = view.slots;
+        this._entityEditorForecastPoints = view.forecastPoints;
     }
 
-    private _buildElapsedForecastPoints(
-        elapsedSlots: readonly ScheduleSlot[],
-    ): ReadonlyMap<string, SlotForecastPoint> {
-        if (elapsedSlots.length === 0) {
-            return this._slotForecastMap.points;
-        }
-
-        const displaySlots: ScheduleDisplaySlot[] = elapsedSlots.map((slot) => ({
-            ...slot,
-            source: "forecast_only",
-            scheduleSlot: null,
-        }));
-        const projection = buildSlotForecastProjection(this._forecast, displaySlots);
-        return new Map([
-            ...materializeSlotForecastMap(projection, displaySlots).points,
-            ...this._slotForecastMap.points,
-        ]);
-    }
-
-    /**
-     * The editor's roster of tracks: every controllable entity whose lane the
-     * card can author.
-     *
-     * Ordered inverter first and then by name rather than by what happens to be
-     * running, because these are stacked timelines -- a row that moves between
-     * refreshes is a row nobody can point at.
-     */
     private _buildEntityEditorLanes(
         statuses: readonly ControllableEntityStatus[],
     ): EntityScheduleLane[] {
-        return statuses
-            .flatMap((status) => {
-                const target = status.scheduleTarget;
-                if (target === null) {
-                    return [];
-                }
-
-                const appliance = target.kind === "inverter"
-                    ? null
-                    : getScheduleApplianceById(this._appliances, target.applianceId);
-                return [{
-                    key: getEntityScheduleTargetKey(target),
-                    target,
-                    name: status.name,
-                    icon: (status.stateObj.attributes.icon as string | undefined)
-                        ?? appliance?.icon
-                        ?? "mdi:flash-outline",
-                    appliance,
-                    isAvailable: status.isAvailable,
-                    actualSlots: this._buildLaneActualSlots(status.entityId),
-                }];
-            })
-            .sort((left, right) => {
-                if ((left.target.kind === "inverter") !== (right.target.kind === "inverter")) {
-                    return left.target.kind === "inverter" ? -1 : 1;
-                }
-
-                return left.name.localeCompare(right.name, this._locale);
-            });
-    }
-
-    /**
-     * One entity's elapsed runs, as actions on the schedule's grid.
-     *
-     * The recorder speaks in entity states; everything the editor draws speaks
-     * in schedule actions, so the translation happens here, once, where the
-     * entity's own definition of its states is still at hand.
-     */
-    private _buildLaneActualSlots(entityId: string): EntityActualSlot[] {
-        const history = this._entityActualHistory[entityId];
-        const entity = this._controllableEntities.find(
-            (candidate) => candidate.entityId === entityId,
-        );
-        if (history === undefined || entity === undefined) {
-            return [];
-        }
-
-        const slotDurationMs = (this._normalizedSchedule.granularityMinutes ?? 60) * 60_000;
-        return history.flatMap((entry) => {
-            const startMs = new Date(entry.slot).getTime();
-            const action = resolveScheduleActionFromEntityState({ entity, state: entry.state });
-            return Number.isNaN(startMs) || action === null
-                ? []
-                : [{ startMs, endMs: startMs + slotDurationMs, action, ratio: entry.ratio }];
+        return buildEntityScheduleLanes({
+            statuses,
+            controllableEntities: this._controllableEntities,
+            appliances: this._appliances,
+            actualHistory: this._entityActualHistory,
+            slotDurationMs: (this._normalizedSchedule.granularityMinutes ?? 60) * 60_000,
+            locale: this._locale,
         });
     }
 

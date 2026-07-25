@@ -8,8 +8,8 @@ import type {
     EntityScheduleAction,
     EntityScheduleBlock,
     EntityScheduleDay,
-    EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
+import type { EntityDayBandLane } from "../model/entity-lane-source";
 import {
     areEntityScheduleActionsEqual,
     isEntityInverterAction,
@@ -17,7 +17,6 @@ import {
 } from "../model/entity-day-schedule-model";
 import { getScheduleActionPresentation } from "../model/schedule-action-presentation";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
-import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
 import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
@@ -28,18 +27,7 @@ const MIN_BAR_PCT = 8;
 /** Segments narrower than this are move-only: two edge handles would not fit. */
 const MIN_RESIZABLE_WIDTH_PX = 34;
 
-/** One entity's row of the band: its schedule for the day, already clipped. */
-export interface EntityDayBandLane {
-    key: string;
-    name: string;
-    icon: string;
-    target: EntityScheduleTarget;
-    appliance: ScheduleApplianceMetadata | null;
-    blocks: readonly EntityScheduleBlock[];
-    /** What the entity really did earlier today, already merged into runs. */
-    actualSegments: readonly EntityActualSegment[];
-    isAvailable: boolean;
-}
+export type { EntityDayBandLane };
 
 export interface EntityDayBandBlockSelectDetail {
     laneKey: string;
