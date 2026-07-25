@@ -174,8 +174,9 @@ async function mountEditor(
             }
             el.forecastPoints = new Map(slots.map((slot) => [
                 slot.id,
-                { socPct: 40 + (slot.index % 12) * 4, solarWh: slot.index * 90, price: 2 },
+                { socPct: 40 + (slot.index % 12) * 4, solarWh: slot.index * 90, price: 2.45 },
             ]));
+            el.priceUnit = "CZK/kWh";
         }
 
         el.slots = slots;
@@ -638,6 +639,38 @@ test.describe("entity day editor", () => {
             return [...select.options].map((option) => Number(option.value));
         });
         expect(Math.min(...options)).toBe(Date.parse(`${DAY_ONE}T10:00:00Z`));
+    });
+
+    /**
+     * The charts are the reason the day is drawn at all, so every hour of them
+     * has to be able to say what it is showing -- including the hours with no
+     * bar to hang a tooltip on.
+     */
+    test("every hour of every chart names itself", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { pruned: true });
+
+        const titles = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const rowTitle = (selector: string, index: number) =>
+                band.shadowRoot.querySelectorAll(`${selector} .slot-hit`)[index]?.getAttribute("title");
+            return {
+                // 09:00, an hour that has gone: it still answers.
+                battery: rowTitle(".context-row:not(.price)", 9),
+                price: rowTitle(".context-row.price", 9),
+                // 00:00 has no sun and so no bar, and still answers.
+                solarAtMidnight: band.shadowRoot
+                    .querySelectorAll(".context-row:not(.price)")[1]
+                    ?.querySelector(".slot-hit")?.getAttribute("title"),
+                hitsPerRow: band.shadowRoot.querySelectorAll(".context-row.price .slot-hit").length,
+            };
+        });
+
+        expect(titles.battery).toBe("scheduling.forecast.battery_label · 76 % · 09:00–10:00");
+        expect(titles.price).toBe("scheduling.forecast.price_label · 2.5 CZK/kWh · 09:00–10:00");
+        expect(titles.solarAtMidnight).toBe("scheduling.forecast.solar_label · 0.0 kWh · 00:00–01:00");
+        expect(titles.hitsPerRow).toBe(24);
     });
 
     test("a past block cannot be edited from the band either", async ({ page }) => {

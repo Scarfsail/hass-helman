@@ -269,6 +269,8 @@ export class SchedulingEntityDayEditor extends LitElement {
     @property({ attribute: false }) public forecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
     @property({ type: String }) public entityName = "";
     @property({ type: String }) public entityIcon = "mdi:flash-outline";
+    /** How the price is denominated, for the forecast rows' tooltips. */
+    @property({ type: String }) public priceUnit: string | null = null;
     @property({ type: String }) public currentDayKey: string | null = null;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
@@ -404,6 +406,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .lanes=${bandLanes}
                         .selectedLaneKey=${this._selectedLaneKey}
                         .forecastPoints=${this.forecastPoints}
+                        .priceUnit=${this.priceUnit}
                         .nowMs=${this.nowMs}
                         .locale=${this.locale}
                         .timeZone=${this.timeZone}

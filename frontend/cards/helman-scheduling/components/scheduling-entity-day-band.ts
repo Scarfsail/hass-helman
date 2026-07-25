@@ -220,6 +220,13 @@ export class SchedulingEntityDayBand extends LitElement {
                 background: color-mix(in srgb, var(--helman-price-negative) 78%, transparent);
             }
 
+            /* Invisible, and only there to be pointed at. */
+            .slot-hit {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+            }
+
             .soc-chart {
                 position: absolute;
                 inset: 0;
@@ -488,6 +495,8 @@ export class SchedulingEntityDayBand extends LitElement {
     /** The lane the block list and the editor below are about. */
     @property({ type: String }) public selectedLaneKey: string | null = null;
     @property({ type: Number }) public nowMs = Date.now();
+    /** How the price is denominated, for the chart's own tooltips. */
+    @property({ type: String }) public priceUnit: string | null = null;
     /** The block the pointer is over, wherever it was pointed at. */
     @property({ type: String }) public hoveredBlockKey: string | null = null;
     @property({ type: String }) public locale = "cs";
@@ -594,6 +603,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     <polygon class="soc-fill" points=${area}></polygon>
                     <polyline class="soc-line" points=${line}></polyline>
                 </svg>
+                ${this._renderSlotHits("battery")}
                 ${this._renderRowOverlays()}
             </div>
         `;
@@ -615,6 +625,7 @@ export class SchedulingEntityDayBand extends LitElement {
                         style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
                     ></span>
                 `)}
+                ${this._renderSlotHits("solar")}
                 ${this._renderRowOverlays()}
             </div>
         `;
@@ -648,6 +659,7 @@ export class SchedulingEntityDayBand extends LitElement {
                         ></span>
                     `;
                 })}
+                ${this._renderSlotHits("price")}
                 ${this._renderRowOverlays()}
             </div>
         `;
@@ -883,6 +895,65 @@ export class SchedulingEntityDayBand extends LitElement {
             ? `${format(actualMs)} + ${format(plannedMs)}`
             : "";
         return html`<span class="lane-total" title=${title}>${format(plannedMs + actualMs)}</span>`;
+    }
+
+    /**
+     * One hover target per slot, so a chart can say what it is showing.
+     *
+     * A layer of its own rather than titles on the bars: a slot with no solar
+     * draws no bar, and the battery line is one path for the whole day, so
+     * there is nothing per-hour to hang a tooltip on. Invisible and inert
+     * beyond the tooltip -- pressing still falls through to the row, which
+     * clears the lane selection.
+     */
+    private _renderSlotHits(kind: "battery" | "solar" | "price") {
+        return this.day.slots.map((slot) => {
+            const title = this._buildSlotHitTitle(kind, slot);
+            return title === null ? nothing : html`
+                <span
+                    class="slot-hit"
+                    title=${title}
+                    style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%`}
+                ></span>
+            `;
+        });
+    }
+
+    private _buildSlotHitTitle(
+        kind: "battery" | "solar" | "price",
+        slot: { id: string; startMs: number; endMs: number | null },
+    ): string | null {
+        const point = this.forecastPoints.get(slot.id);
+        if (point === undefined) {
+            return null;
+        }
+
+        const range = `${formatScheduleTime(slot.startMs, this.locale, this.timeZone)}–${
+            formatScheduleTime(slot.endMs ?? slot.startMs, this.locale, this.timeZone)}`;
+        if (kind === "battery") {
+            return point.socPct === null || point.socPct === undefined
+                ? null
+                : `${this.localize("scheduling.forecast.battery_label")} · ${Math.round(point.socPct)} % · ${range}`;
+        }
+
+        if (kind === "solar") {
+            if (point.solarWh === null || point.solarWh === undefined) {
+                return null;
+            }
+
+            const kwh = point.solarWh / 1000;
+            const value = kwh >= 10 ? `${Math.round(kwh)}` : kwh.toFixed(1);
+            return `${this.localize("scheduling.forecast.solar_label")} · ${value} kWh · ${range}`;
+        }
+
+        if (point.price === null || point.price === undefined) {
+            return null;
+        }
+
+        const price = this.priceUnit === null
+            ? point.price.toFixed(1)
+            : `${point.price.toFixed(1)} ${this.priceUnit}`;
+        return `${this.localize("scheduling.forecast.price_label")} · ${price} · ${range}`;
     }
 
     /**
