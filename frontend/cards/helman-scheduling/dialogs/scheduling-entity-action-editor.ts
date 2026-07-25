@@ -9,6 +9,7 @@ import "./scheduling-generic-appliance-editor";
 import type { ScheduleActionOptionSelectDetail } from "../components/scheduling-action-option-card";
 import type {
     EntityScheduleAction,
+    EntityScheduleBlockAuthorship,
     EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
 import { isEntityInverterAction } from "../model/entity-day-schedule-model";
@@ -18,7 +19,11 @@ import type {
     ScheduleEvChargerApplianceMetadata,
     ScheduleGenericApplianceMetadata,
 } from "../model/schedule-appliance-metadata";
-import type { ScheduleAction, ScheduleApplianceAction } from "../schedule-types";
+import type {
+    ScheduleAction,
+    ScheduleActionAuthorshipSummary,
+    ScheduleApplianceAction,
+} from "../schedule-types";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import type { ScheduleApplianceActionChangeDetail } from "./schedule-appliance-editor-types";
 
@@ -90,6 +95,8 @@ export class SchedulingEntityActionEditor extends LitElement {
      * parses to, and `05` would be rewritten to `5` mid-entry.
      */
     @property({ type: Number }) public sessionKey = 0;
+    /** Who owns the block being edited, which decorates the picked option. */
+    @property({ attribute: false }) public authorship: EntityScheduleBlockAuthorship = "user";
 
     @state() private _actionKind: ScheduleAction["kind"] | null = null;
     @state() private _targetSocInput = "";
@@ -126,6 +133,7 @@ export class SchedulingEntityActionEditor extends LitElement {
                     ${INVERTER_ACTION_KINDS.map((actionKind) => html`
                         <scheduling-action-option-card
                             .action=${this._buildOptionPreview(actionKind)}
+                            .authorship=${this._actionKind === actionKind ? this._authorshipSummary() : null}
                             .checked=${this._actionKind === actionKind}
                             .localize=${this.localize}
                             radioName="entity-schedule-action-kind"
@@ -169,6 +177,7 @@ export class SchedulingEntityActionEditor extends LitElement {
                         .appliance=${appliance as ScheduleEvChargerApplianceMetadata}
                         .localize=${this.localize}
                         .action=${action}
+                        .selectedAuthorship=${this._authorshipSummary()}
                         .showSummary=${false}
                         .showControls=${true}
                         @schedule-appliance-action-change=${this._handleApplianceActionChange}
@@ -180,6 +189,7 @@ export class SchedulingEntityActionEditor extends LitElement {
                         .appliance=${appliance as ScheduleClimateApplianceMetadata}
                         .localize=${this.localize}
                         .action=${action}
+                        .selectedAuthorship=${this._authorshipSummary()}
                         .showSummary=${false}
                         .showControls=${true}
                         @schedule-appliance-action-change=${this._handleApplianceActionChange}
@@ -191,6 +201,7 @@ export class SchedulingEntityActionEditor extends LitElement {
                         .appliance=${appliance as ScheduleGenericApplianceMetadata}
                         .localize=${this.localize}
                         .action=${action}
+                        .selectedAuthorship=${this._authorshipSummary()}
                         .showSummary=${false}
                         .showControls=${true}
                         @schedule-appliance-action-change=${this._handleApplianceActionChange}
@@ -238,6 +249,22 @@ export class SchedulingEntityActionEditor extends LitElement {
         const targetSoc = Number(this._targetSocInput);
         const valid = /^\d+$/.test(this._targetSocInput) && targetSoc >= 0 && targetSoc <= 100;
         this._emitChange({ kind: this._actionKind, targetSoc }, valid);
+    }
+
+    /**
+     * The picked option is decorated the way the slot editor decorates its own:
+     * the border and glow are what make "this one is selected" readable at a
+     * glance, and their colour is the same answer the block list gives about who
+     * put the block there.
+     */
+    private _authorshipSummary(): ScheduleActionAuthorshipSummary {
+        return {
+            state: this.authorship,
+            counts: {
+                user: this.authorship === "automation" ? 0 : 1,
+                automation: this.authorship === "user" ? 0 : 1,
+            },
+        };
     }
 
     private _emitChange(action: EntityScheduleAction, valid: boolean): void {

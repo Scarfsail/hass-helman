@@ -364,7 +364,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         const bandLanes = this._buildBandLanes(day);
         const selectedLane = this._selectedLane;
         const blocks = bandLanes.find((lane) => lane.key === selectedLane?.key)?.blocks ?? [];
-        const editingBlockKey = this._resolveEditingBlockKey(blocks);
+        const editingBlock = this._resolveEditingBlock(blocks);
         const heading = selectedLane?.name ?? this.localize("scheduling.entity_editor.title");
         return html`
             <ha-dialog
@@ -424,8 +424,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                             ${this.localize("scheduling.entity_editor.select_entity")}
                         </div>
                     ` : html`
-                        ${this._renderBlockList(day, selectedLane, blocks, editingBlockKey)}
-                        ${this._renderEditPanel(day, selectedLane, blocks)}
+                        ${this._renderBlockList(day, selectedLane, blocks, editingBlock?.key ?? null)}
+                        ${this._renderEditPanel(day, selectedLane, blocks, editingBlock)}
                     `}
                 </div>
 
@@ -558,6 +558,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         day: EntityScheduleDay,
         lane: EntityScheduleLane,
         blocks: readonly EntityScheduleBlock[],
+        editingBlock: EntityScheduleBlock | null,
     ) {
         const editing = this._editing;
         if (editing === null) {
@@ -612,6 +613,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     .appliance=${lane.appliance}
                     .action=${editing.action}
                     .sessionKey=${this._editSessionId}
+                    .authorship=${editingBlock?.authorship ?? "user"}
                     @entity-action-change=${this._handleActionChange}
                 ></scheduling-entity-action-editor>
 
@@ -811,16 +813,17 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     /** The block the edit session currently covers, for highlighting. */
-    private _resolveEditingBlockKey(blocks: readonly EntityScheduleBlock[]): string | null {
+    private _resolveEditingBlock(
+        blocks: readonly EntityScheduleBlock[],
+    ): EntityScheduleBlock | null {
         const editing = this._editing;
         if (editing === null) {
             return null;
         }
 
-        const block = blocks.find(
+        return blocks.find(
             (candidate) => candidate.startMs < editing.endMs && candidate.endMs > editing.startMs,
-        );
-        return block?.key ?? null;
+        ) ?? null;
     }
 
     private _selectDayIndex(index: number): void {
