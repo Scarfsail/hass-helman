@@ -36,7 +36,10 @@ import {
     normalizeScheduleApplianceMetadata,
     type ScheduleApplianceMetadata,
 } from "../helman-scheduling/model/schedule-appliance-metadata";
-import { buildNormalizedScheduleStructure } from "../helman-scheduling/model/schedule-normalizer";
+import {
+    applyNormalizedScheduleCurrentState,
+    buildNormalizedScheduleStructure,
+} from "../helman-scheduling/model/schedule-normalizer";
 import {
     buildSlotForecastMap,
     deriveScheduleForecastParams,
@@ -626,22 +629,39 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         }
     }
 
+    /**
+     * The schedule as slots, with the one the clock is inside marked.
+     *
+     * The structure is rebuilt only when the schedule itself changes, but which
+     * slot is current is a fact about the clock, so it is re-applied on every
+     * pass -- cheaply, since the model is returned unchanged when the answer has
+     * not moved. Without it nothing is `isCurrent`, and the forecast's fallback
+     * to the battery's live SoC and the live price -- the only readings the
+     * in-progress slot has, since the projection starts at the next boundary --
+     * never fires, leaving that slot blank in every chart drawn from it. The
+     * day it belongs to goes unnamed too, which is what turns the editor's
+     * "today" chip back into a date.
+     */
     private _rebuildNormalizedIfNeeded(): void {
         const schedule = this._ownerSnapshot.schedule;
         if (
-            this._normalizedFor !== null
-            && this._normalizedFor.schedule === schedule
-            && this._normalizedFor.timeZone === this.timeZone
+            this._normalizedFor === null
+            || this._normalizedFor.schedule !== schedule
+            || this._normalizedFor.timeZone !== this.timeZone
         ) {
-            return;
+            this._normalized = buildNormalizedScheduleStructure({
+                schedule,
+                timeZone: this.timeZone,
+                locale: this._locale,
+            });
+            this._normalizedFor = { schedule, timeZone: this.timeZone };
         }
 
-        this._normalized = buildNormalizedScheduleStructure({
-            schedule,
-            timeZone: this.timeZone,
-            locale: this._locale,
-        });
-        this._normalizedFor = { schedule, timeZone: this.timeZone };
+        this._normalized = applyNormalizedScheduleCurrentState(
+            this._normalized,
+            this.timeZone,
+            new Date(this._nowMs),
+        );
     }
 
     private get _localize(): LocalizeFunction {
