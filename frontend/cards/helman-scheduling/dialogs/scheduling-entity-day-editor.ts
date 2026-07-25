@@ -272,6 +272,15 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** How the price is denominated, for the forecast rows' tooltips. */
     @property({ type: String }) public priceUnit: string | null = null;
     @property({ type: String }) public currentDayKey: string | null = null;
+    /**
+     * The day to open on, when the host is already looking at one.
+     *
+     * A host showing tomorrow has answered the question this dialog would
+     * otherwise guess at, and guessing over the answer lands the user on today
+     * after they pressed something on tomorrow. Unset -- or naming a day the
+     * schedule does not reach -- leaves the choice to the usual heuristic.
+     */
+    @property({ type: String }) public initialDayKey: string | null = null;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
     @property({ type: Number }) public nowMs = Date.now();
@@ -729,14 +738,22 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     /**
-     * The day worth opening on: the one holding the selected entity's next
-     * scheduled change, which is what the user tapped on to get here.
+     * The day worth opening on: whichever day the host was showing, or -- when
+     * it did not say -- the one holding the selected entity's next scheduled
+     * change, which is what the user tapped on to get here.
      */
     private _resolveInitialDayIndex(): number {
         const days = this._days();
         const lane = this._selectedLane;
         if (days.length === 0 || lane === null) {
             return 0;
+        }
+
+        const hostDayIndex = this.initialDayKey === null
+            ? -1
+            : days.findIndex((day) => day.dayKey === this.initialDayKey);
+        if (hostDayIndex >= 0) {
+            return hostDayIndex;
         }
 
         const blocks = buildEntityScheduleBlocks({

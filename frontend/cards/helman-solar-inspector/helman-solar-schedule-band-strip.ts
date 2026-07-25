@@ -260,6 +260,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 .entityName=${lane.name}
                 .entityIcon=${lane.icon}
                 .currentDayKey=${this._normalized.currentDayKey}
+                .initialDayKey=${this.date}
                 .locale=${this._locale}
                 .timeZone=${this.timeZone}
                 .nowMs=${this._nowMs}
