@@ -11,7 +11,7 @@ import {
     stripMinutesForSvgX,
     stripWindow,
     type ScheduleStripGeometry,
-} from "./helman-solar-schedule-actions-strip";
+} from "./strip-geometry";
 import { helmanColorVars } from "../color-vars";
 
 const MINUTES_PER_DAY = 1440;

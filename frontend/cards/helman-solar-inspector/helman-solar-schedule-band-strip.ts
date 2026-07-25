@@ -47,7 +47,7 @@ import type {
     NormalizedScheduleModel,
     ScheduleOwnerSnapshot,
 } from "../helman-scheduling/schedule-types";
-import { stripWindow, type ScheduleStripGeometry } from "./helman-solar-schedule-actions-strip";
+import { stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
 import { SLOT_MINUTES } from "./chart-stack";
 import { helmanColorVars } from "../color-vars";
 
