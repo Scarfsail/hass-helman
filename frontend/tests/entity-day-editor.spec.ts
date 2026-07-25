@@ -597,9 +597,12 @@ test.describe("entity day editor", () => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
             const bandEl = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
             const track = bandEl.shadowRoot.querySelector(".track") as HTMLElement;
-            const overlay = bandEl.shadowRoot.querySelector(".past-overlay") as HTMLElement;
+            const overlay = bandEl.shadowRoot.querySelector(".track .past-overlay") as HTMLElement;
             return {
                 contextRows: bandEl.shadowRoot.querySelectorAll(".context-row").length,
+                laneCount: bandEl.shadowRoot.querySelectorAll(".lane").length,
+                chartOverlays: bandEl.shadowRoot.querySelectorAll(".context-row .past-overlay").length,
+                nowMarkers: bandEl.shadowRoot.querySelectorAll(".now-marker").length,
                 // The elapsed hours carry forecast bars of their own.
                 barsBeforeNow: [...bandEl.shadowRoot.querySelectorAll(".context-bar")]
                     .filter((bar: Element) => parseFloat((bar as HTMLElement).style.left) < 40).length,
@@ -608,6 +611,10 @@ test.describe("entity day editor", () => {
         });
 
         expect(band.contextRows).toBe(3);
+        // The charts say "this is behind us" the same way the tracks do, and
+        // carry the same now-line, so the band reads as one day.
+        expect(band.chartOverlays).toBe(3);
+        expect(band.nowMarkers).toBe(band.contextRows + band.laneCount);
         expect(band.barsBeforeNow).toBeGreaterThan(0);
         // Ten of twenty-four hours have gone.
         expect(band.pastWidthPct).toBeGreaterThan(40);

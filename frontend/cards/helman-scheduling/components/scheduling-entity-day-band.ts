@@ -412,6 +412,10 @@ export class SchedulingEntityDayBand extends LitElement {
                 right: 0;
             }
 
+            /* The hours already lived through, washed out the same way on every
+               row of the day: the forecast behind the now-line is history just
+               as much as the runs are, and reading one as live and the other as
+               past is what made the two halves of the band feel unrelated. */
             .past-overlay {
                 position: absolute;
                 top: 0;
@@ -419,6 +423,16 @@ export class SchedulingEntityDayBand extends LitElement {
                 left: 0;
                 background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
                 pointer-events: none;
+            }
+
+            /* A chart sits on the grey row rather than on the card, so a dark
+               wash over it does nothing. It is veiled in the row's own colour
+               instead -- the bars fade towards the background they stand on,
+               which is the same "this is behind us" the tracks get, said in the
+               colour that works here. */
+            .context-row .past-overlay {
+                border-radius: 4px 0 0 4px;
+                background: color-mix(in srgb, var(--secondary-background-color) 62%, transparent);
             }
 
             .now-marker {
@@ -564,6 +578,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     <polygon class="soc-fill" points=${area}></polygon>
                     <polyline class="soc-line" points=${line}></polyline>
                 </svg>
+                ${this._renderRowOverlays()}
             </div>
         `;
     }
@@ -584,6 +599,7 @@ export class SchedulingEntityDayBand extends LitElement {
                         style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
                     ></span>
                 `)}
+                ${this._renderRowOverlays()}
             </div>
         `;
     }
@@ -616,6 +632,7 @@ export class SchedulingEntityDayBand extends LitElement {
                         ></span>
                     `;
                 })}
+                ${this._renderRowOverlays()}
             </div>
         `;
     }
@@ -649,8 +666,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment))}
                     ${this._renderGaps(lane)}
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected))}
-                    ${this._renderPastOverlay()}
-                    ${this._renderNowMarker()}
+                    ${this._renderRowOverlays()}
                 </div>
             </div>
         `;
@@ -808,6 +824,20 @@ export class SchedulingEntityDayBand extends LitElement {
             ? `${format(actualMs)} + ${format(plannedMs)}`
             : "";
         return html`<span class="lane-total" title=${title}>${format(plannedMs + actualMs)}</span>`;
+    }
+
+    /**
+     * The two marks every row of the day carries: where the past ends and where
+     * now is.
+     *
+     * Drawn per row rather than once over the band because the rows are laid
+     * out by the grid and are only two pixels apart -- close enough to read as
+     * one line -- and because pinning a single overlay to the time column would
+     * mean fixing the label column's width, which the longest appliance name
+     * gets to decide.
+     */
+    private _renderRowOverlays() {
+        return html`${this._renderPastOverlay()}${this._renderNowMarker()}`;
     }
 
     private _renderPastOverlay() {
