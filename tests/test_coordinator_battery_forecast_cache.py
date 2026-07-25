@@ -87,6 +87,7 @@ def _install_import_stubs() -> None:
             microsecond=0,
         )
     )
+    recorder_slots_mod.get_today_completed_local_slots = lambda *args, **kwargs: []
     async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
         return None
 
@@ -263,6 +264,22 @@ def _install_import_stubs() -> None:
     if components_pkg is None:
         components_pkg = types.ModuleType("homeassistant.components")
         sys.modules["homeassistant.components"] = components_pkg
+    components_pkg.__path__ = []  # mark as package so sub-imports work
+
+    # ``scheduling.actual_history`` reads what really happened from the
+    # recorder; the coordinator imports it at module level.
+    recorder_mod = sys.modules.get("homeassistant.components.recorder")
+    if recorder_mod is None:
+        recorder_mod = types.ModuleType("homeassistant.components.recorder")
+        sys.modules["homeassistant.components.recorder"] = recorder_mod
+    recorder_mod.get_instance = lambda hass: None
+    recorder_mod.__path__ = []
+
+    history_mod = sys.modules.get("homeassistant.components.recorder.history")
+    if history_mod is None:
+        history_mod = types.ModuleType("homeassistant.components.recorder.history")
+        sys.modules["homeassistant.components.recorder.history"] = history_mod
+    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
 
     energy_pkg = sys.modules.get("homeassistant.components.energy")
     if energy_pkg is None:
@@ -374,6 +391,8 @@ def _cleanup_stubbed_modules() -> None:
         "homeassistant.components",
         "homeassistant.components.energy",
         "homeassistant.components.energy.data",
+    "homeassistant.components.recorder",
+    "homeassistant.components.recorder.history",
         "homeassistant.helpers",
         "homeassistant.helpers.event",
         "homeassistant.helpers.entity_registry",

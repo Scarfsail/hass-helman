@@ -25,8 +25,12 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 previous_modules,
             )
         except Exception:
+            # Restore the module table, but let the failure speak: swallowing it
+            # here turns a missing stub into a baffling unpack error in every
+            # caller.
             _restore_modules(previous_modules)
             sys.modules.pop("custom_components.helman.coordinator", None)
+            raise
 
     async def test_solar_source_state_change_triggers_debounced_refresh(self) -> None:
         coordinator_module, previous_modules = self._load_coordinator_module()
