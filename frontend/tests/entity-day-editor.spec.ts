@@ -655,13 +655,14 @@ test.describe("entity day editor", () => {
             const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
             const rowTitle = (selector: string, index: number) =>
                 band.shadowRoot.querySelectorAll(`${selector} .slot-hit`)[index]?.getAttribute("title");
+            // The charts stack solar, battery, price.
+            const chartRows = band.shadowRoot.querySelectorAll(".context-row:not(.price)");
             return {
                 // 09:00, an hour that has gone: it still answers.
-                battery: rowTitle(".context-row:not(.price)", 9),
+                battery: chartRows[1]?.querySelectorAll(".slot-hit")[9]?.getAttribute("title"),
                 price: rowTitle(".context-row.price", 9),
                 // 00:00 has no sun and so no bar, and still answers.
-                solarAtMidnight: band.shadowRoot
-                    .querySelectorAll(".context-row:not(.price)")[1]
+                solarAtMidnight: chartRows[0]
                     ?.querySelector(".slot-hit")?.getAttribute("title"),
                 hitsPerRow: band.shadowRoot.querySelectorAll(".context-row.price .slot-hit").length,
             };

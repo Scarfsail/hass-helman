@@ -2,6 +2,11 @@ import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import { helmanColorVars } from "../../color-vars";
+import {
+    resolveSocDirection,
+    socColumnBackground,
+    type SocDirection,
+} from "../../shared/soc-columns";
 import type { LocalizeFunction } from "../../localize/localize";
 import type {
     EntityActualSegment,
@@ -241,24 +246,10 @@ export class SchedulingEntityDayBand extends LitElement {
                 bottom: 0;
             }
 
-            .soc-chart {
-                position: absolute;
-                inset: 0;
-                width: 100%;
-                height: 100%;
-            }
-
-            /* A full battery would otherwise flood the row: the level is the
-               line, and the fill is only there to say which side is "charged". */
-            .soc-fill {
-                fill: color-mix(in srgb, var(--helman-battery) 11%, transparent);
-            }
-
-            .soc-line {
-                fill: none;
-                stroke: var(--helman-battery);
-                stroke-width: 1.75;
-                vector-effect: non-scaling-stroke;
+            /* Columns stand on the floor of the row; their colour is set
+               per column, from the shared SoC palette. */
+            .context-bar.soc {
+                bottom: 0;
             }
 
             /* The lane rows are laid out by the grid, so the row wrapper only
@@ -714,8 +705,8 @@ export class SchedulingEntityDayBand extends LitElement {
                 @mouseleave=${() => this._emitTimeHover(null)}
             >
                 ${this.showForecastRows ? html`
-                    ${this._renderSocRow()}
                     ${this._renderSolarRow()}
+                    ${this._renderSocRow()}
                     ${this._renderPriceRow()}
                 ` : nothing}
                 ${this.lanes.map((lane) => this._renderLane(lane))}
@@ -771,37 +762,65 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * Battery state of charge as a line across the day.
+     * Battery state of charge as a column per slot, coloured by what the
+     * battery does over that slot.
      *
-     * A percentage is a level, not a quantity, so it gets a line on a fixed
-     * 0-100 scale rather than bars scaled to the day -- the shape is only
-     * meaningful against the full range.
+     * The same reading the solar inspector's SoC strip gives, in the same
+     * colours -- the direction and the palette come from the shared module, so
+     * a green column means the same thing on both surfaces. A percentage is a
+     * level, so the columns stand on a fixed 0-100 scale rather than one scaled
+     * to the day. Every column here is plan, with no measured half to be
+     * lighter than, so all of them are painted solid.
      */
     private _renderSocRow() {
-        const points = this.day.slots.flatMap((slot) => {
-            const socPct = this.forecastPoints.get(slot.id)?.socPct;
-            return socPct === undefined || socPct === null
-                ? []
-                : [{ x: this._toPercent(slot.startMs), y: 100 - Math.max(0, Math.min(socPct, 100)) }];
-        });
-        if (points.length < 2) {
+        const columns = this._readSocColumns();
+        if (columns.length === 0) {
             return nothing;
         }
 
-        const line = points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
-        const area = `${points[0].x.toFixed(2)},100 ${line} ${points[points.length - 1].x.toFixed(2)},100`;
         return html`
             ${this._renderContextHeading("scheduling.forecast.battery_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
-                <svg class="soc-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
-                    <polygon class="soc-fill" points=${area}></polygon>
-                    <polyline class="soc-line" points=${line}></polyline>
-                </svg>
+                ${columns.map(({ slot, socPct, direction }) => html`
+                    <span
+                        class="context-bar soc"
+                        style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${socPct}%; background: ${socColumnBackground(direction)}`}
+                    ></span>
+                `)}
                 ${this._renderSlotHits("battery")}
                 ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.battery_label")}
             </div>
         `;
+    }
+
+    /**
+     * The day's SoC readings as columns, each carrying the move it leads into.
+     *
+     * A reading is instantaneous but a column covers the slot that starts at
+     * it, so the movement it stands for is the step to the next reading -- the
+     * next one that exists, since a gap in the forecast must not read as the
+     * battery holding. The last column of the day has nothing to move towards
+     * and reads as idle.
+     */
+    private _readSocColumns(): {
+        slot: EntityScheduleDay["slots"][number];
+        socPct: number;
+        direction: SocDirection;
+    }[] {
+        const readings = this.day.slots.flatMap((slot) => {
+            const socPct = this.forecastPoints.get(slot.id)?.socPct;
+            return socPct === undefined || socPct === null
+                ? []
+                : [{ slot, socPct: Math.max(0, Math.min(socPct, 100)) }];
+        });
+
+        return readings.map((reading, index) => ({
+            ...reading,
+            direction: index + 1 < readings.length
+                ? resolveSocDirection(readings[index + 1].socPct - reading.socPct)
+                : "idle",
+        }));
     }
 
     private _renderSolarRow() {

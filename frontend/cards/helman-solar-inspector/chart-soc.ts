@@ -1,7 +1,7 @@
+import { resolveSocDirection, type SocDirection } from "../shared/soc-columns";
 import type { BatterySocPoint } from "./solar-inspector-model";
 
-/** What the battery did over the slot a column covers. */
-export type SocDirection = "charging" | "discharging" | "idle";
+export type { SocDirection };
 
 /** The SoC window one slot was held within; either end may be unknown. */
 export type SocBoundsPoint = { slot: string; minPct: number | null; maxPct: number | null };
@@ -14,9 +14,6 @@ export type SocBar = {
   forecast: boolean;
   direction: SocDirection;
 };
-
-/** Below this much movement over a slot the battery is holding, not cycling. */
-const IDLE_DEADBAND_PCT = 0.5;
 
 type TimedPoint = { slot: string; minutes: number; pct: number };
 
@@ -33,12 +30,6 @@ function timed(points: readonly BatterySocPoint[]): TimedPoint[] {
     .sort((a, b) => a.minutes - b.minutes);
 }
 
-function direction(deltaPct: number): SocDirection {
-  if (deltaPct > IDLE_DEADBAND_PCT) return "charging";
-  if (deltaPct < -IDLE_DEADBAND_PCT) return "discharging";
-  return "idle";
-}
-
 /**
  * How the battery moves over each slot of one series.
  *
@@ -51,7 +42,10 @@ function direction(deltaPct: number): SocDirection {
 function directionsBySlot(points: readonly TimedPoint[]): Map<string, SocDirection> {
   const directions = new Map<string, SocDirection>();
   for (let index = 0; index + 1 < points.length; index++) {
-    directions.set(points[index].slot, direction(points[index + 1].pct - points[index].pct));
+    directions.set(
+      points[index].slot,
+      resolveSocDirection(points[index + 1].pct - points[index].pct),
+    );
   }
   return directions;
 }

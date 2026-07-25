@@ -20,8 +20,8 @@ import {
   slotToMinutes,
   type SocBar,
   type SocBoundsPoint,
-  type SocDirection,
 } from "./chart-soc";
+import { SOC_COLUMN_OPACITY, SOC_DIRECTION_COLOR } from "../shared/soc-columns";
 import {
   BATT_COLOR,
   CHARGE_COLOR,
@@ -29,7 +29,6 @@ import {
   FORECAST_RAW_COLOR,
   GRID_COLOR,
   HOUSE_COLOR,
-  NEUTRAL_LIGHT_COLOR,
   SOLAR_COLOR,
   nodeAccentColor,
 } from "../color-utils";
@@ -149,13 +148,6 @@ type StrokeStyle = { width: number; opacity: number };
 const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
 
 const MINUTES_PER_DAY = 1440;
-
-/** What the battery is doing over a slot, read off the SoC it moves through. */
-const SOC_COLORS = {
-  charging:    CHARGE_COLOR,
-  discharging: DISCHARGE_COLOR,
-  idle:        NEUTRAL_LIGHT_COLOR,
-} as const satisfies Record<SocDirection, string>;
 
 /** The SoC strip's own geometry; it borrows only the x scale from the chart. */
 const SOC_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
@@ -959,12 +951,15 @@ export class HelmanSolarInspector extends LitElement {
         : ""}
       ${hasAnySeries && stacks && layout
         ? html`
+            <!-- Solar, battery, price, then the schedule read against all
+                 three -- the order the day editor stacks the same four things
+                 in, so moving between the two is not a re-read. -->
             <div class="chart-wrap">${this._renderChart(view, stacks, layout)}</div>
-            ${this._renderScheduleActionsStrip(view, layout)}
-            ${this._renderExportPriceStrip(view, layout)}
             ${this._lastLayoutForStrip && this._socBars(view).length
               ? this._renderSocSection(view, this._lastLayoutForStrip)
               : ""}
+            ${this._renderExportPriceStrip(view, layout)}
+            ${this._renderScheduleActionsStrip(view, layout)}
             ${this._impactStripVisible && this._lastLayoutForStrip
               ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
               : ""}
@@ -1649,13 +1644,17 @@ export class HelmanSolarInspector extends LitElement {
         <g clip-path="url(#plot-clip-soc)">
         ${bars.map((bar) => {
           const top = yForPct(bar.pct);
-          const color = SOC_COLORS[bar.direction];
+          const color = SOC_DIRECTION_COLOR[bar.direction];
+          const opacity = bar.forecast
+            ? SOC_COLUMN_OPACITY.forecast
+            : SOC_COLUMN_OPACITY.measured;
           return svg`
             <rect
               x=${layout.xForMinutes(bar.minutes) + 0.5} y=${top}
               width=${Math.max(2, barWidth - 1)} height=${Math.max(1, yForPct(0) - top)}
-              fill=${color} fill-opacity=${bar.forecast ? 0.35 : 0.8}
-              stroke=${color} stroke-width=${bar.forecast ? 0.9 : 0}
+              style=${`fill: ${color}; stroke: ${color};`}
+              fill-opacity=${opacity}
+              stroke-width=${bar.forecast ? 0.9 : 0}
               stroke-dasharray=${bar.forecast ? "2 2" : ""}
             >
               <title>${bar.slot} ${this._formatPct(bar.pct)} · ${this._t(
