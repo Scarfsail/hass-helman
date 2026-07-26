@@ -12,6 +12,7 @@ from .const import (
     MAX_FORECAST_DAYS,
     SCHEDULE_ACTION_KINDS,
 )
+from .automation.spec import OPTIMIZER_SPECS
 from .config_validation import validate_config_document
 from .forecast_request import (
     ForecastRequestNotSupportedError,
@@ -82,6 +83,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_config)
     async_register_command(hass, ws_validate_config)
     async_register_command(hass, ws_save_config)
+    async_register_command(hass, ws_get_optimizer_schema)
     async_register_command(hass, ws_get_schedule)
     async_register_command(hass, ws_set_schedule)
     async_register_command(hass, ws_set_schedule_execution)
@@ -137,6 +139,34 @@ def ws_get_config(
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
     connection.send_result(msg["id"], stor.config)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_optimizer_schema",
+})
+@callback
+def ws_get_optimizer_schema(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Serve the optimizer config schema the visual editor renders from.
+
+    The schema is defined once, in Python, and read by both the config reader
+    and the editor. Hand-maintaining a parallel TypeScript schema guarantees
+    drift between what the editor lets you build and what the reader accepts —
+    which is exactly how the editor came to render a `hold_action` field no
+    Python code has ever read.
+    """
+    if not _require_admin(connection, msg):
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "version": CONFIG_DOCUMENT_VERSION,
+            "kinds": [spec.to_dict() for spec in OPTIMIZER_SPECS.values()],
+        },
+    )
 
 
 @websocket_api.websocket_command({

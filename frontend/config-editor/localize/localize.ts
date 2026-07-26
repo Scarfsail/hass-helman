@@ -17,30 +17,26 @@ export function getLocalizeFunction(
   return (key: string) => localize(key, lang);
 }
 
+/** Marker for a key that resolves in no language. See `localize` below. */
+export const MISSING_TRANSLATION_PREFIX = "⚠ ";
+
 function localize(key: string, language = "cs"): string {
   const selectedLanguage = language.replace(/['"]+/g, "").replace("_", "-");
+  const translated =
+    lookup(key, languages[selectedLanguage]) ?? lookup(key, languages.cs);
+  // Deliberately loud: the schema-driven optimizer card names every field from
+  // a translation key, so a silent fallback to the raw key would let a new
+  // field ship unnamed and look almost right.
+  return translated ?? `${MISSING_TRANSLATION_PREFIX}${key}`;
+}
 
-  let translated: string;
-
-  try {
-    translated = key.split(".").reduce((current, part) => current[part], languages[selectedLanguage]);
-  } catch (_error) {
-    try {
-      translated = key.split(".").reduce((current, part) => current[part], languages.cs);
-    } catch (_fallbackError) {
-      translated = key;
-    }
+function lookup(key: string, table: unknown): string | undefined {
+  let current: any = table;
+  for (const part of key.split(".")) {
+    if (current === null || current === undefined) return undefined;
+    current = current[part];
   }
-
-  if (translated === undefined) {
-    try {
-      translated = key.split(".").reduce((current, part) => current[part], languages.cs);
-    } catch (_fallbackError) {
-      translated = key;
-    }
-  }
-
-  return translated;
+  return typeof current === "string" ? current : undefined;
 }
 
 export function getLanguage(language?: string): string {

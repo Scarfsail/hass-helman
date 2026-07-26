@@ -43,6 +43,10 @@ class OptimizerSpec:
     #: Cross-field checks over *resolved* params (master merged with a group's
     #: override), so a group cannot produce a combination no single pass sees.
     validate: Callable[..., None] | None = None
+    #: What "Add <kind>" seeds in the editor. Lives beside the schema so adding
+    #: a kind stays one Python declaration — required fields have no schema
+    #: default to fall back on, and a blank window helps nobody.
+    new_draft: dict[str, Any] = field(default_factory=dict)
     condition_type_list: tuple[ConditionType, ...] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -81,6 +85,7 @@ class OptimizerSpec:
                 }
                 for condition in self.condition_type_list
             ],
+            "newDraft": self.new_draft,
         }
 
 
@@ -137,16 +142,28 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             condition_types=("run_when",),
             param_scope=Scope.DAY,
             validate=_validate_window,
+            new_draft={
+                "params": {
+                    "window": {"start": "06:00", "end": "14:00"},
+                    "battery_first": {"target_soc": 100, "margin_pct": 20},
+                },
+                "conditions": [{"run_when": ["surplus"]}],
+            },
         ),
         OptimizerSpec(
             kind="export_price",
             condition_types=("when_price_below",),
+            new_draft={"conditions": [{"when_price_below": 0}]},
         ),
         OptimizerSpec(
             kind="surplus_appliance",
             target=_APPLIANCE_TARGET,
             condition_types=("min_surplus_buffer_pct",),
             write_mode=WRITE_MODE_REPAINT,
+            new_draft={
+                "target": {"appliance_id": ""},
+                "conditions": [{"min_surplus_buffer_pct": 5}],
+            },
         ),
         OptimizerSpec(
             kind="daily_runtime",
@@ -159,6 +176,15 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             condition_types=("run_when",),
             param_scope=Scope.DAY,
             validate=_validate_daily_runtime,
+            new_draft={
+                "target": {"appliance_id": ""},
+                "params": {
+                    "min_hours_per_day": 8,
+                    "window": {"start": "08:00", "end": "18:00"},
+                    "max_consecutive_skips": 1,
+                },
+                "conditions": [{"run_when": ["surplus", "tight"]}],
+            },
         ),
         OptimizerSpec(
             kind="charge_from_grid",
@@ -168,6 +194,10 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             ),
             condition_types=("reserve_floor_soc",),
             param_scope=Scope.RUN,
+            new_draft={
+                "params": {"margin_pct": 10, "max_target_soc": 100},
+                "conditions": [{"reserve_floor_soc": 30}],
+            },
         ),
     )
 }
