@@ -181,6 +181,10 @@
           "title": "Ranked more expensive",
           "detail": "Costlier than the chosen slots (worst chosen {worstChosenCost})."
         },
+        "price_above_run_threshold": {
+          "title": "Price too high to run",
+          "detail": "Export price is not below the {threshold} threshold, so this slot cannot be used."
+        },
         "runtime_satisfied": {
           "title": "Runtime satisfied",
           "detail": "Already ran {doneHours} h today."

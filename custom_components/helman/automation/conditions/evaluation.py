@@ -107,19 +107,46 @@ class Eligibility:
         return None if group is None else SlotEligibility(slot_id, group)
 
     def for_day(self, local_date: date) -> SlotEligibility | None:
-        """As :meth:`at`, for optimizers that resolve params per day (see R2).
+        """The group whose params a day runs under, for kinds that resolve per day.
 
-        Only meaningful for kinds whose conditions are all day- or run-scoped —
-        :class:`~..spec.OptimizerSpec` enforces that, so every slot of a day
-        resolves to the same group and returning the first one is exact.
+        When every condition is day- or run-scoped, all slots of a day resolve
+        to the same group and there is nothing to choose. A slot-scoped
+        condition breaks that: with a price threshold in play, one group may own
+        the day's cheap slots and another its expensive ones. The tie goes to
+        the **first group in config order** that owns any slot of the day —
+        config order is what the user reads as their primary intent, matching
+        :meth:`rejection`. Resolving by earliest *slot* instead would hand the
+        day to whichever group happened to own the first quarter-hour.
+
+        A kind using this must still restrict its writes to the slots that group
+        owns (:meth:`slot_ids_owned_by`); the params are day-wide, the
+        eligibility is not.
         """
-        for slot_id in self.horizon_slot_ids:
-            if parse_slot_id(slot_id).date() != local_date:
+        day_slot_ids = frozenset(
+            slot_id
+            for slot_id in self.horizon_slot_ids
+            if parse_slot_id(slot_id).date() == local_date
+        )
+        for group in self.groups:
+            owned = self.slot_ids_owned_by(group) & day_slot_ids
+            if not owned:
                 continue
-            resolved = self.at(slot_id)
-            if resolved is not None:
-                return resolved
+            first = next(s for s in self.horizon_slot_ids if s in owned)
+            return SlotEligibility(first, group)
         return None
+
+    def slot_ids_owned_by(self, group: GroupResolution) -> frozenset[str]:
+        """Slots this group *matched*, i.e. won over its siblings — not its mask.
+
+        A slot inside two groups' masks belongs to only one of them (see
+        :meth:`at`), so an optimizer that placed on the raw mask would write
+        into slots a different group's params govern.
+        """
+        return frozenset(
+            slot_id
+            for slot_id, matched in self._matched.items()
+            if matched is group
+        )
 
     def iter_slots(self) -> Iterator[SlotEligibility]:
         """Every eligible slot in horizon order, planned and candidate alike."""

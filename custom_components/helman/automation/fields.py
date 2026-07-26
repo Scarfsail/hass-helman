@@ -57,6 +57,12 @@ class Field:
     maximum: float | None = None
     choices: tuple[str, ...] | None = None
     fields: tuple["Field", ...] = ()
+    #: Whether a condition group may override this param. ``False`` for params
+    #: that describe something no single group owns — see
+    #: ``daily_runtime.max_consecutive_skips``, which is a property of a *chain*
+    #: of days. The optimizer reads those from master params regardless, so
+    #: accepting an override would silently do nothing.
+    overridable: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise for ``helman/get_optimizer_schema``. Omits absent facets."""
@@ -73,6 +79,8 @@ class Field:
             payload["maximum"] = self.maximum
         if self.choices is not None:
             payload["choices"] = list(self.choices)
+        if not self.overridable:
+            payload["overridable"] = False
         if self.fields:
             payload["fields"] = [child.to_dict() for child in self.fields]
         return payload
@@ -141,7 +149,9 @@ def read_fields(
     ``partial=True`` reads a condition group's ``params`` override: every key
     becomes optional (including inside nested objects) and defaults are not
     filled in, but unknown keys are still rejected — ``battery_first: {typo: 1}``
-    must fail loudly rather than merge silently.
+    must fail loudly rather than merge silently. It is also where
+    ``overridable=False`` bites, since that is the only mode a group override is
+    read in.
     """
     if value is MISSING or value is None:
         data: Mapping[str, Any] = {}
@@ -167,6 +177,15 @@ def read_fields(
     resolved: dict[str, Any] = {}
     for field in fields:
         raw = data.get(field.key, MISSING)
+        if partial and field.key in data and not field.overridable:
+            raise AutomationConfigError(
+                path=f"{path}.{field.key}",
+                code="not_overridable",
+                message=(
+                    f"{path}.{field.key} cannot be set per condition group; "
+                    f"it is read from the optimizer's params"
+                ),
+            )
         if partial and raw is MISSING:
             continue
         read = read_field(field, raw, path=f"{path}.{field.key}", partial=partial)

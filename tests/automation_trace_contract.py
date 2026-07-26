@@ -42,6 +42,7 @@ V1_REASON_CODES: frozenset[str] = frozenset(
         "ranked_more_expensive",
         "runtime_satisfied",
         "forced_after_consecutive_skips",
+        "price_above_run_threshold",
         # surplus_appliance
         "surplus_covers_demand",
         "surplus_insufficient",  # D (frontend derivation)

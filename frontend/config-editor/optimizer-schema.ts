@@ -22,6 +22,11 @@ export interface SchemaField {
     maximum?: number;
     choices?: string[];
     fields?: SchemaField[];
+    /**
+     * `false` when a condition group may not override this param — the reader
+     * rejects such an override, so the group's override form must not offer it.
+     */
+    overridable?: boolean;
 }
 
 export interface SchemaConditionType {

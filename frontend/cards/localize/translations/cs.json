@@ -472,6 +472,10 @@
           "title": "Dražší v pořadí",
           "detail": "Dražší než vybrané sloty (nejhorší vybraný {worstChosenCost})."
         },
+        "price_above_run_threshold": {
+          "title": "Příliš vysoká cena",
+          "detail": "Výkupní cena není nižší než práh {threshold}, slot proto nelze použít."
+        },
         "runtime_satisfied": {
           "title": "Doba splněna",
           "detail": "Dnes už běželo {doneHours} h."

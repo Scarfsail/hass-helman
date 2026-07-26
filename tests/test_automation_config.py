@@ -57,6 +57,7 @@ from custom_components.helman.automation.config import (
     read_automation_config,
 )
 from custom_components.helman.config_validation import validate_config_document
+from custom_components.helman.const import DAY_CLASSIFICATIONS
 
 
 def _export_price(**overrides):
@@ -171,14 +172,96 @@ class ConditionGroupTests(unittest.TestCase):
                     ctx.exception.path, "automation.optimizers[0].conditions"
                 )
 
-    def test_condition_values_fall_back_to_their_declared_defaults(self) -> None:
+    def test_an_omitted_condition_stays_omitted_rather_than_defaulting(self) -> None:
+        """`when_price_below` has no default, so absence means unconstrained.
+
+        A threshold of 0 is a *restriction*, unlike `run_when`'s
+        all-classifications default. Filling it in for a group that never asked
+        would silently gate `daily_runtime` on negative export prices, and
+        `build_eligibility` only masks on the keys actually present.
+        """
         parsed = AutomationConfig.from_dict(
             {"optimizers": [{"id": "export", "kind": "export_price", "conditions": [{}]}]}
         )
 
+        self.assertEqual(parsed.optimizers[0].conditions[0].condition_values, {})
+
+    def test_a_permissive_condition_default_is_still_filled_in(self) -> None:
+        parsed = AutomationConfig.from_dict(
+            {
+                "optimizers": [
+                    {
+                        "id": "runtime",
+                        "kind": "daily_runtime",
+                        "target": {"appliance_id": "boiler"},
+                        "params": {
+                            "min_hours_per_day": 4,
+                            "window": {"start": "08:00", "end": "18:00"},
+                        },
+                        "conditions": [{}],
+                    }
+                ]
+            }
+        )
+
         self.assertEqual(
             parsed.optimizers[0].conditions[0].condition_values,
-            {"when_price_below": 0.0},
+            {"run_when": DAY_CLASSIFICATIONS},
+        )
+
+    def test_a_group_cannot_override_a_non_overridable_param(self) -> None:
+        """`max_consecutive_skips` describes a chain of days, not one day.
+
+        `_plan_for_day` reads it from master params only, so accepting a group
+        override would silently do nothing — reject it at the config boundary
+        instead, and the editor hides it from the override form off the schema.
+        """
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "runtime",
+                            "kind": "daily_runtime",
+                            "target": {"appliance_id": "boiler"},
+                            "params": {
+                                "min_hours_per_day": 4,
+                                "window": {"start": "08:00", "end": "18:00"},
+                            },
+                            "conditions": [
+                                {"params": {"max_consecutive_skips": 3}}
+                            ],
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "not_overridable")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].conditions[0].params.max_consecutive_skips",
+        )
+
+    def test_an_overridable_param_is_still_accepted_per_group(self) -> None:
+        parsed = AutomationConfig.from_dict(
+            {
+                "optimizers": [
+                    {
+                        "id": "runtime",
+                        "kind": "daily_runtime",
+                        "target": {"appliance_id": "boiler"},
+                        "params": {
+                            "min_hours_per_day": 4,
+                            "window": {"start": "08:00", "end": "18:00"},
+                        },
+                        "conditions": [{"params": {"min_hours_per_day": 2}}],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(
+            parsed.optimizers[0].conditions[0].params["min_hours_per_day"], 2
         )
 
     def test_custom_conditions_are_read_verbatim(self) -> None:

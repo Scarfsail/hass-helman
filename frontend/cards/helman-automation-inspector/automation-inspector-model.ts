@@ -96,6 +96,7 @@ const KNOWN_REASON_CODES = new Set([
     "no_cheap_band",
     "runtime_deficit_placed",
     "ranked_more_expensive",
+    "price_above_run_threshold",
     "runtime_satisfied",
     "forced_after_consecutive_skips",
     "surplus_covers_demand",

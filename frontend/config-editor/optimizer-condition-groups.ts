@@ -87,6 +87,12 @@ function renderGroup(
         options.optimizerIndex,
         "params",
     ];
+    // A param the reader refuses per group must not appear in the override form
+    // — offering it would produce a config that cannot be saved. The schema is
+    // the single source for that, so nothing here names a field.
+    const overridableParams = schema.params.filter(
+        (field) => field.overridable !== false,
+    );
 
     return html`
         <details class="condition-group" ?open=${groupIndex === 0}>
@@ -126,14 +132,14 @@ function renderGroup(
                     )}
                 </div>
 
-                ${schema.params.length
+                ${overridableParams.length
                     ? html`
                           <details class="param-override" ?open=${hasOverride}>
                               <summary>${host.t("editor.fields.group_params_override")}</summary>
                               <div class="condition-group-body">
                                   ${renderInheritedNote(host, hasOverride)}
                                   <div class="field-grid">
-                                      ${renderSchemaFields(host, schema.params, {
+                                      ${renderSchemaFields(host, overridableParams, {
                                           basePath: overridePath,
                                           kind: schema.kind,
                                           inheritFrom: paramsPath,

@@ -451,6 +451,126 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
         self.assertEqual(snapshot.schedule.slots, before)
 
 
+class DailyRuntimePriceConditionTests(unittest.TestCase):
+    """`when_price_below` narrows *which slots* a matched day may run on."""
+
+    def _optimize(self, cfg, snapshot, appliance):
+        return build_daily_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        ).optimize(snapshot, cfg)
+
+    def test_only_slots_below_the_threshold_are_placeable(self) -> None:
+        appliance = _generic()
+        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        # 3h of deficit wants 6 slots, but only 2 clear the threshold. Without
+        # the filter the ranking would happily take four 5.0 slots as well.
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=3,
+            max_consecutive_skips=1,
+            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(cheap)
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), cheap)
+
+    def test_an_absent_threshold_leaves_the_whole_window_placeable(self) -> None:
+        appliance = _generic()
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=3,
+            groups=[{"run_when": ["tight"]}],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(len(placed), 6)
+
+    def test_a_day_short_on_eligible_slots_still_places_what_it_can(self) -> None:
+        appliance = _generic()
+        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=3,
+            max_consecutive_skips=1,
+            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(cheap)
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        # 1h delivered against a 3h minimum: short, but not yet due a forced run.
+        self.assertEqual(set(placed), cheap)
+
+    def test_too_few_eligible_slots_eventually_forces_a_full_run(self) -> None:
+        """The escape hatch fires for a priced-out day, not only an unmatched one.
+
+        Without this, a group that matches every day but whose threshold no slot
+        ever clears would under-run forever — `max_consecutive_skips` would
+        never see a "skip" to count.
+        """
+        appliance = _generic()
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=3,
+            max_consecutive_skips=1,
+            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+            # Yesterday also fell short, so today is one skip past the limit.
+            runtime_by_date={appliance.id: {DAY - timedelta(days=1): 0.0}},
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        # Forced: the full 3h, over the whole window, past the threshold.
+        self.assertEqual(len(placed), 6)
+
+    def test_the_day_resolves_to_the_first_group_in_config_order(self) -> None:
+        """Two groups can own different slots of one day; params come from one.
+
+        The tie goes to config order, not to whichever group happens to own the
+        earliest slot — and placement is confined to that group's own slots.
+        """
+        appliance = _generic()
+        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cfg = _config(
+            appliance_id=appliance.id,
+            groups=[
+                {
+                    "run_when": ["tight"],
+                    "when_price_below": 2.0,
+                    "params": {"min_hours_per_day": 1},
+                },
+                {
+                    "run_when": ["tight"],
+                    "when_price_below": 6.0,
+                    "params": {"min_hours_per_day": 5},
+                },
+            ],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(cheap)
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), cheap)
+
+
 class DailyRuntimeTraceContractTests(unittest.TestCase):
     def test_placement_and_ranking_reasons_and_contract(self) -> None:
         appliance = _generic()
@@ -475,6 +595,36 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
                 for d in step["decisions"]
             )
         )
+
+    def test_priced_out_window_slots_get_their_own_rejection(self) -> None:
+        appliance = _generic()
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=1,
+            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+        )
+        optimizer = build_daily_runtime_optimizer(
+            cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        rejected = [
+            d for d in step["decisions"] if d["reason"]["code"] == "price_above_run_threshold"
+        ]
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["reason"]["params"], {"threshold": 2.0})
+        # Every window slot except the two that cleared the threshold.
+        self.assertNotIn(_slot_id(12, 0), rejected[0]["slotIds"])
+        self.assertIn(_slot_id(9, 0), rejected[0]["slotIds"])
 
     def test_satisfied_day_emits_runtime_satisfied(self) -> None:
         appliance = _generic()

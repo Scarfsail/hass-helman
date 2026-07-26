@@ -378,6 +378,7 @@
       "charge_from_grid_max_target_soc": "Horní strop (%) pro cíl nabíjení ze sítě, navíc omezený maximálním SoC baterie.",
       "daily_runtime_appliance_id": "Nakonfigurovaný obecný nebo klimatizační spotřebič, který toto pravidlo udržuje v běhu pro denní minimum.",
       "daily_runtime_min_hours": "Minimum hodin, které má spotřebič denně běžet; již zaznamenaný běh se odečítá.",
+      "daily_runtime_when_price_below": "Prahová hodnota ve stejné jednotce jako předpověď exportní ceny. Použít lze jen sloty okna, jejichž exportní cena je pod touto hodnotou; ponechte prázdné, aby šlo použít kterýkoli slot okna. Den, který pod tímto prahem nedosáhne minima hodin, běží alespoň na vyhovujících slotech a maximální počet po sobě jdoucích vynechání nakonec vynutí plný běh.",
       "daily_runtime_max_consecutive_skips": "Maximální počet po sobě jdoucích dní, které lze vynechat, než je vynucen běh spotřebiče.",
       "deferrable_consumer_energy_entity": "Kumulativní senzor energie (kWh) sledující celkovou spotřebu elektřiny tohoto spotřebiče. Helman používá jeho zaznamenanou historii k odhadu, kolik energie tento spotřebič spotřebuje v nadcházejících časových slotech, aby ho mohl přesunout do levnějších period.",
       "appliance_id": "Jedinečný interní identifikátor tohoto spotřebiče. Používá se v odkazech automatizací a sledování plánování. Neměňte ho po nakonfigurování spotřebiče, mohlo by to rozbít existující automatizace.",

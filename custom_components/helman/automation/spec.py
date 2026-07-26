@@ -32,7 +32,14 @@ class OptimizerSpec:
     params: tuple[Field, ...] = ()
     #: Condition types this kind accepts, in the order the editor offers them.
     condition_types: tuple[str, ...] = ()
-    #: The granularity at which this kind resolves params — see R2 below.
+    #: The granularity at which this kind resolves *params* — independent of the
+    #: scope of its conditions. A DAY- or RUN-scoped kind may accept SLOT-scoped
+    #: conditions, in which case different slots of one day can match different
+    #: groups; :meth:`~.conditions.Eligibility.for_day` resolves that to the
+    #: first group in config order, deterministically. What such a kind must not
+    #: do is place actions on slots its own group does not own — see
+    #: ``daily_runtime``, which intersects its window with the resolved group's
+    #: slots before ranking.
     param_scope: Scope = Scope.SLOT
     #: Cross-field checks over *resolved* params (master merged with a group's
     #: override), so a group cannot produce a combination no single pass sees.
@@ -44,22 +51,11 @@ class OptimizerSpec:
     condition_type_list: tuple[ConditionType, ...] = field(init=False)
 
     def __post_init__(self) -> None:
-        types = tuple(CONDITION_TYPES[key] for key in self.condition_types)
-        object.__setattr__(self, "condition_type_list", types)
-        # R2 — a kind may not combine SLOT-scope conditions with day- or
-        # band-scoped params. Group resolution is per slot, but charge_hold
-        # resolves one release slot per *day* and charge_from_grid sizes one
-        # target per *band*; that is only coherent while every slot in a day
-        # resolves to the same group. Violating it is a chicken-and-egg that is
-        # cheap to check here and expensive to discover at runtime.
-        if self.param_scope is not Scope.SLOT and any(
-            condition.scope is Scope.SLOT and not condition.self_gating
-            for condition in types
-        ):
-            raise AssertionError(
-                f"optimizer kind {self.kind!r} resolves params per "
-                f"{self.param_scope.value} but accepts a slot-scoped condition"
-            )
+        object.__setattr__(
+            self,
+            "condition_type_list",
+            tuple(CONDITION_TYPES[key] for key in self.condition_types),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise for ``helman/get_optimizer_schema``."""
@@ -160,9 +156,13 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             params=(
                 F.positive_number("min_hours_per_day"),
                 F.obj("window", F.time_hhmm("start"), F.time_hhmm("end")),
-                F.non_negative_int("max_consecutive_skips", default=0),
+                # Describes a chain of days, so no single day's group can own it
+                # — `_plan_for_day` reads it from master params only.
+                F.non_negative_int(
+                    "max_consecutive_skips", default=0, overridable=False
+                ),
             ),
-            condition_types=("run_when",),
+            condition_types=("run_when", "when_price_below"),
             param_scope=Scope.DAY,
             validate=_validate_daily_runtime,
             new_draft={

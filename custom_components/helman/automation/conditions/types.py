@@ -189,10 +189,15 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             reason_code="day_not_matched",
             build_mask=_run_when_mask,
         ),
+        # Optional, and deliberately without a default: a threshold of 0 is a
+        # *restriction*, not the permissive no-op that `run_when`'s
+        # all-classifications default is. Filling it in for a group that never
+        # asked would silently gate `daily_runtime` on negative prices. Absent
+        # means unconstrained — an AND over no conditions is true.
         ConditionType(
             key="when_price_below",
             scope=Scope.SLOT,
-            field=F.number("when_price_below", default=0.0),
+            field=F.number("when_price_below", required=False),
             reason_code="price_not_below_threshold",
             build_mask=_export_price_below_mask,
         ),

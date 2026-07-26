@@ -100,7 +100,11 @@ const CONFIG = {
     },
 };
 
-async function mountEditor(page: Page, config: unknown = CONFIG): Promise<Locator> {
+async function mountEditor(
+    page: Page,
+    config: unknown = CONFIG,
+    schemaDocument: unknown = SCHEMA,
+): Promise<Locator> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(
@@ -124,7 +128,7 @@ async function mountEditor(page: Page, config: unknown = CONFIG): Promise<Locato
             };
             document.body.appendChild(element);
         },
-        { schema: SCHEMA, config },
+        { schema: schemaDocument, config },
     );
     const panel = page.locator("helman-config-editor-panel");
     await panel.getByRole("button", { name: "Automation" }).click();
@@ -210,6 +214,39 @@ test.describe("schema-driven optimizer card", () => {
             .first();
         await expect(windowStart).toHaveValue("");
         await expect(windowStart).toHaveAttribute("placeholder", "06:00");
+    });
+
+    test("a non-overridable param is offered by the master block only", async ({
+        page,
+    }) => {
+        // The reader rejects such an override outright, so offering it here
+        // would build a config the user cannot save. Driven by the schema flag
+        // alone — nothing in the editor names the field.
+        const schema = JSON.parse(JSON.stringify(SCHEMA));
+        const chargeHold = schema.kinds.find(
+            (kind: { kind: string }) => kind.kind === "charge_hold",
+        );
+        chargeHold.params.push({
+            key: "max_consecutive_skips",
+            type: "integer",
+            minimum: 0,
+            default: 0,
+            overridable: false,
+        });
+        const panel = await mountEditor(page, CONFIG, schema);
+        const card = await openCard(panel);
+
+        const masterLabels = await card
+            .locator(".appliance-body > .field-grid label")
+            .allInnerTexts();
+        expect(masterLabels).toContain("Max consecutive skips");
+
+        // The override form keeps its four overridable fields (window
+        // start/end, target SoC, margin) and gains no fifth — so this is a
+        // filter, not a broken form.
+        const firstGroup = card.locator(".condition-group").first();
+        await firstGroup.locator(".param-override > summary").click();
+        await expect(firstGroup.locator(".param-override input")).toHaveCount(4);
     });
 
     test("adding a group appends one seeded from the kind's draft", async ({ page }) => {

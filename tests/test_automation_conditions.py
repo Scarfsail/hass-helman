@@ -234,35 +234,30 @@ class RejectionTests(unittest.TestCase):
 
 
 class SpecInvariantTests(unittest.TestCase):
-    def test_r2_holds_for_every_registered_kind(self) -> None:
-        """A kind resolving params per day or per band accepts no slot condition.
+    def test_a_day_scoped_kind_may_accept_a_slot_scoped_condition(self) -> None:
+        """R2 is a resolution rule now, not a ban.
 
-        Group resolution is per slot, but charge_hold resolves one release slot
-        per *day* and charge_from_grid sizes one target per *band*. That is only
-        coherent while every slot of a day resolves to the same group.
+        It used to be an assertion: a kind resolving params per day could accept
+        no slot-scoped condition, because different slots of one day could then
+        resolve to different groups. ``daily_runtime`` needs exactly that
+        combination for ``when_price_below``, so the ambiguity is resolved
+        deterministically (see :meth:`Eligibility.for_day`) instead of banned.
         """
-        for kind, spec in OPTIMIZER_SPECS.items():
-            with self.subTest(kind=kind):
-                if spec.param_scope is Scope.SLOT:
-                    continue
-                self.assertFalse(
-                    any(
-                        condition.scope is Scope.SLOT and not condition.self_gating
-                        for condition in spec.condition_type_list
-                    ),
-                    f"{kind} resolves params per {spec.param_scope.value} but "
-                    "accepts a slot-scoped condition",
-                )
-
-    def test_constructing_a_spec_that_violates_r2_fails(self) -> None:
         from custom_components.helman.automation.spec import OptimizerSpec
 
-        with self.assertRaises(AssertionError):
-            OptimizerSpec(
-                kind="bad",
-                condition_types=("when_price_below",),
-                param_scope=Scope.DAY,
-            )
+        spec = OptimizerSpec(
+            kind="bad",
+            condition_types=("when_price_below",),
+            param_scope=Scope.DAY,
+        )
+
+        self.assertEqual(spec.condition_type_list[0].scope, Scope.SLOT)
+
+    def test_daily_runtime_accepts_both_the_day_and_the_price_condition(self) -> None:
+        self.assertEqual(
+            OPTIMIZER_SPECS["daily_runtime"].condition_types,
+            ("run_when", "when_price_below"),
+        )
 
     def test_every_kind_declares_only_registered_condition_types(self) -> None:
         from custom_components.helman.automation.conditions.types import CONDITION_TYPES

@@ -7,10 +7,18 @@ Stateless beyond the framework's A2 runtime input; manual runs count
 automatically because they show up in history.
 
 Day gating is the ``run_when`` condition — on a day no group matches, nothing is
-placed. ``max_consecutive_skips`` is the one construct that defeats the whole OR
-chain: after that many consecutive short days the optimizer runs anyway, past
-every group's ``custom`` conditions, stamped with its own reason code so the
-inspector never shows a forced run as an unexplained one.
+placed. ``when_price_below`` narrows further, per slot: the day still runs, but
+only the window slots whose export price clears the threshold may be chosen. So
+the matched group decides the day's *params* while its mask decides the day's
+*slots*, which is why placement ranks ``plan.placeable_slots`` and not the whole
+window.
+
+``max_consecutive_skips`` is the one construct that defeats the whole OR chain:
+after that many consecutive short days the optimizer runs anyway, past every
+group's ``custom`` conditions and past the price threshold, over the full
+window, stamped with its own reason code so the inspector never shows a forced
+run as an unexplained one. It is ``overridable=False`` — it describes the chain,
+not any one day in it, so no single group can own it.
 """
 
 from __future__ import annotations
@@ -56,11 +64,19 @@ _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
 
 @dataclass(frozen=True)
 class _DayPlan:
-    """The params one day runs under, and why it is running at all."""
+    """The params one day runs under, where it may run, and why it runs at all."""
 
     params: dict[str, Any]
+    #: Every slot of the daily window, whether or not it is eligible.
+    window_slots: list[str]
+    #: The subset the matched group actually owns — what ranking may choose
+    #: from. Equal to ``window_slots`` on a forced run, which ignores conditions.
+    placeable_slots: list[str]
     group_label: str | None
     forced_after_skips: int | None
+    #: The matched group's ``when_price_below``, so a slot the threshold priced
+    #: out can be told *which* threshold it failed. ``None`` when unconstrained.
+    price_threshold: float | None = None
 
 
 @dataclass(frozen=True)
@@ -109,22 +125,31 @@ class DailyRuntimeOptimizer:
         tzinfo = horizon_start.tzinfo
 
         for local_date, day_context in snapshot.context.day_contexts.items():
+            delivered_hours = runtime_by_date.get(local_date, 0.0)
             plan = self._plan_for_day(
                 local_date=local_date,
                 config=config,
                 eligibility=eligibility,
                 runtime_by_date=runtime_by_date,
+                delivered_hours=delivered_hours,
+                horizon_start=horizon_start,
+                horizon_end=horizon_end,
+                tzinfo=tzinfo,
             )
             params = config.params if plan is None else plan.params
             min_hours_per_day = params["min_hours_per_day"]
-            window_slots = horizon_slots_between(
-                time_on(params["window"]["start"], local_date, tzinfo=tzinfo),
-                time_on(params["window"]["end"], local_date, tzinfo=tzinfo),
-                horizon_start=horizon_start,
-                horizon_end=horizon_end,
+            window_slots = (
+                self._window_slots(
+                    params=params,
+                    local_date=local_date,
+                    horizon_start=horizon_start,
+                    horizon_end=horizon_end,
+                    tzinfo=tzinfo,
+                )
+                if plan is None
+                else plan.window_slots
             )
 
-            delivered_hours = runtime_by_date.get(local_date, 0.0)
             remaining_hours = min_hours_per_day - delivered_hours
             if remaining_hours <= 0:
                 if window_slots:
@@ -157,11 +182,30 @@ class DailyRuntimeOptimizer:
                     )
                 continue
 
+            # Slots inside the window that the matched group does not own —
+            # priced out, in practice. They are neither placed nor "ranked more
+            # expensive", so they get their own rejection rather than falling
+            # through to the frontend's generic "not considered".
+            placeable = set(plan.placeable_slots)
+            filtered_out = [
+                slot_id for slot_id in window_slots if slot_id not in placeable
+            ]
+            if filtered_out:
+                trace.decision(
+                    slot_ids=filtered_out,
+                    outcome="rejected",
+                    reason={
+                        "code": "price_above_run_threshold",
+                        "params": {"threshold": plan.price_threshold},
+                        "signals": ["exportPrice"],
+                    },
+                )
+
             slots_needed = ceil(remaining_hours / _SLOT_HOURS)
             ranked = _rank_slots(
                 document=writer.document,
                 appliance_id=appliance_id,
-                window_slots=window_slots,
+                window_slots=plan.placeable_slots,
                 available_surplus_by_bucket=available_surplus_by_bucket,
                 demand_hourly_energy=demand_hourly_energy,
                 export_price_by_bucket=export_price_by_bucket,
@@ -216,19 +260,50 @@ class DailyRuntimeOptimizer:
         config: "OptimizerInstanceConfig",
         eligibility: "Eligibility",
         runtime_by_date: dict[date, float],
+        delivered_hours: float,
+        horizon_start: datetime,
+        horizon_end: datetime,
+        tzinfo: Any,
     ) -> _DayPlan | None:
-        """Which params today runs under, or ``None`` when today is skipped."""
+        """Which params today runs under and where, or ``None`` when it is skipped.
+
+        Two ways a day can come up short, and both feed the same escape hatch:
+        no group matched it at all, or a group matched but its slot-scoped
+        conditions leave too few slots to cover the deficit. The second is new
+        with ``when_price_below`` — without it, a day whose prices never drop
+        below the threshold would under-run silently and forever, because
+        forcing would only ever fire for the first case.
+        """
         resolved = eligibility.for_day(local_date)
+        short_plan: _DayPlan | None = None
         if resolved is not None:
-            return _DayPlan(
+            window_slots = self._window_slots(
                 params=resolved.params,
+                local_date=local_date,
+                horizon_start=horizon_start,
+                horizon_end=horizon_end,
+                tzinfo=tzinfo,
+            )
+            owned = eligibility.slot_ids_owned_by(resolved.group)
+            placeable = [slot for slot in window_slots if slot in owned]
+            plan = _DayPlan(
+                params=resolved.params,
+                window_slots=window_slots,
+                placeable_slots=placeable,
                 group_label=resolved.group.label,
                 forced_after_skips=None,
+                price_threshold=resolved.condition_value("when_price_below"),
             )
-        # No group matched. Skipping today extends the run by one; once that
+            remaining_hours = resolved.params["min_hours_per_day"] - delivered_hours
+            if remaining_hours <= 0 or len(placeable) * _SLOT_HOURS >= remaining_hours:
+                return plan
+            short_plan = plan
+
+        # Skipping (or under-running) today extends the run by one; once that
         # would pass max_consecutive_skips the optimizer runs anyway — past
-        # every group, including their `custom` conditions. Master params, since
-        # no group matched to override them.
+        # every group, including their `custom` conditions and their price
+        # threshold. Master params, since no group's override governs a run that
+        # matched no group.
         consecutive_skips = (
             _prior_consecutive_skips(
                 local_date=local_date,
@@ -238,11 +313,38 @@ class DailyRuntimeOptimizer:
             + 1
         )
         if consecutive_skips <= config.params["max_consecutive_skips"]:
-            return None
+            # Not yet due a forced run: place what the group does allow, so a
+            # partially-eligible day still delivers what it can.
+            return short_plan
+        forced_window = self._window_slots(
+            params=config.params,
+            local_date=local_date,
+            horizon_start=horizon_start,
+            horizon_end=horizon_end,
+            tzinfo=tzinfo,
+        )
         return _DayPlan(
             params=config.params,
+            window_slots=forced_window,
+            placeable_slots=forced_window,
             group_label=None,
             forced_after_skips=consecutive_skips,
+        )
+
+    @staticmethod
+    def _window_slots(
+        *,
+        params: dict[str, Any],
+        local_date: date,
+        horizon_start: datetime,
+        horizon_end: datetime,
+        tzinfo: Any,
+    ) -> list[str]:
+        return horizon_slots_between(
+            time_on(params["window"]["start"], local_date, tzinfo=tzinfo),
+            time_on(params["window"]["end"], local_date, tzinfo=tzinfo),
+            horizon_start=horizon_start,
+            horizon_end=horizon_end,
         )
 
 
