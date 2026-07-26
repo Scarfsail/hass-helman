@@ -323,26 +323,19 @@ def _emit_charge_hold_decisions(
             outcome="out_of_scope",
             reason={"code": "outside_window", "params": {}},
         )
-    run_when = _first_group_run_when(eligibility)
     for classification, slot_ids in day_not_matched.items():
+        code, value = eligibility.rejection(slot_ids[0]) or ("day_not_matched", ())
         trace.decision(
             slot_ids=slot_ids,
             outcome="out_of_scope",
             reason={
-                "code": "day_not_matched",
+                "code": code,
                 "params": {
                     "classification": classification,
-                    "runWhen": list(run_when),
+                    "runWhen": list(value),
                 },
             },
         )
-
-
-def _first_group_run_when(eligibility: "Eligibility") -> tuple[str, ...]:
-    """The primary group's ``run_when``, for the day-not-matched explanation."""
-    if not eligibility.groups:
-        return ()
-    return tuple(eligibility.groups[0].condition_values.get("run_when", ()))
 
 
 def _surplus_between(

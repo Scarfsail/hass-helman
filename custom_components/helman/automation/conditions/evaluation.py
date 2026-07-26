@@ -101,11 +101,6 @@ class Eligibility:
     def condition_met_by_group(self) -> tuple[bool, ...]:
         return tuple(group.custom_met for group in self.groups)
 
-    @property
-    def any_group_met(self) -> bool:
-        """Whether at least one group's ``custom`` conditions hold this run."""
-        return any(group.custom_met for group in self.groups)
-
     def at(self, slot_id: str) -> SlotEligibility | None:
         """The slot's matched group, or ``None`` when no group's mask covers it."""
         group = self._matched.get(slot_id)

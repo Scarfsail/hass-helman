@@ -78,7 +78,6 @@ export function renderSchemaField(
             helpKey,
             inherited,
             isOverride: inheritFrom !== undefined,
-            choices: field.choices,
         });
     }
     // number | integer
@@ -105,7 +104,6 @@ function renderTextField(
         helpKey: string;
         inherited: unknown;
         isOverride: boolean;
-        choices?: string[];
     },
 ): TemplateResult {
     const { path, labelKey, helpKey, inherited, isOverride } = options;

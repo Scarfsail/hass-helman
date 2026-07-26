@@ -14,18 +14,10 @@ from .evaluation import (
     SlotEligibility,
     build_eligibility,
 )
-from .types import (
-    CONDITION_TYPES,
-    CUSTOM_KEY,
-    ConditionType,
-    MaskInputs,
-    Scope,
-    condition_type,
-)
+from .types import CONDITION_TYPES, ConditionType, MaskInputs, Scope
 
 __all__ = [
     "CONDITION_TYPES",
-    "CUSTOM_KEY",
     "ConditionType",
     "Eligibility",
     "GroupResolution",
@@ -33,5 +25,4 @@ __all__ = [
     "Scope",
     "SlotEligibility",
     "build_eligibility",
-    "condition_type",
 ]

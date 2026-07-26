@@ -167,6 +167,6 @@ function firstTranslated(
 }
 
 /** Whether a key resolves to real text rather than the visible missing-key marker. */
-export function isTranslated(host: OptimizerEditorHost, key: string): boolean {
+function isTranslated(host: OptimizerEditorHost, key: string): boolean {
     return !host.t(key).startsWith(MISSING_TRANSLATION_PREFIX);
 }

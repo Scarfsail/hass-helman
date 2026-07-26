@@ -38,10 +38,6 @@ from ..rails import (
 if TYPE_CHECKING:
     from ..snapshot import OptimizationSnapshot
 
-CUSTOM_KEY = "custom"
-"""The Home Assistant condition list inside a group. Not a system condition."""
-
-
 class Scope(Enum):
     """How finely a condition discriminates. ``SLOT`` is the finest."""
 
@@ -223,10 +219,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
         ),
     )
 }
-
-
-def condition_type(key: str) -> ConditionType:
-    return CONDITION_TYPES[key]
 
 
 def horizon_slot_ids(snapshot: "OptimizationSnapshot") -> tuple[str, ...]:

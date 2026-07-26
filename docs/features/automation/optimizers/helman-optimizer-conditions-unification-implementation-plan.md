@@ -1,6 +1,8 @@
 # Helman Automation — Optimizer conditions unification (implementation plan)
 
-Status: ready for implementation. Derived from
+Status: **implemented** (all four phases). Kept as the design record — it explains
+*why* the shape is what it is, which the code cannot. Two deliberate departures from
+the plan as written are noted inline below. Derived from
 [issue #1](https://github.com/Scarfsail/hass-helman/issues/1) — read it first; this doc assumes
 its target config shape, evaluation semantics and migration rules and does not repeat them.
 Code anchors verified against the tree on 2026-07-26.
@@ -239,8 +241,12 @@ OPTIMIZER_SPECS = {
 **Build hooks, not pure declarations.** `build_optimizer` cannot be fully generic: `export_price`
 needs `control_config` (`stop_export_supported`) and `surplus_appliance` / `daily_runtime` need the
 `AppliancesRuntimeRegistry` to resolve `target.appliance_id` into a runtime and an authored action.
-`OptimizerSpec.build` keeps a per-kind constructor receiving `(resolved_config, control_config,
-appliance_registry)`; the registry removes the *dispatch*, not the construction. The `target` half
+A per-kind constructor receives `(resolved_config, control_config, appliance_registry)`; the
+registry removes the *dispatch*, not the construction.
+
+> **As shipped:** the constructor lookup is a dict in `optimizer.py`, not a `build` field on
+> `OptimizerSpec`. Putting it on the spec would make `spec.py` import the optimizer modules, which
+> import `conditions/` and (for typing) `config.py` — a cycle, for no gain over a dict lookup. The `target` half
 of appliance resolution (`appliance_id` + `climate_mode` → `authored_action`) is shared between the
 two appliance kinds and moves into one helper.
 
@@ -376,6 +382,12 @@ splits that look attractive and are not safe.
 `fields.py`, `rails.py` — extract the primitives; point the five optimizers at them. Pure refactor,
 no behaviour change, tests untouched. **Merge this first on its own** if convenient: it deletes ~15
 duplicated helpers with zero semantic risk and shrinks the Phase 1 diff.
+
+> **As shipped:** only `rails.py` landed in Phase 0. `fields.py`'s readers exist to raise
+> `OptimizerConfigError`, which does not exist until Phase 1b — extracting them early would have
+> meant an adapter translating to the old `<Kind>ValidationError` classes for exactly one commit.
+> `fields.py` therefore lands in 1b with its final error type. Phase 0 stayed a pure, zero-risk
+> refactor, which was the point of carving it out.
 
 ### Phase 1 — foundations, format, migration, runtime wiring
 

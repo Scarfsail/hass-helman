@@ -21,10 +21,6 @@ from . import fields as F
 from .conditions.types import CONDITION_TYPES, ConditionType, Scope
 from .fields import Field, OptimizerConfigError
 
-WRITE_MODE_APPEND = "append"
-WRITE_MODE_REPAINT = "repaint"
-
-
 @dataclass(frozen=True)
 class OptimizerSpec:
     """The config surface and write behaviour of one optimizer kind."""
@@ -36,8 +32,6 @@ class OptimizerSpec:
     params: tuple[Field, ...] = ()
     #: Condition types this kind accepts, in the order the editor offers them.
     condition_types: tuple[str, ...] = ()
-    #: Whether the optimizer adds to its domain or fully repaints it each run.
-    write_mode: str = WRITE_MODE_APPEND
     #: The granularity at which this kind resolves params — see R2 below.
     param_scope: Scope = Scope.SLOT
     #: Cross-field checks over *resolved* params (master merged with a group's
@@ -66,10 +60,6 @@ class OptimizerSpec:
                 f"optimizer kind {self.kind!r} resolves params per "
                 f"{self.param_scope.value} but accepts a slot-scoped condition"
             )
-
-    def field_paths(self) -> tuple[str, ...]:
-        """Every declared key, for the old-shape rejection rules on save."""
-        return tuple(f.key for f in self.target + self.params) + self.condition_types
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise for ``helman/get_optimizer_schema``."""
@@ -159,7 +149,6 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             kind="surplus_appliance",
             target=_APPLIANCE_TARGET,
             condition_types=("min_surplus_buffer_pct",),
-            write_mode=WRITE_MODE_REPAINT,
             new_draft={
                 "target": {"appliance_id": ""},
                 "conditions": [{"min_surplus_buffer_pct": 5}],

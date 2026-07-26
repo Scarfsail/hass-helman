@@ -140,14 +140,18 @@ class DailyRuntimeOptimizer:
 
             if plan is None:
                 if window_slots:
+                    code, value = eligibility.rejection(window_slots[0]) or (
+                        "day_not_matched",
+                        (),
+                    )
                     trace.decision(
                         slot_ids=window_slots,
                         outcome="out_of_scope",
                         reason={
-                            "code": "day_not_matched",
+                            "code": code,
                             "params": {
                                 "classification": day_context.classification,
-                                "runWhen": _first_group_run_when(eligibility),
+                                "runWhen": list(value),
                             },
                         },
                     )
@@ -265,12 +269,6 @@ def _placement_reason(
         "params": {**params, "matchedGroup": plan.group_label},
         "signals": ["exportPrice"],
     }
-
-
-def _first_group_run_when(eligibility: "Eligibility") -> list[str]:
-    if not eligibility.groups:
-        return []
-    return list(eligibility.groups[0].condition_values.get("run_when", ()))
 
 
 def _prior_consecutive_skips(
