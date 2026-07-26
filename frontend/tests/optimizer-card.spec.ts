@@ -252,6 +252,105 @@ test.describe("schema-driven optimizer card", () => {
         await expect(card.locator(".remove-condition-group")).toBeDisabled();
     });
 
+    test("the name and the collapse marker share the summary line", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const summary = card.locator(".condition-group").first().locator("summary");
+
+        // Same line means same vertical centre. The native ::marker sits outside
+        // the flex row and pushes the name onto its own line; a chevron inside
+        // the row does not.
+        const chevron = await summary.locator(".appliance-chevron").boundingBox();
+        const name = await summary.locator(".condition-group-name").boundingBox();
+        const centre = (box: { y: number; height: number } | null) =>
+            box!.y + box!.height / 2;
+        expect(Math.abs(centre(chevron) - centre(name))).toBeLessThan(4);
+    });
+
+    test("the rename field is seeded with the label, default names included", async ({
+        page,
+    }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const group = card.locator(".condition-group").first();
+
+        await group.locator(".rename-condition-group").click();
+
+        // Group 1 has no `name`, so it shows its position — and renaming starts
+        // from what the user is looking at, not from an empty box.
+        await expect(group.locator(".condition-group-name-input")).toHaveValue("Group 1");
+    });
+
+    test("the rename field takes focus with its text selected", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const group = card.locator(".condition-group").first();
+
+        await group.locator(".rename-condition-group").click();
+
+        // One click to rename, and typing replaces the old name rather than
+        // appending to it.
+        await expect(group.locator(".condition-group-name-input")).toBeFocused();
+        await page.keyboard.type("Sunny");
+        await expect(group.locator(".condition-group-name-input")).toHaveValue("Sunny");
+    });
+
+    test("renaming a group updates its heading", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const group = card.locator(".condition-group").first();
+
+        await group.locator(".rename-condition-group").click();
+        await group.locator(".condition-group-name-input").fill("Sunny days");
+        await group.locator(".condition-group-name-input").press("Enter");
+
+        await expect(group.locator(".condition-group-name")).toHaveText("Sunny days");
+    });
+
+    test("committing the untouched default keeps the name implicit", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const group = card.locator(".condition-group").nth(0);
+
+        await group.locator(".rename-condition-group").click();
+        await group.locator(".condition-group-name-input").press("Enter");
+
+        // Still the fallback, so the group renumbers when it moves rather than
+        // freezing "Group 1" into the config.
+        await expect(group.locator(".condition-group-name")).toHaveText("Group 1");
+        await card.locator(".condition-group").nth(1).locator("button", {
+            hasText: "Up",
+        }).click();
+        await expect(
+            card.locator(".condition-group").nth(1).locator(".condition-group-name"),
+        ).toHaveText("Group 2");
+    });
+
+    test("Escape abandons a rename", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const group = card.locator(".condition-group").first();
+
+        await group.locator(".rename-condition-group").click();
+        await group.locator(".condition-group-name-input").fill("Discarded");
+        await group.locator(".condition-group-name-input").press("Escape");
+
+        await expect(group.locator(".condition-group-name")).toHaveText("Group 1");
+    });
+
+    test("starting a rename does not collapse the group", async ({ page }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const group = card.locator(".condition-group").first();
+        await expect(group).toHaveAttribute("open", "");
+
+        await group.locator(".rename-condition-group").click();
+
+        // The icon lives inside <summary>; without stopping the event the click
+        // would toggle the disclosure out from under the input.
+        await expect(group).toHaveAttribute("open", "");
+    });
+
     test("one add button per kind the backend serves", async ({ page }) => {
         const panel = await mountEditor(page);
 

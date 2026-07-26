@@ -35,7 +35,8 @@
       "remove_category": "Remove category",
       "up": "Up",
       "down": "Down",
-      "add_condition_group": "+ Condition group"
+      "add_condition_group": "+ Condition group",
+      "rename_condition_group": "Rename group"
     },
     "status": {
       "loading_config": "Loading stored config...",
@@ -204,7 +205,6 @@
       "bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh": "Data-glitch zero forecast floor (Wh)",
       "bias_correction_slot_invalidation_data_glitch_backfill_max_minutes": "Data-glitch backfill window (min)",
       "condition_groups": "Condition groups",
-      "condition_group_name": "Group name",
       "custom_conditions": "Custom conditions",
       "group_params_override": "Override settings for this group",
       "run_when": "Run on days"
@@ -411,7 +411,6 @@
       "bias_correction_slot_invalidation_data_glitch_max_slot_wh": "Maximum plausible energy for a single 15-minute slot. A solar inverter cannot exceed its rated power × 0.25 hours; any slot above this cap is a recorder glitch (typically a cumulative-meter dump). Helman invalidates the spike slot and walks backwards through consecutive zero slots to invalidate the matching backfilled energy. Leave empty to derive from power_devices.solar.max_power × 0.25 × 1.05.",
       "bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh": "Forecast Wh floor for the zero-with-known-production rule. When a slot's actual is 0 Wh, its forecast was at least this many Wh, and a neighbouring slot within ±60 minutes has non-zero actuals, the slot is treated as a recorder gap and invalidated. Default 200 Wh; set to 0 to disable.",
       "bias_correction_slot_invalidation_data_glitch_backfill_max_minutes": "Maximum minutes the backfill walk may extend backwards from a spike. The walk stops at the first non-zero actual or once this window is reached. Default 120 minutes.",
-      "condition_group_name": "Optional label for this group, shown by the inspector in place of its position.",
       "run_when": "Run on days with one of these classifications (surplus, tight, deficit). Leave all unchecked to never run on its own.",
       "window_start": "Start of the daily window, as HH:MM local time.",
       "window_end": "End of the daily window, as HH:MM local time. Must be after the start.",

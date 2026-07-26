@@ -35,7 +35,8 @@
       "remove_category": "Odstranit kategorii",
       "up": "Nahoru",
       "down": "Dolů",
-      "add_condition_group": "+ Skupina podmínek"
+      "add_condition_group": "+ Skupina podmínek",
+      "rename_condition_group": "Přejmenovat skupinu"
     },
     "status": {
       "loading_config": "Načítám uloženou konfiguraci...",
@@ -204,7 +205,6 @@
       "bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh": "Minimální prognóza pro nulový slot (Wh)",
       "bias_correction_slot_invalidation_data_glitch_backfill_max_minutes": "Okno doplňování při výpadku (min)",
       "condition_groups": "Skupiny podmínek",
-      "condition_group_name": "Název skupiny",
       "custom_conditions": "Vlastní podmínky",
       "group_params_override": "Přepsat nastavení pro tuto skupinu",
       "run_when": "Spouštět ve dnech"
@@ -406,7 +406,6 @@
       "bias_correction_max_interpolated_consecutive_slots": "Maximální počet po sobě jdoucích slotů, které nesplnily podmínku min_valid_slot_days a mohou být doplněny lineární interpolací mezi nejbližšími zdravými sousedy. Sloty vynechané z jiných důvodů (např. nízká prognóza) se nikdy neinterpolují. Nastavte na 0 pro úplné vypnutí interpolace a zachování původního chování. Výchozí hodnota je 2.",
       "bias_correction_aggregation_method": "Metoda použitá k agregaci historických dat. 'Poměr součtů' správně váží jasné slunečné dny oproti menším oblačným dnům a přirozeně filtruje šum z kvantizace senzoru energie (doporučeno). 'Oříznutý průměr' počítá faktor pro každý den nezávisle a průměruje je po vynechání nejvyšších a nejnižších extrémů, což poskytuje robustnost proti jednodenním anomáliím, ale může příliš korigovat velké slunečné dny kvůli nedostatku vážení objemu. Výchozí hodnota je 'Poměr součtů'.",
       "bias_correction_total_energy_entity": "Kumulativní senzor solární energie (kWh, neustále se zvyšující) používaný k vytváření historie skutečné solární výroby pro trénování modelu korekce.",
-      "condition_group_name": "Volitelný název skupiny; inspektor jej zobrazí místo pořadí.",
       "run_when": "Spouštět ve dnech s jednou z těchto klasifikací (surplus, tight, deficit). Když nezaškrtnete nic, samo se nespustí nikdy.",
       "window_start": "Začátek denního okna ve formátu HH:MM místního času.",
       "window_end": "Konec denního okna ve formátu HH:MM místního času. Musí být po začátku.",

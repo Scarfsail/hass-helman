@@ -55,6 +55,7 @@ import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize"
 import { renderOptimizerCard } from "./optimizer-card";
 import {
   fetchOptimizerSchema,
+  type GroupNameEdit,
   type OptimizerEditorHost,
   type OptimizerSchema,
   type OptimizerSchemaDocument,
@@ -131,6 +132,7 @@ export class HelmanConfigEditorPanel
     _applianceYamlErrors: { state: true },
     _liveApplianceMetadata: { state: true },
     _optimizerSchema: { state: true },
+    _editingGroupName: { state: true },
     _helpDialog: { state: true },
   };
 
@@ -602,6 +604,59 @@ export class HelmanConfigEditorPanel
       list-style: revert;
     }
 
+    /* The group's own chevron, so the marker and the name share one line — the
+       native ::marker sits outside the flex row and drops the name below it. */
+    details.condition-group > summary {
+      list-style: none;
+      user-select: none;
+    }
+
+    details.condition-group > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.condition-group[open] > summary .appliance-chevron {
+      transform: rotate(90deg);
+    }
+
+    .condition-group-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .condition-group-name-input {
+      font: inherit;
+      font-weight: var(--ha-font-weight-medium, 500);
+      padding: 2px 6px;
+      min-width: 12ch;
+    }
+
+    /* A borderless glyph button, so renaming sits beside the name without
+       competing with the up/down/remove pills on the other end of the row. */
+    .icon-button {
+      border: none;
+      background: none;
+      padding: 2px;
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      border-radius: 6px;
+      opacity: 0.6;
+      transition: opacity 0.15s ease, background 0.15s ease;
+    }
+
+    .icon-button:hover {
+      opacity: 1;
+      background: rgba(127, 127, 127, 0.12);
+    }
+
+    .icon-button-glyph {
+      width: 15px;
+      height: 15px;
+      fill: var(--secondary-text-color);
+    }
+
     details.condition-group > .condition-group-body,
     details.param-override > .condition-group-body {
       padding: 0 14px 14px;
@@ -961,6 +1016,9 @@ export class HelmanConfigEditorPanel
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
   private _optimizerSchema: OptimizerSchemaDocument | null = null;
+  // The condition group whose name is being renamed inline. One slot, not a
+  // per-group flag: only one name can be under edit at a time.
+  private _editingGroupName: GroupNameEdit | null = null;
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
   private _configFragmentRequested = false;
 
@@ -4461,6 +4519,19 @@ export class HelmanConfigEditorPanel
 
   renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
     return this._renderHelpIcon(labelKey, contentKey);
+  }
+
+  renderSvgIcon(path: string, className: string): TemplateResult {
+    return this._renderSvgIcon(path, className);
+  }
+
+  get editingGroupName(): GroupNameEdit | null {
+    return this._editingGroupName;
+  }
+
+  setEditingGroupName(target: GroupNameEdit | null): void {
+    this._editingGroupName = target;
+    this.requestUpdate();
   }
 
   renderDayClassificationField(

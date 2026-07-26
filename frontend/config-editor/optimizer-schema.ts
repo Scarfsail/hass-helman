@@ -103,6 +103,7 @@ export interface OptimizerEditorHost {
         options?: { min?: number; max?: number; suffix?: string },
     ): TemplateResult;
     renderHelpIcon(labelKey: string, contentKey: string): TemplateResult;
+    renderSvgIcon(path: string, className: string): TemplateResult;
     renderDayClassificationField(
         path: PathSegment[],
         labelKey: string,
@@ -115,6 +116,21 @@ export interface OptimizerEditorHost {
     ): TemplateResult | typeof import("lit").nothing;
     /** Home Assistant's own condition builder, for a group's `custom` list. */
     renderCustomConditions(path: PathSegment[]): TemplateResult;
+
+    /**
+     * The condition group whose name is being renamed inline, if any.
+     *
+     * Editor state rather than group-renderer state, because the renderers are
+     * plain functions — and because only one name can be under edit at a time,
+     * which a single slot expresses and a per-group flag does not.
+     */
+    editingGroupName: GroupNameEdit | null;
+    setEditingGroupName(target: GroupNameEdit | null): void;
+}
+
+export interface GroupNameEdit {
+    optimizerIndex: number;
+    groupIndex: number;
 }
 
 /**
