@@ -4,6 +4,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.components.websocket_api import async_register_command
 from .const import (
+    CONFIG_DOCUMENT_VERSION,
     DEFAULT_FORECAST_DAYS,
     DEFAULT_FORECAST_GRANULARITY_MINUTES,
     DOMAIN,
@@ -171,7 +172,13 @@ async def ws_save_config(
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
 
-    validation = validate_config_document(msg["config"])
+    # Stamp the version before validating, so a YAML round-trip through the
+    # editor can never drop it — a document that lost `config_version` would
+    # re-trigger the load migration on the next start, against a document
+    # already in the new shape.
+    config = {**msg["config"], "config_version": CONFIG_DOCUMENT_VERSION}
+
+    validation = validate_config_document(config)
     if not validation.valid:
         connection.send_result(
             msg["id"],
@@ -183,7 +190,7 @@ async def ws_save_config(
         )
         return
 
-    await stor.async_save(msg["config"])
+    await stor.async_save(config)
 
     entries = hass.config_entries.async_entries(DOMAIN)
     if not entries:

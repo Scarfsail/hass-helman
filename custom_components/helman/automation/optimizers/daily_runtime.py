@@ -2,17 +2,21 @@
 
 Ensure an appliance (generic switch or climate mode) accumulates at least
 ``min_hours_per_day`` within a daily window, placing the remaining hours on the
-cheapest slots, preferring slots the day's solar surplus already covers. Honours
-a skip policy on configured day classifications, bounded by a consecutive-skip
-guard evaluated against recorder history. Stateless beyond the framework's A2
-runtime input; manual runs count automatically because they show up in history.
+cheapest slots, preferring slots the day's solar surplus already covers.
+Stateless beyond the framework's A2 runtime input; manual runs count
+automatically because they show up in history.
+
+Day gating is the ``run_when`` condition — on a day no group matches, nothing is
+placed. ``max_consecutive_skips`` is the one construct that defeats the whole OR
+chain: after that many consecutive short days the optimizer runs anyway, past
+every group's ``custom`` conditions, stamped with its own reason code so the
+inspector never shows a forced run as an unexplained one.
 """
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
@@ -26,13 +30,13 @@ from ...scheduling.schedule import (
     ScheduleDomains,
     build_horizon_end,
     build_horizon_start,
-    format_slot_id,
     iter_horizon_slot_ids,
+    parse_slot_id,
 )
-from ..ownership import (
-    is_user_owned_appliance_action,
-    stamp_automation_appliance_action,
-)
+from ..base import ApplianceTarget, ScheduleWriter, resolve_appliance_target
+from ..conditions import build_eligibility
+from ..fields import time_on
+from ..ownership import is_user_owned_appliance_action
 from ..rails import (
     horizon_slots_between,
     read_available_surplus_by_bucket,
@@ -42,46 +46,27 @@ from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
     from ...appliances import AppliancesRuntimeRegistry
+    from ..conditions import Eligibility
     from ..config import OptimizerInstanceConfig
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
 
-_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
 
 
-class DailyRuntimeValidationError(ValueError):
-    def __init__(self, field: str, message: str) -> None:
-        super().__init__(message)
-        self.field = field
-
-
 @dataclass(frozen=True)
-class _WindowTime:
-    hour: int
-    minute: int
+class _DayPlan:
+    """The params one day runs under, and why it is running at all."""
 
-    def on(self, local_date: date, *, tzinfo) -> datetime:
-        return datetime.combine(
-            local_date, time(self.hour, self.minute), tzinfo=tzinfo
-        )
-
-
-@dataclass(frozen=True)
-class ValidatedDailyRuntimeConfig:
-    appliance: GenericApplianceRuntime | ClimateApplianceRuntime
-    authored_action: dict[str, object]
-    min_hours_per_day: float
-    window_start: _WindowTime
-    window_end: _WindowTime
-    skip_on_days: tuple[str, ...]
-    max_consecutive_skips: int
+    params: dict[str, Any]
+    group_label: str | None
+    forced_after_skips: int | None
 
 
 @dataclass(frozen=True)
 class DailyRuntimeOptimizer:
     id: str
-    config: ValidatedDailyRuntimeConfig
+    target: ApplianceTarget
     kind: str = "daily_runtime"
 
     def optimize(
@@ -90,19 +75,21 @@ class DailyRuntimeOptimizer:
         config: "OptimizerInstanceConfig",
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
-        del config
         trace = trace or NULL_TRACE
-        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
-            self.id, True
-        )
         # Slots outside the daily window are "not considered" — left to a
         # frontend default (D); only the placement/ranking rationale is emitted.
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
-        updated = ScheduleDocument(
-            execution_enabled=snapshot.schedule.execution_enabled,
-            slots=deepcopy(snapshot.schedule.slots),
+
+        eligibility = build_eligibility(snapshot, config)
+        appliance_id = self.target.appliance.id
+        appliance_domain = f"appliance:{appliance_id}"
+        writer = ScheduleWriter(
+            snapshot,
+            eligibility=eligibility,
+            trace=trace,
+            domain=appliance_domain,
         )
-        appliance_id = self.config.appliance.id
+        action = {"domain": appliance_domain, **self.target.authored_action}
 
         runtime_by_date = (
             snapshot.context.runtime_hours_by_appliance_id_by_local_date.get(
@@ -111,7 +98,7 @@ class DailyRuntimeOptimizer:
         )
         available_surplus_by_bucket = read_available_surplus_by_bucket(snapshot)
         demand_hourly_energy = _resolve_demand_hourly_energy(
-            snapshot=snapshot, appliance=self.config.appliance
+            snapshot=snapshot, appliance=self.target.appliance
         )
         export_price_by_bucket = read_price_by_bucket(
             snapshot.context.export_price_forecast
@@ -121,16 +108,24 @@ class DailyRuntimeOptimizer:
         horizon_end = build_horizon_end(snapshot.context.now)
         tzinfo = horizon_start.tzinfo
 
-        appliance_domain = f"appliance:{appliance_id}"
         for local_date, day_context in snapshot.context.day_contexts.items():
+            plan = self._plan_for_day(
+                local_date=local_date,
+                config=config,
+                eligibility=eligibility,
+                runtime_by_date=runtime_by_date,
+            )
+            params = config.params if plan is None else plan.params
+            min_hours_per_day = params["min_hours_per_day"]
             window_slots = horizon_slots_between(
-                self.config.window_start.on(local_date, tzinfo=tzinfo),
-                self.config.window_end.on(local_date, tzinfo=tzinfo),
+                time_on(params["window"]["start"], local_date, tzinfo=tzinfo),
+                time_on(params["window"]["end"], local_date, tzinfo=tzinfo),
                 horizon_start=horizon_start,
                 horizon_end=horizon_end,
             )
+
             delivered_hours = runtime_by_date.get(local_date, 0.0)
-            remaining_hours = self.config.min_hours_per_day - delivered_hours
+            remaining_hours = min_hours_per_day - delivered_hours
             if remaining_hours <= 0:
                 if window_slots:
                     trace.decision(
@@ -143,67 +138,49 @@ class DailyRuntimeOptimizer:
                     )
                 continue
 
-            if self._should_skip(
-                classification=day_context.classification,
-                local_date=local_date,
-                runtime_by_date=runtime_by_date,
-            ):
+            if plan is None:
                 if window_slots:
                     trace.decision(
                         slot_ids=window_slots,
                         outcome="out_of_scope",
                         reason={
-                            "code": "day_skipped",
+                            "code": "day_not_matched",
                             "params": {
                                 "classification": day_context.classification,
-                                "consecutiveSkips": self._prior_consecutive_skips(
-                                    local_date=local_date,
-                                    runtime_by_date=runtime_by_date,
-                                )
-                                + 1,
+                                "runWhen": _first_group_run_when(eligibility),
                             },
                         },
                     )
                 continue
 
             slots_needed = ceil(remaining_hours / _SLOT_HOURS)
-            ranked = self._pick_slots(
-                updated=updated,
+            ranked = _rank_slots(
+                document=writer.document,
                 appliance_id=appliance_id,
-                local_date=local_date,
+                window_slots=window_slots,
                 available_surplus_by_bucket=available_surplus_by_bucket,
                 demand_hourly_energy=demand_hourly_energy,
                 export_price_by_bucket=export_price_by_bucket,
                 reference_time=snapshot.context.now,
-                horizon_start=horizon_start,
-                horizon_end=horizon_end,
-                tzinfo=tzinfo,
             )
             chosen = ranked[:slots_needed]
             for _cost, slot_id in chosen:
-                current_domains = updated.slots.get(slot_id, ScheduleDomains())
-                updated_appliances = dict(current_domains.appliances)
-                updated_appliances[appliance_id] = stamp_automation_appliance_action(
-                    self.config.authored_action, condition_met=condition_met
-                )
-                updated.slots[slot_id] = ScheduleDomains(
-                    inverter=current_domains.inverter,
-                    appliances=updated_appliances,
+                writer.set_appliance(
+                    slot_id,
+                    appliance_id=appliance_id,
+                    action=self.target.authored_action,
                 )
             if chosen:
                 trace.decision(
                     slot_ids=[slot_id for _cost, slot_id in chosen],
                     outcome="applied",
-                    action={"domain": appliance_domain, **self.config.authored_action},
-                    reason={
-                        "code": "runtime_deficit_placed",
-                        "params": {
-                            "minHours": self.config.min_hours_per_day,
-                            "doneHours": round(delivered_hours, 3),
-                            "placedHours": round(len(chosen) * _SLOT_HOURS, 3),
-                        },
-                        "signals": ["exportPrice"],
-                    },
+                    action=action,
+                    reason=_placement_reason(
+                        plan=plan,
+                        min_hours_per_day=min_hours_per_day,
+                        delivered_hours=delivered_hours,
+                        placed_slots=len(chosen),
+                    ),
                 )
             rejected = ranked[slots_needed:]
             if rejected:
@@ -226,81 +203,131 @@ class DailyRuntimeOptimizer:
                     },
                 )
 
-        return updated
+        return writer.flush(action=action)
 
-    def _prior_consecutive_skips(
+    def _plan_for_day(
         self,
         *,
         local_date: date,
+        config: "OptimizerInstanceConfig",
+        eligibility: "Eligibility",
         runtime_by_date: dict[date, float],
-    ) -> int:
-        consecutive_prior_skips = 0
-        cursor = local_date - timedelta(days=1)
-        while cursor in runtime_by_date:
-            if runtime_by_date[cursor] < self.config.min_hours_per_day:
-                consecutive_prior_skips += 1
-                cursor -= timedelta(days=1)
-            else:
-                break
-        return consecutive_prior_skips
-
-    def _should_skip(
-        self,
-        *,
-        classification: str,
-        local_date: date,
-        runtime_by_date: dict[date, float],
-    ) -> bool:
-        if classification not in self.config.skip_on_days:
-            return False
-        # Skipping today extends the run by one; only allowed while it stays
-        # within max_consecutive_skips.
-        consecutive_prior_skips = self._prior_consecutive_skips(
-            local_date=local_date,
-            runtime_by_date=runtime_by_date,
+    ) -> _DayPlan | None:
+        """Which params today runs under, or ``None`` when today is skipped."""
+        resolved = eligibility.for_day(local_date)
+        if resolved is not None:
+            return _DayPlan(
+                params=resolved.params,
+                group_label=resolved.group.label,
+                forced_after_skips=None,
+            )
+        # No group matched. Skipping today extends the run by one; once that
+        # would pass max_consecutive_skips the optimizer runs anyway — past
+        # every group, including their `custom` conditions. Master params, since
+        # no group matched to override them.
+        consecutive_skips = (
+            _prior_consecutive_skips(
+                local_date=local_date,
+                runtime_by_date=runtime_by_date,
+                min_hours_per_day=config.params["min_hours_per_day"],
+            )
+            + 1
         )
-        return consecutive_prior_skips + 1 <= self.config.max_consecutive_skips
+        if consecutive_skips <= config.params["max_consecutive_skips"]:
+            return None
+        return _DayPlan(
+            params=config.params,
+            group_label=None,
+            forced_after_skips=consecutive_skips,
+        )
 
-    def _pick_slots(
-        self,
-        *,
-        updated: ScheduleDocument,
-        appliance_id: str,
-        local_date: date,
-        available_surplus_by_bucket: dict[datetime, float] | None,
-        demand_hourly_energy: float | None,
-        export_price_by_bucket: dict[datetime, float],
-        reference_time: datetime,
-        horizon_start: datetime,
-        horizon_end: datetime,
-        tzinfo,
-    ) -> list[tuple[float, str]]:
-        window_start = self.config.window_start.on(local_date, tzinfo=tzinfo)
-        window_end = self.config.window_end.on(local_date, tzinfo=tzinfo)
 
-        candidates: list[tuple[float, int, datetime, str]] = []
-        cursor = window_start
-        while cursor < window_end:
-            if horizon_start <= cursor < horizon_end:
-                slot_id = format_slot_id(cursor)
-                current_domains = updated.slots.get(slot_id, ScheduleDomains())
-                if not is_user_owned_appliance_action(
-                    current_domains.appliances.get(appliance_id)
-                ):
-                    covered = _slot_is_solar_covered(
-                        slot_id=slot_id,
-                        reference_time=reference_time,
-                        available_surplus_by_bucket=available_surplus_by_bucket,
-                        demand_hourly_energy=demand_hourly_energy,
-                    )
-                    export_price = export_price_by_bucket.get(cursor, float("inf"))
-                    candidates.append(
-                        (export_price, 0 if covered else 1, cursor, slot_id)
-                    )
-            cursor += _SLOT_DURATION
+def _placement_reason(
+    *,
+    plan: _DayPlan,
+    min_hours_per_day: float,
+    delivered_hours: float,
+    placed_slots: int,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "minHours": min_hours_per_day,
+        "doneHours": round(delivered_hours, 3),
+        "placedHours": round(placed_slots * _SLOT_HOURS, 3),
+    }
+    if plan.forced_after_skips is not None:
+        return {
+            "code": "forced_after_consecutive_skips",
+            "params": {**params, "consecutiveSkips": plan.forced_after_skips},
+            "signals": ["exportPrice"],
+        }
+    return {
+        "code": "runtime_deficit_placed",
+        "params": {**params, "matchedGroup": plan.group_label},
+        "signals": ["exportPrice"],
+    }
 
-        candidates.sort(key=lambda item: (item[0], item[1], dt_util.as_utc(item[2])))
-        return [(cost, slot_id) for cost, _covered, _cursor, slot_id in candidates]
+
+def _first_group_run_when(eligibility: "Eligibility") -> list[str]:
+    if not eligibility.groups:
+        return []
+    return list(eligibility.groups[0].condition_values.get("run_when", ()))
+
+
+def _prior_consecutive_skips(
+    *,
+    local_date: date,
+    runtime_by_date: dict[date, float],
+    min_hours_per_day: float,
+) -> int:
+    """Prior days that fell short of the minimum, walking backwards.
+
+    Counts *any* short day, not only days skipped by policy — a day that fell
+    short because its window was too narrow counts too. Pre-existing behaviour,
+    preserved deliberately.
+    """
+    consecutive_prior_skips = 0
+    cursor = local_date - timedelta(days=1)
+    while cursor in runtime_by_date:
+        if runtime_by_date[cursor] >= min_hours_per_day:
+            break
+        consecutive_prior_skips += 1
+        cursor -= timedelta(days=1)
+    return consecutive_prior_skips
+
+
+def _rank_slots(
+    *,
+    document: ScheduleDocument,
+    appliance_id: str,
+    window_slots: list[str],
+    available_surplus_by_bucket: dict[datetime, float] | None,
+    demand_hourly_energy: float | None,
+    export_price_by_bucket: dict[datetime, float],
+    reference_time: datetime,
+) -> list[tuple[float, str]]:
+    """Window slots cheapest-first, solar-covered slots winning ties."""
+    candidates: list[tuple[float, int, datetime, str]] = []
+    for slot_id in window_slots:
+        current_domains = document.slots.get(slot_id, ScheduleDomains())
+        if is_user_owned_appliance_action(current_domains.appliances.get(appliance_id)):
+            continue
+        covered = _slot_is_solar_covered(
+            slot_id=slot_id,
+            reference_time=reference_time,
+            available_surplus_by_bucket=available_surplus_by_bucket,
+            demand_hourly_energy=demand_hourly_energy,
+        )
+        cursor = parse_slot_id(slot_id)
+        candidates.append(
+            (
+                export_price_by_bucket.get(cursor, float("inf")),
+                0 if covered else 1,
+                cursor,
+                slot_id,
+            )
+        )
+    candidates.sort(key=lambda item: (item[0], item[1], dt_util.as_utc(item[2])))
+    return [(cost, slot_id) for cost, _covered, _cursor, slot_id in candidates]
 
 
 def _slot_is_solar_covered(
@@ -355,154 +382,12 @@ def build_daily_runtime_optimizer(
     config: "OptimizerInstanceConfig",
     *,
     appliance_registry: "AppliancesRuntimeRegistry",
+    path: str = "automation.optimizers[?]",
+    **_kwargs: Any,
 ) -> DailyRuntimeOptimizer:
     return DailyRuntimeOptimizer(
         id=config.id,
-        config=validate_daily_runtime_optimizer_config(
-            config, appliance_registry=appliance_registry
+        target=resolve_appliance_target(
+            config, appliance_registry=appliance_registry, path=path
         ),
     )
-
-
-def validate_daily_runtime_optimizer_config(
-    config: "OptimizerInstanceConfig",
-    *,
-    appliance_registry: "AppliancesRuntimeRegistry",
-) -> ValidatedDailyRuntimeConfig:
-    from ...const import DAY_CLASSIFICATIONS
-
-    params = config.params
-    appliance_id = params.get("appliance_id")
-    if not isinstance(appliance_id, str) or not appliance_id:
-        raise DailyRuntimeValidationError(
-            "appliance_id", "appliance_id must be a non-empty string"
-        )
-    appliance = appliance_registry.get_appliance(appliance_id)
-    if appliance is None:
-        raise DailyRuntimeValidationError(
-            "appliance_id", f"unknown appliance_id {appliance_id!r}"
-        )
-
-    climate_mode = params.get("climate_mode")
-    if isinstance(appliance, GenericApplianceRuntime):
-        if climate_mode is not None:
-            raise DailyRuntimeValidationError(
-                "climate_mode",
-                f"climate_mode is not allowed for generic appliance {appliance_id!r}",
-            )
-        authored_action: dict[str, object] = {"on": True}
-    elif isinstance(appliance, ClimateApplianceRuntime):
-        if not isinstance(climate_mode, str) or not climate_mode:
-            raise DailyRuntimeValidationError(
-                "climate_mode",
-                f"climate_mode is required for climate appliance {appliance_id!r}",
-            )
-        if climate_mode not in appliance.authorable_modes:
-            raise DailyRuntimeValidationError(
-                "climate_mode",
-                f"climate_mode {climate_mode!r} is not supported for appliance "
-                f"{appliance_id!r}",
-            )
-        authored_action = {"mode": climate_mode}
-    else:
-        raise DailyRuntimeValidationError(
-            "appliance_id",
-            f"appliance {appliance_id!r} must be generic or climate",
-        )
-
-    min_hours_per_day = _read_positive_number(params, "min_hours_per_day")
-    window_start = _read_window_time(params, "start")
-    window_end = _read_window_time(params, "end")
-    window_hours = (
-        (window_end.hour * 60 + window_end.minute)
-        - (window_start.hour * 60 + window_start.minute)
-    ) / 60
-    if window_hours <= 0:
-        raise DailyRuntimeValidationError(
-            "window", "window.end must be after window.start"
-        )
-    if window_hours < min_hours_per_day:
-        raise DailyRuntimeValidationError(
-            "window",
-            "window width must be at least min_hours_per_day",
-        )
-
-    skip_on_days, max_consecutive_skips = _read_skip(params, DAY_CLASSIFICATIONS)
-
-    return ValidatedDailyRuntimeConfig(
-        appliance=appliance,
-        authored_action=authored_action,
-        min_hours_per_day=min_hours_per_day,
-        window_start=window_start,
-        window_end=window_end,
-        skip_on_days=skip_on_days,
-        max_consecutive_skips=max_consecutive_skips,
-    )
-
-
-def _read_positive_number(params: dict[str, Any], field: str) -> float:
-    value = params.get(field)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise DailyRuntimeValidationError(field, f"{field} must be a number")
-    if value <= 0:
-        raise DailyRuntimeValidationError(field, f"{field} must be > 0")
-    return float(value)
-
-
-def _read_window_time(params: dict[str, Any], field: str) -> _WindowTime:
-    window = params.get("window")
-    if not isinstance(window, dict):
-        raise DailyRuntimeValidationError("window", "window must be an object")
-    raw = window.get(field)
-    if not isinstance(raw, str):
-        raise DailyRuntimeValidationError(
-            "window", f"window.{field} must be an 'HH:MM' string"
-        )
-    parts = raw.split(":")
-    if len(parts) != 2:
-        raise DailyRuntimeValidationError(
-            "window", f"window.{field} must be an 'HH:MM' string"
-        )
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError as err:
-        raise DailyRuntimeValidationError(
-            "window", f"window.{field} must be an 'HH:MM' string"
-        ) from err
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise DailyRuntimeValidationError(
-            "window", f"window.{field} must be a valid 'HH:MM' time"
-        )
-    return _WindowTime(hour=hour, minute=minute)
-
-
-def _read_skip(
-    params: dict[str, Any], classifications: tuple[str, ...]
-) -> tuple[tuple[str, ...], int]:
-    skip = params.get("skip")
-    if skip is None:
-        return (), 0
-    if not isinstance(skip, dict):
-        raise DailyRuntimeValidationError("skip", "skip must be an object")
-    raw_on_days = skip.get("on_days", [])
-    if not isinstance(raw_on_days, (list, tuple)):
-        raise DailyRuntimeValidationError("skip", "skip.on_days must be a list")
-    on_days: list[str] = []
-    for item in raw_on_days:
-        if item not in classifications:
-            raise DailyRuntimeValidationError(
-                "skip",
-                f"skip.on_days entries must be one of {', '.join(classifications)}",
-            )
-        on_days.append(item)
-    raw_max = skip.get("max_consecutive_skips", 0)
-    if isinstance(raw_max, bool) or not isinstance(raw_max, int):
-        raise DailyRuntimeValidationError(
-            "skip", "skip.max_consecutive_skips must be an integer"
-        )
-    if raw_max < 0:
-        raise DailyRuntimeValidationError(
-            "skip", "skip.max_consecutive_skips must be >= 0"
-        )
-    return tuple(on_days), raw_max

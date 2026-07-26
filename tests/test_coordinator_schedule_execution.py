@@ -473,9 +473,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         now = dt_util.now()
         coordinator._last_automation_plan_at = now - timedelta(seconds=120)
-        coordinator._last_plan_condition_map = {"opt": True}
+        coordinator._last_plan_condition_map = {"opt": (True,)}
         coordinator._async_evaluate_optimizer_conditions = AsyncMock(
-            return_value={"opt": False}
+            return_value={"opt": (False,)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
 
@@ -494,9 +494,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         now = dt_util.now()
         coordinator._last_automation_plan_at = now - timedelta(seconds=120)
-        coordinator._last_plan_condition_map = {"opt": True}
+        coordinator._last_plan_condition_map = {"opt": (True,)}
         coordinator._async_evaluate_optimizer_conditions = AsyncMock(
-            return_value={"opt": True}
+            return_value={"opt": (True,)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
 
@@ -513,9 +513,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         now = dt_util.now()
         coordinator._last_automation_plan_at = now  # just planned
-        coordinator._last_plan_condition_map = {"opt": True}
+        coordinator._last_plan_condition_map = {"opt": (True,)}
         coordinator._async_evaluate_optimizer_conditions = AsyncMock(
-            return_value={"opt": False}
+            return_value={"opt": (False,)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
 

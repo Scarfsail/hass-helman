@@ -157,6 +157,7 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     automation_config_mod.OptimizerInstanceConfig = type(
         "OptimizerInstanceConfig", (), {}
     )
+    automation_config_mod.ConditionGroup = type("ConditionGroup", (), {})
     automation_config_mod.read_automation_config = lambda config: None
     sys.modules[automation_config_mod.__name__] = automation_config_mod
 

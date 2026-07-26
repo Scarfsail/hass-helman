@@ -14,7 +14,6 @@ CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 NEXT_SLOT_ID = "2026-03-20T21:30:00+01:00"
 THIRD_SLOT_ID = "2026-03-20T22:00:00+01:00"
 
-
 def _install_import_stubs() -> None:
     custom_components_pkg = sys.modules.get("custom_components")
     if custom_components_pkg is None:
@@ -72,6 +71,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     schedule_document_to_dict,
 )
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
@@ -81,15 +81,12 @@ from automation_trace_contract import (  # noqa: E402
 def _make_optimizer_config(
     *,
     when_price_below: float = 0.0,
-    action: str = "stop_export",
+    groups: list[dict] | None = None,
 ) -> OptimizerInstanceConfig:
-    return OptimizerInstanceConfig(
+    return make_optimizer_config(
         id="avoid-negative-export",
         kind="export_price",
-        params={
-            "when_price_below": when_price_below,
-            "action": action,
-        },
+        conditions=groups or [{"when_price_below": when_price_below}],
     )
 
 

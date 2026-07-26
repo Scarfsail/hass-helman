@@ -578,7 +578,13 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             config={
                 "automation": {
                     "enabled": True,
-                    "optimizers": [{"id": "opt1", "kind": "export_price"}],
+                    "optimizers": [
+                        {
+                            "id": "opt1",
+                            "kind": "export_price",
+                            "conditions": [{"when_price_below": 0.0}],
+                        }
+                    ],
                 }
             },
         )
@@ -605,7 +611,13 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             config={
                 "automation": {
                     "enabled": True,
-                    "optimizers": [{"id": "opt1", "kind": "export_price"}],
+                    "optimizers": [
+                        {
+                            "id": "opt1",
+                            "kind": "export_price",
+                            "conditions": [{"when_price_below": 0.0}],
+                        }
+                    ],
                 }
             },
         )

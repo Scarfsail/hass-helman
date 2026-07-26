@@ -329,10 +329,8 @@ class ConfigValidationTests(unittest.TestCase):
                 {
                     "id": "run-dishwasher-on-surplus",
                     "kind": "surplus_appliance",
-                    "params": {
-                        "appliance_id": "dishwasher",
-                        "action": "on",
-                    },
+                    "target": {"appliance_id": "dishwasher"},
+                    "conditions": [{"min_surplus_buffer_pct": 5}],
                 }
             ],
         }
@@ -350,10 +348,8 @@ class ConfigValidationTests(unittest.TestCase):
                 {
                     "id": "run-unknown-on-surplus",
                     "kind": "surplus_appliance",
-                    "params": {
-                        "appliance_id": "missing-appliance",
-                        "action": "on",
-                    },
+                    "target": {"appliance_id": "missing-appliance"},
+                    "conditions": [{}],
                 }
             ],
         }
@@ -363,7 +359,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "automation.optimizers[0].params.appliance_id"
+                issue.path == "automation.optimizers[0].target.appliance_id"
                 for issue in report.errors
             )
         )
@@ -379,11 +375,11 @@ class ConfigValidationTests(unittest.TestCase):
                 {
                     "id": "run-dishwasher-on-surplus",
                     "kind": "surplus_appliance",
-                    "params": {
+                    "target": {
                         "appliance_id": "dishwasher",
-                        "action": "on",
                         "climate_mode": "heat",
                     },
+                    "conditions": [{}],
                 }
             ],
         }
@@ -393,7 +389,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "automation.optimizers[0].params.climate_mode"
+                issue.path == "automation.optimizers[0].target.climate_mode"
                 for issue in report.errors
             )
         )

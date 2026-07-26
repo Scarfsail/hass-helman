@@ -13,7 +13,6 @@ TZ = timezone(timedelta(hours=2))
 REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
 
-
 def _install_import_stubs() -> None:
     custom_components_pkg = sys.modules.get("custom_components")
     if custom_components_pkg is None:
@@ -69,6 +68,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
 )
 from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
@@ -155,22 +155,21 @@ def _make_snapshot(
 
 def _make_config(
     *,
-    only_on_days=("surplus",),
+    run_when=("surplus",),
     window_start: str = "06:00",
     window_end: str = "14:00",
     target_soc: int = 100,
     margin_pct: int = 0,
+    groups: list[dict] | None = None,
 ) -> OptimizerInstanceConfig:
-    return OptimizerInstanceConfig(
+    return make_optimizer_config(
         id="morning-export",
         kind="charge_hold",
         params={
-            "only_on_days": list(only_on_days),
-            "hold_action": "stop_charging",
-            "release": "day_price_min",
             "window": {"start": window_start, "end": window_end},
             "battery_first": {"target_soc": target_soc, "margin_pct": margin_pct},
         },
+        conditions=groups or [{"run_when": list(run_when)}],
     )
 
 

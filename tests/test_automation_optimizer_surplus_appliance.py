@@ -14,7 +14,6 @@ CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 NEXT_SLOT_ID = "2026-03-20T21:30:00+01:00"
 THIRD_SLOT_ID = "2026-03-20T22:00:00+01:00"
 
-
 def _install_import_stubs() -> None:
     custom_components_pkg = sys.modules.get("custom_components")
     if custom_components_pkg is None:
@@ -109,6 +108,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
     OptimizationSnapshot,
 )
+from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
@@ -151,18 +151,17 @@ def _make_optimizer_config(
     appliance_id: str,
     climate_mode: str | None = None,
     min_surplus_buffer_pct: int = 5,
+    groups: list[dict] | None = None,
 ) -> OptimizerInstanceConfig:
-    params: dict[str, object] = {
-        "appliance_id": appliance_id,
-        "action": "on",
-        "min_surplus_buffer_pct": min_surplus_buffer_pct,
-    }
+    target: dict[str, object] = {"appliance_id": appliance_id}
     if climate_mode is not None:
-        params["climate_mode"] = climate_mode
-    return OptimizerInstanceConfig(
+        target["climate_mode"] = climate_mode
+    return make_optimizer_config(
         id="run-on-surplus",
         kind="surplus_appliance",
-        params=params,
+        target=target,
+        conditions=groups
+        or [{"min_surplus_buffer_pct": min_surplus_buffer_pct}],
     )
 
 
@@ -533,13 +532,13 @@ class SurplusApplianceOptimizerTests(unittest.TestCase):
         generic = _make_generic_runtime()
         climate = _make_climate_runtime()
 
-        with self.assertRaisesRegex(ValueError, "cannot set climate_mode"):
+        with self.assertRaisesRegex(ValueError, "climate_mode is not allowed"):
             build_surplus_appliance_optimizer(
                 _make_optimizer_config(appliance_id=generic.id, climate_mode="heat"),
                 appliance_registry=AppliancesRuntimeRegistry.from_appliances((generic,)),
             )
 
-        with self.assertRaisesRegex(ValueError, "must set climate_mode"):
+        with self.assertRaisesRegex(ValueError, "climate_mode is required"):
             build_surplus_appliance_optimizer(
                 _make_optimizer_config(appliance_id=climate.id),
                 appliance_registry=AppliancesRuntimeRegistry.from_appliances((climate,)),

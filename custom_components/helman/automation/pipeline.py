@@ -559,10 +559,14 @@ def run_optimizer_loop_pure(
         # Stamp the step with its execution-condition state so the run
         # explanation can present this optimizer's placements as candidates
         # (tentative, won't execute) rather than as planned-for-execution.
+        # One bool per step, folded from the per-group results: it reports
+        # whether *any* group matched fully, which is exactly what decides
+        # whether this step can execute at all.
+        condition_met_by_group = snapshot.context.condition_met_by_optimizer_id.get(
+            optimizer_config.id
+        )
         trace.set_condition_met(
-            snapshot.context.condition_met_by_optimizer_id.get(
-                optimizer_config.id, True
-            )
+            True if condition_met_by_group is None else any(condition_met_by_group)
         )
         # railsIn is the rail segment the optimizer received (pre-rebuild).
         trace.set_rails_in(
