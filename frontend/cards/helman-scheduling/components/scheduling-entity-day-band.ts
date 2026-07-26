@@ -138,6 +138,22 @@ export class SchedulingEntityDayBand extends LitElement {
                 grid-template-columns: 1fr;
             }
 
+            /* A host aligning the tracks to its own chart inset them to that
+               chart's plot area, leaving the axis gutters bare on both sides.
+               The tracks take the insets; the lane does not, so the name inside
+               it can start at the host's own left edge -- a name is not a time,
+               and on a narrow screen the gutter is the only room it has. */
+            .band.labels-in-track .track,
+            .band.labels-in-track .context-row {
+                margin-left: var(--entity-day-band-track-inset-start, 0px);
+                margin-right: var(--entity-day-band-track-inset-end, 0px);
+            }
+
+            .band.labels-in-track .lane {
+                display: block;
+                position: relative;
+            }
+
             .row-label {
                 display: flex;
                 align-items: center;
@@ -281,7 +297,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 display: flex;
                 align-items: center;
                 gap: 4px;
-                max-width: min(45%, 180px);
+                max-width: calc(min(45%, 180px) + var(--entity-day-band-track-inset-start, 0px));
                 padding: 0 14px 0 5px;
                 background: linear-gradient(
                     to right,
@@ -949,8 +965,12 @@ export class SchedulingEntityDayBand extends LitElement {
                     ${this._renderGaps(lane)}
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
                     ${this._renderRowOverlays()}
-                    ${inTrackLabels ? this._renderTrackLabel(lane) : nothing}
                 </div>
+                <!--
+                    Outside the track, which clips: the name has to be free to
+                    reach back into whatever gutter the host inset the track by.
+                -->
+                ${inTrackLabels ? this._renderTrackLabel(lane) : nothing}
             </div>
         `;
     }
@@ -964,6 +984,10 @@ export class SchedulingEntityDayBand extends LitElement {
      * behind it is what keeps it readable when an early run happens to sit
      * underneath, and it takes no pointer events, so the run it covers is still
      * the thing being pointed at.
+     *
+     * It starts at the lane's left edge, not the track's: where the host inset
+     * the track to clear a chart's axis gutter, the name gets that gutter to
+     * itself and covers that much less of the day.
      */
     private _renderTrackLabel(lane: EntityDayBandLane) {
         return html`
