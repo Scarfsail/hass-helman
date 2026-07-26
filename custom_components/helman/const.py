@@ -15,6 +15,10 @@ DAY_CONTEXT_STORAGE_VERSION = 1
 DAY_CLASSIFICATION_SURPLUS = "surplus"
 DAY_CLASSIFICATION_TIGHT = "tight"
 DAY_CLASSIFICATION_DEFICIT = "deficit"
+# Version of the stored config document. Bumped when a stored shape changes in
+# a way that needs migrating on load; absent means version 1 (pre-unification).
+CONFIG_DOCUMENT_VERSION = 2
+
 DAY_CLASSIFICATIONS = (
     DAY_CLASSIFICATION_SURPLUS,
     DAY_CLASSIFICATION_TIGHT,

@@ -9,21 +9,17 @@ import {
   cloneJson,
   createApplianceDraft,
   createClimateApplianceDraft,
-  createExportPriceOptimizerDraft,
-  createChargeHoldOptimizerDraft,
-  createChargeFromGridOptimizerDraft,
-  createDailyRuntimeOptimizerDraft,
   createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
   createDeferrableConsumerDraft,
+  createOptimizerDraft,
   createEcoGearEntry,
   createGearKey,
   createImportPriceWindowDraft,
   createLabelKey,
   createModeKey,
   type RenameObjectKeyResult,
-  createSurplusApplianceOptimizerDraft,
   createUseModeEntry,
   createVehicleDraft,
   getValueAtPath,
@@ -56,6 +52,14 @@ import {
   type TabId,
 } from "./config-editor-scopes";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
+import { renderOptimizerCard } from "./optimizer-card";
+import {
+  fetchOptimizerSchema,
+  type GroupNameEdit,
+  type OptimizerEditorHost,
+  type OptimizerSchema,
+  type OptimizerSchemaDocument,
+} from "./optimizer-schema";
 import { loadHaForm, loadHaYamlEditor } from "./load-ha-elements";
 import "./bias-correction-status";
 import type {
@@ -82,15 +86,9 @@ const GENERIC_PROJECTION_STRATEGIES = [
   { value: "history_average", labelKey: "editor.values.history_average" },
 ];
 
-const EXPORT_PRICE_OPTIMIZER_KIND = "export_price";
-const EXPORT_PRICE_OPTIMIZER_ACTION = "stop_export";
 const SURPLUS_APPLIANCE_OPTIMIZER_KIND = "surplus_appliance";
-const SURPLUS_APPLIANCE_OPTIMIZER_ACTION = "on";
-const CHARGE_HOLD_OPTIMIZER_KIND = "charge_hold";
-const CHARGE_FROM_GRID_OPTIMIZER_KIND = "charge_from_grid";
 const DAILY_RUNTIME_OPTIMIZER_KIND = "daily_runtime";
 const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
-const OPTIMIZER_CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
 const APPLIANCE_ICON_SELECTOR = {
   icon: {},
@@ -108,7 +106,10 @@ interface YamlEditorValueChangedDetail {
   errorMsg?: string;
 }
 
-export class HelmanConfigEditorPanel extends LitElement {
+export class HelmanConfigEditorPanel
+  extends LitElement
+  implements OptimizerEditorHost
+{
   static properties = {
     hass: { attribute: false },
     narrow: { type: Boolean },
@@ -130,6 +131,8 @@ export class HelmanConfigEditorPanel extends LitElement {
     _applianceYamlValues: { state: true },
     _applianceYamlErrors: { state: true },
     _liveApplianceMetadata: { state: true },
+    _optimizerSchema: { state: true },
+    _editingGroupName: { state: true },
     _helpDialog: { state: true },
   };
 
@@ -571,6 +574,96 @@ export class HelmanConfigEditorPanel extends LitElement {
       gap: 10px;
     }
 
+    .condition-groups {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .condition-groups-head {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    /* A group reads as one more card in the same visual family as the optimizer
+       card it sits in, so the OR list looks like a list and not like nesting. */
+    details.condition-group,
+    details.param-override {
+      border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
+      border-radius: 8px;
+      background: var(--secondary-background-color, rgba(255, 255, 255, 0.04));
+    }
+
+    details.condition-group > summary,
+    details.param-override > summary {
+      cursor: pointer;
+      padding: 10px 14px;
+      font-weight: var(--ha-font-weight-medium, 500);
+      list-style: revert;
+    }
+
+    /* The group's own chevron, so the marker and the name share one line — the
+       native ::marker sits outside the flex row and drops the name below it. */
+    details.condition-group > summary {
+      list-style: none;
+      user-select: none;
+    }
+
+    details.condition-group > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.condition-group[open] > summary .appliance-chevron {
+      transform: rotate(90deg);
+    }
+
+    .condition-group-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .condition-group-name-input {
+      font: inherit;
+      font-weight: var(--ha-font-weight-medium, 500);
+      padding: 2px 6px;
+      min-width: 12ch;
+    }
+
+    /* A borderless glyph button, so renaming sits beside the name without
+       competing with the up/down/remove pills on the other end of the row. */
+    .icon-button {
+      border: none;
+      background: none;
+      padding: 2px;
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      border-radius: 6px;
+      opacity: 0.6;
+      transition: opacity 0.15s ease, background 0.15s ease;
+    }
+
+    .icon-button:hover {
+      opacity: 1;
+      background: rgba(127, 127, 127, 0.12);
+    }
+
+    .icon-button-glyph {
+      width: 15px;
+      height: 15px;
+      fill: var(--secondary-text-color);
+    }
+
+    details.condition-group > .condition-group-body,
+    details.param-override > .condition-group-body {
+      padding: 0 14px 14px;
+      display: grid;
+      gap: 12px;
+    }
+
     .tab-icon {
       flex-shrink: 0;
       width: 16px;
@@ -920,6 +1013,12 @@ export class HelmanConfigEditorPanel extends LitElement {
   private _applianceYamlValues: Partial<Record<number, JsonValue>> = {};
   private _applianceYamlErrors: Partial<Record<number, string>> = {};
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
+  // Optimizer schema, served by the backend. Fetched alongside the config
+  // the editor already awaits on open, so it costs no extra latency.
+  private _optimizerSchema: OptimizerSchemaDocument | null = null;
+  // The condition group whose name is being renamed inline. One slot, not a
+  // per-group flag: only one name can be under edit at a time.
+  private _editingGroupName: GroupNameEdit | null = null;
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
   private _configFragmentRequested = false;
 
@@ -2023,29 +2122,18 @@ export class HelmanConfigEditorPanel extends LitElement {
               `
             : nothing}
           <div class="section-footer">
-            <button type="button" class="add-button" @click=${this._handleAddExportPriceOptimizer}>
-              ${this._t("editor.actions.add_export_price_optimizer")}
-            </button>
-            <button
-              type="button"
-              class="add-button"
-              @click=${this._handleAddSurplusApplianceOptimizer}
-            >
-              ${this._t("editor.actions.add_surplus_appliance_optimizer")}
-            </button>
-            <button type="button" class="add-button" @click=${this._handleAddChargeHoldOptimizer}>
-              ${this._t("editor.actions.add_charge_hold_optimizer")}
-            </button>
-            <button
-              type="button"
-              class="add-button"
-              @click=${this._handleAddChargeFromGridOptimizer}
-            >
-              ${this._t("editor.actions.add_charge_from_grid_optimizer")}
-            </button>
-            <button type="button" class="add-button" @click=${this._handleAddDailyRuntimeOptimizer}>
-              ${this._t("editor.actions.add_daily_runtime_optimizer")}
-            </button>
+            ${(this._optimizerSchema?.kinds ?? []).map(
+              (schema) => html`
+                <button
+                  type="button"
+                  class="add-button"
+                  data-add-kind=${schema.kind}
+                  @click=${() => this._addOptimizer(schema)}
+                >
+                  ${this._t(`editor.actions.add_${schema.kind}_optimizer`)}
+                </button>
+              `,
+            )}
           </div>
         `,
       )}
@@ -2059,59 +2147,61 @@ export class HelmanConfigEditorPanel extends LitElement {
   ): TemplateResult {
     const optimizerObject = asJsonObject(optimizer) ?? {};
     const kind = this._stringValue(optimizerObject.kind);
-    if (kind === EXPORT_PRICE_OPTIMIZER_KIND) {
-      return this._renderExportPriceOptimizerCard(optimizerObject, index, total);
+    const schema = this._optimizerSchema?.kinds.find((entry) => entry.kind === kind);
+    if (!schema) {
+      return this._renderUnsupportedAutomationOptimizerCard(optimizerObject, index, total);
     }
-    if (kind === SURPLUS_APPLIANCE_OPTIMIZER_KIND) {
-      return this._renderSurplusApplianceOptimizerCard(optimizerObject, index, total);
-    }
-    if (kind === CHARGE_HOLD_OPTIMIZER_KIND) {
-      return this._renderChargeHoldOptimizerCard(optimizerObject, index, total);
-    }
-    if (kind === CHARGE_FROM_GRID_OPTIMIZER_KIND) {
-      return this._renderChargeFromGridOptimizerCard(optimizerObject, index, total);
-    }
-    if (kind === DAILY_RUNTIME_OPTIMIZER_KIND) {
-      return this._renderDailyRuntimeOptimizerCard(optimizerObject, index, total);
-    }
-    return this._renderUnsupportedAutomationOptimizerCard(optimizerObject, index, total);
-  }
-
-  // Renders Home Assistant's visual condition builder for an optimizer, backed by
-  // the config document at automation.optimizers[index].condition. The value is a
-  // list of conditions (ANDed at execution time). The section is collapsed while
-  // empty so the builder does not dominate every card.
-  private _renderOptimizerConditionSection(index: number): TemplateResult {
-    const path: PathSegment[] = ["automation", "optimizers", index, "condition"];
-    const conditions = asJsonArray(this._getValue(path)) ?? [];
-    return html`
-      <details class="condition-section" ?open=${conditions.length > 0}>
-        <summary>${this._t("editor.fields.execution_conditions")}</summary>
-        <div class="condition-body">
-          <ha-selector
-            .hass=${this.hass}
-            .narrow=${this.narrow ?? false}
-            .selector=${OPTIMIZER_CONDITION_SELECTOR}
-            .value=${conditions}
-            @value-changed=${(event: Event) => {
-              const value = (event as CustomEvent<{ value?: unknown }>).detail?.value;
-              this._setOptimizerCondition(path, value);
-            }}
-          ></ha-selector>
-          <div class="helper">${this._t("editor.helpers.execution_conditions")}</div>
-        </div>
-      </details>
-    `;
-  }
-
-  private _setOptimizerCondition(path: PathSegment[], value: unknown): void {
-    this._applyMutation((draft) => {
-      if (!Array.isArray(value) || value.length === 0) {
-        unsetValueAtPath(draft, path);
-        return;
-      }
-      setValueAtPath(draft, path, value as JsonValue);
+    return renderOptimizerCard({
+      host: this,
+      schema,
+      optimizer: optimizerObject,
+      index,
+      total,
+      enabled: this._booleanValue(
+        this._getValue(["automation", "optimizers", index, "enabled"]),
+        true,
+      ),
+      title: this._optimizerCardTitle(schema, optimizerObject, index),
+      renderSvgIcon: (path, className) => this._renderSvgIcon(path, className),
+      renderListActions: (basePath, cardIndex, cardTotal, enabled) =>
+        this._renderOptimizerListActions(basePath, cardIndex, cardTotal, enabled),
+      conditionGroups: {
+        addGroup: () => this._addConditionGroup(index, schema),
+        removeGroup: (groupIndex) => this._removeConditionGroup(index, groupIndex),
+        moveGroup: (groupIndex, targetIndex) =>
+          this._moveListItem(
+            ["automation", "optimizers", index, "conditions"],
+            groupIndex,
+            targetIndex,
+          ),
+      },
     });
+  }
+
+  /** Appliance-target kinds show which appliance they act on, not their id. */
+  private _optimizerCardTitle(
+    schema: OptimizerSchema,
+    optimizer: JsonObject,
+    index: number,
+  ): string {
+    const fallback =
+      this._stringValue(optimizer.id) ||
+      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
+    if (!this._hasApplianceTarget(schema)) return fallback;
+    return this._getSurplusApplianceOptimizerTitle(
+      buildSurplusApplianceSelectionState(
+        this._config,
+        this._liveApplianceMetadata,
+        this._stringValue(
+          this._getValue(["automation", "optimizers", index, "target", "appliance_id"]),
+        ),
+      ),
+      fallback,
+    );
+  }
+
+  private _hasApplianceTarget(schema: OptimizerSchema): boolean {
+    return schema.target.some((field) => field.key === "appliance_id");
   }
 
   private _renderAutomationEnabledField(): TemplateResult {
@@ -2130,214 +2220,6 @@ export class HelmanConfigEditorPanel extends LitElement {
         </ha-formfield>
         <div class="helper">${this._t("editor.helpers.automation_enabled")}</div>
       </div>
-    `;
-  }
-
-  private _renderExportPriceOptimizerCard(
-    optimizer: JsonObject,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["automation", "optimizers", index];
-    const paramsPath: PathSegment[] = [...basePath, "params"];
-    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
-    const optimizerId =
-      this._stringValue(optimizer.id) ||
-      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const action =
-      this._stringValue(this._getValue([...paramsPath, "action"])) ||
-      EXPORT_PRICE_OPTIMIZER_ACTION;
-    const thresholdValue = this._getValue([...paramsPath, "when_price_below"]) ?? 0;
-
-    return html`
-      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${optimizerId}</strong>
-                <span class="card-subtitle">${this._t("editor.values.export_price")}</span>
-              </div>
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
-              <button
-                type="button"
-                ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button
-                type="button"
-                ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button
-                type="button"
-                class="danger"
-                @click=${() => this._removeListItem(["automation", "optimizers"], index)}
-              >${this._t("editor.actions.remove")}</button>
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          <div class="field-grid">
-            ${this._renderRequiredTextField(
-              [...basePath, "id"],
-              "editor.fields.optimizer_id",
-              undefined,
-              "editor.help.automation_optimizer_id",
-            )}
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "when_price_below"],
-              "editor.fields.when_price_below",
-              thresholdValue,
-              "any",
-              "editor.help.export_price_when_price_below",
-            )}
-            <div class="field">
-              <div class="field-label-row">
-                <label>${this._t("editor.fields.optimizer_action")}</label>
-                ${this._renderHelpIcon(
-                  "editor.fields.optimizer_action",
-                  "editor.help.export_price_action",
-                )}
-              </div>
-              <input .value=${action} disabled />
-              <div class="helper">${this._t("editor.helpers.export_price_action")}</div>
-            </div>
-          </div>
-          ${this._renderOptimizerConditionSection(index)}
-        </div>
-      </details>
-    `;
-  }
-
-  private _renderSurplusApplianceOptimizerCard(
-    optimizer: JsonObject,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["automation", "optimizers", index];
-    const paramsPath: PathSegment[] = [...basePath, "params"];
-    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
-    const optimizerId =
-      this._stringValue(optimizer.id) ||
-      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const applianceId = this._stringValue(this._getValue([...paramsPath, "appliance_id"]));
-    const action =
-      this._stringValue(this._getValue([...paramsPath, "action"])) ||
-      SURPLUS_APPLIANCE_OPTIMIZER_ACTION;
-    const minSurplusBufferPct = this._getValue([...paramsPath, "min_surplus_buffer_pct"]) ?? 5;
-    const selectionState = buildSurplusApplianceSelectionState(
-      this._config,
-      this._liveApplianceMetadata,
-      applianceId,
-    );
-    const climateModeFieldState = buildSurplusClimateModeFieldState(
-      selectionState,
-      this._stringValue(this._getValue([...paramsPath, "climate_mode"])),
-    );
-    const summaryTitle = this._getSurplusApplianceOptimizerTitle(selectionState, optimizerId);
-
-    return html`
-      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${summaryTitle}</strong>
-                <span class="card-subtitle">${this._t("editor.values.surplus_appliance")}</span>
-              </div>
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
-              <button
-                type="button"
-                ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button
-                type="button"
-                ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button
-                type="button"
-                class="danger"
-                @click=${() => this._removeListItem(["automation", "optimizers"], index)}
-              >${this._t("editor.actions.remove")}</button>
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          <div class="field-grid">
-            ${this._renderRequiredTextField(
-              [...basePath, "id"],
-              "editor.fields.optimizer_id",
-              undefined,
-              "editor.help.automation_optimizer_id",
-            )}
-            <div class="field">
-              <div class="field-label-row">
-                <label>${this._t("editor.fields.appliance_id")}</label>
-                ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.surplus_appliance_id")}
-              </div>
-              <select
-                @change=${(event: Event) =>
-                  this._handleSurplusApplianceIdChange(
-                    index,
-                    (event.currentTarget as HTMLSelectElement).value,
-                  )}
-              >
-                <option value="" ?selected=${selectionState.selectedId.length === 0}>
-                  ${this._t("editor.values.select_appliance")}
-                </option>
-                ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
-                  ? html`
-                      <option
-                        value=${selectionState.selectedId}
-                        ?selected=${true}
-                      >
-                        ${this._tFormat("editor.dynamic.stale_appliance", {
-                          id: selectionState.selectedId,
-                        })}
-                      </option>
-                    `
-                  : nothing}
-                ${selectionState.options.map(
-                  (option) => html`
-                    <option
-                      value=${option.id}
-                      ?disabled=${option.selectionDisabled}
-                      ?selected=${option.id === selectionState.selectedId}
-                    >
-                      ${this._formatSurplusApplianceOptionLabel(option)}
-                    </option>
-                  `,
-                )}
-              </select>
-              <div class="helper">
-                ${this._renderSurplusApplianceIdHelper(selectionState)}
-              </div>
-            </div>
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "min_surplus_buffer_pct"],
-              "editor.fields.min_surplus_buffer_pct",
-              minSurplusBufferPct,
-              "1",
-              "editor.help.surplus_appliance_min_surplus_buffer_pct",
-            )}
-            ${climateModeFieldState.visible
-              ? this._renderSurplusClimateModeField(paramsPath, climateModeFieldState)
-              : this._renderSurplusApplianceActionField(action)}
-          </div>
-          ${this._renderOptimizerConditionSection(index)}
-        </div>
-      </details>
     `;
   }
 
@@ -2424,274 +2306,6 @@ export class HelmanConfigEditorPanel extends LitElement {
         DAY_CLASSIFICATIONS.filter((classification) => next.includes(classification)),
       );
     });
-  }
-
-  private _renderChargeHoldOptimizerCard(
-    optimizer: JsonObject,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["automation", "optimizers", index];
-    const paramsPath: PathSegment[] = [...basePath, "params"];
-    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
-    const optimizerId =
-      this._stringValue(optimizer.id) ||
-      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
-    const holdAction =
-      this._stringValue(this._getValue([...paramsPath, "hold_action"])) || "stop_charging";
-
-    return html`
-      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(OPTIMIZER_CHEVRON_PATH, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${optimizerId}</strong>
-                <span class="card-subtitle">${this._t("editor.values.charge_hold")}</span>
-              </div>
-            </div>
-            ${this._renderOptimizerListActions(basePath, index, total, enabled)}
-          </div>
-        </summary>
-        <div class="appliance-body">
-          <div class="field-grid">
-            ${this._renderRequiredTextField(
-              [...basePath, "id"],
-              "editor.fields.optimizer_id",
-              undefined,
-              "editor.help.automation_optimizer_id",
-            )}
-            ${this._renderDayClassificationField(
-              [...paramsPath, "only_on_days"],
-              "editor.fields.only_on_days",
-              "editor.help.charge_hold_only_on_days",
-            )}
-            ${this._renderRequiredTextField(
-              [...paramsPath, "window", "start"],
-              "editor.fields.window_start",
-              undefined,
-              "editor.help.optimizer_window",
-            )}
-            ${this._renderRequiredTextField(
-              [...paramsPath, "window", "end"],
-              "editor.fields.window_end",
-              undefined,
-              "editor.help.optimizer_window",
-            )}
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "battery_first", "target_soc"],
-              "editor.fields.target_soc",
-              undefined,
-              "1",
-              "editor.help.charge_hold_target_soc",
-            )}
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "battery_first", "margin_pct"],
-              "editor.fields.margin_pct",
-              undefined,
-              "1",
-              "editor.help.charge_hold_margin_pct",
-            )}
-            <div class="field">
-              <div class="field-label-row">
-                <label>${this._t("editor.fields.hold_action")}</label>
-                ${this._renderHelpIcon("editor.fields.hold_action", "editor.help.charge_hold_action")}
-              </div>
-              <input .value=${holdAction} disabled />
-              <div class="helper">${this._t("editor.helpers.charge_hold_action")}</div>
-            </div>
-          </div>
-          ${this._renderOptimizerConditionSection(index)}
-        </div>
-      </details>
-    `;
-  }
-
-  private _renderChargeFromGridOptimizerCard(
-    optimizer: JsonObject,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["automation", "optimizers", index];
-    const paramsPath: PathSegment[] = [...basePath, "params"];
-    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
-    const optimizerId =
-      this._stringValue(optimizer.id) ||
-      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
-
-    return html`
-      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(OPTIMIZER_CHEVRON_PATH, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${optimizerId}</strong>
-                <span class="card-subtitle">${this._t("editor.values.charge_from_grid")}</span>
-              </div>
-            </div>
-            ${this._renderOptimizerListActions(basePath, index, total, enabled)}
-          </div>
-        </summary>
-        <div class="appliance-body">
-          <div class="field-grid">
-            ${this._renderRequiredTextField(
-              [...basePath, "id"],
-              "editor.fields.optimizer_id",
-              undefined,
-              "editor.help.automation_optimizer_id",
-            )}
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "reserve_floor_soc"],
-              "editor.fields.reserve_floor_soc",
-              undefined,
-              "1",
-              "editor.help.charge_from_grid_reserve_floor_soc",
-            )}
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "margin_pct"],
-              "editor.fields.margin_pct",
-              undefined,
-              "1",
-              "editor.help.charge_from_grid_margin_pct",
-            )}
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "max_target_soc"],
-              "editor.fields.max_target_soc",
-              undefined,
-              "1",
-              "editor.help.charge_from_grid_max_target_soc",
-            )}
-          </div>
-          ${this._renderOptimizerConditionSection(index)}
-        </div>
-      </details>
-    `;
-  }
-
-  private _renderDailyRuntimeOptimizerCard(
-    optimizer: JsonObject,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["automation", "optimizers", index];
-    const paramsPath: PathSegment[] = [...basePath, "params"];
-    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
-    const optimizerId =
-      this._stringValue(optimizer.id) ||
-      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
-    const applianceId = this._stringValue(this._getValue([...paramsPath, "appliance_id"]));
-    const selectionState = buildSurplusApplianceSelectionState(
-      this._config,
-      this._liveApplianceMetadata,
-      applianceId,
-    );
-    const climateModeFieldState = buildSurplusClimateModeFieldState(
-      selectionState,
-      this._stringValue(this._getValue([...paramsPath, "climate_mode"])),
-    );
-    const summaryTitle = this._getSurplusApplianceOptimizerTitle(selectionState, optimizerId);
-
-    return html`
-      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(OPTIMIZER_CHEVRON_PATH, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${summaryTitle}</strong>
-                <span class="card-subtitle">${this._t("editor.values.daily_runtime")}</span>
-              </div>
-            </div>
-            ${this._renderOptimizerListActions(basePath, index, total, enabled)}
-          </div>
-        </summary>
-        <div class="appliance-body">
-          <div class="field-grid">
-            ${this._renderRequiredTextField(
-              [...basePath, "id"],
-              "editor.fields.optimizer_id",
-              undefined,
-              "editor.help.automation_optimizer_id",
-            )}
-            <div class="field">
-              <div class="field-label-row">
-                <label>${this._t("editor.fields.appliance_id")}</label>
-                ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.daily_runtime_appliance_id")}
-              </div>
-              <select
-                @change=${(event: Event) =>
-                  this._handleDailyRuntimeApplianceIdChange(
-                    index,
-                    (event.currentTarget as HTMLSelectElement).value,
-                  )}
-              >
-                <option value="" ?selected=${selectionState.selectedId.length === 0}>
-                  ${this._t("editor.values.select_appliance")}
-                </option>
-                ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
-                  ? html`
-                      <option value=${selectionState.selectedId} ?selected=${true}>
-                        ${this._tFormat("editor.dynamic.stale_appliance", {
-                          id: selectionState.selectedId,
-                        })}
-                      </option>
-                    `
-                  : nothing}
-                ${selectionState.options.map(
-                  (option) => html`
-                    <option
-                      value=${option.id}
-                      ?disabled=${option.selectionDisabled}
-                      ?selected=${option.id === selectionState.selectedId}
-                    >
-                      ${this._formatSurplusApplianceOptionLabel(option)}
-                    </option>
-                  `,
-                )}
-              </select>
-              <div class="helper">${this._renderSurplusApplianceIdHelper(selectionState)}</div>
-            </div>
-            ${climateModeFieldState.visible
-              ? this._renderSurplusClimateModeField(paramsPath, climateModeFieldState)
-              : nothing}
-            ${this._renderRequiredNumberField(
-              [...paramsPath, "min_hours_per_day"],
-              "editor.fields.min_hours_per_day",
-              undefined,
-              "any",
-              "editor.help.daily_runtime_min_hours",
-            )}
-            ${this._renderRequiredTextField(
-              [...paramsPath, "window", "start"],
-              "editor.fields.window_start",
-              undefined,
-              "editor.help.optimizer_window",
-            )}
-            ${this._renderRequiredTextField(
-              [...paramsPath, "window", "end"],
-              "editor.fields.window_end",
-              undefined,
-              "editor.help.optimizer_window",
-            )}
-            ${this._renderDayClassificationField(
-              [...paramsPath, "skip", "on_days"],
-              "editor.fields.skip_on_days",
-              "editor.help.daily_runtime_skip_on_days",
-            )}
-            ${this._renderOptionalNumberField(
-              [...paramsPath, "skip", "max_consecutive_skips"],
-              "editor.fields.max_consecutive_skips",
-              "editor.helpers.daily_runtime_max_consecutive_skips",
-              "editor.help.daily_runtime_max_consecutive_skips",
-              { min: 0 },
-            )}
-          </div>
-          ${this._renderOptimizerConditionSection(index)}
-        </div>
-      </details>
-    `;
   }
 
   private _renderUnsupportedAutomationOptimizerCard(
@@ -4073,10 +3687,12 @@ export class HelmanConfigEditorPanel extends LitElement {
     }
     this._loading = true;
     try {
-      const [loadedResult, liveApplianceMetadataResult] = await Promise.allSettled([
-        this.hass.callWS<unknown>({ type: "helman/get_config" }),
-        this._loadLiveApplianceMetadata(),
-      ]);
+      const [loadedResult, liveApplianceMetadataResult, schemaResult] =
+        await Promise.allSettled([
+          this.hass.callWS<unknown>({ type: "helman/get_config" }),
+          this._loadLiveApplianceMetadata(),
+          fetchOptimizerSchema(this.hass),
+        ]);
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
       }
@@ -4086,9 +3702,11 @@ export class HelmanConfigEditorPanel extends LitElement {
         liveApplianceMetadataResult.status === "fulfilled"
           ? liveApplianceMetadataResult.value
           : null;
+      this._optimizerSchema =
+        schemaResult.status === "fulfilled" ? schemaResult.value : null;
       this._validation = null;
       this._dirty = this._config
-        ? this._normalizeSurplusApplianceOptimizerParams(this._config)
+        ? this._normalizeApplianceOptimizerTargets(this._config)
         : false;
       this._resetScopeYamlState();
       if (options.showMessage) {
@@ -4163,7 +3781,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       if (response.success) {
         this._liveApplianceMetadata = await this._loadLiveApplianceMetadata();
         this._dirty = this._config
-          ? this._normalizeSurplusApplianceOptimizerParams(this._config)
+          ? this._normalizeApplianceOptimizerTargets(this._config)
           : false;
         this._message = {
           kind: "success",
@@ -4457,63 +4075,13 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
   };
 
-  private _handleAddExportPriceOptimizer = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
-      .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
-      .filter((value) => value.length > 0);
-    this._applyMutation((draft) => {
-      const automation = asJsonObject(getValueAtPath(draft, ["automation"]));
-      if (!automation) {
-        setValueAtPath(draft, ["automation"], {
-          enabled: true,
-          optimizers: [createExportPriceOptimizerDraft(existingIds)],
-        });
-        return;
-      }
-
-      appendListItem(
-        draft,
-        ["automation", "optimizers"],
-        createExportPriceOptimizerDraft(existingIds),
-      );
-    });
-  };
-
-  private _handleAddSurplusApplianceOptimizer = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
-      .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
-      .filter((value) => value.length > 0);
-    this._applyMutation((draft) => {
-      const automation = asJsonObject(getValueAtPath(draft, ["automation"]));
-      if (!automation) {
-        setValueAtPath(draft, ["automation"], {
-          enabled: true,
-          optimizers: [createSurplusApplianceOptimizerDraft(existingIds)],
-        });
-        return;
-      }
-
-      appendListItem(
-        draft,
-        ["automation", "optimizers"],
-        createSurplusApplianceOptimizerDraft(existingIds),
-      );
-    });
-  };
-
-  private _handleSurplusApplianceIdChange(index: number, rawValue: string): void {
-    this._applyApplianceIdChange(index, rawValue);
-  }
-
-  private _handleDailyRuntimeApplianceIdChange(index: number, rawValue: string): void {
-    this._applyApplianceIdChange(index, rawValue);
-  }
-
   private _applyApplianceIdChange(index: number, rawValue: string): void {
     const applianceId = rawValue.trim();
-    const paramsPath: PathSegment[] = ["automation", "optimizers", index, "params"];
+    // The appliance and its climate mode are `target` — the optimizer's
+    // identity — not params, so they are never overridable by a group.
+    const targetPath: PathSegment[] = ["automation", "optimizers", index, "target"];
     this._applyMutation((draft) => {
-      setValueAtPath(draft, [...paramsPath, "appliance_id"], applianceId);
+      setValueAtPath(draft, [...targetPath, "appliance_id"], applianceId);
       const selectionState = buildSurplusApplianceSelectionState(
         draft,
         this._liveApplianceMetadata,
@@ -4521,44 +4089,59 @@ export class HelmanConfigEditorPanel extends LitElement {
       );
       const climateModeFieldState = buildSurplusClimateModeFieldState(
         selectionState,
-        this._stringValue(getValueAtPath(draft, [...paramsPath, "climate_mode"])),
+        this._stringValue(getValueAtPath(draft, [...targetPath, "climate_mode"])),
       );
       if (!climateModeFieldState.visible || climateModeFieldState.unavailable) {
-        unsetValueAtPath(draft, [...paramsPath, "climate_mode"]);
+        unsetValueAtPath(draft, [...targetPath, "climate_mode"]);
         return;
       }
-      setValueAtPath(draft, [...paramsPath, "climate_mode"], climateModeFieldState.value);
+      setValueAtPath(draft, [...targetPath, "climate_mode"], climateModeFieldState.value);
     });
   }
 
-  private _addOptimizer(factory: (existingIds: string[]) => JsonObject): void {
+  private _addOptimizer(schema: OptimizerSchema): void {
     const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
       .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
       .filter((value) => value.length > 0);
+    const draftOptimizer = createOptimizerDraft(existingIds, schema.kind, schema.newDraft);
     this._applyMutation((draft) => {
-      const automation = asJsonObject(getValueAtPath(draft, ["automation"]));
-      if (!automation) {
+      if (!asJsonObject(getValueAtPath(draft, ["automation"]))) {
         setValueAtPath(draft, ["automation"], {
           enabled: true,
-          optimizers: [factory(existingIds)],
+          optimizers: [draftOptimizer],
         });
         return;
       }
-      appendListItem(draft, ["automation", "optimizers"], factory(existingIds));
+      appendListItem(draft, ["automation", "optimizers"], draftOptimizer);
     });
   }
 
-  private _handleAddChargeHoldOptimizer = (): void => {
-    this._addOptimizer(createChargeHoldOptimizerDraft);
-  };
+  /** A new group starts from the kind's seed, so it is valid the moment it appears. */
+  private _addConditionGroup(index: number, schema: OptimizerSchema): void {
+    const seed = asJsonArray(schema.newDraft.conditions)?.[0];
+    this._applyMutation((draft) => {
+      appendListItem(
+        draft,
+        ["automation", "optimizers", index, "conditions"],
+        (asJsonObject(seed) ?? {}) as JsonObject,
+      );
+    });
+  }
 
-  private _handleAddChargeFromGridOptimizer = (): void => {
-    this._addOptimizer(createChargeFromGridOptimizerDraft);
-  };
+  /**
+   * Remove a group — never the last one.
+   *
+   * Zero groups is an unsavable automation, so the UI must not be able to reach
+   * that state. The button is disabled too; this is the second lock.
+   */
+  private _removeConditionGroup(index: number, groupIndex: number): void {
+    const path: PathSegment[] = ["automation", "optimizers", index, "conditions"];
+    if ((asJsonArray(this._getValue(path)) ?? []).length <= 1) return;
+    this._removeListItem(path, groupIndex);
+  }
 
-  private _handleAddDailyRuntimeOptimizer = (): void => {
-    this._addOptimizer(createDailyRuntimeOptimizerDraft);
-  };
+
+
 
   private _handleAddEvCharger = (): void => {
     const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
@@ -4808,7 +4391,7 @@ export class HelmanConfigEditorPanel extends LitElement {
     });
   }
 
-  private _normalizeSurplusApplianceOptimizerParams(config: JsonObject): boolean {
+  private _normalizeApplianceOptimizerTargets(config: JsonObject): boolean {
     const optimizers = asJsonArray(getValueAtPath(config, ["automation", "optimizers"])) ?? [];
     let changed = false;
     optimizers.forEach((optimizer, index) => {
@@ -4822,10 +4405,10 @@ export class HelmanConfigEditorPanel extends LitElement {
         return;
       }
 
-      const paramsPath: PathSegment[] = ["automation", "optimizers", index, "params"];
-      const applianceId = this._stringValue(getValueAtPath(config, [...paramsPath, "appliance_id"]));
+      const targetPath: PathSegment[] = ["automation", "optimizers", index, "target"];
+      const applianceId = this._stringValue(getValueAtPath(config, [...targetPath, "appliance_id"]));
       const currentClimateMode = this._stringValue(
-        getValueAtPath(config, [...paramsPath, "climate_mode"]),
+        getValueAtPath(config, [...targetPath, "climate_mode"]),
       );
       const selectionState = buildSurplusApplianceSelectionState(
         config,
@@ -4838,7 +4421,7 @@ export class HelmanConfigEditorPanel extends LitElement {
       );
 
       if (selectionState.selectedOption?.kind === "generic" && currentClimateMode.length > 0) {
-        unsetValueAtPath(config, [...paramsPath, "climate_mode"]);
+        unsetValueAtPath(config, [...targetPath, "climate_mode"]);
         changed = true;
         return;
       }
@@ -4848,7 +4431,7 @@ export class HelmanConfigEditorPanel extends LitElement {
         currentClimateMode.length === 0 &&
         climateModeFieldState.value.length > 0
       ) {
-        setValueAtPath(config, [...paramsPath, "climate_mode"], climateModeFieldState.value);
+        setValueAtPath(config, [...targetPath, "climate_mode"], climateModeFieldState.value);
         changed = true;
       }
     });
@@ -4881,19 +4464,178 @@ export class HelmanConfigEditorPanel extends LitElement {
     return "";
   }
 
-  private _renderSurplusApplianceActionField(action: string): TemplateResult {
+  // --- OptimizerEditorHost -------------------------------------------------
+  //
+  // Thin public wrappers over the form primitives, so the schema-driven
+  // renderers can stay plain functions instead of subclassing this element.
+
+  t(key: string): string {
+    return this._t(key);
+  }
+
+  tFormat(key: string, values: Record<string, string | number>): string {
+    return this._tFormat(key, values);
+  }
+
+  getValue(path: PathSegment[]): unknown {
+    return this._getValue(path);
+  }
+
+  setValue(path: PathSegment[], value: JsonValue | undefined): void {
+    this._applyMutation((draft) => {
+      if (value === undefined) unsetValueAtPath(draft, path);
+      else setValueAtPath(draft, path, value);
+    });
+  }
+
+  renderRequiredTextField(
+    path: PathSegment[],
+    labelKey: string,
+    explicitValue?: unknown,
+    helpKey?: string,
+  ): TemplateResult {
+    return this._renderRequiredTextField(path, labelKey, explicitValue, helpKey);
+  }
+
+  renderRequiredNumberField(
+    path: PathSegment[],
+    labelKey: string,
+    explicitValue?: unknown,
+    step = "any",
+    helpKey?: string,
+  ): TemplateResult {
+    return this._renderRequiredNumberField(path, labelKey, explicitValue, step, helpKey);
+  }
+
+  renderOptionalNumberField(
+    path: PathSegment[],
+    labelKey: string,
+    helperKey?: string,
+    helpKey?: string,
+    options: { min?: number; max?: number; suffix?: string } = {},
+  ): TemplateResult {
+    return this._renderOptionalNumberField(path, labelKey, helperKey, helpKey, options);
+  }
+
+  renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
+    return this._renderHelpIcon(labelKey, contentKey);
+  }
+
+  renderSvgIcon(path: string, className: string): TemplateResult {
+    return this._renderSvgIcon(path, className);
+  }
+
+  get editingGroupName(): GroupNameEdit | null {
+    return this._editingGroupName;
+  }
+
+  setEditingGroupName(target: GroupNameEdit | null): void {
+    this._editingGroupName = target;
+    this.requestUpdate();
+  }
+
+  renderDayClassificationField(
+    path: PathSegment[],
+    labelKey: string,
+    helpKey: string,
+  ): TemplateResult {
+    return this._renderDayClassificationField(path, labelKey, helpKey);
+  }
+
+  /**
+   * The appliance picker and its climate mode.
+   *
+   * Not schema-driven: the options come from the live appliance registry and
+   * the authorable modes of the selected device, neither of which a static
+   * schema can carry.
+   */
+  renderApplianceTargetFields(
+    optimizerIndex: number,
+    kind: string,
+  ): TemplateResult | typeof nothing {
+    const schema = this._optimizerSchema?.kinds.find((entry) => entry.kind === kind);
+    if (!schema || !this._hasApplianceTarget(schema)) return nothing;
+    const targetPath: PathSegment[] = [
+      "automation",
+      "optimizers",
+      optimizerIndex,
+      "target",
+    ];
+    const selectionState = buildSurplusApplianceSelectionState(
+      this._config,
+      this._liveApplianceMetadata,
+      this._stringValue(this._getValue([...targetPath, "appliance_id"])),
+    );
+    const climateModeFieldState = buildSurplusClimateModeFieldState(
+      selectionState,
+      this._stringValue(this._getValue([...targetPath, "climate_mode"])),
+    );
     return html`
       <div class="field">
         <div class="field-label-row">
-          <label>${this._t("editor.fields.optimizer_action")}</label>
-          ${this._renderHelpIcon(
-            "editor.fields.optimizer_action",
-            "editor.help.surplus_appliance_action",
-          )}
+          <label>${this._t("editor.fields.appliance_id")}</label>
+          ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.appliance_id")}
         </div>
-        <input .value=${action} disabled />
-        <div class="helper">${this._t("editor.helpers.surplus_appliance_action")}</div>
+        <select
+          @change=${(event: Event) =>
+            this._applyApplianceIdChange(
+              optimizerIndex,
+              (event.currentTarget as HTMLSelectElement).value,
+            )}
+        >
+          <option value="" ?selected=${selectionState.selectedId.length === 0}>
+            ${this._t("editor.values.select_appliance")}
+          </option>
+          ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
+            ? html`
+                <option value=${selectionState.selectedId} ?selected=${true}>
+                  ${this._tFormat("editor.dynamic.stale_appliance", {
+                    id: selectionState.selectedId,
+                  })}
+                </option>
+              `
+            : nothing}
+          ${selectionState.options.map(
+            (option) => html`
+              <option
+                value=${option.id}
+                ?disabled=${option.selectionDisabled}
+                ?selected=${option.id === selectionState.selectedId}
+              >
+                ${this._formatSurplusApplianceOptionLabel(option)}
+              </option>
+            `,
+          )}
+        </select>
+        <div class="helper">${this._renderSurplusApplianceIdHelper(selectionState)}</div>
       </div>
+      ${climateModeFieldState.visible
+        ? this._renderSurplusClimateModeField(targetPath, climateModeFieldState)
+        : nothing}
+    `;
+  }
+
+  /**
+   * Home Assistant's own condition builder, backed by a group's `custom` list.
+   *
+   * The list is ANDed at execution time; groups are ORed around it.
+   */
+  renderCustomConditions(path: PathSegment[]): TemplateResult {
+    const conditions = asJsonArray(this._getValue(path)) ?? [];
+    return html`
+      <ha-selector
+        .hass=${this.hass}
+        .narrow=${this.narrow ?? false}
+        .selector=${OPTIMIZER_CONDITION_SELECTOR}
+        .value=${conditions}
+        @value-changed=${(event: Event) => {
+          const value = (event as CustomEvent<{ value?: unknown }>).detail?.value;
+          this.setValue(
+            path,
+            Array.isArray(value) && value.length ? (value as JsonValue) : undefined,
+          );
+        }}
+      ></ha-selector>
     `;
   }
 

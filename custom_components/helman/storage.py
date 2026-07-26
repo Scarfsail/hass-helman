@@ -1,10 +1,13 @@
 from __future__ import annotations
 import hashlib
 import json
+import logging
 from typing import Any
 from homeassistant.helpers import storage
 from homeassistant.core import HomeAssistant
+from .automation.migration import migrate_config_document, needs_migration
 from .const import (
+    CONFIG_DOCUMENT_VERSION,
     FORECAST_SNAPSHOT_STORAGE_KEY,
     FORECAST_SNAPSHOT_STORAGE_VERSION,
     SCHEDULE_STORAGE_KEY,
@@ -12,6 +15,8 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "history_buckets": 60,
@@ -43,6 +48,7 @@ class HelmanStorage:
     async def async_load(self) -> None:
         stored = await self._store.async_load()
         self._config = {**DEFAULT_CONFIG, **(stored or {})}
+        await self._async_migrate_config()
         snapshot_document = await self._snapshot_store.async_load()
         if isinstance(snapshot_document, dict) and "house" in snapshot_document:
             self._snapshot = snapshot_document.get("house")
@@ -56,6 +62,24 @@ class HelmanStorage:
             )
             self._solar_snapshot = None
         self._schedule_document = await self._schedule_store.async_load()
+
+    async def _async_migrate_config(self) -> None:
+        """Bring a stored config up to the current document version, once.
+
+        Persists only when something actually changed, so a config already at
+        the current version never rewrites the store on every start.
+        """
+        if not needs_migration(self._config):
+            return
+        migrated, migrated_optimizer_ids = migrate_config_document(self._config)
+        _LOGGER.info(
+            "Migrated Helman config to version %s; optimizers moved to the "
+            "target/params/conditions shape: %s",
+            CONFIG_DOCUMENT_VERSION,
+            ", ".join(migrated_optimizer_ids) or "none",
+        )
+        self._config = migrated
+        await self._store.async_save(migrated)
 
     @property
     def config(self) -> dict[str, Any]:

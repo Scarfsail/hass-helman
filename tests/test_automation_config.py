@@ -56,21 +56,33 @@ from custom_components.helman.automation.config import (
     AutomationConfigError,
     read_automation_config,
 )
-from custom_components.helman.automation import config as automation_config_module
 from custom_components.helman.config_validation import validate_config_document
 
 
-class AutomationConfigTests(unittest.TestCase):
-    def _set_known_kinds(self, *kinds: str) -> None:
-        original = automation_config_module.KNOWN_OPTIMIZER_KINDS
-        automation_config_module.KNOWN_OPTIMIZER_KINDS = frozenset(kinds)
-        self.addCleanup(
-            setattr,
-            automation_config_module,
-            "KNOWN_OPTIMIZER_KINDS",
-            original,
-        )
+def _export_price(**overrides):
+    """A minimal, valid export_price optimizer in the unified shape."""
+    return {
+        "id": "export",
+        "kind": "export_price",
+        "conditions": [{"when_price_below": 0.0}],
+        **overrides,
+    }
 
+
+def _charge_hold(**overrides):
+    return {
+        "id": "hold",
+        "kind": "charge_hold",
+        "params": {
+            "window": {"start": "06:00", "end": "12:00"},
+            "battery_first": {"target_soc": 90, "margin_pct": 10},
+        },
+        "conditions": [{"run_when": ["surplus"]}],
+        **overrides,
+    }
+
+
+class AutomationConfigTests(unittest.TestCase):
     def test_parses_minimal_automation_block_with_defaults(self) -> None:
         parsed = AutomationConfig.from_dict({})
 
@@ -79,91 +91,21 @@ class AutomationConfigTests(unittest.TestCase):
         self.assertEqual(parsed.execution_optimizers, ())
 
     def test_parses_two_optimizers_and_preserves_order(self) -> None:
-        self._set_known_kinds("alpha", "beta")
         parsed = AutomationConfig.from_dict(
-            {
-                "optimizers": [
-                    {
-                        "id": "export",
-                        "kind": "alpha",
-                    },
-                    {
-                        "id": "surplus",
-                        "kind": "beta",
-                    },
-                ]
-            }
+            {"optimizers": [_charge_hold(), _export_price()]}
         )
 
         self.assertEqual(
-            [optimizer.id for optimizer in parsed.optimizers],
-            ["export", "surplus"],
+            [optimizer.id for optimizer in parsed.optimizers], ["hold", "export"]
         )
         self.assertEqual(
             [optimizer.kind for optimizer in parsed.execution_optimizers],
-            ["alpha", "beta"],
+            ["charge_hold", "export_price"],
         )
-
-    def test_optimizer_condition_defaults_to_none(self) -> None:
-        self._set_known_kinds("alpha")
-        parsed = AutomationConfig.from_dict(
-            {"optimizers": [{"id": "a", "kind": "alpha"}]}
-        )
-
-        self.assertIsNone(parsed.optimizers[0].condition)
-
-    def test_parses_optimizer_condition_list(self) -> None:
-        self._set_known_kinds("alpha")
-        condition = [
-            {"condition": "numeric_state", "entity_id": "sensor.x", "above": 10}
-        ]
-        parsed = AutomationConfig.from_dict(
-            {"optimizers": [{"id": "a", "kind": "alpha", "condition": condition}]}
-        )
-
-        self.assertEqual(
-            parsed.optimizers[0].condition,
-            ({"condition": "numeric_state", "entity_id": "sensor.x", "above": 10},),
-        )
-
-    def test_empty_optimizer_condition_list_is_none(self) -> None:
-        self._set_known_kinds("alpha")
-        parsed = AutomationConfig.from_dict(
-            {"optimizers": [{"id": "a", "kind": "alpha", "condition": []}]}
-        )
-
-        self.assertIsNone(parsed.optimizers[0].condition)
-
-    def test_rejects_non_list_optimizer_condition(self) -> None:
-        self._set_known_kinds("alpha")
-        with self.assertRaises(AutomationConfigError) as ctx:
-            AutomationConfig.from_dict(
-                {"optimizers": [{"id": "a", "kind": "alpha", "condition": "nope"}]}
-            )
-
-        self.assertEqual(ctx.exception.path, "automation.optimizers[0].condition")
-
-    def test_rejects_non_object_condition_entry(self) -> None:
-        self._set_known_kinds("alpha")
-        with self.assertRaises(AutomationConfigError) as ctx:
-            AutomationConfig.from_dict(
-                {"optimizers": [{"id": "a", "kind": "alpha", "condition": ["nope"]}]}
-            )
-
-        self.assertEqual(ctx.exception.path, "automation.optimizers[0].condition[0]")
 
     def test_preserves_explicit_top_level_enabled_false(self) -> None:
-        self._set_known_kinds("alpha")
         parsed = AutomationConfig.from_dict(
-            {
-                "enabled": False,
-                "optimizers": [
-                    {
-                        "id": "export",
-                        "kind": "alpha",
-                    }
-                ],
-            }
+            {"enabled": False, "optimizers": [_export_price()]}
         )
 
         self.assertFalse(parsed.enabled)
@@ -171,19 +113,12 @@ class AutomationConfigTests(unittest.TestCase):
         self.assertEqual(parsed.execution_optimizers, ())
 
     def test_rejects_duplicate_optimizer_ids(self) -> None:
-        self._set_known_kinds("alpha", "beta")
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
                     "optimizers": [
-                        {
-                            "id": "duplicate",
-                            "kind": "alpha",
-                        },
-                        {
-                            "id": "duplicate",
-                            "kind": "beta",
-                        },
+                        _export_price(id="duplicate"),
+                        _charge_hold(id="duplicate"),
                     ]
                 }
             )
@@ -192,139 +127,259 @@ class AutomationConfigTests(unittest.TestCase):
         self.assertEqual(ctx.exception.path, "automation.optimizers[1].id")
 
     def test_filters_disabled_instances_from_execution_order(self) -> None:
-        self._set_known_kinds("alpha", "beta")
         parsed = AutomationConfig.from_dict(
-            {
-                "optimizers": [
-                    {
-                        "id": "export",
-                        "kind": "alpha",
-                    },
-                    {
-                        "id": "surplus",
-                        "kind": "beta",
-                        "enabled": False,
-                    },
-                ]
-            }
+            {"optimizers": [_export_price(), _charge_hold(enabled=False)]}
         )
 
         self.assertEqual(
-            [optimizer.id for optimizer in parsed.optimizers],
-            ["export", "surplus"],
+            [optimizer.id for optimizer in parsed.optimizers], ["export", "hold"]
         )
         self.assertEqual(
-            [optimizer.id for optimizer in parsed.execution_optimizers],
-            ["export"],
+            [optimizer.id for optimizer in parsed.execution_optimizers], ["export"]
         )
 
     def test_rejects_unknown_optimizer_kinds_with_descriptive_error(self) -> None:
-        self._set_known_kinds("export_price")
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
-                {
-                    "optimizers": [
-                        {
-                            "id": "unknown",
-                            "kind": "does_not_exist",
-                        }
-                    ]
-                }
+                {"optimizers": [{"id": "unknown", "kind": "does_not_exist"}]}
             )
 
         self.assertEqual(ctx.exception.code, "unknown_optimizer_kind")
         self.assertEqual(ctx.exception.path, "automation.optimizers[0].kind")
         self.assertIn("does_not_exist", str(ctx.exception))
-        self.assertIn("supported optimizer kinds are: export_price", str(ctx.exception))
+        self.assertIn("supported optimizer kinds are: charge_from_grid", str(ctx.exception))
 
-    def test_parses_export_price_optimizer_params_with_defaults(self) -> None:
+    def test_is_no_op_when_automation_branch_is_absent(self) -> None:
+        self.assertIsNone(read_automation_config({}))
+        self.assertIsNone(read_automation_config(None))
+
+
+class ConditionGroupTests(unittest.TestCase):
+    def test_requires_at_least_one_condition_group(self) -> None:
+        for conditions in ({}, {"conditions": []}, {"conditions": None}):
+            with self.subTest(conditions=conditions):
+                with self.assertRaises(AutomationConfigError) as ctx:
+                    AutomationConfig.from_dict(
+                        {
+                            "optimizers": [
+                                {"id": "export", "kind": "export_price", **conditions}
+                            ]
+                        }
+                    )
+                self.assertEqual(ctx.exception.code, "required")
+                self.assertEqual(
+                    ctx.exception.path, "automation.optimizers[0].conditions"
+                )
+
+    def test_condition_values_fall_back_to_their_declared_defaults(self) -> None:
+        parsed = AutomationConfig.from_dict(
+            {"optimizers": [{"id": "export", "kind": "export_price", "conditions": [{}]}]}
+        )
+
+        self.assertEqual(
+            parsed.optimizers[0].conditions[0].condition_values,
+            {"when_price_below": 0.0},
+        )
+
+    def test_custom_conditions_are_read_verbatim(self) -> None:
+        custom = [{"condition": "numeric_state", "entity_id": "sensor.x", "above": 10}]
         parsed = AutomationConfig.from_dict(
             {
                 "optimizers": [
-                    {
-                        "id": "export",
-                        "kind": "export_price",
-                    }
+                    _export_price(conditions=[{"when_price_below": 0.0, "custom": custom}])
                 ]
             }
         )
 
-        self.assertEqual(
-            parsed.execution_optimizers[0].params,
-            {
-                "when_price_below": 0.0,
-                "action": "stop_export",
-            },
-        )
+        self.assertEqual(parsed.optimizers[0].conditions[0].custom, tuple(custom))
 
-    def test_rejects_invalid_export_price_action(self) -> None:
+    def test_absent_custom_is_an_empty_tuple(self) -> None:
+        parsed = AutomationConfig.from_dict({"optimizers": [_export_price()]})
+        self.assertEqual(parsed.optimizers[0].conditions[0].custom, ())
+
+    def test_rejects_non_list_custom(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
                     "optimizers": [
-                        {
-                            "id": "export",
-                            "kind": "export_price",
-                            "params": {
-                                "when_price_below": 0.0,
-                                "action": "normal",
-                            },
-                        }
+                        _export_price(conditions=[{"custom": "nope"}]),
+                    ]
+                }
+            )
+
+        self.assertEqual(
+            ctx.exception.path, "automation.optimizers[0].conditions[0].custom"
+        )
+
+    def test_rejects_non_object_custom_entry(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {"optimizers": [_export_price(conditions=[{"custom": ["nope"]}])]}
+            )
+
+        self.assertEqual(
+            ctx.exception.path, "automation.optimizers[0].conditions[0].custom[0]"
+        )
+
+    def test_rejects_a_condition_type_the_kind_does_not_accept(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {"optimizers": [_export_price(conditions=[{"run_when": ["surplus"]}])]}
+            )
+
+        self.assertEqual(ctx.exception.code, "unknown_key")
+        self.assertEqual(
+            ctx.exception.path, "automation.optimizers[0].conditions[0].run_when"
+        )
+
+    def test_rejects_target_inside_a_group(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        _export_price(conditions=[{"target": {"appliance_id": "x"}}])
                     ]
                 }
             )
 
         self.assertEqual(ctx.exception.code, "invalid_value")
-        self.assertEqual(ctx.exception.path, "automation.optimizers[0].params.action")
+        self.assertIn("never overridable", str(ctx.exception))
 
-    def test_rejects_non_numeric_export_price_threshold(self) -> None:
+    def test_group_name_is_optional_and_read(self) -> None:
+        parsed = AutomationConfig.from_dict(
+            {"optimizers": [_export_price(conditions=[{"name": "Cheap hours"}])]}
+        )
+
+        self.assertEqual(parsed.optimizers[0].conditions[0].name, "Cheap hours")
+
+
+class ParamOverrideTests(unittest.TestCase):
+    def _hold_with_override(self, override):
+        parsed = AutomationConfig.from_dict(
+            {
+                "optimizers": [
+                    _charge_hold(
+                        conditions=[{"run_when": ["surplus"], "params": override}]
+                    )
+                ]
+            }
+        )
+        return parsed.optimizers[0]
+
+    def test_master_params_are_unchanged_by_a_group_override(self) -> None:
+        optimizer = self._hold_with_override({"battery_first": {"target_soc": 95}})
+
+        self.assertEqual(optimizer.params["battery_first"]["target_soc"], 90.0)
+
+    def test_nested_objects_merge_one_level_deep(self) -> None:
+        optimizer = self._hold_with_override({"battery_first": {"target_soc": 95}})
+
+        self.assertEqual(
+            optimizer.conditions[0].params["battery_first"],
+            {"target_soc": 95.0, "margin_pct": 10.0},
+        )
+
+    def test_window_end_can_move_while_start_is_inherited(self) -> None:
+        optimizer = self._hold_with_override({"window": {"end": "14:00"}})
+
+        self.assertEqual(
+            optimizer.conditions[0].params["window"],
+            {"start": "06:00", "end": "14:00"},
+        )
+
+    def test_the_override_as_authored_is_kept_separately(self) -> None:
+        optimizer = self._hold_with_override({"window": {"end": "14:00"}})
+
+        self.assertEqual(
+            optimizer.conditions[0].params_override, {"window": {"end": "14:00"}}
+        )
+
+    def test_rejects_an_unknown_key_inside_a_nested_override(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            self._hold_with_override({"battery_first": {"typo": 1}})
+
+        self.assertEqual(ctx.exception.code, "unknown_key")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].conditions[0].params.battery_first.typo",
+        )
+
+    def test_cross_field_validation_runs_against_resolved_group_params(self) -> None:
+        # Master window is valid; only the resolved group window is inverted.
+        with self.assertRaises(AutomationConfigError) as ctx:
+            self._hold_with_override({"window": {"end": "05:00"}})
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].conditions[0].params.window.end",
+        )
+
+    def test_daily_runtime_window_width_is_checked_per_group(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
                     "optimizers": [
                         {
-                            "id": "export",
-                            "kind": "export_price",
+                            "id": "dhw",
+                            "kind": "daily_runtime",
+                            "target": {"appliance_id": "boiler"},
                             "params": {
-                                "when_price_below": "zero",
+                                "min_hours_per_day": 3,
+                                "window": {"start": "06:00", "end": "22:00"},
                             },
+                            "conditions": [
+                                {"params": {"window": {"end": "08:00"}}},
+                            ],
                         }
                     ]
                 }
             )
 
-        self.assertEqual(ctx.exception.code, "invalid_type")
+        self.assertIn("at least", str(ctx.exception))
         self.assertEqual(
             ctx.exception.path,
-            "automation.optimizers[0].params.when_price_below",
+            "automation.optimizers[0].conditions[0].params.window",
         )
 
-    def test_parses_surplus_appliance_optimizer_params_with_defaults(self) -> None:
-        parsed = AutomationConfig.from_dict(
-            {
-                "optimizers": [
-                    {
-                        "id": "boiler-surplus",
-                        "kind": "surplus_appliance",
-                        "params": {
-                            "appliance_id": "boiler",
-                        },
-                    }
-                ]
-            }
-        )
 
+class RelocatedKeyTests(unittest.TestCase):
+    """The old shape must fail loudly, naming where the value lives now."""
+
+    def test_top_level_condition_names_its_new_home(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {"optimizers": [_export_price(condition=[{"condition": "state"}])]}
+            )
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+        self.assertIn("conditions[0].custom", str(ctx.exception))
+
+    def test_dropped_action_param_is_rejected_rather_than_ignored(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        _export_price(params={"action": "stop_export"}),
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "unknown_key")
         self.assertEqual(
-            parsed.execution_optimizers[0].params,
-            {
-                "appliance_id": "boiler",
-                "action": "on",
-                "climate_mode": None,
-                "min_surplus_buffer_pct": 5,
-            },
+            ctx.exception.path, "automation.optimizers[0].params.action"
         )
 
-    def test_rejects_surplus_appliance_without_appliance_id(self) -> None:
+    def test_unknown_optimizer_key_is_rejected(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {"optimizers": [_export_price(extra="ignored")]}
+            )
+
+        self.assertEqual(ctx.exception.code, "unknown_key")
+        self.assertEqual(ctx.exception.path, "automation.optimizers[0].extra")
+
+    def test_appliance_id_in_params_points_at_target(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
@@ -332,7 +387,26 @@ class AutomationConfigTests(unittest.TestCase):
                         {
                             "id": "boiler-surplus",
                             "kind": "surplus_appliance",
-                            "params": {},
+                            "params": {"appliance_id": "boiler"},
+                            "conditions": [{}],
+                        }
+                    ]
+                }
+            )
+
+        self.assertIn("target.appliance_id", str(ctx.exception))
+
+
+class TargetTests(unittest.TestCase):
+    def test_requires_appliance_id_for_appliance_kinds(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "boiler-surplus",
+                            "kind": "surplus_appliance",
+                            "conditions": [{}],
                         }
                     ]
                 }
@@ -340,34 +414,10 @@ class AutomationConfigTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "required")
         self.assertEqual(
-            ctx.exception.path,
-            "automation.optimizers[0].params.appliance_id",
+            ctx.exception.path, "automation.optimizers[0].target.appliance_id"
         )
 
-    def test_rejects_invalid_surplus_appliance_action(self) -> None:
-        with self.assertRaises(AutomationConfigError) as ctx:
-            AutomationConfig.from_dict(
-                {
-                    "optimizers": [
-                        {
-                            "id": "boiler-surplus",
-                            "kind": "surplus_appliance",
-                            "params": {
-                                "appliance_id": "boiler",
-                                "action": "off",
-                            },
-                        }
-                    ]
-                }
-            )
-
-        self.assertEqual(ctx.exception.code, "invalid_value")
-        self.assertEqual(
-            ctx.exception.path,
-            "automation.optimizers[0].params.action",
-        )
-
-    def test_rejects_invalid_surplus_climate_mode(self) -> None:
+    def test_rejects_an_unsupported_climate_mode(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
@@ -375,10 +425,11 @@ class AutomationConfigTests(unittest.TestCase):
                         {
                             "id": "climate-surplus",
                             "kind": "surplus_appliance",
-                            "params": {
+                            "target": {
                                 "appliance_id": "living-room-hvac",
                                 "climate_mode": "fan_only",
                             },
+                            "conditions": [{}],
                         }
                     ]
                 }
@@ -386,11 +437,10 @@ class AutomationConfigTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "invalid_value")
         self.assertEqual(
-            ctx.exception.path,
-            "automation.optimizers[0].params.climate_mode",
+            ctx.exception.path, "automation.optimizers[0].target.climate_mode"
         )
 
-    def test_rejects_negative_surplus_buffer_pct(self) -> None:
+    def test_rejects_a_negative_surplus_buffer(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
@@ -398,10 +448,8 @@ class AutomationConfigTests(unittest.TestCase):
                         {
                             "id": "boiler-surplus",
                             "kind": "surplus_appliance",
-                            "params": {
-                                "appliance_id": "boiler",
-                                "min_surplus_buffer_pct": -1,
-                            },
+                            "target": {"appliance_id": "boiler"},
+                            "conditions": [{"min_surplus_buffer_pct": -1}],
                         }
                     ]
                 }
@@ -410,40 +458,107 @@ class AutomationConfigTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "invalid_value")
         self.assertEqual(
             ctx.exception.path,
-            "automation.optimizers[0].params.min_surplus_buffer_pct",
+            "automation.optimizers[0].conditions[0].min_surplus_buffer_pct",
         )
 
-    def test_is_no_op_when_automation_branch_is_absent(self) -> None:
-        self.assertIsNone(read_automation_config({}))
-        self.assertIsNone(read_automation_config(None))
+    def test_rejects_a_non_numeric_export_price_threshold(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {"optimizers": [_export_price(conditions=[{"when_price_below": "zero"}])]}
+            )
 
-    def test_ignores_unknown_extra_keys(self) -> None:
-        self._set_known_kinds("alpha")
-        parsed = AutomationConfig.from_dict(
-            {
-                "enabled": True,
-                "note": "ignored",
+        self.assertEqual(ctx.exception.code, "invalid_type")
+        self.assertEqual(
+            ctx.exception.path,
+            "automation.optimizers[0].conditions[0].when_price_below",
+        )
+
+
+class MigrationRoundTripTests(unittest.TestCase):
+    """The migration's output must be exactly what the reader accepts.
+
+    Migration and reading are written independently; without this, a rule that
+    moves a key to the wrong place only fails on a user's next restart.
+    """
+
+    def test_a_full_old_shape_document_reads_back_after_migration(self) -> None:
+        from custom_components.helman.automation.migration import (
+            migrate_config_document,
+        )
+
+        old = {
+            "automation": {
                 "optimizers": [
                     {
+                        "id": "hold",
+                        "kind": "charge_hold",
+                        "params": {
+                            "only_on_days": ["surplus"],
+                            "hold_action": "stop_charging",
+                            "window": {"start": "06:00", "end": "12:00"},
+                            "battery_first": {"target_soc": 90, "margin_pct": 10},
+                        },
+                        "condition": [{"condition": "state", "entity_id": "x.y"}],
+                    },
+                    {
                         "id": "export",
-                        "kind": "alpha",
-                        "extra": "ignored",
-                        "params": {"window": 2},
-                    }
-                ],
+                        "kind": "export_price",
+                        "params": {"when_price_below": -0.05, "action": "stop_export"},
+                    },
+                    {
+                        "id": "surplus",
+                        "kind": "surplus_appliance",
+                        "params": {
+                            "appliance_id": "boiler",
+                            "action": "on",
+                            "min_surplus_buffer_pct": 15,
+                        },
+                    },
+                    {
+                        "id": "bridge",
+                        "kind": "charge_from_grid",
+                        "params": {"reserve_floor_soc": 20, "margin_pct": 10},
+                    },
+                    {
+                        "id": "dhw",
+                        "kind": "daily_runtime",
+                        "params": {
+                            "appliance_id": "boiler",
+                            "min_hours_per_day": 3,
+                            "window": {"start": "06:00", "end": "22:00"},
+                            "skip": {
+                                "on_days": ["deficit"],
+                                "max_consecutive_skips": 2,
+                            },
+                        },
+                    },
+                ]
             }
+        }
+        migrated, _ids = migrate_config_document(old)
+
+        parsed = read_automation_config(migrated)
+
+        self.assertEqual(
+            [optimizer.id for optimizer in parsed.optimizers],
+            ["hold", "export", "surplus", "bridge", "dhw"],
         )
+        self.assertEqual(
+            parsed.optimizers[0].conditions[0].custom,
+            ({"condition": "state", "entity_id": "x.y"},),
+        )
+        self.assertEqual(
+            parsed.optimizers[4].conditions[0].condition_values["run_when"],
+            ("surplus", "tight"),
+        )
+        self.assertEqual(parsed.optimizers[4].params["max_consecutive_skips"], 2)
+        self.assertEqual(parsed.optimizers[2].target["appliance_id"], "boiler")
 
-        self.assertEqual(parsed.optimizers[0].params, {"window": 2})
 
+class DayContextTests(unittest.TestCase):
     def test_validate_config_document_accepts_valid_automation_block(self) -> None:
         report = validate_config_document(
-            {
-                "automation": {
-                    "enabled": True,
-                    "optimizers": [],
-                }
-            }
+            {"automation": {"enabled": True, "optimizers": []}}
         )
 
         self.assertTrue(report.valid)

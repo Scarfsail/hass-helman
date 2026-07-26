@@ -13,7 +13,6 @@ TZ = timezone(timedelta(hours=2))
 REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
 
-
 def _install_import_stubs() -> None:
     custom_components_pkg = sys.modules.get("custom_components")
     if custom_components_pkg is None:
@@ -83,6 +82,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationSnapshot,
 )
 from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
+from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
@@ -154,7 +154,7 @@ def _make_snapshot(
     runtime_by_date: dict[str, dict[date, float]] | None = None,
     schedule_document: ScheduleDocument | None = None,
     classification: str = "tight",
-    condition_met_by_optimizer_id: dict[str, bool] | None = None,
+    condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances((appliance,))
     return OptimizationSnapshot(
@@ -189,23 +189,26 @@ def _config(
     appliance_id: str,
     min_hours_per_day: int = 1,
     climate_mode: str | None = None,
-    skip_on_days=None,
-    max_consecutive_skips: int = 1,
+    run_when=None,
+    max_consecutive_skips: int = 0,
+    groups: list[dict] | None = None,
 ) -> OptimizerInstanceConfig:
-    params: dict[str, object] = {
-        "appliance_id": appliance_id,
-        "min_hours_per_day": min_hours_per_day,
-        "window": {"start": "08:00", "end": "18:00"},
-    }
+    target: dict[str, object] = {"appliance_id": appliance_id}
     if climate_mode is not None:
-        params["climate_mode"] = climate_mode
-    if skip_on_days is not None:
-        params["skip"] = {
-            "on_days": skip_on_days,
+        target["climate_mode"] = climate_mode
+    group: dict[str, object] = {}
+    if run_when is not None:
+        group["run_when"] = list(run_when)
+    return make_optimizer_config(
+        id="daily",
+        kind="daily_runtime",
+        target=target,
+        params={
+            "min_hours_per_day": min_hours_per_day,
+            "window": {"start": "08:00", "end": "18:00"},
             "max_consecutive_skips": max_consecutive_skips,
-        }
-    return OptimizerInstanceConfig(
-        id="daily", kind="daily_runtime", params=params
+        },
+        conditions=groups or [group],
     )
 
 
@@ -253,7 +256,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             _make_snapshot(
                 appliance=appliance,
                 export_points=_export_points(cheap),
-                condition_met_by_optimizer_id={cfg.id: False},
+                condition_met_by_optimizer_id={cfg.id: (False,)},
             ),
             cfg,
         )
@@ -301,7 +304,9 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
     def test_skips_on_deficit_day_when_guard_allows(self) -> None:
         appliance = _generic()
         cfg = _config(
-            appliance_id=appliance.id, skip_on_days=["deficit"], max_consecutive_skips=1
+            appliance_id=appliance.id,
+            run_when=["surplus", "tight"],
+            max_consecutive_skips=1,
         )
         result = build_daily_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
@@ -318,7 +323,9 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
     def test_consecutive_skip_guard_forces_run(self) -> None:
         appliance = _generic()
         cfg = _config(
-            appliance_id=appliance.id, skip_on_days=["deficit"], max_consecutive_skips=1
+            appliance_id=appliance.id,
+            run_when=["surplus", "tight"],
+            max_consecutive_skips=1,
         )
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
         result = build_daily_runtime_optimizer(

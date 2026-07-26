@@ -97,7 +97,7 @@ const KNOWN_REASON_CODES = new Set([
     "runtime_deficit_placed",
     "ranked_more_expensive",
     "runtime_satisfied",
-    "day_skipped",
+    "forced_after_consecutive_skips",
     "surplus_covers_demand",
     "surplus_insufficient",
     "forecast_unavailable",
@@ -112,9 +112,18 @@ interface StepIndexEntry {
     decisionBySlot: Map<string, TraceDecisionDTO>;
     /** slotId -> committed writes for that slot (one per domain). */
     writesBySlot: Map<string, TraceWriteDTO[]>;
-    /** Derivation inputs pulled from emitted params. */
-    exportThreshold: number | null;
-    surplusBufferPct: number | null;
+    /**
+     * Derivation inputs, one entry per condition group.
+     *
+     * With ORed groups there is no single threshold: a slot is eligible when
+     * *any* group accepts it, so it is only rejected when it fails them all.
+     * Scraping a single value off an emitted decision — as this did before
+     * groups — makes derived cells contradict emitted ones, and the coverage
+     * validator cannot catch it because these slots are explicitly declared
+     * derivable.
+     */
+    exportThresholds: number[];
+    surplusBufferPcts: number[];
 }
 
 /**
@@ -310,18 +319,51 @@ export class AutomationInspectorModel {
             if (existing) existing.push(write);
             else writesBySlot.set(write.slotId, [write]);
         }
-        let exportThreshold: number | null = null;
-        let surplusBufferPct: number | null = null;
+        return {
+            step,
+            decisionBySlot,
+            writesBySlot,
+            exportThresholds: this._groupValues(step, "when_price_below", "threshold", [
+                "price_below_threshold",
+            ]),
+            surplusBufferPcts: this._groupValues(
+                step,
+                "min_surplus_buffer_pct",
+                "bufferPct",
+                ["surplus_covers_demand"],
+            ),
+        };
+    }
+
+    /**
+     * One numeric condition value per group.
+     *
+     * Prefers the step's declared groups, which cover every group whether or not
+     * it placed anything. Falls back to scraping emitted decision params so
+     * traces recorded before `conditionGroups` existed still derive.
+     */
+    private _groupValues(
+        step: TraceStepDTO,
+        valueKey: string,
+        paramKey: string,
+        emittingCodes: string[],
+    ): number[] {
+        const fromGroups = (step.conditionGroups ?? [])
+            .map((group) => group.values[valueKey])
+            .filter((value): value is number => typeof value === "number");
+        if (fromGroups.length) return fromGroups;
+        const scraped: number[] = [];
         for (const decision of step.decisions) {
-            const p = decision.reason?.params ?? {};
-            if (decision.reason?.code === "price_below_threshold" && typeof p.threshold === "number") {
-                exportThreshold = p.threshold;
-            }
-            if (decision.reason?.code === "surplus_covers_demand" && typeof p.bufferPct === "number") {
-                surplusBufferPct = p.bufferPct;
+            const value = decision.reason?.params?.[paramKey];
+            if (
+                decision.reason &&
+                emittingCodes.includes(decision.reason.code) &&
+                typeof value === "number"
+            ) {
+                scraped.push(value);
             }
         }
-        return { step, decisionBySlot, writesBySlot, exportThreshold, surplusBufferPct };
+        return scraped;
     }
 
     /** Resolve the cell at (stepIndex, slotIndex) to a rendered view. */
@@ -384,12 +426,15 @@ export class AutomationInspectorModel {
         write?: TraceWriteDTO,
     ): CellView {
         const kind = entry.step.kind;
-        if (kind === "export_price") {
+        if (kind === "export_price" && entry.exportThresholds.length) {
+            // The loosest group decides: the slot is only rejected if its price
+            // clears *every* group's threshold.
+            const threshold = Math.max(...entry.exportThresholds);
             const price = this.railValue(this.trace.staticRails.exportPrice, slotIndex);
-            if (price !== null && entry.exportThreshold !== null && price >= entry.exportThreshold) {
+            if (price !== null && price >= threshold) {
                 return this._derivedView(
                     "price_not_below_threshold",
-                    { threshold: entry.exportThreshold, price },
+                    { threshold, price },
                     slotIndex,
                     localize,
                     write,
@@ -401,9 +446,14 @@ export class AutomationInspectorModel {
                 entry.step.railsIn.availableSurplusKwh,
                 slotIndex,
             );
+            // Likewise the smallest buffer is the easiest to satisfy, so it is
+            // the one a rejected slot failed.
+            const bufferPct = entry.surplusBufferPcts.length
+                ? Math.min(...entry.surplusBufferPcts)
+                : null;
             return this._derivedView(
                 "surplus_insufficient",
-                { surplus, bufferPct: entry.surplusBufferPct },
+                { surplus, bufferPct },
                 slotIndex,
                 localize,
                 write,

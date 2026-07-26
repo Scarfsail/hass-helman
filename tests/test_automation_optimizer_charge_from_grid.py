@@ -13,7 +13,6 @@ TZ = timezone(timedelta(hours=2))
 REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
 
-
 def _install_import_stubs() -> None:
     custom_components_pkg = sys.modules.get("custom_components")
     if custom_components_pkg is None:
@@ -69,6 +68,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
 )
 from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
@@ -169,14 +169,11 @@ def _make_snapshot(
 def _make_config(
     *, reserve_floor_soc: int = 30, margin_pct: int = 0, max_target_soc: int = 100
 ) -> OptimizerInstanceConfig:
-    return OptimizerInstanceConfig(
+    return make_optimizer_config(
         id="grid-bridge-charge",
         kind="charge_from_grid",
-        params={
-            "reserve_floor_soc": reserve_floor_soc,
-            "margin_pct": margin_pct,
-            "max_target_soc": max_target_soc,
-        },
+        params={"margin_pct": margin_pct, "max_target_soc": max_target_soc},
+        conditions=[{"reserve_floor_soc": reserve_floor_soc}],
     )
 
 

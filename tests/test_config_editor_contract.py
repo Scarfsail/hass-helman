@@ -224,7 +224,7 @@ _install_voluptuous_stub()
 _install_import_stubs()
 
 from custom_components.helman.automation import config as automation_config_module
-from custom_components.helman.const import DOMAIN
+from custom_components.helman.const import CONFIG_DOCUMENT_VERSION, DOMAIN
 from custom_components.helman.websockets import (
     ws_get_config,
     ws_save_config,
@@ -324,6 +324,15 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             "KNOWN_OPTIMIZER_KINDS",
             original,
         )
+
+    @staticmethod
+    def _stamped(config: dict) -> dict:
+        """What `ws_save_config` persists: the document plus its version stamp.
+
+        The stamp is written on every save so a YAML round-trip through the
+        editor can never drop it and re-trigger the load migration.
+        """
+        return {**config, "config_version": CONFIG_DOCUMENT_VERSION}
 
     def test_get_config_requires_admin(self) -> None:
         connection = FakeConnection(is_admin=False)
@@ -448,7 +457,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/save_config", "config": {}},
         )
 
-        self.assertEqual(storage.saved_payloads, [{}])
+        self.assertEqual(storage.saved_payloads, [self._stamped({})])
         self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
         self.assertEqual(connection.errors, [])
         self.assertTrue(connection.results[0][1]["success"])
@@ -473,12 +482,11 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/save_config", "config": config},
         )
 
-        self.assertEqual(storage.saved_payloads, [config])
+        self.assertEqual(storage.saved_payloads, [self._stamped(config)])
         self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
         self.assertTrue(connection.results[0][1]["success"])
 
     async def test_save_config_preserves_optimizers_when_disabling_automation(self) -> None:
-        self._set_known_optimizer_kinds("alpha")
         storage = FakeStorage()
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
@@ -488,9 +496,8 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                 "optimizers": [
                     {
                         "id": "export",
-                        "kind": "alpha",
-                        "params": {"window_hours": 2},
-                        "future_flag": True,
+                        "kind": "export_price",
+                        "conditions": [{"when_price_below": 0.0}],
                     }
                 ],
             }
@@ -502,7 +509,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/save_config", "config": config},
         )
 
-        self.assertEqual(storage.saved_payloads, [config])
+        self.assertEqual(storage.saved_payloads, [self._stamped(config)])
         self.assertEqual(
             storage.config["automation"]["optimizers"],
             config["automation"]["optimizers"],
@@ -536,11 +543,8 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                         "id": "preheat-living-room",
                         "kind": "surplus_appliance",
                         "enabled": True,
-                        "params": {
-                            "appliance_id": "dishwasher",
-                            "action": "on",
-                            "min_surplus_buffer_pct": 5,
-                        },
+                        "target": {"appliance_id": "dishwasher"},
+                        "conditions": [{"min_surplus_buffer_pct": 5}],
                     }
                 ],
             }
@@ -552,7 +556,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/save_config", "config": config},
         )
 
-        self.assertEqual(storage.saved_payloads, [config])
+        self.assertEqual(storage.saved_payloads, [self._stamped(config)])
         self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
         self.assertTrue(connection.results[0][1]["success"])
 
@@ -572,7 +576,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "type": "helman/save_config", "config": {}},
         )
 
-        self.assertEqual(storage.saved_payloads, [{}])
+        self.assertEqual(storage.saved_payloads, [self._stamped({})])
         self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
         self.assertEqual(connection.errors, [])
         self.assertFalse(connection.results[0][1]["success"])

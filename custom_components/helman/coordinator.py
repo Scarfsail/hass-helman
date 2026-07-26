@@ -41,7 +41,7 @@ from .appliances import (
 from .automation.compute_inputs import ComputeInputs
 from .automation.config import (
     AutomationConfig,
-    OptimizerInstanceConfig,
+    ConditionGroup,
     read_automation_config,
 )
 from .automation.day_context import (
@@ -370,14 +370,18 @@ class HelmanCoordinator:
         self._automation_input_bundle: AutomationInputBundle | None = None
         self._day_context_store = DayContextStore(hass)
         self._last_automation_run_result: AutomationRunResult | None = None
-        # optimizer_id -> (condition_config, built ConditionChecker | None).
-        # Cached across runs; rebuilt when an optimizer's condition changes and
+        # (optimizer_id, group_index) -> (custom config, built ConditionChecker
+        # | None). Keyed per group because groups are ORed and each carries its
+        # own `custom` list.
+        # Cached across runs; rebuilt when a group's `custom` changes and
         # unloaded when it is removed or on shutdown.
-        self._optimizer_condition_checkers: dict[str, tuple[Any, Any]] = {}
+        self._optimizer_condition_checkers: dict[
+            tuple[str, int], tuple[Any, Any]
+        ] = {}
         # Plan-freshness bookkeeping for the pre-execution reality check:
         # the condition map the current plan was built from, and when.
         self._last_automation_plan_at: datetime | None = None
-        self._last_plan_condition_map: dict[str, bool] = {}
+        self._last_plan_condition_map: dict[str, tuple[bool, ...]] = {}
         self._automation_triggers = AutomationTriggerCoordinator(
             create_task=self._create_task,
             run_callback=self._async_run_automation_trigger_request,
@@ -2254,56 +2258,62 @@ class HelmanCoordinator:
             ),
         )
 
-    async def _async_evaluate_optimizer_conditions(self) -> dict[str, bool]:
-        """Evaluate every optimizer's execution condition against live state.
+    async def _async_evaluate_optimizer_conditions(
+        self,
+    ) -> dict[str, tuple[bool, ...]]:
+        """Evaluate every condition group's ``custom`` conditions against live state.
 
         Runs on the event loop (conditions read ``hass.states``) so the result
-        can be frozen into ``ComputeInputs`` for the pure optimizer loop. Only
-        optimizers that declare a condition appear in the map; a missing id means
-        "always met". Fail-closed: a build/eval error counts as not met.
+        can be frozen into ``ComputeInputs`` for the pure optimizer loop. The
+        value is one bool per group, in config order — an optimizer id absent
+        from the map means "not evaluated", which counts as met. Fail-closed: a
+        build/eval error counts as not met.
         """
         automation_config = read_automation_config(self._active_config)
         if automation_config is None:
-            self._prune_optimizer_condition_checkers(active_ids=set())
+            self._prune_optimizer_condition_checkers(active_keys=set())
             return {}
 
-        results: dict[str, bool] = {}
-        active_ids: set[str] = set()
+        results: dict[str, tuple[bool, ...]] = {}
+        active_keys: set[tuple[str, int]] = set()
         for optimizer in automation_config.optimizers:
-            if not optimizer.condition:
-                continue
-            active_ids.add(optimizer.id)
-            checker = await self._ensure_optimizer_condition_checker(optimizer)
-            results[optimizer.id] = self._evaluate_optimizer_condition(
-                checker, optimizer.id
-            )
-        self._prune_optimizer_condition_checkers(active_ids=active_ids)
+            met_by_group: list[bool] = []
+            for group in optimizer.conditions:
+                if not group.custom:
+                    # No custom conditions is unconditionally met — and must not
+                    # build a checker, which would evaluate an empty AND anyway.
+                    met_by_group.append(True)
+                    continue
+                key = (optimizer.id, group.index)
+                active_keys.add(key)
+                checker = await self._ensure_optimizer_condition_checker(key, group)
+                met_by_group.append(self._evaluate_optimizer_condition(checker, key))
+            results[optimizer.id] = tuple(met_by_group)
+        self._prune_optimizer_condition_checkers(active_keys=active_keys)
         return results
 
     async def _ensure_optimizer_condition_checker(
-        self, optimizer: "OptimizerInstanceConfig"
+        self, key: tuple[str, int], group: "ConditionGroup"
     ) -> Any:
-        cached = self._optimizer_condition_checkers.get(optimizer.id)
-        if cached is not None and cached[0] == optimizer.condition:
+        cached = self._optimizer_condition_checkers.get(key)
+        if cached is not None and cached[0] == group.custom:
             return cached[1]
         if cached is not None:
             self._unload_optimizer_condition_checker(cached[1])
         checker = await self._build_optimizer_condition_checker(
-            optimizer_id=optimizer.id,
-            condition_config=list(optimizer.condition or ()),
+            key=key,
+            condition_config=list(group.custom),
         )
-        self._optimizer_condition_checkers[optimizer.id] = (
-            optimizer.condition,
-            checker,
-        )
+        self._optimizer_condition_checkers[key] = (group.custom, checker)
         return checker
 
     async def _build_optimizer_condition_checker(
-        self, *, optimizer_id: str, condition_config: list[dict[str, Any]]
+        self, *, key: tuple[str, int], condition_config: list[dict[str, Any]]
     ) -> Any:
         from homeassistant.helpers import condition as ha_condition
         from homeassistant.helpers import config_validation as cv
 
+        label = f"optimizer:{key[0]}#{key[1]}"
         try:
             validated = []
             for entry in condition_config:
@@ -2320,18 +2330,17 @@ class HelmanCoordinator:
                     )
                 )
             return await ha_condition.async_conditions_from_config(
-                self._hass, validated, _LOGGER, f"optimizer:{optimizer_id}"
+                self._hass, validated, _LOGGER, label
             )
         except Exception:
             _LOGGER.exception(
-                "Failed to build execution condition for optimizer %s; "
-                "treating as not met",
-                optimizer_id,
+                "Failed to build custom conditions for %s; treating as not met",
+                label,
             )
             return None
 
     def _evaluate_optimizer_condition(
-        self, checker: Any, optimizer_id: str
+        self, checker: Any, key: tuple[str, int]
     ) -> bool:
         if checker is None:
             return False
@@ -2339,18 +2348,21 @@ class HelmanCoordinator:
             return bool(checker.async_check())
         except Exception:
             _LOGGER.debug(
-                "Execution condition for optimizer %s could not be evaluated; "
-                "treating as not met",
-                optimizer_id,
+                "Custom conditions for optimizer %s group %d could not be "
+                "evaluated; treating as not met",
+                key[0],
+                key[1],
                 exc_info=True,
             )
             return False
 
-    def _prune_optimizer_condition_checkers(self, *, active_ids: set[str]) -> None:
-        for optimizer_id in list(self._optimizer_condition_checkers):
-            if optimizer_id in active_ids:
+    def _prune_optimizer_condition_checkers(
+        self, *, active_keys: set[tuple[str, int]]
+    ) -> None:
+        for key in list(self._optimizer_condition_checkers):
+            if key in active_keys:
                 continue
-            _config, checker = self._optimizer_condition_checkers.pop(optimizer_id)
+            _config, checker = self._optimizer_condition_checkers.pop(key)
             self._unload_optimizer_condition_checker(checker)
 
     @staticmethod
@@ -3472,7 +3484,14 @@ class HelmanCoordinator:
                 exc_info=True,
             )
             return False
-        if current_map == self._last_plan_condition_map:
+        # Compare the *derived* per-optimizer eligibility, not the raw per-group
+        # tuples. Comparing tuples would re-plan (and defer one execution cycle)
+        # whenever any group flipped, even when the OR result — and so the plan —
+        # is unchanged: group 0 flipping false->true while group 1 already
+        # matched changes nothing the executor can see.
+        if _any_group_met_by_optimizer(current_map) == _any_group_met_by_optimizer(
+            self._last_plan_condition_map
+        ):
             return False
         # A condition result differs from the plan. Re-plan first (no forecast
         # refresh — presence/temperature don't move the forecast), then defer.
@@ -3884,7 +3903,7 @@ class HelmanCoordinator:
             solar_bias_scheduler.cancel()
             self._solar_bias_scheduler = None
         await self._automation_triggers.async_shutdown()
-        self._prune_optimizer_condition_checkers(active_ids=set())
+        self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()
         self._invalidate_battery_forecast_cache()
 
@@ -3928,3 +3947,13 @@ class HelmanCoordinator:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._refresh_tasks.clear()
+
+
+def _any_group_met_by_optimizer(
+    condition_map: dict[str, tuple[bool, ...]],
+) -> dict[str, bool]:
+    """Fold a per-group condition map to the per-optimizer OR outcome."""
+    return {
+        optimizer_id: any(met_by_group)
+        for optimizer_id, met_by_group in condition_map.items()
+    }

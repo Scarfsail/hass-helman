@@ -6,22 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .automation.config import AutomationConfigError, read_automation_config
-from .automation.optimizers.charge_from_grid import (
-    ChargeFromGridValidationError,
-    validate_charge_from_grid_optimizer_config,
-)
-from .automation.optimizers.charge_hold import (
-    ChargeHoldValidationError,
-    validate_charge_hold_optimizer_config,
-)
-from .automation.optimizers.daily_runtime import (
-    DailyRuntimeValidationError,
-    validate_daily_runtime_optimizer_config,
-)
-from .automation.optimizers.surplus_appliance import (
-    SurplusApplianceValidationError,
-    validate_surplus_appliance_optimizer_config,
-)
+from .automation.optimizer import build_optimizer
 from .appliances.config import build_appliances_runtime_registry
 from .appliances.climate_appliance import (
     ClimateApplianceConfigError,
@@ -991,86 +976,54 @@ def _validate_automation_config(
     appliance_registry = build_appliances_runtime_registry(config)
     battery_issue = describe_battery_entity_config_issue(config)
     seen_export_price = False
+    # Enabled optimizers only, deliberately: a disabled optimizer with a broken
+    # group is a config the user parked, not an error to surface.
     for index, optimizer in enumerate(automation_config.execution_optimizers):
+        path = f"automation.optimizers[{index}]"
+        if optimizer.kind in _BATTERY_DEPENDENT_KINDS and battery_issue is not None:
+            report.add_error(
+                section="automation",
+                path=path,
+                code="battery_required",
+                message=(
+                    f"{optimizer.kind} optimizer {optimizer.id!r} requires a "
+                    f"configured battery: {battery_issue}"
+                ),
+            )
+        # Building is the validation: the generic reader has already checked the
+        # declared schema, so what is left is the runtime resolution (appliance
+        # lookups, authorable modes) that only a builder can do.
+        try:
+            build_optimizer(
+                optimizer,
+                control_config=None,
+                appliance_registry=appliance_registry,
+                path=path,
+            )
+        except AutomationConfigError as err:
+            report.add_error(
+                section="automation",
+                path=err.path,
+                code=err.code,
+                message=str(err),
+            )
+
         if optimizer.kind == "export_price":
             seen_export_price = True
-        if optimizer.kind == "surplus_appliance":
-            try:
-                validate_surplus_appliance_optimizer_config(
-                    optimizer,
-                    appliance_registry=appliance_registry,
-                )
-            except SurplusApplianceValidationError as err:
-                report.add_error(
-                    section="automation",
-                    path=f"automation.optimizers[{index}].params.{err.field}",
-                    code="invalid_value",
-                    message=str(err),
-                )
-        elif optimizer.kind == "charge_hold":
-            if battery_issue is not None:
-                report.add_error(
-                    section="automation",
-                    path=f"automation.optimizers[{index}]",
-                    code="battery_required",
-                    message=(
-                        f"charge_hold optimizer {optimizer.id!r} requires a "
-                        f"configured battery: {battery_issue}"
-                    ),
-                )
-            try:
-                validate_charge_hold_optimizer_config(optimizer)
-            except ChargeHoldValidationError as err:
-                report.add_error(
-                    section="automation",
-                    path=f"automation.optimizers[{index}].params.{err.field}",
-                    code="invalid_value",
-                    message=str(err),
-                )
-            if seen_export_price:
-                report.add_warning(
-                    section="automation",
-                    path=f"automation.optimizers[{index}]",
-                    code="charge_hold_after_export_price",
-                    message=(
-                        f"charge_hold optimizer {optimizer.id!r} is ordered after an "
-                        "export_price optimizer; export_price's stop_export will win "
-                        "shared inverter slots. Place charge_hold first."
-                    ),
-                )
-        elif optimizer.kind == "charge_from_grid":
-            if battery_issue is not None:
-                report.add_error(
-                    section="automation",
-                    path=f"automation.optimizers[{index}]",
-                    code="battery_required",
-                    message=(
-                        f"charge_from_grid optimizer {optimizer.id!r} requires a "
-                        f"configured battery: {battery_issue}"
-                    ),
-                )
-            try:
-                validate_charge_from_grid_optimizer_config(optimizer)
-            except ChargeFromGridValidationError as err:
-                report.add_error(
-                    section="automation",
-                    path=f"automation.optimizers[{index}].params.{err.field}",
-                    code="invalid_value",
-                    message=str(err),
-                )
-        elif optimizer.kind == "daily_runtime":
-            try:
-                validate_daily_runtime_optimizer_config(
-                    optimizer,
-                    appliance_registry=appliance_registry,
-                )
-            except DailyRuntimeValidationError as err:
-                report.add_error(
-                    section="automation",
-                    path=f"automation.optimizers[{index}].params.{err.field}",
-                    code="invalid_value",
-                    message=str(err),
-                )
+        elif optimizer.kind == "charge_hold" and seen_export_price:
+            report.add_warning(
+                section="automation",
+                path=path,
+                code="charge_hold_after_export_price",
+                message=(
+                    f"charge_hold optimizer {optimizer.id!r} is ordered after an "
+                    "export_price optimizer; export_price's stop_export will win "
+                    "shared inverter slots. Place charge_hold first."
+                ),
+            )
+
+
+_BATTERY_DEPENDENT_KINDS = frozenset({"charge_hold", "charge_from_grid"})
 
 
 def _read_supported_appliance(

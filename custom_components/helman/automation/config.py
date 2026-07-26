@@ -4,25 +4,66 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..appliances.climate_appliance import SUPPORTED_CLIMATE_MODES
 from ..const import (
     DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO,
     DAY_CONTEXT_DEFAULT_SURPLUS_ABOVE_RATIO,
 )
-from .optimizer import KNOWN_OPTIMIZER_KINDS
+from .fields import (
+    MISSING,
+    AutomationConfigError,
+    OptimizerConfigError,
+    merge_params,
+    read_fields,
+)
+from .spec import KNOWN_OPTIMIZER_KINDS, OPTIMIZER_SPECS, OptimizerSpec
 
-_MISSING = object()
-_EXPORT_PRICE_OPTIMIZER_KIND = "export_price"
-_SURPLUS_APPLIANCE_OPTIMIZER_KIND = "surplus_appliance"
+__all__ = [
+    "AutomationConfig",
+    "AutomationConfigError",
+    "ConditionGroup",
+    "DayContextConfig",
+    "OptimizerConfigError",
+    "OptimizerInstanceConfig",
+    "read_automation_config",
+]
+
+#: Keys that moved in the conditions unification. Reintroducing one by hand must
+#: fail loudly naming where the value lives now, rather than being silently
+#: discarded — see `validate_config_document`, which enforces the same rules on
+#: the save path.
+RELOCATED_OPTIMIZER_KEYS: dict[str, str] = {
+    "condition": "conditions[0].custom",
+    "only_on_days": "conditions[].run_when",
+    "when_price_below": "conditions[].when_price_below",
+    "min_surplus_buffer_pct": "conditions[].min_surplus_buffer_pct",
+    "reserve_floor_soc": "conditions[].reserve_floor_soc",
+    "appliance_id": "target.appliance_id",
+    "climate_mode": "target.climate_mode",
+    "skip": "params.max_consecutive_skips and conditions[].run_when",
+    "action": "nothing — the optimizer kind implies its action",
+    "hold_action": "nothing — the optimizer kind implies its action",
+    "release": "nothing — the release slot is computed per day, never configured",
+}
+
+_OPTIMIZER_KEYS = frozenset({"id", "kind", "enabled", "target", "params", "conditions"})
+_GROUP_RESERVED_KEYS = frozenset({"name", "params", "custom"})
 
 
-class AutomationConfigError(ValueError):
-    """Raised when the automation config block is invalid."""
+@dataclass(frozen=True)
+class ConditionGroup:
+    """One ORed group: system conditions AND ``custom``, over overridden params."""
 
-    def __init__(self, *, path: str, code: str, message: str) -> None:
-        super().__init__(message)
-        self.path = path
-        self.code = code
+    index: int
+    #: Optional label, shown by the inspector in place of the index.
+    name: str | None
+    #: Declared system condition values, keyed by condition type.
+    condition_values: dict[str, Any]
+    #: Master params merged with this group's override, fully validated.
+    params: dict[str, Any]
+    #: The override as authored, so the editor can tell "set" from "inherited".
+    params_override: dict[str, Any]
+    #: Home Assistant conditions, ANDed. Validated by HA at evaluation time.
+    custom: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -30,12 +71,17 @@ class OptimizerInstanceConfig:
     id: str
     kind: str
     enabled: bool = True
+    #: Identity — what the optimizer acts on. Never overridable by a group, so
+    #: the inspector can say what it acts on without knowing which group matched.
+    target: dict[str, Any] = field(default_factory=dict)
+    #: Master defaults; a group may override any key, merged one level deep.
     params: dict[str, Any] = field(default_factory=dict)
-    # Optional user-authored execution condition (Home Assistant condition
-    # config, a list ANDed at evaluation time). None means "always met". The
-    # condition schema itself is validated by HA at evaluation time, not here;
-    # this reader only checks the outer shape.
-    condition: tuple[dict[str, Any], ...] | None = None
+    #: ORed, evaluated first to last. Always at least one.
+    conditions: tuple[ConditionGroup, ...] = ()
+
+    @property
+    def spec(self) -> OptimizerSpec:
+        return OPTIMIZER_SPECS[self.kind]
 
 
 @dataclass(frozen=True)
@@ -64,11 +110,11 @@ class AutomationConfig:
             path=f"{path}.enabled",
         )
         optimizers = _read_optimizers(
-            data.get("optimizers", _MISSING),
+            data.get("optimizers", MISSING),
             path=f"{path}.optimizers",
         )
         day_context = _read_day_context(
-            data.get("day_context", _MISSING),
+            data.get("day_context", MISSING),
             path=f"{path}.day_context",
         )
         execution_optimizers = (
@@ -84,12 +130,22 @@ class AutomationConfig:
         )
 
 
+def read_automation_config(
+    config: Mapping[str, Any] | None,
+) -> AutomationConfig | None:
+    if config is None or not isinstance(config, Mapping):
+        return None
+    if "automation" not in config:
+        return None
+    return AutomationConfig.from_dict(config["automation"])
+
+
 def _read_day_context(
     value: object,
     *,
     path: str,
 ) -> DayContextConfig:
-    if value is _MISSING:
+    if value is MISSING:
         return DayContextConfig()
     data = _read_mapping(value, path=path)
     deficit_below_ratio = _read_float(
@@ -101,7 +157,7 @@ def _read_day_context(
         path=f"{path}.surplus_above_ratio",
     )
     if deficit_below_ratio >= surplus_above_ratio:
-        _raise_config_error(
+        raise AutomationConfigError(
             path=path,
             code="invalid_value",
             message=(
@@ -115,25 +171,15 @@ def _read_day_context(
     )
 
 
-def read_automation_config(
-    config: Mapping[str, Any] | None,
-) -> AutomationConfig | None:
-    if config is None or not isinstance(config, Mapping):
-        return None
-    if "automation" not in config:
-        return None
-    return AutomationConfig.from_dict(config["automation"])
-
-
 def _read_optimizers(
     value: object,
     *,
     path: str,
 ) -> tuple[OptimizerInstanceConfig, ...]:
-    if value is _MISSING:
+    if value is MISSING:
         return ()
     if not isinstance(value, list):
-        _raise_config_error(
+        raise AutomationConfigError(
             path=path,
             code="invalid_type",
             message=f"{path} must be a list",
@@ -142,12 +188,9 @@ def _read_optimizers(
     seen_ids: set[str] = set()
     optimizers: list[OptimizerInstanceConfig] = []
     for index, raw_optimizer in enumerate(value):
-        optimizer = _read_optimizer(
-            raw_optimizer,
-            path=f"{path}[{index}]",
-        )
+        optimizer = _read_optimizer(raw_optimizer, path=f"{path}[{index}]")
         if optimizer.id in seen_ids:
-            _raise_config_error(
+            raise AutomationConfigError(
                 path=f"{path}[{index}].id",
                 code="duplicate_optimizer_id",
                 message=f"duplicate optimizer id {optimizer.id!r}",
@@ -163,62 +206,143 @@ def _read_optimizer(
     path: str,
 ) -> OptimizerInstanceConfig:
     data = _read_mapping(value, path=path)
-    optimizer_id = _read_non_empty_string(
-        data.get("id", _MISSING),
-        path=f"{path}.id",
-    )
-    kind = _read_non_empty_string(
-        data.get("kind", _MISSING),
-        path=f"{path}.kind",
-    )
+    optimizer_id = _read_non_empty_string(data.get("id", MISSING), path=f"{path}.id")
+    kind = _read_non_empty_string(data.get("kind", MISSING), path=f"{path}.kind")
     if kind not in KNOWN_OPTIMIZER_KINDS:
-        if not KNOWN_OPTIMIZER_KINDS:
-            message = (
-                f"{path}.kind {kind!r} is unknown; no optimizer kinds are supported "
-                "in this phase"
-            )
-        else:
-            supported_kinds = ", ".join(sorted(KNOWN_OPTIMIZER_KINDS))
-            message = (
-                f"{path}.kind {kind!r} is unknown; supported optimizer kinds are: "
-                f"{supported_kinds}"
-            )
-        _raise_config_error(
+        raise AutomationConfigError(
             path=f"{path}.kind",
             code="unknown_optimizer_kind",
-            message=message,
+            message=(
+                f"{path}.kind {kind!r} is unknown; supported optimizer kinds are: "
+                f"{', '.join(sorted(KNOWN_OPTIMIZER_KINDS))}"
+            ),
         )
-    enabled = _read_bool(
-        data.get("enabled", True),
-        path=f"{path}.enabled",
-    )
-    params = _read_optimizer_params(
-        data.get("params", _MISSING),
-        kind=kind,
-        path=f"{path}.params",
-    )
-    condition = _read_optimizer_condition(
-        data.get("condition", _MISSING),
-        path=f"{path}.condition",
-    )
+    _reject_unknown_keys(data, allowed=_OPTIMIZER_KEYS, path=path)
+
+    spec = OPTIMIZER_SPECS[kind]
+    enabled = _read_bool(data.get("enabled", True), path=f"{path}.enabled")
+    target = read_fields(spec.target, data.get("target", MISSING), path=f"{path}.target")
+    raw_params = data.get("params", MISSING)
+    params = read_fields(spec.params, raw_params, path=f"{path}.params")
+    if spec.validate is not None:
+        spec.validate(params, path=f"{path}.params")
+
     return OptimizerInstanceConfig(
         id=optimizer_id,
         kind=kind,
         enabled=enabled,
+        target=target,
         params=params,
-        condition=condition,
+        conditions=_read_condition_groups(
+            data.get("conditions", MISSING),
+            spec=spec,
+            raw_master_params=raw_params,
+            path=f"{path}.conditions",
+        ),
     )
 
 
-def _read_optimizer_condition(
+def _read_condition_groups(
+    value: object,
+    *,
+    spec: OptimizerSpec,
+    raw_master_params: object,
+    path: str,
+) -> tuple[ConditionGroup, ...]:
+    if value is MISSING or value is None or value == []:
+        raise AutomationConfigError(
+            path=path,
+            code="required",
+            message=f"{path} must list at least one condition group",
+        )
+    if not isinstance(value, list):
+        raise AutomationConfigError(
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be a list of condition groups",
+        )
+    return tuple(
+        _read_condition_group(
+            raw_group,
+            index=index,
+            spec=spec,
+            raw_master_params=raw_master_params,
+            path=f"{path}[{index}]",
+        )
+        for index, raw_group in enumerate(value)
+    )
+
+
+def _read_condition_group(
+    value: object,
+    *,
+    index: int,
+    spec: OptimizerSpec,
+    raw_master_params: object,
+    path: str,
+) -> ConditionGroup:
+    data = _read_mapping(value, path=path)
+    if "target" in data:
+        raise AutomationConfigError(
+            path=f"{path}.target",
+            code="invalid_value",
+            message=f"{path}.target is not allowed; target is never overridable",
+        )
+    _reject_unknown_keys(
+        data,
+        allowed=_GROUP_RESERVED_KEYS | set(spec.condition_types),
+        path=path,
+    )
+
+    condition_values = read_fields(
+        tuple(condition.field for condition in spec.condition_type_list),
+        {key: data[key] for key in spec.condition_types if key in data},
+        path=path,
+    )
+
+    # Validate the override on its own so type and unknown-key errors point at
+    # the group the user edited, then re-read the merged result so required-ness
+    # and cross-field checks run against the params the group actually resolves.
+    raw_override = data.get("params", MISSING)
+    params_override = read_fields(
+        spec.params, raw_override, path=f"{path}.params", partial=True
+    )
+    resolved = read_fields(
+        spec.params,
+        merge_params(
+            raw_master_params if isinstance(raw_master_params, Mapping) else {},
+            raw_override if isinstance(raw_override, Mapping) else {},
+        ),
+        path=f"{path}.params",
+    )
+    if spec.validate is not None:
+        spec.validate(resolved, path=f"{path}.params")
+
+    return ConditionGroup(
+        index=index,
+        name=(
+            None
+            if data.get("name") is None
+            else _read_non_empty_string(data.get("name"), path=f"{path}.name")
+        ),
+        condition_values=condition_values,
+        params=resolved,
+        params_override=params_override,
+        custom=_read_custom(data.get("custom", MISSING), path=f"{path}.custom"),
+    )
+
+
+def _read_custom(
     value: object,
     *,
     path: str,
-) -> tuple[dict[str, Any], ...] | None:
-    if value is _MISSING or value is None:
-        return None
+) -> tuple[dict[str, Any], ...]:
+    """Read a group's Home Assistant conditions. Only the outer shape is checked;
+    HA validates the condition schema itself at evaluation time."""
+    if value is MISSING or value is None:
+        return ()
     if not isinstance(value, list):
-        _raise_config_error(
+        raise AutomationConfigError(
             path=path,
             code="invalid_type",
             message=f"{path} must be a list of conditions",
@@ -226,79 +350,39 @@ def _read_optimizer_condition(
     conditions: list[dict[str, Any]] = []
     for index, item in enumerate(value):
         if not isinstance(item, Mapping):
-            _raise_config_error(
+            raise AutomationConfigError(
                 path=f"{path}[{index}]",
                 code="invalid_type",
                 message=f"{path}[{index}] must be an object",
             )
         conditions.append({str(key): entry for key, entry in item.items()})
-    return tuple(conditions) or None
+    return tuple(conditions)
 
 
-def _read_optimizer_params(
-    value: object,
+def _reject_unknown_keys(
+    data: Mapping[str, Any],
     *,
-    kind: str,
+    allowed: frozenset[str] | set[str],
     path: str,
-) -> dict[str, Any]:
-    if kind == _EXPORT_PRICE_OPTIMIZER_KIND:
-        return _read_export_price_params(value, path=path)
-    if kind == _SURPLUS_APPLIANCE_OPTIMIZER_KIND:
-        return _read_surplus_appliance_params(value, path=path)
-    return _read_params(value, path=path)
+) -> None:
+    for key in data:
+        if key in allowed:
+            continue
+        relocated = RELOCATED_OPTIMIZER_KEYS.get(key)
+        raise AutomationConfigError(
+            path=f"{path}.{key}",
+            code="invalid_value" if relocated else "unknown_key",
+            message=(
+                f"{path}.{key} moved to {relocated}"
+                if relocated
+                else f"{path}.{key} is not a valid key"
+            ),
+        )
 
 
-def _read_export_price_params(
-    value: object,
-    *,
-    path: str,
-) -> dict[str, Any]:
-    data = _read_mapping({} if value is _MISSING else value, path=path)
-    return {
-        "when_price_below": _read_float(
-            data.get("when_price_below", 0.0),
-            path=f"{path}.when_price_below",
-        ),
-        "action": _read_export_price_action(
-            data.get("action", "stop_export"),
-            path=f"{path}.action",
-        ),
-    }
-
-
-def _read_surplus_appliance_params(
-    value: object,
-    *,
-    path: str,
-) -> dict[str, Any]:
-    data = _read_mapping({} if value is _MISSING else value, path=path)
-    return {
-        "appliance_id": _read_non_empty_string(
-            data.get("appliance_id", _MISSING),
-            path=f"{path}.appliance_id",
-        ),
-        "action": _read_surplus_appliance_action(
-            data.get("action", "on"),
-            path=f"{path}.action",
-        ),
-        "climate_mode": _read_optional_surplus_climate_mode(
-            data.get("climate_mode"),
-            path=f"{path}.climate_mode",
-        ),
-        "min_surplus_buffer_pct": _read_non_negative_int(
-            data.get("min_surplus_buffer_pct", 5),
-            path=f"{path}.min_surplus_buffer_pct",
-        ),
-    }
-
-
-def _read_mapping(
-    value: object,
-    *,
-    path: str,
-) -> Mapping[str, object]:
+def _read_mapping(value: object, *, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        _raise_config_error(
+        raise AutomationConfigError(
             path=path,
             code="invalid_type",
             message=f"{path} must be an object",
@@ -306,19 +390,15 @@ def _read_mapping(
     return {str(key): item for key, item in value.items()}
 
 
-def _read_non_empty_string(
-    value: object,
-    *,
-    path: str,
-) -> str:
-    if value is _MISSING:
-        _raise_config_error(
+def _read_non_empty_string(value: object, *, path: str) -> str:
+    if value is MISSING:
+        raise AutomationConfigError(
             path=path,
             code="required",
             message=f"{path} must be a non-empty string",
         )
     if not isinstance(value, str) or not value.strip():
-        _raise_config_error(
+        raise AutomationConfigError(
             path=path,
             code="invalid_type",
             message=f"{path} must be a non-empty string",
@@ -326,13 +406,9 @@ def _read_non_empty_string(
     return value.strip()
 
 
-def _read_bool(
-    value: object,
-    *,
-    path: str,
-) -> bool:
+def _read_bool(value: object, *, path: str) -> bool:
     if not isinstance(value, bool):
-        _raise_config_error(
+        raise AutomationConfigError(
             path=path,
             code="invalid_type",
             message=f"{path} must be a boolean",
@@ -340,109 +416,11 @@ def _read_bool(
     return value
 
 
-def _read_params(
-    value: object,
-    *,
-    path: str,
-) -> dict[str, Any]:
-    if value is _MISSING:
-        return {}
-    if not isinstance(value, Mapping):
-        _raise_config_error(
-            path=path,
-            code="invalid_type",
-            message=f"{path} must be an object",
-        )
-    return {str(key): item for key, item in value.items()}
-
-
-def _read_float(
-    value: object,
-    *,
-    path: str,
-) -> float:
+def _read_float(value: object, *, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        _raise_config_error(
+        raise AutomationConfigError(
             path=path,
             code="invalid_type",
             message=f"{path} must be a number",
         )
     return float(value)
-
-
-def _read_export_price_action(
-    value: object,
-    *,
-    path: str,
-) -> str:
-    action = _read_non_empty_string(value, path=path)
-    if action != "stop_export":
-        _raise_config_error(
-            path=path,
-            code="invalid_value",
-            message=f"{path} must be 'stop_export'",
-        )
-    return action
-
-
-def _read_surplus_appliance_action(
-    value: object,
-    *,
-    path: str,
-) -> str:
-    action = _read_non_empty_string(value, path=path)
-    if action != "on":
-        _raise_config_error(
-            path=path,
-            code="invalid_value",
-            message=f"{path} must be 'on'",
-        )
-    return action
-
-
-def _read_optional_surplus_climate_mode(
-    value: object,
-    *,
-    path: str,
-) -> str | None:
-    if value is None:
-        return None
-    climate_mode = _read_non_empty_string(value, path=path)
-    if climate_mode not in SUPPORTED_CLIMATE_MODES:
-        _raise_config_error(
-            path=path,
-            code="invalid_value",
-            message=(
-                f"{path} must be one of {', '.join(SUPPORTED_CLIMATE_MODES)}"
-            ),
-        )
-    return climate_mode
-
-
-def _read_non_negative_int(
-    value: object,
-    *,
-    path: str,
-) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        _raise_config_error(
-            path=path,
-            code="invalid_type",
-            message=f"{path} must be an integer",
-        )
-    if value < 0:
-        _raise_config_error(
-            path=path,
-            code="invalid_value",
-            message=f"{path} must be >= 0",
-        )
-    return value
-
-
-def _raise_config_error(
-    *,
-    path: str,
-    code: str,
-    message: str,
-) -> None:
-    raise AutomationConfigError(path=path, code=code, message=message)

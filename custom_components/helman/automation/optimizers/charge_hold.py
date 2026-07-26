@@ -8,74 +8,46 @@ the day's cheapest export slot. Single pass, read-only over the input snapshot.
 
 Runs **before** ``export_price`` in config order so ``export_price``'s protective
 ``stop_export`` wins any slot both want.
+
+Day gating lives in the ``run_when`` condition; params resolve per day (R2), so
+a group can hold to a later hour or a higher target SoC on surplus days.
 """
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from ...const import (
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    SCHEDULE_ACTION_STOP_CHARGING,
-    SCHEDULE_SLOT_MINUTES,
-)
+from ...const import SCHEDULE_ACTION_STOP_CHARGING, SCHEDULE_SLOT_MINUTES
 from ...scheduling.schedule import (
-    ScheduleAction,
     ScheduleDocument,
-    ScheduleDomains,
-    build_horizon_end,
     build_horizon_start,
     format_slot_id,
-    iter_horizon_slot_ids,
     parse_slot_id,
 )
-from ..ownership import is_user_owned_inverter_action
+from ..base import ScheduleWriter
+from ..conditions import build_eligibility
+from ..fields import time_on
+from ..rails import read_clipped_surplus_by_bucket
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
+    from ..conditions import Eligibility
     from ..config import OptimizerInstanceConfig
     from ..day_context import DayContext
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
 
 _SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
-
-
-class ChargeHoldValidationError(ValueError):
-    def __init__(self, field: str, message: str) -> None:
-        super().__init__(message)
-        self.field = field
-
-
-@dataclass(frozen=True)
-class _WindowTime:
-    hour: int
-    minute: int
-
-    def on(self, local_date: date, *, tzinfo) -> datetime:
-        return datetime.combine(
-            local_date, time(self.hour, self.minute), tzinfo=tzinfo
-        )
-
-
-@dataclass(frozen=True)
-class ValidatedChargeHoldConfig:
-    only_on_days: tuple[str, ...]
-    window_start: _WindowTime
-    window_end: _WindowTime
-    target_soc: float
-    margin_pct: float
+_ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_CHARGING}
 
 
 @dataclass(frozen=True)
 class ChargeHoldOptimizer:
     id: str
-    config: ValidatedChargeHoldConfig
     kind: str = "charge_hold"
 
     def optimize(
@@ -84,18 +56,9 @@ class ChargeHoldOptimizer:
         config: "OptimizerInstanceConfig",
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
-        del config
         trace = trace or NULL_TRACE
-        # When this optimizer's execution condition is not met, its actions are
-        # placed as candidates: still scheduled (for display/promotion) but
-        # excluded from resource accounting and not executed.
-        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
-            self.id, True
-        )
-        updated = ScheduleDocument(
-            execution_enabled=snapshot.schedule.execution_enabled,
-            slots=deepcopy(snapshot.schedule.slots),
-        )
+        eligibility = build_eligibility(snapshot, config, trace)
+        writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
 
         battery_state = snapshot.context.battery_state
         usable_capacity_kwh = snapshot.context.battery_usable_capacity_kwh
@@ -112,21 +75,11 @@ class ChargeHoldOptimizer:
         ):
             # Whole run out of scope: the column stays explained by one note.
             trace.note_horizon(code="battery_params_missing", params={})
-            return updated
+            return writer.flush(action=_ACTION)
 
-        needed_kwh = _compute_needed_kwh(
-            target_soc=self.config.target_soc,
-            current_soc=battery_state.current_soc,
-            usable_capacity_kwh=usable_capacity_kwh,
-            charge_efficiency=charge_efficiency,
+        surplus_by_bucket = read_clipped_surplus_by_bucket(
+            snapshot, max_charge_power_kw=max_charge_power_kw
         )
-        margin_multiplier = 1 + (self.config.margin_pct / 100)
-
-        surplus_by_bucket = _build_clipped_surplus_by_bucket_start(
-            snapshot=snapshot,
-            max_charge_power_kw=max_charge_power_kw,
-        )
-
         tzinfo = build_horizon_start(snapshot.context.now).tzinfo
 
         # Categorize every horizon slot so the column is fully explained. The
@@ -134,41 +87,55 @@ class ChargeHoldOptimizer:
         # all emitted here (the E rows of the reason catalogue).
         resolutions: dict[date, _DayHoldResolution] = {}
 
-        def _resolution(local_date: date, day_context: "DayContext") -> "_DayHoldResolution":
-            cached = resolutions.get(local_date)
-            if cached is not None:
-                return cached
-            resolved = _resolve_day_hold(
+        def _resolution(local_date: date) -> "_DayHoldResolution | None":
+            if local_date in resolutions:
+                return resolutions[local_date]
+            resolved = eligibility.for_day(local_date)
+            day_context = snapshot.context.day_contexts.get(local_date)
+            if resolved is None or day_context is None:
+                return None
+            params = resolved.params
+            battery_first = params["battery_first"]
+            resolution = _resolve_day_hold(
                 local_date=local_date,
                 day_context=day_context,
-                window_start=self.config.window_start.on(local_date, tzinfo=tzinfo),
-                window_end=self.config.window_end.on(local_date, tzinfo=tzinfo),
-                needed_kwh=needed_kwh,
-                margin_multiplier=margin_multiplier,
+                window_start=time_on(
+                    params["window"]["start"], local_date, tzinfo=tzinfo
+                ),
+                window_end=time_on(params["window"]["end"], local_date, tzinfo=tzinfo),
+                needed_kwh=_compute_needed_kwh(
+                    target_soc=battery_first["target_soc"],
+                    current_soc=battery_state.current_soc,
+                    usable_capacity_kwh=usable_capacity_kwh,
+                    charge_efficiency=charge_efficiency,
+                ),
+                margin_pct=battery_first["margin_pct"],
+                group_label=resolved.group.label,
                 surplus_by_bucket=surplus_by_bucket,
                 tzinfo=tzinfo,
             )
-            resolutions[local_date] = resolved
-            return resolved
+            resolutions[local_date] = resolution
+            return resolution
 
         applied_by_day: dict[date, list[str]] = {}
-        blocked_by_day: dict[date, list[str]] = {}
         after_release_by_day: dict[date, list[str]] = {}
         no_room_by_day: dict[date, list[str]] = {}
         outside_window: list[str] = []
         day_not_matched: dict[str, list[str]] = {}
 
-        for slot_id in iter_horizon_slot_ids(snapshot.context.now):
+        for slot_id in eligibility.horizon_slot_ids:
             slot_start = parse_slot_id(slot_id)
             local_date = slot_start.date()
-            day_context = snapshot.context.day_contexts.get(local_date)
-            if day_context is None:
-                outside_window.append(slot_id)
+            resolved = _resolution(local_date)
+            if resolved is None:
+                day_context = snapshot.context.day_contexts.get(local_date)
+                if day_context is None:
+                    outside_window.append(slot_id)
+                else:
+                    day_not_matched.setdefault(day_context.classification, []).append(
+                        slot_id
+                    )
                 continue
-            if day_context.classification not in self.config.only_on_days:
-                day_not_matched.setdefault(day_context.classification, []).append(slot_id)
-                continue
-            resolved = _resolution(local_date, day_context)
             if not (resolved.window_start <= slot_start < resolved.window_end):
                 outside_window.append(slot_id)
                 continue
@@ -176,36 +143,22 @@ class ChargeHoldOptimizer:
                 no_room_by_day.setdefault(local_date, []).append(slot_id)
                 continue
             if slot_start < resolved.release_slot:
-                current_domains = updated.slots.get(slot_id, ScheduleDomains())
-                if is_user_owned_inverter_action(current_domains.inverter):
-                    blocked_by_day.setdefault(local_date, []).append(slot_id)
-                    continue
-                updated.slots[slot_id] = ScheduleDomains(
-                    inverter=ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_CHARGING,
-                        set_by="automation",
-                        condition_met=condition_met,
-                    ),
-                    appliances=dict(current_domains.appliances),
-                )
-                applied_by_day.setdefault(local_date, []).append(slot_id)
+                if writer.set_inverter(slot_id, kind=SCHEDULE_ACTION_STOP_CHARGING):
+                    applied_by_day.setdefault(local_date, []).append(slot_id)
             else:
                 after_release_by_day.setdefault(local_date, []).append(slot_id)
 
         _emit_charge_hold_decisions(
             trace,
-            needed_kwh=needed_kwh,
-            margin_pct=self.config.margin_pct,
-            only_on_days=self.config.only_on_days,
+            eligibility=eligibility,
             resolutions=resolutions,
             applied_by_day=applied_by_day,
-            blocked_by_day=blocked_by_day,
             after_release_by_day=after_release_by_day,
             no_room_by_day=no_room_by_day,
             outside_window=outside_window,
             day_not_matched=day_not_matched,
         )
-        return updated
+        return writer.flush(action=_ACTION)
 
 
 def _compute_needed_kwh(
@@ -228,6 +181,11 @@ class _DayHoldResolution:
     release_slot: datetime | None
     bound_by: str | None
     surplus_at_window_start: float
+    # Carried per day because `battery_first` is group-overridable: two days can
+    # resolve to different groups and so to different needs and margins.
+    needed_kwh: float
+    margin_pct: float
+    group_label: str
 
 
 def _resolve_day_hold(
@@ -237,18 +195,29 @@ def _resolve_day_hold(
     window_start: datetime,
     window_end: datetime,
     needed_kwh: float,
-    margin_multiplier: float,
+    margin_pct: float,
+    group_label: str,
     surplus_by_bucket: list[tuple[datetime, float]],
     tzinfo,
 ) -> _DayHoldResolution:
-    if window_end <= window_start:
+    def _resolution(
+        release_slot: datetime | None,
+        bound_by: str | None,
+        surplus_at_window_start: float,
+    ) -> _DayHoldResolution:
         return _DayHoldResolution(
             window_start=window_start,
             window_end=window_end,
-            release_slot=None,
-            bound_by=None,
-            surplus_at_window_start=0.0,
+            release_slot=release_slot,
+            bound_by=bound_by,
+            surplus_at_window_start=surplus_at_window_start,
+            needed_kwh=needed_kwh,
+            margin_pct=margin_pct,
+            group_label=group_label,
         )
+
+    if window_end <= window_start:
+        return _resolution(None, None, 0.0)
 
     # Only this calendar day's own solar can refill the battery for this day's
     # hold, so bound the surplus accounting at the local midnight after
@@ -265,7 +234,7 @@ def _resolve_day_hold(
         latest_safe_release = window_end
         bound_by = "window_end"
     else:
-        threshold = needed_kwh * margin_multiplier
+        threshold = needed_kwh * (1 + margin_pct / 100)
         # surplus in [t, day_end) is monotonically non-increasing in t, so the
         # latest candidate slot that still covers the threshold is the boundary.
         latest_safe_release = None
@@ -277,38 +246,22 @@ def _resolve_day_hold(
         if latest_safe_release is None:
             # Even releasing at window.start cannot cover the need: no room to
             # hold.
-            return _DayHoldResolution(
-                window_start=window_start,
-                window_end=window_end,
-                release_slot=None,
-                bound_by=None,
-                surplus_at_window_start=surplus_at_window_start,
-            )
+            return _resolution(None, None, surplus_at_window_start)
         bound_by = "surplus"
 
     if day_min_window_start is not None and day_min_window_start < latest_safe_release:
-        release_slot = day_min_window_start
-        bound_by = "day_min_window"
-    else:
-        release_slot = latest_safe_release
-    return _DayHoldResolution(
-        window_start=window_start,
-        window_end=window_end,
-        release_slot=release_slot,
-        bound_by=bound_by,
-        surplus_at_window_start=surplus_at_window_start,
-    )
+        return _resolution(
+            day_min_window_start, "day_min_window", surplus_at_window_start
+        )
+    return _resolution(latest_safe_release, bound_by, surplus_at_window_start)
 
 
 def _emit_charge_hold_decisions(
     trace,
     *,
-    needed_kwh: float,
-    margin_pct: float,
-    only_on_days: tuple[str, ...],
+    eligibility: "Eligibility",
     resolutions: dict[date, _DayHoldResolution],
     applied_by_day: dict[date, list[str]],
-    blocked_by_day: dict[date, list[str]],
     after_release_by_day: dict[date, list[str]],
     no_room_by_day: dict[date, list[str]],
     outside_window: list[str],
@@ -319,27 +272,21 @@ def _emit_charge_hold_decisions(
         trace.decision(
             slot_ids=slot_ids,
             outcome="applied",
-            action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_CHARGING},
+            action=_ACTION,
             reason={
                 "code": "hold_window_applied",
                 "params": {
-                    "neededKwh": round(needed_kwh, 3),
-                    "marginPct": margin_pct,
+                    "neededKwh": round(resolved.needed_kwh, 3),
+                    "marginPct": resolved.margin_pct,
                     "releaseSlot": (
                         None
                         if resolved.release_slot is None
                         else format_slot_id(resolved.release_slot)
                     ),
                     "boundBy": resolved.bound_by,
+                    "matchedGroup": resolved.group_label,
                 },
             },
-        )
-    for slot_ids in blocked_by_day.values():
-        trace.decision(
-            slot_ids=slot_ids,
-            outcome="blocked",
-            action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_CHARGING},
-            reason={"code": "blocked_user_owned", "params": {"domain": "inverter"}},
         )
     for local_date, slot_ids in after_release_by_day.items():
         resolved = resolutions[local_date]
@@ -365,7 +312,7 @@ def _emit_charge_hold_decisions(
             reason={
                 "code": "no_room_to_hold",
                 "params": {
-                    "neededKwh": round(needed_kwh, 3),
+                    "neededKwh": round(resolved.needed_kwh, 3),
                     "surplusAtWindowStart": round(resolved.surplus_at_window_start, 3),
                 },
             },
@@ -377,14 +324,15 @@ def _emit_charge_hold_decisions(
             reason={"code": "outside_window", "params": {}},
         )
     for classification, slot_ids in day_not_matched.items():
+        code, value = eligibility.rejection(slot_ids[0]) or ("day_not_matched", ())
         trace.decision(
             slot_ids=slot_ids,
             outcome="out_of_scope",
             reason={
-                "code": "day_not_matched",
+                "code": code,
                 "params": {
                     "classification": classification,
-                    "onlyOnDays": list(only_on_days),
+                    "runWhen": list(value),
                 },
             },
         )
@@ -404,158 +352,8 @@ def _surplus_between(
     )
 
 
-def _build_clipped_surplus_by_bucket_start(
-    *,
-    snapshot: "OptimizationSnapshot",
-    max_charge_power_kw: float,
-) -> list[tuple[datetime, float]]:
-    raw_series = snapshot.battery_forecast.get("series")
-    if not isinstance(raw_series, list):
-        return []
-
-    surplus_by_bucket: list[tuple[datetime, float]] = []
-    for point in raw_series:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        solar_kwh = _read_optional_float(point.get("solarKwh"))
-        house_kwh = _read_optional_float(point.get("baselineHouseKwh"))
-        if timestamp is None or solar_kwh is None or house_kwh is None:
-            continue
-        duration_hours = _read_optional_float(point.get("durationHours"))
-        if duration_hours is None or duration_hours <= 0:
-            duration_hours = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
-        raw_surplus = max(0.0, solar_kwh - house_kwh)
-        clipped = min(raw_surplus, max_charge_power_kw * duration_hours)
-        surplus_by_bucket.append((timestamp, clipped))
-    return surplus_by_bucket
-
-
 def build_charge_hold_optimizer(
     config: "OptimizerInstanceConfig",
+    **_kwargs: Any,
 ) -> ChargeHoldOptimizer:
-    return ChargeHoldOptimizer(
-        id=config.id,
-        config=validate_charge_hold_optimizer_config(config),
-    )
-
-
-def validate_charge_hold_optimizer_config(
-    config: "OptimizerInstanceConfig",
-) -> ValidatedChargeHoldConfig:
-    params = config.params
-    window_start = _read_window_time(params, "window", "start")
-    window_end = _read_window_time(params, "window", "end")
-    if (window_end.hour, window_end.minute) <= (window_start.hour, window_start.minute):
-        raise ChargeHoldValidationError(
-            "window", "window.end must be after window.start"
-        )
-    return ValidatedChargeHoldConfig(
-        only_on_days=_read_only_on_days(params),
-        window_start=window_start,
-        window_end=window_end,
-        target_soc=_read_target_soc(params),
-        margin_pct=_read_margin_pct(params),
-    )
-
-
-def _read_only_on_days(params: dict[str, Any]) -> tuple[str, ...]:
-    from ...const import DAY_CLASSIFICATIONS
-
-    value = params.get("only_on_days")
-    if value is None:
-        return DAY_CLASSIFICATIONS
-    if not isinstance(value, (list, tuple)) or not value:
-        raise ChargeHoldValidationError(
-            "only_on_days", "only_on_days must be a non-empty list"
-        )
-    days: list[str] = []
-    for item in value:
-        if item not in DAY_CLASSIFICATIONS:
-            raise ChargeHoldValidationError(
-                "only_on_days",
-                f"only_on_days entries must be one of {', '.join(DAY_CLASSIFICATIONS)}",
-            )
-        days.append(item)
-    return tuple(days)
-
-
-def _read_window_time(
-    params: dict[str, Any], key: str, field: str
-) -> _WindowTime:
-    window = params.get(key)
-    if not isinstance(window, dict):
-        raise ChargeHoldValidationError(key, f"{key} must be an object")
-    raw = window.get(field)
-    if not isinstance(raw, str):
-        raise ChargeHoldValidationError(
-            key, f"{key}.{field} must be an 'HH:MM' string"
-        )
-    parts = raw.split(":")
-    if len(parts) != 2:
-        raise ChargeHoldValidationError(
-            key, f"{key}.{field} must be an 'HH:MM' string"
-        )
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError as err:
-        raise ChargeHoldValidationError(
-            key, f"{key}.{field} must be an 'HH:MM' string"
-        ) from err
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ChargeHoldValidationError(
-            key, f"{key}.{field} must be a valid 'HH:MM' time"
-        )
-    return _WindowTime(hour=hour, minute=minute)
-
-
-def _read_target_soc(params: dict[str, Any]) -> float:
-    battery_first = params.get("battery_first")
-    if not isinstance(battery_first, dict):
-        raise ChargeHoldValidationError(
-            "battery_first", "battery_first must be an object"
-        )
-    value = battery_first.get("target_soc")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ChargeHoldValidationError(
-            "battery_first", "battery_first.target_soc must be a number"
-        )
-    if not 0 <= value <= 100:
-        raise ChargeHoldValidationError(
-            "battery_first", "battery_first.target_soc must be between 0 and 100"
-        )
-    return float(value)
-
-
-def _read_margin_pct(params: dict[str, Any]) -> float:
-    battery_first = params.get("battery_first")
-    if not isinstance(battery_first, dict):
-        raise ChargeHoldValidationError(
-            "battery_first", "battery_first must be an object"
-        )
-    value = battery_first.get("margin_pct", 0)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ChargeHoldValidationError(
-            "battery_first", "battery_first.margin_pct must be a number"
-        )
-    if value < 0:
-        raise ChargeHoldValidationError(
-            "battery_first", "battery_first.margin_pct must be >= 0"
-        )
-    return float(value)
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        return None
-    return dt_util.as_local(parsed)
-
-
-def _read_optional_float(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)
+    return ChargeHoldOptimizer(id=config.id)

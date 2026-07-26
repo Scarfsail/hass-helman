@@ -1,24 +1,20 @@
+"""``export_price`` optimizer (use case 2).
+
+Stop exporting while the export price is below the group's threshold. All of the
+gating lives in the ``when_price_below`` condition now, so this module is the
+action write plus its rationale — nothing else.
+"""
+
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.util import dt as dt_util
-
-from ...const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from ...const import SCHEDULE_ACTION_STOP_EXPORT
-from ...scheduling.schedule import (
-    ScheduleAction,
-    ScheduleDocument,
-    ScheduleDomains,
-    build_horizon_start,
-    format_slot_id,
-    iter_horizon_slot_ids,
-)
-from ..ownership import is_user_owned_inverter_action
+from ...scheduling.schedule import ScheduleDocument, iter_horizon_slot_ids
+from ..base import ScheduleWriter
+from ..conditions import build_eligibility
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -27,6 +23,9 @@ if TYPE_CHECKING:
     from ..trace import OptimizerTrace
 
 _LOGGER = logging.getLogger(__name__)
+_ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_EXPORT}
+
+
 @dataclass(frozen=True)
 class ExportPriceOptimizer:
     id: str
@@ -40,29 +39,16 @@ class ExportPriceOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
-        condition_met = snapshot.context.condition_met_by_optimizer_id.get(
-            self.id, True
-        )
-        threshold = _read_threshold(config)
-        action = _read_action(config)
         # `price_not_below_threshold` (rejected) is a frontend derivation rule
-        # (D) over the exportPrice rail + threshold config; leave those slots to
-        # it and only emit applied/blocked/notes here.
+        # (D) over the exportPrice rail + the groups' thresholds; leave those
+        # slots to it and only emit applied/blocked/notes here.
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
-        candidate_slot_ids = _find_candidate_slot_ids(
-            snapshot=snapshot,
-            threshold=threshold,
-        )
 
-        updated_schedule_document = ScheduleDocument(
-            execution_enabled=snapshot.schedule.execution_enabled,
-            slots=deepcopy(snapshot.schedule.slots),
-        )
-        if not candidate_slot_ids:
-            return updated_schedule_document
-
-        if action != SCHEDULE_ACTION_STOP_EXPORT:
-            raise ValueError(f"Unsupported export_price action: {action}")
+        eligibility = build_eligibility(snapshot, config, trace)
+        writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
+        eligible = list(eligibility.iter_slots())
+        if not eligible:
+            return writer.flush(action=_ACTION)
 
         if not self.stop_export_supported:
             _LOGGER.warning(
@@ -70,158 +56,54 @@ class ExportPriceOptimizer:
                 "scheduler.control.action_option_map.stop_export is unavailable; "
                 "skipping %d slot(s)",
                 self.id,
-                len(candidate_slot_ids),
+                len(eligible),
             )
             trace.note(
                 code="stop_export_unsupported",
-                params={"skippedSlots": len(candidate_slot_ids)},
+                params={"skippedSlots": len(eligible)},
             )
             trace.decision(
-                slot_ids=list(candidate_slot_ids),
+                slot_ids=[resolved.slot_id for resolved in eligible],
                 outcome="out_of_scope",
                 reason={
                     "code": "stop_export_unsupported",
-                    "params": {"skippedSlots": len(candidate_slot_ids)},
+                    "params": {"skippedSlots": len(eligible)},
                 },
             )
-            return updated_schedule_document
+            return writer.flush(action=_ACTION)
 
-        applied_slot_ids: list[str] = []
-        blocked_slot_ids: list[str] = []
-        for slot_id in candidate_slot_ids:
-            current_domains = updated_schedule_document.slots.get(slot_id, ScheduleDomains())
-            if is_user_owned_inverter_action(current_domains.inverter):
-                blocked_slot_ids.append(slot_id)
-                continue
-            updated_schedule_document.slots[slot_id] = ScheduleDomains(
-                inverter=ScheduleAction(
-                    kind=SCHEDULE_ACTION_STOP_EXPORT,
-                    set_by="automation",
-                    condition_met=condition_met,
-                ),
-                appliances=dict(current_domains.appliances),
-            )
-            applied_slot_ids.append(slot_id)
+        applied_by_group: dict[int, list[str]] = {}
+        for resolved in eligible:
+            if writer.set_inverter(resolved.slot_id, kind=SCHEDULE_ACTION_STOP_EXPORT):
+                applied_by_group.setdefault(resolved.group.index, []).append(
+                    resolved.slot_id
+                )
 
-        if applied_slot_ids:
+        for group_index, slot_ids in applied_by_group.items():
+            group = eligibility.groups[group_index]
             trace.decision(
-                slot_ids=applied_slot_ids,
+                slot_ids=slot_ids,
                 outcome="applied",
-                action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_EXPORT},
+                action=_ACTION,
                 reason={
                     "code": "price_below_threshold",
-                    "params": {"threshold": threshold},
+                    "params": {
+                        "threshold": group.condition_values["when_price_below"],
+                        "matchedGroup": group.label,
+                    },
                     "signals": ["exportPrice"],
                 },
             )
-        if blocked_slot_ids:
-            trace.decision(
-                slot_ids=blocked_slot_ids,
-                outcome="blocked",
-                action={"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_EXPORT},
-                reason={"code": "blocked_user_owned", "params": {"domain": "inverter"}},
-            )
-
-        return updated_schedule_document
+        return writer.flush(action=_ACTION)
 
 
-def _find_candidate_slot_ids(
+def build_export_price_optimizer(
+    config: "OptimizerInstanceConfig",
     *,
-    snapshot: "OptimizationSnapshot",
-    threshold: float,
-) -> tuple[str, ...]:
-    horizon_slot_ids = tuple(iter_horizon_slot_ids(snapshot.context.now))
-    horizon_slot_id_set = set(horizon_slot_ids)
-    negative_price_bucket_starts = _find_negative_price_bucket_starts(
-        export_price_forecast=snapshot.context.export_price_forecast,
-        threshold=threshold,
-        reference_time=snapshot.context.now,
+    stop_export_supported: bool,
+    **_kwargs: Any,
+) -> ExportPriceOptimizer:
+    return ExportPriceOptimizer(
+        id=config.id,
+        stop_export_supported=stop_export_supported,
     )
-    candidate_slot_id_set = {
-        format_slot_id(build_horizon_start(bucket_start))
-        for bucket_start in negative_price_bucket_starts
-    }
-    return tuple(
-        slot_id
-        for slot_id in horizon_slot_ids
-        if slot_id in candidate_slot_id_set and slot_id in horizon_slot_id_set
-    )
-
-
-def _find_negative_price_bucket_starts(
-    *,
-    export_price_forecast: dict[str, Any],
-    threshold: float,
-    reference_time: datetime,
-    ) -> set[datetime]:
-    negative_bucket_starts: set[datetime] = set()
-
-    current_price = _read_optional_float(export_price_forecast.get("currentPrice"))
-    if current_price is not None and current_price < threshold:
-        negative_bucket_starts.add(_canonical_bucket_start(reference_time))
-
-    raw_points = export_price_forecast.get("points", [])
-    if not isinstance(raw_points, list):
-        return negative_bucket_starts
-
-    for point in raw_points:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        value = _read_optional_float(point.get("value"))
-        if timestamp is None or value is None or value >= threshold:
-            continue
-        negative_bucket_starts.add(_canonical_bucket_start(timestamp))
-
-    return negative_bucket_starts
-def _canonical_bucket_start(timestamp: datetime) -> datetime:
-    local_reference = dt_util.as_local(timestamp)
-    local_day_start = local_reference.replace(
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-    slot_duration_seconds = FORECAST_CANONICAL_GRANULARITY_MINUTES * 60
-    elapsed_seconds = max(
-        0.0,
-        (
-            dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
-        ).total_seconds(),
-    )
-    slot_index = int(elapsed_seconds // slot_duration_seconds)
-    slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
-        seconds=slot_index * slot_duration_seconds
-    )
-    return dt_util.as_local(slot_start_utc)
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        return None
-    return dt_util.as_local(parsed)
-
-
-def _read_optional_float(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)
-
-
-def _read_threshold(config: "OptimizerInstanceConfig") -> float:
-    threshold = _read_optional_float(config.params.get("when_price_below"))
-    if threshold is None:
-        raise ValueError(
-            f"Optimizer {config.id!r} is missing a numeric when_price_below parameter"
-        )
-    return threshold
-
-
-def _read_action(config: "OptimizerInstanceConfig") -> str:
-    action = config.params.get("action")
-    if not isinstance(action, str) or not action:
-        raise ValueError(f"Optimizer {config.id!r} is missing an action parameter")
-    return action
