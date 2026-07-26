@@ -366,6 +366,13 @@ next start, or worse, leave a half-old document that the reader mis-parses. Ther
   existing `daily_runtime` config.
 - Migration is a pure dict→dict function, so its tests are self-stubbing and run on the host
   without importing Home Assistant.
+- **Fixture tests are not enough — check a real stored config.** Fixtures contain what the author
+  remembered; a real `.storage/helman.config` contains what every past version of the editor
+  actually wrote. This shipped a `params.release` that no Python has ever read, which the
+  unknown-key check would have rejected on the first restart after upgrading, while every fixture
+  test passed. `tests/test_stored_config_migration.py` now runs migrate → read → validate against
+  the sibling Home Assistant checkout (or `HELMAN_STORED_CONFIG`) on every suite run, and skips
+  where there is no store. Any future migration is covered by it for free.
 - Optimizer order preserved verbatim — later optimizers overwrite earlier ones and charge_hold
   documents that it must precede export_price.
 
