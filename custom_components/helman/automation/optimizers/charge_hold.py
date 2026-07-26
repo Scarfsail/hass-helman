@@ -57,7 +57,7 @@ class ChargeHoldOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
-        eligibility = build_eligibility(snapshot, config)
+        eligibility = build_eligibility(snapshot, config, trace)
         writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
 
         battery_state = snapshot.context.battery_state

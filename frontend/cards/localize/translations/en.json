@@ -147,7 +147,7 @@
         },
         "day_not_matched": {
           "title": "Day not matched",
-          "detail": "Day is {classification}; runs only on {onlyOnDays}."
+          "detail": "Day is {classification}; runs only on {runWhen}."
         },
         "battery_params_missing": {
           "title": "Battery params missing",
@@ -185,9 +185,9 @@
           "title": "Runtime satisfied",
           "detail": "Already ran {doneHours} h today."
         },
-        "day_skipped": {
-          "title": "Day skipped",
-          "detail": "Skipped on {classification} day (consecutive skips {consecutiveSkips})."
+        "forced_after_consecutive_skips": {
+          "title": "Forced after skips",
+          "detail": "No condition group matched, but {consecutiveSkips} consecutive skips would exceed the limit — placed {placedHours} h anyway."
         },
         "surplus_covers_demand": {
           "title": "Run on surplus",

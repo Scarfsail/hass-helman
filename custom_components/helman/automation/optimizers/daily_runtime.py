@@ -80,7 +80,7 @@ class DailyRuntimeOptimizer:
         # frontend default (D); only the placement/ranking rationale is emitted.
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
 
-        eligibility = build_eligibility(snapshot, config)
+        eligibility = build_eligibility(snapshot, config, trace)
         appliance_id = self.target.appliance.id
         appliance_domain = f"appliance:{appliance_id}"
         writer = ScheduleWriter(

@@ -73,7 +73,7 @@ class ChargeFromGridOptimizer:
         # Only band-relative rationales are non-derivable; every other horizon
         # slot is "not considered" and left to a frontend default (D).
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
-        eligibility = build_eligibility(snapshot, config)
+        eligibility = build_eligibility(snapshot, config, trace)
         writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
 
         battery_state = snapshot.context.battery_state

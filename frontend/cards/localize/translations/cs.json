@@ -438,7 +438,7 @@
         },
         "day_not_matched": {
           "title": "Den neodpovídá",
-          "detail": "Den je {classification}; běží jen ve dnech {onlyOnDays}."
+          "detail": "Den je {classification}; běží jen ve dnech {runWhen}."
         },
         "battery_params_missing": {
           "title": "Chybí parametry baterie",
@@ -476,9 +476,9 @@
           "title": "Doba splněna",
           "detail": "Dnes už běželo {doneHours} h."
         },
-        "day_skipped": {
-          "title": "Den přeskočen",
-          "detail": "Přeskočeno v den typu {classification} (po sobě {consecutiveSkips})."
+        "forced_after_consecutive_skips": {
+          "title": "Vynuceno po přeskočeních",
+          "detail": "Žádná skupina podmínek neodpovídala, ale {consecutiveSkips} přeskočení po sobě by překročilo limit — umístěno {placedHours} h i tak."
         },
         "surplus_covers_demand": {
           "title": "Běh na přebytku",

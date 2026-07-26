@@ -24,11 +24,13 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from ...scheduling.schedule import parse_slot_id
+from ..trace import NULL_TRACE, TraceConditionGroup
 from .types import CONDITION_TYPES, MaskInputs, horizon_slot_ids
 
 if TYPE_CHECKING:
     from ..config import OptimizerInstanceConfig
     from ..snapshot import OptimizationSnapshot
+    from ..trace import OptimizerTrace
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,7 @@ class Eligibility:
 def build_eligibility(
     snapshot: "OptimizationSnapshot",
     config: "OptimizerInstanceConfig",
+    trace: "OptimizerTrace | None" = None,
 ) -> Eligibility:
     """Evaluate every group's mask and fold them into one :class:`Eligibility`."""
     slot_ids = horizon_slot_ids(snapshot)
@@ -186,6 +189,15 @@ def build_eligibility(
             )
         )
 
+    (trace or NULL_TRACE).set_condition_groups(
+        TraceConditionGroup(
+            index=group.index,
+            label=group.label,
+            values=dict(group.condition_values),
+            custom_met=group.custom_met,
+        )
+        for group in groups
+    )
     return Eligibility(groups=tuple(groups), horizon_slot_ids=slot_ids)
 
 

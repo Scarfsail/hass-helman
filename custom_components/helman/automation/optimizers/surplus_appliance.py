@@ -54,7 +54,7 @@ class SurplusApplianceOptimizer:
         # The mask raises SurplusApplianceSkip when the demand or surplus rails
         # are unavailable; the pipeline then restores this appliance's baseline
         # actions rather than letting an empty plan clear it.
-        eligibility = build_eligibility(snapshot, config)
+        eligibility = build_eligibility(snapshot, config, trace)
         writer = ScheduleWriter(
             snapshot,
             eligibility=eligibility,

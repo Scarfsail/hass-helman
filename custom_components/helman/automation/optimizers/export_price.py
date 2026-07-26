@@ -44,7 +44,7 @@ class ExportPriceOptimizer:
         # slots to it and only emit applied/blocked/notes here.
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
 
-        eligibility = build_eligibility(snapshot, config)
+        eligibility = build_eligibility(snapshot, config, trace)
         writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
         eligible = list(eligibility.iter_slots())
         if not eligible:
