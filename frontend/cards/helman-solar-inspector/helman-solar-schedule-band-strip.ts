@@ -103,8 +103,9 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             width: 100%;
         }
 
-        /* Inset to the chart's plot area, so an hour here is the same column of
-           pixels as that hour on every chart above. */
+        /* The tracks are inset to the chart's plot area, so an hour here is the
+           same column of pixels as that hour on every chart above; the wrap
+           itself keeps the card's full width, which is where the names start. */
         .band-wrap {
             --entity-day-band-track-height: ${TRACK_HEIGHT_PX}px;
         }
@@ -210,10 +211,19 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         }
 
         const { start, end } = stripWindow(this.geometry);
-        const leftPct = (this.geometry.marginLeft / this.geometry.width) * 100;
-        const widthPct = (this.geometry.plotWidth / this.geometry.width) * 100;
+        // The wrap spans the card, and only the tracks are inset to the plot
+        // area -- so the lane names get the axis gutter to start in instead of
+        // eating into the day on a narrow screen.
+        const startInsetPct = (this.geometry.marginLeft / this.geometry.width) * 100;
+        const endInsetPct = Math.max(
+            0,
+            100 - startInsetPct - (this.geometry.plotWidth / this.geometry.width) * 100,
+        );
         return html`
-            <div class="band-wrap" style=${`margin-left:${leftPct}%;width:${widthPct}%;`}>
+            <div
+                class="band-wrap"
+                style=${`--entity-day-band-track-inset-start:${startInsetPct}%;--entity-day-band-track-inset-end:${endInsetPct}%;`}
+            >
                 <scheduling-entity-day-band
                     .localize=${this._localize}
                     .day=${day}
