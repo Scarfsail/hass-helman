@@ -133,6 +133,19 @@ class PerKindMoveTests(unittest.TestCase):
         self.assertNotIn("hold_action", migrated["params"])
         self.assertEqual(migrated["params"]["window"], {"start": "06:00", "end": "12:00"})
 
+    def test_charge_hold_drops_the_release_key_no_reader_ever_read(self) -> None:
+        # The old editor draft wrote `release: day_price_min`; nothing read it —
+        # the release slot is computed per day. Left in place it would fail the
+        # new reader's unknown-key check on the first restart after upgrading.
+        migrated = _migrate_one(
+            {
+                "id": "h",
+                "kind": "charge_hold",
+                "params": {"release": "day_price_min", "only_on_days": ["surplus"]},
+            }
+        )
+        self.assertNotIn("release", migrated["params"])
+
     def test_charge_hold_without_only_on_days_runs_on_every_classification(self) -> None:
         migrated = _migrate_one({"id": "h", "kind": "charge_hold"})
         self.assertEqual(migrated["conditions"][0]["run_when"], ALL_DAYS)

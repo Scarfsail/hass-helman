@@ -42,6 +42,7 @@ RELOCATED_OPTIMIZER_KEYS: dict[str, str] = {
     "skip": "params.max_consecutive_skips and conditions[].run_when",
     "action": "nothing — the optimizer kind implies its action",
     "hold_action": "nothing — the optimizer kind implies its action",
+    "release": "nothing — the release slot is computed per day, never configured",
 }
 
 _OPTIMIZER_KEYS = frozenset({"id", "kind", "enabled", "target", "params", "conditions"})

@@ -16,9 +16,11 @@ from typing import Any
 
 from ..const import CONFIG_DOCUMENT_VERSION, DAY_CLASSIFICATIONS
 
-#: Keys that carried exactly one legal value, so moving them would move no
-#: information. Dropped silently here; the reader rejects them from now on.
-_DROPPED_PARAMS = ("action", "hold_action")
+#: Keys no reader has ever read: each carried exactly one legal value, or (for
+#: `release`) named a decision the optimizer computes rather than takes as
+#: config. Moving them would move no information, so they are dropped silently
+#: here; the reader rejects them from now on.
+_DROPPED_PARAMS = ("action", "hold_action", "release")
 
 #: ``old params key -> condition key``. All of these were system conditions
 #: living in ``params``; the point of the unification is that they are visibly
