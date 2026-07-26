@@ -2,18 +2,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import TYPE_CHECKING
 
-from homeassistant.util import dt as dt_util
 
-from ...const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from ...appliances.climate_appliance import ClimateApplianceRuntime
 from ...appliances.generic_appliance import GenericApplianceRuntime
 from ...scheduling.schedule import (
     ScheduleDocument,
     ScheduleDomains,
-    build_horizon_end,
     is_default_domains,
     iter_horizon_slot_ids,
 )
@@ -21,6 +18,7 @@ from ..ownership import (
     is_user_owned_appliance_action,
     stamp_automation_appliance_action,
 )
+from ..rails import read_available_surplus_by_bucket_covering_horizon
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -106,8 +104,8 @@ class SurplusApplianceOptimizer:
                 "when-active demand is unavailable",
             )
 
-        available_surplus_by_bucket_start = _build_available_surplus_by_bucket_start(
-            snapshot=snapshot
+        available_surplus_by_bucket_start = (
+            read_available_surplus_by_bucket_covering_horizon(snapshot)
         )
         if available_surplus_by_bucket_start is None:
             raise SurplusApplianceSkip(
@@ -255,67 +253,6 @@ def validate_surplus_appliance_optimizer_config(
     )
 
 
-def _build_available_surplus_by_bucket_start(
-    *,
-    snapshot: "OptimizationSnapshot",
-) -> dict[datetime, float] | None:
-    if snapshot.adjusted_house_forecast.get("status") != "available":
-        return None
-
-    required_coverage_until = build_horizon_end(snapshot.context.now)
-    if not _forecast_covers_schedule_horizon(
-        snapshot.battery_forecast,
-        required_coverage_until=required_coverage_until,
-    ):
-        return None
-    if not _forecast_covers_schedule_horizon(
-        snapshot.grid_forecast,
-        required_coverage_until=required_coverage_until,
-    ):
-        return None
-
-    raw_series = snapshot.grid_forecast.get("series")
-    if not isinstance(raw_series, list):
-        return None
-
-    source_granularity_minutes = snapshot.grid_forecast.get("sourceGranularityMinutes")
-    if not isinstance(source_granularity_minutes, int) or source_granularity_minutes <= 0:
-        source_granularity_minutes = FORECAST_CANONICAL_GRANULARITY_MINUTES
-
-    available_surplus_by_bucket_start: dict[datetime, float] = {}
-    for point in raw_series:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        available_surplus_kwh = _read_optional_float(point.get("availableSurplusKwh"))
-        if timestamp is None or available_surplus_kwh is None:
-            continue
-        bucket_start = _canonical_bucket_start(
-            timestamp,
-            granularity_minutes=source_granularity_minutes,
-        )
-        available_surplus_by_bucket_start[bucket_start] = available_surplus_kwh
-
-    return available_surplus_by_bucket_start
-
-
-def _forecast_covers_schedule_horizon(
-    forecast: dict[str, Any],
-    *,
-    required_coverage_until: datetime,
-) -> bool:
-    status = forecast.get("status")
-    if status == "available":
-        return True
-    if status != "partial":
-        return False
-
-    coverage_until = _parse_timestamp(forecast.get("coverageUntil"))
-    if coverage_until is None:
-        return False
-    return coverage_until >= required_coverage_until
-
-
 def _slot_has_sufficient_surplus(
     *,
     available_surplus_by_bucket_start: dict[datetime, float],
@@ -401,44 +338,3 @@ def _read_min_surplus_buffer_pct(config: "OptimizerInstanceConfig") -> int:
             f"Optimizer {config.id!r} min_surplus_buffer_pct must be >= 0"
         )
     return buffer_pct
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        return None
-    return dt_util.as_local(parsed)
-
-
-def _canonical_bucket_start(
-    timestamp: datetime,
-    *,
-    granularity_minutes: int,
-) -> datetime:
-    local_reference = dt_util.as_local(timestamp)
-    local_day_start = local_reference.replace(
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-    slot_duration_seconds = granularity_minutes * 60
-    elapsed_seconds = max(
-        0.0,
-        (
-            dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
-        ).total_seconds(),
-    )
-    slot_index = int(elapsed_seconds // slot_duration_seconds)
-    slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
-        seconds=slot_index * slot_duration_seconds
-    )
-    return dt_util.as_local(slot_start_utc)
-
-
-def _read_optional_float(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)

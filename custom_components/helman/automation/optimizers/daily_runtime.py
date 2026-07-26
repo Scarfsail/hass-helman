@@ -33,6 +33,11 @@ from ..ownership import (
     is_user_owned_appliance_action,
     stamp_automation_appliance_action,
 )
+from ..rails import (
+    horizon_slots_between,
+    read_available_surplus_by_bucket,
+    read_price_by_bucket,
+)
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -104,11 +109,11 @@ class DailyRuntimeOptimizer:
                 appliance_id, {}
             )
         )
-        available_surplus_by_bucket = _build_available_surplus_by_bucket_start(snapshot)
+        available_surplus_by_bucket = read_available_surplus_by_bucket(snapshot)
         demand_hourly_energy = _resolve_demand_hourly_energy(
             snapshot=snapshot, appliance=self.config.appliance
         )
-        export_price_by_bucket = _build_price_by_bucket_start(
+        export_price_by_bucket = read_price_by_bucket(
             snapshot.context.export_price_forecast
         )
 
@@ -118,9 +123,9 @@ class DailyRuntimeOptimizer:
 
         appliance_domain = f"appliance:{appliance_id}"
         for local_date, day_context in snapshot.context.day_contexts.items():
-            window_slots = _window_horizon_slots(
-                window_start=self.config.window_start.on(local_date, tzinfo=tzinfo),
-                window_end=self.config.window_end.on(local_date, tzinfo=tzinfo),
+            window_slots = horizon_slots_between(
+                self.config.window_start.on(local_date, tzinfo=tzinfo),
+                self.config.window_end.on(local_date, tzinfo=tzinfo),
                 horizon_start=horizon_start,
                 horizon_end=horizon_end,
             )
@@ -298,22 +303,6 @@ class DailyRuntimeOptimizer:
         return [(cost, slot_id) for cost, _covered, _cursor, slot_id in candidates]
 
 
-def _window_horizon_slots(
-    *,
-    window_start: datetime,
-    window_end: datetime,
-    horizon_start: datetime,
-    horizon_end: datetime,
-) -> list[str]:
-    slots: list[str] = []
-    cursor = window_start
-    while cursor < window_end:
-        if horizon_start <= cursor < horizon_end:
-            slots.append(format_slot_id(cursor))
-        cursor += _SLOT_DURATION
-    return slots
-
-
 def _slot_is_solar_covered(
     *,
     slot_id: str,
@@ -360,42 +349,6 @@ def _resolve_demand_hourly_energy(
         resolved_hourly_energy_kwh=resolved,
     )
     return None if profile is None else profile.hourly_energy_kwh
-
-
-def _build_available_surplus_by_bucket_start(
-    snapshot: "OptimizationSnapshot",
-) -> dict[datetime, float] | None:
-    raw_series = snapshot.grid_forecast.get("series")
-    if not isinstance(raw_series, list):
-        return None
-    surplus_by_bucket: dict[datetime, float] = {}
-    for point in raw_series:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        available = _read_optional_float(point.get("availableSurplusKwh"))
-        if timestamp is None or available is None:
-            continue
-        surplus_by_bucket[timestamp] = available
-    return surplus_by_bucket or None
-
-
-def _build_price_by_bucket_start(
-    price_forecast: dict[str, Any],
-) -> dict[datetime, float]:
-    points = price_forecast.get("points")
-    if not isinstance(points, list):
-        return {}
-    price_by_bucket: dict[datetime, float] = {}
-    for point in points:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        value = _read_optional_float(point.get("value"))
-        if timestamp is None or value is None:
-            continue
-        price_by_bucket[timestamp] = value
-    return price_by_bucket
 
 
 def build_daily_runtime_optimizer(
@@ -553,18 +506,3 @@ def _read_skip(
             "skip", "skip.max_consecutive_skips must be >= 0"
         )
     return tuple(on_days), raw_max
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        return None
-    return dt_util.as_local(parsed)
-
-
-def _read_optional_float(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)

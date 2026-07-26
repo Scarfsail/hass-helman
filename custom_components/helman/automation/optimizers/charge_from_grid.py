@@ -34,6 +34,7 @@ from ...scheduling.schedule import (
     iter_horizon_slot_ids,
 )
 from ..ownership import is_user_owned_inverter_action
+from ..rails import horizon_slots_between, read_price_by_bucket, read_soc_by_bucket
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -99,10 +100,10 @@ class ChargeFromGridOptimizer:
         ):
             return updated
 
-        soc_by_bucket = _build_soc_by_bucket_start(snapshot)
+        soc_by_bucket = read_soc_by_bucket(snapshot)
         if not soc_by_bucket:
             return updated
-        import_price_by_bucket = _build_price_by_bucket_start(
+        import_price_by_bucket = read_price_by_bucket(
             snapshot.context.import_price_forecast
         )
 
@@ -171,7 +172,12 @@ class ChargeFromGridOptimizer:
         if dip <= 0:
             # covered — SoC never dips below the reserve floor.
             emit.window_covered(
-                _band_horizon_slots(cheap_band, horizon_start, horizon_end),
+                horizon_slots_between(
+                    cheap_band.start,
+                    cheap_band.end,
+                    horizon_start=horizon_start,
+                    horizon_end=horizon_end,
+                ),
                 expensive_window=expensive_window,
                 projected_min_soc=round(window_min_soc, 1),
             )
@@ -248,20 +254,6 @@ class ChargeFromGridOptimizer:
             cursor += _SLOT_DURATION
         candidates.sort(key=lambda item: (item[0], dt_util.as_utc(item[1])))
         return [(price, slot_id) for price, _, slot_id in candidates]
-
-
-def _band_horizon_slots(
-    band: "ImportBand",
-    horizon_start: datetime,
-    horizon_end: datetime,
-) -> list[str]:
-    slots: list[str] = []
-    cursor = band.start
-    while cursor < band.end:
-        if horizon_start <= cursor < horizon_end:
-            slots.append(format_slot_id(cursor))
-        cursor += _SLOT_DURATION
-    return slots
 
 
 class _ChargeFromGridEmission:
@@ -387,43 +379,6 @@ def _soc_at(
     return soc_by_bucket[0][1] if soc_by_bucket else None
 
 
-def _build_soc_by_bucket_start(
-    snapshot: "OptimizationSnapshot",
-) -> list[tuple[datetime, float]]:
-    raw_series = snapshot.battery_forecast.get("series")
-    if not isinstance(raw_series, list):
-        return []
-    soc_by_bucket: list[tuple[datetime, float]] = []
-    for point in raw_series:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        soc_pct = _read_optional_float(point.get("socPct"))
-        if timestamp is None or soc_pct is None:
-            continue
-        soc_by_bucket.append((timestamp, soc_pct))
-    soc_by_bucket.sort(key=lambda item: dt_util.as_utc(item[0]))
-    return soc_by_bucket
-
-
-def _build_price_by_bucket_start(
-    price_forecast: dict[str, Any],
-) -> dict[datetime, float]:
-    points = price_forecast.get("points")
-    if not isinstance(points, list):
-        return {}
-    price_by_bucket: dict[datetime, float] = {}
-    for point in points:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        value = _read_optional_float(point.get("value"))
-        if timestamp is None or value is None:
-            continue
-        price_by_bucket[timestamp] = value
-    return price_by_bucket
-
-
 def build_charge_from_grid_optimizer(
     config: "OptimizerInstanceConfig",
 ) -> ChargeFromGridOptimizer:
@@ -472,18 +427,3 @@ def _read_margin_pct(params: dict[str, Any]) -> float:
 
 
 _MISSING = object()
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        return None
-    return dt_util.as_local(parsed)
-
-
-def _read_optional_float(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)

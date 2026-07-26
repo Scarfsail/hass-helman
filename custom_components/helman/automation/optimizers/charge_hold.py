@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.util import dt as dt_util
 
 from ...const import (
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_SLOT_MINUTES,
 )
@@ -28,13 +27,13 @@ from ...scheduling.schedule import (
     ScheduleAction,
     ScheduleDocument,
     ScheduleDomains,
-    build_horizon_end,
     build_horizon_start,
     format_slot_id,
     iter_horizon_slot_ids,
     parse_slot_id,
 )
 from ..ownership import is_user_owned_inverter_action
+from ..rails import read_clipped_surplus_by_bucket
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -122,8 +121,8 @@ class ChargeHoldOptimizer:
         )
         margin_multiplier = 1 + (self.config.margin_pct / 100)
 
-        surplus_by_bucket = _build_clipped_surplus_by_bucket_start(
-            snapshot=snapshot,
+        surplus_by_bucket = read_clipped_surplus_by_bucket(
+            snapshot,
             max_charge_power_kw=max_charge_power_kw,
         )
 
@@ -404,33 +403,6 @@ def _surplus_between(
     )
 
 
-def _build_clipped_surplus_by_bucket_start(
-    *,
-    snapshot: "OptimizationSnapshot",
-    max_charge_power_kw: float,
-) -> list[tuple[datetime, float]]:
-    raw_series = snapshot.battery_forecast.get("series")
-    if not isinstance(raw_series, list):
-        return []
-
-    surplus_by_bucket: list[tuple[datetime, float]] = []
-    for point in raw_series:
-        if not isinstance(point, dict):
-            continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        solar_kwh = _read_optional_float(point.get("solarKwh"))
-        house_kwh = _read_optional_float(point.get("baselineHouseKwh"))
-        if timestamp is None or solar_kwh is None or house_kwh is None:
-            continue
-        duration_hours = _read_optional_float(point.get("durationHours"))
-        if duration_hours is None or duration_hours <= 0:
-            duration_hours = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
-        raw_surplus = max(0.0, solar_kwh - house_kwh)
-        clipped = min(raw_surplus, max_charge_power_kw * duration_hours)
-        surplus_by_bucket.append((timestamp, clipped))
-    return surplus_by_bucket
-
-
 def build_charge_hold_optimizer(
     config: "OptimizerInstanceConfig",
 ) -> ChargeHoldOptimizer:
@@ -543,19 +515,4 @@ def _read_margin_pct(params: dict[str, Any]) -> float:
         raise ChargeHoldValidationError(
             "battery_first", "battery_first.margin_pct must be >= 0"
         )
-    return float(value)
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        return None
-    return dt_util.as_local(parsed)
-
-
-def _read_optional_float(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
     return float(value)
