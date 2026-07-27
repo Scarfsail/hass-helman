@@ -1,11 +1,13 @@
 # Helman Automation — `appliance_runtime` merge (implementation plan)
 
-Status: **proposed**. Code anchors verified against the tree on 2026-07-27.
+Status: **implemented** (2026-07-27, branch `feat/appliance-runtime-merge`). Kept as the design
+record — it explains *why* the shape is what it is, which the code cannot. Departures from the plan
+as written are noted inline. Code anchors verified against the tree on 2026-07-27.
 
 Merge `surplus_appliance` and `daily_runtime` into one kind, `appliance_runtime`, whose daily-hours
 floor, window and skip-forcing are optional. Add a `min_soc_pct` condition, delete
 `min_surplus_buffer_pct`, remove both old kinds from YAML and visual mode, migrate
-`config_version` 2 → 3.
+`config_version` 2 → 4.
 
 Assumes the shape and semantics of
 [the conditions unification](helman-optimizer-conditions-unification-implementation-plan.md) —
@@ -164,9 +166,12 @@ Kept: `read_available_surplus_by_bucket` (`rails.py:114`) and `_slot_is_solar_co
 
 ---
 
-## Migration (`config_version` 2 → 3)
+## Migration (`config_version` 2 → 4)
 
 ### Restructure into a version chain first
+
+Shipped as two steps: **v2 → v3** nests the params (Phase 2), **v3 → v4** renames the kind and
+drops `surplus_appliance` (Phase 3).
 
 `migration.py` implements one transform, v1 → v2, guarded only by an early return at
 `migration.py:58`. Bumping the version with the module as-is runs the v1 transform over v2
@@ -208,6 +213,12 @@ the rejected-kind rules, naming `appliance_runtime` in the message.
 ## Phases
 
 Each ships independently and leaves the tree green.
+
+> **Departure from the plan.** Phases 3 and 4 shipped as one commit, and there are **two**
+> `config_version` bumps rather than one. A schema change and its migration cannot be separated
+> without leaving the tree unable to read the stored config, so the params nesting migrated at
+> v2 → v3 in Phase 2 and the kind rename at v3 → v4 in Phase 3. Two cheap migrations beat one
+> broken intermediate commit.
 
 ### Phase 1 — `min_soc_pct` on `daily_runtime`
 
@@ -260,10 +271,15 @@ Still `kind: daily_runtime`; existing configs unaffected.
 
 ### Phase 4 — migration
 
-- `const.py`: `CONFIG_DOCUMENT_VERSION = 3`.
-- `migration.py`: version chain, then `_migrate_v2_to_v3`.
-- `config_validation.py`: reject both retired kinds on the save path.
-- `tests/test_stored_config_migration.py` is the acceptance gate.
+Merged into Phases 2 and 3; see the departure note above. What landed:
+
+- `const.py`: `CONFIG_DOCUMENT_VERSION = 4`.
+- `migration.py`: version chain, `_migrate_v2_to_v3` (nesting), `_migrate_v3_to_v4` (rename+drop).
+- `config.py`: `RETIRED_OPTIMIZER_KINDS` raises `retired_optimizer_kind` naming the replacement,
+  rather than the generic unknown-kind error listing every supported kind.
+- `tests/test_stored_config_migration.py` is the acceptance gate; the real store migrates to
+  `appliance_runtime` with `min_hours_per_day: 8` and `max_consecutive_skips: 2` preserved, and
+  the five disabled `surplus_appliance` optimizers dropped.
 
 ---
 
