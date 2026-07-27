@@ -667,21 +667,20 @@ class MigrationRoundTripTests(unittest.TestCase):
 
         self.assertEqual(
             [optimizer.id for optimizer in parsed.optimizers],
-            # `surplus` is dropped at v3 -> v4, not translated.
-            ["hold", "export", "bridge", "dhw"],
+            ["hold", "export", "surplus", "bridge", "dhw"],
         )
         self.assertEqual(
             parsed.optimizers[0].conditions[0].custom,
             ({"condition": "state", "entity_id": "x.y"},),
         )
         self.assertEqual(
-            parsed.optimizers[3].conditions[0].condition_values["run_when"],
+            parsed.optimizers[4].conditions[0].condition_values["run_when"],
             ("surplus", "tight"),
         )
         self.assertEqual(
-            parsed.optimizers[3].params["daily_minimum"]["max_consecutive_skips"], 2
+            parsed.optimizers[4].params["daily_minimum"]["max_consecutive_skips"], 2
         )
-        self.assertEqual(parsed.optimizers[3].target["appliance_id"], "boiler")
+        self.assertEqual(parsed.optimizers[2].target["appliance_id"], "boiler")
 
 
 class DayContextTests(unittest.TestCase):

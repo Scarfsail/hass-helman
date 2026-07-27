@@ -23,7 +23,7 @@ Assumes the shape and semantics of
 | `daily_minimum` and `window` optional | Absent = uncapped / whole horizon. Only `daily_minimum` changes the algorithm. |
 | `min_hours_per_day` + `max_consecutive_skips` nest under `daily_minimum`, both required inside | They are one concept and neither is meaningful alone; nesting makes the invalid combination unrepresentable instead of a validation rule, and gives the editor one toggle instead of two nullable scalars. Follows the `charge_hold.battery_first` precedent. |
 | Unset means **key absent**, not `null` | `read_field` treats both alike (`fields.py:205`), but the editor and migration should omit rather than write nulls. |
-| Delete `min_surplus_buffer_pct` | Unused: all five live instances are `enabled: false` on the schema default. Solar awareness survives as the ranking tiebreak. |
+| Delete `min_surplus_buffer_pct` | Unused: all five live instances are `enabled: false` on the schema default. Solar awareness survives as the ranking tiebreak. The *optimizers* are still migrated — only the condition is retired. |
 | Add `min_soc_pct`, SLOT scope | The battery-aware gate, against a rail that already exists. |
 | Surplus definition stays fixed | `availableSurplusKwh` only. |
 | Append, not repaint | `daily_runtime`'s behaviour wins; `repaint_appliance` is deleted. |
@@ -63,7 +63,8 @@ Uncapped:
 ```
 
 `params: {}` with a single unconditioned group would mean *on for the whole horizon*, and is
-rejected — see validation rule 3. It is also the shape migration rule 4 exists to avoid creating.
+rejected — see validation rule 3. It is also why migration rule 4 seeds `run_when` rather than
+leaving a translated `surplus_appliance` group empty.
 
 ---
 
@@ -199,9 +200,14 @@ The existing v1 body moves wholesale into `_migrate_v1_to_v2`, unchanged.
 3. `max_consecutive_skips` absent → materialise `0` inside the object. It reads like "never force"
    but means "force after the first short day" (`daily_runtime.py:307`), and Phase 2 gives absence
    the opposite meaning.
-4. `kind: surplus_appliance` → drop the optimizer; log the ids at INFO. Translating instead yields
-   `{daily_minimum: absent, window: absent, conditions: [{}]}` — the appliance on 24/7 once
-   enabled. Revisit only if a deployment has an *enabled* instance; none does today.
+4. `kind: surplus_appliance` → `kind: appliance_runtime`, uncapped (no `daily_minimum`), `enabled`
+   and `target` carried over untouched. Each group loses `min_surplus_buffer_pct` and gains
+   `run_when: ["surplus"]` unless it already has one: an uncapped group that narrows nothing means
+   "on for the whole horizon" and the reader rejects it (validation rule 3), so the retired
+   condition cannot simply leave a hole. `run_when: ["surplus"]` is the closest honest reading of
+   the kind and invents no threshold, unlike seeding a window or an SoC floor. It is a starting
+   point to refine — most instances will want `min_soc_pct` — not a reproduction of the buffer
+   test, which is no longer expressible.
 
 ### Save path
 

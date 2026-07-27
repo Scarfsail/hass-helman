@@ -151,23 +151,56 @@ def _migrate_v3_to_v4(document: dict[str, Any]) -> tuple[dict[str, Any], list[st
     return _migrate_optimizers(document, _merge_appliance_kinds)
 
 
-def _merge_appliance_kinds(optimizer: dict[str, Any]) -> dict[str, Any] | None:
-    """``daily_runtime`` -> ``appliance_runtime``; drop ``surplus_appliance``.
+def _merge_appliance_kinds(optimizer: dict[str, Any]) -> dict[str, Any]:
+    """Both retired appliance kinds -> ``appliance_runtime``.
 
-    The two kinds differed only in whether placement was capped, which is now
-    ``daily_minimum``'s presence. ``surplus_appliance`` is *dropped* rather than
-    translated: without its retired ``min_surplus_buffer_pct`` it would migrate
-    to an uncapped optimizer with no window and no condition — the appliance on
-    for the whole horizon the moment anyone enabled it. Every instance in the
-    wild is a disabled placeholder on the schema default, so there is nothing to
-    preserve and a loaded gun to avoid.
+    They differed only in whether placement was capped, which is now
+    ``daily_minimum``'s presence: ``daily_runtime`` keeps its params and is
+    capped, ``surplus_appliance`` has none and is uncapped.
+
+    ``enabled`` is carried over untouched — a disabled rule stays disabled, and
+    the user's optimizer list keeps the entries and appliance targets they
+    authored.
     """
     kind = optimizer.get("kind")
     if kind == "surplus_appliance":
-        return None
+        return {
+            **optimizer,
+            "kind": "appliance_runtime",
+            "conditions": _translate_surplus_groups(optimizer.get("conditions")),
+        }
     if kind == "daily_runtime":
         return {**optimizer, "kind": "appliance_runtime"}
     return optimizer
+
+
+def _translate_surplus_groups(conditions: Any) -> list[Any]:
+    """Drop the retired buffer and give each group ``run_when: [surplus]``.
+
+    An uncapped optimizer whose group narrows nothing means "on for the whole
+    horizon", which the reader rejects — so removing ``min_surplus_buffer_pct``
+    cannot simply leave a hole. ``run_when: ["surplus"]`` is the closest honest
+    reading of what the kind meant (run when the day has solar to spare) and
+    invents no threshold, unlike seeding a window or an SoC floor. It is a
+    starting point the user is expected to refine — most will want
+    ``min_soc_pct`` — not a faithful reproduction of the buffer test, which
+    cannot be expressed any more.
+    """
+    if not isinstance(conditions, list):
+        return [{"run_when": ["surplus"], "custom": []}]
+    translated: list[Any] = []
+    for group in conditions:
+        if not isinstance(group, Mapping):
+            translated.append(group)
+            continue
+        rewritten = {
+            key: value
+            for key, value in group.items()
+            if key != "min_surplus_buffer_pct"
+        }
+        rewritten.setdefault("run_when", ["surplus"])
+        translated.append(rewritten)
+    return translated or [{"run_when": ["surplus"], "custom": []}]
 
 
 _MIGRATIONS = {

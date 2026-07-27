@@ -150,28 +150,62 @@ class PerKindMoveTests(unittest.TestCase):
         migrated = _migrate_one({"id": "h", "kind": "charge_hold"})
         self.assertEqual(migrated["conditions"][0]["run_when"], ALL_DAYS)
 
-    def test_surplus_appliance_is_dropped_rather_than_translated(self) -> None:
-        """Every instance is a disabled placeholder; translating arms a 24/7 run.
-
-        Without the retired surplus buffer it would become an uncapped optimizer
-        with no window and no condition, which is "on for the whole horizon".
-        """
-        migrated, _ids = migrate_config_document(
-            _document(
-                {
-                    "id": "s",
-                    "kind": "surplus_appliance",
-                    "params": {
-                        "appliance_id": "dhw",
-                        "climate_mode": "heat",
-                        "action": "on",
-                        "min_surplus_buffer_pct": 15,
-                    },
-                }
-            )
+    def test_surplus_appliance_becomes_an_uncapped_appliance_runtime(self) -> None:
+        migrated = _migrate_one(
+            {
+                "id": "s",
+                "kind": "surplus_appliance",
+                "enabled": False,
+                "params": {
+                    "appliance_id": "dhw",
+                    "climate_mode": "heat",
+                    "action": "on",
+                    "min_surplus_buffer_pct": 15,
+                },
+            }
         )
 
-        self.assertEqual(migrated["automation"]["optimizers"], [])
+        self.assertEqual(migrated["kind"], "appliance_runtime")
+        # A disabled rule stays disabled, and its target survives verbatim.
+        self.assertFalse(migrated["enabled"])
+        self.assertEqual(
+            migrated["target"], {"appliance_id": "dhw", "climate_mode": "heat"}
+        )
+        # No `daily_minimum` — uncapped, which is what the old kind did.
+        self.assertEqual(migrated["params"], {})
+
+    def test_the_retired_buffer_becomes_run_when_surplus(self) -> None:
+        """Removing the buffer cannot leave the group narrowing nothing.
+
+        An uncapped group that narrows nothing means "on for the whole horizon",
+        which the reader rejects, so the migrated group needs *something*.
+        `run_when: [surplus]` is the closest honest reading of the old kind and
+        invents no threshold.
+        """
+        migrated = _migrate_one(
+            {
+                "id": "s",
+                "kind": "surplus_appliance",
+                "params": {"appliance_id": "dhw", "min_surplus_buffer_pct": 15},
+            }
+        )
+
+        group = migrated["conditions"][0]
+        self.assertNotIn("min_surplus_buffer_pct", group)
+        self.assertEqual(group["run_when"], ["surplus"])
+
+    def test_custom_conditions_survive_the_surplus_translation(self) -> None:
+        condition = [{"condition": "state", "entity_id": "input_boolean.x"}]
+        migrated = _migrate_one(
+            {
+                "id": "s",
+                "kind": "surplus_appliance",
+                "params": {"appliance_id": "dhw"},
+                "condition": condition,
+            }
+        )
+
+        self.assertEqual(migrated["conditions"][0]["custom"], condition)
 
     def test_daily_runtime_becomes_appliance_runtime(self) -> None:
         migrated = _migrate_one(
