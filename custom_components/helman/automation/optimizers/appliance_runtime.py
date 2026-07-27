@@ -1,21 +1,28 @@
-"""``daily_runtime`` optimizer (use case 3).
+"""``appliance_runtime`` optimizer — when an appliance may run, and how long.
 
-Ensure an appliance (generic switch or climate mode) accumulates at least
-``min_hours_per_day`` within a daily window, placing the remaining hours on the
-cheapest slots, preferring slots the day's solar surplus already covers.
-Stateless beyond the framework's A2 runtime input; manual runs count
-automatically because they show up in history.
+One behavioural fork, on whether ``daily_minimum`` is configured:
+
+* **capped** — accumulate at least ``min_hours_per_day`` within the window,
+  placing the remaining hours on the cheapest slots and preferring slots the
+  day's solar surplus already covers. Stateless beyond the framework's A2
+  runtime input; manual runs count automatically because they show up in
+  history.
+* **uncapped** — place on *every* slot the conditions allow. Nothing ranks:
+  with no deficit to size a placement against, price and solar coverage
+  discriminate between nothing. The gate is the conditions plus the optional
+  window, so an uncapped optimizer with neither would mean "on 24/7" — which
+  the config reader rejects.
 
 Day gating is the ``run_when`` condition — on a day no group matches, nothing is
-placed. ``when_price_below`` narrows further, per slot: the day still runs, but
-only the window slots whose export price clears the threshold may be chosen. So
-the matched group decides the day's *params* while its mask decides the day's
-*slots*, which is why placement ranks ``plan.placeable_slots`` and not the whole
-window.
+placed. ``when_price_below`` and ``min_soc_pct`` narrow further, per slot: the
+day still runs, but only the window slots whose price or projected SoC clears
+the threshold may be chosen. So the matched group decides the day's *params*
+while its mask decides the day's *slots*, which is why capped placement ranks
+``plan.placeable_slots`` and not the whole window.
 
 ``max_consecutive_skips`` is the one construct that defeats the whole OR chain:
 after that many consecutive short days the optimizer runs anyway, past every
-group's ``custom`` conditions and past the price threshold, over the full
+group's ``custom`` conditions and past every slot condition, over the full
 window, stamped with its own reason code so the inspector never shows a forced
 run as an unexplained one. It is ``overridable=False`` — it describes the chain,
 not any one day in it, so no single group can own it.
@@ -80,10 +87,10 @@ class _DayPlan:
 
 
 @dataclass(frozen=True)
-class DailyRuntimeOptimizer:
+class ApplianceRuntimeOptimizer:
     id: str
     target: ApplianceTarget
-    kind: str = "daily_runtime"
+    kind: str = "appliance_runtime"
 
     def optimize(
         self,
@@ -573,14 +580,14 @@ def _resolve_demand_hourly_energy(
     return None if profile is None else profile.hourly_energy_kwh
 
 
-def build_daily_runtime_optimizer(
+def build_appliance_runtime_optimizer(
     config: "OptimizerInstanceConfig",
     *,
     appliance_registry: "AppliancesRuntimeRegistry",
     path: str = "automation.optimizers[?]",
     **_kwargs: Any,
-) -> DailyRuntimeOptimizer:
-    return DailyRuntimeOptimizer(
+) -> ApplianceRuntimeOptimizer:
+    return ApplianceRuntimeOptimizer(
         id=config.id,
         target=resolve_appliance_target(
             config, appliance_registry=appliance_registry, path=path

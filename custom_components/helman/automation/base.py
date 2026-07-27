@@ -54,7 +54,7 @@ def resolve_appliance_target(
 ) -> ApplianceTarget:
     """Turn ``target.appliance_id`` + ``target.climate_mode`` into a live target.
 
-    Shared by ``surplus_appliance`` and ``daily_runtime`` — the two kinds whose
+    Shared by every kind that writes into an appliance domain — those whose
     target is an appliance. The field *shapes* come from the spec; only the
     registry lookup and the generic/climate split live here, because only they
     need runtime state the schema cannot express.
@@ -189,31 +189,6 @@ class ScheduleWriter:
             appliances=appliances,
         )
         return True
-
-    def repaint_appliance(self, appliance_id: str) -> None:
-        """Drop this appliance's automation-owned actions before rewriting them.
-
-        ``surplus_appliance`` fully repaints its appliance's domain each run
-        rather than adding to it, so a slot that stopped qualifying is cleared
-        instead of lingering from a previous plan. The other four only append —
-        this is a real behavioural difference, not a preamble to flatten away.
-        """
-        for slot_id in list(self.document.slots):
-            domains = self.document.slots[slot_id]
-            if appliance_id not in domains.appliances:
-                continue
-            if is_user_owned_appliance_action(domains.appliances.get(appliance_id)):
-                continue
-            appliances = dict(domains.appliances)
-            appliances.pop(appliance_id, None)
-            updated = ScheduleDomains(
-                inverter=domains.inverter,
-                appliances=appliances,
-            )
-            if is_default_domains(updated):
-                del self.document.slots[slot_id]
-            else:
-                self.document.slots[slot_id] = updated
 
     def flush(self, *, action: dict[str, Any] | None = None) -> ScheduleDocument:
         """Emit the blocked-slot decision and return the finished document."""

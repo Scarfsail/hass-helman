@@ -1,20 +1,20 @@
 import { asJsonArray, asJsonObject } from "./config-document";
 import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } from "./types";
 
-export type SurplusApplianceKind = "generic" | "climate";
+export type ApplianceOptimizerKind = "generic" | "climate";
 
-export interface SurplusApplianceOption {
+export interface ApplianceOptimizerOption {
   id: string;
   name: string;
-  kind: SurplusApplianceKind;
+  kind: ApplianceOptimizerKind;
   liveClimateModes: string[] | null;
   selectionDisabled: boolean;
 }
 
-export interface SurplusApplianceSelectionState {
-  options: SurplusApplianceOption[];
+export interface ApplianceSelectionState {
+  options: ApplianceOptimizerOption[];
   selectedId: string;
-  selectedOption: SurplusApplianceOption | null;
+  selectedOption: ApplianceOptimizerOption | null;
   selectedMissingFromDraft: boolean;
 }
 
@@ -31,11 +31,11 @@ export interface SurplusClimateModeFieldState {
   options: SurplusClimateModeOption[];
 }
 
-export function buildSurplusApplianceSelectionState(
+export function buildApplianceSelectionState(
   config: JsonObject | null | undefined,
   liveMetadata: ApplianceMetadataResponse | null | undefined,
   selectedIdRaw: string,
-): SurplusApplianceSelectionState {
+): ApplianceSelectionState {
   const selectedId = selectedIdRaw.trim();
   const liveAppliancesById = _indexLiveAppliances(liveMetadata);
   const options = _readDraftApplianceOptions(config, liveAppliancesById);
@@ -50,8 +50,8 @@ export function buildSurplusApplianceSelectionState(
   };
 }
 
-export function buildSurplusClimateModeFieldState(
-  selectionState: SurplusApplianceSelectionState,
+export function buildClimateModeFieldState(
+  selectionState: ApplianceSelectionState,
   currentClimateModeRaw: string,
 ): SurplusClimateModeFieldState {
   const currentClimateMode = currentClimateModeRaw.trim();
@@ -102,13 +102,13 @@ export function buildSurplusClimateModeFieldState(
 function _readDraftApplianceOptions(
   config: JsonObject | null | undefined,
   liveAppliancesById: Record<string, ApplianceMetadataEntry>,
-): SurplusApplianceOption[] {
+): ApplianceOptimizerOption[] {
   if (!config) {
     return [];
   }
 
   const appliances = asJsonArray(config.appliances) ?? [];
-  const options: SurplusApplianceOption[] = [];
+  const options: ApplianceOptimizerOption[] = [];
   for (const appliance of appliances) {
     const applianceObject = asJsonObject(appliance);
     if (!applianceObject) {
@@ -156,7 +156,7 @@ function _indexLiveAppliances(
 
 function _readLiveClimateModes(
   liveAppliance: ApplianceMetadataEntry | undefined,
-  expectedKind: SurplusApplianceKind,
+  expectedKind: ApplianceOptimizerKind,
 ): string[] | null {
   if (!liveAppliance || liveAppliance.kind !== expectedKind) {
     return null;
@@ -172,7 +172,7 @@ function _readLiveClimateModes(
 
 function _hasLiveClimateModes(
   liveAppliance: ApplianceMetadataEntry | undefined,
-  expectedKind: SurplusApplianceKind,
+  expectedKind: ApplianceOptimizerKind,
 ): boolean {
   return (_readLiveClimateModes(liveAppliance, expectedKind) ?? []).length > 0;
 }
@@ -181,7 +181,7 @@ function _readNonEmptyString(value: unknown): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : "";
 }
 
-function _readSupportedApplianceKind(value: unknown): SurplusApplianceKind | null {
+function _readSupportedApplianceKind(value: unknown): ApplianceOptimizerKind | null {
   return value === "generic" || value === "climate" ? value : null;
 }
 

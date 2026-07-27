@@ -280,7 +280,7 @@ class MinSocConditionTests(unittest.TestCase):
     def _config(threshold):
         return make_optimizer_config(
             id="runtime",
-            kind="daily_runtime",
+            kind="appliance_runtime",
             target={"appliance_id": "pool"},
             params={
                 "daily_minimum": {
@@ -378,7 +378,7 @@ class SpecInvariantTests(unittest.TestCase):
 
     def test_daily_runtime_accepts_both_the_day_and_the_price_condition(self) -> None:
         self.assertEqual(
-            OPTIMIZER_SPECS["daily_runtime"].condition_types,
+            OPTIMIZER_SPECS["appliance_runtime"].condition_types,
             ("run_when", "when_price_below", "min_soc_pct"),
         )
 

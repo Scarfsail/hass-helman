@@ -3177,7 +3177,7 @@ class HelmanCoordinator:
     ) -> dict[str, dict[date, float]]:
         """Resolve recorder runtime hours per appliance per local date (A2).
 
-        Only resolved for appliances referenced by an enabled ``daily_runtime``
+        Only resolved for appliances referenced by an enabled ``appliance_runtime``
         optimizer; every other appliance (and the recorder) is left untouched.
         The lookback window covers the largest configured
         ``max_consecutive_skips`` (plus one day) so the consecutive-skip guard
@@ -3231,10 +3231,10 @@ class HelmanCoordinator:
     def _resolve_runtime_history_requirements(
         self,
     ) -> tuple[int, set[str]] | None:
-        """Return ``(lookback_days, appliance_ids)`` for daily_runtime rules.
+        """Return ``(lookback_days, appliance_ids)`` for appliance_runtime rules.
 
         ``appliance_ids`` are the appliances referenced by an enabled
-        ``daily_runtime`` optimizer — the only appliances whose recorder history
+        ``appliance_runtime`` optimizer — the only appliances whose recorder history
         needs resolving. Returns ``None`` when no such optimizer references a
         valid appliance.
         """
@@ -3244,7 +3244,7 @@ class HelmanCoordinator:
         max_consecutive_skips = 0
         appliance_ids: set[str] = set()
         for optimizer in automation_config.execution_optimizers:
-            if optimizer.kind != "daily_runtime":
+            if optimizer.kind != "appliance_runtime":
                 continue
             appliance_id = optimizer.params.get("appliance_id")
             if isinstance(appliance_id, str) and appliance_id:

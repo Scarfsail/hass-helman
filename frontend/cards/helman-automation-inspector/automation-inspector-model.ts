@@ -99,8 +99,7 @@ const KNOWN_REASON_CODES = new Set([
     "price_above_run_threshold",
     "runtime_satisfied",
     "forced_after_consecutive_skips",
-    "surplus_covers_demand",
-    "surplus_insufficient",
+    "conditions_matched",
     "soc_below_threshold",
     "forecast_unavailable",
     "blocked_user_owned",
@@ -125,7 +124,7 @@ interface StepIndexEntry {
      * derivable.
      */
     exportThresholds: number[];
-    surplusBufferPcts: number[];
+    socThresholds: number[];
 }
 
 /**
@@ -328,12 +327,7 @@ export class AutomationInspectorModel {
             exportThresholds: this._groupValues(step, "when_price_below", "threshold", [
                 "price_below_threshold",
             ]),
-            surplusBufferPcts: this._groupValues(
-                step,
-                "min_surplus_buffer_pct",
-                "bufferPct",
-                ["surplus_covers_demand"],
-            ),
+            socThresholds: this._groupValues(step, "min_soc_pct", "threshold", []),
         };
     }
 
@@ -443,23 +437,24 @@ export class AutomationInspectorModel {
                 );
             }
         }
-        if (kind === "surplus_appliance") {
-            const surplus = this.railValue(
-                entry.step.railsIn.availableSurplusKwh,
-                slotIndex,
-            );
-            // Likewise the smallest buffer is the easiest to satisfy, so it is
-            // the one a rejected slot failed.
-            const bufferPct = entry.surplusBufferPcts.length
-                ? Math.min(...entry.surplusBufferPcts)
-                : null;
-            return this._derivedView(
-                "surplus_insufficient",
-                { surplus, bufferPct },
-                slotIndex,
-                localize,
-                write,
-            );
+        if (kind === "appliance_runtime" && entry.socThresholds.length) {
+            // Likewise the lowest floor is the easiest to clear, so it is the
+            // one a rejected slot failed.
+            const threshold = Math.min(...entry.socThresholds);
+            const soc = this.railValue(entry.step.railsIn.batterySocPct, slotIndex);
+            // The rail carries the slot's *last* bucket while the condition
+            // rejects on any bucket, so a slot rejected on its first bucket is
+            // explained with a number that passes. Accepted: the verdict is
+            // still right, only the quoted figure is unhelpful.
+            if (soc !== null && soc < threshold) {
+                return this._derivedView(
+                    "soc_below_threshold",
+                    { soc, threshold },
+                    slotIndex,
+                    localize,
+                    write,
+                );
+            }
         }
         // Generic "not considered" default for kinds without a slot-local rule.
         return this._derivedView("out_of_scope_default", {}, slotIndex, localize, write);

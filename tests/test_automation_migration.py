@@ -150,22 +150,43 @@ class PerKindMoveTests(unittest.TestCase):
         migrated = _migrate_one({"id": "h", "kind": "charge_hold"})
         self.assertEqual(migrated["conditions"][0]["run_when"], ALL_DAYS)
 
-    def test_surplus_appliance_target_and_condition_split(self) -> None:
+    def test_surplus_appliance_is_dropped_rather_than_translated(self) -> None:
+        """Every instance is a disabled placeholder; translating arms a 24/7 run.
+
+        Without the retired surplus buffer it would become an uncapped optimizer
+        with no window and no condition, which is "on for the whole horizon".
+        """
+        migrated, _ids = migrate_config_document(
+            _document(
+                {
+                    "id": "s",
+                    "kind": "surplus_appliance",
+                    "params": {
+                        "appliance_id": "dhw",
+                        "climate_mode": "heat",
+                        "action": "on",
+                        "min_surplus_buffer_pct": 15,
+                    },
+                }
+            )
+        )
+
+        self.assertEqual(migrated["automation"]["optimizers"], [])
+
+    def test_daily_runtime_becomes_appliance_runtime(self) -> None:
         migrated = _migrate_one(
             {
-                "id": "s",
-                "kind": "surplus_appliance",
-                "params": {
-                    "appliance_id": "dhw",
-                    "climate_mode": "heat",
-                    "action": "on",
-                    "min_surplus_buffer_pct": 15,
-                },
+                "id": "d",
+                "kind": "daily_runtime",
+                "params": {"appliance_id": "dhw", "min_hours_per_day": 3},
             }
         )
-        self.assertEqual(migrated["target"], {"appliance_id": "dhw", "climate_mode": "heat"})
-        self.assertEqual(migrated["params"], {})
-        self.assertEqual(migrated["conditions"][0]["min_surplus_buffer_pct"], 15)
+
+        self.assertEqual(migrated["kind"], "appliance_runtime")
+        self.assertEqual(
+            migrated["params"]["daily_minimum"],
+            {"min_hours_per_day": 3, "max_consecutive_skips": 0},
+        )
 
     def test_charge_from_grid_floor_becomes_a_condition(self) -> None:
         migrated = _migrate_one(

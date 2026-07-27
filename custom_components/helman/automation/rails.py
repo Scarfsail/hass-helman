@@ -140,9 +140,9 @@ def read_available_surplus_by_bucket(
 ) -> dict[datetime, float] | None:
     """``{bucket_start: availableSurplusKwh}`` keyed by the forecast's own timestamps.
 
-    ``None`` when the grid forecast carries no usable series. Use
-    :func:`read_available_surplus_by_bucket_covering_horizon` when the caller
-    must not act on a forecast that stops short of the schedule horizon.
+    ``None`` when the grid forecast carries no usable series. Callers that must
+    not act on a forecast stopping short of the horizon check coverage
+    themselves; this reader does not.
     """
     raw_series = snapshot.grid_forecast.get("series")
     if not isinstance(raw_series, list):
@@ -157,60 +157,6 @@ def read_available_surplus_by_bucket(
             continue
         surplus_by_bucket[timestamp] = available
     return surplus_by_bucket or None
-
-
-def read_available_surplus_by_bucket_covering_horizon(
-    snapshot: "OptimizationSnapshot",
-) -> dict[datetime, float] | None:
-    """As :func:`read_available_surplus_by_bucket`, but refuses partial coverage.
-
-    Returns ``None`` unless the adjusted house forecast is available and both the
-    battery and grid forecasts reach the end of the schedule horizon. Keys are
-    floored to the grid forecast's *source* granularity so they line up with the
-    demand slices a caller compares them against.
-    """
-    from ..scheduling.schedule import build_horizon_end
-
-    if snapshot.adjusted_house_forecast.get("status") != "available":
-        return None
-
-    required_coverage_until = build_horizon_end(snapshot.context.now)
-    if not _forecast_covers_horizon(
-        snapshot.battery_forecast,
-        required_coverage_until=required_coverage_until,
-    ):
-        return None
-    if not _forecast_covers_horizon(
-        snapshot.grid_forecast,
-        required_coverage_until=required_coverage_until,
-    ):
-        return None
-
-    raw_series = snapshot.grid_forecast.get("series")
-    if not isinstance(raw_series, list):
-        return None
-
-    source_granularity_minutes = snapshot.grid_forecast.get("sourceGranularityMinutes")
-    if (
-        not isinstance(source_granularity_minutes, int)
-        or source_granularity_minutes <= 0
-    ):
-        source_granularity_minutes = FORECAST_CANONICAL_GRANULARITY_MINUTES
-
-    surplus_by_bucket: dict[datetime, float] = {}
-    for point in raw_series:
-        if not isinstance(point, dict):
-            continue
-        timestamp = parse_timestamp(point.get("timestamp"))
-        available_surplus_kwh = read_optional_float(point.get("availableSurplusKwh"))
-        if timestamp is None or available_surplus_kwh is None:
-            continue
-        bucket_start = canonical_bucket_start(
-            timestamp,
-            granularity_minutes=source_granularity_minutes,
-        )
-        surplus_by_bucket[bucket_start] = available_surplus_kwh
-    return surplus_by_bucket
 
 
 def read_clipped_surplus_by_bucket(

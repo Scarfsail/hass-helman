@@ -484,13 +484,9 @@
           "title": "Vynuceno po přeskočeních",
           "detail": "Žádná skupina podmínek neodpovídala, ale {consecutiveSkips} přeskočení po sobě by překročilo limit — umístěno {placedHours} h i tak."
         },
-        "surplus_covers_demand": {
-          "title": "Běh na přebytku",
-          "detail": "Solární přebytek pokryje spotřebu (+{bufferPct}% rezerva)."
-        },
-        "surplus_insufficient": {
-          "title": "Nedostatek přebytku",
-          "detail": "Přebytek {surplus} kWh nepokryje spotřebu (+{bufferPct}% rezerva)."
+        "conditions_matched": {
+          "title": "Podmínky splněny",
+          "detail": "Všechny podmínky tento slot dovolují a žádné denní minimum běh neomezuje."
         },
         "soc_below_threshold": {
           "title": "Nízké nabití baterie",

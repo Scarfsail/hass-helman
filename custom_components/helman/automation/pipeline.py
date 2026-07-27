@@ -12,7 +12,7 @@ from homeassistant.util import dt as dt_util
 
 from .config import AutomationConfig
 from .input_bundle import AutomationInputBundle
-from .optimizers.surplus_appliance import ConditionRailsUnavailable
+from .conditions.types import ConditionRailsUnavailable
 from .ownership import (
     count_automation_owned_actions,
     is_user_owned_appliance_action,

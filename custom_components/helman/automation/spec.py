@@ -39,7 +39,7 @@ class OptimizerSpec:
     #: groups; :meth:`~.conditions.Eligibility.for_day` resolves that to the
     #: first group in config order, deterministically. What such a kind must not
     #: do is place actions on slots its own group does not own — see
-    #: ``daily_runtime``, which intersects its window with the resolved group's
+    #: ``appliance_runtime``, which intersects its window with the resolved group's
     #: slots before ranking.
     param_scope: Scope = Scope.SLOT
     #: Cross-field checks over *resolved* params (master merged with a group's
@@ -94,7 +94,7 @@ def _validate_window(
         )
 
 
-def _validate_daily_runtime(
+def _validate_appliance_runtime(
     params: Mapping[str, Any],
     condition_values: Mapping[str, Any] | None,
     *,
@@ -180,16 +180,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             new_draft={"conditions": [{"when_price_below": 0}]},
         ),
         OptimizerSpec(
-            kind="surplus_appliance",
-            target=_APPLIANCE_TARGET,
-            condition_types=("min_surplus_buffer_pct",),
-            new_draft={
-                "target": {"appliance_id": ""},
-                "conditions": [{"min_surplus_buffer_pct": 5}],
-            },
-        ),
-        OptimizerSpec(
-            kind="daily_runtime",
+            kind="appliance_runtime",
             target=_APPLIANCE_TARGET,
             params=(
                 # Absent = uncapped: place every eligible slot instead of just
@@ -214,7 +205,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             ),
             condition_types=("run_when", "when_price_below", "min_soc_pct"),
             param_scope=Scope.DAY,
-            validate=_validate_daily_runtime,
+            validate=_validate_appliance_runtime,
             new_draft={
                 "target": {"appliance_id": ""},
                 "params": {

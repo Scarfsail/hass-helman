@@ -148,7 +148,9 @@ class AutomationConfigTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "unknown_optimizer_kind")
         self.assertEqual(ctx.exception.path, "automation.optimizers[0].kind")
         self.assertIn("does_not_exist", str(ctx.exception))
-        self.assertIn("supported optimizer kinds are: charge_from_grid", str(ctx.exception))
+        self.assertIn(
+            "supported optimizer kinds are: appliance_runtime", str(ctx.exception)
+        )
 
     def test_is_no_op_when_automation_branch_is_absent(self) -> None:
         self.assertIsNone(read_automation_config({}))
@@ -192,7 +194,7 @@ class ConditionGroupTests(unittest.TestCase):
                 "optimizers": [
                     {
                         "id": "runtime",
-                        "kind": "daily_runtime",
+                        "kind": "appliance_runtime",
                         "target": {"appliance_id": "boiler"},
                         "params": {
                             "daily_minimum": {
@@ -225,7 +227,7 @@ class ConditionGroupTests(unittest.TestCase):
                     "optimizers": [
                         {
                             "id": "runtime",
-                            "kind": "daily_runtime",
+                            "kind": "appliance_runtime",
                             "target": {"appliance_id": "boiler"},
                             "params": {
                                 "daily_minimum": {
@@ -255,7 +257,7 @@ class ConditionGroupTests(unittest.TestCase):
                 "optimizers": [
                     {
                         "id": "runtime",
-                        "kind": "daily_runtime",
+                        "kind": "appliance_runtime",
                         "target": {"appliance_id": "boiler"},
                         "params": {
                             "daily_minimum": {
@@ -420,7 +422,7 @@ class ParamOverrideTests(unittest.TestCase):
                     "optimizers": [
                         {
                             "id": "dhw",
-                            "kind": "daily_runtime",
+                            "kind": "appliance_runtime",
                             "target": {"appliance_id": "boiler"},
                             "params": {
                                 "daily_minimum": {
@@ -487,8 +489,11 @@ class RelocatedKeyTests(unittest.TestCase):
                     "optimizers": [
                         {
                             "id": "boiler-surplus",
-                            "kind": "surplus_appliance",
-                            "params": {"appliance_id": "boiler"},
+                            "kind": "appliance_runtime",
+                            "params": {
+                                "appliance_id": "boiler",
+                                "window": {"start": "08:00", "end": "18:00"},
+                            },
                             "conditions": [{}],
                         }
                     ]
@@ -506,7 +511,8 @@ class TargetTests(unittest.TestCase):
                     "optimizers": [
                         {
                             "id": "boiler-surplus",
-                            "kind": "surplus_appliance",
+                            "kind": "appliance_runtime",
+                            "params": {"window": {"start": "08:00", "end": "18:00"}},
                             "conditions": [{}],
                         }
                     ]
@@ -525,7 +531,8 @@ class TargetTests(unittest.TestCase):
                     "optimizers": [
                         {
                             "id": "climate-surplus",
-                            "kind": "surplus_appliance",
+                            "kind": "appliance_runtime",
+                            "params": {"window": {"start": "08:00", "end": "18:00"}},
                             "target": {
                                 "appliance_id": "living-room-hvac",
                                 "climate_mode": "fan_only",
@@ -541,16 +548,16 @@ class TargetTests(unittest.TestCase):
             ctx.exception.path, "automation.optimizers[0].target.climate_mode"
         )
 
-    def test_rejects_a_negative_surplus_buffer(self) -> None:
+    def test_rejects_an_out_of_range_soc_threshold(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
             AutomationConfig.from_dict(
                 {
                     "optimizers": [
                         {
-                            "id": "boiler-surplus",
-                            "kind": "surplus_appliance",
+                            "id": "boiler-soak",
+                            "kind": "appliance_runtime",
                             "target": {"appliance_id": "boiler"},
-                            "conditions": [{"min_surplus_buffer_pct": -1}],
+                            "conditions": [{"min_soc_pct": 120}],
                         }
                     ]
                 }
@@ -559,8 +566,26 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "invalid_value")
         self.assertEqual(
             ctx.exception.path,
-            "automation.optimizers[0].conditions[0].min_surplus_buffer_pct",
+            "automation.optimizers[0].conditions[0].min_soc_pct",
         )
+
+    def test_a_retired_kind_names_its_replacement(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            AutomationConfig.from_dict(
+                {
+                    "optimizers": [
+                        {
+                            "id": "boiler-surplus",
+                            "kind": "surplus_appliance",
+                            "target": {"appliance_id": "boiler"},
+                            "conditions": [{}],
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(ctx.exception.code, "retired_optimizer_kind")
+        self.assertIn("appliance_runtime", str(ctx.exception))
 
     def test_rejects_a_non_numeric_export_price_threshold(self) -> None:
         with self.assertRaises(AutomationConfigError) as ctx:
@@ -642,20 +667,21 @@ class MigrationRoundTripTests(unittest.TestCase):
 
         self.assertEqual(
             [optimizer.id for optimizer in parsed.optimizers],
-            ["hold", "export", "surplus", "bridge", "dhw"],
+            # `surplus` is dropped at v3 -> v4, not translated.
+            ["hold", "export", "bridge", "dhw"],
         )
         self.assertEqual(
             parsed.optimizers[0].conditions[0].custom,
             ({"condition": "state", "entity_id": "x.y"},),
         )
         self.assertEqual(
-            parsed.optimizers[4].conditions[0].condition_values["run_when"],
+            parsed.optimizers[3].conditions[0].condition_values["run_when"],
             ("surplus", "tight"),
         )
         self.assertEqual(
-            parsed.optimizers[4].params["daily_minimum"]["max_consecutive_skips"], 2
+            parsed.optimizers[3].params["daily_minimum"]["max_consecutive_skips"], 2
         )
-        self.assertEqual(parsed.optimizers[2].target["appliance_id"], "boiler")
+        self.assertEqual(parsed.optimizers[3].target["appliance_id"], "boiler")
 
 
 class DayContextTests(unittest.TestCase):

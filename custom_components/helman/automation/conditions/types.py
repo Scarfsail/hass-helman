@@ -35,7 +35,6 @@ from ..fields import Field
 from ..rails import (
     canonical_bucket_start,
     parse_timestamp,
-    read_available_surplus_by_bucket_covering_horizon,
     read_optional_float,
     read_soc_by_bucket_covering_horizon,
 )
@@ -131,59 +130,6 @@ def _export_price_below_mask(inputs: MaskInputs) -> frozenset[str]:
     return frozenset(below_slot_ids & inputs.all_slots)
 
 
-def _surplus_buffer_mask(inputs: MaskInputs) -> frozenset[str]:
-    from ...appliances.projection_builder import (
-        build_when_active_demand_slices,
-        get_when_active_demand_profile,
-    )
-
-    snapshot = inputs.snapshot
-    appliance_id = str(inputs.target.get("appliance_id"))
-    appliance = snapshot.context.appliance_registry.get_appliance(appliance_id)
-    resolved_hourly_energy_kwh = (
-        snapshot.context.when_active_hourly_energy_kwh_by_appliance_id.get(appliance_id)
-    )
-    if appliance is None or resolved_hourly_energy_kwh is None:
-        raise ConditionRailsUnavailable(
-            appliance_id, "when-active demand is unavailable"
-        )
-    demand_profile = get_when_active_demand_profile(
-        appliance=appliance,
-        resolved_hourly_energy_kwh=resolved_hourly_energy_kwh,
-    )
-    if demand_profile is None:
-        raise ConditionRailsUnavailable(
-            appliance_id, "when-active demand is unavailable"
-        )
-
-    available_surplus_by_bucket = read_available_surplus_by_bucket_covering_horizon(
-        snapshot
-    )
-    if available_surplus_by_bucket is None:
-        raise ConditionRailsUnavailable(
-            appliance_id, "forecast surplus inputs are unavailable"
-        )
-
-    buffer_multiplier = 1 + (inputs.value / 100)
-    eligible: set[str] = set()
-    for slot_id in inputs.horizon_slot_ids:
-        demand_slices = build_when_active_demand_slices(
-            slot_id=slot_id,
-            reference_time=snapshot.context.now,
-            hourly_energy_kwh=demand_profile.hourly_energy_kwh,
-        )
-        if not demand_slices:
-            continue
-        if all(
-            (available := available_surplus_by_bucket.get(demand_slice.bucket_start))
-            is not None
-            and available >= demand_slice.energy_kwh * buffer_multiplier
-            for demand_slice in demand_slices
-        ):
-            eligible.add(slot_id)
-    return frozenset(eligible)
-
-
 def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
     """Slots whose projected SoC stays at or above the threshold throughout.
 
@@ -245,7 +191,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
         # Optional, and deliberately without a default: a threshold of 0 is a
         # *restriction*, not the permissive no-op that `run_when`'s
         # all-classifications default is. Filling it in for a group that never
-        # asked would silently gate `daily_runtime` on negative prices. Absent
+        # asked would silently gate `appliance_runtime` on negative prices. Absent
         # means unconstrained — an AND over no conditions is true.
         ConditionType(
             key="when_price_below",
@@ -253,13 +199,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             field=F.number("when_price_below", required=False),
             reason_code="price_not_below_threshold",
             build_mask=_export_price_below_mask,
-        ),
-        ConditionType(
-            key="min_surplus_buffer_pct",
-            scope=Scope.SLOT,
-            field=F.non_negative_int("min_surplus_buffer_pct", default=5),
-            reason_code="surplus_insufficient",
-            build_mask=_surplus_buffer_mask,
         ),
         # Optional and without a default, for the same reason as
         # `when_price_below`: a floor filled in for a group that never asked for

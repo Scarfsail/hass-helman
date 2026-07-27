@@ -147,7 +147,34 @@ def _nest_daily_minimum(optimizer: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
+def _migrate_v3_to_v4(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    return _migrate_optimizers(document, _merge_appliance_kinds)
+
+
+def _merge_appliance_kinds(optimizer: dict[str, Any]) -> dict[str, Any] | None:
+    """``daily_runtime`` -> ``appliance_runtime``; drop ``surplus_appliance``.
+
+    The two kinds differed only in whether placement was capped, which is now
+    ``daily_minimum``'s presence. ``surplus_appliance`` is *dropped* rather than
+    translated: without its retired ``min_surplus_buffer_pct`` it would migrate
+    to an uncapped optimizer with no window and no condition — the appliance on
+    for the whole horizon the moment anyone enabled it. Every instance in the
+    wild is a disabled placeholder on the schema default, so there is nothing to
+    preserve and a loaded gun to avoid.
+    """
+    kind = optimizer.get("kind")
+    if kind == "surplus_appliance":
+        return None
+    if kind == "daily_runtime":
+        return {**optimizer, "kind": "appliance_runtime"}
+    return optimizer
+
+
+_MIGRATIONS = {
+    1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
+}
 
 
 def _document_version(document: Mapping[str, Any]) -> int:

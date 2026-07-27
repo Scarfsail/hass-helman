@@ -59,7 +59,7 @@ class Field:
     fields: tuple["Field", ...] = ()
     #: Whether a condition group may override this param. ``False`` for params
     #: that describe something no single group owns — see
-    #: ``daily_runtime.max_consecutive_skips``, which is a property of a *chain*
+    #: ``appliance_runtime.daily_minimum.max_consecutive_skips``, which is a property of a *chain*
     #: of days. The optimizer reads those from master params regardless, so
     #: accepting an override would silently do nothing.
     overridable: bool = True
