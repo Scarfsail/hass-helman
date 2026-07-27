@@ -15,11 +15,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from ...const import DAY_CLASSIFICATIONS
+from ...const import (
+    DAY_CLASSIFICATIONS,
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    SCHEDULE_SLOT_MINUTES,
+)
 from ...scheduling.schedule import (
     build_horizon_start,
     format_slot_id,
@@ -33,6 +37,7 @@ from ..rails import (
     parse_timestamp,
     read_available_surplus_by_bucket_covering_horizon,
     read_optional_float,
+    read_soc_by_bucket_covering_horizon,
 )
 
 if TYPE_CHECKING:
@@ -46,8 +51,8 @@ class Scope(Enum):
     RUN = "run"
 
 
-class SurplusApplianceSkip(RuntimeError):
-    """The surplus rails a group needs are unavailable, so the whole run is void.
+class ConditionRailsUnavailable(RuntimeError):
+    """The rails a group's condition needs are unavailable, so the run is void.
 
     Control flow, not an error: the pipeline catches it, restores the appliance's
     baseline automation-owned actions and collapses the column. It must never
@@ -139,19 +144,23 @@ def _surplus_buffer_mask(inputs: MaskInputs) -> frozenset[str]:
         snapshot.context.when_active_hourly_energy_kwh_by_appliance_id.get(appliance_id)
     )
     if appliance is None or resolved_hourly_energy_kwh is None:
-        raise SurplusApplianceSkip(appliance_id, "when-active demand is unavailable")
+        raise ConditionRailsUnavailable(
+            appliance_id, "when-active demand is unavailable"
+        )
     demand_profile = get_when_active_demand_profile(
         appliance=appliance,
         resolved_hourly_energy_kwh=resolved_hourly_energy_kwh,
     )
     if demand_profile is None:
-        raise SurplusApplianceSkip(appliance_id, "when-active demand is unavailable")
+        raise ConditionRailsUnavailable(
+            appliance_id, "when-active demand is unavailable"
+        )
 
     available_surplus_by_bucket = read_available_surplus_by_bucket_covering_horizon(
         snapshot
     )
     if available_surplus_by_bucket is None:
-        raise SurplusApplianceSkip(
+        raise ConditionRailsUnavailable(
             appliance_id, "forecast surplus inputs are unavailable"
         )
 
@@ -173,6 +182,50 @@ def _surplus_buffer_mask(inputs: MaskInputs) -> frozenset[str]:
         ):
             eligible.add(slot_id)
     return frozenset(eligible)
+
+
+def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
+    """Slots whose projected SoC stays at or above the threshold throughout.
+
+    Every forecast bucket the slot overlaps must clear it, not just the slot's
+    first or last: sampling one end would let an appliance switch on into a
+    battery that falls through the floor halfway through the slot.
+
+    Unlike the energy rails there is no duration scaling — ``socPct`` is a level,
+    so the config value is compared directly.
+
+    Blind spot worth knowing: the mask is built once from the pre-run snapshot,
+    so it cannot see the appliance's own draw depressing the very SoC that
+    authorised the slot. Same limitation the surplus buffer had.
+    """
+    snapshot = inputs.snapshot
+    appliance_id = str(inputs.target.get("appliance_id"))
+    soc_by_bucket = read_soc_by_bucket_covering_horizon(snapshot)
+    if soc_by_bucket is None:
+        raise ConditionRailsUnavailable(
+            appliance_id, "the battery SoC forecast is unavailable"
+        )
+
+    threshold = inputs.value
+    eligible: set[str] = set()
+    for slot_id in inputs.horizon_slot_ids:
+        buckets = _slot_bucket_starts(slot_id)
+        if all(
+            (soc_pct := soc_by_bucket.get(bucket_start)) is not None
+            and soc_pct >= threshold
+            for bucket_start in buckets
+        ):
+            eligible.add(slot_id)
+    return frozenset(eligible)
+
+
+def _slot_bucket_starts(slot_id: str) -> tuple[datetime, ...]:
+    """The forecast bucket starts a schedule slot spans, in order."""
+    slot_start = parse_slot_id(slot_id)
+    return tuple(
+        slot_start + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * index)
+        for index in range(SCHEDULE_SLOT_MINUTES // FORECAST_CANONICAL_GRANULARITY_MINUTES)
+    )
 
 
 def _all_slots_mask(inputs: MaskInputs) -> frozenset[str]:
@@ -207,6 +260,16 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             field=F.non_negative_int("min_surplus_buffer_pct", default=5),
             reason_code="surplus_insufficient",
             build_mask=_surplus_buffer_mask,
+        ),
+        # Optional and without a default, for the same reason as
+        # `when_price_below`: a floor filled in for a group that never asked for
+        # one is a restriction nobody authored.
+        ConditionType(
+            key="min_soc_pct",
+            scope=Scope.SLOT,
+            field=F.soc("min_soc_pct", required=False),
+            reason_code="soc_below_threshold",
+            build_mask=_min_soc_mask,
         ),
         # Self-gating: `charge_from_grid` conditions on the SoC dip over the
         # *expensive* band but writes into the *preceding cheap* band, so a mask

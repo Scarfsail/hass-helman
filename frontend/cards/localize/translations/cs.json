@@ -492,6 +492,10 @@
           "title": "Nedostatek přebytku",
           "detail": "Přebytek {surplus} kWh nepokryje spotřebu (+{bufferPct}% rezerva)."
         },
+        "soc_below_threshold": {
+          "title": "Nízké nabití baterie",
+          "detail": "Předpokládané nabití {soc} % je pod prahem {threshold} %."
+        },
         "forecast_unavailable": {
           "title": "Předpověď nedostupná",
           "detail": "Přebytek z předpovědi není dostupný ({status})."

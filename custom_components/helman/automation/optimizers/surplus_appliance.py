@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from ...scheduling.schedule import ScheduleDocument, iter_horizon_slot_ids
 from ..base import ApplianceTarget, ScheduleWriter, resolve_appliance_target
 from ..conditions import build_eligibility
-from ..conditions.types import SurplusApplianceSkip
+from ..conditions.types import ConditionRailsUnavailable
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "SurplusApplianceOptimizer",
-    "SurplusApplianceSkip",
+    "ConditionRailsUnavailable",
     "build_surplus_appliance_optimizer",
 ]
 
@@ -51,7 +51,7 @@ class SurplusApplianceOptimizer:
         appliance_domain = f"appliance:{appliance_id}"
         action = {"domain": appliance_domain, **self.target.authored_action}
 
-        # The mask raises SurplusApplianceSkip when the demand or surplus rails
+        # The mask raises ConditionRailsUnavailable when the demand or surplus rails
         # are unavailable; the pipeline then restores this appliance's baseline
         # actions rather than letting an empty plan clear it.
         eligibility = build_eligibility(snapshot, config, trace)

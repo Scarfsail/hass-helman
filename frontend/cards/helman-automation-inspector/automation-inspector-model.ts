@@ -101,6 +101,7 @@ const KNOWN_REASON_CODES = new Set([
     "forced_after_consecutive_skips",
     "surplus_covers_demand",
     "surplus_insufficient",
+    "soc_below_threshold",
     "forecast_unavailable",
     "blocked_user_owned",
     "optimizer_skipped",

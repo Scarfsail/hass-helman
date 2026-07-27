@@ -12,7 +12,7 @@ from homeassistant.util import dt as dt_util
 
 from .config import AutomationConfig
 from .input_bundle import AutomationInputBundle
-from .optimizers.surplus_appliance import SurplusApplianceSkip
+from .optimizers.surplus_appliance import ConditionRailsUnavailable
 from .ownership import (
     count_automation_owned_actions,
     is_user_owned_appliance_action,
@@ -583,7 +583,7 @@ def run_optimizer_loop_pure(
                 optimizer_config,
                 trace,
             )
-        except SurplusApplianceSkip as err:
+        except ConditionRailsUnavailable as err:
             try:
                 working_schedule_document = restore_automation_owned_appliance_actions(
                     baseline=baseline_schedule_document,

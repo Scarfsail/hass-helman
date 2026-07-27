@@ -102,7 +102,7 @@ from custom_components.helman.appliances.state import AppliancesRuntimeRegistry 
 from custom_components.helman.automation.config import OptimizerInstanceConfig  # noqa: E402
 from custom_components.helman.automation.optimizers.surplus_appliance import (  # noqa: E402
     build_surplus_appliance_optimizer,
-    SurplusApplianceSkip,
+    ConditionRailsUnavailable,
 )
 from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
@@ -551,7 +551,7 @@ class SurplusApplianceOptimizerTests(unittest.TestCase):
             appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
         )
 
-        with self.assertRaisesRegex(SurplusApplianceSkip, "when-active demand is unavailable") as no_demand_ctx:
+        with self.assertRaisesRegex(ConditionRailsUnavailable, "when-active demand is unavailable") as no_demand_ctx:
             optimizer.optimize(
                 _make_snapshot(
                     appliances=(appliance,),
@@ -566,7 +566,7 @@ class SurplusApplianceOptimizerTests(unittest.TestCase):
         self.assertEqual(no_demand_ctx.exception.appliance_id, appliance.id)
 
         with self.assertRaisesRegex(
-            SurplusApplianceSkip,
+            ConditionRailsUnavailable,
             "forecast surplus inputs are unavailable",
         ) as no_forecast_ctx:
             optimizer.optimize(
@@ -616,7 +616,7 @@ class SurplusApplianceOptimizerTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(
-            SurplusApplianceSkip,
+            ConditionRailsUnavailable,
             "forecast surplus inputs are unavailable",
         ) as partial_ctx:
             optimizer.optimize(

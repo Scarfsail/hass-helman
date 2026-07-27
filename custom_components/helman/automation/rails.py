@@ -111,6 +111,30 @@ def read_soc_by_bucket(
     return soc_by_bucket
 
 
+def read_soc_by_bucket_covering_horizon(
+    snapshot: "OptimizationSnapshot",
+) -> dict[datetime, float] | None:
+    """``{bucket_start: socPct}``, or ``None`` unless the forecast spans the horizon.
+
+    As :func:`read_soc_by_bucket`, but keyed for lookup and refusing partial
+    coverage: a caller gating slots on SoC must not read a trajectory that stops
+    halfway through the horizon, because the slots past the end would silently
+    look ineligible rather than unknown.
+    """
+    from ..scheduling.schedule import build_horizon_end
+
+    if not _forecast_covers_horizon(
+        snapshot.battery_forecast,
+        required_coverage_until=build_horizon_end(snapshot.context.now),
+    ):
+        return None
+    soc_by_bucket = {
+        canonical_bucket_start(timestamp): soc_pct
+        for timestamp, soc_pct in read_soc_by_bucket(snapshot)
+    }
+    return soc_by_bucket or None
+
+
 def read_available_surplus_by_bucket(
     snapshot: "OptimizationSnapshot",
 ) -> dict[datetime, float] | None:

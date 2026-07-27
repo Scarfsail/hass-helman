@@ -335,7 +335,7 @@ from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.config import OptimizerInstanceConfig
 from custom_components.helman.automation.input_bundle import AutomationInputBundle
 from custom_components.helman.automation.optimizers.surplus_appliance import (
-    SurplusApplianceSkip,
+    ConditionRailsUnavailable,
 )
 from custom_components.helman.automation.pipeline import (
     AutomationCleanupSummary,
@@ -1313,7 +1313,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             return_value=SimpleNamespace(
                 optimize=Mock(
-                    side_effect=SurplusApplianceSkip(
+                    side_effect=ConditionRailsUnavailable(
                         "boiler",
                         "when-active demand is unavailable",
                     )
@@ -1749,7 +1749,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             return_value=SimpleNamespace(
                 optimize=Mock(
-                    side_effect=SurplusApplianceSkip(
+                    side_effect=ConditionRailsUnavailable(
                         "boiler",
                         "when-active demand is unavailable",
                     )

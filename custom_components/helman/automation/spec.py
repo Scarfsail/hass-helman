@@ -162,7 +162,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
                     "max_consecutive_skips", default=0, overridable=False
                 ),
             ),
-            condition_types=("run_when", "when_price_below"),
+            condition_types=("run_when", "when_price_below", "min_soc_pct"),
             param_scope=Scope.DAY,
             validate=_validate_daily_runtime,
             new_draft={

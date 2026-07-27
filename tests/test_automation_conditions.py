@@ -65,7 +65,10 @@ from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noq
 from custom_components.helman.automation.conditions import (  # noqa: E402
     build_eligibility,
 )
-from custom_components.helman.automation.conditions.types import Scope  # noqa: E402
+from custom_components.helman.automation.conditions.types import (  # noqa: E402
+    ConditionRailsUnavailable,
+    Scope,
+)
 from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
     OptimizationSnapshot,
@@ -233,6 +236,123 @@ class RejectionTests(unittest.TestCase):
         self.assertIsNone(eligibility.rejection(SLOT_0))
 
 
+class MinSocConditionTests(unittest.TestCase):
+    """A slot passes only when *every* bucket it spans clears the threshold.
+
+    Slots are 30 minutes and forecast buckets 15, so each slot spans two.
+    """
+
+    @staticmethod
+    def _snapshot_with_soc(soc_by_timestamp, *, status="available"):
+        from dataclasses import replace
+
+        from custom_components.helman.automation.day_context import DayContext
+
+        snapshot = _snapshot(prices={})
+        snapshot.battery_forecast["status"] = status
+        snapshot.battery_forecast["series"] = [
+            {"timestamp": timestamp, "socPct": soc_pct}
+            for timestamp, soc_pct in soc_by_timestamp.items()
+        ]
+        # `daily_runtime` carries `run_when`, which ANDs a day-classification
+        # mask over everything; without a day context no slot is ever eligible.
+        local_date = REFERENCE_TIME.date()
+        return replace(
+            snapshot,
+            context=replace(
+                snapshot.context,
+                day_contexts={
+                    local_date: DayContext(
+                        local_date=local_date,
+                        classification="tight",
+                        predicted_solar_kwh=5.0,
+                        predicted_consumption_kwh=5.0,
+                        export_price_min=1.0,
+                        export_price_max=5.0,
+                        day_min_window=None,
+                        import_bands=(),
+                    )
+                },
+            ),
+        )
+
+    @staticmethod
+    def _config(threshold):
+        return make_optimizer_config(
+            id="runtime",
+            kind="daily_runtime",
+            target={"appliance_id": "pool"},
+            params={
+                "min_hours_per_day": 1,
+                "window": {"start": "00:00", "end": "23:30"},
+            },
+            conditions=[{"min_soc_pct": threshold}],
+        )
+
+    def test_a_slot_qualifies_when_both_buckets_clear_the_threshold(self) -> None:
+        eligibility = build_eligibility(
+            self._snapshot_with_soc(
+                {
+                    "2026-03-20T21:00:00+01:00": 62.0,
+                    "2026-03-20T21:15:00+01:00": 66.0,
+                    "2026-03-20T21:30:00+01:00": 71.0,
+                    "2026-03-20T21:45:00+01:00": 74.0,
+                }
+            ),
+            self._config(70.0),
+        )
+
+        self.assertIsNone(eligibility.at(SLOT_0))
+        self.assertIsNotNone(eligibility.at(SLOT_1))
+
+    def test_one_failing_bucket_sinks_the_slot(self) -> None:
+        eligibility = build_eligibility(
+            self._snapshot_with_soc(
+                {
+                    "2026-03-20T21:00:00+01:00": 91.0,
+                    "2026-03-20T21:15:00+01:00": 69.0,
+                }
+            ),
+            self._config(70.0),
+        )
+
+        self.assertIsNone(eligibility.at(SLOT_0))
+
+    def test_the_threshold_is_inclusive(self) -> None:
+        eligibility = build_eligibility(
+            self._snapshot_with_soc(
+                {
+                    "2026-03-20T21:00:00+01:00": 70.0,
+                    "2026-03-20T21:15:00+01:00": 82.0,
+                }
+            ),
+            self._config(70.0),
+        )
+
+        self.assertIsNotNone(eligibility.at(SLOT_0))
+
+    def test_a_missing_bucket_fails_closed(self) -> None:
+        eligibility = build_eligibility(
+            self._snapshot_with_soc({"2026-03-20T21:00:00+01:00": 88.0}),
+            self._config(70.0),
+        )
+
+        self.assertIsNone(eligibility.at(SLOT_0))
+
+    def test_a_forecast_short_of_the_horizon_voids_the_run(self) -> None:
+        # Not "nothing matched": an empty mask would silently clear the
+        # appliance, so the pipeline must get the chance to restore its baseline.
+        with self.assertRaises(ConditionRailsUnavailable) as ctx:
+            build_eligibility(
+                self._snapshot_with_soc(
+                    {"2026-03-20T21:00:00+01:00": 88.0}, status="partial"
+                ),
+                self._config(70.0),
+            )
+
+        self.assertEqual(ctx.exception.appliance_id, "pool")
+
+
 class SpecInvariantTests(unittest.TestCase):
     def test_a_day_scoped_kind_may_accept_a_slot_scoped_condition(self) -> None:
         """R2 is a resolution rule now, not a ban.
@@ -256,7 +376,7 @@ class SpecInvariantTests(unittest.TestCase):
     def test_daily_runtime_accepts_both_the_day_and_the_price_condition(self) -> None:
         self.assertEqual(
             OPTIMIZER_SPECS["daily_runtime"].condition_types,
-            ("run_when", "when_price_below"),
+            ("run_when", "when_price_below", "min_soc_pct"),
         )
 
     def test_every_kind_declares_only_registered_condition_types(self) -> None:

@@ -201,6 +201,10 @@
           "title": "Surplus insufficient",
           "detail": "Surplus {surplus} kWh does not cover demand (+{bufferPct}% buffer)."
         },
+        "soc_below_threshold": {
+          "title": "Battery too low",
+          "detail": "Projected battery {soc}% is below the {threshold}% threshold."
+        },
         "forecast_unavailable": {
           "title": "Forecast unavailable",
           "detail": "Forecast surplus is unavailable ({status})."

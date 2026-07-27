@@ -7,7 +7,7 @@ from .daily_runtime import DailyRuntimeOptimizer, build_daily_runtime_optimizer
 from .export_price import ExportPriceOptimizer, build_export_price_optimizer
 from .surplus_appliance import (
     SurplusApplianceOptimizer,
-    SurplusApplianceSkip,
+    ConditionRailsUnavailable,
     build_surplus_appliance_optimizer,
 )
 
@@ -17,7 +17,7 @@ __all__ = [
     "DailyRuntimeOptimizer",
     "ExportPriceOptimizer",
     "SurplusApplianceOptimizer",
-    "SurplusApplianceSkip",
+    "ConditionRailsUnavailable",
     "build_charge_from_grid_optimizer",
     "build_charge_hold_optimizer",
     "build_daily_runtime_optimizer",
