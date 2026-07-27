@@ -283,7 +283,10 @@ class MinSocConditionTests(unittest.TestCase):
             kind="daily_runtime",
             target={"appliance_id": "pool"},
             params={
-                "min_hours_per_day": 1,
+                "daily_minimum": {
+                    "min_hours_per_day": 1,
+                    "max_consecutive_skips": 0,
+                },
                 "window": {"start": "00:00", "end": "23:30"},
             },
             conditions=[{"min_soc_pct": threshold}],

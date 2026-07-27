@@ -187,7 +187,9 @@ class PerKindMoveTests(unittest.TestCase):
             }
         )
         self.assertEqual(migrated["target"], {"appliance_id": "dhw"})
-        self.assertEqual(migrated["params"]["min_hours_per_day"], 3)
+        self.assertEqual(
+            migrated["params"]["daily_minimum"]["min_hours_per_day"], 3
+        )
 
 
 class RunWhenInversionTests(unittest.TestCase):
@@ -207,9 +209,10 @@ class RunWhenInversionTests(unittest.TestCase):
         migrated = _migrate_one(
             {"id": "d", "kind": "daily_runtime", "params": params}
         )
-        return migrated["conditions"][0]["run_when"], migrated["params"][
-            "max_consecutive_skips"
-        ]
+        return (
+            migrated["conditions"][0]["run_when"],
+            migrated["params"]["daily_minimum"]["max_consecutive_skips"],
+        )
 
     def test_skip_absent_runs_on_every_classification(self) -> None:
         self.assertEqual(self._run_when(None), (ALL_DAYS, 0))
@@ -255,7 +258,9 @@ class RunWhenInversionTests(unittest.TestCase):
             }
         )
         self.assertNotIn("skip", migrated["params"])
-        self.assertEqual(migrated["params"]["max_consecutive_skips"], 2)
+        self.assertEqual(
+            migrated["params"]["daily_minimum"]["max_consecutive_skips"], 2
+        )
 
 
 if __name__ == "__main__":

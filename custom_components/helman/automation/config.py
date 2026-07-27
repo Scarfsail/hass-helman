@@ -225,7 +225,7 @@ def _read_optimizer(
     raw_params = data.get("params", MISSING)
     params = read_fields(spec.params, raw_params, path=f"{path}.params")
     if spec.validate is not None:
-        spec.validate(params, path=f"{path}.params")
+        spec.validate(params, None, path=f"{path}.params")
 
     return OptimizerInstanceConfig(
         id=optimizer_id,
@@ -316,7 +316,7 @@ def _read_condition_group(
         path=f"{path}.params",
     )
     if spec.validate is not None:
-        spec.validate(resolved, path=f"{path}.params")
+        spec.validate(resolved, condition_values, path=f"{path}.params")
 
     return ConditionGroup(
         index=index,

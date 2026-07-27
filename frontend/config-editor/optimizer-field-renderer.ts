@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 
-import type { PathSegment } from "./types";
+import type { JsonObject, PathSegment } from "./types";
 import {
     fieldHelpKey,
     fieldLabelKey,
@@ -53,14 +53,28 @@ export function renderSchemaField(
         : undefined;
 
     if (field.type === "object") {
-        // Objects flatten into the same grid rather than nesting a sub-card:
-        // `window.start` reads as one more field, not as a form within a form.
-        return html`${renderSchemaFields(host, field.fields ?? [], {
+        const children = html`${renderSchemaFields(host, field.fields ?? [], {
             ...options,
             basePath: path,
             inheritFrom,
             parents: [...parents, field.key],
         })}`;
+        // An optional object is a *mode*, not a set of blank fields: its members
+        // are required once it exists, so it gets one toggle rather than letting
+        // a half-filled group reach the reader. Overrides are exempt — there
+        // nothing is required and the object is only ever partially set.
+        if (field.required === false && inheritFrom === undefined) {
+            return renderOptionalGroup(host, field, {
+                path,
+                labelKey: fieldLabelKey(host, field, parents),
+                helpKey: fieldHelpKey(host, options.kind, field, parents),
+                children,
+            });
+        }
+        // Otherwise objects flatten into the same grid rather than nesting a
+        // sub-card: `window.start` reads as one more field, not a form within a
+        // form.
+        return children;
     }
 
     const labelKey = fieldLabelKey(host, field, parents);
@@ -94,6 +108,54 @@ export function renderSchemaField(
         field.type === "integer" ? "1" : "any",
         helpKey,
     );
+}
+
+/**
+ * A whole optional param object, behind an on/off toggle.
+ *
+ * Turning it on seeds every child from its schema default (or a blank the user
+ * must fill), because the reader requires them all once the object exists.
+ */
+function renderOptionalGroup(
+    host: OptimizerEditorHost,
+    field: SchemaField,
+    options: {
+        path: PathSegment[];
+        labelKey: string;
+        helpKey: string;
+        children: TemplateResult;
+    },
+): TemplateResult {
+    const { path, labelKey, helpKey, children } = options;
+    const present = host.getValue(path) !== undefined && host.getValue(path) !== null;
+    return html`
+        <div class="optional-param-group">
+            <div class="field-label-row">
+                <label>
+                    <input
+                        type="checkbox"
+                        .checked=${present}
+                        @change=${(event: Event) => {
+                            const on = (event.currentTarget as HTMLInputElement).checked;
+                            host.setValue(path, on ? seedObject(field) : undefined);
+                        }}
+                    />
+                    ${host.t(labelKey)}
+                </label>
+                ${host.renderHelpIcon(labelKey, helpKey)}
+            </div>
+            ${present ? children : nothing}
+        </div>
+    `;
+}
+
+function seedObject(field: SchemaField): JsonObject {
+    const seeded: JsonObject = {};
+    for (const child of field.fields ?? []) {
+        if (child.default !== undefined) seeded[child.key] = child.default;
+        else if (child.type === "object") seeded[child.key] = seedObject(child);
+    }
+    return seeded;
 }
 
 function renderTextField(

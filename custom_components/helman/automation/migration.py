@@ -51,21 +51,40 @@ def migrate_config_document(
     already at the current version. Optimizer order is preserved verbatim —
     later optimizers overwrite earlier ones, and ``charge_hold`` documents that
     it must precede ``export_price``.
+
+    Steps compose: a version-1 document runs through every step in turn. Each
+    step must therefore read exactly the shape its predecessor wrote, which is
+    why they are separate functions rather than one accumulated transform — the
+    version-1 rules would silently wipe the ``conditions`` a version-2 document
+    already has.
     """
     if not isinstance(document, Mapping):
         return ({} if document is None else dict(document), [])
     migrated = deepcopy(dict(document))
-    if _document_version(document) >= CONFIG_DOCUMENT_VERSION:
-        migrated["config_version"] = CONFIG_DOCUMENT_VERSION
+    version = _document_version(document)
+    migrated["config_version"] = CONFIG_DOCUMENT_VERSION
+    if version >= CONFIG_DOCUMENT_VERSION:
         return (migrated, [])
 
-    migrated["config_version"] = CONFIG_DOCUMENT_VERSION
-    automation = migrated.get("automation")
+    migrated_ids: list[str] = []
+    while version < CONFIG_DOCUMENT_VERSION:
+        migrated, ids = _MIGRATIONS[version](migrated)
+        migrated_ids = ids or migrated_ids
+        version += 1
+    return (migrated, migrated_ids)
+
+
+def _migrate_optimizers(
+    document: dict[str, Any],
+    migrate: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    """Apply ``migrate`` to every optimizer, dropping the ones it returns ``None`` for."""
+    automation = document.get("automation")
     if not isinstance(automation, Mapping):
-        return (migrated, [])
+        return (document, [])
     optimizers = automation.get("optimizers")
     if not isinstance(optimizers, list):
-        return (migrated, [])
+        return (document, [])
 
     migrated_ids: list[str] = []
     rebuilt: list[Any] = []
@@ -73,10 +92,62 @@ def migrate_config_document(
         if not isinstance(raw, Mapping):
             rebuilt.append(raw)
             continue
-        rebuilt.append(_migrate_optimizer(dict(raw)))
+        replacement = migrate(dict(raw))
+        if replacement is not None:
+            rebuilt.append(replacement)
         migrated_ids.append(str(raw.get("id", "?")))
-    migrated["automation"] = {**automation, "optimizers": rebuilt}
-    return (migrated, migrated_ids)
+    document["automation"] = {**automation, "optimizers": rebuilt}
+    return (document, migrated_ids)
+
+
+def _migrate_v1_to_v2(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    return _migrate_optimizers(document, _migrate_optimizer)
+
+
+def _migrate_v2_to_v3(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    return _migrate_optimizers(document, _nest_daily_minimum)
+
+
+def _nest_daily_minimum(optimizer: dict[str, Any]) -> dict[str, Any]:
+    """``min_hours_per_day`` + ``max_consecutive_skips`` -> ``daily_minimum``.
+
+    They are one concept — a floor and how long it may go unmet — and nesting
+    them makes "skips without a minimum" unrepresentable. Absence of the object
+    now means uncapped, so a v2 optimizer that omitted ``max_consecutive_skips``
+    and relied on its ``default=0`` must have the 0 written out: absent used to
+    mean "force after the first short day", and now means "never force".
+    """
+    if optimizer.get("kind") != "daily_runtime":
+        return optimizer
+
+    def nest(params: dict[str, Any], *, fill_default: bool) -> dict[str, Any]:
+        daily_minimum = {
+            key: params.pop(key)
+            for key in ("min_hours_per_day", "max_consecutive_skips")
+            if key in params
+        }
+        if fill_default and "min_hours_per_day" in daily_minimum:
+            daily_minimum.setdefault("max_consecutive_skips", 0)
+        if daily_minimum:
+            params["daily_minimum"] = daily_minimum
+        return params
+
+    migrated = dict(optimizer)
+    migrated["params"] = nest(dict(optimizer.get("params") or {}), fill_default=True)
+    conditions = optimizer.get("conditions")
+    if isinstance(conditions, list):
+        migrated["conditions"] = [
+            (
+                {**group, "params": nest(dict(group["params"]), fill_default=False)}
+                if isinstance(group, Mapping) and isinstance(group.get("params"), Mapping)
+                else group
+            )
+            for group in conditions
+        ]
+    return migrated
+
+
+_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
 
 
 def _document_version(document: Mapping[str, Any]) -> int:

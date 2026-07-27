@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..appliances.climate_appliance import SUPPORTED_CLIMATE_MODES
+from ..const import DAY_CLASSIFICATIONS
 from . import fields as F
 from .conditions.types import CONDITION_TYPES, ConditionType, Scope
 from .fields import Field, OptimizerConfigError
@@ -43,6 +44,9 @@ class OptimizerSpec:
     param_scope: Scope = Scope.SLOT
     #: Cross-field checks over *resolved* params (master merged with a group's
     #: override), so a group cannot produce a combination no single pass sees.
+    #: Called as ``validate(params, condition_values, path=…)``; the second
+    #: argument is ``None`` at master level, where no group is in scope yet, and
+    #: the group's resolved condition values otherwise.
     validate: Callable[..., None] | None = None
     #: What "Add <kind>" seeds in the editor. Lives beside the schema so adding
     #: a kind stays one Python declaration — required fields have no schema
@@ -75,7 +79,12 @@ class OptimizerSpec:
         }
 
 
-def _validate_window(params: Mapping[str, Any], *, path: str) -> None:
+def _validate_window(
+    params: Mapping[str, Any],
+    _condition_values: Mapping[str, Any] | None = None,
+    *,
+    path: str,
+) -> None:
     window = params.get("window") or {}
     if _minutes(window.get("end")) <= _minutes(window.get("start")):
         raise OptimizerConfigError(
@@ -85,20 +94,49 @@ def _validate_window(params: Mapping[str, Any], *, path: str) -> None:
         )
 
 
-def _validate_daily_runtime(params: Mapping[str, Any], *, path: str) -> None:
-    _validate_window(params, path=path)
-    window = params.get("window") or {}
-    window_hours = (_minutes(window.get("end")) - _minutes(window.get("start"))) / 60
-    min_hours_per_day = params.get("min_hours_per_day", 0)
-    if window_hours < min_hours_per_day:
-        raise OptimizerConfigError(
-            path=f"{path}.window",
-            code="invalid_value",
-            message=(
-                f"{path}.window must be at least {path}.min_hours_per_day wide "
-                f"({window_hours:g}h < {min_hours_per_day:g}h)"
-            ),
+def _validate_daily_runtime(
+    params: Mapping[str, Any],
+    condition_values: Mapping[str, Any] | None,
+    *,
+    path: str,
+) -> None:
+    window = params.get("window")
+    daily_minimum = params.get("daily_minimum")
+    if window:
+        _validate_window(params, path=path)
+    if window and daily_minimum:
+        window_hours = (_minutes(window.get("end")) - _minutes(window.get("start"))) / 60
+        min_hours_per_day = daily_minimum["min_hours_per_day"]
+        if window_hours < min_hours_per_day:
+            raise OptimizerConfigError(
+                path=f"{path}.window",
+                code="invalid_value",
+                message=(
+                    f"{path}.window must be at least "
+                    f"{path}.daily_minimum.min_hours_per_day wide "
+                    f"({window_hours:g}h < {min_hours_per_day:g}h)"
+                ),
+            )
+
+    # An uncapped group places on *every* slot it owns, so one that narrows
+    # nothing turns the appliance on for the whole horizon. `run_when` carries an
+    # all-classifications default, so it only counts when it is narrower than
+    # that — otherwise the check could never fire.
+    if daily_minimum is None and condition_values is not None and not window:
+        narrows = any(
+            key != "run_when" or set(value) != set(DAY_CLASSIFICATIONS)
+            for key, value in condition_values.items()
         )
+        if not narrows:
+            raise OptimizerConfigError(
+                path=path,
+                code="invalid_value",
+                message=(
+                    f"{path} has no daily_minimum and no window, so its condition "
+                    "group must narrow the horizon: set a condition, narrow "
+                    "run_when, or add a window"
+                ),
+            )
 
 
 def _minutes(hhmm: object) -> int:
@@ -154,12 +192,24 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             kind="daily_runtime",
             target=_APPLIANCE_TARGET,
             params=(
-                F.positive_number("min_hours_per_day"),
-                F.obj("window", F.time_hhmm("start"), F.time_hhmm("end")),
-                # Describes a chain of days, so no single day's group can own it
-                # — `_plan_for_day` reads it from master params only.
-                F.non_negative_int(
-                    "max_consecutive_skips", default=0, overridable=False
+                # Absent = uncapped: place every eligible slot instead of just
+                # enough to cover a deficit. Both members are required inside, so
+                # the "skips without a minimum" combination is unrepresentable —
+                # and a group cannot introduce the object either, since
+                # `max_consecutive_skips` is required and not overridable.
+                F.obj(
+                    "daily_minimum",
+                    F.positive_number("min_hours_per_day"),
+                    # Describes a chain of days, so no single day's group can own
+                    # it — `_plan_for_day` reads it from master params only.
+                    F.non_negative_int("max_consecutive_skips", overridable=False),
+                    required=False,
+                ),
+                F.obj(
+                    "window",
+                    F.time_hhmm("start"),
+                    F.time_hhmm("end"),
+                    required=False,
                 ),
             ),
             condition_types=("run_when", "when_price_below", "min_soc_pct"),
@@ -168,9 +218,11 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             new_draft={
                 "target": {"appliance_id": ""},
                 "params": {
-                    "min_hours_per_day": 8,
+                    "daily_minimum": {
+                        "min_hours_per_day": 8,
+                        "max_consecutive_skips": 1,
+                    },
                     "window": {"start": "08:00", "end": "18:00"},
-                    "max_consecutive_skips": 1,
                 },
                 "conditions": [{"run_when": ["surplus", "tight"]}],
             },

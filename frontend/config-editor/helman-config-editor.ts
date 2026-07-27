@@ -587,6 +587,27 @@ export class HelmanConfigEditorPanel
       flex-wrap: wrap;
     }
 
+    /* An optional param object: the toggle owns the block, and its fields only
+       exist while it is on, so the indent shows what turning it off removes. */
+    .optional-param-group {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: subgrid;
+      gap: 10px;
+      padding-left: 12px;
+      border-left: 2px solid var(--divider-color, rgba(255, 255, 255, 0.12));
+    }
+
+    .optional-param-group > .field-label-row {
+      grid-column: 1 / -1;
+    }
+
+    .optional-param-group label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     /* A group reads as one more card in the same visual family as the optimizer
        card it sits in, so the OR list looks like a list and not like nesting. */
     details.condition-group,

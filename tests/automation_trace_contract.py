@@ -43,6 +43,8 @@ V1_REASON_CODES: frozenset[str] = frozenset(
         "runtime_satisfied",
         "forced_after_consecutive_skips",
         "price_above_run_threshold",
+        "conditions_matched",  # uncapped: no deficit to size a placement against
+        "soc_below_threshold",  # D (frontend derivation)
         # surplus_appliance
         "surplus_covers_demand",
         "surplus_insufficient",  # D (frontend derivation)

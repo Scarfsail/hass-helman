@@ -195,7 +195,10 @@ class ConditionGroupTests(unittest.TestCase):
                         "kind": "daily_runtime",
                         "target": {"appliance_id": "boiler"},
                         "params": {
-                            "min_hours_per_day": 4,
+                            "daily_minimum": {
+                                "min_hours_per_day": 4,
+                                "max_consecutive_skips": 0,
+                            },
                             "window": {"start": "08:00", "end": "18:00"},
                         },
                         "conditions": [{}],
@@ -225,11 +228,14 @@ class ConditionGroupTests(unittest.TestCase):
                             "kind": "daily_runtime",
                             "target": {"appliance_id": "boiler"},
                             "params": {
-                                "min_hours_per_day": 4,
+                                "daily_minimum": {
+                                    "min_hours_per_day": 4,
+                                    "max_consecutive_skips": 0,
+                                },
                                 "window": {"start": "08:00", "end": "18:00"},
                             },
                             "conditions": [
-                                {"params": {"max_consecutive_skips": 3}}
+                                {"params": {"daily_minimum": {"max_consecutive_skips": 3}}}
                             ],
                         }
                     ]
@@ -239,7 +245,8 @@ class ConditionGroupTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "not_overridable")
         self.assertEqual(
             ctx.exception.path,
-            "automation.optimizers[0].conditions[0].params.max_consecutive_skips",
+            "automation.optimizers[0].conditions[0].params.daily_minimum"
+            ".max_consecutive_skips",
         )
 
     def test_an_overridable_param_is_still_accepted_per_group(self) -> None:
@@ -251,17 +258,25 @@ class ConditionGroupTests(unittest.TestCase):
                         "kind": "daily_runtime",
                         "target": {"appliance_id": "boiler"},
                         "params": {
-                            "min_hours_per_day": 4,
+                            "daily_minimum": {
+                                "min_hours_per_day": 4,
+                                "max_consecutive_skips": 0,
+                            },
                             "window": {"start": "08:00", "end": "18:00"},
                         },
-                        "conditions": [{"params": {"min_hours_per_day": 2}}],
+                        "conditions": [
+                            {"params": {"daily_minimum": {"min_hours_per_day": 2}}}
+                        ],
                     }
                 ]
             }
         )
 
         self.assertEqual(
-            parsed.optimizers[0].conditions[0].params["min_hours_per_day"], 2
+            parsed.optimizers[0].conditions[0].params["daily_minimum"][
+                "min_hours_per_day"
+            ],
+            2,
         )
 
     def test_custom_conditions_are_read_verbatim(self) -> None:
@@ -408,7 +423,10 @@ class ParamOverrideTests(unittest.TestCase):
                             "kind": "daily_runtime",
                             "target": {"appliance_id": "boiler"},
                             "params": {
-                                "min_hours_per_day": 3,
+                                "daily_minimum": {
+                                    "min_hours_per_day": 3,
+                                    "max_consecutive_skips": 0,
+                                },
                                 "window": {"start": "06:00", "end": "22:00"},
                             },
                             "conditions": [
@@ -634,7 +652,9 @@ class MigrationRoundTripTests(unittest.TestCase):
             parsed.optimizers[4].conditions[0].condition_values["run_when"],
             ("surplus", "tight"),
         )
-        self.assertEqual(parsed.optimizers[4].params["max_consecutive_skips"], 2)
+        self.assertEqual(
+            parsed.optimizers[4].params["daily_minimum"]["max_consecutive_skips"], 2
+        )
         self.assertEqual(parsed.optimizers[2].target["appliance_id"], "boiler")
 
 
