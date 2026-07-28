@@ -1454,16 +1454,10 @@ export class HelmanSolarInspector extends LitElement {
             negateWh(sumWhOverSlots(payload.series.gridForecast, slots)),
           ),
         ];
-      case "battery": {
-        const bars = this._socBars(payload);
-        const index = bars.findIndex((bar) => bar.minutes === slotToMinutes(slot));
-        const bar = index >= 0 && !bars[index].forecast ? bars[index] : null;
-        const next = bar ? bars[index + 1] ?? null : null;
-        const forecastBars = this._socForecastBars(payload);
-        const forecastIndex = forecastBars.findIndex((fc) => fc.minutes === slotToMinutes(slot));
-        const forecastBar = forecastIndex >= 0 ? forecastBars[forecastIndex] : null;
-        const forecastNext = forecastBar ? forecastBars[forecastIndex + 1] ?? null : null;
-        const rows: TooltipRow[] = [
+      case "battery":
+        // SoC has its own strip right below with its own popup; this one is
+        // about power, so it stops at the battery's watts like the others.
+        return [
           this._powerRow(
             this._t("bias_correction.inspector.merged.battery"),
             CHART_COLORS.battery,
@@ -1471,24 +1465,6 @@ export class HelmanSolarInspector extends LitElement {
             negateWh(sumWhOverSlots(payload.series.batteryForecast, slots)),
           ),
         ];
-        if (bar || forecastBar) {
-          rows.push(
-            {
-              label: this._t("bias_correction.inspector.soc_from"),
-              actual: bar ? { value: this._formatPct(bar.pct) } : null,
-              forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
-            },
-            {
-              label: this._t("bias_correction.inspector.soc_to"),
-              actual: bar ? { value: this._formatPct(next ? next.pct : bar.pct) } : null,
-              forecast: forecastBar
-                ? { value: this._formatPct(forecastNext ? forecastNext.pct : forecastBar.pct) }
-                : null,
-            },
-          );
-        }
-        return rows;
-      }
     }
   }
 
