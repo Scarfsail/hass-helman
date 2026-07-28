@@ -23,6 +23,8 @@
       "battery_soc_strip": "Battery state of charge",
       "soc_from": "SoC start",
       "soc_to": "SoC end",
+      "soc_forecast_from": "Forecast SoC start",
+      "soc_forecast_to": "Forecast SoC end",
       "export_price_strip": "Export price",
       "export_price": "Export price",
       "soc_direction": {

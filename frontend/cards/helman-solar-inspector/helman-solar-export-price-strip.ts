@@ -227,7 +227,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     style="cursor: pointer;"
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
                     @mousemove=${(event: MouseEvent) =>
-                        this._handleHover(event, geometry, columns, zeroY, yForValue, unit)}
+                        this._handleHover(event, geometry, columns, unit)}
                     @mouseleave=${() => { this._emitHover(null); this._emitTooltip(null); }}
                 >
                     <defs>
@@ -365,34 +365,25 @@ export class HelmanSolarExportPriceStrip extends LitElement {
 
     /**
      * Report the hovered minute-of-day so the inspector can echo it everywhere,
-     * and the popup content -- but only while the pointer sits inside the
-     * hovered column's own rendered bar, not just its time slice of the strip.
+     * and the popup content. The whole column's slot counts as "on" it, not just
+     * its own bar height -- a single-series bar has nothing else there to
+     * disambiguate, so a value near zero would otherwise leave almost no
+     * pointable area.
      */
     private _handleHover(
         event: MouseEvent,
         geometry: ScheduleStripGeometry,
         columns: PriceColumn[],
-        zeroY: number,
-        yForValue: (value: number) => number,
         unit: string,
     ): void {
         const svgEl = event.currentTarget as SVGSVGElement;
         const rect = svgEl.getBoundingClientRect();
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        const svgY = ((event.clientY - rect.top) / rect.height) * PRICE_STRIP.height;
         const minutes = stripMinutesForSvgX(geometry, svgX);
         const column = minutes === null
             ? undefined
             : columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
         if (minutes === null || !column) {
-            this._emitHover(null);
-            this._emitTooltip(null);
-            return;
-        }
-        const valueY = yForValue(column.value);
-        const top = Math.min(zeroY, valueY);
-        const bottom = Math.max(zeroY, valueY);
-        if (svgY < top || svgY > bottom) {
             this._emitHover(null);
             this._emitTooltip(null);
             return;

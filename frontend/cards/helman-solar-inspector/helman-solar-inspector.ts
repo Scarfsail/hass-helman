@@ -1837,7 +1837,7 @@ export class HelmanSolarInspector extends LitElement {
         aria-label=${this._t("bias_correction.inspector.battery_soc_strip")}
         style="cursor: pointer;"
         @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
-        @mousemove=${(e: MouseEvent) => this._handleSocHover(e, layout, bars)}
+        @mousemove=${(e: MouseEvent) => this._handleSocHover(e, payload, layout, bars)}
         @mouseleave=${() => this._clearHover()}
       >
         <defs>
@@ -1880,6 +1880,7 @@ export class HelmanSolarInspector extends LitElement {
               : ""}
           `;
         })}
+        ${this._renderSocForecastLine(payload, bars, layout, yForPct)}
         ${this._renderSocUnusableZones(payload, layout, yForPct)}
         </g>
       </svg>
@@ -1895,6 +1896,56 @@ export class HelmanSolarInspector extends LitElement {
     return buildSocBars(actual, forecast, this._lastForecastFillFrom);
   }
 
+  /**
+   * The forecast's own level at every slot of the day, not just the ones it
+   * speaks for alone -- so it can be traced as a dashed line over the measured
+   * columns too, the same way the chart above keeps drawing the forecast's
+   * outline over the hours the actuals have already filled in.
+   */
+  private _socForecastBars(payload: InspectorPayload): SocBar[] {
+    if (!this._isSeriesVisible("batterySocForecast")) return [];
+    return buildSocBars([], payload.series.batterySocForecast, Number.NEGATIVE_INFINITY);
+  }
+
+  /**
+   * A dashed step-line tracing the forecast's SoC across the measured part of
+   * the day -- the part its own column no longer represents, since that column
+   * now shows the actual reading instead.
+   *
+   * Keyed off the strip's own measured/forecast split (`socBars`), not the
+   * power chart's seam: the SoC actuals can lag or lead the power actuals, so
+   * the two do not necessarily turn forecast at the same slot.
+   */
+  private _renderSocForecastLine(
+    payload: InspectorPayload,
+    socBars: SocBar[],
+    layout: ChartLayout,
+    yForPct: (pct: number) => number,
+  ) {
+    const measuredMinutes = new Set(
+      socBars.filter((bar) => !bar.forecast).map((bar) => bar.minutes),
+    );
+    if (!measuredMinutes.size) return "";
+    const bars = this._socForecastBars(payload)
+      .filter((bar) => measuredMinutes.has(bar.minutes))
+      .sort((a, b) => a.minutes - b.minutes);
+    if (!bars.length) return "";
+    const points = bars.flatMap((bar) => [
+      [layout.xForMinutes(bar.minutes), yForPct(bar.pct)] as const,
+      [layout.xForMinutes(bar.minutes + this._slotMinutes), yForPct(bar.pct)] as const,
+    ]);
+    const path = points
+      .map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
+      .join(" ");
+    // A fixed battery hue would sit almost on top of the "charging" column
+    // colour (both greens), so the line reads against the theme's own text
+    // colour instead -- contrast that holds regardless of a bar's direction.
+    return svg`
+      <path d=${path} fill="none" stroke="var(--primary-text-color, #fff)"
+            stroke-width="1.4" stroke-dasharray="4 3" stroke-opacity="0.85"></path>
+    `;
+  }
+
   /** The SoC strip's own y scale: 0% at the baseline, 100% at the top. */
   private _yForSocPct(pct: number): number {
     const { padTop, padBottom, height } = SOC_STRIP;
@@ -1903,15 +1954,20 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * Hover for the SoC strip: only the column's own rendered rect — its reading
-   * down to the baseline — counts as "on" it, not the whole slot-wide column of
-   * the strip the way the shared chart hover treats a full-height band.
+   * Hover for the SoC strip: the whole slot-wide column counts as "on" it, not
+   * just the sliver its own reading fills -- a single-series bar (unlike the
+   * combined chart's stacked bands) has nothing else there to disambiguate,
+   * so a value near 0% would otherwise be nearly impossible to point at.
    */
-  private _handleSocHover(event: MouseEvent, layout: ChartLayout, bars: SocBar[]) {
+  private _handleSocHover(
+    event: MouseEvent,
+    payload: InspectorPayload,
+    layout: ChartLayout,
+    bars: SocBar[],
+  ) {
     const svgEl = event.currentTarget as SVGSVGElement;
     const rect = svgEl.getBoundingClientRect();
     const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
-    const svgY = ((event.clientY - rect.top) / rect.height) * SOC_STRIP.height;
     if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
       this._clearHover();
       return;
@@ -1925,30 +1981,41 @@ export class HelmanSolarInspector extends LitElement {
       this._clearHover();
       return;
     }
-    const top = this._yForSocPct(bar.pct);
-    const bottom = this._yForSocPct(0);
-    if (svgY < top || svgY > bottom) {
-      this._clearHover();
-      return;
-    }
     this._setHoverMinutes(bar.minutes);
     const next = bars[index + 1] ?? null;
-    this._setTooltip(
-      event,
-      [
-        {
-          label: this._t(`bias_correction.inspector.soc_direction.${bar.direction}`),
-          value: "",
-          color: SOC_DIRECTION_COLOR[bar.direction],
-        },
-        { label: this._t("bias_correction.inspector.soc_from"), value: this._formatPct(bar.pct) },
-        {
-          label: this._t("bias_correction.inspector.soc_to"),
-          value: next ? this._formatPct(next.pct) : this._formatPct(bar.pct),
-        },
-      ],
-      bar.slot,
-    );
+    const rows: TooltipRow[] = [
+      {
+        label: this._t(`bias_correction.inspector.soc_direction.${bar.direction}`),
+        value: "",
+        color: SOC_DIRECTION_COLOR[bar.direction],
+      },
+      { label: this._t("bias_correction.inspector.soc_from"), value: this._formatPct(bar.pct) },
+      {
+        label: this._t("bias_correction.inspector.soc_to"),
+        value: next ? this._formatPct(next.pct) : this._formatPct(bar.pct),
+      },
+    ];
+    // The bar itself already carries the forecast once there is no actual left
+    // to show instead, so a second forecast row there would just repeat it.
+    if (!bar.forecast) {
+      const forecastBars = this._socForecastBars(payload);
+      const forecastIndex = forecastBars.findIndex((fc) => fc.minutes === bar.minutes);
+      const forecastBar = forecastIndex >= 0 ? forecastBars[forecastIndex] : null;
+      if (forecastBar) {
+        const forecastNext = forecastBars[forecastIndex + 1] ?? null;
+        rows.push(
+          {
+            label: this._t("bias_correction.inspector.soc_forecast_from"),
+            value: this._formatPct(forecastBar.pct),
+          },
+          {
+            label: this._t("bias_correction.inspector.soc_forecast_to"),
+            value: forecastNext ? this._formatPct(forecastNext.pct) : this._formatPct(forecastBar.pct),
+          },
+        );
+      }
+    }
+    this._setTooltip(event, rows, bar.slot);
   }
 
   /** The two levels a column is read against: empty and full. */

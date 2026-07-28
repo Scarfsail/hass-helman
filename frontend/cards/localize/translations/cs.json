@@ -319,6 +319,8 @@
       "battery_soc_strip": "Stav nabití baterie",
       "soc_from": "SoC začátek",
       "soc_to": "SoC konec",
+      "soc_forecast_from": "Predikce SoC začátek",
+      "soc_forecast_to": "Predikce SoC konec",
       "export_price_strip": "Výkupní cena",
       "export_price": "Výkupní cena",
       "soc_direction": {
