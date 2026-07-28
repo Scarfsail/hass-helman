@@ -246,7 +246,15 @@ type ChartLayout = {
   slotWidth: number;
   xForMinutes: (m: number) => number;
   yForW: (w: number) => number;
+  /** Inverse of `yForW`: the watts a plot-space y coordinate reads as. */
+  wForY: (y: number) => number;
 };
+
+/** One row of a hover popup: a label/value pair, optionally swatched with a series colour. */
+type TooltipRow = { label: string; value: string; color?: string };
+
+/** The floating popup that follows the cursor over whichever bar/band it sits on. */
+type TooltipContent = { x: number; y: number; rows: TooltipRow[] };
 
 type InspectorPayload = {
   date: string;
@@ -349,6 +357,13 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
+  /**
+   * Content for the floating popup that follows the cursor over a chart. `null`
+   * hides it; set only once the pointer sits over a bar/band's own rendered
+   * area, not just its slot's x-range, so a hover over empty space above a
+   * short column shows nothing.
+   */
+  @state() private _tooltip: TooltipContent | null = null;
 
   /** Whether the opening slot width has been seeded from config or page width. */
   private _slotMinutesInitialized = false;
@@ -464,6 +479,45 @@ export class HelmanSolarInspector extends LitElement {
       color: var(--secondary-text-color);
       background: var(--secondary-background-color);
       line-height: 1.35;
+    }
+
+    .hover-tooltip {
+      position: fixed;
+      z-index: 20;
+      pointer-events: none;
+      transform: translate(-50%, -100%) translateY(-10px);
+      background: var(--card-background-color, #fff);
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      padding: 6px 9px;
+      font-size: 12px;
+      line-height: 1.5;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+      white-space: nowrap;
+    }
+
+    .hover-tooltip-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .hover-tooltip-swatch {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      flex: none;
+    }
+
+    .hover-tooltip-label {
+      color: var(--secondary-text-color);
+    }
+
+    .hover-tooltip-value {
+      margin-left: auto;
+      font-weight: 600;
+      padding-left: 10px;
     }
 
     .interpolation-note {
@@ -954,6 +1008,7 @@ export class HelmanSolarInspector extends LitElement {
             <!-- Solar, battery, price, then the schedule read against all
                  three -- the order the day editor stacks the same four things
                  in, so moving between the two is not a re-read. -->
+            ${this._renderTooltip()}
             <div class="chart-wrap">${this._renderChart(view, stacks, layout)}</div>
             ${this._lastLayoutForStrip && this._socBars(view).length
               ? this._renderSocSection(view, this._lastLayoutForStrip)
@@ -1092,10 +1147,12 @@ export class HelmanSolarInspector extends LitElement {
       margin.left + ((minutes - dayStartMinutes) / daySpan) * plotWidth;
     const yForW = (powerW: number) =>
       margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
+    const wForY = (y: number) =>
+      minKw * 1000 + ((margin.top + plotHeight - y) / plotHeight) * spanW;
 
     return {
       width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks,
-      dayStartMinutes, dayEndMinutes, slotWidth, xForMinutes, yForW,
+      dayStartMinutes, dayEndMinutes, slotWidth, xForMinutes, yForW, wForY,
     };
   }
 
@@ -1228,6 +1285,35 @@ export class HelmanSolarInspector extends LitElement {
 
   private _clearHover() {
     this._setHoverMinutes(null);
+    this._clearTooltip();
+  }
+
+  /** Show the popup at the pointer's viewport position, fixed so it escapes the shadow root's own layout. */
+  private _setTooltip(event: MouseEvent, rows: TooltipRow[]) {
+    this._tooltip = { x: event.clientX, y: event.clientY, rows };
+  }
+
+  private _clearTooltip() {
+    this._tooltip = null;
+  }
+
+  /** The popup itself: a small card of label/value rows, following the cursor. */
+  private _renderTooltip() {
+    if (!this._tooltip) return "";
+    const { x, y, rows } = this._tooltip;
+    return html`
+      <div class="hover-tooltip" style="left: ${x}px; top: ${y}px;">
+        ${rows.map((row) => html`
+          <div class="hover-tooltip-row">
+            ${row.color
+              ? html`<span class="hover-tooltip-swatch" style="background: ${row.color};"></span>`
+              : ""}
+            <span class="hover-tooltip-label">${row.label}</span>
+            <span class="hover-tooltip-value">${row.value}</span>
+          </div>
+        `)}
+      </div>
+    `;
   }
 
   /**
@@ -1612,10 +1698,8 @@ export class HelmanSolarInspector extends LitElement {
   private _renderSocStrip(payload: InspectorPayload, layout: ChartLayout) {
     const bars = this._socBars(payload);
     if (!bars.length) return "";
-    const { height, padTop, padBottom } = SOC_STRIP;
-    const innerHeight = height - padTop - padBottom;
-    const yForPct = (pct: number) =>
-      padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
+    const { height } = SOC_STRIP;
+    const yForPct = (pct: number) => this._yForSocPct(pct);
     const barWidth = Math.max(3, layout.slotWidth);
     return svg`
       <svg
@@ -1624,7 +1708,7 @@ export class HelmanSolarInspector extends LitElement {
         aria-label=${this._t("bias_correction.inspector.battery_soc_strip")}
         style="cursor: pointer;"
         @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
-        @mousemove=${(e: MouseEvent) => this._handleChartHover(e, payload)}
+        @mousemove=${(e: MouseEvent) => this._handleSocHover(e, layout, bars)}
         @mouseleave=${() => this._clearHover()}
       >
         <defs>
@@ -1656,11 +1740,7 @@ export class HelmanSolarInspector extends LitElement {
               fill-opacity=${opacity}
               stroke-width=${bar.forecast ? 0.9 : 0}
               stroke-dasharray=${bar.forecast ? "2 2" : ""}
-            >
-              <title>${bar.slot} ${this._formatPct(bar.pct)} · ${this._t(
-                `bias_correction.inspector.soc_direction.${bar.direction}`,
-              )}</title>
-            </rect>
+            ></rect>
           `;
         })}
         ${this._renderSocUnusableZones(payload, layout, yForPct)}
@@ -1676,6 +1756,58 @@ export class HelmanSolarInspector extends LitElement {
       ? payload.series.batterySocForecast
       : [];
     return buildSocBars(actual, forecast, this._lastForecastFillFrom);
+  }
+
+  /** The SoC strip's own y scale: 0% at the baseline, 100% at the top. */
+  private _yForSocPct(pct: number): number {
+    const { padTop, padBottom, height } = SOC_STRIP;
+    const innerHeight = height - padTop - padBottom;
+    return padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
+  }
+
+  /**
+   * Hover for the SoC strip: only the column's own rendered rect — its reading
+   * down to the baseline — counts as "on" it, not the whole slot-wide column of
+   * the strip the way the shared chart hover treats a full-height band.
+   */
+  private _handleSocHover(event: MouseEvent, layout: ChartLayout, bars: SocBar[]) {
+    const svgEl = event.currentTarget as SVGSVGElement;
+    const rect = svgEl.getBoundingClientRect();
+    const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
+    const svgY = ((event.clientY - rect.top) / rect.height) * SOC_STRIP.height;
+    if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
+      this._clearHover();
+      return;
+    }
+    const minutes = this._minutesForSvgX(layout, svgX);
+    const index = bars.findIndex(
+      (bar) => minutes >= bar.minutes && minutes < bar.minutes + this._slotMinutes,
+    );
+    const bar = index >= 0 ? bars[index] : null;
+    if (!bar) {
+      this._clearHover();
+      return;
+    }
+    const top = this._yForSocPct(bar.pct);
+    const bottom = this._yForSocPct(0);
+    if (svgY < top || svgY > bottom) {
+      this._clearHover();
+      return;
+    }
+    this._setHoverMinutes(bar.minutes);
+    const next = bars[index + 1] ?? null;
+    this._setTooltip(event, [
+      {
+        label: bar.slot,
+        value: this._t(`bias_correction.inspector.soc_direction.${bar.direction}`),
+        color: SOC_DIRECTION_COLOR[bar.direction],
+      },
+      { label: this._t("bias_correction.inspector.soc_from"), value: this._formatPct(bar.pct) },
+      {
+        label: this._t("bias_correction.inspector.soc_to"),
+        value: next ? this._formatPct(next.pct) : this._formatPct(bar.pct),
+      },
+    ]);
   }
 
   /** The two levels a column is read against: empty and full. */

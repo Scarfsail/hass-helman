@@ -21,7 +21,10 @@
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
       "battery_soc_strip": "Battery state of charge",
+      "soc_from": "SoC start",
+      "soc_to": "SoC end",
       "export_price_strip": "Export price",
+      "export_price": "Export price",
       "soc_direction": {
         "charging": "charging",
         "discharging": "discharging",
@@ -70,7 +73,8 @@
         "house": "House",
         "grid": "Grid",
         "battery": "Battery",
-        "battery_soc": "Battery SoC"
+        "battery_soc": "Battery SoC",
+        "export_price": "Export price"
       }
     }
   },

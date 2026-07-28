@@ -317,7 +317,10 @@
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
       "battery_soc_strip": "Stav nabití baterie",
+      "soc_from": "SoC začátek",
+      "soc_to": "SoC konec",
       "export_price_strip": "Výkupní cena",
+      "export_price": "Výkupní cena",
       "soc_direction": {
         "charging": "nabíjení",
         "discharging": "vybíjení",
@@ -365,7 +368,8 @@
         "house": "Spotřeba",
         "grid": "Síť",
         "battery": "Baterie",
-        "battery_soc": "SoC baterie"
+        "battery_soc": "SoC baterie",
+        "export_price": "Výkupní cena"
       }
     }
   },
