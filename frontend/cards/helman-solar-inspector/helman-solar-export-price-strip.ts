@@ -32,12 +32,18 @@ export interface PriceColumnsDetail {
     unit: string;
 }
 
-/** The popup content emitted for the inspector's shared floating tooltip to render. */
+/**
+ * The popup content emitted for the inspector's shared floating tooltip to
+ * render. Price has no actual/forecast duality of its own -- it is simply a
+ * rate -- so `hasActual` is always false and every row carries only a
+ * forecast cell.
+ */
 export interface PriceTooltipContent {
     x: number;
     y: number;
     title?: string;
-    rows: Array<{ label: string; value: string; color?: string }>;
+    hasActual: boolean;
+    rows: Array<{ label: string; actual: { value: string; color?: string } | null; forecast: { value: string; color?: string } | null }>;
 }
 
 /**
@@ -393,10 +399,12 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             x: event.clientX,
             y: event.clientY,
             title: `${this._formatMinutes(column.startMinutes)} – ${this._formatMinutes(column.endMinutes)}`,
+            hasActual: false,
             rows: [
                 {
                     label: this._t("bias_correction.inspector.export_price"),
-                    value: `${column.value.toFixed(1)} ${unit}`.trim(),
+                    actual: null,
+                    forecast: { value: `${column.value.toFixed(1)} ${unit}`.trim() },
                 },
             ],
         });

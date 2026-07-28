@@ -252,11 +252,30 @@ type ChartLayout = {
   wForY: (y: number) => number;
 };
 
-/** One row of a hover popup: a label/value pair, optionally swatched with a series colour. */
-type TooltipRow = { label: string; value: string; color?: string };
+/** One cell of a hover popup's actual/forecast column, optionally swatched. */
+type TooltipCell = { value: string; color?: string } | null;
 
-/** The floating popup that follows the cursor over whichever bar/band it sits on. */
-type TooltipContent = { x: number; y: number; title?: string; rows: TooltipRow[] };
+/**
+ * One row of a hover popup: a label, and its actual and forecast readings side
+ * by side. `forecast` is the only cell guaranteed present -- a slot with no
+ * actual data yet (still ahead of it) leaves `actual` null, and the popup
+ * drops that column entirely rather than show it empty.
+ */
+type TooltipRow = { label: string; actual: TooltipCell; forecast: TooltipCell };
+
+/**
+ * The floating popup that follows the cursor over whichever bar/band it sits
+ * on. `hasActual` decides once, for the whole popup, whether the actual
+ * column renders -- the hovered slot either has lived through or it hasn't,
+ * so every row in one popup agrees on it.
+ */
+type TooltipContent = {
+  x: number;
+  y: number;
+  title?: string;
+  hasActual: boolean;
+  rows: TooltipRow[];
+};
 
 /** The four things the combined chart stacks; a hover hit-tests to exactly one. */
 type SeriesFamily = "solar" | "house" | "battery" | "grid";
@@ -513,10 +532,34 @@ export class HelmanSolarInspector extends LitElement {
       margin-bottom: 3px;
     }
 
-    .hover-tooltip-row {
+    .hover-tooltip-table {
+      display: grid;
+      column-gap: 10px;
+      row-gap: 2px;
+      align-items: center;
+    }
+
+    .hover-tooltip-table.has-actual {
+      grid-template-columns: auto 1fr 1fr;
+    }
+
+    .hover-tooltip-table.forecast-only {
+      grid-template-columns: auto 1fr;
+    }
+
+    .hover-tooltip-header {
+      color: var(--secondary-text-color);
+      font-size: 0.9em;
+      text-align: right;
+    }
+
+    .hover-tooltip-cell {
       display: flex;
       align-items: center;
-      gap: 6px;
+      justify-content: flex-end;
+      gap: 4px;
+      font-weight: 600;
+      text-align: right;
     }
 
     .hover-tooltip-swatch {
@@ -529,12 +572,6 @@ export class HelmanSolarInspector extends LitElement {
 
     .hover-tooltip-label {
       color: var(--secondary-text-color);
-    }
-
-    .hover-tooltip-value {
-      margin-left: auto;
-      font-weight: 600;
-      padding-left: 10px;
     }
 
     .interpolation-note {
@@ -1325,9 +1362,11 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._setHoverMinutes(slot);
+    const hasActual = slot < this._lastForecastFillFrom;
     this._setTooltip(
       event,
       this._seriesTooltipRows(payload, family, minutesToSlot(slot)),
+      hasActual,
       this._formatSelectionRange([minutesToSlot(slot)]),
     );
   }
@@ -1355,6 +1394,20 @@ export class HelmanSolarInspector extends LitElement {
     return null;
   }
 
+  /** One row's actual/forecast pair as Wh, formatted, colour-matched to its series. */
+  private _powerRow(
+    label: string,
+    color: string,
+    actualWh: number | null,
+    forecastWh: number | null,
+  ): TooltipRow {
+    return {
+      label,
+      actual: actualWh === null ? null : { value: this._formatWh(actualWh), color },
+      forecast: forecastWh === null ? null : { value: this._formatWh(forecastWh), color },
+    };
+  }
+
   /** The forecast/actual pair for one hovered family, at the single hovered slot. */
   private _seriesTooltipRows(
     payload: InspectorPayload,
@@ -1365,32 +1418,62 @@ export class HelmanSolarInspector extends LitElement {
     switch (family) {
       case "solar":
         return [
-          { label: this._t("bias_correction.inspector.corrected_forecast"), value: this._formatWh(sumWhOverSlots(payload.series.corrected, slots)), color: CHART_COLORS.corrected },
-          { label: this._t("bias_correction.inspector.actual_production"), value: this._formatWh(sumWhOverSlots(payload.series.actual, slots)), color: CHART_COLORS.actual },
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.solar"),
+            CHART_COLORS.actual,
+            sumWhOverSlots(payload.series.actual, slots),
+            sumWhOverSlots(payload.series.corrected, slots),
+          ),
         ];
       case "house":
         return [
-          { label: this._t("bias_correction.inspector.house_forecast"), value: this._formatWh(negateWh(sumWhOverSlots(payload.series.houseForecast, slots))), color: CHART_COLORS.house },
-          { label: this._t("bias_correction.inspector.house_actual"), value: this._formatWh(negateWh(sumWhOverSlots(payload.series.houseActual, slots))), color: CHART_COLORS.house },
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.house"),
+            CHART_COLORS.house,
+            negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
+            negateWh(sumWhOverSlots(payload.series.houseForecast, slots)),
+          ),
         ];
       case "grid":
         return [
-          { label: this._t("bias_correction.inspector.grid_forecast"), value: this._formatWh(negateWh(sumWhOverSlots(payload.series.gridForecast, slots))), color: CHART_COLORS.grid },
-          { label: this._t("bias_correction.inspector.grid_actual"), value: this._formatWh(negateWh(sumWhOverSlots(payload.series.gridActual, slots))), color: CHART_COLORS.grid },
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.grid"),
+            CHART_COLORS.grid,
+            negateWh(sumWhOverSlots(payload.series.gridActual, slots)),
+            negateWh(sumWhOverSlots(payload.series.gridForecast, slots)),
+          ),
         ];
       case "battery": {
         const bars = this._socBars(payload);
         const index = bars.findIndex((bar) => bar.minutes === slotToMinutes(slot));
-        const bar = index >= 0 ? bars[index] : null;
+        const bar = index >= 0 && !bars[index].forecast ? bars[index] : null;
         const next = bar ? bars[index + 1] ?? null : null;
+        const forecastBars = this._socForecastBars(payload);
+        const forecastIndex = forecastBars.findIndex((fc) => fc.minutes === slotToMinutes(slot));
+        const forecastBar = forecastIndex >= 0 ? forecastBars[forecastIndex] : null;
+        const forecastNext = forecastBar ? forecastBars[forecastIndex + 1] ?? null : null;
         const rows: TooltipRow[] = [
-          { label: this._t("bias_correction.inspector.battery_forecast"), value: this._formatWh(negateWh(sumWhOverSlots(payload.series.batteryForecast, slots))), color: CHART_COLORS.battery },
-          { label: this._t("bias_correction.inspector.battery_actual"), value: this._formatWh(negateWh(sumWhOverSlots(payload.series.batteryActual, slots))), color: CHART_COLORS.battery },
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.battery"),
+            CHART_COLORS.battery,
+            negateWh(sumWhOverSlots(payload.series.batteryActual, slots)),
+            negateWh(sumWhOverSlots(payload.series.batteryForecast, slots)),
+          ),
         ];
-        if (bar) {
+        if (bar || forecastBar) {
           rows.push(
-            { label: this._t("bias_correction.inspector.soc_from"), value: this._formatPct(bar.pct) },
-            { label: this._t("bias_correction.inspector.soc_to"), value: next ? this._formatPct(next.pct) : this._formatPct(bar.pct) },
+            {
+              label: this._t("bias_correction.inspector.soc_from"),
+              actual: bar ? { value: this._formatPct(bar.pct) } : null,
+              forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
+            },
+            {
+              label: this._t("bias_correction.inspector.soc_to"),
+              actual: bar ? { value: this._formatPct(next ? next.pct : bar.pct) } : null,
+              forecast: forecastBar
+                ? { value: this._formatPct(forecastNext ? forecastNext.pct : forecastBar.pct) }
+                : null,
+            },
           );
         }
         return rows;
@@ -1411,30 +1494,50 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /** Show the popup at the pointer's viewport position, fixed so it escapes the shadow root's own layout. */
-  private _setTooltip(event: MouseEvent, rows: TooltipRow[], title?: string) {
-    this._tooltip = { x: event.clientX, y: event.clientY, title, rows };
+  private _setTooltip(event: MouseEvent, rows: TooltipRow[], hasActual: boolean, title?: string) {
+    this._tooltip = { x: event.clientX, y: event.clientY, title, hasActual, rows };
   }
 
   private _clearTooltip() {
     this._tooltip = null;
   }
 
-  /** The popup itself: a small card of label/value rows, following the cursor. */
+  private _renderTooltipCell(cell: TooltipCell) {
+    if (!cell) return html`<span class="hover-tooltip-cell">—</span>`;
+    return html`
+      <span class="hover-tooltip-cell">
+        ${cell.color ? html`<span class="hover-tooltip-swatch" style="background: ${cell.color};"></span>` : ""}
+        ${cell.value}
+      </span>
+    `;
+  }
+
+  /**
+   * The popup itself: a title, then a label/actual/forecast table, following
+   * the cursor. A slot with no actual reading yet drops the actual column
+   * entirely rather than pad it with dashes -- what the popup states as
+   * "the" value there is simply the forecast.
+   */
   private _renderTooltip() {
     if (!this._tooltip) return "";
-    const { x, y, title, rows } = this._tooltip;
+    const { x, y, title, hasActual, rows } = this._tooltip;
     return html`
       <div class="hover-tooltip" style="left: ${x}px; top: ${y}px;">
         ${title ? html`<div class="hover-tooltip-title">${title}</div>` : ""}
-        ${rows.map((row) => html`
-          <div class="hover-tooltip-row">
-            ${row.color
-              ? html`<span class="hover-tooltip-swatch" style="background: ${row.color};"></span>`
-              : ""}
+        <div class="hover-tooltip-table ${hasActual ? "has-actual" : "forecast-only"}">
+          ${hasActual
+            ? html`
+                <span></span>
+                <span class="hover-tooltip-header">${this._t("bias_correction.inspector.column_actual")}</span>
+                <span class="hover-tooltip-header">${this._t("bias_correction.inspector.column_forecast")}</span>
+              `
+            : ""}
+          ${rows.map((row) => html`
             <span class="hover-tooltip-label">${row.label}</span>
-            <span class="hover-tooltip-value">${row.value}</span>
-          </div>
-        `)}
+            ${hasActual ? this._renderTooltipCell(row.actual) : ""}
+            ${this._renderTooltipCell(row.forecast)}
+          `)}
+        </div>
       </div>
     `;
   }
@@ -1940,9 +2043,11 @@ export class HelmanSolarInspector extends LitElement {
     // A fixed battery hue would sit almost on top of the "charging" column
     // colour (both greens), so the line reads against the theme's own text
     // colour instead -- contrast that holds regardless of a bar's direction.
+    // Width and dash match the chart above's own forecast outline exactly.
     return svg`
       <path d=${path} fill="none" stroke="var(--primary-text-color, #fff)"
-            stroke-width="1.4" stroke-dasharray="4 3" stroke-opacity="0.85"></path>
+            stroke-width=${FORECAST_OUTLINE.width} stroke-dasharray="4 3"
+            stroke-opacity=${FORECAST_OUTLINE.opacity}></path>
     `;
   }
 
@@ -1982,40 +2087,39 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._setHoverMinutes(bar.minutes);
+    // The bar itself is either the actual reading or, ahead of it, the
+    // forecast standing in alone -- never both -- so only a measured bar has
+    // a real actual column to show.
+    const hasActual = !bar.forecast;
     const next = bars[index + 1] ?? null;
+    const forecastBars = this._socForecastBars(payload);
+    const forecastIndex = forecastBars.findIndex((fc) => fc.minutes === bar.minutes);
+    const forecastBar = forecastIndex >= 0 ? forecastBars[forecastIndex] : null;
+    const forecastNext = forecastBar ? forecastBars[forecastIndex + 1] ?? null : null;
     const rows: TooltipRow[] = [
       {
-        label: this._t(`bias_correction.inspector.soc_direction.${bar.direction}`),
-        value: "",
-        color: SOC_DIRECTION_COLOR[bar.direction],
+        label: this._t("bias_correction.inspector.soc_direction_label"),
+        actual: hasActual
+          ? { value: this._t(`bias_correction.inspector.soc_direction.${bar.direction}`), color: SOC_DIRECTION_COLOR[bar.direction] }
+          : null,
+        forecast: forecastBar
+          ? { value: this._t(`bias_correction.inspector.soc_direction.${forecastBar.direction}`), color: SOC_DIRECTION_COLOR[forecastBar.direction] }
+          : null,
       },
-      { label: this._t("bias_correction.inspector.soc_from"), value: this._formatPct(bar.pct) },
+      {
+        label: this._t("bias_correction.inspector.soc_from"),
+        actual: hasActual ? { value: this._formatPct(bar.pct) } : null,
+        forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
+      },
       {
         label: this._t("bias_correction.inspector.soc_to"),
-        value: next ? this._formatPct(next.pct) : this._formatPct(bar.pct),
+        actual: hasActual ? { value: this._formatPct(next ? next.pct : bar.pct) } : null,
+        forecast: forecastBar
+          ? { value: this._formatPct(forecastNext ? forecastNext.pct : forecastBar.pct) }
+          : null,
       },
     ];
-    // The bar itself already carries the forecast once there is no actual left
-    // to show instead, so a second forecast row there would just repeat it.
-    if (!bar.forecast) {
-      const forecastBars = this._socForecastBars(payload);
-      const forecastIndex = forecastBars.findIndex((fc) => fc.minutes === bar.minutes);
-      const forecastBar = forecastIndex >= 0 ? forecastBars[forecastIndex] : null;
-      if (forecastBar) {
-        const forecastNext = forecastBars[forecastIndex + 1] ?? null;
-        rows.push(
-          {
-            label: this._t("bias_correction.inspector.soc_forecast_from"),
-            value: this._formatPct(forecastBar.pct),
-          },
-          {
-            label: this._t("bias_correction.inspector.soc_forecast_to"),
-            value: forecastNext ? this._formatPct(forecastNext.pct) : this._formatPct(forecastBar.pct),
-          },
-        );
-      }
-    }
-    this._setTooltip(event, rows, bar.slot);
+    this._setTooltip(event, rows, hasActual, bar.slot);
   }
 
   /** The two levels a column is read against: empty and full. */
