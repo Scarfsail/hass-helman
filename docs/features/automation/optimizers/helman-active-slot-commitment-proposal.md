@@ -90,8 +90,8 @@ Not bad luck — it is structurally last in the ranking:
 
 ```mermaid
 flowchart LR
-    A["_slot_is_solar_covered<br/>looks up 15-min aligned keys<br/>projection_builder.py:603"] --> M{"key match?"}
-    B["grid series, first point<br/>timestamp = raw run instant<br/>battery_capacity_forecast_builder.py:310, 1080"] --> M
+    A["_slot_is_solar_covered<br/>looks up 15-min aligned keys"] --> M{"key match?"}
+    B["surplus rail keyed by the<br/>timestamp verbatim; the series'<br/>first point = raw run instant"] --> M
     M -- "never, for the active slot" --> F["covered = False"]
     F --> L["sorts below every<br/>solar-covered future slot"]
 
@@ -99,15 +99,26 @@ flowchart LR
     style L fill:#ffcccc,stroke:#c00,stroke-width:2px
 ```
 
-`reference_time` is never aligned in production — Home Assistant's
-`async_track_time_change` fires with a random 50–500 ms offset. So the lookup
-for the currently-executing slot always misses, `available is None`, and
-coverage returns `False`. Ranking is `(price, covered, chronological)`; with
-flat or hourly-tied export prices, `covered` *is* the ranking. The running slot
-therefore sits at the bottom of the chosen set — exactly where the cut lands.
+The series' first point covers only the remainder of the bucket in progress and
+is stamped with the raw run instant. `reference_time` is never aligned in
+production — Home Assistant's `async_track_time_change` fires with a random
+50–500 ms offset — so that key is one no caller can construct. Callers look
+buckets up by flooring a slot start, so the bucket covering *now* always missed:
+`available is None`, coverage returns `False`.
 
-This is untested: every test in `test_automation_optimizer_appliance_runtime.py`
-uses an aligned `REFERENCE_TIME` with future-only candidate slots.
+Ranking is `(price, covered, chronological)`; with flat or hourly-tied export
+prices, `covered` *is* the ranking. The running slot therefore sat at the bottom
+of the chosen set — exactly where the cut lands.
+
+Fixed in `read_available_surplus_by_bucket` rather than in the forecast builder:
+`read_soc_by_bucket_covering_horizon`, one function above it, already floors its
+keys with `canonical_bucket_start`, so the surplus rail was the outlier. Fixing
+the reader keeps the published series untouched and follows the convention the
+sibling reader already sets.
+
+It was untested because every test in
+`test_automation_optimizer_appliance_runtime.py` uses an aligned
+`REFERENCE_TIME` with future-only candidate slots.
 
 ### What makes it fire so often
 
@@ -219,14 +230,21 @@ genuinely cheaper: the current slot was demoted for a spurious reason, not a rea
 price signal. Fixing that bug reduces how often the pin overrides a real signal
 rather than a fake one.
 
-## Related, fix separately
+## Status
 
-**Timestamp alignment.** Emit the aligned `slot_key` rather than the raw
-`slot_start` for the first grid-series point
-(`battery_capacity_forecast_builder.py:310`, `:1080`), or align the lookup. It
-silently distorts every solar-coverage decision about the current slot, not just
-this symptom. The pin stops the flicker regardless; this makes the ranking
-honest.
+Both changes are implemented on `feat/active-slot-commitment`:
+
+| Commit | Change |
+|---|---|
+| `feat(automation): keep an in-flight appliance run in the plan` | the pin — `appliance_active_by_id` (A5) plus promotion before the cut |
+| `fix(automation): key the surplus rail by canonical bucket start` | the alignment fix, in the reader |
+
+Six tests cover the pin (kept when running, dropped when idle, marginal-slot
+displacement, ineligible slot, minimum reached, still stamped a candidate) and
+one covers the alignment fix using an unaligned reference time. Each was
+verified to fail with its change reverted.
+
+## Related, fix separately
 
 **Empty condition masks.** `_export_price_below_mask` and `_run_when_mask`
 (`conditions/types.py:104-130`, `:92-101`) return an empty mask when their rail
