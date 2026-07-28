@@ -232,17 +232,29 @@ rather than a fake one.
 
 ## Status
 
-Both changes are implemented on `feat/active-slot-commitment`:
+Implemented and merged to `main`:
 
 | Commit | Change |
 |---|---|
 | `feat(automation): keep an in-flight appliance run in the plan` | the pin — `appliance_active_by_id` (A5) plus promotion before the cut |
-| `fix(automation): key the surplus rail by canonical bucket start` | the alignment fix, in the reader |
+| `fix(automation): key the surplus rail by canonical bucket start` | the surplus rail could not *find* the bucket in progress |
+| `fix(automation): stop gating the slot in progress on elapsed SoC buckets` | `min_soc_pct` gated on a bucket that no longer exists |
 
-Six tests cover the pin (kept when running, dropped when idle, marginal-slot
-displacement, ineligible slot, minimum reached, still stamped a candidate) and
-one covers the alignment fix using an unaligned reference time. Each was
-verified to fail with its change reverted.
+Eight tests cover the three (pin kept when running, dropped when idle,
+marginal-slot displacement, ineligible slot, minimum reached, still stamped a
+candidate; the surplus rail under an unaligned reference time; the SoC mask past
+a slot midpoint). Each was verified to fail with its change reverted.
+
+### The third one was found by deploying
+
+The first two were derived from the code. The third only surfaced when the fix
+was watched against a live instance: with `min_soc_pct` configured, the slot in
+progress left `placeable_slots` on every re-plan landing in the second half of a
+slot — which is exactly where the pin's guard reads, so **the pin was inert
+precisely when it was needed**. Two of the three defects are the same shape: a
+rail that cannot describe the bucket in progress. The surplus rail failed to
+find a bucket that existed; the SoC mask gated on one that legitimately no
+longer does.
 
 ## Related, fix separately
 

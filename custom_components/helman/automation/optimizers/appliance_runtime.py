@@ -574,11 +574,10 @@ def _promote_in_flight_slot(
     if not active:
         return ranked
     for index, (_cost, slot_id) in enumerate(ranked):
-        if slot_id != active_slot_id:
-            continue
-        if index == 0:
-            return ranked
-        return [ranked[index], *ranked[:index], *ranked[index + 1 :]]
+        if slot_id == active_slot_id:
+            if index == 0:
+                return ranked
+            return [ranked[index], *ranked[:index], *ranked[index + 1 :]]
     return ranked
 
 
