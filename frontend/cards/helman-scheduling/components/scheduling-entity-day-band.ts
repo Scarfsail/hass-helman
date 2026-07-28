@@ -972,7 +972,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 -->
                 <div
                     class="track"
-                    title=${inTrackLabels ? lane.name : nothing}
+                    title=${inTrackLabels && !this.readonly ? lane.name : nothing}
                     @click=${(event: Event) => this._handleTrackClick(event, lane.key)}
                 >
                     ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment, changeBoundaries))}
