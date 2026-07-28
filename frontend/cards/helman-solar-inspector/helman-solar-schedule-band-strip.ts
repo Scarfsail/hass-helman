@@ -13,6 +13,7 @@ import type {
     EntityDayBandBlockSelectDetail,
     EntityDayBandHighlight,
     EntityDayBandLaneSelectDetail,
+    EntityDayBandPointerMoveDetail,
     EntityDayBandTimeHoverDetail,
 } from "../helman-scheduling/components/scheduling-entity-day-band";
 import type { EntityScheduleSaveDetail } from "../helman-scheduling/dialogs/scheduling-entity-day-editor";
@@ -29,6 +30,8 @@ import {
     buildEntityDayBandLanes,
     buildEntityScheduleDayView,
     buildEntityScheduleLanes,
+    formatLaneRunRange,
+    resolveLaneRunPresentation,
     type EntityDayBandLane,
     type EntityScheduleDayView,
 } from "../helman-scheduling/model/entity-lane-source";
@@ -40,6 +43,7 @@ import {
     applyNormalizedScheduleCurrentState,
     buildNormalizedScheduleStructure,
 } from "../helman-scheduling/model/schedule-normalizer";
+import { formatScheduleTime } from "../helman-scheduling/model/schedule-time";
 import {
     buildSlotForecastMap,
     deriveScheduleForecastParams,
@@ -53,6 +57,21 @@ import type {
 import { stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
 import { SLOT_MINUTES } from "./chart-stack";
 import { helmanColorVars } from "../color-vars";
+
+/** One lane's action at the hovered moment, for the fast hover popup. */
+export interface ScheduleHoverTooltipRow {
+    label: string;
+    value: string;
+    toneClass: string;
+}
+
+/** The popup content emitted for the inspector's shared floating tooltip to render. */
+export interface ScheduleHoverTooltipContent {
+    x: number;
+    y: number;
+    title: string;
+    rows: ScheduleHoverTooltipRow[];
+}
 
 const MINUTES_PER_DAY = 1440;
 const MINUTE_MS = 60_000;
@@ -151,6 +170,8 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     private _dayView: EntityScheduleDayView = { slots: [], forecastPoints: new Map() };
     private _lanes: EntityScheduleLane[] = [];
     private _days: EntityScheduleDay[] = [];
+    /** The lanes actually drawn on the last render, for the hover popup to read. */
+    private _lastBandLanes: EntityDayBandLane[] = [];
     private _forecastMap: SlotForecastMap = EMPTY_SLOT_FORECAST_MAP;
     private _derivedFor: {
         normalized: unknown;
@@ -209,6 +230,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         if (lanes.length === 0) {
             return nothing;
         }
+        this._lastBandLanes = lanes;
 
         const { start, end } = stripWindow(this.geometry);
         // The wrap spans the card, and only the tracks are inset to the plot
@@ -241,6 +263,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                     @entity-day-band-lane-select=${this._handleLaneSelect}
                     @entity-day-band-block-select=${this._handleBlockSelect}
                     @entity-day-band-time-hover=${this._handleTimeHover}
+                    @entity-day-band-pointer-move=${this._handlePointerMove}
                 ></scheduling-entity-day-band>
             </div>
             ${this._renderEditor()}
@@ -485,7 +508,60 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         this._emitHover(
             atMs === null || day === null ? null : (atMs - day.startMs) / MINUTE_MS,
         );
+        if (atMs === null) {
+            this._emitTooltip(null);
+        }
     };
+
+    /**
+     * Every lane with something active at the hovered moment, in one fast
+     * popup -- the native per-block `title` a lane's own segment carries is
+     * still there underneath, but reading eight of them one at a time is not
+     * how "what does the house look like at 14:00" gets answered.
+     */
+    private _handlePointerMove = (event: CustomEvent<EntityDayBandPointerMoveDetail>): void => {
+        event.stopPropagation();
+        const { atMs, clientX, clientY } = event.detail;
+        if (atMs === null) {
+            this._emitTooltip(null);
+            return;
+        }
+        const rows: ScheduleHoverTooltipRow[] = [];
+        for (const lane of this._lastBandLanes) {
+            const run =
+                lane.actualSegments.find((segment) => atMs >= segment.startMs && atMs < segment.endMs)
+                ?? lane.blocks.find((block) => atMs >= block.startMs && atMs < block.endMs);
+            if (run === undefined) continue;
+            const presentation = resolveLaneRunPresentation(lane, run, this._localize);
+            // An actual segment's real running time can be shorter than its
+            // slot, the same distinction the segment's own native title draws.
+            const totalMs = "activeMs" in run ? run.activeMs : undefined;
+            const range = formatLaneRunRange(run, this._locale, this.timeZone, totalMs);
+            rows.push({
+                label: lane.name,
+                value: `${presentation.label} · ${range}`,
+                toneClass: presentation.toneClass,
+            });
+        }
+        if (rows.length === 0) {
+            this._emitTooltip(null);
+            return;
+        }
+        this._emitTooltip({
+            x: clientX,
+            y: clientY,
+            title: formatScheduleTime(atMs, this._locale, this.timeZone),
+            rows,
+        });
+    };
+
+    private _emitTooltip(content: ScheduleHoverTooltipContent | null): void {
+        this.dispatchEvent(new CustomEvent<ScheduleHoverTooltipContent | null>("slot-tooltip", {
+            detail: content,
+            bubbles: true,
+            composed: true,
+        }));
+    }
 
     private _emitHover(minutes: number | null): void {
         this.dispatchEvent(new CustomEvent<{ minutes: number | null }>("slot-hover", {

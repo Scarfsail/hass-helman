@@ -7,6 +7,7 @@ import {
   SLOT_MINUTES,
   accumulateBands,
   bandRuns,
+  clampToSign,
   lastStackSlot,
   stackSlots,
   stackTotals,
@@ -36,6 +37,7 @@ import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-band-strip";
 import "./helman-solar-export-price-strip";
+import type { PriceColumn, PriceColumnsDetail } from "./helman-solar-export-price-strip";
 import "../helman/power-devices-container";
 import { DeviceNode } from "../helman/DeviceNode";
 import {
@@ -80,6 +82,8 @@ import {
   type SlotSelectionState,
 } from "./slot-selection.js";
 import { helmanColorVars } from "../color-vars";
+import { schedulingSharedStyles } from "../helman-scheduling/styles/scheduling-shared-styles";
+import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
@@ -246,7 +250,41 @@ type ChartLayout = {
   slotWidth: number;
   xForMinutes: (m: number) => number;
   yForW: (w: number) => number;
+  /** Inverse of `yForW`: the watts a plot-space y coordinate reads as. */
+  wForY: (y: number) => number;
 };
+
+/**
+ * One cell of a hover popup's actual/forecast column, optionally swatched --
+ * either with a literal colour, or with a schedule action's tone class, whose
+ * accent colour rides in via `schedulingSharedStyles`.
+ */
+type TooltipCell = { value: string; color?: string; toneClass?: string } | null;
+
+/**
+ * One row of a hover popup: a label, and its actual and forecast readings side
+ * by side. `forecast` is the only cell guaranteed present -- a slot with no
+ * actual data yet (still ahead of it) leaves `actual` null, and the popup
+ * drops that column entirely rather than show it empty.
+ */
+type TooltipRow = { label: string; actual: TooltipCell; forecast: TooltipCell };
+
+/**
+ * The floating popup that follows the cursor over whichever bar/band it sits
+ * on. `hasActual` decides once, for the whole popup, whether the actual
+ * column renders -- the hovered slot either has lived through or it hasn't,
+ * so every row in one popup agrees on it.
+ */
+type TooltipContent = {
+  x: number;
+  y: number;
+  title?: string;
+  hasActual: boolean;
+  rows: TooltipRow[];
+};
+
+/** The four things the combined chart stacks; a hover hit-tests to exactly one. */
+type SeriesFamily = "solar" | "house" | "battery" | "grid";
 
 type InspectorPayload = {
   date: string;
@@ -349,6 +387,20 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
+  /**
+   * Content for the floating popup that follows the cursor over a chart. `null`
+   * hides it; set only once the pointer sits over a bar/band's own rendered
+   * area, not just its slot's x-range, so a hover over empty space above a
+   * short column shows nothing.
+   */
+  @state() private _tooltip: TooltipContent | null = null;
+  /**
+   * The selected day's export-price columns, echoed up from the price strip --
+   * the only place that loads them -- so the selected-slot panel can show a
+   * price for the slot even while the strip itself is collapsed or off-screen.
+   */
+  @state() private _priceColumns: PriceColumn[] = [];
+  @state() private _priceUnit = "";
 
   /** Whether the opening slot width has been seeded from config or page width. */
   private _slotMinutesInitialized = false;
@@ -361,7 +413,7 @@ export class HelmanSolarInspector extends LitElement {
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
 
-  static styles = [helmanColorVars, css`
+  static styles = [helmanColorVars, schedulingSharedStyles, css`
     :host {
       display: block;
       width: 100%;
@@ -464,6 +516,68 @@ export class HelmanSolarInspector extends LitElement {
       color: var(--secondary-text-color);
       background: var(--secondary-background-color);
       line-height: 1.35;
+    }
+
+    .hover-tooltip {
+      position: fixed;
+      z-index: 20;
+      pointer-events: none;
+      transform: translate(-50%, -100%) translateY(-10px);
+      background: var(--card-background-color, #fff);
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      padding: 6px 9px;
+      font-size: 12px;
+      line-height: 1.5;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+      white-space: nowrap;
+    }
+
+    .hover-tooltip-title {
+      font-weight: 600;
+      margin-bottom: 3px;
+    }
+
+    .hover-tooltip-table {
+      display: grid;
+      column-gap: 10px;
+      row-gap: 2px;
+      align-items: center;
+    }
+
+    .hover-tooltip-table.has-actual {
+      grid-template-columns: auto 1fr 1fr;
+    }
+
+    .hover-tooltip-table.forecast-only {
+      grid-template-columns: auto 1fr;
+    }
+
+    .hover-tooltip-header {
+      color: var(--secondary-text-color);
+      font-size: 0.9em;
+      text-align: right;
+    }
+
+    .hover-tooltip-cell {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      font-weight: 600;
+      text-align: right;
+    }
+
+    .hover-tooltip-swatch {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      flex: none;
+    }
+
+    .hover-tooltip-label {
+      color: var(--secondary-text-color);
     }
 
     .interpolation-note {
@@ -954,6 +1068,7 @@ export class HelmanSolarInspector extends LitElement {
             <!-- Solar, battery, price, then the schedule read against all
                  three -- the order the day editor stacks the same four things
                  in, so moving between the two is not a re-read. -->
+            ${this._renderTooltip()}
             <div class="chart-wrap">${this._renderChart(view, stacks, layout)}</div>
             ${this._lastLayoutForStrip && this._socBars(view).length
               ? this._renderSocSection(view, this._lastLayoutForStrip)
@@ -1092,10 +1207,12 @@ export class HelmanSolarInspector extends LitElement {
       margin.left + ((minutes - dayStartMinutes) / daySpan) * plotWidth;
     const yForW = (powerW: number) =>
       margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
+    const wForY = (y: number) =>
+      minKw * 1000 + ((margin.top + plotHeight - y) / plotHeight) * spanW;
 
     return {
       width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks,
-      dayStartMinutes, dayEndMinutes, slotWidth, xForMinutes, yForW,
+      dayStartMinutes, dayEndMinutes, slotWidth, xForMinutes, yForW, wForY,
     };
   }
 
@@ -1175,6 +1292,8 @@ export class HelmanSolarInspector extends LitElement {
         .hoverMinutes=${this._hoveredMinutes}
         @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
           this._setHoverMinutes(event.detail?.minutes ?? null)}
+        @slot-tooltip=${(event: CustomEvent<ScheduleHoverTooltipContent | null>) =>
+          this._setScheduleTooltip(event.detail)}
       ></helman-solar-schedule-band-strip>
     `;
   }
@@ -1219,6 +1338,136 @@ export class HelmanSolarInspector extends LitElement {
     return layout.dayStartMinutes + ((svgX - layout.margin.left) / layout.plotWidth) * daySpan;
   }
 
+  /**
+   * Hover for the combined chart: a popup appears only once the cursor sits
+   * inside one of the stacked bands actually drawn there -- solar, house,
+   * battery or grid -- not merely somewhere in that slot's column, the way the
+   * shared highlight-only hover treats the whole column height as active.
+   */
+  private _handleMainChartHover(
+    event: MouseEvent,
+    payload: InspectorPayload,
+    stacks: ChartStacks,
+    layout: ChartLayout,
+  ) {
+    const svgEl = event.currentTarget as SVGSVGElement;
+    const rect = svgEl.getBoundingClientRect();
+    const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
+    if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
+      this._clearHover();
+      return;
+    }
+    const minutes = this._minutesForSvgX(layout, svgX);
+    const slot = Math.floor(minutes / this._slotMinutes) * this._slotMinutes;
+    const rows = this._allSeriesTooltipRows(payload, minutesToSlot(slot));
+    if (!rows.length) {
+      this._clearHover();
+      return;
+    }
+    this._setHoverMinutes(slot);
+    const hasActual = slot < this._lastForecastFillFrom;
+    this._setTooltip(
+      event,
+      rows,
+      hasActual,
+      this._formatSelectionRange([minutesToSlot(slot)]),
+    );
+  }
+
+  /** EXPERIMENT: every series' row for the hovered slot, in one popup. */
+  private _allSeriesTooltipRows(payload: InspectorPayload, slot: string): TooltipRow[] {
+    const families: SeriesFamily[] = ["solar", "house", "battery", "grid"];
+    return families
+      .flatMap((family) => this._seriesTooltipRows(payload, family, slot))
+      .filter((row) => row.actual !== null || row.forecast !== null);
+  }
+
+  /**
+   * Which of a stack's bands, if any, the cursor's watt value falls inside at
+   * this slot. Walked layer by layer from the zero baseline rather than via
+   * `accumulateBands`, whose bands drop a layer entirely when it is flat --
+   * which would desync a band index from the family it belongs to.
+   */
+  private _hitTestStackFamily(set: StackSet, slot: number, watts: number): SeriesFamily | null {
+    const sign: 1 | -1 = watts >= 0 ? 1 : -1;
+    const layers = sign > 0 ? set.positive : set.negative;
+    const families: readonly SeriesFamily[] =
+      sign > 0 ? ["solar", "battery", "grid"] : ["house", "battery", "grid"];
+    let base = 0;
+    for (let index = 0; index < layers.length; index++) {
+      const value = clampToSign(layers[index].values.get(slot) ?? 0, sign);
+      const top = base + value;
+      const lo = Math.min(base, top);
+      const hi = Math.max(base, top);
+      if (lo !== hi && watts >= lo && watts <= hi) return families[index];
+      base = top;
+    }
+    return null;
+  }
+
+  /** One row's actual/forecast pair as Wh, formatted, colour-matched to its series. */
+  private _powerRow(
+    label: string,
+    color: string,
+    actualWh: number | null,
+    forecastWh: number | null,
+  ): TooltipRow {
+    return {
+      label,
+      actual: actualWh === null ? null : { value: this._formatWh(actualWh), color },
+      forecast: forecastWh === null ? null : { value: this._formatWh(forecastWh), color },
+    };
+  }
+
+  /** The forecast/actual pair for one hovered family, at the single hovered slot. */
+  private _seriesTooltipRows(
+    payload: InspectorPayload,
+    family: SeriesFamily,
+    slot: string,
+  ): TooltipRow[] {
+    const slots = [slot];
+    switch (family) {
+      case "solar":
+        return [
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.solar"),
+            CHART_COLORS.actual,
+            sumWhOverSlots(payload.series.actual, slots),
+            sumWhOverSlots(payload.series.corrected, slots),
+          ),
+        ];
+      case "house":
+        return [
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.house"),
+            CHART_COLORS.house,
+            negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
+            negateWh(sumWhOverSlots(payload.series.houseForecast, slots)),
+          ),
+        ];
+      case "grid":
+        return [
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.grid"),
+            CHART_COLORS.grid,
+            negateWh(sumWhOverSlots(payload.series.gridActual, slots)),
+            negateWh(sumWhOverSlots(payload.series.gridForecast, slots)),
+          ),
+        ];
+      case "battery":
+        // SoC has its own strip right below with its own popup; this one is
+        // about power, so it stops at the battery's watts like the others.
+        return [
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.battery"),
+            CHART_COLORS.battery,
+            negateWh(sumWhOverSlots(payload.series.batteryActual, slots)),
+            negateWh(sumWhOverSlots(payload.series.batteryForecast, slots)),
+          ),
+        ];
+    }
+  }
+
   /** Store the hovered minute at whole-minute resolution, skipping redundant updates. */
   private _setHoverMinutes(minutes: number | null) {
     const next = minutes === null ? null : Math.round(minutes);
@@ -1228,6 +1477,82 @@ export class HelmanSolarInspector extends LitElement {
 
   private _clearHover() {
     this._setHoverMinutes(null);
+    this._clearTooltip();
+  }
+
+  /** Show the popup at the pointer's viewport position, fixed so it escapes the shadow root's own layout. */
+  private _setTooltip(event: MouseEvent, rows: TooltipRow[], hasActual: boolean, title?: string) {
+    this._tooltip = { x: event.clientX, y: event.clientY, title, hasActual, rows };
+  }
+
+  private _clearTooltip() {
+    this._tooltip = null;
+  }
+
+  /**
+   * The schedule band's own popup shape (one row per lane, no actual/forecast
+   * duality) mapped onto the shared table -- always the forecast-only layout,
+   * same as price's, with the tone class carrying the row's colour.
+   */
+  private _setScheduleTooltip(content: ScheduleHoverTooltipContent | null) {
+    this._tooltip = content === null
+      ? null
+      : {
+          x: content.x,
+          y: content.y,
+          title: content.title,
+          hasActual: false,
+          rows: content.rows.map((row) => ({
+            label: row.label,
+            actual: null,
+            forecast: { value: row.value, toneClass: row.toneClass },
+          })),
+        };
+  }
+
+  private _renderTooltipCell(cell: TooltipCell) {
+    if (!cell) return html`<span class="hover-tooltip-cell">—</span>`;
+    const swatch = cell.toneClass
+      ? html`<span class="hover-tooltip-swatch ${cell.toneClass}" style="background: var(--schedule-action-tone-accent);"></span>`
+      : cell.color
+        ? html`<span class="hover-tooltip-swatch" style="background: ${cell.color};"></span>`
+        : "";
+    return html`
+      <span class="hover-tooltip-cell">
+        ${swatch}
+        ${cell.value}
+      </span>
+    `;
+  }
+
+  /**
+   * The popup itself: a title, then a label/actual/forecast table, following
+   * the cursor. A slot with no actual reading yet drops the actual column
+   * entirely rather than pad it with dashes -- what the popup states as
+   * "the" value there is simply the forecast.
+   */
+  private _renderTooltip() {
+    if (!this._tooltip) return "";
+    const { x, y, title, hasActual, rows } = this._tooltip;
+    return html`
+      <div class="hover-tooltip" style="left: ${x}px; top: ${y}px;">
+        ${title ? html`<div class="hover-tooltip-title">${title}</div>` : ""}
+        <div class="hover-tooltip-table ${hasActual ? "has-actual" : "forecast-only"}">
+          ${hasActual
+            ? html`
+                <span></span>
+                <span class="hover-tooltip-header">${this._t("bias_correction.inspector.column_actual")}</span>
+                <span class="hover-tooltip-header">${this._t("bias_correction.inspector.column_forecast")}</span>
+              `
+            : ""}
+          ${rows.map((row) => html`
+            <span class="hover-tooltip-label">${row.label}</span>
+            ${hasActual ? this._renderTooltipCell(row.actual) : ""}
+            ${this._renderTooltipCell(row.forecast)}
+          `)}
+        </div>
+      </div>
+    `;
   }
 
   /**
@@ -1284,6 +1609,12 @@ export class HelmanSolarInspector extends LitElement {
                   this._handleStripSlotPick(event, payload)}
                 @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
                   this._setHoverMinutes(event.detail?.minutes ?? null)}
+                @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
+                  { this._tooltip = event.detail ?? null; }}
+                @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
+                  this._priceColumns = event.detail.columns;
+                  this._priceUnit = event.detail.unit;
+                }}
               ></helman-solar-export-price-strip>
             `
           : ""}
@@ -1342,7 +1673,7 @@ export class HelmanSolarInspector extends LitElement {
         aria-label=${this._t("bias_correction.inspector.title")}
         style="cursor: pointer;"
         @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
-        @mousemove=${(e: MouseEvent) => this._handleChartHover(e, payload)}
+        @mousemove=${(e: MouseEvent) => this._handleMainChartHover(e, payload, stacks, layout)}
         @mouseleave=${() => this._clearHover()}
       >
         ${this._renderChartBackground(layout)}
@@ -1612,10 +1943,8 @@ export class HelmanSolarInspector extends LitElement {
   private _renderSocStrip(payload: InspectorPayload, layout: ChartLayout) {
     const bars = this._socBars(payload);
     if (!bars.length) return "";
-    const { height, padTop, padBottom } = SOC_STRIP;
-    const innerHeight = height - padTop - padBottom;
-    const yForPct = (pct: number) =>
-      padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
+    const { height } = SOC_STRIP;
+    const yForPct = (pct: number) => this._yForSocPct(pct);
     const barWidth = Math.max(3, layout.slotWidth);
     return svg`
       <svg
@@ -1624,7 +1953,7 @@ export class HelmanSolarInspector extends LitElement {
         aria-label=${this._t("bias_correction.inspector.battery_soc_strip")}
         style="cursor: pointer;"
         @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
-        @mousemove=${(e: MouseEvent) => this._handleChartHover(e, payload)}
+        @mousemove=${(e: MouseEvent) => this._handleSocHover(e, payload, layout, bars)}
         @mouseleave=${() => this._clearHover()}
       >
         <defs>
@@ -1648,21 +1977,26 @@ export class HelmanSolarInspector extends LitElement {
           const opacity = bar.forecast
             ? SOC_COLUMN_OPACITY.forecast
             : SOC_COLUMN_OPACITY.measured;
+          const x = layout.xForMinutes(bar.minutes) + 0.5;
+          const cx = x + Math.max(2, barWidth - 1) / 2;
           return svg`
             <rect
-              x=${layout.xForMinutes(bar.minutes) + 0.5} y=${top}
+              x=${x} y=${top}
               width=${Math.max(2, barWidth - 1)} height=${Math.max(1, yForPct(0) - top)}
               style=${`fill: ${color}; stroke: ${color};`}
               fill-opacity=${opacity}
               stroke-width=${bar.forecast ? 0.9 : 0}
               stroke-dasharray=${bar.forecast ? "2 2" : ""}
-            >
-              <title>${bar.slot} ${this._formatPct(bar.pct)} · ${this._t(
-                `bias_correction.inspector.soc_direction.${bar.direction}`,
-              )}</title>
-            </rect>
+            ></rect>
+            ${barWidth >= 18
+              ? svg`
+                  <text x=${cx} y=${Math.max(top - 3, 9)} text-anchor="middle" font-size="9"
+                        fill="var(--secondary-text-color)">${Math.round(bar.pct)}%</text>
+                `
+              : ""}
           `;
         })}
+        ${this._renderSocForecastLine(payload, bars, layout, yForPct)}
         ${this._renderSocUnusableZones(payload, layout, yForPct)}
         </g>
       </svg>
@@ -1676,6 +2010,129 @@ export class HelmanSolarInspector extends LitElement {
       ? payload.series.batterySocForecast
       : [];
     return buildSocBars(actual, forecast, this._lastForecastFillFrom);
+  }
+
+  /**
+   * The forecast's own level at every slot of the day, not just the ones it
+   * speaks for alone -- so it can be traced as a dashed line over the measured
+   * columns too, the same way the chart above keeps drawing the forecast's
+   * outline over the hours the actuals have already filled in.
+   */
+  private _socForecastBars(payload: InspectorPayload): SocBar[] {
+    if (!this._isSeriesVisible("batterySocForecast")) return [];
+    return buildSocBars([], payload.series.batterySocForecast, Number.NEGATIVE_INFINITY);
+  }
+
+  /**
+   * A dashed step-line tracing the forecast's SoC across the measured part of
+   * the day -- the part its own column no longer represents, since that column
+   * now shows the actual reading instead.
+   *
+   * Keyed off the strip's own measured/forecast split (`socBars`), not the
+   * power chart's seam: the SoC actuals can lag or lead the power actuals, so
+   * the two do not necessarily turn forecast at the same slot.
+   */
+  private _renderSocForecastLine(
+    payload: InspectorPayload,
+    socBars: SocBar[],
+    layout: ChartLayout,
+    yForPct: (pct: number) => number,
+  ) {
+    const measuredMinutes = new Set(
+      socBars.filter((bar) => !bar.forecast).map((bar) => bar.minutes),
+    );
+    if (!measuredMinutes.size) return "";
+    const bars = this._socForecastBars(payload)
+      .filter((bar) => measuredMinutes.has(bar.minutes))
+      .sort((a, b) => a.minutes - b.minutes);
+    if (!bars.length) return "";
+    const points = bars.flatMap((bar) => [
+      [layout.xForMinutes(bar.minutes), yForPct(bar.pct)] as const,
+      [layout.xForMinutes(bar.minutes + this._slotMinutes), yForPct(bar.pct)] as const,
+    ]);
+    const path = points
+      .map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
+      .join(" ");
+    // A fixed battery hue would sit almost on top of the "charging" column
+    // colour (both greens), so the line reads against the theme's own text
+    // colour instead -- contrast that holds regardless of a bar's direction.
+    // Width and dash match the chart above's own forecast outline exactly.
+    return svg`
+      <path d=${path} fill="none" stroke="var(--primary-text-color, #fff)"
+            stroke-width=${FORECAST_OUTLINE.width} stroke-dasharray="4 3"
+            stroke-opacity=${FORECAST_OUTLINE.opacity}></path>
+    `;
+  }
+
+  /** The SoC strip's own y scale: 0% at the baseline, 100% at the top. */
+  private _yForSocPct(pct: number): number {
+    const { padTop, padBottom, height } = SOC_STRIP;
+    const innerHeight = height - padTop - padBottom;
+    return padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
+  }
+
+  /**
+   * Hover for the SoC strip: the whole slot-wide column counts as "on" it, not
+   * just the sliver its own reading fills -- a single-series bar (unlike the
+   * combined chart's stacked bands) has nothing else there to disambiguate,
+   * so a value near 0% would otherwise be nearly impossible to point at.
+   */
+  private _handleSocHover(
+    event: MouseEvent,
+    payload: InspectorPayload,
+    layout: ChartLayout,
+    bars: SocBar[],
+  ) {
+    const svgEl = event.currentTarget as SVGSVGElement;
+    const rect = svgEl.getBoundingClientRect();
+    const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
+    if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
+      this._clearHover();
+      return;
+    }
+    const minutes = this._minutesForSvgX(layout, svgX);
+    const index = bars.findIndex(
+      (bar) => minutes >= bar.minutes && minutes < bar.minutes + this._slotMinutes,
+    );
+    const bar = index >= 0 ? bars[index] : null;
+    if (!bar) {
+      this._clearHover();
+      return;
+    }
+    this._setHoverMinutes(bar.minutes);
+    // The bar itself is either the actual reading or, ahead of it, the
+    // forecast standing in alone -- never both -- so only a measured bar has
+    // a real actual column to show.
+    const hasActual = !bar.forecast;
+    const next = bars[index + 1] ?? null;
+    const forecastBars = this._socForecastBars(payload);
+    const forecastIndex = forecastBars.findIndex((fc) => fc.minutes === bar.minutes);
+    const forecastBar = forecastIndex >= 0 ? forecastBars[forecastIndex] : null;
+    const forecastNext = forecastBar ? forecastBars[forecastIndex + 1] ?? null : null;
+    const rows: TooltipRow[] = [
+      {
+        label: this._t("bias_correction.inspector.soc_direction_label"),
+        actual: hasActual
+          ? { value: this._t(`bias_correction.inspector.soc_direction.${bar.direction}`), color: SOC_DIRECTION_COLOR[bar.direction] }
+          : null,
+        forecast: forecastBar
+          ? { value: this._t(`bias_correction.inspector.soc_direction.${forecastBar.direction}`), color: SOC_DIRECTION_COLOR[forecastBar.direction] }
+          : null,
+      },
+      {
+        label: this._t("bias_correction.inspector.soc_from"),
+        actual: hasActual ? { value: this._formatPct(bar.pct) } : null,
+        forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
+      },
+      {
+        label: this._t("bias_correction.inspector.soc_to"),
+        actual: hasActual ? { value: this._formatPct(next ? next.pct : bar.pct) } : null,
+        forecast: forecastBar
+          ? { value: this._formatPct(forecastNext ? forecastNext.pct : forecastBar.pct) }
+          : null,
+      },
+    ];
+    this._setTooltip(event, rows, hasActual, bar.slot);
   }
 
   /** The two levels a column is read against: empty and full. */
@@ -2059,6 +2516,12 @@ export class HelmanSolarInspector extends LitElement {
             "batteryForecast",
             "batteryActual",
           )}
+          ${this._priceColumns.length
+            ? this._renderMetric(
+                this._t("bias_correction.inspector.merged.export_price"),
+                this._formatPrice(this._priceAtSelectionStart(slots)),
+              )
+            : ""}
         </div>
       </div>
       ${this._renderHouseBreakdown(
@@ -2707,6 +3170,29 @@ export class HelmanSolarInspector extends LitElement {
       return this._t("bias_correction.inspector.actual_not_available");
     }
     return `${value.toFixed(1)} %`;
+  }
+
+  private _formatPrice(value: number | null): string {
+    if (value === null || !Number.isFinite(value)) {
+      return this._t("bias_correction.inspector.actual_not_available");
+    }
+    return `${value.toFixed(2)} ${this._priceUnit}`.trim();
+  }
+
+  /**
+   * The price the selection opens on -- a rate, not an energy, so it is read at
+   * the first slot rather than summed, the same rule the SoC box follows.
+   */
+  private _priceAtSelectionStart(slots: readonly string[]): number | null {
+    for (const slot of slots) {
+      const minutes = slotToMinutes(slot);
+      if (minutes === null) continue;
+      const column = this._priceColumns.find(
+        (c) => minutes >= c.startMinutes && minutes < c.endMinutes,
+      );
+      if (column) return column.value;
+    }
+    return null;
   }
 
   private _sortContributionRows(rows: ContributionRow[]): ContributionRow[] {

@@ -14,14 +14,15 @@ import type {
     EntityScheduleBlock,
     EntityScheduleDay,
 } from "../model/entity-day-schedule-model";
-import type { EntityDayBandLane } from "../model/entity-lane-source";
+import {
+    formatLaneRunRange,
+    resolveLaneRunPresentation,
+    type EntityDayBandLane,
+} from "../model/entity-lane-source";
 import {
     areEntityScheduleActionsEqual,
-    isEntityInverterAction,
     resolveEntityScheduleRangeLimits,
 } from "../model/entity-day-schedule-model";
-import { getScheduleActionPresentation } from "../model/schedule-action-presentation";
-import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
 import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
@@ -74,6 +75,19 @@ export interface EntityDayBandHighlight {
 export interface EntityDayBandTimeHoverDetail {
     /** Where the pointer is on the time axis, or null when it has left. */
     atMs: number | null;
+}
+
+/**
+ * Every genuine pointer move over the band, with its viewport position --
+ * unlike `entity-day-band-time-hover`, which a host uses to move a shared
+ * highlight and so only fires when the time itself changes, a host drawing
+ * something that follows the cursor (a popup) needs every move, even a purely
+ * vertical one where the time under the pointer stayed the same.
+ */
+export interface EntityDayBandPointerMoveDetail {
+    atMs: number | null;
+    clientX: number;
+    clientY: number;
 }
 
 type DragMode = "start" | "end" | "move";
@@ -958,7 +972,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 -->
                 <div
                     class="track"
-                    title=${inTrackLabels ? lane.name : nothing}
+                    title=${inTrackLabels && !this.readonly ? lane.name : nothing}
                     @click=${(event: Event) => this._handleTrackClick(event, lane.key)}
                 >
                     ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment, changeBoundaries))}
@@ -1070,11 +1084,11 @@ export class SchedulingEntityDayBand extends LitElement {
         const presentation = this._getPresentation(lane, segment);
         // The hours it really ran, which is not the width when it spent only
         // part of a slot doing it.
-        const title = `${lane.name} · ${presentation.label} · ${this._formatRange(segment, segment.activeMs)}`;
+        const title = `${lane.name} · ${presentation.label} · ${formatLaneRunRange(segment, this.locale, this.timeZone, segment.activeMs)}`;
         return html`
             <span
                 class=${`segment actual ${presentation.toneClass}${changeBoundaries.has(segment.startMs) ? " changed" : ""}`}
-                title=${title}
+                title=${this.readonly ? nothing : title}
                 style=${`left: ${this._toPercent(segment.startMs)}%; width: ${this._toWidthPercent(segment.startMs, segment.endMs)}%`}
                 @click=${() => this._emitLaneSelect(lane.key)}
             >
@@ -1110,7 +1124,7 @@ export class SchedulingEntityDayBand extends LitElement {
             laneSelected && this.hoveredBlockKey === block.key ? "hovered" : "",
             this._drag !== null && editing ? "dragging" : "",
         ].filter((value) => value.length > 0).join(" ");
-        const title = `${lane.name} · ${presentation.label} · ${this._formatRange(block)}`;
+        const title = `${lane.name} · ${presentation.label} · ${formatLaneRunRange(block, this.locale, this.timeZone)}`;
 
         return html`
             <!--
@@ -1123,7 +1137,7 @@ export class SchedulingEntityDayBand extends LitElement {
             <button
                 class=${classes}
                 type="button"
-                title=${title}
+                title=${this.readonly ? nothing : title}
                 aria-label=${title}
                 aria-pressed=${editing}
                 style=${`left: ${this._toPercent(block.startMs)}%; width: ${widthPct}%`}
@@ -1281,11 +1295,15 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         const ratio = (event.clientX - rect.left) / rect.width;
-        this._emitTimeHover(
-            ratio < 0 || ratio > 1
-                ? null
-                : this._windowStartMs + ratio * (this._windowEndMs - this._windowStartMs),
-        );
+        const atMs = ratio < 0 || ratio > 1
+            ? null
+            : this._windowStartMs + ratio * (this._windowEndMs - this._windowStartMs);
+        this._emitTimeHover(atMs);
+        this.dispatchEvent(new CustomEvent<EntityDayBandPointerMoveDetail>("entity-day-band-pointer-move", {
+            bubbles: true,
+            composed: true,
+            detail: { atMs, clientX: event.clientX, clientY: event.clientY },
+        }));
     };
 
     private _renderPastOverlay() {
@@ -1486,27 +1504,7 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     private _getPresentation(lane: EntityDayBandLane, run: { action: EntityScheduleAction }) {
-        if (lane.target.kind === "inverter" && isEntityInverterAction(run.action)) {
-            return getScheduleActionPresentation(run.action, this.localize);
-        }
-
-        return getScheduleApplianceActionPresentation({
-            appliance: lane.appliance ?? { kind: "generic", icon: lane.icon },
-            action: run.action === null || isEntityInverterAction(run.action) ? null : run.action,
-            localize: this.localize,
-        });
-    }
-
-    /**
-     * "08:00-12:00 (4 h)".
-     *
-     * The span answers when, the total answers how much -- and for a run that
-     * really happened those are different questions, since it can have spent
-     * only part of a slot running.
-     */
-    private _formatRange(run: { startMs: number; endMs: number }, totalMs?: number): string {
-        const format = (atMs: number): string => formatScheduleTime(atMs, this.locale, this.timeZone);
-        return `${format(run.startMs)}–${format(run.endMs)} (${this._formatHours(totalMs ?? run.endMs - run.startMs)})`;
+        return resolveLaneRunPresentation(lane, run, this.localize);
     }
 
     private _formatHours(durationMs: number): string {

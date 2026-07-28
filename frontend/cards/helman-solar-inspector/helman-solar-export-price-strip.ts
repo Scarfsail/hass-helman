@@ -20,10 +20,30 @@ const MINUTES_PER_DAY = 1440;
 const PRICE_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
 
 /** A single export-price sample placed on the selected day's timeline. */
-interface PriceColumn {
+export interface PriceColumn {
     startMinutes: number;
     endMinutes: number;
     value: number;
+}
+
+/** The day's price columns, published so the inspector can look one up by slot. */
+export interface PriceColumnsDetail {
+    columns: PriceColumn[];
+    unit: string;
+}
+
+/**
+ * The popup content emitted for the inspector's shared floating tooltip to
+ * render. Price has no actual/forecast duality of its own -- it is simply a
+ * rate -- so `hasActual` is always false and every row carries only a
+ * forecast cell.
+ */
+export interface PriceTooltipContent {
+    x: number;
+    y: number;
+    title?: string;
+    hasActual: boolean;
+    rows: Array<{ label: string; actual: { value: string; color?: string } | null; forecast: { value: string; color?: string } | null }>;
 }
 
 /**
@@ -84,6 +104,26 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             }
             void this._load();
         }
+    }
+
+    protected updated(changed: PropertyValues<this>): void {
+        // The inspector's own selected-slot panel has no other way to reach this
+        // component's day of prices -- it lives only here, behind the loader --
+        // so every change that could move a value at a given minute is echoed up.
+        if (changed.has("_forecast") || changed.has("date")) {
+            this._emitColumns();
+        }
+    }
+
+    /** Publish this day's price columns, so the inspector can look one up by slot. */
+    private _emitColumns(): void {
+        this.dispatchEvent(
+            new CustomEvent<PriceColumnsDetail>("price-columns", {
+                detail: { columns: this._buildColumns(), unit: this._forecast?.grid.exportPriceUnit ?? "" },
+                bubbles: true,
+                composed: true,
+            }),
+        );
     }
 
     render() {
@@ -192,8 +232,9 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     aria-label=${this._t("bias_correction.inspector.export_price_strip")}
                     style="cursor: pointer;"
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
-                    @mousemove=${(event: MouseEvent) => this._handleHover(event, geometry)}
-                    @mouseleave=${() => this._emitHover(null)}
+                    @mousemove=${(event: MouseEvent) =>
+                        this._handleHover(event, geometry, columns, unit)}
+                    @mouseleave=${() => { this._emitHover(null); this._emitTooltip(null); }}
                 >
                     <defs>
                         <clipPath id="export-price-plot-clip">
@@ -217,6 +258,10 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                         const right = xForMinutes(column.endMinutes);
                         const width = Math.max(1, right - left - 0.5);
                         const future = column.startMinutes >= seam;
+                        const cx = left + width / 2;
+                        // The label sits outside the bar, on the far side from zero,
+                        // so it never has to fight the bar's own fill for contrast.
+                        const labelY = positive ? Math.max(top - 3, 9) : Math.min(top + barHeight + 9, height - 2);
                         return svg`
                             <rect
                                 x=${left + 0.25} y=${top}
@@ -225,9 +270,13 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                                 fill-opacity=${future ? 0.4 : 0.85}
                                 stroke-width=${future ? 0.9 : 0}
                                 stroke-dasharray=${future ? "2 2" : ""}
-                            >
-                                <title>${this._formatMinutes(column.startMinutes)} ${column.value.toFixed(1)} ${unit}</title>
-                            </rect>
+                            ></rect>
+                            ${width >= 18
+                                ? svg`
+                                    <text x=${cx} y=${labelY} text-anchor="middle" font-size="9"
+                                          fill="var(--secondary-text-color)">${column.value.toFixed(1)}</text>
+                                  `
+                                : ""}
                         `;
                     })}
                     </g>
@@ -320,18 +369,61 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         );
     }
 
-    /** Report the hovered minute-of-day so the inspector can echo it everywhere. */
-    private _handleHover(event: MouseEvent, geometry: ScheduleStripGeometry): void {
+    /**
+     * Report the hovered minute-of-day so the inspector can echo it everywhere,
+     * and the popup content. The whole column's slot counts as "on" it, not just
+     * its own bar height -- a single-series bar has nothing else there to
+     * disambiguate, so a value near zero would otherwise leave almost no
+     * pointable area.
+     */
+    private _handleHover(
+        event: MouseEvent,
+        geometry: ScheduleStripGeometry,
+        columns: PriceColumn[],
+        unit: string,
+    ): void {
         const svgEl = event.currentTarget as SVGSVGElement;
         const rect = svgEl.getBoundingClientRect();
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        this._emitHover(stripMinutesForSvgX(geometry, svgX));
+        const minutes = stripMinutesForSvgX(geometry, svgX);
+        const column = minutes === null
+            ? undefined
+            : columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
+        if (minutes === null || !column) {
+            this._emitHover(null);
+            this._emitTooltip(null);
+            return;
+        }
+        this._emitHover(minutes);
+        this._emitTooltip({
+            x: event.clientX,
+            y: event.clientY,
+            title: `${this._formatMinutes(column.startMinutes)} – ${this._formatMinutes(column.endMinutes)}`,
+            hasActual: false,
+            rows: [
+                {
+                    label: this._t("bias_correction.inspector.export_price"),
+                    actual: null,
+                    forecast: { value: `${column.value.toFixed(1)} ${unit}`.trim() },
+                },
+            ],
+        });
     }
 
     private _emitHover(minutes: number | null): void {
         this.dispatchEvent(
             new CustomEvent<{ minutes: number | null }>("slot-hover", {
                 detail: { minutes },
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    private _emitTooltip(content: PriceTooltipContent | null): void {
+        this.dispatchEvent(
+            new CustomEvent<PriceTooltipContent | null>("slot-tooltip", {
+                detail: content,
                 bubbles: true,
                 composed: true,
             }),
