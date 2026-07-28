@@ -30,6 +30,7 @@ interface PriceColumn {
 export interface PriceTooltipContent {
     x: number;
     y: number;
+    title?: string;
     rows: Array<{ label: string; value: string; color?: string }>;
 }
 
@@ -344,8 +345,10 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
         const svgY = ((event.clientY - rect.top) / rect.height) * PRICE_STRIP.height;
         const minutes = stripMinutesForSvgX(geometry, svgX);
-        const column = columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
-        if (!column) {
+        const column = minutes === null
+            ? undefined
+            : columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
+        if (minutes === null || !column) {
             this._emitHover(null);
             this._emitTooltip(null);
             return;
@@ -362,9 +365,10 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         this._emitTooltip({
             x: event.clientX,
             y: event.clientY,
+            title: `${this._formatMinutes(column.startMinutes)} – ${this._formatMinutes(column.endMinutes)}`,
             rows: [
                 {
-                    label: this._formatMinutes(column.startMinutes),
+                    label: this._t("bias_correction.inspector.export_price"),
                     value: `${column.value.toFixed(1)} ${unit}`.trim(),
                 },
             ],
