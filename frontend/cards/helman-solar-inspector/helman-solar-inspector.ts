@@ -1370,6 +1370,8 @@ export class HelmanSolarInspector extends LitElement {
                   this._handleStripSlotPick(event, payload)}
                 @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
                   this._setHoverMinutes(event.detail?.minutes ?? null)}
+                @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
+                  { this._tooltip = event.detail ?? null; }}
               ></helman-solar-export-price-strip>
             `
           : ""}

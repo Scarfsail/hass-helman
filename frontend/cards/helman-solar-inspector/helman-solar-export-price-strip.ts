@@ -26,6 +26,13 @@ interface PriceColumn {
     value: number;
 }
 
+/** The popup content emitted for the inspector's shared floating tooltip to render. */
+export interface PriceTooltipContent {
+    x: number;
+    y: number;
+    rows: Array<{ label: string; value: string; color?: string }>;
+}
+
 /**
  * A horizontal strip of the grid export price across the selected inspector day,
  * aligned to the solar inspector chart's time axis and coloured to match the
@@ -192,8 +199,9 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                     aria-label=${this._t("bias_correction.inspector.export_price_strip")}
                     style="cursor: pointer;"
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
-                    @mousemove=${(event: MouseEvent) => this._handleHover(event, geometry)}
-                    @mouseleave=${() => this._emitHover(null)}
+                    @mousemove=${(event: MouseEvent) =>
+                        this._handleHover(event, geometry, columns, zeroY, yForValue, unit)}
+                    @mouseleave=${() => { this._emitHover(null); this._emitTooltip(null); }}
                 >
                     <defs>
                         <clipPath id="export-price-plot-clip">
@@ -225,9 +233,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                                 fill-opacity=${future ? 0.4 : 0.85}
                                 stroke-width=${future ? 0.9 : 0}
                                 stroke-dasharray=${future ? "2 2" : ""}
-                            >
-                                <title>${this._formatMinutes(column.startMinutes)} ${column.value.toFixed(1)} ${unit}</title>
-                            </rect>
+                            ></rect>
                         `;
                     })}
                     </g>
@@ -320,18 +326,65 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         );
     }
 
-    /** Report the hovered minute-of-day so the inspector can echo it everywhere. */
-    private _handleHover(event: MouseEvent, geometry: ScheduleStripGeometry): void {
+    /**
+     * Report the hovered minute-of-day so the inspector can echo it everywhere,
+     * and the popup content -- but only while the pointer sits inside the
+     * hovered column's own rendered bar, not just its time slice of the strip.
+     */
+    private _handleHover(
+        event: MouseEvent,
+        geometry: ScheduleStripGeometry,
+        columns: PriceColumn[],
+        zeroY: number,
+        yForValue: (value: number) => number,
+        unit: string,
+    ): void {
         const svgEl = event.currentTarget as SVGSVGElement;
         const rect = svgEl.getBoundingClientRect();
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        this._emitHover(stripMinutesForSvgX(geometry, svgX));
+        const svgY = ((event.clientY - rect.top) / rect.height) * PRICE_STRIP.height;
+        const minutes = stripMinutesForSvgX(geometry, svgX);
+        const column = columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
+        if (!column) {
+            this._emitHover(null);
+            this._emitTooltip(null);
+            return;
+        }
+        const valueY = yForValue(column.value);
+        const top = Math.min(zeroY, valueY);
+        const bottom = Math.max(zeroY, valueY);
+        if (svgY < top || svgY > bottom) {
+            this._emitHover(null);
+            this._emitTooltip(null);
+            return;
+        }
+        this._emitHover(minutes);
+        this._emitTooltip({
+            x: event.clientX,
+            y: event.clientY,
+            rows: [
+                {
+                    label: this._formatMinutes(column.startMinutes),
+                    value: `${column.value.toFixed(1)} ${unit}`.trim(),
+                },
+            ],
+        });
     }
 
     private _emitHover(minutes: number | null): void {
         this.dispatchEvent(
             new CustomEvent<{ minutes: number | null }>("slot-hover", {
                 detail: { minutes },
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    private _emitTooltip(content: PriceTooltipContent | null): void {
+        this.dispatchEvent(
+            new CustomEvent<PriceTooltipContent | null>("slot-tooltip", {
+                detail: content,
                 bubbles: true,
                 composed: true,
             }),
