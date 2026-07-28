@@ -20,10 +20,16 @@ const MINUTES_PER_DAY = 1440;
 const PRICE_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
 
 /** A single export-price sample placed on the selected day's timeline. */
-interface PriceColumn {
+export interface PriceColumn {
     startMinutes: number;
     endMinutes: number;
     value: number;
+}
+
+/** The day's price columns, published so the inspector can look one up by slot. */
+export interface PriceColumnsDetail {
+    columns: PriceColumn[];
+    unit: string;
 }
 
 /** The popup content emitted for the inspector's shared floating tooltip to render. */
@@ -92,6 +98,26 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             }
             void this._load();
         }
+    }
+
+    protected updated(changed: PropertyValues<this>): void {
+        // The inspector's own selected-slot panel has no other way to reach this
+        // component's day of prices -- it lives only here, behind the loader --
+        // so every change that could move a value at a given minute is echoed up.
+        if (changed.has("_forecast") || changed.has("date")) {
+            this._emitColumns();
+        }
+    }
+
+    /** Publish this day's price columns, so the inspector can look one up by slot. */
+    private _emitColumns(): void {
+        this.dispatchEvent(
+            new CustomEvent<PriceColumnsDetail>("price-columns", {
+                detail: { columns: this._buildColumns(), unit: this._forecast?.grid.exportPriceUnit ?? "" },
+                bubbles: true,
+                composed: true,
+            }),
+        );
     }
 
     render() {

@@ -37,6 +37,7 @@ import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-band-strip";
 import "./helman-solar-export-price-strip";
+import type { PriceColumn, PriceColumnsDetail } from "./helman-solar-export-price-strip";
 import "../helman/power-devices-container";
 import { DeviceNode } from "../helman/DeviceNode";
 import {
@@ -368,6 +369,13 @@ export class HelmanSolarInspector extends LitElement {
    * short column shows nothing.
    */
   @state() private _tooltip: TooltipContent | null = null;
+  /**
+   * The selected day's export-price columns, echoed up from the price strip --
+   * the only place that loads them -- so the selected-slot panel can show a
+   * price for the slot even while the strip itself is collapsed or off-screen.
+   */
+  @state() private _priceColumns: PriceColumn[] = [];
+  @state() private _priceUnit = "";
 
   /** Whether the opening slot width has been seeded from config or page width. */
   private _slotMinutesInitialized = false;
@@ -1487,6 +1495,10 @@ export class HelmanSolarInspector extends LitElement {
                   this._setHoverMinutes(event.detail?.minutes ?? null)}
                 @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
                   { this._tooltip = event.detail ?? null; }}
+                @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
+                  this._priceColumns = event.detail.columns;
+                  this._priceUnit = event.detail.unit;
+                }}
               ></helman-solar-export-price-strip>
             `
           : ""}
@@ -2312,6 +2324,12 @@ export class HelmanSolarInspector extends LitElement {
             "batteryForecast",
             "batteryActual",
           )}
+          ${this._priceColumns.length
+            ? this._renderMetric(
+                this._t("bias_correction.inspector.merged.export_price"),
+                this._formatPrice(this._priceAtSelectionStart(slots)),
+              )
+            : ""}
         </div>
       </div>
       ${this._renderHouseBreakdown(
@@ -2960,6 +2978,29 @@ export class HelmanSolarInspector extends LitElement {
       return this._t("bias_correction.inspector.actual_not_available");
     }
     return `${value.toFixed(1)} %`;
+  }
+
+  private _formatPrice(value: number | null): string {
+    if (value === null || !Number.isFinite(value)) {
+      return this._t("bias_correction.inspector.actual_not_available");
+    }
+    return `${value.toFixed(2)} ${this._priceUnit}`.trim();
+  }
+
+  /**
+   * The price the selection opens on -- a rate, not an energy, so it is read at
+   * the first slot rather than summed, the same rule the SoC box follows.
+   */
+  private _priceAtSelectionStart(slots: readonly string[]): number | null {
+    for (const slot of slots) {
+      const minutes = slotToMinutes(slot);
+      if (minutes === null) continue;
+      const column = this._priceColumns.find(
+        (c) => minutes >= c.startMinutes && minutes < c.endMinutes,
+      );
+      if (column) return column.value;
+    }
+    return null;
   }
 
   private _sortContributionRows(rows: ContributionRow[]): ContributionRow[] {
