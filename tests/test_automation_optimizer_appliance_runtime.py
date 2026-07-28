@@ -499,6 +499,37 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         placed = _placed_slots(result, appliance.id)
         self.assertEqual(set(placed), {_slot_id(13, 0)})
 
+    def test_the_slot_in_progress_can_win_the_coverage_tie_break(self) -> None:
+        # Regression: the grid series' first point is stamped with the raw run
+        # instant, not a bucket start. Keyed verbatim it produced a key no
+        # caller could construct, so the bucket covering *now* always missed and
+        # the slot being executed could never be found solar-covered. Every
+        # other test here uses an aligned reference time, which hides it.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=0.5)
+        now = _at(12, 20).replace(microsecond=183921)
+        # 12:00 (in progress) and 14:00 share the cheapest price; both are
+        # covered, so the chronological tie-break must hand it to 12:00.
+        grid_series = [{"timestamp": now.isoformat(), "availableSurplusKwh": 5.0}]
+        grid_series += [
+            {
+                "timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                "availableSurplusKwh": 5.0,
+            }
+            for hour, minute in ((12, 30), (14, 0), (14, 15))
+        ]
+        result = _runtime(appliance.id, cfg).optimize(
+            _make_snapshot(
+                appliance=appliance,
+                export_points=_export_points({_slot_id(12, 0), _slot_id(14, 0)}),
+                grid_series=grid_series,
+                when_active={appliance.id: 0.4},
+                now=now,
+            ),
+            cfg,
+        )
+        self.assertEqual(set(_placed_slots(result, appliance.id)), {_slot_id(12, 0)})
+
     def test_leaves_user_owned_appliance_slot_untouched(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
