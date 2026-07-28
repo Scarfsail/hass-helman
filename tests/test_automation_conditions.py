@@ -243,12 +243,16 @@ class MinSocConditionTests(unittest.TestCase):
     """
 
     @staticmethod
-    def _snapshot_with_soc(soc_by_timestamp, *, status="available"):
+    def _snapshot_with_soc(soc_by_timestamp, *, status="available", now=None):
         from dataclasses import replace
 
         from custom_components.helman.automation.day_context import DayContext
 
         snapshot = _snapshot(prices={})
+        if now is not None:
+            snapshot = replace(
+                snapshot, context=replace(snapshot.context, now=now)
+            )
         snapshot.battery_forecast["status"] = status
         snapshot.battery_forecast["series"] = [
             {"timestamp": timestamp, "socPct": soc_pct}
@@ -307,6 +311,30 @@ class MinSocConditionTests(unittest.TestCase):
 
         self.assertIsNone(eligibility.at(SLOT_0))
         self.assertIsNotNone(eligibility.at(SLOT_1))
+
+    def test_the_slot_in_progress_survives_once_its_first_bucket_has_elapsed(
+        self,
+    ) -> None:
+        # The battery forecast starts at the bucket containing `now`, so once
+        # `now` passes a slot's midpoint the slot's first bucket is in the past
+        # and absent from the series. "Every bucket clears the threshold" must
+        # not read that absence as a failure: the slot is executing, its first
+        # bucket is history, and the only buckets that can still be gated are
+        # the ones still to come.
+        eligibility = build_eligibility(
+            self._snapshot_with_soc(
+                {
+                    # 21:00 has elapsed and is not in the forecast.
+                    "2026-03-20T21:15:00+01:00": 95.0,
+                    "2026-03-20T21:30:00+01:00": 95.0,
+                    "2026-03-20T21:45:00+01:00": 95.0,
+                },
+                now=datetime.fromisoformat("2026-03-20T21:22:00+01:00"),
+            ),
+            self._config(70.0),
+        )
+
+        self.assertIsNotNone(eligibility.at(SLOT_0))
 
     def test_one_failing_bucket_sinks_the_slot(self) -> None:
         eligibility = build_eligibility(
