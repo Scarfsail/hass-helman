@@ -1861,15 +1861,23 @@ export class HelmanSolarInspector extends LitElement {
           const opacity = bar.forecast
             ? SOC_COLUMN_OPACITY.forecast
             : SOC_COLUMN_OPACITY.measured;
+          const x = layout.xForMinutes(bar.minutes) + 0.5;
+          const cx = x + Math.max(2, barWidth - 1) / 2;
           return svg`
             <rect
-              x=${layout.xForMinutes(bar.minutes) + 0.5} y=${top}
+              x=${x} y=${top}
               width=${Math.max(2, barWidth - 1)} height=${Math.max(1, yForPct(0) - top)}
               style=${`fill: ${color}; stroke: ${color};`}
               fill-opacity=${opacity}
               stroke-width=${bar.forecast ? 0.9 : 0}
               stroke-dasharray=${bar.forecast ? "2 2" : ""}
             ></rect>
+            ${barWidth >= 18
+              ? svg`
+                  <text x=${cx} y=${Math.max(top - 3, 9)} text-anchor="middle" font-size="9"
+                        fill="var(--secondary-text-color)">${Math.round(bar.pct)}%</text>
+                `
+              : ""}
           `;
         })}
         ${this._renderSocUnusableZones(payload, layout, yForPct)}

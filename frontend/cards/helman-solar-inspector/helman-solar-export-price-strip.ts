@@ -252,6 +252,10 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                         const right = xForMinutes(column.endMinutes);
                         const width = Math.max(1, right - left - 0.5);
                         const future = column.startMinutes >= seam;
+                        const cx = left + width / 2;
+                        // The label sits outside the bar, on the far side from zero,
+                        // so it never has to fight the bar's own fill for contrast.
+                        const labelY = positive ? Math.max(top - 3, 9) : Math.min(top + barHeight + 9, height - 2);
                         return svg`
                             <rect
                                 x=${left + 0.25} y=${top}
@@ -261,6 +265,12 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                                 stroke-width=${future ? 0.9 : 0}
                                 stroke-dasharray=${future ? "2 2" : ""}
                             ></rect>
+                            ${width >= 18
+                                ? svg`
+                                    <text x=${cx} y=${labelY} text-anchor="middle" font-size="9"
+                                          fill="var(--secondary-text-color)">${column.value.toFixed(1)}</text>
+                                  `
+                                : ""}
                         `;
                     })}
                     </g>
