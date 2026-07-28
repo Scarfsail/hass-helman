@@ -138,7 +138,16 @@ def read_soc_by_bucket_covering_horizon(
 def read_available_surplus_by_bucket(
     snapshot: "OptimizationSnapshot",
 ) -> dict[datetime, float] | None:
-    """``{bucket_start: availableSurplusKwh}`` keyed by the forecast's own timestamps.
+    """``{bucket_start: availableSurplusKwh}`` keyed by canonical bucket start.
+
+    Keys are floored to the bucket grid, as in
+    :func:`read_soc_by_bucket_covering_horizon`. The series' **first** point is
+    stamped with the raw run instant rather than a bucket start — it covers only
+    the remainder of the bucket in progress — so keying by the timestamp
+    verbatim produced one key no caller can ever construct. Callers look
+    buckets up by flooring a slot start, which meant the bucket covering *now*
+    always missed: the slot being executed could never be found solar-covered,
+    and lost every coverage tie-break to future slots for no real reason.
 
     ``None`` when the grid forecast carries no usable series. Callers that must
     not act on a forecast stopping short of the horizon check coverage
@@ -155,7 +164,7 @@ def read_available_surplus_by_bucket(
         available = read_optional_float(point.get("availableSurplusKwh"))
         if timestamp is None or available is None:
             continue
-        surplus_by_bucket[timestamp] = available
+        surplus_by_bucket[canonical_bucket_start(timestamp)] = available
     return surplus_by_bucket or None
 
 

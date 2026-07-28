@@ -158,6 +158,8 @@ def _make_snapshot(
     schedule_document: ScheduleDocument | None = None,
     classification: str = "tight",
     condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] | None = None,
+    now: datetime | None = None,
+    appliance_active_by_id: dict[str, bool] | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances((appliance,))
     return OptimizationSnapshot(
@@ -169,7 +171,7 @@ def _make_snapshot(
             "series": [] if grid_series is None else deepcopy(grid_series),
         },
         context=OptimizationContext(
-            now=REFERENCE_TIME,
+            now=REFERENCE_TIME if now is None else now,
             battery_state=None,
             solar_forecast={"status": "available", "points": []},
             import_price_forecast={"unit": "CZK/kWh", "currentPrice": 3.0, "points": []},
@@ -183,6 +185,7 @@ def _make_snapshot(
             runtime_hours_by_appliance_id_by_local_date=runtime_by_date or {},
             day_contexts={DAY: _day_context(classification)},
             condition_met_by_optimizer_id=condition_met_by_optimizer_id or {},
+            appliance_active_by_id=appliance_active_by_id or {},
         ),
     )
 
@@ -291,6 +294,104 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         # remaining 0.5h -> 1 slot only, the cheapest.
         self.assertEqual(len(_placed_slots(result, appliance.id)), 1)
 
+    # --- in-flight run commitment -------------------------------------------
+    #
+    # Shared setup: it is 12:20, the appliance has been running in the 12:00
+    # slot, and 12:00 is the *most expensive* slot of the window. Ranking alone
+    # therefore drops it and the appliance is switched off mid-run.
+
+    def _in_flight_snapshot(self, appliance, *, active: bool, now=None, done=0.5):
+        # Enough cheap slots that ranking never has to reach back to 12:00 on
+        # the chronological tie-break — the only thing that may place it is the
+        # promotion under test.
+        cheap = {_slot_id(14, 0), _slot_id(14, 30), _slot_id(15, 0), _slot_id(15, 30)}
+        return _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points(cheap),
+            runtime_by_date={appliance.id: {DAY: done}},
+            now=_at(12, 20) if now is None else now,
+            appliance_active_by_id={appliance.id: active},
+        )
+
+    def test_idle_appliance_loses_its_expensive_current_slot(self) -> None:
+        # The control: without a run to protect, ranking decides alone.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        result = _runtime(appliance.id, cfg).optimize(
+            self._in_flight_snapshot(appliance, active=False), cfg
+        )
+        self.assertNotIn(_slot_id(12, 0), _placed_slots(result, appliance.id))
+
+    def test_running_appliance_keeps_its_current_slot(self) -> None:
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        result = _runtime(appliance.id, cfg).optimize(
+            self._in_flight_snapshot(appliance, active=True), cfg
+        )
+        self.assertIn(_slot_id(12, 0), _placed_slots(result, appliance.id))
+
+    def test_promotion_displaces_the_marginal_slot_not_the_budget(self) -> None:
+        # Promotion must not inflate the placement: the same number of slots is
+        # placed, the last one above the cut simply loses its seat.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=2)
+        idle = _placed_slots(
+            _runtime(appliance.id, cfg).optimize(
+                self._in_flight_snapshot(appliance, active=False), cfg
+            ),
+            appliance.id,
+        )
+        running = _placed_slots(
+            _runtime(appliance.id, cfg).optimize(
+                self._in_flight_snapshot(appliance, active=True), cfg
+            ),
+            appliance.id,
+        )
+        # remaining 1.5h -> 3 slots either way; the running slot takes the seat
+        # of the priciest one the idle plan had chosen.
+        self.assertEqual(len(idle), 3)
+        self.assertEqual(len(running), 3)
+        self.assertEqual(set(running) - set(idle), {_slot_id(12, 0)})
+        self.assertEqual(len(set(idle) - set(running)), 1)
+
+    def test_running_appliance_does_not_keep_an_ineligible_slot(self) -> None:
+        # 07:20 is outside the 08:00-18:00 window, so the running slot never
+        # reaches ranking. A condition that stops holding still stops the run.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        result = _runtime(appliance.id, cfg).optimize(
+            self._in_flight_snapshot(appliance, active=True, now=_at(7, 20)), cfg
+        )
+        self.assertNotIn(_slot_id(7, 0), _placed_slots(result, appliance.id))
+
+    def test_running_appliance_still_stops_once_the_minimum_is_met(self) -> None:
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        result = _runtime(appliance.id, cfg).optimize(
+            _make_snapshot(
+                appliance=appliance,
+                export_points=_export_points({_slot_id(14, 0)}),
+                runtime_by_date={appliance.id: {DAY: 1.0}},
+                now=_at(12, 20),
+                appliance_active_by_id={appliance.id: True},
+            ),
+            cfg,
+        )
+        self.assertEqual(_placed_slots(result, appliance.id), {})
+
+    def test_running_appliance_slot_is_still_stamped_a_candidate(self) -> None:
+        # Promotion is about ranking, not about condition_met: a custom
+        # condition going false still stops the run, via candidate stripping.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
+        snapshot = self._in_flight_snapshot(appliance, active=True)
+        snapshot.context.condition_met_by_optimizer_id[cfg.id] = (False,)
+        result = _runtime(appliance.id, cfg).optimize(snapshot, cfg)
+        self.assertEqual(
+            _placed_slots(result, appliance.id)[_slot_id(12, 0)].get("conditionMet"),
+            False,
+        )
+
     def test_already_satisfied_places_nothing(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
@@ -397,6 +498,37 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         )
         placed = _placed_slots(result, appliance.id)
         self.assertEqual(set(placed), {_slot_id(13, 0)})
+
+    def test_the_slot_in_progress_can_win_the_coverage_tie_break(self) -> None:
+        # Regression: the grid series' first point is stamped with the raw run
+        # instant, not a bucket start. Keyed verbatim it produced a key no
+        # caller could construct, so the bucket covering *now* always missed and
+        # the slot being executed could never be found solar-covered. Every
+        # other test here uses an aligned reference time, which hides it.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=0.5)
+        now = _at(12, 20).replace(microsecond=183921)
+        # 12:00 (in progress) and 14:00 share the cheapest price; both are
+        # covered, so the chronological tie-break must hand it to 12:00.
+        grid_series = [{"timestamp": now.isoformat(), "availableSurplusKwh": 5.0}]
+        grid_series += [
+            {
+                "timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                "availableSurplusKwh": 5.0,
+            }
+            for hour, minute in ((12, 30), (14, 0), (14, 15))
+        ]
+        result = _runtime(appliance.id, cfg).optimize(
+            _make_snapshot(
+                appliance=appliance,
+                export_points=_export_points({_slot_id(12, 0), _slot_id(14, 0)}),
+                grid_series=grid_series,
+                when_active={appliance.id: 0.4},
+                now=now,
+            ),
+            cfg,
+        )
+        self.assertEqual(set(_placed_slots(result, appliance.id)), {_slot_id(12, 0)})
 
     def test_leaves_user_owned_appliance_slot_untouched(self) -> None:
         appliance = _generic()

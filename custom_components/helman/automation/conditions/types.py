@@ -140,6 +140,14 @@ def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
     Unlike the energy rails there is no duration scaling — ``socPct`` is a level,
     so the config value is compared directly.
 
+    Buckets that have already elapsed are skipped. The forecast begins at the
+    bucket containing ``now``, so once ``now`` passes a slot's midpoint the
+    slot's first bucket is history and absent from the series. Reading that
+    absence as a failure excluded the slot *being executed* from every re-plan
+    landing in the second half of a slot — switching the appliance off mid-run
+    over a bucket whose SoC is already a matter of record. Only buckets still
+    to come can be gated.
+
     Blind spot worth knowing: the mask is built once from the pre-run snapshot,
     so it cannot see the appliance's own draw depressing the very SoC that
     authorised the slot. Same limitation the surplus buffer had.
@@ -153,13 +161,19 @@ def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
         )
 
     threshold = inputs.value
+    bucket_duration = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
+    now = snapshot.context.now
     eligible: set[str] = set()
     for slot_id in inputs.horizon_slot_ids:
-        buckets = _slot_bucket_starts(slot_id)
-        if all(
+        pending = [
+            bucket_start
+            for bucket_start in _slot_bucket_starts(slot_id)
+            if bucket_start + bucket_duration > now
+        ]
+        if pending and all(
             (soc_pct := soc_by_bucket.get(bucket_start)) is not None
             and soc_pct >= threshold
-            for bucket_start in buckets
+            for bucket_start in pending
         ):
             eligible.add(slot_id)
     return frozenset(eligible)
