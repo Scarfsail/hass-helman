@@ -20,6 +20,13 @@ the threshold may be chosen. So the matched group decides the day's *params*
 while its mask decides the day's *slots*, which is why capped placement ranks
 ``plan.placeable_slots`` and not the whole window.
 
+Capped placement additionally treats the slot being *executed right now* as a
+commitment rather than a free variable: if the appliance is running and its
+current slot survived ranking, that slot is promoted to the front so the
+shrinking ``slots_needed`` cut cannot drop it mid-run. Promotion only — every
+condition that gates placement still stops the appliance the moment it stops
+holding.
+
 ``max_consecutive_skips`` is the one construct that defeats the whole OR chain:
 after that many consecutive short days the optimizer runs anyway, past every
 group's ``custom`` conditions and past every slot condition, over the full
@@ -45,6 +52,7 @@ from ...scheduling.schedule import (
     ScheduleDomains,
     build_horizon_end,
     build_horizon_start,
+    format_slot_id,
     iter_horizon_slot_ids,
     parse_slot_id,
 )
@@ -230,6 +238,13 @@ class ApplianceRuntimeOptimizer:
                 demand_hourly_energy=demand_hourly_energy,
                 export_price_by_bucket=export_price_by_bucket,
                 reference_time=snapshot.context.now,
+            )
+            ranked = _promote_in_flight_slot(
+                ranked,
+                active=snapshot.context.appliance_active_by_id.get(
+                    appliance_id, False
+                ),
+                active_slot_id=format_slot_id(horizon_start),
             )
             chosen = ranked[:slots_needed]
             for _cost, slot_id in chosen:
@@ -530,6 +545,41 @@ def _rank_slots(
         )
     candidates.sort(key=lambda item: (item[0], item[1], dt_util.as_utc(item[2])))
     return [(cost, slot_id) for cost, _covered, _cursor, slot_id in candidates]
+
+
+def _promote_in_flight_slot(
+    ranked: list[tuple[float, str]],
+    *,
+    active: bool,
+    active_slot_id: str,
+) -> list[tuple[float, str]]:
+    """Move a running appliance's current slot to the front of the ranking.
+
+    Ranking sorts by price, then solar coverage, then time — and knows nothing
+    about what is running. Because ``slots_needed`` shrinks as runtime is
+    delivered, the cut at ``ranked[:slots_needed]`` walks up the list, and the
+    slot being executed right now is routinely the one it removes: the appliance
+    is switched off mid-run and back on at whichever slot won instead.
+
+    Promotion, not exemption. The slot must still have survived ranking, which
+    means it is still in ``placeable_slots`` — so every condition that gates
+    placement (``min_soc_pct``, ``when_price_below``, ``run_when``) still stops
+    the appliance the moment it stops holding. A ``custom`` condition going
+    false stops it too, by a different route: the action is still placed here,
+    but stamped ``condition_met=False`` and stripped before execution.
+
+    The cost is one marginal slot: promoting displaces whatever sat last above
+    the cut. That is the trade for not short-cycling the appliance.
+    """
+    if not active:
+        return ranked
+    for index, (_cost, slot_id) in enumerate(ranked):
+        if slot_id != active_slot_id:
+            continue
+        if index == 0:
+            return ranked
+        return [ranked[index], *ranked[:index], *ranked[index + 1 :]]
+    return ranked
 
 
 def _slot_is_solar_covered(

@@ -35,3 +35,8 @@ class ComputeInputs:
     condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] = field(
         default_factory=dict
     )
+    # Which appliances are physically running at the moment the run started,
+    # by the same definition of "running" the recorder runtime query uses. Read
+    # by ``appliance_runtime`` to keep an in-flight run in the plan; see
+    # ``OptimizationContext.appliance_active_by_id``.
+    appliance_active_by_id: dict[str, bool] = field(default_factory=dict)

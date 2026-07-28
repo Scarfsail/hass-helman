@@ -2256,7 +2256,28 @@ class HelmanCoordinator:
                 if include_condition_flags
                 else {}
             ),
+            appliance_active_by_id=self._read_appliance_active_by_id(),
         )
+
+    def _read_appliance_active_by_id(self) -> dict[str, bool]:
+        """Which appliances are running right now, from live state.
+
+        Uses the same entity/active-state pair the recorder runtime query uses
+        (:func:`_resolve_runtime_entity_and_states`), so "running" means the
+        same thing to the optimizer as the delivered hours it plans against.
+        An appliance whose entity is missing or unavailable counts as not
+        running — the pin it feeds may only ever preserve a run, so failing
+        this way loses smoothness, never control.
+        """
+        active_by_id: dict[str, bool] = {}
+        for appliance in self._iter_automation_candidate_appliances():
+            entity_id, active_states = _resolve_runtime_entity_and_states(appliance)
+            if entity_id is None:
+                continue
+            state = self._hass.states.get(entity_id)
+            raw_state = getattr(state, "state", None)
+            active_by_id[appliance.id] = raw_state in active_states
+        return active_by_id
 
     async def _async_evaluate_optimizer_conditions(
         self,
@@ -2677,6 +2698,7 @@ class HelmanCoordinator:
                 condition_met_by_optimizer_id=dict(
                     compute_inputs.condition_met_by_optimizer_id
                 ),
+                appliance_active_by_id=dict(compute_inputs.appliance_active_by_id),
             ),
         )
 

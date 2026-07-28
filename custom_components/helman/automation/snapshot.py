@@ -52,6 +52,13 @@ class OptimizationContext:
     condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] = field(
         default_factory=dict
     )
+    # A5 — which appliances are physically running right now, resolved by the
+    # framework from live state. The one thing a stateless optimizer cannot
+    # derive from the schedule it is about to rewrite: the plan for the slot in
+    # progress is a commitment, not a free variable, so an optimizer that would
+    # otherwise re-rank an in-flight run out of its own plan can decline to.
+    # Read-only for optimizers.
+    appliance_active_by_id: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -121,6 +128,7 @@ def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:
                     snapshot.context.condition_met_by_optimizer_id.items()
                 )
             },
+            "applianceActiveById": dict(snapshot.context.appliance_active_by_id),
         },
     }
 
