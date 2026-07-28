@@ -1353,19 +1353,14 @@ export class HelmanSolarInspector extends LitElement {
     const svgEl = event.currentTarget as SVGSVGElement;
     const rect = svgEl.getBoundingClientRect();
     const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
-    const svgY = ((event.clientY - rect.top) / rect.height) * layout.height;
     if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
       this._clearHover();
       return;
     }
     const minutes = this._minutesForSvgX(layout, svgX);
     const slot = Math.floor(minutes / this._slotMinutes) * this._slotMinutes;
-    const watts = layout.wForY(svgY);
-    // The same seam the stacks themselves fill from: before it the actual
-    // stack carries the drawn band, from it on the forecast does.
-    const set = slot < this._lastForecastFillFrom ? stacks.actual : stacks.forecast;
-    const family = this._hitTestStackFamily(set, slot, watts);
-    if (!family) {
+    const rows = this._allSeriesTooltipRows(payload, minutesToSlot(slot));
+    if (!rows.length) {
       this._clearHover();
       return;
     }
@@ -1373,10 +1368,18 @@ export class HelmanSolarInspector extends LitElement {
     const hasActual = slot < this._lastForecastFillFrom;
     this._setTooltip(
       event,
-      this._seriesTooltipRows(payload, family, minutesToSlot(slot)),
+      rows,
       hasActual,
       this._formatSelectionRange([minutesToSlot(slot)]),
     );
+  }
+
+  /** EXPERIMENT: every series' row for the hovered slot, in one popup. */
+  private _allSeriesTooltipRows(payload: InspectorPayload, slot: string): TooltipRow[] {
+    const families: SeriesFamily[] = ["solar", "house", "battery", "grid"];
+    return families
+      .flatMap((family) => this._seriesTooltipRows(payload, family, slot))
+      .filter((row) => row.actual !== null || row.forecast !== null);
   }
 
   /**
