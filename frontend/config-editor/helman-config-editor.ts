@@ -31,12 +31,12 @@ import {
   unsetValueAtPath,
 } from "./config-document";
 import {
-  buildSurplusApplianceSelectionState,
-  buildSurplusClimateModeFieldState,
-  type SurplusApplianceOption,
-  type SurplusApplianceSelectionState,
+  buildApplianceSelectionState,
+  buildClimateModeFieldState,
+  type ApplianceOptimizerOption,
+  type ApplianceSelectionState,
   type SurplusClimateModeFieldState,
-} from "./surplus-appliance-ui";
+} from "./appliance-optimizer-ui";
 import {
   DOCUMENT_SCOPE_ID,
   SECTION_ICONS,
@@ -86,8 +86,7 @@ const GENERIC_PROJECTION_STRATEGIES = [
   { value: "history_average", labelKey: "editor.values.history_average" },
 ];
 
-const SURPLUS_APPLIANCE_OPTIMIZER_KIND = "surplus_appliance";
-const DAILY_RUNTIME_OPTIMIZER_KIND = "daily_runtime";
+const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
 const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 
 const APPLIANCE_ICON_SELECTOR = {
@@ -585,6 +584,27 @@ export class HelmanConfigEditorPanel
       align-items: baseline;
       gap: 10px;
       flex-wrap: wrap;
+    }
+
+    /* An optional param object: the toggle owns the block, and its fields only
+       exist while it is on, so the indent shows what turning it off removes. */
+    .optional-param-group {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: subgrid;
+      gap: 10px;
+      padding-left: 12px;
+      border-left: 2px solid var(--divider-color, rgba(255, 255, 255, 0.12));
+    }
+
+    .optional-param-group > .field-label-row {
+      grid-column: 1 / -1;
+    }
+
+    .optional-param-group label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     /* A group reads as one more card in the same visual family as the optimizer
@@ -2188,8 +2208,8 @@ export class HelmanConfigEditorPanel
       this._stringValue(optimizer.id) ||
       this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
     if (!this._hasApplianceTarget(schema)) return fallback;
-    return this._getSurplusApplianceOptimizerTitle(
-      buildSurplusApplianceSelectionState(
+    return this._getApplianceOptimizerTitle(
+      buildApplianceSelectionState(
         this._config,
         this._liveApplianceMetadata,
         this._stringValue(
@@ -4082,12 +4102,12 @@ export class HelmanConfigEditorPanel
     const targetPath: PathSegment[] = ["automation", "optimizers", index, "target"];
     this._applyMutation((draft) => {
       setValueAtPath(draft, [...targetPath, "appliance_id"], applianceId);
-      const selectionState = buildSurplusApplianceSelectionState(
+      const selectionState = buildApplianceSelectionState(
         draft,
         this._liveApplianceMetadata,
         applianceId,
       );
-      const climateModeFieldState = buildSurplusClimateModeFieldState(
+      const climateModeFieldState = buildClimateModeFieldState(
         selectionState,
         this._stringValue(getValueAtPath(draft, [...targetPath, "climate_mode"])),
       );
@@ -4397,11 +4417,7 @@ export class HelmanConfigEditorPanel
     optimizers.forEach((optimizer, index) => {
       const optimizerObject = asJsonObject(optimizer);
       const optimizerKind = this._stringValue(optimizerObject?.kind);
-      if (
-        !optimizerObject ||
-        (optimizerKind !== SURPLUS_APPLIANCE_OPTIMIZER_KIND &&
-          optimizerKind !== DAILY_RUNTIME_OPTIMIZER_KIND)
-      ) {
+      if (!optimizerObject || optimizerKind !== APPLIANCE_RUNTIME_OPTIMIZER_KIND) {
         return;
       }
 
@@ -4410,12 +4426,12 @@ export class HelmanConfigEditorPanel
       const currentClimateMode = this._stringValue(
         getValueAtPath(config, [...targetPath, "climate_mode"]),
       );
-      const selectionState = buildSurplusApplianceSelectionState(
+      const selectionState = buildApplianceSelectionState(
         config,
         this._liveApplianceMetadata,
         applianceId,
       );
-      const climateModeFieldState = buildSurplusClimateModeFieldState(
+      const climateModeFieldState = buildClimateModeFieldState(
         selectionState,
         currentClimateMode,
       );
@@ -4561,12 +4577,12 @@ export class HelmanConfigEditorPanel
       optimizerIndex,
       "target",
     ];
-    const selectionState = buildSurplusApplianceSelectionState(
+    const selectionState = buildApplianceSelectionState(
       this._config,
       this._liveApplianceMetadata,
       this._stringValue(this._getValue([...targetPath, "appliance_id"])),
     );
-    const climateModeFieldState = buildSurplusClimateModeFieldState(
+    const climateModeFieldState = buildClimateModeFieldState(
       selectionState,
       this._stringValue(this._getValue([...targetPath, "climate_mode"])),
     );
@@ -4602,12 +4618,12 @@ export class HelmanConfigEditorPanel
                 ?disabled=${option.selectionDisabled}
                 ?selected=${option.id === selectionState.selectedId}
               >
-                ${this._formatSurplusApplianceOptionLabel(option)}
+                ${this._formatApplianceOptimizerOptionLabel(option)}
               </option>
             `,
           )}
         </select>
-        <div class="helper">${this._renderSurplusApplianceIdHelper(selectionState)}</div>
+        <div class="helper">${this._renderApplianceIdHelper(selectionState)}</div>
       </div>
       ${climateModeFieldState.visible
         ? this._renderSurplusClimateModeField(targetPath, climateModeFieldState)
@@ -4653,7 +4669,7 @@ export class HelmanConfigEditorPanel
           <label>${this._t("editor.fields.climate_mode")}</label>
           ${this._renderHelpIcon(
             "editor.fields.climate_mode",
-            "editor.help.surplus_appliance_climate_mode",
+            "editor.help.appliance_runtime_climate_mode",
           )}
         </div>
         <select
@@ -4688,20 +4704,20 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderSurplusApplianceIdHelper(
-    selectionState: SurplusApplianceSelectionState,
+  private _renderApplianceIdHelper(
+    selectionState: ApplianceSelectionState,
   ): string {
     if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
-      return this._t("editor.helpers.surplus_appliance_id_missing_from_draft");
+      return this._t("editor.helpers.appliance_runtime_id_missing_from_draft");
     }
     if (selectionState.options.some((option) => option.selectionDisabled)) {
-      return this._t("editor.helpers.surplus_appliance_id_pending_reload");
+      return this._t("editor.helpers.appliance_runtime_id_pending_reload");
     }
-    return this._t("editor.helpers.surplus_appliance_id");
+    return this._t("editor.helpers.appliance_runtime_id");
   }
 
-  private _getSurplusApplianceOptimizerTitle(
-    selectionState: SurplusApplianceSelectionState,
+  private _getApplianceOptimizerTitle(
+    selectionState: ApplianceSelectionState,
     fallbackTitle: string,
   ): string {
     if (selectionState.selectedOption) {
@@ -4719,18 +4735,18 @@ export class HelmanConfigEditorPanel
     climateModeFieldState: SurplusClimateModeFieldState,
   ): string {
     if (climateModeFieldState.unavailable) {
-      return this._t("editor.helpers.surplus_appliance_climate_mode_unavailable");
+      return this._t("editor.helpers.appliance_runtime_climate_mode_unavailable");
     }
     if (climateModeFieldState.options.some((option) => option.isUnknown)) {
-      return this._t("editor.helpers.surplus_appliance_climate_mode_unknown");
+      return this._t("editor.helpers.appliance_runtime_climate_mode_unknown");
     }
     if (climateModeFieldState.disabled) {
-      return this._t("editor.helpers.surplus_appliance_climate_mode_single");
+      return this._t("editor.helpers.appliance_runtime_climate_mode_single");
     }
-    return this._t("editor.helpers.surplus_appliance_climate_mode");
+    return this._t("editor.helpers.appliance_runtime_climate_mode");
   }
 
-  private _formatSurplusApplianceOptionLabel(option: SurplusApplianceOption): string {
+  private _formatApplianceOptimizerOptionLabel(option: ApplianceOptimizerOption): string {
     const baseLabel =
       option.name === option.id
         ? option.id

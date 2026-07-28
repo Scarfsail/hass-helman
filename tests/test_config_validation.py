@@ -320,7 +320,7 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
-    def test_surplus_appliance_optimizer_passes_for_configured_generic_appliance(self) -> None:
+    def test_appliance_runtime_optimizer_passes_for_configured_generic_appliance(self) -> None:
         config = _valid_config()
         config["appliances"].append(_generic_appliance())
         config["automation"] = {
@@ -328,9 +328,9 @@ class ConfigValidationTests(unittest.TestCase):
             "optimizers": [
                 {
                     "id": "run-dishwasher-on-surplus",
-                    "kind": "surplus_appliance",
+                    "kind": "appliance_runtime",
                     "target": {"appliance_id": "dishwasher"},
-                    "conditions": [{"min_surplus_buffer_pct": 5}],
+                    "conditions": [{"min_soc_pct": 80}],
                 }
             ],
         }
@@ -340,14 +340,15 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(report.valid)
         self.assertEqual(report.errors, [])
 
-    def test_surplus_appliance_optimizer_rejects_unknown_appliance_id(self) -> None:
+    def test_appliance_runtime_optimizer_rejects_unknown_appliance_id(self) -> None:
         config = _valid_config()
         config["automation"] = {
             "enabled": True,
             "optimizers": [
                 {
                     "id": "run-unknown-on-surplus",
-                    "kind": "surplus_appliance",
+                    "kind": "appliance_runtime",
+                    "params": {"window": {"start": "08:00", "end": "18:00"}},
                     "target": {"appliance_id": "missing-appliance"},
                     "conditions": [{}],
                 }
@@ -364,7 +365,7 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
-    def test_surplus_appliance_optimizer_rejects_climate_mode_for_generic_appliance(
+    def test_appliance_runtime_optimizer_rejects_climate_mode_for_generic_appliance(
         self,
     ) -> None:
         config = _valid_config()
@@ -374,7 +375,8 @@ class ConfigValidationTests(unittest.TestCase):
             "optimizers": [
                 {
                     "id": "run-dishwasher-on-surplus",
-                    "kind": "surplus_appliance",
+                    "kind": "appliance_runtime",
+                    "params": {"window": {"start": "08:00", "end": "18:00"}},
                     "target": {
                         "appliance_id": "dishwasher",
                         "climate_mode": "heat",

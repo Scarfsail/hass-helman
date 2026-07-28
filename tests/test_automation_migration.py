@@ -150,11 +150,12 @@ class PerKindMoveTests(unittest.TestCase):
         migrated = _migrate_one({"id": "h", "kind": "charge_hold"})
         self.assertEqual(migrated["conditions"][0]["run_when"], ALL_DAYS)
 
-    def test_surplus_appliance_target_and_condition_split(self) -> None:
+    def test_surplus_appliance_becomes_an_uncapped_appliance_runtime(self) -> None:
         migrated = _migrate_one(
             {
                 "id": "s",
                 "kind": "surplus_appliance",
+                "enabled": False,
                 "params": {
                     "appliance_id": "dhw",
                     "climate_mode": "heat",
@@ -163,9 +164,63 @@ class PerKindMoveTests(unittest.TestCase):
                 },
             }
         )
-        self.assertEqual(migrated["target"], {"appliance_id": "dhw", "climate_mode": "heat"})
+
+        self.assertEqual(migrated["kind"], "appliance_runtime")
+        # A disabled rule stays disabled, and its target survives verbatim.
+        self.assertFalse(migrated["enabled"])
+        self.assertEqual(
+            migrated["target"], {"appliance_id": "dhw", "climate_mode": "heat"}
+        )
+        # No `daily_minimum` — uncapped, which is what the old kind did.
         self.assertEqual(migrated["params"], {})
-        self.assertEqual(migrated["conditions"][0]["min_surplus_buffer_pct"], 15)
+
+    def test_the_retired_buffer_becomes_run_when_surplus(self) -> None:
+        """Removing the buffer cannot leave the group narrowing nothing.
+
+        An uncapped group that narrows nothing means "on for the whole horizon",
+        which the reader rejects, so the migrated group needs *something*.
+        `run_when: [surplus]` is the closest honest reading of the old kind and
+        invents no threshold.
+        """
+        migrated = _migrate_one(
+            {
+                "id": "s",
+                "kind": "surplus_appliance",
+                "params": {"appliance_id": "dhw", "min_surplus_buffer_pct": 15},
+            }
+        )
+
+        group = migrated["conditions"][0]
+        self.assertNotIn("min_surplus_buffer_pct", group)
+        self.assertEqual(group["run_when"], ["surplus"])
+
+    def test_custom_conditions_survive_the_surplus_translation(self) -> None:
+        condition = [{"condition": "state", "entity_id": "input_boolean.x"}]
+        migrated = _migrate_one(
+            {
+                "id": "s",
+                "kind": "surplus_appliance",
+                "params": {"appliance_id": "dhw"},
+                "condition": condition,
+            }
+        )
+
+        self.assertEqual(migrated["conditions"][0]["custom"], condition)
+
+    def test_daily_runtime_becomes_appliance_runtime(self) -> None:
+        migrated = _migrate_one(
+            {
+                "id": "d",
+                "kind": "daily_runtime",
+                "params": {"appliance_id": "dhw", "min_hours_per_day": 3},
+            }
+        )
+
+        self.assertEqual(migrated["kind"], "appliance_runtime")
+        self.assertEqual(
+            migrated["params"]["daily_minimum"],
+            {"min_hours_per_day": 3, "max_consecutive_skips": 0},
+        )
 
     def test_charge_from_grid_floor_becomes_a_condition(self) -> None:
         migrated = _migrate_one(
@@ -187,7 +242,9 @@ class PerKindMoveTests(unittest.TestCase):
             }
         )
         self.assertEqual(migrated["target"], {"appliance_id": "dhw"})
-        self.assertEqual(migrated["params"]["min_hours_per_day"], 3)
+        self.assertEqual(
+            migrated["params"]["daily_minimum"]["min_hours_per_day"], 3
+        )
 
 
 class RunWhenInversionTests(unittest.TestCase):
@@ -207,9 +264,10 @@ class RunWhenInversionTests(unittest.TestCase):
         migrated = _migrate_one(
             {"id": "d", "kind": "daily_runtime", "params": params}
         )
-        return migrated["conditions"][0]["run_when"], migrated["params"][
-            "max_consecutive_skips"
-        ]
+        return (
+            migrated["conditions"][0]["run_when"],
+            migrated["params"]["daily_minimum"]["max_consecutive_skips"],
+        )
 
     def test_skip_absent_runs_on_every_classification(self) -> None:
         self.assertEqual(self._run_when(None), (ALL_DAYS, 0))
@@ -255,7 +313,9 @@ class RunWhenInversionTests(unittest.TestCase):
             }
         )
         self.assertNotIn("skip", migrated["params"])
-        self.assertEqual(migrated["params"]["max_consecutive_skips"], 2)
+        self.assertEqual(
+            migrated["params"]["daily_minimum"]["max_consecutive_skips"], 2
+        )
 
 
 if __name__ == "__main__":

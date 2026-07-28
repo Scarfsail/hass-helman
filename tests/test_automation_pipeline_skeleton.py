@@ -334,8 +334,8 @@ from custom_components.helman.appliances import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.config import OptimizerInstanceConfig
 from custom_components.helman.automation.input_bundle import AutomationInputBundle
-from custom_components.helman.automation.optimizers.surplus_appliance import (
-    SurplusApplianceSkip,
+from custom_components.helman.automation.conditions.types import (
+    ConditionRailsUnavailable,
 )
 from custom_components.helman.automation.pipeline import (
     AutomationCleanupSummary,
@@ -516,11 +516,13 @@ def _make_optimizer_instance(
     kind: str = "export_price",
     enabled: bool = True,
     params: dict[str, object] | None = None,
+    target: dict[str, object] | None = None,
 ) -> OptimizerInstanceConfig:
     return OptimizerInstanceConfig(
         id=optimizer_id,
         kind=kind,
         enabled=enabled,
+        target=target or {},
         params={
             "when_price_below": 0.0,
             "action": "stop_export",
@@ -1313,7 +1315,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             return_value=SimpleNamespace(
                 optimize=Mock(
-                    side_effect=SurplusApplianceSkip(
+                    side_effect=ConditionRailsUnavailable(
                         "boiler",
                         "when-active demand is unavailable",
                     )
@@ -1325,12 +1327,9 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",
-                        kind="surplus_appliance",
-                        params={
-                            "appliance_id": "boiler",
-                            "action": "on",
-                            "min_surplus_buffer_pct": 5,
-                        },
+                        kind="appliance_runtime",
+                        target={"appliance_id": "boiler"},
+                        params={},
                     )
                 ),
             ).run(reference_time=REFERENCE_TIME)
@@ -1688,7 +1687,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(
                         optimizer_id="run-boiler",
-                        kind="daily_runtime",
+                        kind="appliance_runtime",
                         params={"appliance_id": "boiler", "action": "on"},
                     )
                 ),
@@ -1749,7 +1748,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             return_value=SimpleNamespace(
                 optimize=Mock(
-                    side_effect=SurplusApplianceSkip(
+                    side_effect=ConditionRailsUnavailable(
                         "boiler",
                         "when-active demand is unavailable",
                     )
@@ -1761,12 +1760,9 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",
-                        kind="surplus_appliance",
-                        params={
-                            "appliance_id": "boiler",
-                            "action": "on",
-                            "min_surplus_buffer_pct": 5,
-                        },
+                        kind="appliance_runtime",
+                        target={"appliance_id": "boiler"},
+                        params={},
                     )
                 ),
             ).run(reference_time=REFERENCE_TIME)

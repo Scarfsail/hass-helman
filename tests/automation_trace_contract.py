@@ -37,15 +37,14 @@ V1_REASON_CODES: frozenset[str] = frozenset(
         "window_covered",
         "band_not_expensive",
         "no_cheap_band",
-        # daily_runtime
+        # appliance_runtime
         "runtime_deficit_placed",
         "ranked_more_expensive",
         "runtime_satisfied",
         "forced_after_consecutive_skips",
         "price_above_run_threshold",
-        # surplus_appliance
-        "surplus_covers_demand",
-        "surplus_insufficient",  # D (frontend derivation)
+        "conditions_matched",  # uncapped: no deficit to size a placement against
+        "soc_below_threshold",  # D (frontend derivation)
         "forecast_unavailable",
         # any / framework
         "blocked_user_owned",
@@ -62,10 +61,9 @@ V1_REASON_CODES: frozenset[str] = frozenset(
 CONTRACT_TESTED_KINDS: frozenset[str] = frozenset(
     {
         "export_price",
-        "surplus_appliance",
         "charge_hold",
         "charge_from_grid",
-        "daily_runtime",
+        "appliance_runtime",
     }
 )
 

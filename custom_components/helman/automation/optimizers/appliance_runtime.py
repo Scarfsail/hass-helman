@@ -1,21 +1,28 @@
-"""``daily_runtime`` optimizer (use case 3).
+"""``appliance_runtime`` optimizer — when an appliance may run, and how long.
 
-Ensure an appliance (generic switch or climate mode) accumulates at least
-``min_hours_per_day`` within a daily window, placing the remaining hours on the
-cheapest slots, preferring slots the day's solar surplus already covers.
-Stateless beyond the framework's A2 runtime input; manual runs count
-automatically because they show up in history.
+One behavioural fork, on whether ``daily_minimum`` is configured:
+
+* **capped** — accumulate at least ``min_hours_per_day`` within the window,
+  placing the remaining hours on the cheapest slots and preferring slots the
+  day's solar surplus already covers. Stateless beyond the framework's A2
+  runtime input; manual runs count automatically because they show up in
+  history.
+* **uncapped** — place on *every* slot the conditions allow. Nothing ranks:
+  with no deficit to size a placement against, price and solar coverage
+  discriminate between nothing. The gate is the conditions plus the optional
+  window, so an uncapped optimizer with neither would mean "on 24/7" — which
+  the config reader rejects.
 
 Day gating is the ``run_when`` condition — on a day no group matches, nothing is
-placed. ``when_price_below`` narrows further, per slot: the day still runs, but
-only the window slots whose export price clears the threshold may be chosen. So
-the matched group decides the day's *params* while its mask decides the day's
-*slots*, which is why placement ranks ``plan.placeable_slots`` and not the whole
-window.
+placed. ``when_price_below`` and ``min_soc_pct`` narrow further, per slot: the
+day still runs, but only the window slots whose price or projected SoC clears
+the threshold may be chosen. So the matched group decides the day's *params*
+while its mask decides the day's *slots*, which is why capped placement ranks
+``plan.placeable_slots`` and not the whole window.
 
 ``max_consecutive_skips`` is the one construct that defeats the whole OR chain:
 after that many consecutive short days the optimizer runs anyway, past every
-group's ``custom`` conditions and past the price threshold, over the full
+group's ``custom`` conditions and past every slot condition, over the full
 window, stamped with its own reason code so the inspector never shows a forced
 run as an unexplained one. It is ``overridable=False`` — it describes the chain,
 not any one day in it, so no single group can own it.
@@ -80,10 +87,10 @@ class _DayPlan:
 
 
 @dataclass(frozen=True)
-class DailyRuntimeOptimizer:
+class ApplianceRuntimeOptimizer:
     id: str
     target: ApplianceTarget
-    kind: str = "daily_runtime"
+    kind: str = "appliance_runtime"
 
     def optimize(
         self,
@@ -106,6 +113,19 @@ class DailyRuntimeOptimizer:
             domain=appliance_domain,
         )
         action = {"domain": appliance_domain, **self.target.authored_action}
+
+        # Master params decide the mode: `daily_minimum` is not something a group
+        # can introduce (its required, non-overridable `max_consecutive_skips`
+        # makes a partial override unreadable), so this is stable across groups.
+        if config.params.get("daily_minimum") is None:
+            return self._optimize_uncapped(
+                snapshot=snapshot,
+                config=config,
+                eligibility=eligibility,
+                writer=writer,
+                trace=trace,
+                action=action,
+            )
 
         runtime_by_date = (
             snapshot.context.runtime_hours_by_appliance_id_by_local_date.get(
@@ -137,7 +157,7 @@ class DailyRuntimeOptimizer:
                 tzinfo=tzinfo,
             )
             params = config.params if plan is None else plan.params
-            min_hours_per_day = params["min_hours_per_day"]
+            min_hours_per_day = params["daily_minimum"]["min_hours_per_day"]
             window_slots = (
                 self._window_slots(
                     params=params,
@@ -253,6 +273,52 @@ class DailyRuntimeOptimizer:
 
         return writer.flush(action=action)
 
+    def _optimize_uncapped(
+        self,
+        *,
+        snapshot: "OptimizationSnapshot",
+        config: "OptimizerInstanceConfig",
+        eligibility: "Eligibility",
+        writer: ScheduleWriter,
+        trace: "OptimizerTrace",
+        action: dict[str, Any],
+    ) -> ScheduleDocument:
+        """Place on every eligible slot, with no deficit to size the placement.
+
+        There is nothing to rank: without a cap every slot the conditions allow
+        is taken, so neither price nor solar coverage discriminates. The gate is
+        the conditions plus the optional window, and nothing else.
+        """
+        appliance_id = self.target.appliance.id
+        window = _window_slot_ids(config.params, snapshot)
+
+        applied_by_group: dict[int, list[str]] = {}
+        for resolved in eligibility.iter_slots():
+            if window is not None and resolved.slot_id not in window:
+                continue
+            if writer.set_appliance(
+                resolved.slot_id,
+                appliance_id=appliance_id,
+                action=self.target.authored_action,
+            ):
+                applied_by_group.setdefault(resolved.group.index, []).append(
+                    resolved.slot_id
+                )
+
+        for group_index, slot_ids in applied_by_group.items():
+            trace.decision(
+                slot_ids=slot_ids,
+                outcome="applied",
+                action=action,
+                reason={
+                    "code": "conditions_matched",
+                    "params": {
+                        "matchedGroup": eligibility.groups[group_index].label
+                    },
+                },
+            )
+        return writer.flush(action=action)
+
     def _plan_for_day(
         self,
         *,
@@ -294,7 +360,9 @@ class DailyRuntimeOptimizer:
                 forced_after_skips=None,
                 price_threshold=resolved.condition_value("when_price_below"),
             )
-            remaining_hours = resolved.params["min_hours_per_day"] - delivered_hours
+            remaining_hours = (
+                resolved.params["daily_minimum"]["min_hours_per_day"] - delivered_hours
+            )
             if remaining_hours <= 0 or len(placeable) * _SLOT_HOURS >= remaining_hours:
                 return plan
             short_plan = plan
@@ -304,15 +372,16 @@ class DailyRuntimeOptimizer:
         # every group, including their `custom` conditions and their price
         # threshold. Master params, since no group's override governs a run that
         # matched no group.
+        master_daily_minimum = config.params["daily_minimum"]
         consecutive_skips = (
             _prior_consecutive_skips(
                 local_date=local_date,
                 runtime_by_date=runtime_by_date,
-                min_hours_per_day=config.params["min_hours_per_day"],
+                min_hours_per_day=master_daily_minimum["min_hours_per_day"],
             )
             + 1
         )
-        if consecutive_skips <= config.params["max_consecutive_skips"]:
+        if consecutive_skips <= master_daily_minimum["max_consecutive_skips"]:
             # Not yet due a forced run: place what the group does allow, so a
             # partially-eligible day still delivers what it can.
             return short_plan
@@ -340,12 +409,45 @@ class DailyRuntimeOptimizer:
         horizon_end: datetime,
         tzinfo: Any,
     ) -> list[str]:
-        return horizon_slots_between(
-            time_on(params["window"]["start"], local_date, tzinfo=tzinfo),
-            time_on(params["window"]["end"], local_date, tzinfo=tzinfo),
-            horizon_start=horizon_start,
-            horizon_end=horizon_end,
+        """The day's placeable span: its window, or the whole day without one."""
+        window = params.get("window")
+        start = (
+            time_on(window["start"], local_date, tzinfo=tzinfo)
+            if window
+            else time_on("00:00", local_date, tzinfo=tzinfo)
         )
+        end = (
+            time_on(window["end"], local_date, tzinfo=tzinfo)
+            if window
+            else time_on("00:00", local_date + timedelta(days=1), tzinfo=tzinfo)
+        )
+        return horizon_slots_between(
+            start, end, horizon_start=horizon_start, horizon_end=horizon_end
+        )
+
+
+def _window_slot_ids(
+    params: dict[str, Any],
+    snapshot: "OptimizationSnapshot",
+) -> frozenset[str] | None:
+    """Every day's window slots as one set, or ``None`` when unconstrained."""
+    window = params.get("window")
+    if not window:
+        return None
+    horizon_start = build_horizon_start(snapshot.context.now)
+    horizon_end = build_horizon_end(snapshot.context.now)
+    tzinfo = horizon_start.tzinfo
+    slot_ids: set[str] = set()
+    for local_date in snapshot.context.day_contexts:
+        slot_ids.update(
+            horizon_slots_between(
+                time_on(window["start"], local_date, tzinfo=tzinfo),
+                time_on(window["end"], local_date, tzinfo=tzinfo),
+                horizon_start=horizon_start,
+                horizon_end=horizon_end,
+            )
+        )
+    return frozenset(slot_ids)
 
 
 def _placement_reason(
@@ -478,14 +580,14 @@ def _resolve_demand_hourly_energy(
     return None if profile is None else profile.hourly_energy_kwh
 
 
-def build_daily_runtime_optimizer(
+def build_appliance_runtime_optimizer(
     config: "OptimizerInstanceConfig",
     *,
     appliance_registry: "AppliancesRuntimeRegistry",
     path: str = "automation.optimizers[?]",
     **_kwargs: Any,
-) -> DailyRuntimeOptimizer:
-    return DailyRuntimeOptimizer(
+) -> ApplianceRuntimeOptimizer:
+    return ApplianceRuntimeOptimizer(
         id=config.id,
         target=resolve_appliance_target(
             config, appliance_registry=appliance_registry, path=path

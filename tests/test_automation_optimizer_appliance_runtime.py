@@ -72,10 +72,13 @@ _install_import_stubs()
 from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime  # noqa: E402
 from custom_components.helman.appliances.generic_appliance import GenericApplianceRuntime  # noqa: E402
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
-from custom_components.helman.automation.config import OptimizerInstanceConfig  # noqa: E402
+from custom_components.helman.automation.config import (  # noqa: E402
+    AutomationConfigError,
+    OptimizerInstanceConfig,
+)
 from custom_components.helman.automation.day_context import DayContext  # noqa: E402
-from custom_components.helman.automation.optimizers.daily_runtime import (  # noqa: E402
-    build_daily_runtime_optimizer,
+from custom_components.helman.automation.optimizers.appliance_runtime import (  # noqa: E402
+    build_appliance_runtime_optimizer,
 )
 from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
@@ -201,19 +204,21 @@ def _config(
         group["run_when"] = list(run_when)
     return make_optimizer_config(
         id="daily",
-        kind="daily_runtime",
+        kind="appliance_runtime",
         target=target,
         params={
-            "min_hours_per_day": min_hours_per_day,
+            "daily_minimum": {
+                "min_hours_per_day": min_hours_per_day,
+                "max_consecutive_skips": max_consecutive_skips,
+            },
             "window": {"start": "08:00", "end": "18:00"},
-            "max_consecutive_skips": max_consecutive_skips,
         },
         conditions=groups or [group],
     )
 
 
 def _runtime(appliance_id: str, cfg: OptimizerInstanceConfig):
-    return build_daily_runtime_optimizer(
+    return build_appliance_runtime_optimizer(
         cfg,
         appliance_registry=AppliancesRuntimeRegistry.from_appliances(
             (_generic(appliance_id),)
@@ -230,12 +235,12 @@ def _placed_slots(result: ScheduleDocument, appliance_id: str) -> dict[str, dict
     }
 
 
-class DailyRuntimeOptimizerTests(unittest.TestCase):
+class ApplianceRuntimeOptimizerTests(unittest.TestCase):
     def test_places_cheapest_export_slots(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(appliance=appliance, export_points=_export_points(cheap)),
@@ -250,7 +255,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -273,7 +278,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -289,7 +294,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
     def test_already_satisfied_places_nothing(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -308,7 +313,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             run_when=["surplus", "tight"],
             max_consecutive_skips=1,
         )
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -328,7 +333,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             max_consecutive_skips=1,
         )
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -353,7 +358,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             {"timestamp": _at(10, 15).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
         ]
         export_points = _export_points({_slot_id(12, 0), _slot_id(12, 30)})
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -379,7 +384,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             {"timestamp": _at(13, 15).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
         ]
         export_points = _export_points({_slot_id(11, 0), _slot_id(13, 0)})
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -406,7 +411,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
                 }
             },
         )
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(
@@ -426,7 +431,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             appliance_id=appliance.id, min_hours_per_day=1, climate_mode="heat"
         )
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
-        result = build_daily_runtime_optimizer(
+        result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
             _make_snapshot(appliance=appliance, export_points=_export_points(cheap)),
@@ -445,7 +450,7 @@ class DailyRuntimeOptimizerTests(unittest.TestCase):
             export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
         )
         before = deepcopy(snapshot.schedule.slots)
-        build_daily_runtime_optimizer(
+        build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(snapshot, cfg)
         self.assertEqual(snapshot.schedule.slots, before)
@@ -455,7 +460,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
     """`when_price_below` narrows *which slots* a matched day may run on."""
 
     def _optimize(self, cfg, snapshot, appliance):
-        return build_daily_runtime_optimizer(
+        return build_appliance_runtime_optimizer(
             cfg,
             appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
         ).optimize(snapshot, cfg)
@@ -553,12 +558,12 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
                 {
                     "run_when": ["tight"],
                     "when_price_below": 2.0,
-                    "params": {"min_hours_per_day": 1},
+                    "params": {"daily_minimum": {"min_hours_per_day": 1}},
                 },
                 {
                     "run_when": ["tight"],
                     "when_price_below": 6.0,
-                    "params": {"min_hours_per_day": 5},
+                    "params": {"daily_minimum": {"min_hours_per_day": 5}},
                 },
             ],
         )
@@ -576,7 +581,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
-        optimizer = build_daily_runtime_optimizer(
+        optimizer = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         )
         snapshot = _make_snapshot(appliance=appliance, export_points=_export_points(cheap))
@@ -603,7 +608,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
             min_hours_per_day=1,
             groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
         )
-        optimizer = build_daily_runtime_optimizer(
+        optimizer = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         )
         snapshot = _make_snapshot(
@@ -629,7 +634,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
     def test_satisfied_day_emits_runtime_satisfied(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        optimizer = build_daily_runtime_optimizer(
+        optimizer = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         )
         snapshot = _make_snapshot(
@@ -645,6 +650,179 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         self.assertTrue(
             any(d["reason"]["code"] == "runtime_satisfied" for d in step["decisions"])
         )
+
+
+def _uncapped_config(
+    *,
+    appliance_id: str,
+    window: dict | None = None,
+    groups: list[dict] | None = None,
+) -> OptimizerInstanceConfig:
+    params: dict[str, object] = {}
+    if window is not None:
+        params["window"] = window
+    return make_optimizer_config(
+        id="soak",
+        kind="appliance_runtime",
+        target={"appliance_id": appliance_id},
+        params=params,
+        conditions=groups or [{"run_when": ["tight"]}],
+    )
+
+
+class UncappedModeTests(unittest.TestCase):
+    """Without ``daily_minimum`` there is no deficit, so every eligible slot runs."""
+
+    def _optimize(self, cfg, snapshot, appliance):
+        return build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        ).optimize(snapshot, cfg)
+
+    def test_every_eligible_slot_is_placed(self) -> None:
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id, window={"start": "08:00", "end": "10:00"}
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(set())
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(
+            set(placed),
+            {_slot_id(8, 0), _slot_id(8, 30), _slot_id(9, 0), _slot_id(9, 30)},
+        )
+
+    def test_price_does_not_rank_when_there_is_no_cap(self) -> None:
+        # The capped path would take only the two cheap slots; uncapped takes
+        # the whole window, cheap or not.
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id, window={"start": "12:00", "end": "13:00"}
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points({_slot_id(12, 0)})
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(12, 0), _slot_id(12, 30)})
+
+    def test_delivered_runtime_does_not_shrink_the_placement(self) -> None:
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id, window={"start": "08:00", "end": "09:00"}
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points(set()),
+            runtime_by_date={appliance.id: {DAY: 12.0}},
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(8, 0), _slot_id(8, 30)})
+
+    def test_a_day_no_group_matches_places_nothing(self) -> None:
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id,
+            window={"start": "08:00", "end": "10:00"},
+            groups=[{"run_when": ["surplus"]}],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            export_points=_export_points(set()),
+            classification="tight",
+        )
+
+        self.assertEqual(
+            _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id), {}
+        )
+
+    def test_placement_is_traced_as_conditions_matched(self) -> None:
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id, window={"start": "08:00", "end": "09:00"}
+        )
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(set())
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["reason"]["code"], "conditions_matched")
+
+    def test_a_window_is_optional(self) -> None:
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id, groups=[{"when_price_below": 2.0}]
+        )
+        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(cheap)
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), cheap)
+
+
+class UncappedValidationTests(unittest.TestCase):
+    def test_a_group_that_narrows_nothing_is_rejected(self) -> None:
+        with self.assertRaises(AutomationConfigError) as ctx:
+            _uncapped_config(appliance_id="pool-pump", groups=[{}])
+
+        self.assertEqual(ctx.exception.code, "invalid_value")
+
+    def test_a_window_alone_is_enough(self) -> None:
+        _uncapped_config(
+            appliance_id="pool-pump",
+            window={"start": "08:00", "end": "18:00"},
+            groups=[{}],
+        )
+
+    def test_a_narrowed_run_when_is_enough(self) -> None:
+        _uncapped_config(appliance_id="pool-pump", groups=[{"run_when": ["surplus"]}])
+
+    def test_a_capped_optimizer_needs_no_narrowing_condition(self) -> None:
+        _config(appliance_id="pool-pump", groups=[{}])
+
+    def test_skips_cannot_be_set_without_a_minimum(self) -> None:
+        with self.assertRaises(AutomationConfigError):
+            make_optimizer_config(
+                id="soak",
+                kind="appliance_runtime",
+                target={"appliance_id": "pool-pump"},
+                params={"daily_minimum": {"max_consecutive_skips": 2}},
+                conditions=[{"run_when": ["surplus"]}],
+            )
+
+    def test_a_group_cannot_introduce_the_daily_minimum(self) -> None:
+        # `max_consecutive_skips` is required inside and not overridable, so a
+        # partial object can never resolve on a master that has none.
+        with self.assertRaises(AutomationConfigError):
+            _uncapped_config(
+                appliance_id="pool-pump",
+                groups=[
+                    {
+                        "run_when": ["surplus"],
+                        "params": {"daily_minimum": {"min_hours_per_day": 2}},
+                    }
+                ],
+            )
 
 
 if __name__ == "__main__":

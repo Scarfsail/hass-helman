@@ -35,14 +35,28 @@ RELOCATED_OPTIMIZER_KEYS: dict[str, str] = {
     "condition": "conditions[0].custom",
     "only_on_days": "conditions[].run_when",
     "when_price_below": "conditions[].when_price_below",
-    "min_surplus_buffer_pct": "conditions[].min_surplus_buffer_pct",
+    "min_surplus_buffer_pct": "nothing — the surplus buffer condition was retired",
     "reserve_floor_soc": "conditions[].reserve_floor_soc",
+    "min_hours_per_day": "params.daily_minimum.min_hours_per_day",
+    "max_consecutive_skips": "params.daily_minimum.max_consecutive_skips",
     "appliance_id": "target.appliance_id",
     "climate_mode": "target.climate_mode",
-    "skip": "params.max_consecutive_skips and conditions[].run_when",
+    "skip": "params.daily_minimum.max_consecutive_skips and conditions[].run_when",
     "action": "nothing — the optimizer kind implies its action",
     "hold_action": "nothing — the optimizer kind implies its action",
     "release": "nothing — the release slot is computed per day, never configured",
+}
+
+#: Kinds the merge retired, and what to write instead. The loader migrates these
+#: automatically; a hand-edited document reaches the reader unmigrated, so name
+#: the replacement rather than listing every supported kind and leaving the user
+#: to guess which one absorbed theirs.
+RETIRED_OPTIMIZER_KINDS: dict[str, str] = {
+    "daily_runtime": "appliance_runtime",
+    "surplus_appliance": (
+        "appliance_runtime without params.daily_minimum, and a condition "
+        "(min_soc_pct) or a window in place of the retired surplus buffer"
+    ),
 }
 
 _OPTIMIZER_KEYS = frozenset({"id", "kind", "enabled", "target", "params", "conditions"})
@@ -208,6 +222,15 @@ def _read_optimizer(
     data = _read_mapping(value, path=path)
     optimizer_id = _read_non_empty_string(data.get("id", MISSING), path=f"{path}.id")
     kind = _read_non_empty_string(data.get("kind", MISSING), path=f"{path}.kind")
+    if kind in RETIRED_OPTIMIZER_KINDS:
+        raise AutomationConfigError(
+            path=f"{path}.kind",
+            code="retired_optimizer_kind",
+            message=(
+                f"{path}.kind {kind!r} was retired; use "
+                f"{RETIRED_OPTIMIZER_KINDS[kind]}"
+            ),
+        )
     if kind not in KNOWN_OPTIMIZER_KINDS:
         raise AutomationConfigError(
             path=f"{path}.kind",
@@ -225,7 +248,7 @@ def _read_optimizer(
     raw_params = data.get("params", MISSING)
     params = read_fields(spec.params, raw_params, path=f"{path}.params")
     if spec.validate is not None:
-        spec.validate(params, path=f"{path}.params")
+        spec.validate(params, None, path=f"{path}.params")
 
     return OptimizerInstanceConfig(
         id=optimizer_id,
@@ -316,7 +339,7 @@ def _read_condition_group(
         path=f"{path}.params",
     )
     if spec.validate is not None:
-        spec.validate(resolved, path=f"{path}.params")
+        spec.validate(resolved, condition_values, path=f"{path}.params")
 
     return ConditionGroup(
         index=index,

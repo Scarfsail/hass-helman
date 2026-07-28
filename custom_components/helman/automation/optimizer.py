@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 from .optimizers import (
     build_charge_from_grid_optimizer,
     build_charge_hold_optimizer,
-    build_daily_runtime_optimizer,
+    build_appliance_runtime_optimizer,
     build_export_price_optimizer,
-    build_surplus_appliance_optimizer,
 )
 from .spec import KNOWN_OPTIMIZER_KINDS
 
@@ -39,10 +38,9 @@ class Optimizer(Protocol):
 #: construction.
 _BUILDERS: dict[str, Callable[..., "Optimizer"]] = {
     "export_price": build_export_price_optimizer,
-    "surplus_appliance": build_surplus_appliance_optimizer,
     "charge_hold": build_charge_hold_optimizer,
     "charge_from_grid": build_charge_from_grid_optimizer,
-    "daily_runtime": build_daily_runtime_optimizer,
+    "appliance_runtime": build_appliance_runtime_optimizer,
 }
 
 

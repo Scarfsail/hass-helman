@@ -516,8 +516,8 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(connection.results[0][1]["success"])
 
-    async def test_save_config_persists_surplus_appliance_optimizer(self) -> None:
-        self._set_known_optimizer_kinds("export_price", "surplus_appliance")
+    async def test_save_config_persists_appliance_runtime_optimizer(self) -> None:
+        self._set_known_optimizer_kinds("export_price", "appliance_runtime")
         storage = FakeStorage()
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
@@ -541,10 +541,10 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                 "optimizers": [
                     {
                         "id": "preheat-living-room",
-                        "kind": "surplus_appliance",
+                        "kind": "appliance_runtime",
                         "enabled": True,
                         "target": {"appliance_id": "dishwasher"},
-                        "conditions": [{"min_surplus_buffer_pct": 5}],
+                        "conditions": [{"min_soc_pct": 80}],
                     }
                 ],
             }
