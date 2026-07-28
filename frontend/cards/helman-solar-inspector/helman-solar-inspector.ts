@@ -82,6 +82,8 @@ import {
   type SlotSelectionState,
 } from "./slot-selection.js";
 import { helmanColorVars } from "../color-vars";
+import { schedulingSharedStyles } from "../helman-scheduling/styles/scheduling-shared-styles";
+import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
@@ -252,8 +254,12 @@ type ChartLayout = {
   wForY: (y: number) => number;
 };
 
-/** One cell of a hover popup's actual/forecast column, optionally swatched. */
-type TooltipCell = { value: string; color?: string } | null;
+/**
+ * One cell of a hover popup's actual/forecast column, optionally swatched --
+ * either with a literal colour, or with a schedule action's tone class, whose
+ * accent colour rides in via `schedulingSharedStyles`.
+ */
+type TooltipCell = { value: string; color?: string; toneClass?: string } | null;
 
 /**
  * One row of a hover popup: a label, and its actual and forecast readings side
@@ -407,7 +413,7 @@ export class HelmanSolarInspector extends LitElement {
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
 
-  static styles = [helmanColorVars, css`
+  static styles = [helmanColorVars, schedulingSharedStyles, css`
     :host {
       display: block;
       width: 100%;
@@ -1286,6 +1292,8 @@ export class HelmanSolarInspector extends LitElement {
         .hoverMinutes=${this._hoveredMinutes}
         @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
           this._setHoverMinutes(event.detail?.minutes ?? null)}
+        @slot-tooltip=${(event: CustomEvent<ScheduleHoverTooltipContent | null>) =>
+          this._setScheduleTooltip(event.detail)}
       ></helman-solar-schedule-band-strip>
     `;
   }
@@ -1502,11 +1510,37 @@ export class HelmanSolarInspector extends LitElement {
     this._tooltip = null;
   }
 
+  /**
+   * The schedule band's own popup shape (one row per lane, no actual/forecast
+   * duality) mapped onto the shared table -- always the forecast-only layout,
+   * same as price's, with the tone class carrying the row's colour.
+   */
+  private _setScheduleTooltip(content: ScheduleHoverTooltipContent | null) {
+    this._tooltip = content === null
+      ? null
+      : {
+          x: content.x,
+          y: content.y,
+          title: content.title,
+          hasActual: false,
+          rows: content.rows.map((row) => ({
+            label: row.label,
+            actual: null,
+            forecast: { value: row.value, toneClass: row.toneClass },
+          })),
+        };
+  }
+
   private _renderTooltipCell(cell: TooltipCell) {
     if (!cell) return html`<span class="hover-tooltip-cell">—</span>`;
+    const swatch = cell.toneClass
+      ? html`<span class="hover-tooltip-swatch ${cell.toneClass}" style="background: var(--schedule-action-tone-accent);"></span>`
+      : cell.color
+        ? html`<span class="hover-tooltip-swatch" style="background: ${cell.color};"></span>`
+        : "";
     return html`
       <span class="hover-tooltip-cell">
-        ${cell.color ? html`<span class="hover-tooltip-swatch" style="background: ${cell.color};"></span>` : ""}
+        ${swatch}
         ${cell.value}
       </span>
     `;

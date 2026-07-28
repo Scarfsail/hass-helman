@@ -1,3 +1,4 @@
+import type { LocalizeFunction } from "../../localize/localize";
 import type { ControllableEntityDTO, EntityActualHistorySlotDTO, ForecastPayload } from "../../helman-api";
 import type { ScheduleDisplaySlot, ScheduleSlot } from "../schedule-types";
 import {
@@ -9,9 +10,11 @@ import {
     buildEntityActualSegments,
     buildEntityScheduleBlocks,
     getEntityScheduleTargetKey,
+    isEntityInverterAction,
     selectEntityScheduleDayBlocks,
     type EntityActualSegment,
     type EntityActualSlot,
+    type EntityScheduleAction,
     type EntityScheduleBlock,
     type EntityScheduleDay,
     type EntityScheduleDrafts,
@@ -19,6 +22,9 @@ import {
     type EntityScheduleTarget,
 } from "./entity-day-schedule-model";
 import { getScheduleApplianceById, type ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
+import { getScheduleActionPresentation } from "./schedule-action-presentation";
+import { getScheduleApplianceActionPresentation } from "./schedule-appliance-action-presentation";
+import { formatScheduleTime } from "./schedule-time";
 import {
     buildSlotForecastProjection,
     materializeSlotForecastMap,
@@ -143,6 +149,48 @@ export interface EntityDayBandLane {
     /** What the entity really did earlier today, already merged into runs. */
     actualSegments: readonly EntityActualSegment[];
     isAvailable: boolean;
+}
+
+/**
+ * How one lane presents a run of its own -- an inverter reads its actions
+ * against the inverter's own presentation table, everything else against its
+ * appliance's, and both need this same routing. Shared so every surface that
+ * draws or summarizes a lane's blocks (the day editor, the inspector's
+ * read-only band and its hover popup) tells the same story for the same run.
+ */
+export function resolveLaneRunPresentation(
+    lane: EntityDayBandLane,
+    run: { action: EntityScheduleAction },
+    localize: LocalizeFunction,
+) {
+    if (lane.target.kind === "inverter" && isEntityInverterAction(run.action)) {
+        return getScheduleActionPresentation(run.action, localize);
+    }
+
+    return getScheduleApplianceActionPresentation({
+        appliance: lane.appliance ?? { kind: "generic", icon: lane.icon },
+        action: run.action === null || isEntityInverterAction(run.action) ? null : run.action,
+        localize,
+    });
+}
+
+/**
+ * "08:00–12:00 (4 h)" -- the span answers when, the total answers how much,
+ * and for a run that really happened those can differ (it may have spent
+ * only part of a slot running), which is why `totalMs` is its own parameter
+ * rather than always the span's own length. Shared with the day band's own
+ * segment titles so a run reads identically wherever it is summarized.
+ */
+export function formatLaneRunRange(
+    run: { startMs: number; endMs: number },
+    locale: string,
+    timeZone: string,
+    totalMs?: number,
+): string {
+    const format = (atMs: number): string => formatScheduleTime(atMs, locale, timeZone);
+    const hours = (totalMs ?? run.endMs - run.startMs) / 3_600_000;
+    const hoursLabel = `${hours.toLocaleString(locale, { maximumFractionDigits: 1 })} h`;
+    return `${format(run.startMs)}–${format(run.endMs)} (${hoursLabel})`;
 }
 
 /**
