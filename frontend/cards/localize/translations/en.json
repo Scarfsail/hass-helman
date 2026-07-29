@@ -208,6 +208,10 @@
           "title": "Battery too low",
           "detail": "Projected battery {soc}% is below the {threshold}% threshold."
         },
+        "insufficient_solar_coverage": {
+          "title": "Not enough solar",
+          "detail": "Solar surplus covers only {coveragePct}% of this appliance's demand here; {requiredPct}% is required."
+        },
         "forecast_unavailable": {
           "title": "Forecast unavailable",
           "detail": "Forecast surplus is unavailable ({status})."

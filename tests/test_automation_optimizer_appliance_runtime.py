@@ -76,6 +76,9 @@ from custom_components.helman.automation.config import (  # noqa: E402
     AutomationConfigError,
     OptimizerInstanceConfig,
 )
+from custom_components.helman.automation.conditions.types import (  # noqa: E402
+    ConditionRailsUnavailable,
+)
 from custom_components.helman.automation.day_context import DayContext  # noqa: E402
 from custom_components.helman.automation.optimizers.appliance_runtime import (  # noqa: E402
     build_appliance_runtime_optimizer,
@@ -160,6 +163,31 @@ def _soc_series(
     return series
 
 
+def _surplus_series(
+    surplus_by_slot: dict[str, float],
+    *,
+    default: float = 0.0,
+) -> list[dict[str, object]]:
+    """A 15-minute surplus series over the window, keyed by *schedule* slot.
+
+    ``_min_solar_coverage_mask`` fails closed on a missing bucket, so every
+    bucket of every window slot has to be present or thin sun is
+    indistinguishable from a gap in the rail.
+    """
+    series: list[dict[str, object]] = []
+    cursor = _at(8)
+    while cursor < _at(18):
+        slot_id = _slot_id(cursor.hour, (cursor.minute // 30) * 30)
+        series.append(
+            {
+                "timestamp": cursor.isoformat(timespec="seconds"),
+                "availableSurplusKwh": surplus_by_slot.get(slot_id, default),
+            }
+        )
+        cursor += timedelta(minutes=15)
+    return series
+
+
 def _day_context(classification: str = "tight") -> DayContext:
     return DayContext(
         local_date=DAY,
@@ -186,6 +214,8 @@ def _make_snapshot(
     condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] | None = None,
     now: datetime | None = None,
     appliance_active_by_id: dict[str, bool] | None = None,
+    grid_status: str = "available",
+    grid_coverage_until: str | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances((appliance,))
     return OptimizationSnapshot(
@@ -196,7 +226,8 @@ def _make_snapshot(
             "series": [] if battery_series is None else deepcopy(battery_series),
         },
         grid_forecast={
-            "status": "available",
+            "status": grid_status,
+            "coverageUntil": grid_coverage_until,
             "series": [] if grid_series is None else deepcopy(grid_series),
         },
         context=OptimizationContext(
@@ -819,6 +850,205 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         self.assertEqual(set(placed), cheap)
 
 
+class SolarCoverageConditionTests(unittest.TestCase):
+    """``min_solar_coverage_pct`` — is this slot's energy free right now?
+
+    The appliance draws 0.4 kWh/h, so each 15-minute bucket of a slot wants
+    0.1 kWh: 0.081 kWh of surplus is 81 % coverage and 0.079 kWh is 79 %.
+    """
+
+    def _optimize(self, cfg, snapshot, appliance):
+        return build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        ).optimize(snapshot, cfg)
+
+    def _config_with(self, appliance, threshold: float, **kwargs):
+        return _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=0.5,
+            max_consecutive_skips=1,
+            groups=[{"run_when": ["tight"], "min_solar_coverage_pct": threshold}],
+            **kwargs,
+        )
+
+    def test_a_slot_below_the_threshold_is_gated_out(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            grid_series=_surplus_series(
+                {_slot_id(12, 0): 0.081, _slot_id(12, 30): 0.079}
+            ),
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        # 81 % clears an 80 % floor; 79 % does not.
+        self.assertEqual(set(placed), {_slot_id(12, 0)})
+
+    def test_every_bucket_of_the_slot_must_clear(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        # 13:00's first bucket is drenched and its second is thin. Sampling one
+        # end would authorise the slot on a value that holds for half of it.
+        series = _surplus_series({})
+        by_timestamp = {entry["timestamp"]: entry for entry in series}
+        by_timestamp[_at(13, 0).isoformat(timespec="seconds")][
+            "availableSurplusKwh"
+        ] = 0.2
+        by_timestamp[_at(13, 15).isoformat(timespec="seconds")][
+            "availableSurplusKwh"
+        ] = 0.079
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            grid_series=series,
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(placed, {})
+
+    def test_a_slot_clearing_in_every_bucket_is_taken(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            grid_series=_surplus_series({_slot_id(13, 0): 0.2}),
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(13, 0)})
+
+    def test_full_coverage_is_reachable_at_a_hundred(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 100)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            # Exactly the bucket demand: 100 % is "at least", not "more than".
+            grid_series=_surplus_series({_slot_id(9, 0): 0.1, _slot_id(9, 30): 0.099}),
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(9, 0)})
+
+    # --- rails must raise, never fail closed --------------------------------
+    #
+    # The condition gates placement, so an empty mask is indistinguishable from
+    # the condition correctly saying "no sun anywhere" — and would silently
+    # clear the appliance instead of restoring its baseline actions.
+
+    def test_a_missing_surplus_rail_raises(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        snapshot = _make_snapshot(
+            appliance=appliance, when_active={appliance.id: 0.4}
+        )
+
+        with self.assertRaises(ConditionRailsUnavailable):
+            self._optimize(cfg, snapshot, appliance)
+
+    def test_a_surplus_rail_stopping_short_of_the_horizon_raises(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            grid_series=_surplus_series({_slot_id(13, 0): 0.2}),
+            grid_status="partial",
+            # A partial series truncates rather than pads, so without this guard
+            # the back half of the horizon would look uncovered.
+            grid_coverage_until=_at(18).isoformat(timespec="seconds"),
+        )
+
+        with self.assertRaises(ConditionRailsUnavailable):
+            self._optimize(cfg, snapshot, appliance)
+
+    def test_a_partial_rail_that_does_cover_the_horizon_is_used(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            grid_series=_surplus_series({_slot_id(13, 0): 0.2}),
+            grid_status="partial",
+            grid_coverage_until=(
+                REFERENCE_TIME + timedelta(hours=48)
+            ).isoformat(timespec="seconds"),
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(13, 0)})
+
+    def test_a_missing_demand_profile_raises(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            grid_series=_surplus_series({_slot_id(13, 0): 0.2}),
+        )
+
+        with self.assertRaises(ConditionRailsUnavailable):
+            self._optimize(cfg, snapshot, appliance)
+
+    def test_an_absent_threshold_leaves_the_whole_window_placeable(self) -> None:
+        # Absent means unconstrained, never "inherit a default" — a coverage
+        # floor nobody authored would stop the appliance running after dark.
+        appliance = _generic()
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=0.5,
+            groups=[{"run_when": ["tight"]}],
+        )
+        snapshot = _make_snapshot(appliance=appliance)
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(len(placed), 1)
+
+    def test_a_gated_slot_is_told_the_coverage_it_achieved(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, 80)
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            grid_series=_surplus_series(
+                {_slot_id(12, 0): 0.081, _slot_id(12, 30): 0.04}
+            ),
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        by_slot = {
+            decision["slotIds"][0]: decision
+            for decision in step["decisions"]
+            if decision["reason"]["code"] == "insufficient_solar_coverage"
+        }
+        # One decision per slot, because the coverage differs per slot.
+        self.assertEqual(
+            by_slot[_slot_id(12, 30)]["reason"]["params"],
+            {"requiredPct": 80.0, "coveragePct": 40.0},
+        )
+        self.assertEqual(by_slot[_slot_id(12, 30)]["outcome"], "rejected")
+        # The slot that cleared the gate is placed, not rejected.
+        self.assertNotIn(_slot_id(12, 0), by_slot)
+
+
 class DailyRuntimeTraceContractTests(unittest.TestCase):
     def test_placement_and_ranking_reasons_and_contract(self) -> None:
         appliance = _generic()
@@ -1084,6 +1314,20 @@ class UncappedValidationTests(unittest.TestCase):
 
     def test_a_narrowed_run_when_is_enough(self) -> None:
         _uncapped_config(appliance_id="pool-pump", groups=[{"run_when": ["surplus"]}])
+
+    def test_a_solar_coverage_floor_is_enough(self) -> None:
+        # It gates slots, so it narrows the horizon like any other condition.
+        _uncapped_config(
+            appliance_id="pool-pump", groups=[{"min_solar_coverage_pct": 80}]
+        )
+
+    def test_a_solar_coverage_floor_is_bounded_to_a_percentage(self) -> None:
+        for value in (-1, 101):
+            with self.subTest(value=value), self.assertRaises(AutomationConfigError):
+                _config(
+                    appliance_id="pool-pump",
+                    groups=[{"min_solar_coverage_pct": value}],
+                )
 
     def test_a_capped_optimizer_needs_no_narrowing_condition(self) -> None:
         _config(appliance_id="pool-pump", groups=[{}])

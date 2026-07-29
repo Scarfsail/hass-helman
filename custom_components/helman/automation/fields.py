@@ -101,6 +101,15 @@ def soc(key: str, **kwargs: Any) -> Field:
     return Field(key=key, type="number", minimum=0, maximum=100, **kwargs)
 
 
+def percent(key: str, **kwargs: Any) -> Field:
+    """A 0..100 share of something that is not a battery state of charge.
+
+    Structurally identical to :func:`soc`; named apart because ``soc`` carries
+    battery semantics a coverage ratio or a headroom margin does not.
+    """
+    return Field(key=key, type="number", minimum=0, maximum=100, **kwargs)
+
+
 def margin_pct(key: str, *, default: Any = 0) -> Field:
     return Field(key=key, type="number", minimum=0, default=default)
 

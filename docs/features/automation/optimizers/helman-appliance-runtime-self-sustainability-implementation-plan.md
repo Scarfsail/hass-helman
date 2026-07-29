@@ -371,8 +371,15 @@ so it would count by default and let an uncapped optimizer place across the whol
 1. ✅ **Trace rejection fix** (`d7f89b7`). `Eligibility.rejection()` in place of a hardcoded
    `price_above_run_threshold` for every window slot the matched group did not own. Independent bug
    fix, shipped.
-2. **`min_solar_coverage_pct`.** New condition, all-buckets natively, rails guards,
-   `_slot_is_solar_covered` grows a threshold. No simulation, no plumbing.
+2. ✅ **`min_solar_coverage_pct`.** New condition, all-buckets natively, rails guards. No
+   simulation, no plumbing. The threshold landed on the *mask*, not on
+   `_slot_is_solar_covered`: the gate is the condition, and ranking still wants the plain
+   "fully covered" boolean. Both now sit on one `rails.slot_solar_coverage_pct` primitive,
+   which the trace also reads to quote a rejected slot its own coverage.
+   Preceded by an independent fix (`aeaf261`): a day *no* group owns because a slot
+   condition emptied it was formatted as a `run_when` rejection, so `list(threshold)` raised
+   `TypeError`. Pre-existing under `when_price_below`; routine once an overcast day can do
+   it.
 3. **Re-simulation seam.** Extract the pure slot simulator; add the discharge parameters and the
    forecast overlay to `OptimizationContext`. No behaviour change — assert the extracted function
    reproduces `_build_schedule_adjusted_series` exactly.

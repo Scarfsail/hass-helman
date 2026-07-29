@@ -499,6 +499,10 @@
           "title": "Nízké nabití baterie",
           "detail": "Předpokládané nabití {soc} % je pod prahem {threshold} %."
         },
+        "insufficient_solar_coverage": {
+          "title": "Málo slunce",
+          "detail": "Přebytek ze slunce pokryje jen {coveragePct} % spotřeby spotřebiče v tomto slotu; požaduje se {requiredPct} %."
+        },
         "forecast_unavailable": {
           "title": "Předpověď nedostupná",
           "detail": "Přebytek z předpovědi není dostupný ({status})."

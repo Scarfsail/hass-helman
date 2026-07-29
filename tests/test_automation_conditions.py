@@ -407,7 +407,7 @@ class SpecInvariantTests(unittest.TestCase):
     def test_daily_runtime_accepts_both_the_day_and_the_price_condition(self) -> None:
         self.assertEqual(
             OPTIMIZER_SPECS["appliance_runtime"].condition_types,
-            ("run_when", "when_price_below", "min_soc_pct"),
+            ("run_when", "when_price_below", "min_soc_pct", "min_solar_coverage_pct"),
         )
 
     def test_every_kind_declares_only_registered_condition_types(self) -> None:

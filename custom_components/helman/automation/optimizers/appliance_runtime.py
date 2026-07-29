@@ -44,8 +44,6 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from ...appliances.climate_appliance import ClimateApplianceRuntime
-from ...appliances.generic_appliance import GenericApplianceRuntime
 from ...const import SCHEDULE_SLOT_MINUTES
 from ...scheduling.schedule import (
     ScheduleDocument,
@@ -64,6 +62,8 @@ from ..rails import (
     horizon_slots_between,
     read_available_surplus_by_bucket,
     read_price_by_bucket,
+    read_when_active_hourly_energy_kwh,
+    slot_solar_coverage_pct,
 )
 from ..trace import NULL_TRACE
 
@@ -139,8 +139,8 @@ class ApplianceRuntimeOptimizer:
             )
         )
         available_surplus_by_bucket = read_available_surplus_by_bucket(snapshot)
-        demand_hourly_energy = _resolve_demand_hourly_energy(
-            snapshot=snapshot, appliance=self.target.appliance
+        demand_hourly_energy = read_when_active_hourly_energy_kwh(
+            snapshot, appliance_id
         )
         export_price_by_bucket = read_price_by_bucket(
             snapshot.context.export_price_forecast
@@ -195,6 +195,9 @@ class ApplianceRuntimeOptimizer:
                     eligibility=eligibility,
                     window_slots=window_slots,
                     day_context=day_context,
+                    reference_time=snapshot.context.now,
+                    available_surplus_by_bucket=available_surplus_by_bucket,
+                    demand_hourly_energy=demand_hourly_energy,
                 )
                 continue
 
@@ -203,6 +206,9 @@ class ApplianceRuntimeOptimizer:
                 eligibility=eligibility,
                 window_slots=window_slots,
                 placeable=set(plan.placeable_slots),
+                reference_time=snapshot.context.now,
+                available_surplus_by_bucket=available_surplus_by_bucket,
+                demand_hourly_energy=demand_hourly_energy,
             )
 
             slots_needed = ceil(remaining_hours / _SLOT_HOURS)
@@ -446,16 +452,20 @@ def _trace_unmatched_day(
     eligibility: "Eligibility",
     window_slots: list[str],
     day_context: "DayContext",
+    reference_time: datetime,
+    available_surplus_by_bucket: dict[datetime, float] | None,
+    demand_hourly_energy: float | None,
 ) -> None:
     """Explain a day on which no group owned a single window slot.
 
     Usually the day itself was not matched, and the message is the day's
     classification against the group's ``run_when``. But a *slot*-scoped
     condition can empty a whole day too — a day whose prices never drop below
-    the threshold — and those carry the condition's own value, which is a
-    number, not a list of classifications. Formatting one as the other raised
-    ``TypeError`` and took the whole run down; they now fall through to the same
-    per-slot explanations a partially-owned day gets.
+    the threshold, or an overcast one no slot of which clears
+    ``min_solar_coverage_pct`` — and those carry the condition's own value,
+    which is a number, not a list of classifications. Formatting one as the
+    other raised ``TypeError`` and took the whole run down; they now fall
+    through to the same per-slot explanations a partially-owned day gets.
     """
     if not window_slots:
         return
@@ -466,6 +476,9 @@ def _trace_unmatched_day(
             eligibility=eligibility,
             window_slots=window_slots,
             placeable=set(),
+            reference_time=reference_time,
+            available_surplus_by_bucket=available_surplus_by_bucket,
+            demand_hourly_energy=demand_hourly_energy,
         )
         return
     trace.decision(
@@ -487,15 +500,23 @@ def _trace_window_exclusions(
     eligibility: "Eligibility",
     window_slots: list[str],
     placeable: set[str],
+    reference_time: datetime,
+    available_surplus_by_bucket: dict[datetime, float] | None,
+    demand_hourly_energy: float | None,
 ) -> None:
     """Explain window slots the matched group does not own.
 
-    Only the priced-out ones are emitted: ``when_price_below``'s own reason code
-    is worded for ``export_price`` ("export allowed"), which reads backwards for
-    an appliance, so this kind relabels it. Every other exclusion is left to the
-    frontend's derivation, which explains a SoC rejection with the slot's actual
-    projected SoC — a number this optimizer would have to re-read the rail to
-    supply.
+    Two exclusions are emitted; the rest are left to the frontend's derivation,
+    which explains a SoC rejection with the slot's actual projected SoC — a
+    number this optimizer would have to re-read the rail to supply.
+
+    * **price**, because ``when_price_below``'s own reason code is worded for
+      ``export_price`` ("export allowed"), which reads backwards for an
+      appliance, so this kind relabels it;
+    * **solar coverage**, because the frontend *cannot* derive it: the verdict
+      compares the surplus rail against **this appliance's** demand, and no rail
+      carries that. Both are already in hand here, so the slot is told the
+      coverage it actually achieved.
     """
     priced_out: list[str] = []
     threshold: float | None = None
@@ -503,10 +524,35 @@ def _trace_window_exclusions(
         if slot_id in placeable:
             continue
         rejection = eligibility.rejection(slot_id)
-        if rejection is None or rejection[0] != "price_not_below_threshold":
+        if rejection is None:
             continue
-        priced_out.append(slot_id)
-        threshold = rejection[1]
+        code, value = rejection
+        if code == "insufficient_solar_coverage":
+            coverage_pct = _slot_coverage_pct(
+                slot_id=slot_id,
+                reference_time=reference_time,
+                available_surplus_by_bucket=available_surplus_by_bucket,
+                demand_hourly_energy=demand_hourly_energy,
+            )
+            # One decision per slot, not one batch: the coverage each slot
+            # achieved is the whole point of the message.
+            trace.decision(
+                slot_ids=[slot_id],
+                outcome="rejected",
+                reason={
+                    "code": "insufficient_solar_coverage",
+                    "params": {
+                        "requiredPct": value,
+                        "coveragePct": (
+                            None if coverage_pct is None else round(coverage_pct, 1)
+                        ),
+                    },
+                    "signals": ["availableSurplusKwh"],
+                },
+            )
+        elif code == "price_not_below_threshold":
+            priced_out.append(slot_id)
+            threshold = value
     if priced_out:
         trace.decision(
             slot_ids=priced_out,
@@ -635,6 +681,29 @@ def _promote_in_flight_slot(
     return ranked
 
 
+def _slot_coverage_pct(
+    *,
+    slot_id: str,
+    reference_time: datetime,
+    available_surplus_by_bucket: dict[datetime, float] | None,
+    demand_hourly_energy: float | None,
+) -> float | None:
+    """The slot's worst-bucket solar coverage, or ``None`` when unknowable.
+
+    Ranking is best-effort where the ``min_solar_coverage_pct`` mask is strict:
+    a missing rail here costs a tiebreak, so it degrades to "not covered"
+    instead of voiding the run the way the mask must.
+    """
+    if available_surplus_by_bucket is None or demand_hourly_energy is None:
+        return None
+    return slot_solar_coverage_pct(
+        slot_id=slot_id,
+        reference_time=reference_time,
+        available_surplus_by_bucket=available_surplus_by_bucket,
+        demand_hourly_energy=demand_hourly_energy,
+    )
+
+
 def _slot_is_solar_covered(
     *,
     slot_id: str,
@@ -642,45 +711,19 @@ def _slot_is_solar_covered(
     available_surplus_by_bucket: dict[datetime, float] | None,
     demand_hourly_energy: float | None,
 ) -> bool:
-    if (
-        available_surplus_by_bucket is None
-        or demand_hourly_energy is None
-        or demand_hourly_energy <= 0
-    ):
-        return False
-    from ...appliances.projection_builder import build_when_active_demand_slices
+    """Fully covered — the ranking tiebreak, i.e. a 100 % coverage threshold.
 
-    demand_slices = build_when_active_demand_slices(
+    Still a boolean with ``min_solar_coverage_pct`` in play: for a threshold
+    below 100 the gate leaves several slots standing, and "runs entirely on sun"
+    is what discriminates between them.
+    """
+    coverage_pct = _slot_coverage_pct(
         slot_id=slot_id,
         reference_time=reference_time,
-        hourly_energy_kwh=demand_hourly_energy,
+        available_surplus_by_bucket=available_surplus_by_bucket,
+        demand_hourly_energy=demand_hourly_energy,
     )
-    if not demand_slices:
-        return False
-    for demand_slice in demand_slices:
-        available = available_surplus_by_bucket.get(demand_slice.bucket_start)
-        if available is None or available < demand_slice.energy_kwh:
-            return False
-    return True
-
-
-def _resolve_demand_hourly_energy(
-    *,
-    snapshot: "OptimizationSnapshot",
-    appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
-) -> float | None:
-    from ...appliances.projection_builder import get_when_active_demand_profile
-
-    resolved = snapshot.context.when_active_hourly_energy_kwh_by_appliance_id.get(
-        appliance.id
-    )
-    if resolved is None:
-        return None
-    profile = get_when_active_demand_profile(
-        appliance=appliance,
-        resolved_hourly_energy_kwh=resolved,
-    )
-    return None if profile is None else profile.hourly_energy_kwh
+    return coverage_pct is not None and coverage_pct >= 100.0
 
 
 def build_appliance_runtime_optimizer(

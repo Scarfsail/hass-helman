@@ -168,6 +168,96 @@ def read_available_surplus_by_bucket(
     return surplus_by_bucket or None
 
 
+def read_available_surplus_by_bucket_covering_horizon(
+    snapshot: "OptimizationSnapshot",
+) -> dict[datetime, float] | None:
+    """As :func:`read_available_surplus_by_bucket`, but refusing partial coverage.
+
+    A ``partial`` grid forecast *truncates* rather than pads, so a caller gating
+    slots on surplus would find every slot past the truncation uncovered — a
+    verdict indistinguishable from a genuine "no sun there". ``None`` means
+    "unknown", which such a caller must turn into a raise rather than an empty
+    mask. Callers that only *rank* on surplus want the softer reader.
+    """
+    from ..scheduling.schedule import build_horizon_end
+
+    if not _forecast_covers_horizon(
+        snapshot.grid_forecast,
+        required_coverage_until=build_horizon_end(snapshot.context.now),
+    ):
+        return None
+    return read_available_surplus_by_bucket(snapshot)
+
+
+def read_when_active_hourly_energy_kwh(
+    snapshot: "OptimizationSnapshot",
+    appliance_id: str,
+) -> float | None:
+    """The appliance's own demand while it runs, in kWh per hour, or ``None``.
+
+    Not a forecast series, but the same shape of question: one value an
+    optimizer or a condition mask reads off the snapshot rather than deriving.
+    """
+    from ..appliances.climate_appliance import ClimateApplianceRuntime
+    from ..appliances.generic_appliance import GenericApplianceRuntime
+    from ..appliances.projection_builder import get_when_active_demand_profile
+
+    resolved = snapshot.context.when_active_hourly_energy_kwh_by_appliance_id.get(
+        appliance_id
+    )
+    if resolved is None:
+        return None
+    appliance = snapshot.context.appliance_registry.get_appliance(appliance_id)
+    if not isinstance(
+        appliance, (GenericApplianceRuntime, ClimateApplianceRuntime)
+    ):
+        return None
+    profile = get_when_active_demand_profile(
+        appliance=appliance,
+        resolved_hourly_energy_kwh=resolved,
+    )
+    return None if profile is None else profile.hourly_energy_kwh
+
+
+def slot_solar_coverage_pct(
+    *,
+    slot_id: str,
+    reference_time: datetime,
+    available_surplus_by_bucket: dict[datetime, float],
+    demand_hourly_energy: float,
+) -> float | None:
+    """What share of the slot's own demand the projected surplus covers, in %.
+
+    The **worst** bucket decides. Every 15-minute bucket the slot spans has to
+    clear the caller's threshold, because sampling one end would authorise a
+    slot on a value that holds for half of it.
+
+    ``None`` when the answer is not knowable: no demand to cover (the slot has
+    fully elapsed) or a bucket missing from the rail. Callers treat that as "not
+    covered" — the same fail-closed reading ``_min_soc_mask`` gives a missing
+    bucket — so a gap can never *authorise* a slot.
+    """
+    from ..appliances.projection_builder import build_when_active_demand_slices
+
+    if demand_hourly_energy <= 0:
+        return None
+    demand_slices = build_when_active_demand_slices(
+        slot_id=slot_id,
+        reference_time=reference_time,
+        hourly_energy_kwh=demand_hourly_energy,
+    )
+    if not demand_slices:
+        return None
+    worst_ratio: float | None = None
+    for demand_slice in demand_slices:
+        available = available_surplus_by_bucket.get(demand_slice.bucket_start)
+        if available is None:
+            return None
+        ratio = available / demand_slice.energy_kwh
+        worst_ratio = ratio if worst_ratio is None else min(worst_ratio, ratio)
+    return None if worst_ratio is None else worst_ratio * 100
+
+
 def read_clipped_surplus_by_bucket(
     snapshot: "OptimizationSnapshot",
     *,

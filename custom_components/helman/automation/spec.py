@@ -203,7 +203,12 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
                     required=False,
                 ),
             ),
-            condition_types=("run_when", "when_price_below", "min_soc_pct"),
+            condition_types=(
+                "run_when",
+                "when_price_below",
+                "min_soc_pct",
+                "min_solar_coverage_pct",
+            ),
             param_scope=Scope.DAY,
             validate=_validate_appliance_runtime,
             new_draft={
