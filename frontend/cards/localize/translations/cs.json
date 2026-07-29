@@ -499,6 +499,22 @@
           "title": "Nízké nabití baterie",
           "detail": "Předpokládané nabití {soc} % je pod prahem {threshold} %."
         },
+        "insufficient_solar_coverage": {
+          "title": "Málo slunce",
+          "detail": "Přebytek ze slunce pokryje jen {coveragePct} % spotřeby spotřebiče v tomto slotu; požaduje se {requiredPct} %."
+        },
+        "would_break_soc_floor": {
+          "title": "Vybilo by baterii",
+          "detail": "Spuštění v tomto slotu by baterii stáhlo na {projectedMinSoc} % v {atSlot}, pod hranici {floor} %."
+        },
+        "soc_floor_already_breached": {
+          "title": "Baterie dojde i bez spotřebiče",
+          "detail": "Baterie klesne na {baselineMinSoc} % — pod hranici {floor} % — i bez tohoto spotřebiče, takže nemůže běžet soběstačně."
+        },
+        "not_solar_neutral": {
+          "title": "Den by se nezaplatil",
+          "detail": "Spuštění v tomto slotu nechá den o {deltaSocPct} % níž na baterii a o {deltaImportKwh} kWh výš na odběru ze sítě, takže to slunce nepokrylo."
+        },
         "forecast_unavailable": {
           "title": "Předpověď nedostupná",
           "detail": "Přebytek z předpovědi není dostupný ({status})."

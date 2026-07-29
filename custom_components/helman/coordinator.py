@@ -300,6 +300,10 @@ class _ForecastRebuildSnapshot:
     battery_forecast: dict[str, Any]
     projection_plan: ApplianceProjectionPlan
     grid_forecast: dict[str, Any] | None = None
+    #: The overlay ``battery_forecast`` was simulated from, kept so the
+    #: optimization snapshot can carry it. Re-deriving it downstream is not
+    #: possible: the snapshot's schedule document is the unstripped original.
+    schedule_overlay: ScheduleForecastOverlay | None = None
 
 
 @dataclass(frozen=True)
@@ -2542,6 +2546,7 @@ class HelmanCoordinator:
             battery_forecast=battery_forecast,
             projection_plan=projection_plan,
             grid_forecast=grid_forecast,
+            schedule_overlay=schedule_overlay,
         )
 
     async def async_resolve_day_contexts(
@@ -2659,6 +2664,11 @@ class HelmanCoordinator:
             if battery_settings.max_charge_power_w is not None
             else None
         )
+        battery_max_discharge_power_kw = (
+            battery_settings.max_discharge_power_w / 1000
+            if battery_settings.max_discharge_power_w is not None
+            else None
+        )
         battery_usable_capacity_kwh = (
             battery_state.nominal_capacity_kwh if battery_state is not None else None
         )
@@ -2668,6 +2678,9 @@ class HelmanCoordinator:
             adjusted_house_forecast=deepcopy(rebuild.adjusted_house_forecast),
             battery_forecast=deepcopy(rebuild.battery_forecast),
             grid_forecast=deepcopy(rebuild.grid_forecast),
+            # Not deepcopied: a frozen dataclass of frozen slots, and the
+            # optimizers only read it.
+            schedule_overlay=rebuild.schedule_overlay,
             context=OptimizationContext(
                 now=reference_time,
                 battery_state=battery_state,
@@ -2691,6 +2704,8 @@ class HelmanCoordinator:
                 battery_max_charge_power_kw=battery_max_charge_power_kw,
                 battery_usable_capacity_kwh=battery_usable_capacity_kwh,
                 battery_charge_efficiency=battery_settings.charge_efficiency,
+                battery_max_discharge_power_kw=battery_max_discharge_power_kw,
+                battery_discharge_efficiency=battery_settings.discharge_efficiency,
                 runtime_hours_by_appliance_id_by_local_date=deepcopy(
                     input_bundle.runtime_hours_by_appliance_id_by_local_date
                 ),

@@ -8,6 +8,7 @@ import sys
 import types
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -711,6 +712,32 @@ class SnapshotSerializationTests(unittest.TestCase):
             payload["context"]["whenActiveHourlyEnergyKwhByApplianceId"],
             {"boiler": 1.25},
         )
+
+    def test_snapshot_to_dict_carries_both_halves_of_the_battery_params(self) -> None:
+        # Only the charge side used to be surfaced; an optimizer re-simulating
+        # the battery needs the discharge side too.
+        context = _make_snapshot().context
+        payload = snapshot_to_dict(
+            replace(
+                _make_snapshot(),
+                context=replace(
+                    context,
+                    battery_max_discharge_power_kw=4.0,
+                    battery_discharge_efficiency=0.93,
+                ),
+            )
+        )
+
+        self.assertEqual(payload["context"]["batteryMaxDischargePowerKw"], 4.0)
+        self.assertEqual(payload["context"]["batteryDischargeEfficiency"], 0.93)
+
+    def test_snapshot_to_dict_omits_the_simulation_overlay(self) -> None:
+        # It is a simulation input, not a view: serialising it would restate
+        # `scheduleDocument` at canonical resolution for a consumer that has it.
+        payload = snapshot_to_dict(_make_snapshot())
+
+        self.assertNotIn("scheduleOverlay", payload)
+        self.assertNotIn("scheduleOverlay", payload["context"])
 
     def test_snapshot_to_dict_hides_internal_battery_available_surplus_field(self) -> None:
         snapshot = _make_snapshot()

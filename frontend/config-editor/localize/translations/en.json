@@ -155,6 +155,9 @@
       "climate_mode": "Climate mode",
       "min_surplus_buffer_pct": "Min surplus buffer %",
       "min_soc_pct": "Min battery SoC %",
+      "min_solar_coverage_pct": "Min solar coverage %",
+      "ensure_self_sustainability": "Ensure self-sustainability",
+      "self_sustainability": "Self-sustainability",
       "day_context_deficit_ratio": "Deficit below ratio",
       "day_context_surplus_ratio": "Surplus above ratio",
       "daily_minimum": "Daily minimum hours",
@@ -332,6 +335,10 @@
       "unsupported_appliance_kind": "Unsupported appliance kind: {kind}",
       "condition_group": "Group {index}"
     },
+    "choices": {
+      "ensure_self_sustainability_soft": "Soft — never break the battery floor",
+      "ensure_self_sustainability_strict": "Strict — the day must pay for itself"
+    },
     "help": {
       "aria_label": "Field help",
       "close": "Close",
@@ -415,6 +422,9 @@
       "bias_correction_slot_invalidation_data_glitch_backfill_max_minutes": "Maximum minutes the backfill walk may extend backwards from a spike. The walk stops at the first non-zero actual or once this window is reached. Default 120 minutes.",
       "run_when": "Run on days with one of these classifications (surplus, tight, deficit). Leave all unchecked to never run on its own.",
       "min_soc_pct": "Only use slots where the projected battery state of charge stays at or above this percentage for the whole slot. Leave empty to ignore the battery. The projection does not account for this appliance's own draw.",
+      "min_solar_coverage_pct": "Only use slots where the projected solar surplus covers at least this share of the appliance's own demand, in every 15-minute bucket of the slot. 100 means it runs entirely on surplus that would otherwise be exported; lower values allow the battery or the grid to make up the rest. Leave empty to ignore solar coverage.",
+      "ensure_self_sustainability": "Re-simulate the battery with this appliance's own runs included, and only place where it stays self-sufficient. 'Soft' keeps the projected battery above the inverter reserve plus the margin below. 'Strict' additionally requires the day to pay for itself, which confines the appliance to daylight hours. Leave empty to ignore the battery impact.",
+      "self_sustainability_margin_pct": "Headroom above the inverter's own minimum SoC, in percentage points, that self-sustainability keeps free. A margin of 0 never fires: the projected battery can never reach the inverter minimum in the first place.",
       "window_start": "Start of the daily window, as HH:MM local time.",
       "window_end": "End of the daily window, as HH:MM local time. Must be after the start.",
       "climate_mode": "Which mode this optimizer authors on the climate appliance.",

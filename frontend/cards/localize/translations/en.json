@@ -208,6 +208,22 @@
           "title": "Battery too low",
           "detail": "Projected battery {soc}% is below the {threshold}% threshold."
         },
+        "insufficient_solar_coverage": {
+          "title": "Not enough solar",
+          "detail": "Solar surplus covers only {coveragePct}% of this appliance's demand here; {requiredPct}% is required."
+        },
+        "would_break_soc_floor": {
+          "title": "Would drain the battery",
+          "detail": "Running here would take the battery down to {projectedMinSoc}% at {atSlot}, below the {floor}% floor."
+        },
+        "soc_floor_already_breached": {
+          "title": "Battery already runs out",
+          "detail": "The battery drops to {baselineMinSoc}% — below the {floor}% floor — even without this appliance, so it cannot run self-sufficiently."
+        },
+        "not_solar_neutral": {
+          "title": "The day would not pay for itself",
+          "detail": "Running here leaves the day {deltaSocPct}% down on battery and {deltaImportKwh} kWh up on grid import, so the sun did not cover it."
+        },
         "forecast_unavailable": {
           "title": "Forecast unavailable",
           "detail": "Forecast surplus is unavailable ({status})."

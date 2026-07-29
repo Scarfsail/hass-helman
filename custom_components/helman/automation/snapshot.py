@@ -19,6 +19,7 @@ from ..scheduling.schedule import (
 
 if TYPE_CHECKING:
     from ..battery_state import BatteryLiveState
+    from ..scheduling.forecast_overlay import ScheduleForecastOverlay
     from .day_context import DayContext
 
 
@@ -37,6 +38,12 @@ class OptimizationContext:
     battery_max_charge_power_kw: float | None = None
     battery_usable_capacity_kwh: float | None = None
     battery_charge_efficiency: float | None = None
+    # The discharge half of A1. Only the charge side was surfaced, because the
+    # only consumer sized a *charge*. An optimizer that re-simulates the battery
+    # to see what its own placement costs needs both halves — the trajectory it
+    # is checking is mostly the battery discharging into the house.
+    battery_max_discharge_power_kw: float | None = None
+    battery_discharge_efficiency: float | None = None
     # A2 — framework-resolved runtime hours per appliance per local calendar day
     # (recorder-derived). Rules read this synchronously.
     runtime_hours_by_appliance_id_by_local_date: dict[str, dict[date, float]] = field(
@@ -68,6 +75,26 @@ class OptimizationSnapshot:
     battery_forecast: dict[str, Any]
     grid_forecast: dict[str, Any]
     context: OptimizationContext
+    #: The inverter overlay ``battery_forecast`` was actually simulated from.
+    #:
+    #: Carried rather than re-derived, because it is *not* reconstructible from
+    #: ``schedule``. That field is the unstripped original document, while the
+    #: forecast ran on one that had candidate actions blanked and target-SoC
+    #: actions dropped where the inverter control config offers no matching
+    #: option. An optimizer rebuilding an overlay from ``schedule`` would apply
+    #: actions the forecast excluded and produce a trajectory that disagrees
+    #: with every rail, the inspector and ``min_soc_pct`` — and the control
+    #: config it would need is not reachable from an optimizer anyway.
+    #:
+    #: ``None`` on snapshots built without one. Note that
+    #: ``build_schedule_forecast_overlay`` returns an effectively empty overlay
+    #: when execution is disabled, so a re-simulation then sees no inverter
+    #: actions — correct, since none will be executed.
+    #:
+    #: Deliberately absent from :func:`snapshot_to_dict`: it is a simulation
+    #: input, and serialising it would restate the schedule at canonical
+    #: resolution for a consumer that has the schedule already.
+    schedule_overlay: "ScheduleForecastOverlay | None" = None
 
 
 def attach_day_contexts(
@@ -109,6 +136,10 @@ def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:
             "batteryMaxChargePowerKw": snapshot.context.battery_max_charge_power_kw,
             "batteryUsableCapacityKwh": snapshot.context.battery_usable_capacity_kwh,
             "batteryChargeEfficiency": snapshot.context.battery_charge_efficiency,
+            "batteryMaxDischargePowerKw": (
+                snapshot.context.battery_max_discharge_power_kw
+            ),
+            "batteryDischargeEfficiency": snapshot.context.battery_discharge_efficiency,
             "runtimeHoursByApplianceIdByLocalDate": {
                 appliance_id: {
                     local_date.isoformat(): hours

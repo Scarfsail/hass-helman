@@ -67,6 +67,20 @@ const SCHEMA = {
                         default: ["surplus", "tight", "deficit"],
                     },
                 },
+                // A `choices` condition. Every condition used to be a number or
+                // a day-classification set, so the widget renderer fell through
+                // to a numeric input for anything else — which made the first
+                // string-valued condition impossible to fill in at all.
+                {
+                    key: "ensure_self_sustainability",
+                    scope: "run",
+                    field: {
+                        key: "ensure_self_sustainability",
+                        type: "string",
+                        required: false,
+                        choices: ["soft", "strict"],
+                    },
+                },
             ],
             newDraft: {
                 params: {
@@ -196,6 +210,44 @@ test.describe("schema-driven optimizer card", () => {
             "Group 1",
             "Otherwise",
         ]);
+    });
+
+    test("a choices condition renders a picker, not a number box", async ({
+        page,
+    }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const field = card
+            .locator(".condition-group-body > .field-grid .field")
+            .filter({ hasText: "Ensure self-sustainability" })
+            .first();
+
+        await expect(field.locator("select")).toHaveCount(1);
+        await expect(field.locator("input")).toHaveCount(0);
+        // Blank first, because an optional condition left unset means
+        // unconstrained rather than "pick one".
+        expect(
+            await field.locator("select option").evaluateAll((options) =>
+                options.map((option) => (option as HTMLOptionElement).value),
+            ),
+        ).toEqual(["", "soft", "strict"]);
+    });
+
+    test("a choices option is labelled, and falls back to the raw value", async ({
+        page,
+    }) => {
+        const panel = await mountEditor(page);
+        const card = await openCard(panel);
+        const field = card
+            .locator(".condition-group-body > .field-grid .field")
+            .filter({ hasText: "Ensure self-sustainability" })
+            .first();
+
+        const labels = await field
+            .locator("select option")
+            .evaluateAll((options) => options.map((option) => option.textContent));
+        expect(labels[1]).toContain("Soft");
+        expect(labels[2]).toContain("Strict");
     });
 
     test("a group's override shows the inherited value as a placeholder", async ({

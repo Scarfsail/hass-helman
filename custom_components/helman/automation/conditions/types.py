@@ -35,8 +35,11 @@ from ..fields import Field
 from ..rails import (
     canonical_bucket_start,
     parse_timestamp,
+    read_available_surplus_by_bucket_covering_horizon,
     read_optional_float,
     read_soc_by_bucket_covering_horizon,
+    read_when_active_hourly_energy_kwh,
+    slot_solar_coverage_pct,
 )
 
 if TYPE_CHECKING:
@@ -179,6 +182,62 @@ def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
     return frozenset(eligible)
 
 
+def _min_solar_coverage_mask(inputs: MaskInputs) -> frozenset[str]:
+    """Slots whose every bucket's surplus covers the appliance's own demand.
+
+    "Is this slot's energy free *right now*." For each 15-minute bucket the slot
+    spans, the appliance's demand for that bucket must be met by the projected
+    ``availableSurplusKwh`` to at least the configured share; the worst bucket
+    decides, as in :func:`_min_soc_mask`.
+
+    **Why this needs no simulation, unlike ``ensure_self_sustainability``.**
+    ``availableSurplusKwh`` is what remains *after* the battery has charged, so
+    it is non-zero only when solar exceeds what the battery can or will absorb.
+    Consuming it neither discharges the battery nor slows its charge, so the SoC
+    trajectory is unchanged — and distinct slots consume distinct buckets, so no
+    placement changes another's coverage. That independence is what makes this a
+    legal mask rather than a self-gating condition.
+
+    Caveat worth knowing: during a ``charge_to_target_soc`` bucket the surplus
+    can be non-zero while the house is *simultaneously* importing, so
+    "solar-covered" does not strictly imply "free".
+
+    ``100`` is the whole appliance running on sun alone. Lower values exist
+    because full coverage is unreachable for the appliance class this targets: a
+    1 kW pool pump against 0.8 kW of surplus is never covered, so a
+    strict-only condition would mean "never runs".
+    """
+    snapshot = inputs.snapshot
+    appliance_id = str(inputs.target.get("appliance_id"))
+    # This condition gates placement, so an unavailable rail must void the run.
+    # Yielding an empty mask instead would be indistinguishable from the
+    # condition correctly saying "no sun anywhere", and would silently clear the
+    # appliance rather than restoring its baseline actions.
+    surplus_by_bucket = read_available_surplus_by_bucket_covering_horizon(snapshot)
+    if surplus_by_bucket is None:
+        raise ConditionRailsUnavailable(
+            appliance_id, "the grid surplus forecast does not cover the horizon"
+        )
+    demand_hourly_energy = read_when_active_hourly_energy_kwh(snapshot, appliance_id)
+    if demand_hourly_energy is None:
+        raise ConditionRailsUnavailable(
+            appliance_id, "the appliance's when-active demand profile is unavailable"
+        )
+
+    threshold = inputs.value
+    eligible: set[str] = set()
+    for slot_id in inputs.horizon_slot_ids:
+        coverage_pct = slot_solar_coverage_pct(
+            slot_id=slot_id,
+            reference_time=snapshot.context.now,
+            available_surplus_by_bucket=surplus_by_bucket,
+            demand_hourly_energy=demand_hourly_energy,
+        )
+        if coverage_pct is not None and coverage_pct >= threshold:
+            eligible.add(slot_id)
+    return frozenset(eligible)
+
+
 def _slot_bucket_starts(slot_id: str) -> tuple[datetime, ...]:
     """The forecast bucket starts a schedule slot spans, in order."""
     slot_start = parse_slot_id(slot_id)
@@ -223,6 +282,40 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             field=F.soc("min_soc_pct", required=False),
             reason_code="soc_below_threshold",
             build_mask=_min_soc_mask,
+        ),
+        # Optional and without a default, as above: a coverage floor filled in
+        # for a group that never asked for one would stop the appliance running
+        # on any slot the sun does not already pay for.
+        ConditionType(
+            key="min_solar_coverage_pct",
+            scope=Scope.SLOT,
+            field=F.percent("min_solar_coverage_pct", required=False),
+            reason_code="insufficient_solar_coverage",
+            build_mask=_min_solar_coverage_mask,
+        ),
+        # Self-gating, and for a sharper reason than `reserve_floor_soc`: this
+        # condition *couples slots*. Placing at 09:00 changes whether 20:00 is
+        # feasible, and `system_mask &= mask` (evaluation.py) assumes slot
+        # independence. So the mask is all-true, the optimizer re-simulates the
+        # horizon with its own placements folded in, and the reason codes are
+        # emitted from there rather than from here — a mask cannot say *which*
+        # placement broke the floor. `reason_code` is the one a lone rejection
+        # falls back to.
+        #
+        # The level is the condition's value rather than a bool beside a
+        # separate knob: one key, three states (absent / soft / strict), so they
+        # cannot contradict each other.
+        ConditionType(
+            key="ensure_self_sustainability",
+            scope=Scope.RUN,
+            field=F.string(
+                "ensure_self_sustainability",
+                required=False,
+                choices=("soft", "strict"),
+            ),
+            reason_code="would_break_soc_floor",
+            build_mask=_all_slots_mask,
+            self_gating=True,
         ),
         # Self-gating: `charge_from_grid` conditions on the SoC dip over the
         # *expensive* band but writes into the *preceding cheap* band, so a mask

@@ -45,6 +45,10 @@ V1_REASON_CODES: frozenset[str] = frozenset(
         "price_above_run_threshold",
         "conditions_matched",  # uncapped: no deficit to size a placement against
         "soc_below_threshold",  # D (frontend derivation)
+        "insufficient_solar_coverage",
+        "would_break_soc_floor",
+        "soc_floor_already_breached",
+        "not_solar_neutral",
         "forecast_unavailable",
         # any / framework
         "blocked_user_owned",

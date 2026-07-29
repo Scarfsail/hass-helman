@@ -44,8 +44,6 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from ...appliances.climate_appliance import ClimateApplianceRuntime
-from ...appliances.generic_appliance import GenericApplianceRuntime
 from ...const import SCHEDULE_SLOT_MINUTES
 from ...scheduling.schedule import (
     ScheduleDocument,
@@ -58,12 +56,15 @@ from ...scheduling.schedule import (
 )
 from ..base import ApplianceTarget, ScheduleWriter, resolve_appliance_target
 from ..conditions import build_eligibility
+from ..conditions.types import ConditionRailsUnavailable
 from ..fields import time_on
 from ..ownership import is_user_owned_appliance_action
 from ..rails import (
     horizon_slots_between,
     read_available_surplus_by_bucket,
     read_price_by_bucket,
+    read_when_active_hourly_energy_kwh,
+    slot_solar_coverage_pct,
 )
 from ..trace import NULL_TRACE
 
@@ -71,10 +72,18 @@ if TYPE_CHECKING:
     from ...appliances import AppliancesRuntimeRegistry
     from ..conditions import Eligibility
     from ..config import OptimizerInstanceConfig
+    from ..day_context import DayContext
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
+    from .self_sustainability import Trajectory
 
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
+
+# "≈ 0" for strict's day-balance test. Both are the inspector's own rail
+# epsilons (`RAIL_METRICS` in automation-inspector-model.ts): a difference the
+# UI would not render as a change is not one to reject a placement over.
+_STRICT_SOC_TOLERANCE_PCT = 0.5
+_STRICT_IMPORT_TOLERANCE_KWH = 0.05
 
 
 @dataclass(frozen=True)
@@ -89,9 +98,15 @@ class _DayPlan:
     placeable_slots: list[str]
     group_label: str | None
     forced_after_skips: int | None
-    #: The matched group's ``when_price_below``, so a slot the threshold priced
-    #: out can be told *which* threshold it failed. ``None`` when unconstrained.
-    price_threshold: float | None = None
+    #: The matched group's ``ensure_self_sustainability``, or ``None`` when it
+    #: set none — and always ``None`` on a forced run, which bypasses it as it
+    #: bypasses every other condition.
+    #:
+    #: Constant across the day by construction: capped placement intersects the
+    #: window with the resolved group's own slots, so every placeable slot of a
+    #: day belongs to the same group, hence the same level and the same resolved
+    #: ``margin_pct``. No "the floor moves mid-day" rule is needed.
+    self_sustainability: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,8 +156,8 @@ class ApplianceRuntimeOptimizer:
             )
         )
         available_surplus_by_bucket = read_available_surplus_by_bucket(snapshot)
-        demand_hourly_energy = _resolve_demand_hourly_energy(
-            snapshot=snapshot, appliance=self.target.appliance
+        demand_hourly_energy = read_when_active_hourly_energy_kwh(
+            snapshot, appliance_id
         )
         export_price_by_bucket = read_price_by_bucket(
             snapshot.context.export_price_forecast
@@ -152,6 +167,17 @@ class ApplianceRuntimeOptimizer:
         horizon_end = build_horizon_end(snapshot.context.now)
         tzinfo = horizon_start.tzinfo
 
+        gate = _SelfSustainabilityGate.for_run(
+            snapshot=snapshot,
+            config=config,
+            appliance_id=appliance_id,
+            demand_hourly_energy=demand_hourly_energy,
+        )
+
+        # The day loop must run chronologically, and does: `build_day_contexts`
+        # inserts in sorted date order and every hop preserves it. That used to
+        # be incidental; with self-sustainability it is load-bearing, because
+        # day 1's placements lower day 2's trajectory.
         for local_date, day_context in snapshot.context.day_contexts.items():
             delivered_hours = runtime_by_date.get(local_date, 0.0)
             plan = self._plan_for_day(
@@ -192,42 +218,26 @@ class ApplianceRuntimeOptimizer:
                 continue
 
             if plan is None:
-                if window_slots:
-                    code, value = eligibility.rejection(window_slots[0]) or (
-                        "day_not_matched",
-                        (),
-                    )
-                    trace.decision(
-                        slot_ids=window_slots,
-                        outcome="out_of_scope",
-                        reason={
-                            "code": code,
-                            "params": {
-                                "classification": day_context.classification,
-                                "runWhen": list(value),
-                            },
-                        },
-                    )
+                _trace_unmatched_day(
+                    trace=trace,
+                    eligibility=eligibility,
+                    window_slots=window_slots,
+                    day_context=day_context,
+                    reference_time=snapshot.context.now,
+                    available_surplus_by_bucket=available_surplus_by_bucket,
+                    demand_hourly_energy=demand_hourly_energy,
+                )
                 continue
 
-            # Slots inside the window that the matched group does not own —
-            # priced out, in practice. They are neither placed nor "ranked more
-            # expensive", so they get their own rejection rather than falling
-            # through to the frontend's generic "not considered".
-            placeable = set(plan.placeable_slots)
-            filtered_out = [
-                slot_id for slot_id in window_slots if slot_id not in placeable
-            ]
-            if filtered_out:
-                trace.decision(
-                    slot_ids=filtered_out,
-                    outcome="rejected",
-                    reason={
-                        "code": "price_above_run_threshold",
-                        "params": {"threshold": plan.price_threshold},
-                        "signals": ["exportPrice"],
-                    },
-                )
+            _trace_window_exclusions(
+                trace=trace,
+                eligibility=eligibility,
+                window_slots=window_slots,
+                placeable=set(plan.placeable_slots),
+                reference_time=snapshot.context.now,
+                available_surplus_by_bucket=available_surplus_by_bucket,
+                demand_hourly_energy=demand_hourly_energy,
+            )
 
             slots_needed = ceil(remaining_hours / _SLOT_HOURS)
             ranked = _rank_slots(
@@ -238,6 +248,11 @@ class ApplianceRuntimeOptimizer:
                 demand_hourly_energy=demand_hourly_energy,
                 export_price_by_bucket=export_price_by_bucket,
                 reference_time=snapshot.context.now,
+                # A forced run bypasses self-sustainability as it bypasses every
+                # other condition, but it need not be gratuitous about it:
+                # ranking by coverage first takes the slots that move the SoC
+                # least. The coverage flag is already computed.
+                prefer_covered=plan.forced_after_skips is not None,
             )
             ranked = _promote_in_flight_slot(
                 ranked,
@@ -246,7 +261,11 @@ class ApplianceRuntimeOptimizer:
                 ),
                 active_slot_id=format_slot_id(horizon_start),
             )
-            chosen = ranked[:slots_needed]
+            chosen, floor_rejected, not_reached = gate.take(
+                ranked,
+                slots_needed=slots_needed,
+                plan=plan,
+            )
             for _cost, slot_id in chosen:
                 writer.set_appliance(
                     slot_id,
@@ -265,13 +284,18 @@ class ApplianceRuntimeOptimizer:
                         placed_slots=len(chosen),
                     ),
                 )
-            rejected = ranked[slots_needed:]
-            if rejected:
+            for slot_id, reason in floor_rejected:
+                # Per slot: the projected minimum and where it falls are what
+                # make the rejection readable, and they differ slot by slot.
+                trace.decision(
+                    slot_ids=[slot_id], outcome="rejected", reason=reason
+                )
+            if not_reached:
                 worst_chosen_cost = max(
                     (cost for cost, _slot_id in chosen), default=0.0
                 )
                 trace.decision(
-                    slot_ids=[slot_id for _cost, slot_id in rejected],
+                    slot_ids=[slot_id for _cost, slot_id in not_reached],
                     outcome="rejected",
                     reason={
                         "code": "ranked_more_expensive",
@@ -306,10 +330,33 @@ class ApplianceRuntimeOptimizer:
         """
         appliance_id = self.target.appliance.id
         window = _window_slot_ids(config.params, snapshot)
+        gate = _SelfSustainabilityGate.for_run(
+            snapshot=snapshot,
+            config=config,
+            appliance_id=appliance_id,
+            demand_hourly_energy=read_when_active_hourly_energy_kwh(
+                snapshot, appliance_id
+            ),
+        )
 
         applied_by_group: dict[int, list[str]] = {}
+        # `iter_slots` yields in horizon order, which is what the coupled
+        # self-sustainability constraint needs: uncapped mode has no ranking, so
+        # chronological is the only defensible acceptance order.
         for resolved in eligibility.iter_slots():
             if window is not None and resolved.slot_id not in window:
+                continue
+            rejection = gate.accept(
+                resolved.slot_id,
+                level=resolved.condition_value("ensure_self_sustainability"),
+                params=resolved.params,
+            )
+            if rejection is not None:
+                trace.decision(
+                    slot_ids=[resolved.slot_id],
+                    outcome="rejected",
+                    reason=rejection,
+                )
                 continue
             if writer.set_appliance(
                 resolved.slot_id,
@@ -373,7 +420,9 @@ class ApplianceRuntimeOptimizer:
                 placeable_slots=placeable,
                 group_label=resolved.group.label,
                 forced_after_skips=None,
-                price_threshold=resolved.condition_value("when_price_below"),
+                self_sustainability=resolved.condition_value(
+                    "ensure_self_sustainability"
+                ),
             )
             remaining_hours = (
                 resolved.params["daily_minimum"]["min_hours_per_day"] - delivered_hours
@@ -465,6 +514,393 @@ def _window_slot_ids(
     return frozenset(slot_ids)
 
 
+class _SelfSustainabilityGate:
+    """Greedy acceptance under ``ensure_self_sustainability``.
+
+    Inert unless some group asked for it — `for_run` returns a gate that takes
+    the ranking's top ``slots_needed`` unchanged, which is exactly the previous
+    behaviour, and never builds a simulator.
+
+    When it is live, a candidate is accepted only if the horizon *re-simulated
+    with every accepted placement plus this one* keeps the battery above the
+    floor. Acceptance re-checks the whole accepted set rather than the candidate
+    alone: taking an 18:00 slot changes the SoC after 18:00, which lies inside
+    the region a 13:00 slot was already checked over.
+
+    The accepted set spans days, not just the day being planned, because the
+    trajectory does.
+    """
+
+    def __init__(
+        self,
+        *,
+        snapshot: "OptimizationSnapshot",
+        appliance_id: str,
+        demand_hourly_energy: float,
+    ) -> None:
+        from .self_sustainability import build_horizon_simulator
+
+        self._snapshot = snapshot
+        self._demand_hourly_energy = demand_hourly_energy
+        self._simulator = build_horizon_simulator(
+            snapshot, appliance_id=appliance_id
+        )
+        self._accepted_demand: dict[datetime, float] = {}
+        self._demand_cache: dict[str, dict[datetime, float]] = {}
+
+    @classmethod
+    def for_run(
+        cls,
+        *,
+        snapshot: "OptimizationSnapshot",
+        config: "OptimizerInstanceConfig",
+        appliance_id: str,
+        demand_hourly_energy: float | None,
+    ) -> "_SelfSustainabilityGate | _NullGate":
+        if not any(
+            group.condition_values.get("ensure_self_sustainability")
+            for group in config.conditions
+        ):
+            return _NullGate()
+        if demand_hourly_energy is None:
+            # Without a demand profile there is no "what would this cost";
+            # the gate would silently pass everything.
+            raise ConditionRailsUnavailable(
+                appliance_id,
+                "the appliance's when-active demand profile is unavailable",
+            )
+        return cls(
+            snapshot=snapshot,
+            appliance_id=appliance_id,
+            demand_hourly_energy=demand_hourly_energy,
+        )
+
+    def take(
+        self,
+        ranked: list[tuple[float, str]],
+        *,
+        slots_needed: int,
+        plan: _DayPlan,
+    ) -> tuple[
+        list[tuple[float, str]],
+        list[tuple[str, dict[str, Any]]],
+        list[tuple[float, str]],
+    ]:
+        """``(chosen, floor_rejected, not_reached)`` for one day's ranking."""
+        if plan.self_sustainability is None:
+            return ranked[:slots_needed], [], ranked[slots_needed:]
+
+        floor = self._floor_pct(plan.params)
+        chosen: list[tuple[float, str]] = []
+        floor_rejected: list[tuple[str, dict[str, Any]]] = []
+        not_reached: list[tuple[float, str]] = []
+        for cost, slot_id in ranked:
+            if len(chosen) >= slots_needed:
+                not_reached.append((cost, slot_id))
+                continue
+            reason = self._accept(
+                slot_id, floor=floor, level=plan.self_sustainability
+            )
+            if reason is None:
+                chosen.append((cost, slot_id))
+            else:
+                floor_rejected.append((slot_id, reason))
+        return chosen, floor_rejected, not_reached
+
+    def accept(
+        self, slot_id: str, *, level: str | None, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Uncapped acceptance of one slot. ``None`` accepts; a reason rejects.
+
+        Uncapped mode iterates ``eligibility.iter_slots()`` across groups, so
+        unlike capped placement the level and the margin can change from slot to
+        slot; both come from the group owning the candidate. Candidates arrive
+        in horizon order, which is the ordering the coupled constraint needs.
+        """
+        if level is None:
+            return None
+        return self._accept(slot_id, floor=self._floor_pct(params), level=level)
+
+    def _accept(
+        self, slot_id: str, *, floor: float, level: str
+    ) -> dict[str, Any] | None:
+        baseline = self._simulator.baseline
+        if baseline.min_soc_pct < floor:
+            # The no-appliance trajectory already dips below the floor, so the
+            # appliance is not the cause and must not be blamed. Decided from
+            # the baseline, never by re-testing "the accepted set minus the
+            # candidate" — for the first candidate that set is empty, the test
+            # passes trivially, and the first candidate takes the blame.
+            return {
+                "code": "soc_floor_already_breached",
+                "params": {
+                    "floor": round(floor, 2),
+                    "baselineMinSoc": round(baseline.min_soc_pct, 2),
+                },
+                "signals": ["batterySocPct"],
+            }
+        candidate_demand = _merge_demand(
+            self._accepted_demand, self._slot_demand(slot_id)
+        )
+        trajectory = self._simulator.simulate(candidate_demand)
+        if trajectory.min_soc_pct < floor:
+            return {
+                "code": "would_break_soc_floor",
+                "params": {
+                    "floor": round(floor, 2),
+                    "projectedMinSoc": round(trajectory.min_soc_pct, 2),
+                    "atSlot": trajectory.min_soc_at,
+                },
+                "signals": ["batterySocPct"],
+            }
+        if level == "strict":
+            # Strict *inherits* the floor rather than replacing it: a day can
+            # balance while still dipping through the floor at noon.
+            unbalanced = self._day_imbalance(slot_id, trajectory, baseline)
+            if unbalanced is not None:
+                return unbalanced
+        self._accepted_demand = candidate_demand
+        return None
+
+    def _day_imbalance(
+        self,
+        slot_id: str,
+        trajectory: "Trajectory",
+        baseline: "Trajectory",
+    ) -> dict[str, Any] | None:
+        """Strict's extra test: did the day the slot belongs to pay for itself?
+
+        Over that day, to local midnight and against the no-appliance baseline,
+        the battery must be restored *and* no extra grid energy bought. Together
+        those mean the appliance's energy came from solar that would otherwise
+        have been exported or curtailed. The battery may be drained mid-morning
+        provided the day's sun refills it — which is exactly what
+        ``min_solar_coverage_pct`` cannot express, being per-slot and unable to
+        time-shift.
+
+        **Why SoC alone is not enough.** Grid import also leaves the battery
+        unchanged: ``charge_from_grid`` charging to a target simply imports one
+        more kWh to still hit it, so end-of-day SoC is identical and the
+        appliance ran on imported energy.
+
+        **Consequence, intended:** energy consumed after sunset cannot be repaid
+        by today's sun, so strict confines the appliance to daylight hours.
+
+        Both comparisons are one-sided. Ending the day *better* than the
+        baseline is not a failure, it just cannot happen often.
+        """
+        local_date = parse_slot_id(slot_id).date()
+        nominal_capacity_kwh = self._nominal_capacity_kwh()
+        # A day whose midnight lies beyond the horizon falls back to the horizon
+        # end, which is what the simulator recorded for it.
+        delta_energy_kwh = trajectory.end_energy_kwh_by_date.get(
+            local_date, 0.0
+        ) - baseline.end_energy_kwh_by_date.get(local_date, 0.0)
+        delta_soc_pct = delta_energy_kwh / nominal_capacity_kwh * 100
+        delta_import_kwh = trajectory.imported_kwh_by_date.get(
+            local_date, 0.0
+        ) - baseline.imported_kwh_by_date.get(local_date, 0.0)
+        if (
+            -delta_soc_pct <= _STRICT_SOC_TOLERANCE_PCT
+            and delta_import_kwh <= _STRICT_IMPORT_TOLERANCE_KWH
+        ):
+            return None
+        return {
+            "code": "not_solar_neutral",
+            "params": {
+                "deltaSocPct": round(delta_soc_pct, 2),
+                "deltaImportKwh": round(delta_import_kwh, 3),
+            },
+            "signals": ["batterySocPct", "importedFromGridKwh"],
+        }
+
+    def _nominal_capacity_kwh(self) -> float:
+        battery_state = self._snapshot.context.battery_state
+        assert battery_state is not None  # build_horizon_simulator guarantees it
+        return battery_state.nominal_capacity_kwh
+
+    def _floor_pct(self, params: dict[str, Any]) -> float:
+        # In percentage *points* above the inverter's own reserve. A floor at
+        # `min_soc` is provably inert: every discharge path clamps `remaining`
+        # to `min_energy_kwh`, so the projected SoC can never reach `min_soc`,
+        # let alone breach it. Only the margin gives the floor teeth.
+        battery_state = self._snapshot.context.battery_state
+        assert battery_state is not None  # build_horizon_simulator guarantees it
+        return battery_state.min_soc + _margin_pct(params)
+
+    def _slot_demand(self, slot_id: str) -> dict[datetime, float]:
+        cached = self._demand_cache.get(slot_id)
+        if cached is None:
+            from ...appliances.projection_builder import (
+                build_when_active_demand_slices,
+            )
+
+            cached = {
+                demand_slice.bucket_start: demand_slice.energy_kwh
+                for demand_slice in build_when_active_demand_slices(
+                    slot_id=slot_id,
+                    reference_time=self._snapshot.context.now,
+                    hourly_energy_kwh=self._demand_hourly_energy,
+                )
+            }
+            self._demand_cache[slot_id] = cached
+        return cached
+
+
+class _NullGate:
+    """No group asked for self-sustainability, so the ranking decides alone."""
+
+    def take(
+        self,
+        ranked: list[tuple[float, str]],
+        *,
+        slots_needed: int,
+        plan: _DayPlan,
+    ) -> tuple[
+        list[tuple[float, str]],
+        list[tuple[str, dict[str, Any]]],
+        list[tuple[float, str]],
+    ]:
+        return ranked[:slots_needed], [], ranked[slots_needed:]
+
+    def accept(
+        self, slot_id: str, *, level: str | None, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        return None
+
+
+def _merge_demand(
+    base: dict[datetime, float], extra: dict[datetime, float]
+) -> dict[datetime, float]:
+    merged = dict(base)
+    for bucket_start, energy_kwh in extra.items():
+        merged[bucket_start] = merged.get(bucket_start, 0.0) + energy_kwh
+    return merged
+
+
+def _margin_pct(params: dict[str, Any]) -> float:
+    return (params.get("self_sustainability") or {}).get("margin_pct", 0.0)
+
+
+def _trace_unmatched_day(
+    *,
+    trace: "OptimizerTrace",
+    eligibility: "Eligibility",
+    window_slots: list[str],
+    day_context: "DayContext",
+    reference_time: datetime,
+    available_surplus_by_bucket: dict[datetime, float] | None,
+    demand_hourly_energy: float | None,
+) -> None:
+    """Explain a day on which no group owned a single window slot.
+
+    Usually the day itself was not matched, and the message is the day's
+    classification against the group's ``run_when``. But a *slot*-scoped
+    condition can empty a whole day too — a day whose prices never drop below
+    the threshold, or an overcast one no slot of which clears
+    ``min_solar_coverage_pct`` — and those carry the condition's own value,
+    which is a number, not a list of classifications. Formatting one as the
+    other raised ``TypeError`` and took the whole run down; they now fall
+    through to the same per-slot explanations a partially-owned day gets.
+    """
+    if not window_slots:
+        return
+    rejection = eligibility.rejection(window_slots[0])
+    if rejection is not None and rejection[0] != "day_not_matched":
+        _trace_window_exclusions(
+            trace=trace,
+            eligibility=eligibility,
+            window_slots=window_slots,
+            placeable=set(),
+            reference_time=reference_time,
+            available_surplus_by_bucket=available_surplus_by_bucket,
+            demand_hourly_energy=demand_hourly_energy,
+        )
+        return
+    trace.decision(
+        slot_ids=window_slots,
+        outcome="out_of_scope",
+        reason={
+            "code": "day_not_matched",
+            "params": {
+                "classification": day_context.classification,
+                "runWhen": list(() if rejection is None else rejection[1]),
+            },
+        },
+    )
+
+
+def _trace_window_exclusions(
+    *,
+    trace: "OptimizerTrace",
+    eligibility: "Eligibility",
+    window_slots: list[str],
+    placeable: set[str],
+    reference_time: datetime,
+    available_surplus_by_bucket: dict[datetime, float] | None,
+    demand_hourly_energy: float | None,
+) -> None:
+    """Explain window slots the matched group does not own.
+
+    Two exclusions are emitted; the rest are left to the frontend's derivation,
+    which explains a SoC rejection with the slot's actual projected SoC — a
+    number this optimizer would have to re-read the rail to supply.
+
+    * **price**, because ``when_price_below``'s own reason code is worded for
+      ``export_price`` ("export allowed"), which reads backwards for an
+      appliance, so this kind relabels it;
+    * **solar coverage**, because the frontend *cannot* derive it: the verdict
+      compares the surplus rail against **this appliance's** demand, and no rail
+      carries that. Both are already in hand here, so the slot is told the
+      coverage it actually achieved.
+    """
+    priced_out: list[str] = []
+    threshold: float | None = None
+    for slot_id in window_slots:
+        if slot_id in placeable:
+            continue
+        rejection = eligibility.rejection(slot_id)
+        if rejection is None:
+            continue
+        code, value = rejection
+        if code == "insufficient_solar_coverage":
+            coverage_pct = _slot_coverage_pct(
+                slot_id=slot_id,
+                reference_time=reference_time,
+                available_surplus_by_bucket=available_surplus_by_bucket,
+                demand_hourly_energy=demand_hourly_energy,
+            )
+            # One decision per slot, not one batch: the coverage each slot
+            # achieved is the whole point of the message.
+            trace.decision(
+                slot_ids=[slot_id],
+                outcome="rejected",
+                reason={
+                    "code": "insufficient_solar_coverage",
+                    "params": {
+                        "requiredPct": value,
+                        "coveragePct": (
+                            None if coverage_pct is None else round(coverage_pct, 1)
+                        ),
+                    },
+                    "signals": ["availableSurplusKwh"],
+                },
+            )
+        elif code == "price_not_below_threshold":
+            priced_out.append(slot_id)
+            threshold = value
+    if priced_out:
+        trace.decision(
+            slot_ids=priced_out,
+            outcome="rejected",
+            reason={
+                "code": "price_above_run_threshold",
+                "params": {"threshold": threshold},
+                "signals": ["exportPrice"],
+            },
+        )
+
+
 def _placement_reason(
     *,
     plan: _DayPlan,
@@ -521,8 +957,15 @@ def _rank_slots(
     demand_hourly_energy: float | None,
     export_price_by_bucket: dict[datetime, float],
     reference_time: datetime,
+    prefer_covered: bool = False,
 ) -> list[tuple[float, str]]:
-    """Window slots cheapest-first, solar-covered slots winning ties."""
+    """Window slots cheapest-first, solar-covered slots winning ties.
+
+    ``prefer_covered`` inverts the two keys for a forced run, which places past
+    every condition including self-sustainability: ordering by coverage first
+    takes the slots that move the battery least, so the escape hatch does as
+    little damage as it can while still delivering the runtime.
+    """
     candidates: list[tuple[float, int, datetime, str]] = []
     for slot_id in window_slots:
         current_domains = document.slots.get(slot_id, ScheduleDomains())
@@ -543,7 +986,13 @@ def _rank_slots(
                 slot_id,
             )
         )
-    candidates.sort(key=lambda item: (item[0], item[1], dt_util.as_utc(item[2])))
+    candidates.sort(
+        key=lambda item: (
+            (item[1], item[0], dt_util.as_utc(item[2]))
+            if prefer_covered
+            else (item[0], item[1], dt_util.as_utc(item[2]))
+        )
+    )
     return [(cost, slot_id) for cost, _covered, _cursor, slot_id in candidates]
 
 
@@ -581,6 +1030,29 @@ def _promote_in_flight_slot(
     return ranked
 
 
+def _slot_coverage_pct(
+    *,
+    slot_id: str,
+    reference_time: datetime,
+    available_surplus_by_bucket: dict[datetime, float] | None,
+    demand_hourly_energy: float | None,
+) -> float | None:
+    """The slot's worst-bucket solar coverage, or ``None`` when unknowable.
+
+    Ranking is best-effort where the ``min_solar_coverage_pct`` mask is strict:
+    a missing rail here costs a tiebreak, so it degrades to "not covered"
+    instead of voiding the run the way the mask must.
+    """
+    if available_surplus_by_bucket is None or demand_hourly_energy is None:
+        return None
+    return slot_solar_coverage_pct(
+        slot_id=slot_id,
+        reference_time=reference_time,
+        available_surplus_by_bucket=available_surplus_by_bucket,
+        demand_hourly_energy=demand_hourly_energy,
+    )
+
+
 def _slot_is_solar_covered(
     *,
     slot_id: str,
@@ -588,45 +1060,19 @@ def _slot_is_solar_covered(
     available_surplus_by_bucket: dict[datetime, float] | None,
     demand_hourly_energy: float | None,
 ) -> bool:
-    if (
-        available_surplus_by_bucket is None
-        or demand_hourly_energy is None
-        or demand_hourly_energy <= 0
-    ):
-        return False
-    from ...appliances.projection_builder import build_when_active_demand_slices
+    """Fully covered — the ranking tiebreak, i.e. a 100 % coverage threshold.
 
-    demand_slices = build_when_active_demand_slices(
+    Still a boolean with ``min_solar_coverage_pct`` in play: for a threshold
+    below 100 the gate leaves several slots standing, and "runs entirely on sun"
+    is what discriminates between them.
+    """
+    coverage_pct = _slot_coverage_pct(
         slot_id=slot_id,
         reference_time=reference_time,
-        hourly_energy_kwh=demand_hourly_energy,
+        available_surplus_by_bucket=available_surplus_by_bucket,
+        demand_hourly_energy=demand_hourly_energy,
     )
-    if not demand_slices:
-        return False
-    for demand_slice in demand_slices:
-        available = available_surplus_by_bucket.get(demand_slice.bucket_start)
-        if available is None or available < demand_slice.energy_kwh:
-            return False
-    return True
-
-
-def _resolve_demand_hourly_energy(
-    *,
-    snapshot: "OptimizationSnapshot",
-    appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
-) -> float | None:
-    from ...appliances.projection_builder import get_when_active_demand_profile
-
-    resolved = snapshot.context.when_active_hourly_energy_kwh_by_appliance_id.get(
-        appliance.id
-    )
-    if resolved is None:
-        return None
-    profile = get_when_active_demand_profile(
-        appliance=appliance,
-        resolved_hourly_energy_kwh=resolved,
-    )
-    return None if profile is None else profile.hourly_energy_kwh
+    return coverage_pct is not None and coverage_pct >= 100.0
 
 
 def build_appliance_runtime_optimizer(
