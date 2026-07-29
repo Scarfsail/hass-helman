@@ -27,7 +27,7 @@ Assumes the shape and semantics of
 | The floor is `inverter min_soc + margin_pct`, in **percentage points** | Not a bare SoC threshold. A floor *at* `min_soc` is provably inert: `min_energy_kwh = nominal × min_soc/100` (`battery_state.py:243`), every discharge path clamps `remaining = max(min_energy_kwh, …)`, and `socPct = remaining/nominal × 100` — so the projected SoC can never reach `min_soc`, let alone breach it. Only a floor strictly above it can ever fire. |
 | Level is the condition's *value*, not a bool | One key, three states (absent / `soft` / `strict`), per group. A bool plus a separate level knob would let them contradict. |
 | `margin_pct` is a param, the level is a condition | The margin is a property of the installation; the level is a policy that varies by day type. Params are overridable per group, so the margin still can be. |
-| `ensure_self_sustainability` is **self-gating** | It couples slots — placing at 09:00 changes whether 20:00 is feasible — and `system_mask = AND(masks)` (`evaluation.py:191`) assumes slot independence. Follows the `reserve_floor_soc` precedent (`conditions/types.py:227`, `charge_from_grid.py:180`). |
+| `ensure_self_sustainability` is **self-gating** | It couples slots — placing at 09:00 changes whether 20:00 is feasible — and `system_mask &= mask` (`evaluation.py:201`) assumes slot independence. Follows the `reserve_floor_soc` precedent (`conditions/types.py:227`, `charge_from_grid.py:180`). |
 | Strict = soft **plus** a day-balance test | A day can balance while still dipping through the floor at noon, so strict inherits the floor check rather than replacing it. |
 | Strict compares **both** ΔSoC and Δimport | SoC alone does not prove solar paid: grid import also leaves the battery unchanged. See "Why ΔSoC alone is not enough". |
 | `min_soc_pct` is kept | "Is the battery low *now*" is a different question from "will the plan *make* it low". |
@@ -66,6 +66,43 @@ unconstrained for that group**, never "inherit a default". A condition field car
 default is filled into groups that never mentioned it (`fields.py:208`) — how the deleted
 `min_surplus_buffer_pct` acquired an unchosen `5` in every live config. `margin_pct` is a *param*,
 where a default is legitimate (`charge_from_grid.max_target_soc` precedent, `spec.py:225`).
+
+### The default must live on the object, not only on the member
+
+```python
+F.obj(
+    "self_sustainability",
+    F.percent("margin_pct", default=5),
+    default={},                          # ← without this the member default never fires
+)
+```
+
+`read_field` returns `MISSING` for an absent field *before* descending into an object
+(`fields.py:203-210`), so a nested member's default only fires once the parent has a value. Giving
+the **object** `default={}` supplies that value, and `read_fields` then fills each member from its
+own default. Verified against the real reader:
+
+| Config | Resolved |
+|---|---|
+| `params` omits `self_sustainability` | `{"self_sustainability": {"margin_pct": 5.0}}` |
+| `self_sustainability: {margin_pct: 12}` | `{"self_sustainability": {"margin_pct": 12.0}}` |
+| group override omits it (`partial=True`) | `{}` — inherits master, as intended |
+| group override sets `margin_pct: 20` | `{"self_sustainability": {"margin_pct": 20.0}}` |
+
+This is the **first defaulted object** in `spec.py` — `daily_minimum` and `window` are optional with
+no defaulted members, and `battery_first` has a defaulted member but is `required=True`. The
+mechanism is not new (it falls out of `Field.default` + `read_field`'s object branch); only its use
+is. Pin it with a test, because nothing else in the tree would catch a regression.
+
+Nesting is kept rather than flattened to `self_sustainability_margin_pct` because it matches the
+house style (`daily_minimum`, `battery_first`), reads alongside the `ensure_self_sustainability`
+condition it belongs to, and leaves room for a second member without a config break —
+`merge_params` merges objects key-by-key (`fields.py:336`), so a group overriding one member would
+still inherit the rest.
+
+The object is present on every `appliance_runtime` instance whether or not any group sets
+`ensure_self_sustainability`, and is simply unread when none does — as `max_target_soc` is on a
+`charge_from_grid` with no window to bridge. So no cross-field validation ties the two together.
 
 ---
 
@@ -156,7 +193,7 @@ battery running dry:
 1. a `stop_discharging` action imports the whole deficit (`:626-627`);
 2. a discharge *power* limit imports even with energy available (`:651-656`);
 3. `charge_to_target_soc` imports deliberately (`:889-899`);
-4. `discharge_to_target_soc` stops at the target, not the physical minimum (`:965-976`).
+4. `discharge_to_target_soc` stops at the target, not the physical minimum (`:947-958`).
 
 All four appear in the baseline too, so they cancel in the delta. This is why strict must compare
 against a baseline rather than test for absolute zero import.
@@ -208,7 +245,7 @@ so the run takes the slots that move SoC least. The coverage flag is already com
 shortness from the mask-derived `placeable_slots` (`appliance_runtime.py:387`), and a self-gating
 condition contributes an all-true mask, so it rejects *after* that decision. The shortfall reaches
 `max_consecutive_skips` only via `runtime_hours_by_appliance_id_by_local_date`, which the coordinator
-populates for past days and today (`coordinator.py:3221-3222`) — so it is counted a calendar day
+populates for past days and today (`coordinator.py:3222-3223`) — so it is counted a calendar day
 later. Accepted; note it, because it is the first gating condition with this asymmetry.
 
 ---
@@ -348,6 +385,9 @@ so it would count by default and let an uncapped optimizer place across the whol
 
 ## Tests
 
+* Config surface: a config that omits `self_sustainability` entirely still resolves
+  `margin_pct: 5`; a group overriding it wins; a group that omits it inherits master. This is the
+  first defaulted object in the tree, so nothing else guards it.
 * Coverage gate: 79 % fails `min_solar_coverage_pct: 80` and 81 % passes; every bucket must clear;
   a missing surplus rail, a partial surplus rail, and a missing demand profile each raise rather than
   emptying the mask.
