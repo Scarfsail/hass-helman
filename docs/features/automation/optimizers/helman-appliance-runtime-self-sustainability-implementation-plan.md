@@ -380,9 +380,13 @@ so it would count by default and let an uncapped optimizer place across the whol
    condition emptied it was formatted as a `run_when` rejection, so `list(threshold)` raised
    `TypeError`. Pre-existing under `when_price_below`; routine once an overcast day can do
    it.
-3. **Re-simulation seam.** Extract the pure slot simulator; add the discharge parameters and the
-   forecast overlay to `OptimizationContext`. No behaviour change — assert the extracted function
-   reproduces `_build_schedule_adjusted_series` exactly.
+3. ✅ **Re-simulation seam.** The pure slot simulator now lives in `battery_slot_simulation.py`
+   rather than at module level inside the builder, so an optimizer can import the physics without
+   pulling in `hass`, the recorder and the config reader. Discharge parameters went on
+   `OptimizationContext` as planned; the overlay went on `OptimizationSnapshot` (it is a
+   forecast input, not a run-invariant parameter) and is deliberately absent from
+   `snapshot_to_dict`. No behaviour change — the parity test steps the extracted simulator over
+   the builder's own slot inputs and compares entry for entry.
 4. **`ensure_self_sustainability: soft`.** Greedy acceptance, baseline simulation, forced-run
    re-ranking, `would_break_soc_floor` + `soc_floor_already_breached`.
 5. **`ensure_self_sustainability: strict`.** The day-boundary ΔSoC/Δimport test and

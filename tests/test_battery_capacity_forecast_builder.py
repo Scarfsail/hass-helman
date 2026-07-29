@@ -1498,5 +1498,168 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         assert all(v == 1.0 for v in result.values())
 
 
+class ExtractedSimulatorParityTests(unittest.TestCase):
+    """The extracted simulator *is* what the builder runs, not a copy of it.
+
+    ``battery_slot_simulation`` exists so a second caller — an optimizer asking
+    what its own placement would do to the battery — can run the same physics.
+    The whole point is that there is one implementation, so this pins the seam:
+    stepping the extracted function over the builder's own slot inputs must
+    reproduce the builder's adjusted series entry for entry, including the
+    stitched baseline comparison and the ``scheduleAdjusted`` verdict.
+    """
+
+    def _module(self):
+        _install_import_stubs()
+        module = importlib.reload(
+            importlib.import_module(
+                "custom_components.helman.battery_capacity_forecast_builder"
+            )
+        )
+        module.dt_util = _FakeDtUtil
+        return module
+
+    @staticmethod
+    def _live_state(module):
+        return module.BatteryLiveState(
+            current_remaining_energy_kwh=5.0,
+            current_soc=50.0,
+            min_soc=10.0,
+            max_soc=95.0,
+            nominal_capacity_kwh=10.0,
+            min_energy_kwh=1.0,
+            max_energy_kwh=9.5,
+        )
+
+    @staticmethod
+    def _settings(module):
+        return module.BatteryForecastSettings(
+            charge_efficiency=0.95,
+            discharge_efficiency=0.93,
+            max_charge_power_w=5000.0,
+            max_discharge_power_w=4000.0,
+        )
+
+    def _slot_inputs(self, module):
+        # Deliberately mixed: a charging slot, a discharging slot, and one of
+        # each again so a target-SoC action has somewhere to land.
+        from datetime import timedelta
+
+        base = datetime(2026, 3, 20, 21, 0, tzinfo=TZ)
+        profile = [
+            (1.2, 0.3),
+            (0.0, 0.9),
+            (2.0, 0.2),
+            (0.0, 1.4),
+            (0.1, 0.5),
+        ]
+        return [
+            module._BatteryForecastSlotInput(
+                slot_start=base + timedelta(minutes=15 * index),
+                slot_key=base + timedelta(minutes=15 * index),
+                duration_hours=0.25,
+                solar_kwh=solar_kwh,
+                baseline_house_kwh=house_kwh,
+            )
+            for index, (solar_kwh, house_kwh) in enumerate(profile)
+        ]
+
+    def test_stepping_the_extracted_simulator_reproduces_the_adjusted_series(
+        self,
+    ) -> None:
+        from custom_components.helman.battery_slot_simulation import (
+            simulate_schedule_action_slot,
+        )
+
+        module = self._module()
+        builder = module.BatteryCapacityForecastBuilder(
+            SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None)), {}
+        )
+        live_state = self._live_state(module)
+        settings = self._settings(module)
+        slot_inputs = self._slot_inputs(module)
+        overlay = _FakeScheduleOverlay(
+            horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
+            actions_by_slot={
+                slot_inputs[1].slot_key: SimpleNamespace(
+                    kind="charge_to_target_soc", target_soc=80
+                ),
+                slot_inputs[2].slot_key: SimpleNamespace(
+                    kind="stop_charging", target_soc=None
+                ),
+                slot_inputs[3].slot_key: SimpleNamespace(
+                    kind="discharge_to_target_soc", target_soc=30
+                ),
+                slot_inputs[4].slot_key: SimpleNamespace(
+                    kind="stop_discharging", target_soc=None
+                ),
+            },
+        )
+
+        baseline_series = builder._simulate_series(
+            slot_inputs=slot_inputs, live_state=live_state, settings=settings
+        )
+        adjusted, schedule_adjusted, _coverage = (
+            builder._build_schedule_adjusted_series(
+                slot_inputs=slot_inputs,
+                baseline_series=baseline_series,
+                schedule_overlay=overlay,
+                live_state=live_state,
+                settings=settings,
+            )
+        )
+
+        # The independent walk: exactly what an optimizer re-simulating the
+        # horizon does, carrying `remainingEnergyKwh` from slot to slot.
+        remaining_energy_kwh = live_state.current_remaining_energy_kwh
+        replayed: list[dict] = []
+        for slot_input in slot_inputs:
+            result = simulate_schedule_action_slot(
+                slot_start=slot_input.slot_start,
+                duration_hours=slot_input.duration_hours,
+                solar_kwh=slot_input.solar_kwh,
+                baseline_house_kwh=slot_input.baseline_house_kwh,
+                remaining_energy_kwh=remaining_energy_kwh,
+                live_state=live_state,
+                settings=settings,
+                action=overlay.lookup_action(slot_input.slot_key),
+            )
+            remaining_energy_kwh = result.remaining_energy_kwh
+            replayed.append(result.slot)
+
+        self.assertTrue(schedule_adjusted)
+        self.assertEqual(len(replayed), len(adjusted))
+        for index, (replayed_slot, adjusted_slot) in enumerate(
+            zip(replayed, adjusted, strict=True)
+        ):
+            with self.subTest(slot=index):
+                # The builder stitches a baseline comparison onto each entry;
+                # everything the simulator itself produces must be identical.
+                self.assertEqual(
+                    replayed_slot,
+                    {
+                        key: value
+                        for key, value in adjusted_slot.items()
+                        if key
+                        not in {"baselineSocPct", "baselineRemainingEnergyKwh"}
+                    },
+                )
+        # And the walk ends where the builder's series ends.
+        self.assertEqual(
+            replayed[-1]["remainingEnergyKwh"], adjusted[-1]["remainingEnergyKwh"]
+        )
+
+    def test_an_action_the_simulator_does_not_model_is_named_as_such(self) -> None:
+        from custom_components.helman.battery_slot_simulation import (
+            is_baseline_schedule_action,
+            is_supported_schedule_action,
+        )
+
+        self.assertTrue(is_supported_schedule_action("charge_to_target_soc"))
+        self.assertFalse(is_supported_schedule_action("something_new"))
+        self.assertTrue(is_baseline_schedule_action("normal"))
+        self.assertFalse(is_baseline_schedule_action("stop_charging"))
+
+
 if __name__ == "__main__":
     unittest.main()
