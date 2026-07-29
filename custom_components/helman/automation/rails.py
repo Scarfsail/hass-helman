@@ -123,7 +123,7 @@ def read_soc_by_bucket_covering_horizon(
     """
     from ..scheduling.schedule import build_horizon_end
 
-    if not _forecast_covers_horizon(
+    if not forecast_covers_horizon(
         snapshot.battery_forecast,
         required_coverage_until=build_horizon_end(snapshot.context.now),
     ):
@@ -181,7 +181,7 @@ def read_available_surplus_by_bucket_covering_horizon(
     """
     from ..scheduling.schedule import build_horizon_end
 
-    if not _forecast_covers_horizon(
+    if not forecast_covers_horizon(
         snapshot.grid_forecast,
         required_coverage_until=build_horizon_end(snapshot.context.now),
     ):
@@ -308,11 +308,16 @@ def horizon_slots_between(
     return slots
 
 
-def _forecast_covers_horizon(
+def forecast_covers_horizon(
     forecast: dict[str, Any],
     *,
     required_coverage_until: datetime,
 ) -> bool:
+    """Whether a forecast payload is complete enough to gate decisions on.
+
+    ``partial`` truncates rather than pads, so the caller has to know how far it
+    actually reaches before treating a missing tail as a negative answer.
+    """
     status = forecast.get("status")
     if status == "available":
         return True

@@ -212,6 +212,14 @@
           "title": "Not enough solar",
           "detail": "Solar surplus covers only {coveragePct}% of this appliance's demand here; {requiredPct}% is required."
         },
+        "would_break_soc_floor": {
+          "title": "Would drain the battery",
+          "detail": "Running here would take the battery down to {projectedMinSoc}% at {atSlot}, below the {floor}% floor."
+        },
+        "soc_floor_already_breached": {
+          "title": "Battery already runs out",
+          "detail": "The battery drops to {baselineMinSoc}% — below the {floor}% floor — even without this appliance, so it cannot run self-sufficiently."
+        },
         "forecast_unavailable": {
           "title": "Forecast unavailable",
           "detail": "Forecast surplus is unavailable ({status})."

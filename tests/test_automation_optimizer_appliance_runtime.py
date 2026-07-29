@@ -52,6 +52,14 @@ def _install_import_stubs() -> None:
     if homeassistant_pkg is None:
         homeassistant_pkg = types.ModuleType("homeassistant")
         sys.modules["homeassistant"] = homeassistant_pkg
+    # `battery_state` — reached through the self-sustainability simulator —
+    # imports `HomeAssistant` purely for a type annotation on its live readers.
+    core_mod = sys.modules.get("homeassistant.core")
+    if core_mod is None:
+        core_mod = types.ModuleType("homeassistant.core")
+        sys.modules["homeassistant.core"] = core_mod
+    if not hasattr(core_mod, "HomeAssistant"):
+        core_mod.HomeAssistant = type("HomeAssistant", (), {})
     util_pkg = sys.modules.get("homeassistant.util")
     if util_pkg is None:
         util_pkg = types.ModuleType("homeassistant.util")
@@ -80,6 +88,7 @@ from custom_components.helman.automation.conditions.types import (  # noqa: E402
     ConditionRailsUnavailable,
 )
 from custom_components.helman.automation.day_context import DayContext  # noqa: E402
+from custom_components.helman.battery_state import BatteryLiveState  # noqa: E402
 from custom_components.helman.automation.optimizers.appliance_runtime import (  # noqa: E402
     build_appliance_runtime_optimizer,
 )
@@ -188,6 +197,103 @@ def _surplus_series(
     return series
 
 
+#: The battery the self-sustainability tests reason about: 10 kWh nominal,
+#: half full, an inverter reserve of 10 % and lossless conversion so every
+#: figure in those tests is exact arithmetic rather than a simulated
+#: approximation.
+BATTERY = BatteryLiveState(
+    current_remaining_energy_kwh=5.0,
+    current_soc=50.0,
+    min_soc=10.0,
+    max_soc=100.0,
+    nominal_capacity_kwh=10.0,
+    min_energy_kwh=1.0,
+    max_energy_kwh=10.0,
+)
+BATTERY_PARAMS = {
+    "battery_max_charge_power_kw": 5.0,
+    "battery_charge_efficiency": 1.0,
+    "battery_max_discharge_power_kw": 5.0,
+    "battery_discharge_efficiency": 1.0,
+    "battery_usable_capacity_kwh": 10.0,
+}
+#: 48 h of 15-minute buckets, which is what the schedule horizon spans.
+HORIZON_BUCKETS = 192
+
+
+def _sim_series(net_by_bucket: dict[datetime, float]) -> list[dict[str, object]]:
+    """A battery series the horizon simulator can actually replay.
+
+    Buckets carry ``solarKwh`` / ``baselineHouseKwh`` / ``durationHours`` rather
+    than the ``socPct`` the mask-based conditions read, because the simulator
+    re-derives the trajectory rather than reading it. A bucket's *net* is all
+    these tests care about, so it is expressed directly and split into a solar
+    or a house value as the sign requires.
+    """
+    series: list[dict[str, object]] = []
+    for index in range(HORIZON_BUCKETS):
+        bucket_start = REFERENCE_TIME + timedelta(minutes=15 * index)
+        net = net_by_bucket.get(bucket_start, 0.0)
+        series.append(
+            {
+                "timestamp": bucket_start.isoformat(timespec="seconds"),
+                "durationHours": 0.25,
+                "solarKwh": max(0.0, net),
+                "baselineHouseKwh": max(0.0, -net),
+            }
+        )
+    return series
+
+
+def _morning_dip_series(*, trough_kwh: float = 1.6) -> list[dict[str, object]]:
+    """Drains to ``trough_kwh`` by 09:00, then refills to full by 13:15.
+
+    The shape the whole soft-floor story rests on: a slot placed *before* the
+    trough deepens it, while one placed after it cannot, so "would break the
+    floor" discriminates by time rather than rejecting everything.
+    """
+    drain_kwh = BATTERY.current_remaining_energy_kwh - trough_kwh
+    buckets = 17  # 05:00 .. 09:00 inclusive
+    per_bucket = drain_kwh / buckets
+    net: dict[datetime, float] = {}
+    for index in range(buckets):
+        net[REFERENCE_TIME + timedelta(minutes=15 * index)] = -per_bucket
+    for index in range(buckets, buckets * 2):
+        net[REFERENCE_TIME + timedelta(minutes=15 * index)] = per_bucket
+    return _sim_series(net)
+
+
+def _trailing_drain_series(*, trough_kwh: float) -> list[dict[str, object]]:
+    """Flat until the last quarter of the horizon, then drains to ``trough_kwh``.
+
+    Puts the horizon's only trough *after* both planned days, so a placement on
+    either day eats into the same headroom — which is what makes the accepted
+    set having to span days observable.
+    """
+    drain_kwh = BATTERY.current_remaining_energy_kwh - trough_kwh
+    first = HORIZON_BUCKETS - 48
+    per_bucket = drain_kwh / (HORIZON_BUCKETS - first)
+    return _sim_series(
+        {
+            REFERENCE_TIME + timedelta(minutes=15 * index): -per_bucket
+            for index in range(first, HORIZON_BUCKETS)
+        }
+    )
+
+
+def _day_context_on(local_date: date, classification: str = "tight") -> DayContext:
+    return DayContext(
+        local_date=local_date,
+        classification=classification,
+        predicted_solar_kwh=5.0,
+        predicted_consumption_kwh=5.0,
+        export_price_min=1.0,
+        export_price_max=5.0,
+        day_min_window=None,
+        import_bands=(),
+    )
+
+
 def _day_context(classification: str = "tight") -> DayContext:
     return DayContext(
         local_date=DAY,
@@ -216,6 +322,9 @@ def _make_snapshot(
     appliance_active_by_id: dict[str, bool] | None = None,
     grid_status: str = "available",
     grid_coverage_until: str | None = None,
+    battery_state: object | None = None,
+    battery_params: dict[str, float] | None = None,
+    day_contexts: dict[date, DayContext] | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances((appliance,))
     return OptimizationSnapshot(
@@ -232,7 +341,8 @@ def _make_snapshot(
         },
         context=OptimizationContext(
             now=REFERENCE_TIME if now is None else now,
-            battery_state=None,
+            battery_state=battery_state,
+            **(battery_params or {}),
             solar_forecast={"status": "available", "points": []},
             import_price_forecast={"unit": "CZK/kWh", "currentPrice": 3.0, "points": []},
             export_price_forecast={
@@ -243,7 +353,11 @@ def _make_snapshot(
             appliance_registry=registry,
             when_active_hourly_energy_kwh_by_appliance_id=when_active or {},
             runtime_hours_by_appliance_id_by_local_date=runtime_by_date or {},
-            day_contexts={DAY: _day_context(classification)},
+            day_contexts=(
+                {DAY: _day_context(classification)}
+                if day_contexts is None
+                else day_contexts
+            ),
             condition_met_by_optimizer_id=condition_met_by_optimizer_id or {},
             appliance_active_by_id=appliance_active_by_id or {},
         ),
@@ -1049,6 +1163,492 @@ class SolarCoverageConditionTests(unittest.TestCase):
         self.assertNotIn(_slot_id(12, 0), by_slot)
 
 
+class SoftSelfSustainabilityTests(unittest.TestCase):
+    """``ensure_self_sustainability: soft`` — will running here cost me later?
+
+    The battery drains to 16 % by 09:00 and refills by 13:15, and the floor is
+    ``min_soc`` 10 % plus a 5 pp margin = 15 %. The appliance draws 0.4 kWh/h,
+    so a 30-minute slot costs 0.2 kWh = 2 pp: enough to push the 09:00 trough
+    through the floor if it runs before it, and harmless if it runs after.
+    """
+
+    def _snapshot(self, appliance, **kwargs):
+        kwargs.setdefault("battery_series", _morning_dip_series())
+        return _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            **kwargs,
+        )
+
+    def _config_with(
+        self, appliance, *, level="soft", margin_pct=5, window_start="06:00", **kwargs
+    ):
+        params: dict[str, object] = {
+            "daily_minimum": {
+                "min_hours_per_day": kwargs.pop("min_hours_per_day", 0.5),
+                "max_consecutive_skips": kwargs.pop("max_consecutive_skips", 1),
+            },
+            "window": {"start": window_start, "end": "18:00"},
+        }
+        if margin_pct is not None:
+            params["self_sustainability"] = {"margin_pct": margin_pct}
+        group: dict[str, object] = {"run_when": ["tight"]}
+        if level is not None:
+            group["ensure_self_sustainability"] = level
+        return make_optimizer_config(
+            id="daily",
+            kind="appliance_runtime",
+            target={"appliance_id": appliance.id},
+            params=params,
+            conditions=kwargs.pop("groups", None) or [group],
+        )
+
+    def _optimize(self, cfg, snapshot, appliance):
+        return build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        ).optimize(snapshot, cfg)
+
+    def test_the_cheapest_slot_loses_to_a_safe_one_when_it_breaks_the_floor(
+        self,
+    ) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        # 08:00 is the cheapest slot and sits before the trough; 14:00 is
+        # dearer but after it.
+        snapshot = self._snapshot(
+            appliance,
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (8, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertNotIn(_slot_id(8, 0), placed)
+        self.assertEqual(len(placed), 1)
+        # Anything at or after the 09:00 trough leaves it untouched.
+        self.assertGreaterEqual(min(placed), _slot_id(9, 0))
+
+    def test_without_the_condition_the_cheapest_slot_wins_regardless(self) -> None:
+        # The control: the same snapshot, the same ranking, no condition. The
+        # gate must be the only thing that moved the placement.
+        appliance = _generic()
+        cfg = self._config_with(appliance, level=None)
+        snapshot = self._snapshot(
+            appliance,
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (8, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(8, 0)})
+
+    def test_a_margin_of_zero_never_fires(self) -> None:
+        """The floor is `min_soc + margin`, and at margin 0 it is provably inert.
+
+        Every discharge path clamps the remaining energy to ``min_energy_kwh``,
+        so the projected SoC can never *reach* ``min_soc``, let alone go below
+        it. Only the margin gives the floor teeth — which is the whole reason
+        the config carries percentage points rather than a bare SoC threshold.
+        """
+        appliance = _generic()
+        cfg = self._config_with(appliance, margin_pct=0)
+        snapshot = self._snapshot(
+            appliance,
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (8, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(8, 0)})
+
+    def test_acceptance_re_checks_the_whole_accepted_set(self) -> None:
+        """Not just the candidate on its own.
+
+        The trough sits 2 pp above the floor, so one 0.2 kWh slot fits before it
+        and a second does not — even though, judged alone, the second is
+        identical to the first. Only re-simulating everything already accepted
+        makes that visible. The run then falls through to a slot after the
+        trough, which costs nothing.
+        """
+        appliance = _generic()
+        # 1 h of runtime = 2 slots; 08:00 and 08:30 are the cheapest and both
+        # sit before the trough.
+        cfg = self._config_with(appliance, min_hours_per_day=1)
+        snapshot = self._snapshot(
+            appliance,
+            battery_series=_morning_dip_series(trough_kwh=1.7),
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if hour == 8 else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(len(placed), 2)
+        self.assertIn(_slot_id(8, 0), placed)
+        # The second-cheapest slot is the one the combined trajectory rejects.
+        self.assertNotIn(_slot_id(8, 30), placed)
+        self.assertTrue(
+            all(slot_id >= _slot_id(9, 0) for slot_id in set(placed) - {_slot_id(8, 0)})
+        )
+
+    def test_a_breach_is_told_where_the_floor_would_break(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = self._snapshot(
+            appliance,
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (8, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        breached = [
+            decision
+            for decision in step["decisions"]
+            if decision["reason"]["code"] == "would_break_soc_floor"
+        ]
+        self.assertTrue(breached)
+        params = next(
+            decision["reason"]["params"]
+            for decision in breached
+            if decision["slotIds"] == [_slot_id(8, 0)]
+        )
+        self.assertEqual(params["floor"], 15.0)
+        self.assertEqual(params["projectedMinSoc"], 14.0)
+        self.assertEqual(params["atSlot"], _slot_id(9, 0))
+
+    def test_a_trajectory_already_below_the_floor_blames_the_baseline(self) -> None:
+        """And blames it for the *first* candidate, not just the later ones.
+
+        Deriving the verdict from "the accepted set minus the candidate" would
+        pass trivially for the first candidate — the set is empty — so the first
+        slot considered would always be blamed for a dip it did not cause.
+        """
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = self._snapshot(
+            appliance,
+            # The battery runs down to 14 % with no appliance at all.
+            battery_series=_morning_dip_series(trough_kwh=1.4),
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (8, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        self.assertEqual(_placed_slots(result, appliance.id), {})
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        codes = {
+            slot_id: decision["reason"]["code"]
+            for decision in step["decisions"]
+            for slot_id in decision["slotIds"]
+        }
+        # The cheapest slot is considered first; it must not take the blame.
+        self.assertEqual(codes[_slot_id(8, 0)], "soc_floor_already_breached")
+        self.assertNotIn("would_break_soc_floor", set(codes.values()))
+        params = next(
+            decision["reason"]["params"]
+            for decision in step["decisions"]
+            if decision["reason"]["code"] == "soc_floor_already_breached"
+        )
+        self.assertEqual(params, {"floor": 15.0, "baselineMinSoc": 14.0})
+
+    def test_a_forced_run_places_despite_the_floor_and_prefers_covered_slots(
+        self,
+    ) -> None:
+        """The escape hatch defeats this condition as it defeats every other.
+
+        It does not have to be gratuitous about it: a forced run ranks by solar
+        coverage before price, so it takes the slots that move the battery
+        least.
+        """
+        appliance = _generic()
+        cfg = self._config_with(
+            appliance,
+            max_consecutive_skips=0,
+            # No group matches a deficit day, so the run is forced.
+            groups=[{"run_when": ["surplus"], "ensure_self_sustainability": "soft"}],
+        )
+        snapshot = self._snapshot(
+            appliance,
+            classification="deficit",
+            battery_series=_morning_dip_series(trough_kwh=1.4),
+            # 11:00 is solar-covered but dear; 08:00 is the cheapest slot.
+            grid_series=_surplus_series({_slot_id(11, 0): 5.0}),
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (8, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        # Placed at all, despite a baseline already through the floor...
+        self.assertEqual(len(placed), 1)
+        # ...and on the covered slot rather than the cheapest one.
+        self.assertEqual(set(placed), {_slot_id(11, 0)})
+
+    def test_the_in_flight_slot_stops_the_appliance_when_it_breaks_the_floor(
+        self,
+    ) -> None:
+        """Promotion, not exemption — the same rule every other condition gets.
+
+        The appliance is running in the 05:00 slot and promotion puts it at the
+        front of the ranking, so it is the *first* candidate. It still has to
+        pass: it sits before the trough, so it does not, and the run moves on.
+        """
+        appliance = _generic()
+        # Window widened so the slot in progress is inside it.
+        cfg = self._config_with(appliance, window_start="05:00")
+        snapshot = self._snapshot(
+            appliance,
+            appliance_active_by_id={appliance.id: True},
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertNotIn(_slot_id(5, 0), placed)
+        self.assertEqual(len(placed), 1)
+
+    def test_the_in_flight_slot_survives_when_it_passes(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance, window_start="05:00")
+        snapshot = self._snapshot(
+            appliance,
+            # Ample headroom: the promoted slot costs 2 pp against 15.
+            battery_series=_morning_dip_series(trough_kwh=3.0),
+            appliance_active_by_id={appliance.id: True},
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(5, 0)})
+
+    def test_day_one_placements_lower_day_twos_trajectory(self) -> None:
+        """The accepted set spans days, because the trajectory does.
+
+        The horizon's only trough sits at its far end, 2 pp above the floor —
+        room for exactly one 0.2 kWh slot across *both* days. Day 1 is planned
+        first and takes it, so day 2 finds none left, however cheap its slots
+        are.
+        """
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        snapshot = self._snapshot(
+            appliance,
+            battery_series=_trailing_drain_series(trough_kwh=1.7),
+            day_contexts={
+                DAY: _day_context_on(DAY),
+                DAY + timedelta(days=1): _day_context_on(DAY + timedelta(days=1)),
+            },
+            # Day 2 is the cheap day; it still loses, because greedy runs the
+            # days in order and day 1 has already spent the headroom.
+            export_points=[
+                {
+                    "timestamp": (
+                        _at(hour, minute) + timedelta(days=day)
+                    ).isoformat(timespec="seconds"),
+                    "value": 1.0 if day == 1 else 5.0,
+                }
+                for day in (0, 1)
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(len(placed), 1)
+        self.assertTrue(
+            all(slot_id.startswith(DAY.isoformat()) for slot_id in placed),
+            f"day 1 must win the headroom, got {sorted(placed)}",
+        )
+
+    # --- rails must raise, never fail closed --------------------------------
+
+    def test_a_missing_battery_state_raises(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_params=BATTERY_PARAMS,
+            battery_series=_morning_dip_series(),
+        )
+
+        with self.assertRaises(ConditionRailsUnavailable):
+            self._optimize(cfg, snapshot, appliance)
+
+    def test_missing_battery_parameters_raise(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            # The discharge half used to be absent from every snapshot; without
+            # it there is no simulation to run.
+            battery_params={
+                key: value
+                for key, value in BATTERY_PARAMS.items()
+                if key != "battery_max_discharge_power_kw"
+            },
+            battery_series=_morning_dip_series(),
+        )
+
+        with self.assertRaises(ConditionRailsUnavailable):
+            self._optimize(cfg, snapshot, appliance)
+
+    def test_a_battery_forecast_short_of_the_horizon_raises(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            battery_series=_morning_dip_series(),
+        )
+        snapshot.battery_forecast["status"] = "partial"
+        snapshot.battery_forecast["coverageUntil"] = _at(18).isoformat(
+            timespec="seconds"
+        )
+
+        with self.assertRaises(ConditionRailsUnavailable):
+            self._optimize(cfg, snapshot, appliance)
+
+    def test_a_missing_demand_profile_raises(self) -> None:
+        appliance = _generic()
+        cfg = self._config_with(appliance)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            battery_series=_morning_dip_series(),
+        )
+
+        with self.assertRaises(ConditionRailsUnavailable):
+            self._optimize(cfg, snapshot, appliance)
+
+    def test_nothing_is_simulated_when_no_group_asks_for_it(self) -> None:
+        # The gate is inert without the condition, so a config that never
+        # mentions it must not start raising on a snapshot with no battery.
+        appliance = _generic()
+        cfg = self._config_with(appliance, level=None)
+        snapshot = _make_snapshot(appliance=appliance)
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(len(placed), 1)
+
+
+class SelfSustainabilityConfigTests(unittest.TestCase):
+    """The first defaulted *object* in the tree, so nothing else guards it."""
+
+    def _config(self, *, params=None, groups=None):
+        return make_optimizer_config(
+            id="daily",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool-pump"},
+            params={
+                "daily_minimum": {
+                    "min_hours_per_day": 1,
+                    "max_consecutive_skips": 1,
+                },
+                **(params or {}),
+            },
+            conditions=groups or [{"run_when": ["tight"]}],
+        )
+
+    def test_omitting_the_object_entirely_still_resolves_the_margin(self) -> None:
+        # `read_field` returns MISSING for an absent field *before* descending
+        # into an object, so the member default only fires once the parent has a
+        # value. `default={}` on the object is what supplies it.
+        cfg = self._config()
+
+        self.assertEqual(cfg.params["self_sustainability"], {"margin_pct": 5.0})
+
+    def test_setting_the_margin_wins(self) -> None:
+        cfg = self._config(params={"self_sustainability": {"margin_pct": 12}})
+
+        self.assertEqual(cfg.params["self_sustainability"], {"margin_pct": 12.0})
+
+    def test_a_group_that_omits_it_inherits_the_master(self) -> None:
+        cfg = self._config(
+            groups=[{"run_when": ["tight"], "params": {"window": None}}]
+        )
+
+        self.assertEqual(
+            cfg.conditions[0].params["self_sustainability"], {"margin_pct": 5.0}
+        )
+
+    def test_a_group_can_override_the_margin(self) -> None:
+        cfg = self._config(
+            groups=[
+                {
+                    "run_when": ["tight"],
+                    "params": {"self_sustainability": {"margin_pct": 20}},
+                }
+            ]
+        )
+
+        self.assertEqual(
+            cfg.conditions[0].params["self_sustainability"], {"margin_pct": 20.0}
+        )
+
+    def test_the_level_is_one_of_two_words(self) -> None:
+        self._config(groups=[{"ensure_self_sustainability": "soft"}])
+        self._config(groups=[{"ensure_self_sustainability": "strict"}])
+        with self.assertRaises(AutomationConfigError):
+            self._config(groups=[{"ensure_self_sustainability": "yes"}])
+
+
 class DailyRuntimeTraceContractTests(unittest.TestCase):
     def test_placement_and_ranking_reasons_and_contract(self) -> None:
         appliance = _generic()
@@ -1297,6 +1897,41 @@ class UncappedModeTests(unittest.TestCase):
 
         self.assertEqual(set(placed), cheap)
 
+    def test_self_sustainability_accepts_candidates_chronologically(self) -> None:
+        """Uncapped has no ranking, so time is the only defensible order.
+
+        The trough at 09:00 sits 2 pp above the floor: room for exactly one
+        0.2 kWh slot before it. Taking them in horizon order means the earliest
+        eligible slot wins that room and the ones behind it are refused, while
+        everything past the trough is free.
+        """
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id,
+            window={"start": "06:00", "end": "18:00"},
+            groups=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            battery_series=_morning_dip_series(trough_kwh=1.7),
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertIn(_slot_id(6, 0), placed)
+        self.assertNotIn(_slot_id(6, 30), placed)
+        self.assertNotIn(_slot_id(8, 30), placed)
+        # Past the trough a slot no longer deepens it, so the run resumes.
+        self.assertIn(_slot_id(10, 0), placed)
+        # But each acceptance drains the battery for good, and uncapped mode
+        # keeps taking slots until the accumulated draw reaches the floor
+        # itself — which is exactly why the check re-simulates the whole
+        # accepted set rather than one slot at a time.
+        self.assertNotIn(_slot_id(17, 30), placed)
+
 
 class UncappedValidationTests(unittest.TestCase):
     def test_a_group_that_narrows_nothing_is_rejected(self) -> None:
@@ -1314,6 +1949,15 @@ class UncappedValidationTests(unittest.TestCase):
 
     def test_a_narrowed_run_when_is_enough(self) -> None:
         _uncapped_config(appliance_id="pool-pump", groups=[{"run_when": ["surplus"]}])
+
+    def test_self_sustainability_alone_does_not_narrow_the_horizon(self) -> None:
+        # It is self-gating: its mask is all-true by construction, so it cannot
+        # be what stops an uncapped optimizer running the appliance 24/7.
+        with self.assertRaises(AutomationConfigError):
+            _uncapped_config(
+                appliance_id="pool-pump",
+                groups=[{"ensure_self_sustainability": "soft"}],
+            )
 
     def test_a_solar_coverage_floor_is_enough(self) -> None:
         # It gates slots, so it narrows the horizon like any other condition.

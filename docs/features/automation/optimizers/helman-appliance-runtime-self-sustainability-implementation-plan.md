@@ -387,8 +387,10 @@ so it would count by default and let an uncapped optimizer place across the whol
    forecast input, not a run-invariant parameter) and is deliberately absent from
    `snapshot_to_dict`. No behaviour change — the parity test steps the extracted simulator over
    the builder's own slot inputs and compares entry for entry.
-4. **`ensure_self_sustainability: soft`.** Greedy acceptance, baseline simulation, forced-run
-   re-ranking, `would_break_soc_floor` + `soc_floor_already_breached`.
+4. ✅ **`ensure_self_sustainability: soft`.** Greedy acceptance, baseline simulation, forced-run
+   re-ranking, `would_break_soc_floor` + `soc_floor_already_breached`. Rule 3 excludes the
+   condition via `ConditionType.self_gating` rather than by name — a self-gating condition
+   contributes an all-true mask *by definition*, so the exclusion is a property, not a list.
 5. **`ensure_self_sustainability: strict`.** The day-boundary ΔSoC/Δimport test and
    `not_solar_neutral`.
 

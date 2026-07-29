@@ -102,6 +102,8 @@ const KNOWN_REASON_CODES = new Set([
     "conditions_matched",
     "soc_below_threshold",
     "insufficient_solar_coverage",
+    "would_break_soc_floor",
+    "soc_floor_already_breached",
     "forecast_unavailable",
     "blocked_user_owned",
     "optimizer_skipped",

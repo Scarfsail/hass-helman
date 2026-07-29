@@ -293,6 +293,30 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             reason_code="insufficient_solar_coverage",
             build_mask=_min_solar_coverage_mask,
         ),
+        # Self-gating, and for a sharper reason than `reserve_floor_soc`: this
+        # condition *couples slots*. Placing at 09:00 changes whether 20:00 is
+        # feasible, and `system_mask &= mask` (evaluation.py) assumes slot
+        # independence. So the mask is all-true, the optimizer re-simulates the
+        # horizon with its own placements folded in, and the reason codes are
+        # emitted from there rather than from here — a mask cannot say *which*
+        # placement broke the floor. `reason_code` is the one a lone rejection
+        # falls back to.
+        #
+        # The level is the condition's value rather than a bool beside a
+        # separate knob: one key, three states (absent / soft / strict), so they
+        # cannot contradict each other.
+        ConditionType(
+            key="ensure_self_sustainability",
+            scope=Scope.RUN,
+            field=F.string(
+                "ensure_self_sustainability",
+                required=False,
+                choices=("soft", "strict"),
+            ),
+            reason_code="would_break_soc_floor",
+            build_mask=_all_slots_mask,
+            self_gating=True,
+        ),
         # Self-gating: `charge_from_grid` conditions on the SoC dip over the
         # *expensive* band but writes into the *preceding cheap* band, so a mask
         # of "slots where SoC dips below the floor" would mark exactly the slots
