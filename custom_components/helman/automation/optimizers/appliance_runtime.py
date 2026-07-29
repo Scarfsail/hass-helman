@@ -89,9 +89,6 @@ class _DayPlan:
     placeable_slots: list[str]
     group_label: str | None
     forced_after_skips: int | None
-    #: The matched group's ``when_price_below``, so a slot the threshold priced
-    #: out can be told *which* threshold it failed. ``None`` when unconstrained.
-    price_threshold: float | None = None
 
 
 @dataclass(frozen=True)
@@ -210,21 +207,31 @@ class ApplianceRuntimeOptimizer:
                     )
                 continue
 
-            # Slots inside the window that the matched group does not own —
-            # priced out, in practice. They are neither placed nor "ranked more
-            # expensive", so they get their own rejection rather than falling
-            # through to the frontend's generic "not considered".
+            # Slots inside the window that the matched group does not own. Only
+            # the priced-out ones are emitted: `when_price_below`'s own reason
+            # code is worded for `export_price` ("export allowed"), which reads
+            # backwards for an appliance, so this kind relabels it. Every other
+            # exclusion is left to the frontend's derivation, which explains a
+            # SoC rejection with the slot's actual projected SoC — a number this
+            # optimizer would have to re-read the rail to supply.
             placeable = set(plan.placeable_slots)
-            filtered_out = [
-                slot_id for slot_id in window_slots if slot_id not in placeable
-            ]
-            if filtered_out:
+            priced_out: list[str] = []
+            threshold: float | None = None
+            for slot_id in window_slots:
+                if slot_id in placeable:
+                    continue
+                rejection = eligibility.rejection(slot_id)
+                if rejection is None or rejection[0] != "price_not_below_threshold":
+                    continue
+                priced_out.append(slot_id)
+                threshold = rejection[1]
+            if priced_out:
                 trace.decision(
-                    slot_ids=filtered_out,
+                    slot_ids=priced_out,
                     outcome="rejected",
                     reason={
                         "code": "price_above_run_threshold",
-                        "params": {"threshold": plan.price_threshold},
+                        "params": {"threshold": threshold},
                         "signals": ["exportPrice"],
                     },
                 )
@@ -373,7 +380,6 @@ class ApplianceRuntimeOptimizer:
                 placeable_slots=placeable,
                 group_label=resolved.group.label,
                 forced_after_skips=None,
-                price_threshold=resolved.condition_value("when_price_below"),
             )
             remaining_hours = (
                 resolved.params["daily_minimum"]["min_hours_per_day"] - delivered_hours

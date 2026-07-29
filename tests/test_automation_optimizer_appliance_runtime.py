@@ -135,6 +135,31 @@ def _export_points(cheap_slots: set[str]) -> list[dict[str, object]]:
     return points
 
 
+def _soc_series(
+    *,
+    low_slots: set[str],
+    low: float = 50.0,
+    high: float = 90.0,
+) -> list[dict[str, object]]:
+    """A 15-minute SoC series over the window, dipping on ``low_slots``.
+
+    ``_min_soc_mask`` fails closed on a missing bucket, so every bucket of every
+    window slot has to be present or the dip is indistinguishable from a gap.
+    """
+    series: list[dict[str, object]] = []
+    cursor = _at(8)
+    while cursor < _at(18):
+        slot_id = _slot_id(cursor.hour, (cursor.minute // 30) * 30)
+        series.append(
+            {
+                "timestamp": cursor.isoformat(timespec="seconds"),
+                "socPct": low if slot_id in low_slots else high,
+            }
+        )
+        cursor += timedelta(minutes=15)
+    return series
+
+
 def _day_context(classification: str = "tight") -> DayContext:
     return DayContext(
         local_date=DAY,
@@ -154,6 +179,7 @@ def _make_snapshot(
     when_active: dict[str, float] | None = None,
     export_points: list[dict[str, object]] | None = None,
     grid_series: list[dict[str, object]] | None = None,
+    battery_series: list[dict[str, object]] | None = None,
     runtime_by_date: dict[str, dict[date, float]] | None = None,
     schedule_document: ScheduleDocument | None = None,
     classification: str = "tight",
@@ -165,7 +191,10 @@ def _make_snapshot(
     return OptimizationSnapshot(
         schedule=ScheduleDocument() if schedule_document is None else schedule_document,
         adjusted_house_forecast={"status": "available", "series": []},
-        battery_forecast={"status": "available", "series": []},
+        battery_forecast={
+            "status": "available",
+            "series": [] if battery_series is None else deepcopy(battery_series),
+        },
         grid_forecast={
             "status": "available",
             "series": [] if grid_series is None else deepcopy(grid_series),
@@ -762,6 +791,51 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         # Every window slot except the two that cleared the threshold.
         self.assertNotIn(_slot_id(12, 0), rejected[0]["slotIds"])
         self.assertIn(_slot_id(9, 0), rejected[0]["slotIds"])
+
+    def test_a_soc_rejected_slot_is_not_reported_as_priced_out(self) -> None:
+        # The rejection used to be hardcoded to the price code for *every*
+        # window slot the matched group did not own, so a slot dropped by
+        # `min_soc_pct` was explained as "price too high to run" — with a null
+        # threshold, since this config has no price condition at all.
+        appliance = _generic()
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=1,
+            groups=[{"run_when": ["tight"], "min_soc_pct": 70}],
+        )
+        optimizer = build_appliance_runtime_optimizer(
+            cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            battery_series=_soc_series(low_slots={_slot_id(12, 0)}),
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        self.assertEqual(
+            [
+                decision
+                for decision in step["decisions"]
+                if decision["reason"]["code"] == "price_above_run_threshold"
+            ],
+            [],
+            "a SoC rejection must not be reported as a price rejection",
+        )
+        # Left to the frontend's derivation, which explains it with the slot's
+        # own projected SoC rather than a threshold this config never set.
+        self.assertNotIn(
+            _slot_id(12, 0),
+            {
+                slot_id
+                for decision in step["decisions"]
+                for slot_id in decision["slotIds"]
+            },
+        )
 
     def test_satisfied_day_emits_runtime_satisfied(self) -> None:
         appliance = _generic()
