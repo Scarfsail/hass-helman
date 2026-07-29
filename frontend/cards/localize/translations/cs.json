@@ -53,7 +53,8 @@
     },
     "day": {
       "today": "Dnes",
-      "tomorrow": "Zítra"
+      "tomorrow": "Zítra",
+      "yesterday": "Včera"
     },
     "badge": {
       "now": "Teď"
@@ -290,6 +291,7 @@
       "next_day": "Další den",
       "refresh": "Obnovit",
       "daylight_only": "Zobrazit jen hodiny se solární energií",
+      "day_pills": "Výběr dne",
       "slot_size": "Šířka slotu (minuty)",
       "today": "Dnes",
       "forecast_only": "Pouze prognóza",

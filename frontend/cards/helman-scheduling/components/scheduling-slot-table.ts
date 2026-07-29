@@ -14,10 +14,23 @@ import { getScheduleApplianceActionPresentation } from "../model/schedule-applia
 import type { ScheduleApplianceProjectionBadge } from "../model/schedule-appliance-projection";
 import { getScheduleApplianceProjectionBadgeLabel } from "../model/schedule-appliance-projection-presentation";
 import { getScheduleActionLabel } from "../model/schedule-labels";
+import { getScheduleGridPositiveDisplay } from "../model/grid-surplus-display";
 import {
-    GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KWH,
-    getScheduleGridPositiveDisplay,
-} from "../model/grid-surplus-display";
+    type DayAggregateGaugeKind,
+    dayAggregateGaugeStyles,
+    renderDayAggregateGauge,
+} from "../../shared/day-aggregate-gauge";
+import {
+    ZERO_KWH_DISPLAY_THRESHOLD,
+    formatGridEnergy,
+    formatKwhValue,
+    formatPositiveGridDisplayValue,
+    formatPriceValue,
+    formatSolarGaugeTitle,
+    formatSolarGaugeValue,
+    formatVisiblePriceValue,
+    isZeroKwhDisplayValue,
+} from "../../shared/forecast-value-format";
 import {
     type ScheduleRuntimeComplianceModel,
     type ScheduleRuntimeComplianceSeverity,
@@ -49,8 +62,6 @@ import type {
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import { helmanColorVars, helmanMetricVars } from "../../color-vars";
 
-const ZERO_KWH_DISPLAY_THRESHOLD = GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KWH;
-
 /** One action's line in a row's "why" popover. */
 interface WhyActionEntry {
     /** Human label, e.g. "Boiler · Charge" or "Hold charging". */
@@ -67,42 +78,12 @@ interface WhyRowExplanation {
     entries: WhyActionEntry[];
 }
 
-function _formatSolarGaugeValue(wh: number): string {
-    const kwh = wh / 1000;
-    return kwh >= 10 ? `${Math.round(kwh)}` : `${kwh.toFixed(1)}`;
-}
-
-function _formatSolarGaugeTitle(wh: number): string {
-    return `${_formatSolarGaugeValue(wh)} kWh`;
-}
-
-function _isZeroKwhDisplayValue(kwh: number): boolean {
-    return Math.abs(kwh) < ZERO_KWH_DISPLAY_THRESHOLD;
-}
-
 function _isZeroSolarDisplayValue(wh: number): boolean {
-    return _isZeroKwhDisplayValue(wh / 1000);
+    return isZeroKwhDisplayValue(wh / 1000);
 }
 
 function _isZeroPriceDisplayValue(value: number): boolean {
     return Math.abs(value) < ZERO_KWH_DISPLAY_THRESHOLD;
-}
-
-function _formatKwhValue(kwh: number): string {
-    const absKwh = Math.abs(kwh);
-    if (absKwh >= 10) {
-        return absKwh.toFixed(0);
-    }
-
-    if (absKwh >= 1) {
-        return absKwh.toFixed(1);
-    }
-
-    return absKwh.toFixed(2);
-}
-
-function _formatVisiblePriceValue(value: number): string {
-    return value.toFixed(1);
 }
 
 /** Fixed-precision value for a "why" impact chip; em dash when unavailable. */
@@ -127,6 +108,7 @@ export class SchedulingSlotTable extends LitElement {
         helmanColorVars,
         helmanMetricVars,
         schedulingSharedStyles,
+        dayAggregateGaugeStyles,
         css`
             :host {
                 --schedule-table-disclosure-width: 16px;
@@ -438,246 +420,6 @@ export class SchedulingSlotTable extends LitElement {
             .day-aggregate-cell {
                 padding-top: 6px;
                 padding-bottom: 2px;
-            }
-
-            .day-aggregate-gauge {
-                box-sizing: border-box;
-                position: relative;
-                display: flex;
-                align-items: center;
-                overflow: hidden;
-                width: 100%;
-                min-width: 0;
-                min-height: 18px;
-                padding: 1px 4px;
-                border-radius: 4px;
-                font-size: 0.62rem;
-                font-weight: 700;
-                line-height: 1.2;
-                white-space: nowrap;
-            }
-
-            .day-aggregate-gauge > :not(.day-aggregate-gauge-fill, .day-aggregate-gauge-center) {
-                position: relative;
-                z-index: 1;
-            }
-
-            .day-aggregate-gauge-fill {
-                position: absolute;
-                inset: 0 auto 0 0;
-                z-index: 0;
-                border-radius: inherit;
-                pointer-events: none;
-            }
-
-            .day-aggregate-gauge-center {
-                position: absolute;
-                top: 3px;
-                bottom: 3px;
-                left: 50%;
-                width: 1px;
-                z-index: 1;
-                background: color-mix(in srgb, var(--primary-text-color) 18%, transparent);
-                transform: translateX(-50%);
-            }
-
-            .day-aggregate-gauge-value {
-                display: block;
-                min-width: 0;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                font-variant-numeric: tabular-nums;
-            }
-
-            .day-aggregate-gauge.battery {
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-battery) 10%, transparent),
-                    color-mix(in srgb, var(--helman-battery) 5%, transparent)
-                );
-                color: color-mix(in srgb, var(--helman-battery) 26%, var(--primary-text-color));
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-battery) 14%, var(--divider-color));
-                text-shadow: none;
-            }
-
-            .day-aggregate-gauge.battery .day-aggregate-gauge-fill {
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-battery) 34%, white 4%),
-                    color-mix(in srgb, var(--helman-battery) 22%, transparent)
-                );
-            }
-
-            .day-aggregate-gauge.solar {
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-solar) 8%, #171613),
-                    color-mix(in srgb, var(--helman-solar) 4%, #0b0b0a)
-                );
-                color: color-mix(in srgb, white 72%, var(--helman-solar));
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-solar) 10%, #25231f);
-                text-shadow: none;
-            }
-
-            .day-aggregate-gauge.solar .day-aggregate-gauge-fill {
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-solar) 24%, #2d2500),
-                    color-mix(in srgb, var(--helman-solar) 16%, #131000)
-                );
-            }
-
-            .day-aggregate-gauge.grid {
-                direction: ltr;
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-grid) 8%, #10151d),
-                    color-mix(in srgb, var(--helman-grid) 4%, #06090d),
-                    color-mix(in srgb, var(--helman-grid) 8%, #10151d)
-                );
-                color: color-mix(in srgb, var(--primary-text-color) 76%, transparent);
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-grid) 9%, #1c2430);
-                text-shadow: none;
-            }
-
-            .day-aggregate-gauge.grid.surplus {
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, #5f5f5f 20%, #1b1b1b),
-                    color-mix(in srgb, #4c4c4c 11%, #0d0d0d),
-                    color-mix(in srgb, #5f5f5f 20%, #1b1b1b)
-                );
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, #727272 30%, #292929);
-            }
-
-            .day-aggregate-gauge.grid .day-aggregate-gauge-fill.import {
-                inset: 0 auto 0 auto;
-                right: 50%;
-                left: auto;
-                background: linear-gradient(
-                    270deg,
-                    color-mix(in srgb, #2563eb 42%, white 2%),
-                    color-mix(in srgb, #2563eb 20%, transparent)
-                );
-                border-radius: 4px 0 0 4px;
-            }
-
-            .day-aggregate-gauge.grid .day-aggregate-gauge-fill.export {
-                inset: 0 auto 0 50%;
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-grid-export) 42%, white 2%),
-                    color-mix(in srgb, var(--helman-grid-export) 20%, transparent)
-                );
-                border-radius: 0 4px 4px 0;
-            }
-
-            .day-aggregate-gauge.grid .day-aggregate-gauge-fill.surplus {
-                inset: 0 auto 0 50%;
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, #595959 76%, var(--primary-text-color)),
-                    color-mix(in srgb, #3a3a3a 56%, transparent)
-                );
-                border-radius: 0 4px 4px 0;
-            }
-
-            .day-aggregate-gauge-pair {
-                display: flex;
-                align-items: center;
-                gap: 4px;
-                width: 100%;
-                min-width: 0;
-            }
-
-            .day-aggregate-gauge-pair .day-aggregate-gauge-value {
-                flex: 1 1 0;
-            }
-
-            .day-aggregate-gauge-pair .day-aggregate-gauge-value.import {
-                color: color-mix(in srgb, #2563eb 58%, var(--primary-text-color));
-                text-align: left;
-            }
-
-            .day-aggregate-gauge-pair .day-aggregate-gauge-value.export {
-                color: color-mix(in srgb, var(--helman-grid-export) 52%, var(--primary-text-color));
-                text-align: right;
-            }
-
-            .day-aggregate-gauge-pair .day-aggregate-gauge-value.surplus {
-                color: color-mix(in srgb, var(--secondary-text-color) 82%, #5b5b5b);
-                text-align: right;
-            }
-
-            .day-aggregate-gauge.price {
-                direction: ltr;
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-price-negative) 8%, transparent),
-                    color-mix(in srgb, var(--card-background-color) 94%, transparent),
-                    color-mix(in srgb, var(--helman-price-positive) 8%, transparent)
-                );
-                color: color-mix(in srgb, var(--primary-text-color) 76%, transparent);
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--helman-price-positive) 12%, var(--divider-color));
-                text-shadow: none;
-            }
-
-            .day-aggregate-gauge.price .day-aggregate-gauge-fill.negative {
-                inset: 0 auto 0 auto;
-                left: auto;
-                background: linear-gradient(
-                    270deg,
-                    color-mix(in srgb, var(--helman-price-negative) 40%, white 2%),
-                    color-mix(in srgb, var(--helman-price-negative) 18%, transparent)
-                );
-                border-radius: 4px 0 0 4px;
-            }
-
-            .day-aggregate-gauge.price .day-aggregate-gauge-fill.positive {
-                inset: 0 auto 0 auto;
-                background: linear-gradient(
-                    90deg,
-                    color-mix(in srgb, var(--helman-price-positive) 40%, white 2%),
-                    color-mix(in srgb, var(--helman-price-positive) 18%, transparent)
-                );
-                border-radius: 0 4px 4px 0;
-            }
-
-            .day-aggregate-price-pair {
-                display: flex;
-                align-items: center;
-                gap: 4px;
-                width: 100%;
-                min-width: 0;
-            }
-
-            .day-aggregate-price-pair .day-aggregate-gauge-value {
-                flex: 1 1 0;
-            }
-
-            .day-aggregate-price-pair .day-aggregate-gauge-value.negative {
-                color: color-mix(in srgb, var(--helman-price-negative) 62%, var(--primary-text-color));
-                text-align: left;
-            }
-
-            .day-aggregate-price-pair .day-aggregate-gauge-value.positive {
-                color: color-mix(in srgb, var(--helman-price-positive) 62%, var(--primary-text-color));
-                text-align: right;
-            }
-
-            .day-aggregate-gauge.zero {
-                color: var(--secondary-text-color);
-                background: color-mix(in srgb, var(--secondary-text-color) 12%, transparent);
-                box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--secondary-text-color) 14%, transparent);
-                text-shadow: none;
-            }
-
-            .day-aggregate-gauge.zero .day-aggregate-gauge-center {
-                background: color-mix(in srgb, var(--secondary-text-color) 28%, transparent);
-            }
-
-            .day-aggregate-gauge.unavailable {
-                opacity: 0.4;
             }
 
             .schedule-row > *,
@@ -1432,16 +1174,16 @@ export class SchedulingSlotTable extends LitElement {
                     </th>
                     <td class="day-spacer-cell action" aria-hidden="true"></td>
                     <td class="day-aggregate-cell soc">
-                        ${this._renderDayBatteryAggregate(section.dayAggregate)}
+                        ${this._renderDayAggregate("battery", section.dayAggregate)}
                     </td>
                     <td class="day-aggregate-cell solar">
-                        ${this._renderDaySolarAggregate(section.dayAggregate)}
+                        ${this._renderDayAggregate("solar", section.dayAggregate)}
                     </td>
                     <td class="day-aggregate-cell grid">
-                        ${this._renderDayGridAggregate(section.dayAggregate)}
+                        ${this._renderDayAggregate("grid", section.dayAggregate)}
                     </td>
                     <td class="day-aggregate-cell price">
-                        ${this._renderDayPriceAggregate(section.dayAggregate)}
+                        ${this._renderDayAggregate("price", section.dayAggregate)}
                     </td>
                 </tr>
                 ${expanded ? section.rows.map((row) => this._renderTableRow(row)) : nothing}
@@ -1449,205 +1191,31 @@ export class SchedulingSlotTable extends LitElement {
         `;
     }
 
-    private _renderDayBatteryAggregate(aggregate: ScheduleTableDayAggregateModel | null) {
+    /**
+     * A whole-day gauge, drawn by the shared renderer the solar inspector's day
+     * pills use. The table shows every figure; only the pills suppress any.
+     */
+    private _renderDayAggregate(
+        kind: DayAggregateGaugeKind,
+        aggregate: ScheduleTableDayAggregateModel | null,
+    ) {
         const forecast = this.tableModel.forecast;
-        if (
-            !forecast.batteryAvailable
-            || aggregate?.batteryMinSocPct === null
-            || aggregate.batteryMaxSocPct === null
-        ) {
-            return html`
-                <div class="day-aggregate-gauge battery unavailable" aria-hidden="true"></div>
-            `;
-        }
+        const available = kind === "battery"
+            ? forecast.batteryAvailable
+            : kind === "solar"
+                ? forecast.solarAvailable
+                : kind === "grid"
+                    ? forecast.gridAvailable
+                    : forecast.priceAvailable;
 
-        const startPct = Math.max(Math.min(aggregate.batteryMinSocPct, 100), 0);
-        const widthPct = Math.max(Math.min(aggregate.batteryMaxSocPct, 100) - startPct, 0);
-
-        return html`
-            <div
-                class="day-aggregate-gauge battery"
-                role="img"
-                aria-label=${this._buildDayBatteryAggregateTitle(aggregate.batteryMinSocPct, aggregate.batteryMaxSocPct)}
-                title=${this._buildDayBatteryAggregateTitle(aggregate.batteryMinSocPct, aggregate.batteryMaxSocPct)}
-            >
-                ${widthPct > 0 ? html`
-                    <span
-                        class="day-aggregate-gauge-fill"
-                        style=${`left:${startPct}%;width:${widthPct}%;`}
-                        aria-hidden="true"
-                    ></span>
-                ` : nothing}
-                <span class="day-aggregate-gauge-value">
-                    ${Math.round(aggregate.batteryMinSocPct)} : ${Math.round(aggregate.batteryMaxSocPct)}
-                </span>
-            </div>
-        `;
-    }
-
-    private _renderDaySolarAggregate(aggregate: ScheduleTableDayAggregateModel | null) {
-        const forecast = this.tableModel.forecast;
-        if (!forecast.solarAvailable || aggregate?.solarWh === null) {
-            return html`
-                <div class="day-aggregate-gauge solar unavailable" aria-hidden="true"></div>
-            `;
-        }
-
-        const widthPct = forecast.dayAggregateScale.solarMaxWh > 0
-            ? Math.min((aggregate.solarWh / forecast.dayAggregateScale.solarMaxWh) * 100, 100)
-            : 0;
-
-        return html`
-            <div
-                class="day-aggregate-gauge solar"
-                role="img"
-                aria-label=${this._buildDaySolarAggregateTitle(aggregate.solarWh)}
-                title=${this._buildDaySolarAggregateTitle(aggregate.solarWh)}
-            >
-                ${widthPct > 0 ? html`
-                    <span
-                        class="day-aggregate-gauge-fill"
-                        style=${`width:${widthPct}%;`}
-                        aria-hidden="true"
-                    ></span>
-                ` : nothing}
-                <span class="day-aggregate-gauge-value">${_formatSolarGaugeValue(aggregate.solarWh)}</span>
-            </div>
-        `;
-    }
-
-    private _renderDayGridAggregate(aggregate: ScheduleTableDayAggregateModel | null) {
-        const forecast = this.tableModel.forecast;
-        if (
-            !forecast.gridAvailable
-            || aggregate?.gridImportKwh === null
-            || aggregate.gridExportKwh === null
-        ) {
-            return html`
-                <div class="day-aggregate-gauge grid unavailable" aria-hidden="true"></div>
-            `;
-        }
-
-        const positiveDisplay = getScheduleGridPositiveDisplay({
-            exportKwh: aggregate.gridExportKwh,
-            availableSurplusKwh: aggregate.availableSurplusKwh,
+        return renderDayAggregateGauge({
+            kind,
+            aggregate,
+            scale: forecast.dayAggregateScale,
+            available,
+            priceDisplayUnit: forecast.priceDisplayUnit,
+            localize: this.localize,
         });
-        const hasImport = !_isZeroKwhDisplayValue(aggregate.gridImportKwh);
-        const hasPositiveDisplay = positiveDisplay.kind !== null;
-        const importWidthPct = forecast.dayAggregateScale.gridMaxKwh > 0
-            && hasImport
-            ? Math.min((aggregate.gridImportKwh / forecast.dayAggregateScale.gridMaxKwh) * 50, 50)
-            : 0;
-        const positiveWidthPct = forecast.dayAggregateScale.gridMaxKwh > 0
-            && hasPositiveDisplay
-            ? Math.min((positiveDisplay.valueKwh / forecast.dayAggregateScale.gridMaxKwh) * 50, 50)
-            : 0;
-
-        return html`
-            <div
-                class=${`day-aggregate-gauge grid${positiveDisplay.kind === "surplus" ? " surplus" : ""}${!hasImport && !hasPositiveDisplay ? " zero" : ""}`}
-                role="img"
-                aria-label=${this._buildDayGridAggregateTitle(aggregate)}
-                title=${this._buildDayGridAggregateTitle(aggregate)}
-            >
-                <span class="day-aggregate-gauge-center" aria-hidden="true"></span>
-                ${importWidthPct > 0 ? html`
-                    <span
-                        class="day-aggregate-gauge-fill import"
-                        style=${`width:${importWidthPct}%;`}
-                        aria-hidden="true"
-                    ></span>
-                ` : nothing}
-                ${positiveWidthPct > 0 && positiveDisplay.kind !== null ? html`
-                    <span
-                        class=${`day-aggregate-gauge-fill ${positiveDisplay.kind}`}
-                        style=${`width:${positiveWidthPct}%;`}
-                        aria-hidden="true"
-                    ></span>
-                ` : nothing}
-                <span class="day-aggregate-gauge-pair">
-                    ${hasImport ? html`
-                        <span class="day-aggregate-gauge-value import">
-                            ${_formatKwhValue(aggregate.gridImportKwh)}
-                        </span>
-                    ` : nothing}
-                    ${hasPositiveDisplay && positiveDisplay.kind !== null ? html`
-                        <span class=${`day-aggregate-gauge-value ${positiveDisplay.kind}`}>
-                            ${this._formatPositiveGridDisplayValue(positiveDisplay.valueKwh)}
-                        </span>
-                    ` : nothing}
-                </span>
-            </div>
-        `;
-    }
-
-    private _renderDayPriceAggregate(aggregate: ScheduleTableDayAggregateModel | null) {
-        const forecast = this.tableModel.forecast;
-        if (!forecast.priceAvailable || !aggregate?.priceHasData) {
-            return html`
-                <div class="day-aggregate-gauge price unavailable" aria-hidden="true"></div>
-            `;
-        }
-
-        const hasNegative = aggregate.priceNegativeMin !== null && aggregate.priceNegativeMax !== null;
-        const hasPositive = aggregate.pricePositiveMin !== null && aggregate.pricePositiveMax !== null;
-        const isZero = !hasNegative && !hasPositive;
-        const negativeStartPct = forecast.dayAggregateScale.priceMaxAbs > 0 && hasNegative
-            ? Math.min((Math.abs(aggregate.priceNegativeMax) / forecast.dayAggregateScale.priceMaxAbs) * 50, 50)
-            : 0;
-        const negativeWidthPct = forecast.dayAggregateScale.priceMaxAbs > 0 && hasNegative
-            ? Math.min(
-                ((Math.abs(aggregate.priceNegativeMin) - Math.abs(aggregate.priceNegativeMax))
-                    / forecast.dayAggregateScale.priceMaxAbs) * 50,
-                50,
-            )
-            : 0;
-        const positiveStartPct = forecast.dayAggregateScale.priceMaxAbs > 0 && hasPositive
-            ? Math.min((aggregate.pricePositiveMin / forecast.dayAggregateScale.priceMaxAbs) * 50, 50)
-            : 0;
-        const positiveWidthPct = forecast.dayAggregateScale.priceMaxAbs > 0 && hasPositive
-            ? Math.min(
-                ((aggregate.pricePositiveMax - aggregate.pricePositiveMin) / forecast.dayAggregateScale.priceMaxAbs) * 50,
-                50,
-            )
-            : 0;
-
-        return html`
-            <div
-                class=${`day-aggregate-gauge price${isZero ? " zero" : ""}`}
-                role="img"
-                aria-label=${this._buildDayPriceAggregateTitle(aggregate, forecast.priceDisplayUnit)}
-                title=${this._buildDayPriceAggregateTitle(aggregate, forecast.priceDisplayUnit)}
-            >
-                <span class="day-aggregate-gauge-center" aria-hidden="true"></span>
-                ${hasNegative && negativeWidthPct > 0 ? html`
-                    <span
-                        class="day-aggregate-gauge-fill negative"
-                        style=${`right:calc(50% + ${negativeStartPct}%);width:${negativeWidthPct}%;`}
-                        aria-hidden="true"
-                    ></span>
-                ` : nothing}
-                ${hasPositive && positiveWidthPct > 0 ? html`
-                    <span
-                        class="day-aggregate-gauge-fill positive"
-                        style=${`left:calc(50% + ${positiveStartPct}%);width:${positiveWidthPct}%;`}
-                        aria-hidden="true"
-                    ></span>
-                ` : nothing}
-                <span class="day-aggregate-price-pair">
-                    ${hasNegative ? html`
-                        <span class="day-aggregate-gauge-value negative">
-                            ${_formatVisiblePriceValue(aggregate.priceNegativeMin)}
-                        </span>
-                    ` : nothing}
-                    ${hasPositive ? html`
-                        <span class="day-aggregate-gauge-value positive">
-                            ${_formatVisiblePriceValue(aggregate.pricePositiveMin)} : ${_formatVisiblePriceValue(aggregate.pricePositiveMax)}
-                        </span>
-                    ` : nothing}
-                </span>
-            </div>
-        `;
     }
 
     private _renderTableRow(row: ScheduleTableRowModel) {
@@ -2055,7 +1623,7 @@ export class SchedulingSlotTable extends LitElement {
             : 0;
         const label = type === "battery"
             ? `${Math.round(value)}`
-            : _formatSolarGaugeValue(value);
+            : formatSolarGaugeValue(value);
         const classes = `slot-forecast-gauge ${type}${isZero ? " zero" : ""}`;
 
         return html`
@@ -2102,15 +1670,15 @@ export class SchedulingSlotTable extends LitElement {
             exportKwh: point.gridExportKwh,
             availableSurplusKwh: point.availableSurplusKwh,
         });
-        const hasImport = !_isZeroKwhDisplayValue(importValue);
+        const hasImport = !isZeroKwhDisplayValue(importValue);
         const hasPositiveDisplay = positiveDisplay.kind !== null;
         const netValue = point.gridNetKwh ?? 0;
         const displayValue = positiveDisplay.kind === "surplus"
             ? positiveDisplay.valueKwh
-            : _isZeroKwhDisplayValue(netValue)
+            : isZeroKwhDisplayValue(netValue)
             ? 0
             : netValue;
-        const isZero = !hasImport && !hasPositiveDisplay && _isZeroKwhDisplayValue(netValue);
+        const isZero = !hasImport && !hasPositiveDisplay && isZeroKwhDisplayValue(netValue);
         const direction = positiveDisplay.kind === "surplus"
             ? "positive"
             : _getCenterOriginDirection(displayValue);
@@ -2147,7 +1715,7 @@ export class SchedulingSlotTable extends LitElement {
                 ${!isZero ? html`
                     <span class=${`slot-forecast-gauge-text${positiveDisplay.kind === "surplus" ? " surplus" : ""}`}>
                         ${positiveDisplay.kind === "surplus"
-                            ? this._formatPositiveGridDisplayValue(displayValue)
+                            ? formatPositiveGridDisplayValue(displayValue)
                             : this._formatVisibleGridNet(displayValue)}
                     </span>
                 ` : nothing}
@@ -2189,7 +1757,7 @@ export class SchedulingSlotTable extends LitElement {
                     ></span>
                 ` : nothing}
                 ${!isZero ? html`
-                    <span class="slot-forecast-gauge-text">${_formatVisiblePriceValue(displayValue)}</span>
+                    <span class="slot-forecast-gauge-text">${formatVisiblePriceValue(displayValue)}</span>
                 ` : nothing}
             </div>
         `;
@@ -2320,22 +1888,22 @@ export class SchedulingSlotTable extends LitElement {
         const titleParts = [
             this.localize("scheduling.forecast.grid_label"),
             `${this.localize("scheduling.forecast.net")}: ${this._formatSignedGridEnergy(point.gridNetKwh ?? 0)}`,
-            `${this.localize("scheduling.forecast.import")}: ${this._formatGridEnergy(point.gridImportKwh ?? 0)}`,
-            `${this.localize("scheduling.forecast.export")}: ${this._formatGridEnergy(point.gridExportKwh ?? 0)}`,
+            `${this.localize("scheduling.forecast.import")}: ${formatGridEnergy(point.gridImportKwh ?? 0)}`,
+            `${this.localize("scheduling.forecast.export")}: ${formatGridEnergy(point.gridExportKwh ?? 0)}`,
         ];
         if (
             point.availableSurplusKwh !== null
-            && !_isZeroKwhDisplayValue(point.availableSurplusKwh)
+            && !isZeroKwhDisplayValue(point.availableSurplusKwh)
         ) {
             titleParts.push(
-                `${this.localize("scheduling.forecast.surplus")}: ${this._formatGridEnergy(point.availableSurplusKwh)}`,
+                `${this.localize("scheduling.forecast.surplus")}: ${formatGridEnergy(point.availableSurplusKwh)}`,
             );
         }
         return titleParts.join(" · ");
     }
 
     private _buildPriceGaugeTitle(price: number, unit: string | null): string {
-        return `${this.localize("scheduling.forecast.price_label")}: ${this._formatPriceValue(price, unit)}`;
+        return `${this.localize("scheduling.forecast.price_label")}: ${formatPriceValue(price, unit)}`;
     }
 
     private _buildGaugeTitle(type: "battery" | "solar", value: number): string {
@@ -2344,55 +1912,8 @@ export class SchedulingSlotTable extends LitElement {
             : this.localize("scheduling.forecast.solar_label");
         const label = type === "battery"
             ? `${Math.round(value)}%`
-            : _formatSolarGaugeTitle(value);
+            : formatSolarGaugeTitle(value);
         return `${gaugeLabel}: ${label}`;
-    }
-
-    private _buildDayBatteryAggregateTitle(minSocPct: number, maxSocPct: number): string {
-        return `${this.localize("scheduling.forecast.battery_label")}: ${Math.round(minSocPct)}% : ${Math.round(maxSocPct)}%`;
-    }
-
-    private _buildDaySolarAggregateTitle(wh: number): string {
-        return `${this.localize("scheduling.forecast.solar_label")}: ${_formatSolarGaugeTitle(wh)}`;
-    }
-
-    private _buildDayGridAggregateTitle(aggregate: ScheduleTableDayAggregateModel): string {
-        const titleParts = [
-            this.localize("scheduling.forecast.grid_label"),
-            `${this.localize("scheduling.forecast.import")}: ${this._formatGridEnergy(aggregate.gridImportKwh ?? 0)}`,
-            `${this.localize("scheduling.forecast.export")}: ${this._formatGridEnergy(aggregate.gridExportKwh ?? 0)}`,
-        ];
-        if (
-            aggregate.availableSurplusKwh !== null
-            && !_isZeroKwhDisplayValue(aggregate.availableSurplusKwh)
-        ) {
-            titleParts.push(
-                `${this.localize("scheduling.forecast.surplus")}: ${this._formatGridEnergy(aggregate.availableSurplusKwh)}`,
-            );
-        }
-        return titleParts.join(" · ");
-    }
-
-    private _buildDayPriceAggregateTitle(
-        aggregate: ScheduleTableDayAggregateModel,
-        unit: string | null,
-    ): string {
-        const ranges: string[] = [];
-        if (aggregate.priceNegativeMin !== null && aggregate.priceNegativeMax !== null) {
-            ranges.push(
-                `${this._formatPriceValue(aggregate.priceNegativeMin, unit)} to ${this._formatPriceValue(aggregate.priceNegativeMax, unit)}`,
-            );
-        }
-        if (aggregate.pricePositiveMin !== null && aggregate.pricePositiveMax !== null) {
-            ranges.push(
-                `${this._formatPriceValue(aggregate.pricePositiveMin, unit)} to ${this._formatPriceValue(aggregate.pricePositiveMax, unit)}`,
-            );
-        }
-
-        const title = ranges.length > 0
-            ? ranges.join(" · ")
-            : this._formatPriceValue(0, unit);
-        return `${this.localize("scheduling.forecast.price_label")}: ${title}`;
     }
 
     private _formatVisibleGridNet(kwh: number): string {
@@ -2402,24 +1923,11 @@ export class SchedulingSlotTable extends LitElement {
 
     private _formatCompactGridNet(kwh: number): string {
         const prefix = kwh > 0 ? "+" : kwh < 0 ? "−" : "";
-        return `${prefix}${_formatKwhValue(kwh)}`;
-    }
-
-    private _formatPositiveGridDisplayValue(kwh: number): string {
-        return `+${_formatKwhValue(kwh)}`;
+        return `${prefix}${formatKwhValue(kwh)}`;
     }
 
     private _formatSignedGridEnergy(kwh: number): string {
         return `${this._formatCompactGridNet(kwh)} kWh`;
-    }
-
-    private _formatGridEnergy(kwh: number): string {
-        return `${_formatKwhValue(kwh)} kWh`;
-    }
-
-    private _formatPriceValue(value: number, unit: string | null): string {
-        const formattedValue = _formatVisiblePriceValue(value);
-        return unit ? `${formattedValue} ${unit}` : formattedValue;
     }
 
     private _buildHourToggleAriaLabel(row: ScheduleTableHourRowModel): string {
