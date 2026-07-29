@@ -75,8 +75,15 @@ if TYPE_CHECKING:
     from ..day_context import DayContext
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
+    from .self_sustainability import Trajectory
 
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
+
+# "≈ 0" for strict's day-balance test. Both are the inspector's own rail
+# epsilons (`RAIL_METRICS` in automation-inspector-model.ts): a difference the
+# UI would not render as a change is not one to reject a placement over.
+_STRICT_SOC_TOLERANCE_PCT = 0.5
+_STRICT_IMPORT_TOLERANCE_KWH = 0.05
 
 
 @dataclass(frozen=True)
@@ -534,7 +541,6 @@ class _SelfSustainabilityGate:
         from .self_sustainability import build_horizon_simulator
 
         self._snapshot = snapshot
-        self._appliance_id = appliance_id
         self._demand_hourly_energy = demand_hourly_energy
         self._simulator = build_horizon_simulator(
             snapshot, appliance_id=appliance_id
@@ -592,7 +598,9 @@ class _SelfSustainabilityGate:
             if len(chosen) >= slots_needed:
                 not_reached.append((cost, slot_id))
                 continue
-            reason = self._accept(slot_id, floor=floor)
+            reason = self._accept(
+                slot_id, floor=floor, level=plan.self_sustainability
+            )
             if reason is None:
                 chosen.append((cost, slot_id))
             else:
@@ -611,9 +619,11 @@ class _SelfSustainabilityGate:
         """
         if level is None:
             return None
-        return self._accept(slot_id, floor=self._floor_pct(params))
+        return self._accept(slot_id, floor=self._floor_pct(params), level=level)
 
-    def _accept(self, slot_id: str, *, floor: float) -> dict[str, Any] | None:
+    def _accept(
+        self, slot_id: str, *, floor: float, level: str
+    ) -> dict[str, Any] | None:
         baseline = self._simulator.baseline
         if baseline.min_soc_pct < floor:
             # The no-appliance trajectory already dips below the floor, so the
@@ -633,18 +643,81 @@ class _SelfSustainabilityGate:
             self._accepted_demand, self._slot_demand(slot_id)
         )
         trajectory = self._simulator.simulate(candidate_demand)
-        if trajectory.min_soc_pct >= floor:
-            self._accepted_demand = candidate_demand
+        if trajectory.min_soc_pct < floor:
+            return {
+                "code": "would_break_soc_floor",
+                "params": {
+                    "floor": round(floor, 2),
+                    "projectedMinSoc": round(trajectory.min_soc_pct, 2),
+                    "atSlot": trajectory.min_soc_at,
+                },
+                "signals": ["batterySocPct"],
+            }
+        if level == "strict":
+            # Strict *inherits* the floor rather than replacing it: a day can
+            # balance while still dipping through the floor at noon.
+            unbalanced = self._day_imbalance(slot_id, trajectory, baseline)
+            if unbalanced is not None:
+                return unbalanced
+        self._accepted_demand = candidate_demand
+        return None
+
+    def _day_imbalance(
+        self,
+        slot_id: str,
+        trajectory: "Trajectory",
+        baseline: "Trajectory",
+    ) -> dict[str, Any] | None:
+        """Strict's extra test: did the day the slot belongs to pay for itself?
+
+        Over that day, to local midnight and against the no-appliance baseline,
+        the battery must be restored *and* no extra grid energy bought. Together
+        those mean the appliance's energy came from solar that would otherwise
+        have been exported or curtailed. The battery may be drained mid-morning
+        provided the day's sun refills it — which is exactly what
+        ``min_solar_coverage_pct`` cannot express, being per-slot and unable to
+        time-shift.
+
+        **Why SoC alone is not enough.** Grid import also leaves the battery
+        unchanged: ``charge_from_grid`` charging to a target simply imports one
+        more kWh to still hit it, so end-of-day SoC is identical and the
+        appliance ran on imported energy.
+
+        **Consequence, intended:** energy consumed after sunset cannot be repaid
+        by today's sun, so strict confines the appliance to daylight hours.
+
+        Both comparisons are one-sided. Ending the day *better* than the
+        baseline is not a failure, it just cannot happen often.
+        """
+        local_date = parse_slot_id(slot_id).date()
+        nominal_capacity_kwh = self._nominal_capacity_kwh()
+        # A day whose midnight lies beyond the horizon falls back to the horizon
+        # end, which is what the simulator recorded for it.
+        delta_energy_kwh = trajectory.end_energy_kwh_by_date.get(
+            local_date, 0.0
+        ) - baseline.end_energy_kwh_by_date.get(local_date, 0.0)
+        delta_soc_pct = delta_energy_kwh / nominal_capacity_kwh * 100
+        delta_import_kwh = trajectory.imported_kwh_by_date.get(
+            local_date, 0.0
+        ) - baseline.imported_kwh_by_date.get(local_date, 0.0)
+        if (
+            -delta_soc_pct <= _STRICT_SOC_TOLERANCE_PCT
+            and delta_import_kwh <= _STRICT_IMPORT_TOLERANCE_KWH
+        ):
             return None
         return {
-            "code": "would_break_soc_floor",
+            "code": "not_solar_neutral",
             "params": {
-                "floor": round(floor, 2),
-                "projectedMinSoc": round(trajectory.min_soc_pct, 2),
-                "atSlot": trajectory.min_soc_at,
+                "deltaSocPct": round(delta_soc_pct, 2),
+                "deltaImportKwh": round(delta_import_kwh, 3),
             },
-            "signals": ["batterySocPct"],
+            "signals": ["batterySocPct", "importedFromGridKwh"],
         }
+
+    def _nominal_capacity_kwh(self) -> float:
+        battery_state = self._snapshot.context.battery_state
+        assert battery_state is not None  # build_horizon_simulator guarantees it
+        return battery_state.nominal_capacity_kwh
 
     def _floor_pct(self, params: dict[str, Any]) -> float:
         # In percentage *points* above the inverter's own reserve. A floor at

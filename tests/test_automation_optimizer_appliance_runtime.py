@@ -96,7 +96,14 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
     OptimizationSnapshot,
 )
-from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
+from custom_components.helman.scheduling.forecast_overlay import (  # noqa: E402
+    ScheduleForecastOverlay,
+)
+from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleAction,
+    ScheduleDocument,
+    ScheduleSlot,
+)
 from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
@@ -263,6 +270,48 @@ def _morning_dip_series(*, trough_kwh: float = 1.6) -> list[dict[str, object]]:
     return _sim_series(net)
 
 
+def _curtailed_solar_series() -> list[dict[str, object]]:
+    """Flat, then far more sun than the battery can hold, then flat again.
+
+    The only shape under which a day can genuinely *pay for itself*: the battery
+    fills and the rest of the surplus is exported, so an earlier draw is
+    absorbed by solar that was going to be given away. Without curtailment,
+    every kWh the appliance takes is a kWh the battery ends the day short of.
+    """
+    charge_buckets = 13  # 09:00 .. 12:00, at 0.5 kWh each against 5 kWh of room
+    return _sim_series(
+        {
+            REFERENCE_TIME + timedelta(minutes=15 * index): 0.5
+            for index in range(16, 16 + charge_buckets)
+        }
+    )
+
+
+def _grid_charge_overlay(*, first_bucket: datetime, buckets: int):
+    """An overlay that force-charges the battery to 100 % from the grid.
+
+    The row-7 trap: with a charger targeting a SoC, an earlier appliance draw
+    is silently repaid *from the grid*, so end-of-day SoC is identical and only
+    the import delta shows what happened.
+    """
+    return ScheduleForecastOverlay(
+        horizon_start=REFERENCE_TIME,
+        horizon_end=REFERENCE_TIME + timedelta(hours=48),
+        canonical_slot_minutes=15,
+        slots=tuple(
+            ScheduleSlot(
+                id=(first_bucket + timedelta(minutes=15 * index)).isoformat(
+                    timespec="seconds"
+                ),
+                action=ScheduleAction(
+                    kind="charge_to_target_soc", target_soc=100
+                ),
+            )
+            for index in range(buckets)
+        ),
+    )
+
+
 def _trailing_drain_series(*, trough_kwh: float) -> list[dict[str, object]]:
     """Flat until the last quarter of the horizon, then drains to ``trough_kwh``.
 
@@ -325,9 +374,11 @@ def _make_snapshot(
     battery_state: object | None = None,
     battery_params: dict[str, float] | None = None,
     day_contexts: dict[date, DayContext] | None = None,
+    schedule_overlay: object | None = None,
 ) -> OptimizationSnapshot:
     registry = AppliancesRuntimeRegistry.from_appliances((appliance,))
     return OptimizationSnapshot(
+        schedule_overlay=schedule_overlay,
         schedule=ScheduleDocument() if schedule_document is None else schedule_document,
         adjusted_house_forecast={"status": "available", "series": []},
         battery_forecast={
@@ -1586,6 +1637,179 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
 
         self.assertEqual(len(placed), 1)
+
+
+class StrictSelfSustainabilityTests(unittest.TestCase):
+    """``strict`` — soft, plus: did the day the slot belongs to pay for itself?
+
+    Over that day, to local midnight and against the no-appliance baseline, the
+    battery must be restored *and* no extra grid energy bought. The battery may
+    be drained in the morning provided the day's sun refills it, which is
+    exactly what ``min_solar_coverage_pct`` cannot express.
+    """
+
+    def _config(self, appliance, *, groups=None):
+        return make_optimizer_config(
+            id="daily",
+            kind="appliance_runtime",
+            target={"appliance_id": appliance.id},
+            params={
+                "daily_minimum": {
+                    "min_hours_per_day": 0.5,
+                    "max_consecutive_skips": 1,
+                },
+                "window": {"start": "06:00", "end": "18:00"},
+            },
+            conditions=groups
+            or [{"run_when": ["tight"], "ensure_self_sustainability": "strict"}],
+        )
+
+    def _optimize(self, cfg, snapshot, appliance):
+        return build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        ).optimize(snapshot, cfg)
+
+    def test_a_morning_draw_repaid_by_curtailed_midday_sun_passes(self) -> None:
+        appliance = _generic()
+        cfg = self._config(appliance)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            battery_series=_curtailed_solar_series(),
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        # 06:00 drains 0.2 kWh; the midday surplus was being exported anyway, so
+        # the day ends on the same SoC and the same import as without it.
+        self.assertEqual(set(placed), {_slot_id(6, 0)})
+
+    def test_an_evening_slot_cannot_be_repaid_and_is_refused(self) -> None:
+        """Intended consequence: strict confines the appliance to daylight."""
+        appliance = _generic()
+        cfg = self._config(appliance)
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            battery_series=_curtailed_solar_series(),
+            # 17:00 is the cheapest slot, so ranking reaches it first.
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (17, 0)
+                 else 2.0 if (hour, minute) == (6, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertNotIn(_slot_id(17, 0), placed)
+        self.assertEqual(set(placed), {_slot_id(6, 0)})
+
+    def test_soft_would_have_taken_the_evening_slot(self) -> None:
+        # The control: the floor alone is happy with an evening run — the
+        # battery is full and stays far above it. Only the day-balance test
+        # refuses it, which is why strict is soft *plus* something.
+        appliance = _generic()
+        cfg = self._config(
+            appliance,
+            groups=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            battery_series=_curtailed_solar_series(),
+            export_points=[
+                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
+                 "value": 1.0 if (hour, minute) == (17, 0)
+                 else 2.0 if (hour, minute) == (6, 0) else 5.0}
+                for hour in range(6, 18)
+                for minute in (0, 30)
+            ],
+        )
+
+        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+
+        self.assertEqual(set(placed), {_slot_id(17, 0)})
+
+    def test_a_restored_battery_paid_for_from_the_grid_still_fails(self) -> None:
+        """The reason strict compares *both* deltas.
+
+        A grid charger targeting a SoC simply imports one more kWh to still hit
+        it, so the appliance's draw leaves end-of-day SoC untouched while the
+        energy came off the grid. SoC alone would call that self-sustaining.
+        """
+        appliance = _generic()
+        cfg = self._config(appliance)
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            # No sun at all; the battery is filled from the grid at 14:00.
+            battery_series=_sim_series({}),
+            schedule_overlay=_grid_charge_overlay(
+                first_bucket=_at(14, 0), buckets=5
+            ),
+        )
+
+        result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        self.assertEqual(_placed_slots(result, appliance.id), {})
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        params = next(
+            decision["reason"]["params"]
+            for decision in step["decisions"]
+            if decision["reason"]["code"] == "not_solar_neutral"
+            and decision["slotIds"] == [_slot_id(6, 0)]
+        )
+        # The battery is restored exactly...
+        self.assertEqual(params["deltaSocPct"], 0.0)
+        # ...and the whole 0.2 kWh came off the grid instead.
+        self.assertEqual(params["deltaImportKwh"], 0.2)
+
+    def test_strict_still_inherits_the_floor(self) -> None:
+        """A day can balance while still dipping through the floor at noon."""
+        appliance = _generic()
+        cfg = self._config(appliance)
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance,
+            when_active={appliance.id: 0.4},
+            battery_state=BATTERY,
+            battery_params=BATTERY_PARAMS,
+            battery_series=_morning_dip_series(trough_kwh=1.6),
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        step = trace.to_dict()["steps"][0]
+        codes = {
+            slot_id: decision["reason"]["code"]
+            for decision in step["decisions"]
+            for slot_id in decision["slotIds"]
+        }
+        self.assertEqual(codes[_slot_id(6, 0)], "would_break_soc_floor")
 
 
 class SelfSustainabilityConfigTests(unittest.TestCase):

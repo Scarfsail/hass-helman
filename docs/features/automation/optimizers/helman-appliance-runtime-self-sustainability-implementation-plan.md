@@ -1,6 +1,6 @@
 # Helman Automation — `appliance_runtime` self-sustainability (implementation plan)
 
-Status: **proposed** (branch `feat/appliance-runtime-self-sustainability`). Resolves
+Status: **implemented** (branch `feat/appliance-runtime-self-sustainability`). Resolves
 [issue #3](https://github.com/Scarfsail/hass-helman/issues/3). Code anchors verified against the
 tree on 2026-07-29.
 
@@ -391,8 +391,11 @@ so it would count by default and let an uncapped optimizer place across the whol
    re-ranking, `would_break_soc_floor` + `soc_floor_already_breached`. Rule 3 excludes the
    condition via `ConditionType.self_gating` rather than by name — a self-gating condition
    contributes an all-true mask *by definition*, so the exclusion is a property, not a list.
-5. **`ensure_self_sustainability: strict`.** The day-boundary ΔSoC/Δimport test and
-   `not_solar_neutral`.
+5. ✅ **`ensure_self_sustainability: strict`.** The day-boundary ΔSoC/Δimport test and
+   `not_solar_neutral`. "≈ 0" resolved to the inspector's own rail epsilons — 0.5 pp of SoC
+   and 0.05 kWh of import — so a difference the UI would not render as a change cannot reject
+   a placement. Both comparisons are one-sided: ending a day *better* than the baseline is not
+   a failure.
 
 ---
 

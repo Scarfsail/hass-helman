@@ -19,8 +19,10 @@ optimizer does the work, exactly as ``reserve_floor_soc`` does for
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from ...battery_slot_simulation import (
@@ -58,6 +60,17 @@ class Trajectory:
     #: The bucket that low point falls in, as a slot id — so a rejection can
     #: name *where* the floor would break, not just that it would.
     min_soc_at: str | None
+    #: Remaining energy after each local date's *last* simulated bucket — the
+    #: day boundary, or the horizon end for a day the horizon cuts short.
+    end_energy_kwh_by_date: Mapping[date, float] = MappingProxyType({})
+    #: Grid import summed over each local date.
+    #:
+    #: Import is non-zero in four situations that are not the battery running
+    #: dry — a `stop_discharging` action, a discharge *power* limit, a
+    #: deliberate `charge_to_target_soc`, and a `discharge_to_target_soc` that
+    #: stops at its target. All four appear in the baseline too, which is why
+    #: the strict test compares a delta rather than testing for absolute zero.
+    imported_kwh_by_date: Mapping[date, float] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -94,57 +107,92 @@ class HorizonSimulator:
         self._buckets = buckets
         self._live_state = live_state
         self._settings = settings
-        self._index_by_key = {bucket.key: index for index, bucket in enumerate(buckets)}
-        self._energy_before, self._prefix_min = self._simulate_baseline()
+        self._index_by_key = {
+            bucket.key: index for index, bucket in enumerate(buckets)
+        }
+        # State *entering* each bucket, so both lists carry one more entry than
+        # there are buckets and the last describes the end of the horizon.
+        self._energy_before: list[float] = []
+        self._prefix: list[Trajectory] = []
+        self._simulate_baseline()
 
     @property
     def baseline(self) -> Trajectory:
         """The no-appliance trajectory, simulated once at construction.
 
-        What ``soc_floor_already_breached`` is decided from. It must not be
-        derived by re-testing "the accepted set minus the candidate": for the
-        first candidate that set is empty, the test passes trivially, and the
-        first candidate is blamed for a dip it had nothing to do with.
+        What ``soc_floor_already_breached`` is decided from, and what the strict
+        day-balance test compares against. It must not be derived by re-testing
+        "the accepted set minus the candidate": for the first candidate that set
+        is empty, the test passes trivially, and the first candidate is blamed
+        for a dip it had nothing to do with.
         """
-        return self._prefix_min[len(self._buckets)]
+        return self._prefix[len(self._buckets)]
 
     def simulate(self, extra_demand_by_bucket: dict[datetime, float]) -> Trajectory:
         """The trajectory with ``extra_demand_by_bucket`` added to the house.
 
         Resumes from the earliest bucket the extra demand touches rather than
         from ``now``: everything before it is by definition the baseline, whose
-        trajectory and running minimum are already known.
+        trajectory and running totals are already recorded.
         """
         start = self._first_touched_index(extra_demand_by_bucket)
         if start is None:
             return self.baseline
 
-        prefix = self._prefix_min[start]
-        min_soc_pct = prefix.min_soc_pct
-        min_soc_at = prefix.min_soc_at
-        remaining_energy_kwh = self._energy_before[start]
-
+        prefix = self._prefix[start]
+        state = _WalkState(
+            remaining_energy_kwh=self._energy_before[start],
+            min_soc_pct=prefix.min_soc_pct,
+            min_soc_at=prefix.min_soc_at,
+            end_energy_kwh_by_date=dict(prefix.end_energy_kwh_by_date),
+            imported_kwh_by_date=dict(prefix.imported_kwh_by_date),
+        )
         for bucket in self._buckets[start:]:
-            result = simulate_schedule_action_slot(
-                slot_start=bucket.start,
-                duration_hours=bucket.duration_hours,
-                solar_kwh=bucket.solar_kwh,
-                baseline_house_kwh=(
-                    bucket.baseline_house_kwh
-                    + extra_demand_by_bucket.get(bucket.key, 0.0)
-                ),
-                remaining_energy_kwh=remaining_energy_kwh,
-                live_state=self._live_state,
-                settings=self._settings,
-                action=bucket.action,
-            )
-            remaining_energy_kwh = result.remaining_energy_kwh
-            soc_pct = result.slot["socPct"]
-            if soc_pct < min_soc_pct:
-                min_soc_pct = soc_pct
-                min_soc_at = format_slot_id(bucket.key)
+            self._step(state, bucket, extra_demand_by_bucket.get(bucket.key, 0.0))
+        return state.to_trajectory()
 
-        return Trajectory(min_soc_pct=min_soc_pct, min_soc_at=min_soc_at)
+    def _simulate_baseline(self) -> None:
+        state = _WalkState(
+            remaining_energy_kwh=self._live_state.current_remaining_energy_kwh,
+            min_soc_pct=_INFINITE_SOC,
+            min_soc_at=None,
+            end_energy_kwh_by_date={},
+            imported_kwh_by_date={},
+        )
+        self._energy_before.append(state.remaining_energy_kwh)
+        self._prefix.append(state.to_trajectory())
+        for bucket in self._buckets:
+            self._step(state, bucket, 0.0)
+            self._energy_before.append(state.remaining_energy_kwh)
+            self._prefix.append(state.to_trajectory())
+
+    def _step(
+        self, state: "_WalkState", bucket: _Bucket, extra_demand_kwh: float
+    ) -> None:
+        result = simulate_schedule_action_slot(
+            slot_start=bucket.start,
+            duration_hours=bucket.duration_hours,
+            solar_kwh=bucket.solar_kwh,
+            baseline_house_kwh=bucket.baseline_house_kwh + extra_demand_kwh,
+            remaining_energy_kwh=state.remaining_energy_kwh,
+            live_state=self._live_state,
+            settings=self._settings,
+            action=bucket.action,
+        )
+        state.remaining_energy_kwh = result.remaining_energy_kwh
+        soc_pct = result.slot["socPct"]
+        if soc_pct < state.min_soc_pct:
+            state.min_soc_pct = soc_pct
+            state.min_soc_at = format_slot_id(bucket.key)
+        local_date = bucket.key.date()
+        # Overwritten every bucket, so each date ends up holding the energy
+        # after its *last* one — local midnight, or the horizon end for a day
+        # the horizon cuts short.
+        state.end_energy_kwh_by_date[local_date] = result.remaining_energy_kwh
+        state.imported_kwh_by_date[local_date] = (
+            state.imported_kwh_by_date.get(local_date, 0.0)
+            + result.slot["importedFromGridKwh"]
+        )
 
     def _first_touched_index(
         self, extra_demand_by_bucket: dict[datetime, float]
@@ -156,40 +204,26 @@ class HorizonSimulator:
         ]
         return min(indices) if indices else None
 
-    def _simulate_baseline(self) -> tuple[list[float], list[Trajectory]]:
-        """Energy entering each bucket, and the running minimum SoC before it.
 
-        ``energy_before[i]`` and ``prefix_min[i]`` describe the state *entering*
-        bucket ``i``, so both lists carry one more entry than there are buckets;
-        the last describes the end of the horizon.
-        """
-        energy_before = [self._live_state.current_remaining_energy_kwh]
-        prefix_min = [Trajectory(min_soc_pct=_INFINITE_SOC, min_soc_at=None)]
+@dataclass
+class _WalkState:
+    """The mutable half of a walk, so the per-bucket step is written once."""
 
-        remaining_energy_kwh = self._live_state.current_remaining_energy_kwh
-        min_soc_pct = _INFINITE_SOC
-        min_soc_at: str | None = None
-        for bucket in self._buckets:
-            result = simulate_schedule_action_slot(
-                slot_start=bucket.start,
-                duration_hours=bucket.duration_hours,
-                solar_kwh=bucket.solar_kwh,
-                baseline_house_kwh=bucket.baseline_house_kwh,
-                remaining_energy_kwh=remaining_energy_kwh,
-                live_state=self._live_state,
-                settings=self._settings,
-                action=bucket.action,
-            )
-            remaining_energy_kwh = result.remaining_energy_kwh
-            soc_pct = result.slot["socPct"]
-            if soc_pct < min_soc_pct:
-                min_soc_pct = soc_pct
-                min_soc_at = format_slot_id(bucket.key)
-            energy_before.append(remaining_energy_kwh)
-            prefix_min.append(
-                Trajectory(min_soc_pct=min_soc_pct, min_soc_at=min_soc_at)
-            )
-        return energy_before, prefix_min
+    remaining_energy_kwh: float
+    min_soc_pct: float
+    min_soc_at: str | None
+    end_energy_kwh_by_date: dict[date, float]
+    imported_kwh_by_date: dict[date, float]
+
+    def to_trajectory(self) -> Trajectory:
+        return Trajectory(
+            min_soc_pct=self.min_soc_pct,
+            min_soc_at=self.min_soc_at,
+            end_energy_kwh_by_date=MappingProxyType(
+                dict(self.end_energy_kwh_by_date)
+            ),
+            imported_kwh_by_date=MappingProxyType(dict(self.imported_kwh_by_date)),
+        )
 
 
 def build_horizon_simulator(

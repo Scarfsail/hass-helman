@@ -48,6 +48,7 @@ V1_REASON_CODES: frozenset[str] = frozenset(
         "insufficient_solar_coverage",
         "would_break_soc_floor",
         "soc_floor_already_breached",
+        "not_solar_neutral",
         "forecast_unavailable",
         # any / framework
         "blocked_user_owned",

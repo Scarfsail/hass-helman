@@ -511,6 +511,10 @@
           "title": "Baterie dojde i bez spotřebiče",
           "detail": "Baterie klesne na {baselineMinSoc} % — pod hranici {floor} % — i bez tohoto spotřebiče, takže nemůže běžet soběstačně."
         },
+        "not_solar_neutral": {
+          "title": "Den by se nezaplatil",
+          "detail": "Spuštění v tomto slotu nechá den o {deltaSocPct} % níž na baterii a o {deltaImportKwh} kWh výš na odběru ze sítě, takže to slunce nepokrylo."
+        },
         "forecast_unavailable": {
           "title": "Předpověď nedostupná",
           "detail": "Přebytek z předpovědi není dostupný ({status})."
