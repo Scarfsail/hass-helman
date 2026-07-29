@@ -705,6 +705,88 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         # Forced: the full 3h, over the whole window, past the threshold.
         self.assertEqual(len(placed), 6)
 
+    def test_a_wholly_priced_out_day_is_explained_not_crashed(self) -> None:
+        """Regression: a slot condition can empty a whole day, not just a run_when.
+
+        The unmatched-day branch formatted *whatever* condition excluded the day
+        as ``run_when``, so a numeric threshold reached ``list(2.0)`` and took
+        the run down with a ``TypeError``. Reachable today with
+        ``when_price_below``, and routine once a coverage condition can write off
+        an overcast day.
+        """
+        appliance = _generic()
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=1,
+            # One short day is still within budget, so nothing forces a run and
+            # the day genuinely resolves to no group at all.
+            max_consecutive_skips=1,
+            groups=[{"run_when": ["tight"], "when_price_below": 0.5}],
+        )
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(set())
+        )
+
+        result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        self.assertEqual(_placed_slots(result, appliance.id), {})
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        priced_out = [
+            decision
+            for decision in step["decisions"]
+            if decision["reason"]["code"] == "price_above_run_threshold"
+        ]
+        self.assertEqual(len(priced_out), 1)
+        self.assertEqual(priced_out[0]["reason"]["params"], {"threshold": 0.5})
+        self.assertIn(_slot_id(12, 0), priced_out[0]["slotIds"])
+        # And it is *not* explained as a day the classification excluded.
+        self.assertEqual(
+            [
+                decision
+                for decision in step["decisions"]
+                if decision["reason"]["code"] == "day_not_matched"
+            ],
+            [],
+        )
+
+    def test_an_unmatched_day_still_reports_its_classification(self) -> None:
+        appliance = _generic()
+        cfg = _config(
+            appliance_id=appliance.id,
+            min_hours_per_day=1,
+            max_consecutive_skips=1,
+            run_when=["surplus"],
+        )
+        optimizer = build_appliance_runtime_optimizer(
+            cfg,
+            appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,)),
+        )
+        snapshot = _make_snapshot(appliance=appliance, classification="deficit")
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        step = trace.to_dict()["steps"][0]
+        unmatched = [
+            decision
+            for decision in step["decisions"]
+            if decision["reason"]["code"] == "day_not_matched"
+        ]
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(
+            unmatched[0]["reason"]["params"],
+            {"classification": "deficit", "runWhen": ["surplus"]},
+        )
+
     def test_the_day_resolves_to_the_first_group_in_config_order(self) -> None:
         """Two groups can own different slots of one day; params come from one.
 

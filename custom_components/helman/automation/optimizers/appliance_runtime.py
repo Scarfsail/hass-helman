@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from ...appliances import AppliancesRuntimeRegistry
     from ..conditions import Eligibility
     from ..config import OptimizerInstanceConfig
+    from ..day_context import DayContext
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
 
@@ -189,52 +190,20 @@ class ApplianceRuntimeOptimizer:
                 continue
 
             if plan is None:
-                if window_slots:
-                    code, value = eligibility.rejection(window_slots[0]) or (
-                        "day_not_matched",
-                        (),
-                    )
-                    trace.decision(
-                        slot_ids=window_slots,
-                        outcome="out_of_scope",
-                        reason={
-                            "code": code,
-                            "params": {
-                                "classification": day_context.classification,
-                                "runWhen": list(value),
-                            },
-                        },
-                    )
+                _trace_unmatched_day(
+                    trace=trace,
+                    eligibility=eligibility,
+                    window_slots=window_slots,
+                    day_context=day_context,
+                )
                 continue
 
-            # Slots inside the window that the matched group does not own. Only
-            # the priced-out ones are emitted: `when_price_below`'s own reason
-            # code is worded for `export_price` ("export allowed"), which reads
-            # backwards for an appliance, so this kind relabels it. Every other
-            # exclusion is left to the frontend's derivation, which explains a
-            # SoC rejection with the slot's actual projected SoC — a number this
-            # optimizer would have to re-read the rail to supply.
-            placeable = set(plan.placeable_slots)
-            priced_out: list[str] = []
-            threshold: float | None = None
-            for slot_id in window_slots:
-                if slot_id in placeable:
-                    continue
-                rejection = eligibility.rejection(slot_id)
-                if rejection is None or rejection[0] != "price_not_below_threshold":
-                    continue
-                priced_out.append(slot_id)
-                threshold = rejection[1]
-            if priced_out:
-                trace.decision(
-                    slot_ids=priced_out,
-                    outcome="rejected",
-                    reason={
-                        "code": "price_above_run_threshold",
-                        "params": {"threshold": threshold},
-                        "signals": ["exportPrice"],
-                    },
-                )
+            _trace_window_exclusions(
+                trace=trace,
+                eligibility=eligibility,
+                window_slots=window_slots,
+                placeable=set(plan.placeable_slots),
+            )
 
             slots_needed = ceil(remaining_hours / _SLOT_HOURS)
             ranked = _rank_slots(
@@ -469,6 +438,85 @@ def _window_slot_ids(
             )
         )
     return frozenset(slot_ids)
+
+
+def _trace_unmatched_day(
+    *,
+    trace: "OptimizerTrace",
+    eligibility: "Eligibility",
+    window_slots: list[str],
+    day_context: "DayContext",
+) -> None:
+    """Explain a day on which no group owned a single window slot.
+
+    Usually the day itself was not matched, and the message is the day's
+    classification against the group's ``run_when``. But a *slot*-scoped
+    condition can empty a whole day too — a day whose prices never drop below
+    the threshold — and those carry the condition's own value, which is a
+    number, not a list of classifications. Formatting one as the other raised
+    ``TypeError`` and took the whole run down; they now fall through to the same
+    per-slot explanations a partially-owned day gets.
+    """
+    if not window_slots:
+        return
+    rejection = eligibility.rejection(window_slots[0])
+    if rejection is not None and rejection[0] != "day_not_matched":
+        _trace_window_exclusions(
+            trace=trace,
+            eligibility=eligibility,
+            window_slots=window_slots,
+            placeable=set(),
+        )
+        return
+    trace.decision(
+        slot_ids=window_slots,
+        outcome="out_of_scope",
+        reason={
+            "code": "day_not_matched",
+            "params": {
+                "classification": day_context.classification,
+                "runWhen": list(() if rejection is None else rejection[1]),
+            },
+        },
+    )
+
+
+def _trace_window_exclusions(
+    *,
+    trace: "OptimizerTrace",
+    eligibility: "Eligibility",
+    window_slots: list[str],
+    placeable: set[str],
+) -> None:
+    """Explain window slots the matched group does not own.
+
+    Only the priced-out ones are emitted: ``when_price_below``'s own reason code
+    is worded for ``export_price`` ("export allowed"), which reads backwards for
+    an appliance, so this kind relabels it. Every other exclusion is left to the
+    frontend's derivation, which explains a SoC rejection with the slot's actual
+    projected SoC — a number this optimizer would have to re-read the rail to
+    supply.
+    """
+    priced_out: list[str] = []
+    threshold: float | None = None
+    for slot_id in window_slots:
+        if slot_id in placeable:
+            continue
+        rejection = eligibility.rejection(slot_id)
+        if rejection is None or rejection[0] != "price_not_below_threshold":
+            continue
+        priced_out.append(slot_id)
+        threshold = rejection[1]
+    if priced_out:
+        trace.decision(
+            slot_ids=priced_out,
+            outcome="rejected",
+            reason={
+                "code": "price_above_run_threshold",
+                "params": {"threshold": threshold},
+                "signals": ["exportPrice"],
+            },
+        )
 
 
 def _placement_reason(
