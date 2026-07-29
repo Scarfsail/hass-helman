@@ -4533,6 +4533,15 @@ export class HelmanConfigEditorPanel
     return this._renderOptionalNumberField(path, labelKey, helperKey, helpKey, options);
   }
 
+  renderOptionalSelectField(
+    path: PathSegment[],
+    labelKey: string,
+    options: { value: string; label: string }[],
+    helpKey?: string,
+  ): TemplateResult {
+    return this._renderOptionalSelectField(path, labelKey, options, helpKey);
+  }
+
   renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
     return this._renderHelpIcon(labelKey, contentKey);
   }

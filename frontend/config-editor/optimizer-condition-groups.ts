@@ -8,6 +8,7 @@ import {
     renderSchemaFields,
 } from "./optimizer-field-renderer";
 import {
+    fieldChoiceLabel,
     fieldHelpKey,
     fieldLabelKey,
     type OptimizerEditorHost,
@@ -269,6 +270,21 @@ function renderConditionWidget(
     const helpKey = fieldHelpKey(host, schema.kind, condition.field);
     if (condition.field.type === "day_classifications") {
         return host.renderDayClassificationField(path, labelKey, helpKey);
+    }
+    // Dispatch on `choices` before type, because a choices field is a picker
+    // whatever it is made of. Falling through to the number input rendered
+    // `ensure_self_sustainability` — a string of "soft" | "strict" — as a
+    // numeric box the value could not be typed into at all.
+    if (condition.field.choices?.length) {
+        return host.renderOptionalSelectField(
+            path,
+            labelKey,
+            condition.field.choices.map((choice) => ({
+                value: choice,
+                label: fieldChoiceLabel(host, condition.field, choice),
+            })),
+            helpKey,
+        );
     }
     return host.renderRequiredNumberField(
         path,

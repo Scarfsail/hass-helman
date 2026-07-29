@@ -107,6 +107,14 @@ export interface OptimizerEditorHost {
         helpKey?: string,
         options?: { min?: number; max?: number; suffix?: string },
     ): TemplateResult;
+    /** A ``choices`` field. The blank option unsets it, which is what an
+     * optional condition's "absent means unconstrained" needs. */
+    renderOptionalSelectField(
+        path: PathSegment[],
+        labelKey: string,
+        options: { value: string; label: string }[],
+        helpKey?: string,
+    ): TemplateResult;
     renderHelpIcon(labelKey: string, contentKey: string): TemplateResult;
     renderSvgIcon(path: string, className: string): TemplateResult;
     renderDayClassificationField(
@@ -176,6 +184,22 @@ export function fieldHelpKey(
         qualified,
         field.key,
     ]);
+}
+
+/**
+ * The visible label for one value of a ``choices`` field.
+ *
+ * Falls back to the raw value rather than to the missing-translation marker: a
+ * choice is a word the backend accepts, so an untranslated one is still
+ * *usable*, unlike an untranslated field name.
+ */
+export function fieldChoiceLabel(
+    host: OptimizerEditorHost,
+    field: SchemaField,
+    choice: string,
+): string {
+    const key = `editor.choices.${field.key}_${choice}`;
+    return isTranslated(host, key) ? host.t(key) : choice;
 }
 
 function firstTranslated(

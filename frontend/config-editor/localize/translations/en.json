@@ -335,6 +335,10 @@
       "unsupported_appliance_kind": "Unsupported appliance kind: {kind}",
       "condition_group": "Group {index}"
     },
+    "choices": {
+      "ensure_self_sustainability_soft": "Soft — never break the battery floor",
+      "ensure_self_sustainability_strict": "Strict — the day must pay for itself"
+    },
     "help": {
       "aria_label": "Field help",
       "close": "Close",

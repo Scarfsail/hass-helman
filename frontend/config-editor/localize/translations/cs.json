@@ -335,6 +335,10 @@
       "unsupported_appliance_kind": "Nepodporovaný typ spotřebiče: {kind}",
       "condition_group": "Skupina {index}"
     },
+    "choices": {
+      "ensure_self_sustainability_soft": "Soft — nikdy nepodkročit rezervu baterie",
+      "ensure_self_sustainability_strict": "Strict — den se musí zaplatit sám"
+    },
     "help": {
       "aria_label": "Nápověda k poli",
       "close": "Zavřít",
