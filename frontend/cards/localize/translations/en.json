@@ -8,6 +8,7 @@
       "next_day": "Next day",
       "refresh": "Refresh",
       "daylight_only": "Show only hours with solar energy",
+      "day_pills": "Pick a day",
       "slot_size": "Slot width (minutes)",
       "today": "Today",
       "forecast_only": "Forecast only",

@@ -36,6 +36,13 @@ import {
 import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-band-strip";
+import "./helman-solar-day-pills";
+import type { DayPillSelectDetail } from "./helman-solar-day-pills";
+import {
+  buildHistoryDayAggregate,
+  NO_PILL_AVAILABILITY,
+  type SolarInspectorHistoryDay,
+} from "./day-pill-model";
 import "./helman-solar-export-price-strip";
 import type { PriceColumn, PriceColumnsDetail } from "./helman-solar-export-price-strip";
 import "../helman/power-devices-container";
@@ -369,6 +376,13 @@ export class HelmanSolarInspector extends LitElement {
 
   @state() private _selectedDate = "";
   @state() private _payload: InspectorPayload | null = null;
+  /**
+   * The day range the last successful load reported. Kept apart from the
+   * payload so the day pills stay put while the next day loads — the payload is
+   * cleared for the duration, and a header that emptied on every click would
+   * reflow the whole card under the pointer.
+   */
+  @state() private _range: InspectorPayload["range"] | null = null;
   @state() private _loading = false;
   @state() private _error = "";
   /**
@@ -421,22 +435,61 @@ export class HelmanSolarInspector extends LitElement {
 
     .body {
       display: grid;
+      /* An auto track grows to its widest child, so one row that cannot get
+         narrower — the day pills, on a phone — would widen the column and take
+         every chart below it past the card's edge. Capping the track at the
+         card's own width makes each row fit or scroll inside itself. */
+      grid-template-columns: minmax(0, 1fr);
       gap: 12px;
       min-width: 0;
       width: 100%;
     }
 
     .nav {
-      display: grid;
-      grid-template-columns: 40px minmax(0, 1fr) auto;
+      display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 8px;
+    }
+
+    /* The day row keeps the first line to itself and the toolbar drops below
+       it, rather than the other way round: picking a day is what the header is
+       for, and the pills are the widest thing in it. The min-width is the point
+       at which that happens — below it the pills scroll instead of shrinking
+       the toolbar out of reach. */
+    /* Sized from its content, so the wrap happens exactly when the days stop
+       fitting beside the toolbar — the toolbar drops to a second line and gives
+       the whole width back to the pills. Shrinking below that is still allowed
+       (min-width: 0): a hard floor would push the card wider than its column
+       and take every chart under it along. */
+    .day-nav {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: stretch;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    /* Only as wide as the days it holds, so the forward arrow stays against the
+       last pill rather than drifting to the far edge. Shrinking is still
+       allowed — the row scrolls inside itself. */
+    .day-pills {
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+
+    /* Arrows stand as tall as what they step through. */
+    .day-arrow {
+      flex: 0 0 auto;
+      align-self: stretch;
+      height: auto;
     }
 
     .nav-actions {
       display: flex;
       align-items: center;
       gap: 6px;
+      margin-inline-start: auto;
     }
 
     .icon-button.active {
@@ -489,19 +542,6 @@ export class HelmanSolarInspector extends LitElement {
     .icon-button:disabled {
       opacity: 0.45;
       cursor: not-allowed;
-    }
-
-    .day-label {
-      min-width: 0;
-      color: var(--primary-text-color);
-      font-weight: 600;
-      overflow-wrap: anywhere;
-    }
-
-    .day-meta {
-      min-width: 0;
-      display: grid;
-      gap: 2px;
     }
 
     .day-state {
@@ -1005,17 +1045,25 @@ export class HelmanSolarInspector extends LitElement {
   private _renderNavigation(payload: InspectorPayload | null) {
     const canGoPrevious = payload?.range.canGoPrevious ?? true;
     const canGoNext = payload?.range.canGoNext ?? true;
-    const dayState = [
-      this._formatRelativeDayOffset(this._selectedDate),
-      payload?.range.isToday ? this._t("bias_correction.inspector.today") : "",
-      payload?.range.isFuture ? this._t("bias_correction.inspector.forecast_only") : "",
-    ].filter(Boolean).join(" · ");
+    // The day and its offset used to head the card in words. The pills say the
+    // same thing and say it about every day at once, so the words went.
     return html`
       <div class="nav">
-        <button class="icon-button" title=${this._t("bias_correction.inspector.previous_day")} ?disabled=${!canGoPrevious || this._loading} @click=${() => this._moveDay(-1)}>&lt;</button>
-        <div class="day-meta">
-          <div class="day-label">${this._formatDay(this._selectedDate)}</div>
-          <div class="day-state">${dayState}</div>
+        <!-- Arrows and pills are one control: an arrow that wrapped away from
+             the row it steps would be an orphan. -->
+        <div class="day-nav">
+          <button class="icon-button day-arrow" title=${this._t("bias_correction.inspector.previous_day")} ?disabled=${!canGoPrevious || this._loading} @click=${() => this._moveDay(-1)}>&lt;</button>
+          <helman-solar-day-pills
+            class="day-pills"
+            .hass=${this.hass}
+            .selectedDate=${this._selectedDate}
+            .startDate=${this._todayIso()}
+            .endDate=${this._range?.maxDate ?? this._todayIso()}
+            .historyDay=${this._historyPillDay(payload)}
+            .timeZone=${this._haTimeZone() ?? "UTC"}
+            @day-pill-select=${this._handleDayPillSelect}
+          ></helman-solar-day-pills>
+          <button class="icon-button day-arrow" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
         </div>
         <div class="nav-actions">
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
@@ -1040,7 +1088,6 @@ export class HelmanSolarInspector extends LitElement {
             ?disabled=${this._loading}
             @click=${() => this._load()}
           >⟳</button>
-          <button class="icon-button" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
         </div>
       </div>
     `;
@@ -2967,6 +3014,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
+        this._range = payload.range;
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),
           this._slotSelection,
@@ -3001,6 +3049,42 @@ export class HelmanSolarInspector extends LitElement {
     );
     this._load();
   }
+
+  /**
+   * The pill for a day already lived through, rebuilt from what was measured.
+   *
+   * The schedule and the forecast only reach forward, so a past day would have
+   * no pill at all — yet the card is holding that day's actuals, which is
+   * exactly the same three numbers. The pill appears only while such a day is
+   * the shown one, and it appears the moment it is picked: until its data
+   * lands it renders empty rather than letting the row shift under the click.
+   */
+  private _historyPillDay(payload: InspectorPayload | null): SolarInspectorHistoryDay | null {
+    const date = this._selectedDate;
+    if (date === "" || date >= this._todayIso()) {
+      return null;
+    }
+
+    if (payload === null || payload.date !== date) {
+      return { dayKey: date, aggregate: null, availability: NO_PILL_AVAILABILITY };
+    }
+
+    const { aggregate, availability } = buildHistoryDayAggregate({
+      solarActualWh: payload.totals.actualWh,
+      socActualPct: payload.series.batterySocActual.map((point) => point.pct),
+      gridActualWh: payload.series.gridActual.map((point) => point.valueWh),
+    });
+    return { dayKey: date, aggregate, availability };
+  }
+
+  private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
+    event.stopPropagation();
+    if (event.detail.date === this._selectedDate) {
+      return;
+    }
+    this._selectedDate = event.detail.date;
+    this._load();
+  };
 
   private _selectTrainingDate(date: string) {
     this._selectedTrainingDate = date;
@@ -3122,15 +3206,6 @@ export class HelmanSolarInspector extends LitElement {
       month: "short",
       day: "numeric",
     });
-  }
-
-  private _formatRelativeDayOffset(value: string) {
-    const selected = this._parseIsoDate(value);
-    const today = this._parseIsoDate(this._todayIso());
-    const selectedTime = Date.UTC(selected.year, selected.month - 1, selected.day);
-    const todayTime = Date.UTC(today.year, today.month - 1, today.day);
-    const offset = Math.round((selectedTime - todayTime) / 86400000);
-    return offset > 0 ? `+${offset}` : String(offset);
   }
 
   private _haTimeZone(): string | undefined {

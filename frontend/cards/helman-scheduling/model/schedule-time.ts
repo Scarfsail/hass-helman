@@ -159,12 +159,19 @@ export function formatScheduleDayLabel({
     locale,
     todayLabel,
     tomorrowLabel,
+    yesterdayLabel,
 }: {
     dayKey: string;
     currentDayKey: string | null;
     locale: string;
     todayLabel: string;
     tomorrowLabel: string;
+    /**
+     * Names the day before today. Omitted by the schedule, which never looks
+     * back; the inspector's pills do, and one step back is worth a word for the
+     * same reason "tomorrow" is.
+     */
+    yesterdayLabel?: string;
 }): string {
     if (currentDayKey !== null) {
         if (dayKey === currentDayKey) {
@@ -173,6 +180,10 @@ export function formatScheduleDayLabel({
 
         if (dayKey === _addDaysToDayKey(currentDayKey, 1)) {
             return tomorrowLabel;
+        }
+
+        if (yesterdayLabel !== undefined && dayKey === _addDaysToDayKey(currentDayKey, -1)) {
+            return yesterdayLabel;
         }
     }
 
