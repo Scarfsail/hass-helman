@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.util import dt as dt_util
 
 from ..const import FORECAST_CANONICAL_GRANULARITY_MINUTES, SCHEDULE_SLOT_MINUTES
-from ..scheduling.schedule import format_slot_id
+from ..scheduling.schedule import (
+    format_slot_id,
+    iter_horizon_slot_ids,
+    parse_slot_id,
+)
 
 if TYPE_CHECKING:
     from .snapshot import OptimizationSnapshot
@@ -88,6 +92,93 @@ def read_price_by_bucket(price_forecast: dict[str, Any]) -> dict[datetime, float
         if timestamp is None or value is None:
             continue
         price_by_bucket[timestamp] = value
+    return price_by_bucket
+
+
+def slot_bucket_starts(slot_id: str) -> tuple[datetime, ...]:
+    """The forecast bucket starts a schedule slot spans, in order."""
+    slot_start = parse_slot_id(slot_id)
+    return tuple(
+        slot_start + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * index)
+        for index in range(
+            SCHEDULE_SLOT_MINUTES // FORECAST_CANONICAL_GRANULARITY_MINUTES
+        )
+    )
+
+
+def _next_local_midnight(timestamp: datetime) -> datetime:
+    """Local midnight of the day *after* ``timestamp``'s.
+
+    Stepping through the day in UTC and re-flooring keeps the answer right
+    across a DST boundary, where the day is 23 or 25 hours long: 36 hours from
+    a day's midnight lands mid-morning of the next day either way.
+    """
+    local_day_start = dt_util.as_local(timestamp).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return dt_util.as_local(
+        dt_util.as_utc(local_day_start) + timedelta(hours=36)
+    ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def read_export_price_by_bucket(
+    snapshot: "OptimizationSnapshot",
+) -> dict[datetime, float]:
+    """``{bucket_start: price}`` over the horizon, read as a step function.
+
+    Unlike the fixed import-price windows, the export feed is whatever the
+    configured sensor publishes as timestamped attributes — no fixed grid, no
+    alignment validation, no guaranteed 15-minute spacing. The feed this was
+    written against publishes **hourly** points, so a bucket-exact lookup finds
+    a price for ``:00`` and nothing for ``:15``, ``:30``, ``:45``.
+
+    Prices are a step function, so a bucket takes the most recent point at or
+    before its start — the same reading :func:`..trace.price_points_to_slots`
+    already gives the inspector's ``exportPrice`` rail. Reading them by exact
+    lookup instead is what let an hourly feed mark only the top-of-hour slot,
+    leaving the ``:30`` slot of a negative-priced hour unprotected while the
+    inspector displayed the negative price against it.
+
+    Only the published ``points`` are read; ``currentPrice`` is a separate
+    reading of the bucket containing ``now`` and is left to callers, which today
+    take it as an independent contributor rather than as an override.
+
+    The step does **not** run past the end of the local day holding the last
+    point. Export tariffs are published a day at a time, so the final point of a
+    published day governs until midnight and the feed says nothing beyond it.
+    Carrying it further would authorise tomorrow's slots on today's last price;
+    absent from the map means *unknown*, which every caller reads as "not below
+    the threshold" rather than as a price.
+    """
+    forecast = snapshot.context.export_price_forecast
+    points: list[tuple[datetime, float]] = []
+    raw_points = forecast.get("points")
+    if isinstance(raw_points, list):
+        for point in raw_points:
+            if not isinstance(point, dict):
+                continue
+            timestamp = parse_timestamp(point.get("timestamp"))
+            value = read_optional_float(point.get("value"))
+            if timestamp is None or value is None:
+                continue
+            points.append((timestamp, value))
+    points.sort(key=lambda item: dt_util.as_utc(item[0]))
+
+    price_by_bucket: dict[datetime, float] = {}
+    if points:
+        coverage_end = _next_local_midnight(points[-1][0])
+        index = 0
+        current: float | None = None
+        for slot_id in iter_horizon_slot_ids(snapshot.context.now):
+            for bucket_start in slot_bucket_starts(slot_id):
+                while index < len(points) and points[index][0] <= bucket_start:
+                    current = points[index][1]
+                    index += 1
+                if current is not None and bucket_start < coverage_end:
+                    price_by_bucket[bucket_start] = current
     return price_by_bucket
 
 

@@ -15,18 +15,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from ...const import (
     DAY_CLASSIFICATIONS,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    SCHEDULE_SLOT_MINUTES,
 )
 from ...scheduling.schedule import (
-    build_horizon_start,
-    format_slot_id,
     iter_horizon_slot_ids,
     parse_slot_id,
 )
@@ -34,11 +31,12 @@ from .. import fields as F
 from ..fields import Field
 from ..rails import (
     canonical_bucket_start,
-    parse_timestamp,
     read_available_surplus_by_bucket_covering_horizon,
+    read_export_price_by_bucket,
     read_optional_float,
     read_soc_by_bucket_covering_horizon,
     read_when_active_hourly_energy_kwh,
+    slot_bucket_starts,
     slot_solar_coverage_pct,
 )
 
@@ -105,32 +103,50 @@ def _run_when_mask(inputs: MaskInputs) -> frozenset[str]:
 
 
 def _export_price_below_mask(inputs: MaskInputs) -> frozenset[str]:
-    forecast = inputs.snapshot.context.export_price_forecast
+    """Slots where the export price drops below the threshold at any point.
+
+    A slot spans two forecast buckets and qualifies when **either** clears the
+    threshold. That is the conservative reading for the kind this gates today:
+    ``export_price`` takes a protective action, so a slot half of which is
+    priced badly is a slot to act on. (It is the *permissive* reading for
+    ``appliance_runtime``, which reads the same condition as permission to
+    consume — a distinction with no consequence while the feed publishes hourly
+    points, since both buckets of a slot then always carry the same price. See
+    issue #5.)
+
+    Prices come from :func:`..rails.read_export_price_by_bucket` rather than
+    from the raw points, so an hourly feed reaches every bucket of the hour
+    instead of only the one a point lands in. A bucket the feed does not cover
+    is absent, and absent never qualifies a slot.
+
+    ``currentPrice`` is a second, independent reading of the bucket containing
+    ``now``: either it or the published point can qualify the slot in progress,
+    which is what the union has always done. It is deliberately not an override
+    — a point that says the current bucket is negative still stops the export
+    even when the live sensor has already ticked back above the threshold.
+    """
+    price_by_bucket = read_export_price_by_bucket(inputs.snapshot)
     threshold = inputs.value
-    reference_time = inputs.snapshot.context.now
-
-    below_bucket_starts: set[datetime] = set()
-    current_price = read_optional_float(forecast.get("currentPrice"))
-    if current_price is not None and current_price < threshold:
-        below_bucket_starts.add(canonical_bucket_start(reference_time))
-    raw_points = forecast.get("points")
-    if isinstance(raw_points, list):
-        for point in raw_points:
-            if not isinstance(point, dict):
-                continue
-            timestamp = parse_timestamp(point.get("timestamp"))
-            value = read_optional_float(point.get("value"))
-            if timestamp is None or value is None or value >= threshold:
-                continue
-            below_bucket_starts.add(canonical_bucket_start(timestamp))
-
-    # Forecast buckets are finer than schedule slots; a slot qualifies when any
-    # of its buckets does, which is what mapping bucket -> slot start gives.
-    below_slot_ids = {
-        format_slot_id(build_horizon_start(bucket_start))
-        for bucket_start in below_bucket_starts
-    }
-    return frozenset(below_slot_ids & inputs.all_slots)
+    current_price = read_optional_float(
+        inputs.snapshot.context.export_price_forecast.get("currentPrice")
+    )
+    current_bucket = (
+        canonical_bucket_start(inputs.snapshot.context.now)
+        if current_price is not None and current_price < threshold
+        else None
+    )
+    eligible: set[str] = set()
+    for slot_id in inputs.horizon_slot_ids:
+        if any(
+            bucket_start == current_bucket
+            or (
+                (price := price_by_bucket.get(bucket_start)) is not None
+                and price < threshold
+            )
+            for bucket_start in slot_bucket_starts(slot_id)
+        ):
+            eligible.add(slot_id)
+    return frozenset(eligible)
 
 
 def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
@@ -170,7 +186,7 @@ def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
     for slot_id in inputs.horizon_slot_ids:
         pending = [
             bucket_start
-            for bucket_start in _slot_bucket_starts(slot_id)
+            for bucket_start in slot_bucket_starts(slot_id)
             if bucket_start + bucket_duration > now
         ]
         if pending and all(
@@ -236,15 +252,6 @@ def _min_solar_coverage_mask(inputs: MaskInputs) -> frozenset[str]:
         if coverage_pct is not None and coverage_pct >= threshold:
             eligible.add(slot_id)
     return frozenset(eligible)
-
-
-def _slot_bucket_starts(slot_id: str) -> tuple[datetime, ...]:
-    """The forecast bucket starts a schedule slot spans, in order."""
-    slot_start = parse_slot_id(slot_id)
-    return tuple(
-        slot_start + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * index)
-        for index in range(SCHEDULE_SLOT_MINUTES // FORECAST_CANONICAL_GRANULARITY_MINUTES)
-    )
 
 
 def _all_slots_mask(inputs: MaskInputs) -> frozenset[str]:
