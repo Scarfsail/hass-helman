@@ -1,5 +1,6 @@
 import type { LocalizeFunction } from "../../localize/localize";
 import type { ControllableEntityDTO, EntityActualHistorySlotDTO, ForecastPayload } from "../../helman-api";
+import { isScheduleEvChargerAction } from "../schedule-types";
 import type { ScheduleDisplaySlot, ScheduleSlot } from "../schedule-types";
 import {
     resolveScheduleActionFromEntityState,
@@ -22,6 +23,13 @@ import {
     type EntityScheduleTarget,
 } from "./entity-day-schedule-model";
 import { getScheduleApplianceById, type ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
+import {
+    buildScheduleVehicleSocSlots,
+    EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
+    getScheduleApplianceRunEnergyProjection,
+    type ScheduleApplianceProjectionBadge,
+    type ScheduleApplianceProjectionIndex,
+} from "./schedule-appliance-projection";
 import { getScheduleActionPresentation } from "./schedule-action-presentation";
 import { getScheduleApplianceActionPresentation } from "./schedule-appliance-action-presentation";
 import { formatScheduleTime } from "./schedule-time";
@@ -149,6 +157,31 @@ export interface EntityDayBandLane {
     /** What the entity really did earlier today, already merged into runs. */
     actualSegments: readonly EntityActualSegment[];
     isAvailable: boolean;
+    /**
+     * What each block is still projected to consume, keyed by block key.
+     *
+     * Resolved here rather than in the band because it is a question about the
+     * schedule and the projection, and the band draws what it is handed.
+     */
+    blockProjections: ReadonlyMap<string, ScheduleApplianceProjectionBadge>;
+    /**
+     * What each charging run does to the vehicle, keyed by block key.
+     *
+     * Only an EV lane has any, and only for the runs the projection reaches --
+     * the charge is a fact about the run, so it lives and dies with the run
+     * rather than being smeared across the day around it.
+     */
+    blockVehicleSoc: ReadonlyMap<string, EntityDayBandBlockSoc>;
+}
+
+/** One charging run's projected charge, as the band needs to draw it. */
+export interface EntityDayBandBlockSoc {
+    /** The run's own slots and where each leaves the vehicle, for the ramp. */
+    endPctBySlotId: ReadonlyMap<string, number>;
+    /** Where the run finds the vehicle, when the capacity makes that derivable. */
+    startPct: number | null;
+    /** Where it leaves it. */
+    endPct: number;
 }
 
 /**
@@ -210,6 +243,7 @@ export function buildEntityDayBandLanes({
     drafts = {},
     nowMs,
     activeOnly = false,
+    projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
 }: {
     lanes: readonly EntityScheduleLane[];
     slots: readonly ScheduleSlot[];
@@ -217,16 +251,15 @@ export function buildEntityDayBandLanes({
     drafts?: EntityScheduleDrafts;
     nowMs: number;
     activeOnly?: boolean;
+    /** Projected consumption and SoC; the default index simply draws none. */
+    projectionIndex?: ScheduleApplianceProjectionIndex;
 }): EntityDayBandLane[] {
+    const slotStartMsById = new Map<string, number>(
+        slots.map((slot): [string, number] => [slot.id, slot.startMs]),
+    );
     return lanes
-        .map((lane) => ({
-            key: lane.key,
-            name: lane.name,
-            icon: lane.icon,
-            target: lane.target,
-            appliance: lane.appliance,
-            isAvailable: lane.isAvailable,
-            blocks: selectEntityScheduleDayBlocks(
+        .map((lane) => {
+            const blocks = selectEntityScheduleDayBlocks(
                 buildEntityScheduleBlocks({
                     slots,
                     target: lane.target,
@@ -234,10 +267,166 @@ export function buildEntityDayBandLanes({
                     nowMs,
                 }),
                 day,
-            ),
-            actualSegments: buildEntityActualSegments({ actualSlots: lane.actualSlots, day }),
-        }))
+            );
+            return {
+                key: lane.key,
+                name: lane.name,
+                icon: lane.icon,
+                target: lane.target,
+                appliance: lane.appliance,
+                isAvailable: lane.isAvailable,
+                blocks,
+                actualSegments: buildEntityActualSegments({ actualSlots: lane.actualSlots, day }),
+                blockProjections: _buildLaneBlockProjections({
+                    appliance: lane.appliance,
+                    blocks,
+                    projectionIndex,
+                    slotStartMsById,
+                    nowMs,
+                }),
+                blockVehicleSoc: _buildLaneBlockVehicleSoc({
+                    appliance: lane.appliance,
+                    blocks,
+                    projectionIndex,
+                }),
+            };
+        })
         .filter((lane) => !activeOnly || lane.blocks.length > 0 || lane.actualSegments.length > 0);
+}
+
+/**
+ * What each of a lane's runs still has left to consume.
+ *
+ * Only the slots that have not started count. A run's projection is what it is
+ * going to draw, and the hours it already drew are not a plan any more -- so an
+ * in-progress run's figure shrinks slot by slot instead of standing at its
+ * opening estimate all evening, and a finished run carries no figure at all.
+ */
+function _buildLaneBlockProjections({
+    appliance,
+    blocks,
+    projectionIndex,
+    slotStartMsById,
+    nowMs,
+}: {
+    appliance: ScheduleApplianceMetadata | null;
+    blocks: readonly EntityScheduleBlock[];
+    projectionIndex: ScheduleApplianceProjectionIndex;
+    slotStartMsById: ReadonlyMap<string, number>;
+    nowMs: number;
+}): ReadonlyMap<string, ScheduleApplianceProjectionBadge> {
+    const projections = new Map<string, ScheduleApplianceProjectionBadge>();
+    if (appliance === null) {
+        return projections;
+    }
+
+    for (const block of blocks) {
+        const action = block.action;
+        if (action === null || isEntityInverterAction(action)) {
+            continue;
+        }
+
+        const slotIds = block.slotIds.filter((slotId) => {
+            const startMs = slotStartMsById.get(slotId);
+            return startMs !== undefined && startMs >= nowMs;
+        });
+        if (slotIds.length === 0) {
+            continue;
+        }
+
+        const projection = getScheduleApplianceRunEnergyProjection({
+            projectionIndex,
+            applianceKind: appliance.kind,
+            applianceId: appliance.id,
+            action,
+            slotIds,
+        });
+        if (projection !== null) {
+            projections.set(block.key, projection);
+        }
+    }
+
+    return projections;
+}
+
+/**
+ * What each of an EV lane's charging runs does to the vehicle.
+ *
+ * Resolved a run at a time, over that run's own slots: a charge belongs to the
+ * run that causes it, and a run is what the band draws. Which vehicle comes
+ * from the run's own action rather than from the projection -- a charger with
+ * two cars on it emits points for both, and the one the plan names is the one
+ * the plan is about.
+ */
+function _buildLaneBlockVehicleSoc({
+    appliance,
+    blocks,
+    projectionIndex,
+}: {
+    appliance: ScheduleApplianceMetadata | null;
+    blocks: readonly EntityScheduleBlock[];
+    projectionIndex: ScheduleApplianceProjectionIndex;
+}): ReadonlyMap<string, EntityDayBandBlockSoc> {
+    const blockSoc = new Map<string, EntityDayBandBlockSoc>();
+    if (appliance === null || appliance.kind !== "ev_charger") {
+        return blockSoc;
+    }
+
+    for (const block of blocks) {
+        const action = block.action;
+        if (
+            action === null
+            || isEntityInverterAction(action)
+            || !isScheduleEvChargerAction(action)
+        ) {
+            continue;
+        }
+
+        const vehicleId = _isNonEmptyVehicleId(action.vehicleId) ? action.vehicleId : null;
+        const series = buildScheduleVehicleSocSlots({
+            projectionIndex,
+            applianceId: appliance.id,
+            vehicleId,
+            batteryCapacityKwh: _resolveVehicleCapacityKwh(appliance, vehicleId),
+            slotIds: block.slotIds,
+        });
+        if (series.length === 0) {
+            continue;
+        }
+
+        blockSoc.set(block.key, {
+            endPctBySlotId: new Map<string, number>(
+                series.map((slot): [string, number] => [slot.slotId, slot.endPct]),
+            ),
+            startPct: series[0].startPct,
+            endPct: series[series.length - 1].endPct,
+        });
+    }
+
+    return blockSoc;
+}
+
+/**
+ * The named vehicle's capacity, or the only vehicle's when the run names none.
+ *
+ * A charger with one car does not need the schedule to say which car, so the
+ * common case still gets a starting level; with several on it and no name
+ * there is no honest answer, and the run reports only where it ends up.
+ */
+function _resolveVehicleCapacityKwh(
+    appliance: ScheduleApplianceMetadata,
+    vehicleId: string | null,
+): number {
+    const vehicles = "vehicles" in appliance ? appliance.vehicles : [];
+    if (vehicleId === null) {
+        return vehicles.length === 1 ? vehicles[0].batteryCapacityKwh : 0;
+    }
+
+    return vehicles.find((vehicle) => vehicle.id === vehicleId)?.batteryCapacityKwh ?? 0;
+}
+
+function _isNonEmptyVehicleId(value: string | undefined): value is string {
+    return typeof value === "string" && value.trim().length > 0;
 }
 
 export interface EntityScheduleDayView {

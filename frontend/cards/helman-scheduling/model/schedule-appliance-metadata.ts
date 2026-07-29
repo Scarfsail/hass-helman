@@ -15,6 +15,14 @@ import type {
 export interface ScheduleVehicleOption {
     id: string;
     name: string;
+    /**
+     * What the battery holds, in kWh, or 0 when the backend did not say.
+     *
+     * Carried so a projected SoC can be read backwards into the charge that
+     * produced it: the projection reports where a slot leaves the car, and the
+     * level it entered at is that minus the slot's own energy over the capacity.
+     */
+    batteryCapacityKwh: number;
 }
 
 /**
@@ -126,7 +134,11 @@ function _normalizeApplianceMetadata(
             scheduleCapabilities: _cloneEvChargerScheduleCapabilities(appliance.metadata.scheduleCapabilities),
             vehicles: appliance.vehicles
                 .filter((vehicle) => _isVehicleOption(vehicle))
-                .map((vehicle) => ({ id: vehicle.id, name: vehicle.name })),
+                .map((vehicle) => ({
+                    id: vehicle.id,
+                    name: vehicle.name,
+                    batteryCapacityKwh: _normalizeCapacityKwh(vehicle.metadata?.batteryCapacityKwh),
+                })),
         };
     }
 
@@ -223,6 +235,10 @@ function _isClimateApplianceMetadata(
     return appliance.kind === "climate"
         && Array.isArray(appliance.metadata?.scheduleCapabilities?.modes)
         && typeof appliance.controls?.climate?.entityId === "string";
+}
+
+function _normalizeCapacityKwh(value: number | null | undefined): number {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function _isVehicleOption(vehicle: ApplianceVehicleDTO): boolean {

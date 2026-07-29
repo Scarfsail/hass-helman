@@ -19,6 +19,8 @@ import {
     resolveLaneRunPresentation,
     type EntityDayBandLane,
 } from "../model/entity-lane-source";
+import type { ScheduleApplianceProjectionBadge } from "../model/schedule-appliance-projection";
+import { getScheduleApplianceProjectionBadgeLabel } from "../model/schedule-appliance-projection-presentation";
 import {
     areEntityScheduleActionsEqual,
     resolveEntityScheduleRangeLimits,
@@ -32,6 +34,16 @@ const AXIS_HOURS = [0, 3, 6, 9, 12, 15, 18, 21];
 const MIN_BAR_PCT = 8;
 /** Segments narrower than this are move-only: two edge handles would not fit. */
 const MIN_RESIZABLE_WIDTH_PX = 34;
+/** Wide enough for the projected energy to carry its unit as well as its value. */
+const MIN_UNIT_LABEL_WIDTH_PX = 62;
+/** Below this a run is icon-only: a clipped number is worse than no number. */
+const MIN_FIGURE_WIDTH_PX = 38;
+/** A charging run this wide can say where it leaves the vehicle. */
+const MIN_SOC_END_WIDTH_PX = 44;
+/** And this wide, where it found it as well. */
+const MIN_SOC_BOTH_WIDTH_PX = 96;
+/** Room the two levels take at a run's edges, which the centre figure gives up. */
+const SOC_ENDPOINT_ALLOWANCE_PX = 52;
 
 export type { EntityDayBandLane };
 
@@ -426,6 +438,55 @@ export class SchedulingEntityDayBand extends LitElement {
 
             .segment.dragging {
                 cursor: grabbing;
+            }
+
+            /* What the run still has left to draw, beside its own icon. It is
+               dropped rather than shrunk when the run is too narrow to hold it
+               -- the hover title carries the figure either way, and a clipped
+               "1." is a worse answer than none. */
+            .segment-figure {
+                flex: 0 1 auto;
+                margin-left: 3px;
+                overflow: hidden;
+                font-size: 0.62rem;
+                font-variant-numeric: tabular-nums;
+                line-height: 1;
+                white-space: nowrap;
+                opacity: 0.9;
+            }
+
+            /* The vehicle's projected charge, under everything the lane plans.
+               Bottom-anchored columns rather than a line: the track is 16px in
+               the inspector, and a 1px path across it is not a shape anybody
+               can read. Inert -- the runs above it are what gets pointed at. */
+            .soc-ramp {
+                position: absolute;
+                bottom: 0;
+                z-index: 0;
+                background: color-mix(in srgb, var(--helman-charge) 22%, transparent);
+                pointer-events: none;
+            }
+
+            /* The levels either side of a charging run, on the run's own edges.
+               Inert, so the run underneath is still what gets pressed. */
+            .soc-endpoint {
+                position: absolute;
+                top: 50%;
+                transform: translateY(-50%);
+                font-size: 0.58rem;
+                font-variant-numeric: tabular-nums;
+                line-height: 1;
+                white-space: nowrap;
+                opacity: 0.85;
+                pointer-events: none;
+            }
+
+            .soc-endpoint.start {
+                left: 3px;
+            }
+
+            .soc-endpoint.end {
+                right: 3px;
             }
 
             /* Nothing here can be taken hold of, but everything can be asked
@@ -975,6 +1036,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     title=${inTrackLabels && !this.readonly ? lane.name : nothing}
                     @click=${(event: Event) => this._handleTrackClick(event, lane.key)}
                 >
+                    ${this._renderVehicleSocRamp(lane)}
                     ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment, changeBoundaries))}
                     ${this._renderGaps(lane)}
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
@@ -1124,7 +1186,19 @@ export class SchedulingEntityDayBand extends LitElement {
             laneSelected && this.hoveredBlockKey === block.key ? "hovered" : "",
             this._drag !== null && editing ? "dragging" : "",
         ].filter((value) => value.length > 0).join(" ");
-        const title = `${lane.name} · ${presentation.label} · ${formatLaneRunRange(block, this.locale, this.timeZone)}`;
+        const projection = lane.blockProjections.get(block.key) ?? null;
+        const blockSoc = lane.blockVehicleSoc.get(block.key);
+        // The hover answers in full whatever the run was too narrow to show.
+        const title = [
+            `${lane.name} · ${presentation.label} · ${formatLaneRunRange(block, this.locale, this.timeZone)}`,
+            projection === null
+                ? ""
+                : getScheduleApplianceProjectionBadgeLabel(projection, this.localize),
+            blockSoc === undefined
+                ? ""
+                : `${this.localize("scheduling.appliance.ev.expected_soc")} ${
+                    blockSoc.startPct === null ? "" : `${blockSoc.startPct} → `}${blockSoc.endPct} %`,
+        ].filter((part) => part.length > 0).join(" · ");
 
         return html`
             <!--
@@ -1152,7 +1226,13 @@ export class SchedulingEntityDayBand extends LitElement {
                         @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, lane, block, "start")}
                     ></span>
                 ` : nothing}
+                ${this._renderVehicleSocEndpoints(lane, block, widthPct)}
                 <ha-icon .icon=${presentation.icon}></ha-icon>
+                ${this._renderSegmentFigure(
+                    projection,
+                    widthPct,
+                    lane.blockVehicleSoc.has(block.key) ? SOC_ENDPOINT_ALLOWANCE_PX : 0,
+                )}
                 ${resizable ? html`
                     <span
                         class="handle end"
@@ -1160,6 +1240,109 @@ export class SchedulingEntityDayBand extends LitElement {
                     ></span>
                 ` : nothing}
             </button>
+        `;
+    }
+
+    /**
+     * The run's projected consumption, as much of it as the run is wide enough
+     * to say.
+     *
+     * Three answers rather than two, because the unit is the first thing worth
+     * giving up: on a narrow run "1.4" next to a boiler's icon is already
+     * unambiguous, and holding out for "1.4 kWh" would mean saying nothing at
+     * all on most of the runs in a day.
+     */
+    private _renderSegmentFigure(
+        projection: ScheduleApplianceProjectionBadge | null,
+        widthPct: number,
+        reservedPx: number,
+    ) {
+        if (projection === null || projection.kind !== "energy") {
+            return nothing;
+        }
+
+        // What is left after the run's edges have taken theirs, so a charging
+        // run's kilowatt-hours and its two levels are not competing for the
+        // same pixels.
+        const widthPx = (widthPct / 100) * this._trackWidthPx - reservedPx;
+        // Unmeasured: assume there is room, and let the next update settle it.
+        // Guessing narrow would blank every figure on the first paint.
+        if (this._trackWidthPx > 0 && widthPx < MIN_FIGURE_WIDTH_PX) {
+            return nothing;
+        }
+
+        const withUnit = this._trackWidthPx === 0 || widthPx >= MIN_UNIT_LABEL_WIDTH_PX;
+        return html`<span class="segment-figure">${
+            withUnit ? `${projection.text} kWh` : projection.text
+        }</span>`;
+    }
+
+    /**
+     * The vehicle's charge climbing across the run that causes it.
+     *
+     * Drawn inside the run and nowhere else. The charge is what this block of
+     * time is for, and carrying the level on past the run would say the plan is
+     * still doing something during hours where it has stopped.
+     */
+    private _renderVehicleSocRamp(lane: EntityDayBandLane) {
+        if (lane.blockVehicleSoc.size === 0) {
+            return nothing;
+        }
+
+        // Drawn on the track rather than inside the runs, because the track is
+        // what the day's percentages are measured against -- and the runs it
+        // shows through are translucent, so a column still reads as belonging
+        // to the one above it. Blocks never share a slot, so the runs' own maps
+        // simply add up.
+        const endPctBySlotId = new Map<string, number>();
+        for (const blockSoc of lane.blockVehicleSoc.values()) {
+            for (const [slotId, endPct] of blockSoc.endPctBySlotId) {
+                endPctBySlotId.set(slotId, endPct);
+            }
+        }
+
+        return this.day.slots.map((slot) => {
+            const endPct = endPctBySlotId.get(slot.id);
+            if (endPct === undefined) {
+                return nothing;
+            }
+
+            return html`
+                <span
+                    class="soc-ramp"
+                    style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${Math.max(0, Math.min(endPct, 100))}%`}
+                ></span>
+            `;
+        });
+    }
+
+    /**
+     * Where the run finds the vehicle and where it leaves it, pinned to its own
+     * two edges.
+     *
+     * The edges are the point: a level at the left edge of a run reads as the
+     * level going in, which is what makes the pair legible without an arrow
+     * between them to say so. The ending level is the one worth protecting, so
+     * a run too narrow for both keeps that one and drops the start.
+     */
+    private _renderVehicleSocEndpoints(lane: EntityDayBandLane, block: EntityScheduleBlock, widthPct: number) {
+        const blockSoc = lane.blockVehicleSoc.get(block.key);
+        if (blockSoc === undefined) {
+            return nothing;
+        }
+
+        const widthPx = (widthPct / 100) * this._trackWidthPx;
+        if (this._trackWidthPx > 0 && widthPx < MIN_SOC_END_WIDTH_PX) {
+            return nothing;
+        }
+
+        const showStart = blockSoc.startPct !== null
+            && (this._trackWidthPx === 0 || widthPx >= MIN_SOC_BOTH_WIDTH_PX);
+        return html`
+            ${showStart
+                ? html`<span class="soc-endpoint start">${blockSoc.startPct}</span>`
+                : nothing}
+            <span class="soc-endpoint end">${blockSoc.endPct} %</span>
         `;
     }
 

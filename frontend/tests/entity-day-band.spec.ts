@@ -89,6 +89,10 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
                 continuesBefore: false,
                 continuesAfter: false,
             }],
+            // No projection loaded: the runs draw as bare bars, which is what
+            // every one of these geometry assertions is about.
+            blockProjections: new Map(),
+            blockVehicleSoc: new Map(),
         }];
         band.nowMs = nowMs;
         band.readonly = true;

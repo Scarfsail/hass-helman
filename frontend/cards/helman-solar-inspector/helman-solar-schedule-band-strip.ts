@@ -40,6 +40,11 @@ import {
     type ScheduleApplianceMetadata,
 } from "../helman-scheduling/model/schedule-appliance-metadata";
 import {
+    buildScheduleApplianceProjectionIndex,
+    EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
+    type ScheduleApplianceProjectionIndex,
+} from "../helman-scheduling/model/schedule-appliance-projection";
+import {
     applyNormalizedScheduleCurrentState,
     buildNormalizedScheduleStructure,
 } from "../helman-scheduling/model/schedule-normalizer";
@@ -146,6 +151,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     @state() private _appliances: ScheduleApplianceMetadata[] = [];
     @state() private _controllableEntities: ControllableEntityDTO[] = [];
     @state() private _actualHistory: Record<string, EntityActualHistorySlotDTO[]> = {};
+    @state() private _projectionIndex: ScheduleApplianceProjectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
     @state() private _forecast: ForecastPayload | null = null;
     @state() private _nowMs = Date.now();
     @state() private _editorTarget: EntityScheduleLane | null = null;
@@ -161,6 +167,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     private _entitiesRequested = false;
     private _forecastLoader: ForecastLoader | null = null;
     private _forecastLoaderKey: string | null = null;
+    private _projectionLoadGeneration = 0;
     /** The schedule the open draft was seeded from, to notice a refresh under it. */
     private _editorScheduleAtOpen: unknown = null;
 
@@ -197,6 +204,8 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 this._appliancesRequested = false;
                 this._entitiesRequested = false;
                 this._actualHistory = {};
+                this._projectionLoadGeneration += 1;
+                this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
                 this._syncOwner();
                 void this._loadAppliances();
                 void this._loadControllableEntities();
@@ -292,6 +301,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 .lanes=${this._lanes}
                 .slots=${this._dayView.slots}
                 .forecastPoints=${this._dayView.forecastPoints}
+                .projectionIndex=${this._projectionIndex}
                 .priceUnit=${this._forecastMap.priceDisplayUnit}
                 .entityName=${lane.name}
                 .entityIcon=${lane.icon}
@@ -352,6 +362,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             day,
             nowMs: this._nowMs,
             activeOnly: true,
+            projectionIndex: this._projectionIndex,
         });
     }
 
@@ -606,8 +617,43 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         if (this._editorOpen && this._editorScheduleAtOpen !== null) {
             this._editorScheduleChanged = snapshot.schedule !== this._editorScheduleAtOpen;
         }
+        this._projectionLoadGeneration += 1;
+        this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
         if (snapshot.schedule !== null) {
             void this._loadActualHistory();
+            void this._loadProjections();
+        }
+    }
+
+    /**
+     * What each scheduled run is projected to consume, and where it leaves the
+     * car.
+     *
+     * Reloaded with the schedule, because that is what it is a projection of:
+     * moving a charging run changes both the energy under it and every SoC
+     * after it. Failure is silent for the same reason the history's is -- the
+     * band is entirely readable as bare runs, and this only ever adds a figure
+     * to one.
+     */
+    private async _loadProjections(): Promise<void> {
+        const hass = this.hass;
+        if (!hass) {
+            return;
+        }
+
+        const generation = this._projectionLoadGeneration;
+        try {
+            const payload = await getSharedHelmanStore(hass).getApplianceProjections();
+            if (generation !== this._projectionLoadGeneration || this.hass?.connection !== hass.connection) {
+                return;
+            }
+            this._projectionIndex = buildScheduleApplianceProjectionIndex(payload);
+        } catch (error) {
+            if (generation !== this._projectionLoadGeneration || this.hass?.connection !== hass.connection) {
+                return;
+            }
+            this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
+            console.warn("helman-solar-inspector: failed to load appliance projections", error);
         }
     }
 

@@ -502,6 +502,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                     .lanes=${this._buildEntityEditorLanes(controllableEntityStatuses)}
                     .slots=${this._entityEditorSlots}
                     .forecastPoints=${this._entityEditorForecastPoints}
+                    .projectionIndex=${this._applianceProjectionIndex}
                     .priceUnit=${this._slotForecastMap.priceDisplayUnit}
                     .entityName=${this._entityEditorName}
                     .entityIcon=${this._entityEditorAppliance?.icon ?? "mdi:flash-outline"}

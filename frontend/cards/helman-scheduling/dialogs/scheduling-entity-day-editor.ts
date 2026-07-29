@@ -38,6 +38,10 @@ import {
     selectEntityScheduleSlotsInRange,
 } from "../model/entity-day-schedule-model";
 import { buildEntityDayBandLanes } from "../model/entity-lane-source";
+import {
+    EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
+    type ScheduleApplianceProjectionIndex,
+} from "../model/schedule-appliance-projection";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
 import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
 import { formatScheduleTime } from "../model/schedule-time";
@@ -267,6 +271,9 @@ export class SchedulingEntityDayEditor extends LitElement {
     @property({ attribute: false }) public lanes: readonly EntityScheduleLane[] = [];
     @property({ attribute: false }) public slots: readonly ScheduleSlot[] = [];
     @property({ attribute: false }) public forecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
+    /** Projected consumption and vehicle SoC, for the band's own figures. */
+    @property({ attribute: false }) public projectionIndex: ScheduleApplianceProjectionIndex =
+        EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
     @property({ type: String }) public entityName = "";
     @property({ type: String }) public entityIcon = "mdi:flash-outline";
     /** How the price is denominated, for the forecast rows' tooltips. */
@@ -813,6 +820,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             day,
             drafts: this._drafts,
             nowMs: this.nowMs,
+            projectionIndex: this.projectionIndex,
         });
     }
 

@@ -166,6 +166,157 @@ export function getScheduleApplianceProjectionBadge({
     return null;
 }
 
+/**
+ * What a whole run is projected to consume, whatever appliance it belongs to.
+ *
+ * `getScheduleApplianceProjectionBadge` answers one slot at a time, and for an
+ * EV charger it answers with the vehicle's SoC instead -- the right badge for a
+ * chip, but it leaves a charging run with no consumption figure at all. A lane
+ * draws runs rather than slots, and the question a run raises is how much it
+ * costs, so the energy is summed here for every kind, against the same action
+ * matchers the per-slot badge uses.
+ *
+ * Slots the caller leaves out simply do not count, which is how a run that is
+ * half over reports only what it has left to draw.
+ */
+export function getScheduleApplianceRunEnergyProjection({
+    projectionIndex,
+    applianceKind,
+    applianceId,
+    action,
+    slotIds,
+}: {
+    projectionIndex: ScheduleApplianceProjectionIndex;
+    applianceKind: string | null | undefined;
+    applianceId: string;
+    action: ScheduleApplianceAction;
+    slotIds: readonly string[];
+}): Extract<ScheduleApplianceProjectionBadge, { kind: "energy" }> | null {
+    if (isScheduleApplianceActionEnabled(action) !== true) {
+        return null;
+    }
+
+    const resolvedApplianceKind = _resolveProjectionApplianceKind(applianceKind, action);
+    const slotPoints = projectionIndex.points.get(applianceId);
+    if (slotPoints === undefined || resolvedApplianceKind === null) {
+        return null;
+    }
+
+    const matched: ScheduleApplianceProjectionPoint[] = [];
+    for (const slotId of slotIds) {
+        const candidates = slotPoints.get(slotId);
+        if (candidates === undefined) {
+            continue;
+        }
+
+        matched.push(..._collectEnergyProjectionPoints(
+            candidates.filter((candidate) =>
+                _matchesRunProjectedAction(resolvedApplianceKind, action, candidate)),
+        ));
+    }
+
+    if (matched.length === 0) {
+        return null;
+    }
+
+    const energyKwh = matched.reduce((sum, candidate) => sum + candidate.energyKwh!, 0);
+    return {
+        kind: "energy",
+        text: _formatEnergyBadgeText(energyKwh),
+        energyKwh,
+        // The badge's own kinds are about how the figure is labelled, and an EV
+        // charger's kilowatt-hours are labelled like any other appliance's.
+        applianceKind: resolvedApplianceKind === "climate" ? "climate" : "generic",
+        mode: resolvedApplianceKind === "climate" && isScheduleClimateApplianceAction(action)
+            ? action.mode
+            : null,
+        projectionMethod: _mergeProjectionMethods(
+            matched.map((candidate) => candidate.projectionMethod),
+        ),
+    };
+}
+
+/** What one charging slot does to the vehicle: the level in, the level out. */
+export interface ScheduleVehicleSocSlot {
+    slotId: string;
+    /** Where the slot leaves the vehicle. */
+    endPct: number;
+    /** Where it found it, or null when the capacity to work that out is missing. */
+    startPct: number | null;
+}
+
+/**
+ * A vehicle's projected charge, slot by slot, for the slots that actually
+ * charge it.
+ *
+ * The backend emits a point only where charging happens, and the SoC it carries
+ * is cumulative -- the vehicle's live reading plus everything charged up to
+ * that slot -- so a point is where the slot *leaves* the car. The level it
+ * found is that minus what the slot itself puts in, which is why the capacity
+ * is needed: without it a run can still say where it ends up, just not where it
+ * started.
+ *
+ * Nothing is emitted for the hours in between. A vehicle that is not charging
+ * is not doing anything the schedule is responsible for, and drawing its level
+ * across the evening would claim the plan put it there.
+ */
+export function buildScheduleVehicleSocSlots({
+    projectionIndex,
+    applianceId,
+    vehicleId,
+    batteryCapacityKwh,
+    slotIds,
+}: {
+    projectionIndex: ScheduleApplianceProjectionIndex;
+    applianceId: string;
+    vehicleId: string | null;
+    batteryCapacityKwh: number;
+    slotIds: readonly string[];
+}): ScheduleVehicleSocSlot[] {
+    const slotPoints = projectionIndex.points.get(applianceId);
+    if (slotPoints === undefined) {
+        return [];
+    }
+
+    const series: ScheduleVehicleSocSlot[] = [];
+    for (const slotId of slotIds) {
+        let endPct: number | null = null;
+        let energyKwh = 0;
+        for (const candidate of slotPoints.get(slotId) ?? []) {
+            if (candidate.expectedVehicleSocPct === null) {
+                continue;
+            }
+            if (
+                vehicleId !== null
+                && _isNonEmptyString(candidate.vehicleId)
+                && candidate.vehicleId !== vehicleId
+            ) {
+                continue;
+            }
+
+            endPct = endPct === null
+                ? candidate.expectedVehicleSocPct
+                : Math.max(endPct, candidate.expectedVehicleSocPct);
+            energyKwh += candidate.energyKwh ?? 0;
+        }
+
+        if (endPct === null) {
+            continue;
+        }
+
+        const gainPct = batteryCapacityKwh > 0
+            ? (energyKwh / batteryCapacityKwh) * 100
+            : null;
+        series.push({
+            slotId,
+            endPct,
+            startPct: gainPct === null ? null : Math.max(0, Math.round(endPct - gainPct)),
+        });
+    }
+
+    return series;
+}
+
 export function mergeScheduleApplianceProjectionBadges(
     current: ScheduleApplianceProjectionBadge | null,
     next: ScheduleApplianceProjectionBadge | null,
@@ -303,6 +454,25 @@ function _matchesClimateProjectedAction(
         && action.mode !== candidate.mode
     ) {
         return false;
+    }
+
+    return true;
+}
+
+/** The per-kind action matchers, routed the way the per-slot badge routes them. */
+function _matchesRunProjectedAction(
+    applianceKind: "ev_charger" | "generic" | "climate",
+    action: ScheduleApplianceAction,
+    candidate: ScheduleApplianceProjectionPoint,
+): boolean {
+    if (applianceKind === "ev_charger") {
+        return isScheduleEvChargerAction(action)
+            && _matchesEvProjectedAction(action, candidate);
+    }
+
+    if (applianceKind === "climate") {
+        return isScheduleClimateApplianceAction(action)
+            && _matchesClimateProjectedAction(action, candidate);
     }
 
     return true;
