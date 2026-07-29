@@ -224,6 +224,9 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             schedule_document=ScheduleDocument(execution_enabled=True),
             export_price_points=[
                 {"timestamp": "2026-03-20T21:15:00+01:00", "value": -0.2},
+                # Ends the step; see the note in
+                # `test_leaves_user_owned_inverter_slots_untouched`.
+                {"timestamp": NEXT_SLOT_ID, "value": 1.5},
             ],
             grid_series=[
                 {
@@ -265,7 +268,14 @@ class ExportPriceOptimizerTests(unittest.TestCase):
         )
         snapshot = _make_snapshot(
             schedule_document=schedule_document,
-            export_price_points=[{"timestamp": CURRENT_SLOT_ID, "value": -0.1}],
+            # The price is a step function, so the second point is what ends the
+            # negative one — without it the -0.1 would hold to midnight and this
+            # test would silently also be pinning where the step stops. That is
+            # `test_carries_the_last_price_forward_to_the_end_of_its_day`'s job.
+            export_price_points=[
+                {"timestamp": CURRENT_SLOT_ID, "value": -0.1},
+                {"timestamp": NEXT_SLOT_ID, "value": 1.5},
+            ],
             grid_series=[{"timestamp": CURRENT_SLOT_ID, "exportedToGridKwh": 0.6}],
         )
 
@@ -349,6 +359,88 @@ class ExportPriceOptimizerTests(unittest.TestCase):
         ).optimize(snapshot, _make_optimizer_config())
 
         self.assertEqual(schedule_document_to_dict(result)["slots"], {})
+
+
+class ExportPriceStepFunctionTests(unittest.TestCase):
+    """The feed publishes hourly points; slots are half-hourly.
+
+    The mask used to mark the slot each below-threshold *point* landed in and
+    nothing else, so an hourly feed protected ``21:00`` and left ``21:30``
+    exporting into the same negative-priced hour. Prices are a step function:
+    a bucket takes the most recent point at or before it.
+    """
+
+    def _stop_export_slot_ids(
+        self,
+        *,
+        export_price_points: list[dict[str, object]],
+        current_price: float = 2.0,
+    ) -> list[str]:
+        snapshot = _make_snapshot(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            export_price_points=export_price_points,
+            current_price=current_price,
+        )
+        result = ExportPriceOptimizer(
+            id="avoid-negative-export",
+            stop_export_supported=True,
+        ).optimize(snapshot, _make_optimizer_config())
+        return sorted(
+            slot_id
+            for slot_id, slot in schedule_document_to_dict(result)["slots"].items()
+            if slot["inverter"].get("kind") == "stop_export"
+        )
+
+    def test_an_hourly_point_covers_both_slots_of_its_hour(self) -> None:
+        self.assertEqual(
+            self._stop_export_slot_ids(
+                export_price_points=[
+                    {"timestamp": CURRENT_SLOT_ID, "value": -0.1},
+                    {"timestamp": THIRD_SLOT_ID, "value": 1.5},
+                ]
+            ),
+            [CURRENT_SLOT_ID, NEXT_SLOT_ID],
+        )
+
+    def test_a_point_mid_slot_does_not_reach_back_over_the_slot_start(self) -> None:
+        """The step runs forwards only, so 21:00's bucket stays uncovered."""
+        self.assertEqual(
+            self._stop_export_slot_ids(
+                export_price_points=[
+                    {"timestamp": "2026-03-20T21:30:00+01:00", "value": -0.1},
+                    {"timestamp": "2026-03-20T22:00:00+01:00", "value": 1.5},
+                ]
+            ),
+            [NEXT_SLOT_ID],
+        )
+
+    def test_the_last_price_carries_to_the_end_of_its_day_and_no_further(self) -> None:
+        """Export tariffs are published a day at a time.
+
+        The final point of a published day governs until midnight; past that the
+        feed says nothing, and an unknown price must not authorise a write.
+        """
+        self.assertEqual(
+            self._stop_export_slot_ids(
+                export_price_points=[{"timestamp": THIRD_SLOT_ID, "value": -0.1}]
+            ),
+            [
+                "2026-03-20T22:00:00+01:00",
+                "2026-03-20T22:30:00+01:00",
+                "2026-03-20T23:00:00+01:00",
+                "2026-03-20T23:30:00+01:00",
+            ],
+        )
+
+    def test_current_price_alone_still_qualifies_the_slot_in_progress(self) -> None:
+        """``currentPrice`` contributes independently of the points, as before."""
+        self.assertEqual(
+            self._stop_export_slot_ids(
+                export_price_points=[{"timestamp": CURRENT_SLOT_ID, "value": 5.0}],
+                current_price=-0.1,
+            ),
+            [CURRENT_SLOT_ID],
+        )
 
 
 class ExportPriceTraceContractTests(unittest.TestCase):
