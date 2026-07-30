@@ -256,6 +256,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 style=${`--entity-day-band-track-inset-start:${startInsetPct}%;--entity-day-band-track-inset-end:${endInsetPct}%;`}
             >
                 <scheduling-entity-day-band
+                    .hass=${this.hass}
                     .localize=${this._localize}
                     .day=${day}
                     .lanes=${lanes}
@@ -294,6 +295,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
 
         return html`
             <scheduling-entity-day-editor
+                .hass=${this.hass}
                 .open=${this._editorOpen}
                 .localize=${this._localize}
                 .target=${lane.target}

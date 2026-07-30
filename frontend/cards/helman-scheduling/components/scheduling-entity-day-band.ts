@@ -1,6 +1,7 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
+import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import { helmanColorVars } from "../../color-vars";
 import {
     resolveSocDirection,
@@ -212,6 +213,26 @@ export class SchedulingEntityDayBand extends LitElement {
                 --mdc-icon-size: 15px;
             }
 
+            /* The live badge stands in for that icon, so it has to be boxed to
+               the same size -- left to itself it sizes for an entity row and
+               would set the lane's height. */
+            .lane-label state-badge,
+            .track-label state-badge {
+                flex: 0 0 auto;
+                width: 18px;
+                height: 18px;
+                line-height: 18px;
+                cursor: pointer;
+            }
+
+            .lane-label state-badge {
+                --mdc-icon-size: 15px;
+            }
+
+            .lane.unavailable state-badge {
+                opacity: 0.6;
+            }
+
             .lane-name {
                 flex: 1 1 auto;
                 overflow: hidden;
@@ -339,6 +360,14 @@ export class SchedulingEntityDayBand extends LitElement {
             .track-label ha-icon {
                 flex: 0 0 auto;
                 --mdc-icon-size: 13px;
+            }
+
+            /* The label itself takes no pointer events so the runs under it stay
+               the thing being pointed at; the badge is the one exception, because
+               it is a control of its own. */
+            .track-label state-badge {
+                --mdc-icon-size: 13px;
+                pointer-events: auto;
             }
 
             /* The lane under edit, said the same way the label column said it. */
@@ -669,6 +698,12 @@ export class SchedulingEntityDayBand extends LitElement {
         `,
     ];
 
+    /**
+     * Only the lane labels need it: with `hass` the icon beside a lane's name is
+     * that entity's live state badge instead of a flat glyph. Without it the
+     * band still draws in full, on the static icon the lane carries.
+     */
+    @property({ attribute: false }) public hass?: HomeAssistant;
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public day!: EntityScheduleDay;
     @property({ attribute: false }) public lanes: readonly EntityDayBandLane[] = [];
@@ -1021,7 +1056,7 @@ export class SchedulingEntityDayBand extends LitElement {
                         title=${lane.name}
                         @click=${() => this._emitLaneSelect(lane.key)}
                     >
-                        <ha-icon .icon=${lane.icon}></ha-icon>
+                        ${this._renderLaneIcon(lane)}
                         <span class="lane-name">${lane.name}</span>
                         ${this._renderLaneTotal(lane)}
                     </button>
@@ -1068,11 +1103,56 @@ export class SchedulingEntityDayBand extends LitElement {
     private _renderTrackLabel(lane: EntityDayBandLane) {
         return html`
             <span class="track-label">
-                <ha-icon .icon=${lane.icon}></ha-icon>
+                ${this._renderLaneIcon(lane)}
                 <span class="lane-name">${lane.name}</span>
                 ${this._renderLaneTotal(lane)}
             </span>
         `;
+    }
+
+    /**
+     * The lane's icon, live where it can be: with the entity's state to hand it
+     * is that entity's own badge, coloured by what the entity is doing right
+     * now, and pressing it opens more-info -- the same identity target the
+     * card's running list gives its rows. An entity the state machine cannot
+     * answer for falls back to the flat icon the lane carries, so no lane ever
+     * loses its icon.
+     */
+    private _renderLaneIcon(lane: EntityDayBandLane) {
+        const stateObj = this.hass?.states?.[lane.entityId];
+        if (stateObj === undefined) {
+            return html`<ha-icon .icon=${lane.icon}></ha-icon>`;
+        }
+
+        return html`
+            <!--
+                stateColor must be a property binding: state-badge declares it
+                with attribute: false, so a bare attribute is ignored and the
+                icon stays uncoloured.
+            -->
+            <state-badge
+                .hass=${this.hass}
+                .stateObj=${stateObj}
+                .stateColor=${true}
+                title=${lane.name}
+                @click=${(event: Event) => this._handleLaneIconClick(event, lane)}
+            ></state-badge>
+        `;
+    }
+
+    /**
+     * The icon means "tell me about this entity", not "select this lane" -- so
+     * it swallows the press that the label around it would otherwise turn into
+     * a lane selection.
+     */
+    private _handleLaneIconClick(event: Event, lane: EntityDayBandLane): void {
+        event.preventDefault();
+        event.stopPropagation();
+        this.dispatchEvent(new CustomEvent("hass-more-info", {
+            bubbles: true,
+            composed: true,
+            detail: { entityId: lane.entityId },
+        }));
     }
 
     /**

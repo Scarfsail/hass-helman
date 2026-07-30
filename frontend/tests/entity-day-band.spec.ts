@@ -28,6 +28,8 @@ const WINDOW_END_MS = DAY_START_MS + 18 * HOUR_MS;
 interface MountOptions {
     windowed?: boolean;
     highlight?: boolean;
+    /** Hand the band a state machine, so the lane label's icon goes live. */
+    live?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
@@ -35,7 +37,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const slots = Array.from({ length: 24 }, (_, hour) => ({
             id: new Date(at(hour)).toISOString(),
@@ -62,8 +64,21 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             endMs: at(24),
             editableFromMs: nowMs,
         };
+        if (live) {
+            band.hass = {
+                locale: { language: "en" },
+                states: {
+                    "switch.boiler": {
+                        entity_id: "switch.boiler",
+                        state: "on",
+                        attributes: { friendly_name: "Boiler" },
+                    },
+                },
+            };
+        }
         band.lanes = [{
             key: "appliance:boiler",
+            entityId: "switch.boiler",
             name: "Boiler",
             icon: "mdi:water-boiler",
             target: { kind: "appliance", applianceId: "boiler" },
@@ -116,6 +131,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             "entity-day-band-lane-select",
             "entity-day-band-time-hover",
             "entity-day-band-gap-select",
+            "hass-more-info",
         ]) {
             band.addEventListener(type, (event: Event) => {
                 ((window as unknown as Record<string, unknown>).__events as unknown[]).push({
@@ -133,6 +149,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         windowEndMs: WINDOW_END_MS,
         windowed: options.windowed ?? false,
         highlight: options.highlight ?? false,
+        live: options.live ?? false,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -275,5 +292,64 @@ test.describe("entity day band, read only", () => {
         expect(
             await label.evaluate((element) => getComputedStyle(element).pointerEvents),
         ).toBe("none");
+    });
+
+    /**
+     * The label's icon is the entity's own live badge wherever the host handed
+     * the band a state machine. `state-badge` is an HA element that is not in
+     * this bundle, so it renders as an inert unknown element -- what is worth
+     * pinning is that it is there, bound to the right state, and that it is a
+     * control of its own rather than part of the label.
+     */
+    test("a lane's icon is the entity's live state badge", async ({ page }) => {
+        await mountBand(page, { live: true });
+
+        const bound = await page.evaluate(() => {
+            const badge = document
+                .querySelector("scheduling-entity-day-band")!
+                .shadowRoot!.querySelector(".track-label state-badge") as HTMLElement & Record<string, unknown>;
+            return {
+                state: (badge.stateObj as { state: string }).state,
+                stateColor: badge.stateColor,
+                pointerEvents: getComputedStyle(badge).pointerEvents,
+                staticIcons: document
+                    .querySelector("scheduling-entity-day-band")!
+                    .shadowRoot!.querySelectorAll(".track-label ha-icon").length,
+            };
+        });
+
+        expect(bound.state).toBe("on");
+        expect(bound.stateColor).toBe(true);
+        expect(bound.pointerEvents).toBe("auto");
+        expect(bound.staticIcons).toBe(0);
+    });
+
+    test("an entity the state machine cannot answer for keeps its flat icon", async ({ page }) => {
+        // No `hass` at all is the same case as an entity that is simply missing
+        // from it: there is no state to draw, and the lane still needs an icon.
+        await mountBand(page);
+
+        const shadow = page.locator("scheduling-entity-day-band");
+        expect(await shadow.locator(".track-label ha-icon").count()).toBe(1);
+        expect(await shadow.locator(".track-label state-badge").count()).toBe(0);
+    });
+
+    test("pressing the icon asks about the entity, not about the lane", async ({ page }) => {
+        await mountBand(page, { live: true });
+
+        // The badge has no box of its own here (it is an undefined element), so
+        // the press is driven on the element rather than through the mouse.
+        await page.evaluate(() => {
+            document
+                .querySelector("scheduling-entity-day-band")!
+                .shadowRoot!.querySelector(".track-label state-badge")!
+                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        });
+
+        const events = await readEvents(page);
+        expect(events.filter((event) => event.type === "hass-more-info")).toHaveLength(1);
+        expect(events.find((event) => event.type === "hass-more-info")!.detail)
+            .toMatchObject({ entityId: "switch.boiler" });
+        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
     });
 });
