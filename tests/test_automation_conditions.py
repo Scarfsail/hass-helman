@@ -236,6 +236,171 @@ class RejectionTests(unittest.TestCase):
         self.assertIsNone(eligibility.rejection(SLOT_0))
 
 
+class MaxRunPriceConditionTests(unittest.TestCase):
+    """``max_run_price`` (issue #5) — permission to consume needs *every*
+    bucket a slot spans to clear the threshold, the opposite of
+    ``when_price_below``'s any-bucket reading for ``export_price``.
+    """
+
+    @staticmethod
+    def _snapshot_with_price_points(points, *, current_price=None, now=None):
+        from dataclasses import replace
+
+        from custom_components.helman.automation.day_context import DayContext
+
+        snapshot = _snapshot(prices={})
+        forecast = dict(snapshot.context.export_price_forecast)
+        forecast["points"] = [
+            {"timestamp": timestamp, "value": value}
+            for timestamp, value in points.items()
+        ]
+        forecast["currentPrice"] = current_price
+        snapshot = replace(
+            snapshot,
+            context=replace(snapshot.context, export_price_forecast=forecast),
+        )
+        if now is not None:
+            snapshot = replace(snapshot, context=replace(snapshot.context, now=now))
+        # `appliance_runtime` carries `run_when`, which ANDs a day mask over
+        # everything; without a day context no slot is ever eligible.
+        local_date = REFERENCE_TIME.date()
+        return replace(
+            snapshot,
+            context=replace(
+                snapshot.context,
+                day_contexts={
+                    local_date: DayContext(
+                        local_date=local_date,
+                        classification="tight",
+                        predicted_solar_kwh=5.0,
+                        predicted_consumption_kwh=5.0,
+                        export_price_min=1.0,
+                        export_price_max=5.0,
+                        day_min_window=None,
+                        import_bands=(),
+                    )
+                },
+            ),
+        )
+
+    @staticmethod
+    def _config(threshold):
+        return make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={
+                "daily_minimum": {
+                    "min_hours_per_day": 1,
+                    "max_consecutive_skips": 0,
+                },
+                "window": {"start": "00:00", "end": "23:30"},
+            },
+            conditions=[{"max_run_price": threshold}],
+        )
+
+    def test_a_slot_qualifies_when_both_buckets_clear_the_threshold(self) -> None:
+        eligibility = build_eligibility(
+            self._snapshot_with_price_points(
+                {
+                    "2026-03-20T21:00:00+01:00": 1.0,
+                    "2026-03-20T21:30:00+01:00": 6.0,
+                },
+                current_price=None,
+            ),
+            self._config(2.0),
+        )
+
+        self.assertIsNotNone(eligibility.at(SLOT_0))
+        self.assertIsNone(eligibility.at(SLOT_1))
+
+    def test_one_expensive_bucket_sinks_the_slot(self) -> None:
+        # `when_price_below`'s any-bucket reading would have let this slot
+        # through on its cheap first half; `max_run_price` must not.
+        eligibility = build_eligibility(
+            self._snapshot_with_price_points(
+                {
+                    "2026-03-20T21:00:00+01:00": 1.0,
+                    "2026-03-20T21:15:00+01:00": 5.0,
+                },
+                current_price=None,
+            ),
+            self._config(2.0),
+        )
+
+        self.assertIsNone(eligibility.at(SLOT_0))
+
+    def test_the_threshold_is_exclusive(self) -> None:
+        eligibility = build_eligibility(
+            self._snapshot_with_price_points(
+                {"2026-03-20T21:00:00+01:00": 2.0}, current_price=None
+            ),
+            self._config(2.0),
+        )
+
+        self.assertIsNone(eligibility.at(SLOT_0))
+
+    def test_a_missing_bucket_fails_closed(self) -> None:
+        eligibility = build_eligibility(
+            self._snapshot_with_price_points({}, current_price=None),
+            self._config(2.0),
+        )
+
+        self.assertIsNone(eligibility.at(SLOT_0))
+
+    def test_elapsed_buckets_are_skipped(self) -> None:
+        # The bucket containing `now` is 21:15; 21:00 has already elapsed at
+        # an expensive price. Only buckets still to come can be gated.
+        eligibility = build_eligibility(
+            self._snapshot_with_price_points(
+                {
+                    "2026-03-20T21:00:00+01:00": 9.0,
+                    "2026-03-20T21:15:00+01:00": 1.0,
+                },
+                current_price=None,
+                now=datetime.fromisoformat("2026-03-20T21:22:00+01:00"),
+            ),
+            self._config(2.0),
+        )
+
+        self.assertIsNotNone(eligibility.at(SLOT_0))
+
+    def test_current_price_overrides_a_stale_forecast_point_for_the_live_bucket(
+        self,
+    ) -> None:
+        # The forecast point for 21:00 is expensive, but the live sensor has
+        # already ticked down; the live reading is authoritative for the
+        # bucket containing `now`, not just another way to qualify it.
+        eligibility = build_eligibility(
+            self._snapshot_with_price_points(
+                {
+                    "2026-03-20T21:00:00+01:00": 9.0,
+                    "2026-03-20T21:15:00+01:00": 1.0,
+                },
+                current_price=1.0,
+            ),
+            self._config(2.0),
+        )
+
+        self.assertIsNotNone(eligibility.at(SLOT_0))
+
+    def test_current_price_can_also_sink_an_otherwise_cheap_bucket(self) -> None:
+        # The forecast point for 21:00 is cheap, but the live sensor has since
+        # ticked up; the live reading still governs the bucket in progress.
+        eligibility = build_eligibility(
+            self._snapshot_with_price_points(
+                {
+                    "2026-03-20T21:00:00+01:00": 1.0,
+                    "2026-03-20T21:15:00+01:00": 1.0,
+                },
+                current_price=9.0,
+            ),
+            self._config(2.0),
+        )
+
+        self.assertIsNone(eligibility.at(SLOT_0))
+
+
 class MinSocConditionTests(unittest.TestCase):
     """A slot passes only when *every* bucket it spans clears the threshold.
 
@@ -409,7 +574,7 @@ class SpecInvariantTests(unittest.TestCase):
             OPTIMIZER_SPECS["appliance_runtime"].condition_types,
             (
                 "run_when",
-                "when_price_below",
+                "max_run_price",
                 "min_soc_pct",
                 "min_solar_coverage_pct",
                 "ensure_self_sustainability",

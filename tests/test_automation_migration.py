@@ -247,6 +247,69 @@ class PerKindMoveTests(unittest.TestCase):
         )
 
 
+class PriceConditionSplitTests(unittest.TestCase):
+    """v4->v5: ``appliance_runtime``'s ``when_price_below`` -> ``max_run_price``.
+
+    Issue #5 — the two kinds sharing ``when_price_below`` needed opposite
+    aggregation over a slot's forecast buckets, so ``appliance_runtime`` gets
+    its own key. ``export_price`` is untouched: its usage stays correct as-is.
+
+    Unlike the other per-kind moves, ``appliance_runtime``'s price condition
+    only exists in the *already-unified* (v4) shape — pre-unification there
+    was no such condition for the retired ``daily_runtime``/``surplus_appliance``
+    kinds to carry. So these start from a v4 document instead of v1, to isolate
+    the v4->v5 step rather than replaying the whole chain.
+    """
+
+    @staticmethod
+    def _migrate_from_v4(*optimizers):
+        document = {**_document(*optimizers), "config_version": 4}
+        migrated, _ids = migrate_config_document(document)
+        return migrated["automation"]["optimizers"][0]
+
+    def test_appliance_runtime_price_condition_is_renamed(self) -> None:
+        migrated = self._migrate_from_v4(
+            {
+                "id": "runtime",
+                "kind": "appliance_runtime",
+                "target": {"appliance_id": "dhw"},
+                "conditions": [{"run_when": ALL_DAYS, "when_price_below": 2.0}],
+            }
+        )
+
+        group = migrated["conditions"][0]
+        self.assertNotIn("when_price_below", group)
+        self.assertEqual(group["max_run_price"], 2.0)
+
+    def test_export_price_is_left_alone(self) -> None:
+        migrated = self._migrate_from_v4(
+            {
+                "id": "export",
+                "kind": "export_price",
+                "conditions": [{"when_price_below": 1.0}],
+            }
+        )
+
+        self.assertEqual(migrated["conditions"][0]["when_price_below"], 1.0)
+
+    def test_a_group_without_the_price_condition_is_untouched(self) -> None:
+        migrated = self._migrate_from_v4(
+            {
+                "id": "runtime",
+                "kind": "appliance_runtime",
+                "target": {"appliance_id": "dhw"},
+                "conditions": [{"run_when": ALL_DAYS}],
+            }
+        )
+
+        self.assertEqual(migrated["conditions"][0], {"run_when": ALL_DAYS})
+
+    def test_migrating_to_the_current_version_covers_this_step(self) -> None:
+        migrated, _ids = migrate_config_document(_document())
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 5)
+
+
 class RunWhenInversionTests(unittest.TestCase):
     """``skip.on_days`` -> ``run_when`` is not a plain complement.
 

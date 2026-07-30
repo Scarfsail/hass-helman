@@ -814,7 +814,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
 
 
 class DailyRuntimePriceConditionTests(unittest.TestCase):
-    """`when_price_below` narrows *which slots* a matched day may run on."""
+    """`max_run_price` narrows *which slots* a matched day may run on."""
 
     def _optimize(self, cfg, snapshot, appliance):
         return build_appliance_runtime_optimizer(
@@ -831,7 +831,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
             appliance_id=appliance.id,
             min_hours_per_day=3,
             max_consecutive_skips=1,
-            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+            groups=[{"run_when": ["tight"], "max_run_price": 2.0}],
         )
         snapshot = _make_snapshot(
             appliance=appliance, export_points=_export_points(cheap)
@@ -864,7 +864,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
             appliance_id=appliance.id,
             min_hours_per_day=3,
             max_consecutive_skips=1,
-            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+            groups=[{"run_when": ["tight"], "max_run_price": 2.0}],
         )
         snapshot = _make_snapshot(
             appliance=appliance, export_points=_export_points(cheap)
@@ -887,7 +887,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
             appliance_id=appliance.id,
             min_hours_per_day=3,
             max_consecutive_skips=1,
-            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+            groups=[{"run_when": ["tight"], "max_run_price": 2.0}],
         )
         snapshot = _make_snapshot(
             appliance=appliance,
@@ -907,7 +907,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         The unmatched-day branch formatted *whatever* condition excluded the day
         as ``run_when``, so a numeric threshold reached ``list(2.0)`` and took
         the run down with a ``TypeError``. Reachable today with
-        ``when_price_below``, and routine once a coverage condition can write off
+        ``max_run_price``, and routine once a coverage condition can write off
         an overcast day.
         """
         appliance = _generic()
@@ -917,7 +917,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
             # One short day is still within budget, so nothing forces a run and
             # the day genuinely resolves to no group at all.
             max_consecutive_skips=1,
-            groups=[{"run_when": ["tight"], "when_price_below": 0.5}],
+            groups=[{"run_when": ["tight"], "max_run_price": 0.5}],
         )
         optimizer = build_appliance_runtime_optimizer(
             cfg,
@@ -996,12 +996,12 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
             groups=[
                 {
                     "run_when": ["tight"],
-                    "when_price_below": 2.0,
+                    "max_run_price": 2.0,
                     "params": {"daily_minimum": {"min_hours_per_day": 1}},
                 },
                 {
                     "run_when": ["tight"],
-                    "when_price_below": 6.0,
+                    "max_run_price": 6.0,
                     "params": {"daily_minimum": {"min_hours_per_day": 5}},
                 },
             ],
@@ -1903,7 +1903,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         cfg = _config(
             appliance_id=appliance.id,
             min_hours_per_day=1,
-            groups=[{"run_when": ["tight"], "when_price_below": 2.0}],
+            groups=[{"run_when": ["tight"], "max_run_price": 2.0}],
         )
         optimizer = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
@@ -2110,7 +2110,7 @@ class UncappedModeTests(unittest.TestCase):
     def test_a_window_is_optional(self) -> None:
         appliance = _generic()
         cfg = _uncapped_config(
-            appliance_id=appliance.id, groups=[{"when_price_below": 2.0}]
+            appliance_id=appliance.id, groups=[{"max_run_price": 2.0}]
         )
         cheap = {_slot_id(12, 0), _slot_id(12, 30)}
         snapshot = _make_snapshot(
