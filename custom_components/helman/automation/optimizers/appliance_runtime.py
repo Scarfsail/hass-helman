@@ -14,7 +14,7 @@ One behavioural fork, on whether ``daily_minimum`` is configured:
   the config reader rejects.
 
 Day gating is the ``run_when`` condition — on a day no group matches, nothing is
-placed. ``when_price_below`` and ``min_soc_pct`` narrow further, per slot: the
+placed. ``max_run_price`` and ``min_soc_pct`` narrow further, per slot: the
 day still runs, but only the window slots whose price or projected SoC clears
 the threshold may be chosen. So the matched group decides the day's *params*
 while its mask decides the day's *slots*, which is why capped placement ranks
@@ -398,7 +398,7 @@ class ApplianceRuntimeOptimizer:
         Two ways a day can come up short, and both feed the same escape hatch:
         no group matched it at all, or a group matched but its slot-scoped
         conditions leave too few slots to cover the deficit. The second is new
-        with ``when_price_below`` — without it, a day whose prices never drop
+        with ``max_run_price`` — without it, a day whose prices never drop
         below the threshold would under-run silently and forever, because
         forcing would only ever fire for the first case.
         """
@@ -846,9 +846,9 @@ def _trace_window_exclusions(
     which explains a SoC rejection with the slot's actual projected SoC — a
     number this optimizer would have to re-read the rail to supply.
 
-    * **price**, because ``when_price_below``'s own reason code is worded for
-      ``export_price`` ("export allowed"), which reads backwards for an
-      appliance, so this kind relabels it;
+    * **price**, because the verdict needs all-buckets aggregation over the
+      export price rail (``max_run_price``, issue #5), which the frontend's
+      single-price derivation for ``export_price`` cannot express;
     * **solar coverage**, because the frontend *cannot* derive it: the verdict
       compares the surplus rail against **this appliance's** demand, and no rail
       carries that. Both are already in hand here, so the slot is told the
@@ -886,7 +886,7 @@ def _trace_window_exclusions(
                     "signals": ["availableSurplusKwh"],
                 },
             )
-        elif code == "price_not_below_threshold":
+        elif code == "price_above_run_threshold":
             priced_out.append(slot_id)
             threshold = value
     if priced_out:
@@ -1012,7 +1012,7 @@ def _promote_in_flight_slot(
 
     Promotion, not exemption. The slot must still have survived ranking, which
     means it is still in ``placeable_slots`` — so every condition that gates
-    placement (``min_soc_pct``, ``when_price_below``, ``run_when``) still stops
+    placement (``min_soc_pct``, ``max_run_price``, ``run_when``) still stops
     the appliance the moment it stops holding. A ``custom`` condition going
     false stops it too, by a different route: the action is still placed here,
     but stamped ``condition_met=False`` and stripped before execution.

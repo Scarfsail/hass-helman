@@ -230,7 +230,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             ),
             condition_types=(
                 "run_when",
-                "when_price_below",
+                "max_run_price",
                 "min_soc_pct",
                 "min_solar_coverage_pct",
                 "ensure_self_sustainability",

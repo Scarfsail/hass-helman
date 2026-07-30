@@ -174,6 +174,34 @@ def _merge_appliance_kinds(optimizer: dict[str, Any]) -> dict[str, Any]:
     return optimizer
 
 
+def _migrate_v4_to_v5(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    return _migrate_optimizers(document, _rename_appliance_runtime_price_condition)
+
+
+def _rename_appliance_runtime_price_condition(optimizer: dict[str, Any]) -> dict[str, Any]:
+    """``appliance_runtime``'s ``when_price_below`` -> ``max_run_price``.
+
+    Issue #5: the two kinds sharing ``when_price_below`` needed opposite
+    aggregation over a slot's forecast buckets (any-bucket for ``export_price``,
+    all-bucket for permission-to-consume), so ``appliance_runtime`` gets its own
+    condition key rather than a hidden branch on a shared one.
+    ``export_price``'s ``when_price_below`` is untouched — this only renames
+    the key inside ``appliance_runtime`` groups.
+    """
+    if optimizer.get("kind") != "appliance_runtime":
+        return optimizer
+    conditions = optimizer.get("conditions")
+    if not isinstance(conditions, list):
+        return optimizer
+    renamed: list[Any] = []
+    for group in conditions:
+        if isinstance(group, Mapping) and "when_price_below" in group:
+            group = dict(group)
+            group["max_run_price"] = group.pop("when_price_below")
+        renamed.append(group)
+    return {**optimizer, "conditions": renamed}
+
+
 def _translate_surplus_groups(conditions: Any) -> list[Any]:
     """Drop the retired buffer and give each group ``run_when: [surplus]``.
 
@@ -207,6 +235,7 @@ _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }
 
 
