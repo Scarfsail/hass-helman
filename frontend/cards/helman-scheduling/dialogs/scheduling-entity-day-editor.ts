@@ -1,6 +1,7 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
+import type { HomeAssistant } from "../../../hass-frontend/src/types";
 import type { LocalizeFunction } from "../../localize/localize";
 import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";
@@ -263,6 +264,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         `,
     ];
 
+    /** Passed straight to the band, whose lane labels show live entity state. */
+    @property({ attribute: false }) public hass?: HomeAssistant;
     @property({ attribute: false }) public localize!: LocalizeFunction;
     /** The lane selected when the dialog opens: the row the user pressed. */
     @property({ attribute: false }) public target: EntityScheduleTarget | null = null;
@@ -417,6 +420,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     ` : nothing}
 
                     <scheduling-entity-day-band
+                        .hass=${this.hass}
                         .localize=${this.localize}
                         .day=${day}
                         .lanes=${bandLanes}
@@ -699,6 +703,9 @@ export class SchedulingEntityDayEditor extends LitElement {
         return [{
             key: getEntityScheduleTargetKey(this.target),
             target: this.target,
+            // The roster is where the entity ids come from; without it there is
+            // nothing to resolve, so the lane's label keeps its static icon.
+            entityId: "",
             name: this.entityName,
             icon: this.appliance?.icon ?? this.entityIcon,
             appliance: this.appliance,

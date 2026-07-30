@@ -41,6 +41,8 @@ export function getEntityScheduleTargetKey(target: EntityScheduleTarget): string
 export interface EntityScheduleLane {
     key: string;
     target: EntityScheduleTarget;
+    /** The entity behind the lane, so a label can show its live state. */
+    entityId: string;
     name: string;
     icon: string;
     appliance: ScheduleApplianceMetadata | null;

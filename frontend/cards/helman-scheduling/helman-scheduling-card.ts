@@ -495,6 +495,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
 
             ${this._entityEditorTarget ? html`
                 <scheduling-entity-day-editor
+                    .hass=${this._hass}
                     .open=${this._entityEditorOpen}
                     .localize=${this._localize}
                     .target=${this._entityEditorTarget}

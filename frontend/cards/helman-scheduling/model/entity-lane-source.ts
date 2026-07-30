@@ -90,6 +90,7 @@ export function buildEntityScheduleLanes({
             return [{
                 key: getEntityScheduleTargetKey(target),
                 target,
+                entityId: status.entityId,
                 name: status.name,
                 icon: (status.stateObj.attributes.icon as string | undefined)
                     ?? appliance?.icon
@@ -149,6 +150,8 @@ export function buildEntityLaneActualSlots({
 /** One entity's row of the band: its schedule for the day, already clipped. */
 export interface EntityDayBandLane {
     key: string;
+    /** The entity behind the lane, so a label can show its live state. */
+    entityId: string;
     name: string;
     icon: string;
     target: EntityScheduleTarget;
@@ -270,6 +273,7 @@ export function buildEntityDayBandLanes({
             );
             return {
                 key: lane.key,
+                entityId: lane.entityId,
                 name: lane.name,
                 icon: lane.icon,
                 target: lane.target,
