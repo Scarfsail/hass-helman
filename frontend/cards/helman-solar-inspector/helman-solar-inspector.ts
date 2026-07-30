@@ -2151,11 +2151,10 @@ export class HelmanSolarInspector extends LitElement {
     // forecast standing in alone -- never both -- so only a measured bar has
     // a real actual column to show.
     const hasActual = !bar.forecast;
-    const next = bars[index + 1] ?? null;
-    const forecastBars = this._socForecastBars(payload);
-    const forecastIndex = forecastBars.findIndex((fc) => fc.minutes === bar.minutes);
-    const forecastBar = forecastIndex >= 0 ? forecastBars[forecastIndex] : null;
-    const forecastNext = forecastBar ? forecastBars[forecastIndex + 1] ?? null : null;
+    // Each column already carries both ends of its own slot, so the levels it
+    // moved between read straight off it -- no neighbour to consult.
+    const forecastBar =
+      this._socForecastBars(payload).find((fc) => fc.minutes === bar.minutes) ?? null;
     const rows: TooltipRow[] = [
       {
         label: this._t("bias_correction.inspector.soc_direction_label"),
@@ -2168,15 +2167,13 @@ export class HelmanSolarInspector extends LitElement {
       },
       {
         label: this._t("bias_correction.inspector.soc_from"),
-        actual: hasActual ? { value: this._formatPct(bar.pct) } : null,
-        forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
+        actual: hasActual ? { value: this._formatPct(bar.fromPct) } : null,
+        forecast: forecastBar ? { value: this._formatPct(forecastBar.fromPct) } : null,
       },
       {
         label: this._t("bias_correction.inspector.soc_to"),
-        actual: hasActual ? { value: this._formatPct(next ? next.pct : bar.pct) } : null,
-        forecast: forecastBar
-          ? { value: this._formatPct(forecastNext ? forecastNext.pct : forecastBar.pct) }
-          : null,
+        actual: hasActual ? { value: this._formatPct(bar.pct) } : null,
+        forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
       },
     ];
     this._setTooltip(event, rows, hasActual, bar.slot);
