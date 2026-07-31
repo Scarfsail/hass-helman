@@ -509,6 +509,9 @@ export class SchedulingConditionMatrix extends LitElement {
             `;
         }
 
+        // A condition column never expands: nodes are flat, so there is nothing
+        // under one. Only the custom column above has sub-columns.
+
         // One result shared across every group: drawn once, spanning them,
         // rather than repeated as N identical checkmarks.
         if (spans.has(column.key)) {
@@ -516,32 +519,14 @@ export class SchedulingConditionMatrix extends LitElement {
                 return nothing;
             }
             const node = group.conditions.find((entry) => entry.key === column.key)!;
-            return html`
-                ${this._renderNodeCell(cell, group, column.key, node, {
-                    rowSpan: cell.groups.length,
-                    spanning: true,
-                })}
-                ${expanded ? column.subKeys.map((subKey) => this._renderNodeCell(
-                    cell,
-                    group,
-                    column.key,
-                    node.children.find((child) => child.key === subKey) ?? null,
-                    { rowSpan: cell.groups.length, spanning: true, subKey },
-                )) : nothing}
-            `;
+            return this._renderNodeCell(cell, group, column.key, node, {
+                rowSpan: cell.groups.length,
+                spanning: true,
+            });
         }
 
         const node = group.conditions.find((entry) => entry.key === column.key) ?? null;
-        return html`
-            ${this._renderNodeCell(cell, group, column.key, node, {})}
-            ${expanded ? column.subKeys.map((subKey) => this._renderNodeCell(
-                cell,
-                group,
-                column.key,
-                node?.children.find((child) => child.key === subKey) ?? null,
-                { subKey },
-            )) : nothing}
-        `;
+        return this._renderNodeCell(cell, group, column.key, node, {});
     }
 
     private _renderNodeCell(
@@ -730,18 +715,13 @@ export class SchedulingConditionMatrix extends LitElement {
             }
         }
 
-        const columns: MatrixColumn[] = keys.map((key) => {
-            const subKeys: string[] = [];
-            for (const group of groups) {
-                const node = group.conditions.find((entry) => entry.key === key);
-                for (const child of node?.children ?? []) {
-                    if (!subKeys.includes(child.key)) {
-                        subKeys.push(child.key);
-                    }
-                }
-            }
-            return { kind: "condition" as const, key, subKeys };
-        });
+        // Condition nodes are flat -- the backend emits one per configured
+        // condition and nothing below it -- so a condition column never expands.
+        // Only the custom column has sub-columns, and those come from the
+        // group's own `customResults`, not from a node.
+        const columns: MatrixColumn[] = keys.map((key) => (
+            { kind: "condition" as const, key, subKeys: [] }
+        ));
 
         const customCount = groups.reduce(
             (most, group) => Math.max(most, group.customResults.length),
@@ -799,13 +779,13 @@ export class SchedulingConditionMatrix extends LitElement {
      * LEVEL 3 SEAM.
      *
      * Pressing a node publishes `condition-matrix-node-select`, naming the
-     * optimizer, the slot, the group, the top-level condition and -- where the
-     * press landed on an expanded sub-column -- the sub-key. Phase C's
-     * logic-block diagram mounts on that event: the node it needs is
-     * `cell.groups[groupIndex].conditions.find(key)`, with `children` under it
-     * and `customResults` for the `"custom"` column, all already parsed.
+     * optimizer, the slot, the group, the condition and -- where the press
+     * landed on an expanded custom sub-column -- the sub-key. The node it
+     * refers to is `cell.groups[groupIndex].conditions.find(key)`, with
+     * `customResults` for the `"custom"` column, all already parsed.
      *
-     * Nothing in this file needs to change to attach it.
+     * The dialog no longer mounts this component, so nothing consumes the
+     * event today; it is kept because the component still stands alone.
      * ---------------------------------------------------------------------
      */
     private _handleNodeClick(

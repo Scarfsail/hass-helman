@@ -99,9 +99,6 @@ const INVERTER_PAYLOAD = {
                             // Never consulted past the hold window: not false.
                             state: [["true", 3], ["not_evaluated", 2]],
                             value: [[40, 5]],
-                            children: [
-                                { key: "window_soc_known", scope: "slot", state: [["true", 5]] },
-                            ],
                         },
                         {
                             // Fails only at 15:00, and says what it saw there.
@@ -474,7 +471,7 @@ function node(
     key: string,
     scope: string,
     state: string,
-    options: { value?: unknown; actual?: unknown; children?: unknown[] } = {},
+    options: { value?: unknown; actual?: unknown } = {},
 ) {
     return {
         key,
@@ -482,7 +479,6 @@ function node(
         state,
         value: options.value ?? null,
         actual: options.actual ?? null,
-        children: options.children ?? [],
     };
 }
 
@@ -517,10 +513,7 @@ const CHARGE_HOLD_CELL = {
             customResults: [false, null],
             conditions: [
                 // Never consulted past the hold window: not false.
-                node("min_soc_pct", "slot", "not_evaluated", {
-                    value: 40,
-                    children: [node("window_soc_known", "slot", "true")],
-                }),
+                node("min_soc_pct", "slot", "not_evaluated", { value: 40 }),
                 node("hold_room", "slot", "false", { value: 5, actual: 0.4 }),
                 // One result for the whole expensive band, not five.
                 node("reserve_floor_soc", "window", "true", { value: 20 }),
@@ -665,18 +658,20 @@ test.describe("lane explanation, level 2", () => {
             .toContainText("40");
     });
 
-    test("a condition header expands into its inner conditions", async ({ page }) => {
+    test("a condition column does not expand, because nodes are flat", async ({ page }) => {
         await drill(page);
 
-        await expect(matrix(page).locator('th.sub-head[data-sub="window_soc_known"]')).toHaveCount(0);
-        await matrix(page).locator('th.condition-head[data-condition="min_soc_pct"] .expander').click();
-
-        await expect(matrix(page).locator('th.condition-head[data-condition="min_soc_pct"]'))
-            .toHaveAttribute("data-expanded", "true");
-        await expect(matrix(page).locator('th.sub-head[data-sub="window_soc_known"]')).toHaveCount(1);
-        await expect(matrix(page)
-            .locator('tbody tr[data-group="0"] td[data-condition="min_soc_pct"][data-sub="window_soc_known"]'))
-            .toHaveAttribute("data-state", "true");
+        // The backend emits one node per configured condition and nothing below
+        // it, so there is nothing to open. The header is a plain label with no
+        // expander, rather than a control that opens an empty row.
+        const head = matrix(page).locator('th.condition-head[data-condition="min_soc_pct"]');
+        await expect(head).toHaveCount(1);
+        await expect(head.locator(".expander")).toHaveCount(0);
+        await expect(head).toHaveAttribute("data-expanded", "false");
+        // Every column contributes a spacer to the second header row; what must
+        // not exist is a real sub-column under a condition.
+        await expect(matrix(page).locator('th.sub-head[data-condition="min_soc_pct"]'))
+            .toHaveCount(0);
     });
 
     test("the custom column expands into one sub-column per entry", async ({ page }) => {

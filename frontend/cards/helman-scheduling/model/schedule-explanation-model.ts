@@ -76,8 +76,6 @@ export interface ExplanationConditionNode {
     value: unknown;
     /** What the slot presented. Recorded only for nodes that did not pass. */
     actual: unknown;
-    /** Inner conditions and per-entry custom conditions. */
-    children: ExplanationConditionNode[];
 }
 
 export interface ExplanationGate {
@@ -263,7 +261,6 @@ function decodeNodeColumns(
         const states = decodeExplanationRuns<string>(column.state, length);
         const values = decodeExplanationRuns<unknown>(column.value, length);
         const actuals = decodeExplanationSparse<unknown>(column.actual, length);
-        const children = decodeNodeColumns(column.children, length);
         const key = typeof column.key === "string" ? column.key : "";
         const rawScope = typeof column.scope === "string" ? column.scope : "slot";
         const scope = (NODE_SCOPES.has(rawScope) ? rawScope : "slot") as ExplanationNodeScope;
@@ -282,7 +279,6 @@ function decodeNodeColumns(
                 state: state as ExplanationNodeState,
                 value: values[index],
                 actual: actuals[index],
-                children: children[index],
             });
         }
     }
@@ -367,24 +363,13 @@ function decodeGroupColumns(columns: unknown, length: number): ExplanationGroup[
  *
  * A `false` node always wins over a `not_evaluated` one: the false node is why
  * the slot was rejected, whereas an unevaluated one is a consequence of the
- * rejection (the optimizer stopped consulting it). Depth-first so an inner
- * condition can name itself rather than hiding behind its parent.
+ * rejection (the optimizer stopped consulting it).
  */
 function findDecisiveNode(
     nodes: readonly ExplanationConditionNode[],
     state: ExplanationNodeState,
 ): ExplanationConditionNode | null {
-    for (const node of nodes) {
-        if (node.state === state) {
-            const inner = findDecisiveNode(node.children, state);
-            return inner ?? node;
-        }
-        const inner = findDecisiveNode(node.children, state);
-        if (inner !== null) {
-            return inner;
-        }
-    }
-    return null;
+    return nodes.find((node) => node.state === state) ?? null;
 }
 
 function resolveDecisive(
@@ -617,30 +602,18 @@ export function getWinningExplanationCell(
 }
 
 /**
- * One condition node of a cell by key, searched depth-first across its groups.
+ * One condition node of a cell by key, across its groups.
  *
- * Inner conditions are searched too, so a decisive key that named an inner node
- * still finds the node that carries the `actual`.
+ * Nodes are flat: the backend emits one per configured condition and nothing
+ * below it, so the first group carrying the key owns the answer.
  */
 export function findExplanationNode(
     cell: ExplanationCell,
     key: string,
 ): ExplanationConditionNode | null {
-    const walk = (nodes: readonly ExplanationConditionNode[]): ExplanationConditionNode | null => {
-        for (const node of nodes) {
-            if (node.key === key) {
-                return node;
-            }
-            const inner = walk(node.children);
-            if (inner !== null) {
-                return inner;
-            }
-        }
-        return null;
-    };
     for (const group of cell.groups) {
-        const node = walk(group.conditions);
-        if (node !== null) {
+        const node = group.conditions.find((candidate) => candidate.key === key);
+        if (node !== undefined) {
             return node;
         }
     }
