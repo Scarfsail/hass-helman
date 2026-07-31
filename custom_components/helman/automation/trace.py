@@ -17,10 +17,10 @@ Design notes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import logging
 from datetime import datetime
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from homeassistant.util import dt as dt_util
 
@@ -28,6 +28,16 @@ from ..scheduling.schedule import (
     SCHEDULE_SLOT_DURATION,
     format_slot_id,
     parse_slot_id,
+)
+from .explain import (
+    NODE_STATES,
+    OPTIMIZER_STATUSES,
+    STATUS_OK,
+    ConditionNode,
+    GateNode,
+    GroupExplanation,
+    OptimizerExplanation,
+    SlotExplanation,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -136,8 +146,52 @@ class _MutableStep:
     # slots the optimizer intentionally leaves to frontend derivation (the D
     # rows of the reason catalogue); the coverage validator treats them covered.
     derivable: set[str] = field(default_factory=set)
+    # --- explanation layer (see .explain) ---------------------------------
+    # Serialized under the ``explanation`` key (pivoted against the run's
+    # ``slotIds``) only once something is actually recorded, so an unconverted
+    # optimizer's payload stays byte-identical.
+    # slot_id -> group index -> group explanation, in first-recorded order.
+    group_explanations: dict[str, dict[int, GroupExplanation]] = field(
+        default_factory=dict
+    )
+    # slot_id -> gate key -> gate node, in first-recorded order.
+    gates: dict[str, dict[str, GateNode]] = field(default_factory=dict)
+    # ``None`` until stamped; ``end_step`` falls back to its own status.
+    explain_status: str | None = None
+    explain_status_reason: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def has_explanation(self) -> bool:
+        return bool(self.group_explanations or self.gates)
+
+    def explanation(self, slot_ids: Sequence[str]) -> OptimizerExplanation:
+        """Assemble what was recorded into an :class:`OptimizerExplanation`.
+
+        A slot appears only where this step actually said something about it
+        (groups or gates); slots it never looked at stay absent, and serialize
+        as ``null`` in every column rather than claiming a verdict.
+        """
+        slots: list[SlotExplanation] = []
+        for slot_id in slot_ids:
+            groups = self.group_explanations.get(slot_id) or {}
+            gates = self.gates.get(slot_id) or {}
+            if not groups and not gates:
+                continue
+            slots.append(
+                SlotExplanation(
+                    slot_id=slot_id,
+                    groups=tuple(groups[index] for index in sorted(groups)),
+                    gates=tuple(gates.values()),
+                )
+            )
+        return OptimizerExplanation(
+            optimizer_id=self.optimizer_id,
+            kind=self.kind,
+            status=self.explain_status or STATUS_OK,
+            status_reason=self.explain_status_reason,
+            slots=tuple(slots),
+        )
+
+    def to_dict(self, slot_ids: Sequence[str] = ()) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "optimizerId": self.optimizer_id,
             "kind": self.kind,
@@ -156,7 +210,41 @@ class _MutableStep:
             payload["conditionGroups"] = [
                 group.to_dict() for group in self.condition_groups
             ]
+        if self.has_explanation():
+            payload["explanation"] = self.explanation(slot_ids).to_dict(slot_ids)
         return payload
+
+
+def _resolve_nodes(
+    nodes: tuple[ConditionNode, ...],
+    key: str,
+    state: str,
+    value: Any,
+    actual: Any,
+) -> tuple[tuple[ConditionNode, ...], bool]:
+    """Replace the ``key`` node (at any depth) with its resolved result."""
+    resolved: list[ConditionNode] = []
+    changed = False
+    for node in nodes:
+        if node.key == key:
+            resolved.append(
+                replace(
+                    node,
+                    state=state,
+                    value=node.value if value is None else value,
+                    actual=actual,
+                )
+            )
+            changed = True
+            continue
+        children, child_changed = _resolve_nodes(
+            node.children, key, state, value, actual
+        )
+        if child_changed:
+            node = replace(node, children=children)
+            changed = True
+        resolved.append(node)
+    return tuple(resolved), changed
 
 
 class OptimizerTrace:
@@ -249,6 +337,12 @@ class OptimizerTrace:
         if step is None:
             return
         step.status = status
+        if step.explain_status is None:
+            # never stamped explicitly: inherit the loop's own verdict, so a
+            # skipped/failed step stays distinguishable in the explanation too.
+            step.explain_status = (
+                status if status in OPTIMIZER_STATUSES else STATUS_OK
+            )
         try:
             if status != "skipped":
                 self._validate_coverage(step, frozenset(step.derivable))
@@ -304,6 +398,193 @@ class OptimizerTrace:
             outcome=outcome,
             reason={"code": code, "params": params or {}},
         )
+
+    # --- explanation layer ---------------------------------------------------
+    #
+    # Where decisions say *what* an optimizer did, these record *the logic that
+    # produced it*: the per-group condition matrix, the post-condition gates,
+    # and the step's own status. They accumulate on the current step and are
+    # assembled into a ``RunExplanation`` by the pipeline; they do not appear in
+    # ``to_dict`` and never affect coverage validation.
+
+    def _horizon_slots(self, slot_ids: Iterable[str], what: str) -> list[str]:
+        """Filter to horizon slots, warning about (and dropping) strays."""
+        known: list[str] = []
+        strays = 0
+        for slot_id in slot_ids:
+            if slot_id in self._slot_id_set:
+                known.append(slot_id)
+            else:
+                strays += 1
+        if strays:
+            _LOGGER.warning(
+                "trace %s references %d off-horizon slot(s); dropped",
+                what,
+                strays,
+            )
+        return known
+
+    def set_group_explanations(
+        self,
+        explanations: Mapping[str, Iterable[GroupExplanation]],
+    ) -> None:
+        """Attach the per-group condition explanations for the current step.
+
+        ``explanations`` maps slot id -> the ORed condition groups as they
+        resolved for that slot. Stamped once where the information is born
+        (``build_eligibility``) rather than by each optimizer, mirroring
+        :meth:`set_condition_groups`. Replaces whatever was recorded before, so
+        a re-evaluating step cannot end up with two generations mixed.
+        """
+        step = self._current
+        if step is None:
+            return
+        if not isinstance(explanations, Mapping):
+            _LOGGER.warning(
+                "trace group explanations must be a mapping, got %r",
+                type(explanations).__name__,
+            )
+            return
+        stored: dict[str, dict[int, GroupExplanation]] = {}
+        strays = 0
+        for slot_id, groups in explanations.items():
+            if slot_id not in self._slot_id_set:
+                strays += 1
+                continue
+            by_index: dict[int, GroupExplanation] = {}
+            for group in groups:
+                by_index[group.index] = group
+            stored[slot_id] = by_index
+        if strays:
+            _LOGGER.warning(
+                "trace group explanations reference %d off-horizon slot(s); "
+                "dropped",
+                strays,
+            )
+        step.group_explanations = stored
+
+    def gate(
+        self,
+        *,
+        slot_ids: Sequence[str],
+        key: str,
+        state: str,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a post-condition gate for a set of slots.
+
+        Gates are the part of a slot's fate that lives outside the condition
+        rails: window, deadline, capacity, daily-minimum bookkeeping, the
+        day-hold release, the writer-level ``blocked_user_owned`` veto.
+
+        ``state`` is tri-valued plus ``not_applicable`` (:data:`NODE_STATES`) —
+        a gate the optimizer short-circuited past is ``not_evaluated``, never
+        ``false``.
+
+        **Ranking is an ordinal, not a gate result.** "You lost to 4 cheaper
+        slots" has no truth value, so cheapness ranking is recorded as ``rank``
+        / ``rank_of`` inside ``params`` (per slot, hence one call per slot);
+        ``state`` then only says whether the slot made the cut, and may be
+        ``not_applicable`` for a purely informational ordinal.
+
+        Re-recording the same key for the same slot overwrites: the last word
+        an optimizer has about a gate is the one that decided the slot.
+        """
+        step = self._current
+        if step is None:
+            return
+        if state not in NODE_STATES:
+            _LOGGER.warning("trace gate %r has unknown state %r", key, state)
+        node = GateNode(key=key, state=state, params=dict(params or {}))
+        for slot_id in self._horizon_slots(slot_ids, f"gate {key!r}"):
+            step.gates.setdefault(slot_id, {})[key] = node
+
+    def resolve_condition(
+        self,
+        *,
+        slot_ids: Sequence[str],
+        key: str,
+        state: str,
+        value: Any = None,
+        actual: Any = None,
+        group_index: int | None = None,
+    ) -> None:
+        """Resolve a self-gating condition node the rails could not decide.
+
+        ``ensure_self_sustainability`` and ``reserve_floor_soc`` deliberately
+        contribute an all-true mask, so ``build_eligibility`` can only leave
+        them ``not_evaluated``; only the optimizer that consults them knows
+        their real result — and, for a capped run, which slots it never got as
+        far as consulting. This overwrites the placeholder in place, leaving the
+        node's ``scope`` (``reserve_floor_soc`` is window-scoped) untouched.
+
+        ``group_index=None`` resolves the node in every group that carries it.
+        Slots where no such node exists are skipped with a warning: a condition
+        a group does not configure must stay ``not_applicable``, never be
+        invented here.
+        """
+        step = self._current
+        if step is None:
+            return
+        if state not in NODE_STATES:
+            _LOGGER.warning(
+                "trace condition resolution %r has unknown state %r", key, state
+            )
+        missing = 0
+        for slot_id in self._horizon_slots(slot_ids, f"condition {key!r}"):
+            groups = step.group_explanations.get(slot_id)
+            if not groups:
+                missing += 1
+                continue
+            resolved_any = False
+            for index, group in groups.items():
+                if group_index is not None and index != group_index:
+                    continue
+                conditions, changed = _resolve_nodes(
+                    group.conditions, key, state, value, actual
+                )
+                if changed:
+                    groups[index] = replace(group, conditions=conditions)
+                    resolved_any = True
+            if not resolved_any:
+                missing += 1
+        if missing:
+            _LOGGER.warning(
+                "trace: condition %r has no placeholder node in %d slot(s); "
+                "resolution dropped",
+                key,
+                missing,
+            )
+
+    def set_step_status(self, *, status: str, reason: str | None = None) -> None:
+        """Record the current step's explanation status and why.
+
+        ``status`` is one of :data:`OPTIMIZER_STATUSES` (``ok`` / ``skipped`` /
+        ``failed``). A skipped or failed step must never be indistinguishable
+        from a step that evaluated every slot to ``false`` — ``reason`` carries
+        the cause (``condition_rails_unavailable``, ``battery_params_missing``,
+        ``stop_export_unsupported``, ...).
+
+        Does not touch the decision-trace ``status``, which :meth:`end_step`
+        owns; when this is never called, ``end_step`` back-fills from that.
+        """
+        step = self._current
+        if step is None:
+            return
+        if status not in OPTIMIZER_STATUSES:
+            _LOGGER.warning("trace step has unknown status %r", status)
+        step.explain_status = status
+        step.explain_status_reason = reason
+
+    def optimizer_explanations(self) -> tuple[OptimizerExplanation, ...]:
+        """The recorded explanation data, one entry per ended step.
+
+        The assembly seam for the run record: a caller builds
+        ``RunExplanation(run_at=..., slot_ids=trace.slot_ids,
+        optimizers=trace.optimizer_explanations())``. The same objects are what
+        each step serializes under its ``explanation`` key.
+        """
+        return tuple(step.explanation(self._slot_ids) for step in self._steps)
 
     # --- coverage validation -------------------------------------------------
 
@@ -370,7 +651,7 @@ class OptimizerTrace:
         return {
             "slotIds": list(self._slot_ids),
             "staticRails": self._static_rails,
-            "steps": [step.to_dict() for step in self._steps],
+            "steps": [step.to_dict(self._slot_ids) for step in self._steps],
             "railsFinal": self._rails_final,
         }
 
