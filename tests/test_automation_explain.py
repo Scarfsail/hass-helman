@@ -1,9 +1,14 @@
-"""The explanation DTOs and their index-aligned serialization.
+"""The explanation DTOs, their serialization, and the matrix the rails produce.
 
-Pure codec tests: no optimizer, no pipeline, no store. What is guarded here is
-(a) that a record survives a round trip unchanged, (b) that the per-slot columns
-really are index-aligned and run-length encoded, and (c) that a passing node
-costs nothing in the payload.
+Most of this file is codec: no optimizer, no pipeline, no store. What is
+guarded there is (a) that a record survives a round trip unchanged, (b) that the
+per-slot columns really are index-aligned and run-length encoded, and (c) that a
+passing node costs nothing in the payload.
+
+:class:`ConditionMatrixTests` is the one behavioural half: it drives the real
+``build_eligibility`` and asserts on the matrix it stamps, end to end through
+serialization — the properties an optimizer will rely on before it ever calls
+``resolve_condition``.
 """
 
 from __future__ import annotations
@@ -38,6 +43,33 @@ def _install_import_stubs() -> None:
     automation_pkg.__path__ = [
         str(ROOT / "custom_components" / "helman" / "automation")
     ]
+
+    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
+    if scheduling_pkg is None:
+        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
+        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
+    scheduling_pkg.__path__ = [
+        str(ROOT / "custom_components" / "helman" / "scheduling")
+    ]
+
+    homeassistant_pkg = sys.modules.get("homeassistant")
+    if homeassistant_pkg is None:
+        homeassistant_pkg = types.ModuleType("homeassistant")
+        sys.modules["homeassistant"] = homeassistant_pkg
+
+    util_pkg = sys.modules.get("homeassistant.util")
+    if util_pkg is None:
+        util_pkg = types.ModuleType("homeassistant.util")
+        sys.modules["homeassistant.util"] = util_pkg
+
+    dt_mod = sys.modules.get("homeassistant.util.dt")
+    if dt_mod is None:
+        dt_mod = types.ModuleType("homeassistant.util.dt")
+        sys.modules["homeassistant.util.dt"] = dt_mod
+    dt_mod.parse_datetime = datetime.fromisoformat
+    dt_mod.as_local = lambda value: value
+    dt_mod.as_utc = lambda value: value
+    util_pkg.dt = dt_mod
 
 
 _install_import_stubs()
@@ -412,6 +444,181 @@ class RoundTripTests(unittest.TestCase):
         restored = RunExplanation.from_dict(self._rich_record().to_dict())
         node = restored.optimizers[0].slots[0].groups[0].conditions[1]
         self.assertEqual(node.scope, "window")
+
+
+class ConditionMatrixTests(unittest.TestCase):
+    """The matrix ``build_eligibility`` stamps, as an optimizer will read it.
+
+    Driven through the real condition rails and then through serialization, so a
+    property asserted here holds in the payload the frontend receives — not just
+    in the in-memory DTO.
+    """
+
+    REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
+    SLOT_0 = "2026-03-20T21:00:00+01:00"
+    SLOT_1 = "2026-03-20T21:30:00+01:00"
+    SLOT_2 = "2026-03-20T22:00:00+01:00"
+    # SLOT_0 clears either threshold, SLOT_1 only the looser one, SLOT_2 neither.
+    PRICES = {SLOT_0: -1.0, SLOT_1: 0.5, SLOT_2: 5.0}
+
+    def _snapshot(self, *, day_classification: str | None = None):
+        from custom_components.helman.appliances import AppliancesRuntimeRegistry
+        from custom_components.helman.automation.day_context import DayContext
+        from custom_components.helman.automation.snapshot import (
+            OptimizationContext,
+            OptimizationSnapshot,
+        )
+        from custom_components.helman.scheduling.schedule import ScheduleDocument
+
+        local_date = self.REFERENCE_TIME.date()
+        day_contexts = {}
+        if day_classification is not None:
+            day_contexts[local_date] = DayContext(
+                local_date=local_date,
+                classification=day_classification,
+                predicted_solar_kwh=5.0,
+                predicted_consumption_kwh=5.0,
+                export_price_min=1.0,
+                export_price_max=5.0,
+                day_min_window=None,
+                import_bands=(),
+            )
+        return OptimizationSnapshot(
+            schedule=ScheduleDocument(),
+            adjusted_house_forecast={"status": "available", "series": []},
+            battery_forecast={"status": "available", "series": []},
+            grid_forecast={"status": "available", "series": []},
+            context=OptimizationContext(
+                now=self.REFERENCE_TIME,
+                battery_state=None,
+                solar_forecast={"status": "available", "points": []},
+                import_price_forecast={"currentPrice": 7.0, "points": []},
+                export_price_forecast={
+                    "currentPrice": 9.0,
+                    "points": [
+                        {"timestamp": slot_id, "value": value}
+                        for slot_id, value in self.PRICES.items()
+                    ],
+                },
+                appliance_registry=AppliancesRuntimeRegistry(),
+                when_active_hourly_energy_kwh_by_appliance_id={},
+                day_contexts=day_contexts,
+            ),
+        )
+
+    def _record(self, config, snapshot=None):
+        """Build the matrix and push it through a full serialization round trip."""
+        from custom_components.helman.automation.conditions import (
+            build_eligibility,
+            build_group_explanations,
+        )
+
+        snapshot = snapshot if snapshot is not None else self._snapshot()
+        eligibility = build_eligibility(snapshot, config)
+        explanations = build_group_explanations(snapshot, config, eligibility)
+        slot_ids = eligibility.horizon_slot_ids
+        optimizer = OptimizerExplanation(
+            optimizer_id=config.id,
+            kind=config.kind,
+            slots=tuple(
+                SlotExplanation(
+                    slot_id=slot_id,
+                    groups=explanations[slot_id],
+                    verdict=(
+                        "execute"
+                        if slot_id in eligibility.planned_slot_ids
+                        else "candidate"
+                        if slot_id in eligibility.candidate_slot_ids
+                        else "skip"
+                    ),
+                )
+                for slot_id in slot_ids
+            ),
+        )
+        record = RunExplanation(
+            run_at=self.REFERENCE_TIME, slot_ids=slot_ids, optimizers=(optimizer,)
+        )
+        restored = RunExplanation.from_dict(record.to_dict())
+        return {slot.slot_id: slot for slot in restored.optimizers[0].slots}
+
+    def _export_price_config(self, *groups):
+        from automation_config_builders import make_optimizer_config
+
+        return make_optimizer_config(
+            id="export", kind="export_price", conditions=list(groups)
+        )
+
+    def _appliance_config(self, *groups):
+        from automation_config_builders import make_optimizer_config
+
+        return make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=list(groups),
+        )
+
+    def test_a_two_group_or_shows_the_first_failing_and_the_second_passing(
+        self,
+    ) -> None:
+        slots = self._record(
+            self._export_price_config(
+                {"when_price_below": 0.0}, {"when_price_below": 1.0}
+            )
+        )
+
+        slot = slots[self.SLOT_1]
+        self.assertEqual(
+            [group.conditions[0].state for group in slot.groups], ["false", "true"]
+        )
+        # The OR is satisfied, so the slot executes even though group 1 failed.
+        self.assertEqual(slot.verdict, "execute")
+
+    def test_a_slot_failing_on_price_carries_the_actual_price(self) -> None:
+        slots = self._record(self._export_price_config({"when_price_below": 0.0}))
+
+        node = slots[self.SLOT_2].groups[0].conditions[0]
+        self.assertEqual(node.state, "false")
+        self.assertEqual(node.value, 0.0)
+        self.assertEqual(node.actual, 5.0)
+        self.assertEqual(slots[self.SLOT_2].verdict, "skip")
+
+    def test_a_passing_node_costs_nothing_in_the_payload(self) -> None:
+        slots = self._record(self._export_price_config({"when_price_below": 0.0}))
+
+        self.assertIsNone(slots[self.SLOT_0].groups[0].conditions[0].actual)
+
+    def test_a_group_not_configuring_a_condition_is_not_applicable(self) -> None:
+        slots = self._record(
+            self._appliance_config(
+                {"run_when": ["tight"], "max_run_price": 2.0},
+                {"run_when": ["tight"]},
+            ),
+            self._snapshot(day_classification="tight"),
+        )
+
+        states = [
+            next(node for node in group.conditions if node.key == "max_run_price").state
+            for group in slots[self.SLOT_0].groups
+        ]
+        self.assertEqual(states, ["false", "not_applicable"])
+
+    def test_a_self_gating_condition_is_not_evaluated_not_true(self) -> None:
+        slots = self._record(
+            self._appliance_config(
+                {"run_when": ["tight"], "ensure_self_sustainability": "strict"}
+            ),
+            self._snapshot(day_classification="tight"),
+        )
+
+        node = next(
+            node
+            for node in slots[self.SLOT_0].groups[0].conditions
+            if node.key == "ensure_self_sustainability"
+        )
+        self.assertEqual(node.state, "not_evaluated")
+        self.assertEqual(node.scope, "run")
 
 
 if __name__ == "__main__":

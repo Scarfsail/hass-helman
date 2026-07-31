@@ -64,6 +64,7 @@ _install_import_stubs()
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.automation.conditions import (  # noqa: E402
     build_eligibility,
+    build_group_explanations,
 )
 from custom_components.helman.automation.conditions.types import (  # noqa: E402
     ConditionRailsUnavailable,
@@ -547,6 +548,240 @@ class MinSocConditionTests(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.appliance_id, "pool")
+
+
+class GroupExplanationTests(unittest.TestCase):
+    """The per-slot condition matrix ``build_eligibility`` stamps on the trace.
+
+    Read-only over the same ``masks_by_key`` ``Eligibility`` uses, so nothing
+    here may change which slots an optimizer sees — the classes above guard
+    that.
+    """
+
+    @staticmethod
+    def _explanations(snapshot, config):
+        eligibility = build_eligibility(snapshot, config)
+        return build_group_explanations(snapshot, config, eligibility)
+
+    @staticmethod
+    def _states(groups, key):
+        return [
+            next(node for node in group.conditions if node.key == key).state
+            for group in groups
+        ]
+
+    def test_every_group_is_explained_in_every_horizon_slot(self) -> None:
+        config = _config({"when_price_below": 0.0}, {"when_price_below": 1.0})
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        self.assertEqual(len(explanations), 96)
+        for slot_id, groups in explanations.items():
+            with self.subTest(slot_id=slot_id):
+                self.assertEqual([group.index for group in groups], [0, 1])
+
+    def test_a_failing_slot_is_false_and_a_passing_one_true(self) -> None:
+        config = _config({"when_price_below": 0.0})
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        self.assertEqual(self._states(explanations[SLOT_0], "when_price_below"), ["true"])
+        self.assertEqual(
+            self._states(explanations[SLOT_2], "when_price_below"), ["false"]
+        )
+
+    def test_a_slot_failing_on_price_carries_the_actual_price(self) -> None:
+        config = _config({"when_price_below": 0.0})
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        rejected = explanations[SLOT_2][0].conditions[0]
+        self.assertEqual(rejected.state, "false")
+        self.assertEqual(rejected.value, 0.0)
+        self.assertEqual(rejected.actual, 5.0)
+
+    def test_a_passing_slot_carries_no_actual(self) -> None:
+        config = _config({"when_price_below": 0.0})
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        self.assertIsNone(explanations[SLOT_0][0].conditions[0].actual)
+
+    def test_a_group_that_does_not_configure_a_condition_is_not_applicable(self) -> None:
+        config = make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=[
+                {"run_when": ["tight"], "max_run_price": 2.0},
+                {"run_when": ["tight"]},
+            ],
+        )
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        # Never `true`: the second group simply has no opinion on price.
+        self.assertEqual(
+            self._states(explanations[SLOT_0], "max_run_price"),
+            ["false", "not_applicable"],
+        )
+
+    def test_a_self_gating_condition_stays_not_evaluated(self) -> None:
+        config = make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
+        )
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        # `_all_slots_mask` says "true" for every slot; rendering that would be
+        # a lie, so the optimizer resolves it later instead.
+        node = next(
+            node
+            for node in explanations[SLOT_0][0].conditions
+            if node.key == "ensure_self_sustainability"
+        )
+        self.assertEqual(node.state, "not_evaluated")
+        self.assertEqual(node.value, "soft")
+
+    def test_condition_scope_is_carried_onto_the_node(self) -> None:
+        config = make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=[{"run_when": ["tight"], "max_run_price": 2.0}],
+        )
+        groups = self._explanations(_snapshot(prices=_PRICES), config)[SLOT_0]
+        scopes = {node.key: node.scope for node in groups[0].conditions}
+
+        self.assertEqual(scopes["run_when"], "day")
+        self.assertEqual(scopes["max_run_price"], "slot")
+
+    def test_a_slot_scoped_kind_reports_slot_matched_params(self) -> None:
+        config = _config({"when_price_below": 0.0})
+        groups = self._explanations(_snapshot(prices=_PRICES), config)[SLOT_0]
+
+        self.assertEqual(groups[0].params_source, "slot_matched")
+
+    def test_a_day_scoped_kind_marks_resolved_and_fallback_days_apart(self) -> None:
+        from dataclasses import replace
+
+        from custom_components.helman.automation.day_context import DayContext
+
+        local_date = REFERENCE_TIME.date()
+        snapshot = _snapshot(prices=_PRICES)
+        snapshot = replace(
+            snapshot,
+            context=replace(
+                snapshot.context,
+                day_contexts={
+                    local_date: DayContext(
+                        local_date=local_date,
+                        classification="tight",
+                        predicted_solar_kwh=5.0,
+                        predicted_consumption_kwh=5.0,
+                        export_price_min=1.0,
+                        export_price_max=5.0,
+                        day_min_window=None,
+                        import_bands=(),
+                    )
+                },
+            ),
+        )
+        config = make_optimizer_config(
+            id="hold",
+            kind="charge_hold",
+            params={
+                "window": {"start": "06:00", "end": "14:00"},
+                "battery_first": {"target_soc": 100, "margin_pct": 20},
+            },
+            conditions=[{"run_when": ["tight"]}],
+        )
+        explanations = self._explanations(snapshot, config)
+
+        # Today has a day context, so `for_day` resolves a group; the following
+        # days have none, and the kind would fall back to master params.
+        self.assertEqual(explanations[SLOT_0][0].params_source, "day_resolved")
+        tomorrow = "2026-03-21T12:00:00+01:00"
+        self.assertEqual(explanations[tomorrow][0].params_source, "master_fallback")
+
+    def test_each_group_carries_its_own_resolved_params_and_label(self) -> None:
+        config = make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=[
+                {"name": "Cheap", "run_when": ["tight"]},
+                {
+                    "run_when": ["tight"],
+                    "params": {"window": {"start": "10:00", "end": "12:00"}},
+                },
+            ],
+        )
+        groups = self._explanations(_snapshot(prices=_PRICES), config)[SLOT_0]
+
+        self.assertEqual([group.label for group in groups], ["Cheap", "#2"])
+        self.assertEqual(groups[0].params["window"]["start"], "00:00")
+        self.assertEqual(groups[1].params["window"]["start"], "10:00")
+
+    def test_per_entry_custom_results_reach_the_explanation(self) -> None:
+        from dataclasses import replace
+
+        from custom_components.helman.automation.compute_inputs import (
+            CustomConditionGroupResult,
+            CustomConditionResult,
+        )
+
+        config = _config({"when_price_below": 1.0})
+        snapshot = _snapshot(prices=_PRICES)
+        snapshot = replace(
+            snapshot,
+            context=replace(
+                snapshot.context,
+                custom_condition_results_by_optimizer_id={
+                    config.id: (
+                        CustomConditionGroupResult(
+                            index=0,
+                            met=False,
+                            entries=(
+                                CustomConditionResult(met=True),
+                                CustomConditionResult(met=False),
+                                CustomConditionResult(met=False, errored=True),
+                            ),
+                        ),
+                    )
+                },
+            ),
+        )
+        groups = self._explanations(snapshot, config)[SLOT_0]
+
+        # `None` is the entry that blew up, which fail-closed `met=False` alone
+        # could not distinguish from one that plainly evaluated false.
+        self.assertEqual(groups[0].custom_results, (True, False, None))
+
+    def test_a_run_without_custom_evaluation_reports_no_entries(self) -> None:
+        config = _config({"when_price_below": 1.0})
+        groups = self._explanations(_snapshot(prices=_PRICES), config)[SLOT_0]
+
+        self.assertEqual(groups[0].custom_results, ())
+
+    def test_build_eligibility_stamps_the_explanations_on_the_trace(self) -> None:
+        class _RecordingTrace:
+            def __init__(self) -> None:
+                self.explanations = None
+
+            def set_condition_groups(self, groups) -> None:
+                tuple(groups)
+
+            def set_group_explanations(self, explanations) -> None:
+                self.explanations = explanations
+
+        trace = _RecordingTrace()
+        config = _config({"when_price_below": 0.0})
+        build_eligibility(_snapshot(prices=_PRICES), config, trace)
+
+        self.assertIsNotNone(trace.explanations)
+        self.assertEqual(trace.explanations[SLOT_2][0].conditions[0].actual, 5.0)
 
 
 class SpecInvariantTests(unittest.TestCase):
