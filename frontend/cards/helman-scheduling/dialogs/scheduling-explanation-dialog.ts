@@ -239,6 +239,7 @@ export class SchedulingExplanationDialog extends LitElement {
         return html`
             <ha-dialog
                 .open=${this.open}
+                width="large"
                 @closed=${this._handleClosed}
                 .heading=${this._title()}
                 .headerTitle=${this._title()}
