@@ -252,7 +252,11 @@ def _resolve_nodes(
     actual: Any,
     scope: str | None,
 ) -> tuple[tuple[ConditionNode, ...], bool]:
-    """Replace the ``key`` node (at any depth) with its resolved result."""
+    """Replace the ``key`` node with its resolved result.
+
+    Nodes are flat -- ``build_group_explanations`` emits one per configured
+    condition and nothing below it -- so this is a single pass, not a walk.
+    """
     resolved: list[ConditionNode] = []
     changed = False
     for node in nodes:
@@ -268,12 +272,6 @@ def _resolve_nodes(
             )
             changed = True
             continue
-        children, child_changed = _resolve_nodes(
-            node.children, key, state, value, actual, scope
-        )
-        if child_changed:
-            node = replace(node, children=children)
-            changed = True
         resolved.append(node)
     return tuple(resolved), changed
 

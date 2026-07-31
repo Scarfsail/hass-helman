@@ -190,7 +190,12 @@ class ConditionNode:
 
     ``value`` is what the condition was configured with (the threshold);
     ``actual`` is what the slot actually presented, recorded only when the node
-    did not pass. ``children`` carries inner and per-entry custom conditions.
+    did not pass.
+
+    Nodes are flat. Conditions do not nest: ``build_group_explanations`` emits
+    one node per configured condition and nothing below it. Per-entry custom
+    conditions are group-level and live on ``GroupExplanation.custom_results``,
+    not under a condition.
     """
 
     key: str
@@ -198,7 +203,6 @@ class ConditionNode:
     state: str = STATE_NOT_EVALUATED
     value: Any = None
     actual: Any = None
-    children: tuple["ConditionNode", ...] = ()
 
     def __post_init__(self) -> None:
         _warn_unknown("node state", self.state, NODE_STATES)
@@ -288,11 +292,6 @@ def _encode_condition_columns(
         )
         if actuals:
             column["actual"] = actuals
-        children = _encode_condition_columns(
-            [node.children if node is not None else None for node in per_slot]
-        )
-        if children:
-            column["children"] = children
         columns.append(column)
     return columns
 
@@ -310,7 +309,6 @@ def _decode_condition_columns(
         states = decode_runs(column.get("state"), length)
         values = decode_runs(column.get("value"), length)
         actuals = decode_sparse(column.get("actual"), length)
-        children = _decode_condition_columns(column.get("children"), length)
         for index in range(length):
             if states[index] is None:
                 continue
@@ -321,7 +319,6 @@ def _decode_condition_columns(
                     state=states[index],
                     value=values[index],
                     actual=actuals[index],
-                    children=tuple(children[index]),
                 )
             )
     return per_slot

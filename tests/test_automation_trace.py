@@ -474,7 +474,8 @@ class TraceResolveConditionTests(unittest.TestCase):
         self.assertEqual(groups[0].conditions[0].state, STATE_NOT_EVALUATED)
         self.assertEqual(groups[1].conditions[0].state, STATE_TRUE)
 
-    def test_nested_child_node_is_resolved(self) -> None:
+    def test_resolution_leaves_sibling_conditions_alone(self) -> None:
+        """Only the named key is resolved; the group's other nodes are untouched."""
         slots = _slot_ids(1)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "appliance_runtime")
@@ -482,16 +483,11 @@ class TraceResolveConditionTests(unittest.TestCase):
             {
                 slots[0]: [
                     _group(
+                        ConditionNode(key="run_when", state=STATE_NOT_EVALUATED),
                         ConditionNode(
-                            key="outer",
+                            key="ensure_self_sustainability",
                             state=STATE_NOT_EVALUATED,
-                            children=(
-                                ConditionNode(
-                                    key="ensure_self_sustainability",
-                                    state=STATE_NOT_EVALUATED,
-                                ),
-                            ),
-                        )
+                        ),
                     )
                 ]
             }
@@ -500,8 +496,9 @@ class TraceResolveConditionTests(unittest.TestCase):
             slot_ids=slots, key="ensure_self_sustainability", state=STATE_TRUE
         )
         trace.end_step(status="ok")
-        outer = trace.optimizer_explanations()[0].slots[0].groups[0].conditions[0]
-        self.assertEqual(outer.children[0].state, STATE_TRUE)
+        conditions = trace.optimizer_explanations()[0].slots[0].groups[0].conditions
+        self.assertEqual(conditions[0].state, STATE_NOT_EVALUATED)
+        self.assertEqual(conditions[1].state, STATE_TRUE)
 
     def test_missing_placeholder_warns_and_invents_nothing(self) -> None:
         slots = _slot_ids(1)

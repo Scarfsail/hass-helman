@@ -320,13 +320,6 @@ class RoundTripTests(unittest.TestCase):
                                 state="false",
                                 value=3.5,
                                 actual=4.2,
-                                children=(
-                                    ConditionNode(
-                                        key="custom:0",
-                                        state="true",
-                                        value="binary_sensor.away",
-                                    ),
-                                ),
                             ),
                             ConditionNode(
                                 key="reserve_floor_soc",
@@ -435,11 +428,16 @@ class RoundTripTests(unittest.TestCase):
         gated = slots[restored.slot_ids[1]].groups[0].conditions[0]
         self.assertEqual(gated.state, "not_evaluated")
 
-    def test_child_nodes_round_trip(self) -> None:
+    def test_per_entry_custom_results_round_trip(self) -> None:
+        """Custom conditions are group-level, never nested under a condition.
+
+        This is the shape the removed ``ConditionNode.children`` field implied
+        and never delivered: no producer ever populated it, so per-entry custom
+        results have always lived here instead.
+        """
         restored = RunExplanation.from_dict(self._rich_record().to_dict())
-        node = restored.optimizers[0].slots[0].groups[0].conditions[0]
-        self.assertEqual(node.children[0].key, "custom:0")
-        self.assertEqual(node.children[0].value, "binary_sensor.away")
+        group = restored.optimizers[0].slots[0].groups[0]
+        self.assertEqual(group.custom_results, (True, False))
 
     def test_window_scope_is_carried(self) -> None:
         restored = RunExplanation.from_dict(self._rich_record().to_dict())
