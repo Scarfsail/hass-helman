@@ -2,11 +2,15 @@ import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../localize/localize";
+// Registered, deliberately not mounted. The level-2 matrix said nothing the
+// diagram does not, so the drill is now grid → diagram; the component and its
+// tests stay because the seam is worth keeping, and it has to stay in the
+// bundle for them to have anything to instantiate.
 import "../components/scheduling-condition-matrix";
 import "../components/scheduling-logic-diagram";
-import type { ConditionMatrixNodeSelectDetail } from "../components/scheduling-condition-matrix";
 import {
     getExplanationCell,
+    getWinningExplanationCell,
     parseScheduleExplanation,
     type ExplanationCell,
     type ExplanationColumn,
@@ -19,8 +23,8 @@ import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 const KEY_PREFIX = "scheduling.explanation";
 
 /**
- * Which cell of the grid was pressed. This is the level-2 seam: the condition
- * matrix for that optimizer and that slot is opened from here.
+ * Which cell of the grid was pressed. This is the drill-down seam: the logic
+ * diagram for that optimizer and that slot is opened from here.
  */
 export interface ScheduleExplanationCellSelectDetail {
     targetKey: string;
@@ -33,19 +37,25 @@ export interface ScheduleExplanationCellSelectDetail {
 /**
  * Why one lane's day looks the way it does.
  *
- * Level 1 of a three-level drill: rows are half-hour slots, one column per
- * optimizer that touched the lane in pipeline order, and a Result column last.
+ * The grid: rows are half-hour slots, one column per optimizer that touched the
+ * lane in pipeline order, and -- on a lane with more than one optimizer -- a
+ * Result column last. Pressing a cell opens the logic diagram for that slot
+ * underneath, which is the whole drill; the level-2 condition matrix that used
+ * to sit between them is no longer mounted, because it repeated what the
+ * diagram already draws.
  *
  * The Result column exists because a verdict is not an outcome.
  * `ScheduleWriter.set_inverter` is last-writer-wins among optimizers, so an
  * optimizer can decide `execute`, write, and lose the slot to a later step
  * without ever being told. Result names who actually landed the write; the
- * losers read `overwritten` in their own column.
+ * losers read `overwritten` in their own column. It also has to name a
+ * *candidate* as a candidate: a placed-but-not-running slot rendered as
+ * "zapnout" is the table asserting a run that will not happen.
  *
- * The layout does not adapt to the lane. An appliance lane with a single
- * optimizer is one column plus Result -- the same table, narrower. A lane whose
- * shape changes with its content is a lane you have to re-learn every time you
- * open it.
+ * **The one place the layout does adapt is that column.** With a single
+ * optimizer, Result can only ever restate that optimizer's own cell, so it is
+ * dropped -- an appliance lane is one column, not one column plus its echo.
+ * Nothing else about the table changes with its content.
  */
 @customElement("scheduling-explanation-dialog")
 export class SchedulingExplanationDialog extends LitElement {
@@ -200,6 +210,14 @@ export class SchedulingExplanationDialog extends LitElement {
                 font-weight: 600;
             }
 
+            /* A candidate is not a scheduled run: it is displayed, and it only
+               executes if its custom conditions come true at the moment the
+               action would start. It reads in the same colour the candidate
+               cells do, and in its own words, never the action's. */
+            .result-cell.candidate {
+                color: var(--info-color, var(--primary-color));
+            }
+
             .result-cell .detail {
                 font-weight: 400;
             }
@@ -223,15 +241,12 @@ export class SchedulingExplanationDialog extends LitElement {
 
     @state() private _model: ScheduleExplanationModel | null = null;
     @state() private _selected: { optimizerId: string; rowIndex: number } | null = null;
-    /** Level 3: the node pressed in the matrix, or null while it is closed. */
-    @state() private _node: ConditionMatrixNodeSelectDetail | null = null;
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
         if (changedProperties.has("payload")) {
             this._model = parseScheduleExplanation(this.payload);
             this._selected = null;
-            this._node = null;
         }
     }
 
@@ -247,7 +262,6 @@ export class SchedulingExplanationDialog extends LitElement {
                 <div class="dialog-content">
                     ${this._renderMeta()}
                     ${this._renderBody()}
-                    ${this._renderConditionMatrix()}
                     ${this._renderLogicDiagram()}
                 </div>
                 <ha-dialog-footer slot="footer">
@@ -299,7 +313,9 @@ export class SchedulingExplanationDialog extends LitElement {
                         <tr>
                             <th class="time-cell">${this._text("time_column")}</th>
                             ${model.columns.map((column) => this._renderHead(column))}
-                            <th class="result-head">${this._text("result_column")}</th>
+                            ${this._showResultColumn(model) ? html`
+                                <th class="result-head">${this._text("result_column")}</th>
+                            ` : nothing}
                         </tr>
                     </thead>
                     <tbody>
@@ -308,6 +324,16 @@ export class SchedulingExplanationDialog extends LitElement {
                 </table>
             </div>
         `;
+    }
+
+    /**
+     * Result earns its column only when the lane has something to arbitrate.
+     *
+     * With one optimizer, "who landed the write" can only be that optimizer,
+     * and the column restates the cell beside it in every row.
+     */
+    private _showResultColumn(model: ScheduleExplanationModel): boolean {
+        return model.columns.length > 1;
     }
 
     private _renderHead(column: ExplanationColumn) {
@@ -342,7 +368,7 @@ export class SchedulingExplanationDialog extends LitElement {
                         : formatScheduleTime(row.startMs, this.locale, this.timeZone)}
                 </th>
                 ${model.columns.map((column) => this._renderCell(column, column.cells[row.index]))}
-                ${this._renderResult(row)}
+                ${this._showResultColumn(model) ? this._renderResult(model, row) : nothing}
             </tr>
         `;
     }
@@ -384,13 +410,35 @@ export class SchedulingExplanationDialog extends LitElement {
         `;
     }
 
-    private _renderResult(row: ExplanationRow) {
+    /**
+     * What the slot actually shows, read off the *winning cell's verdict*.
+     *
+     * The winner's kind alone is not the answer. A `candidate` is placed and
+     * displayed and never executed, so rendering its optimizer's action label
+     * -- "zapnout" -- states a run that will not happen. The cell that accounts
+     * for the slot is `getWinningExplanationCell`, and its verdict is what the
+     * column reports.
+     */
+    private _renderResult(model: ScheduleExplanationModel, row: ExplanationRow) {
+        const winning = getWinningExplanationCell(model, row.slotId);
+        if (winning !== null && winning.outcome === "candidate") {
+            const kind = model.columns
+                .find((column) => column.optimizerId === winning.optimizerId)?.kind ?? null;
+            return html`
+                <td class="result-cell candidate" data-result="candidate">
+                    ${this._text("outcome.candidate")}
+                    <span class="detail">(${this._optimizerLabel(kind)})</span>
+                </td>
+            `;
+        }
         if (row.winnerOptimizerId === null) {
-            return html`<td class="result-cell empty">${this._text("result_none")}</td>`;
+            return html`<td class="result-cell empty" data-result="none">
+                ${this._text("result_none")}
+            </td>`;
         }
 
         return html`
-            <td class="result-cell" data-winner=${row.winnerOptimizerId}>
+            <td class="result-cell" data-result="wrote" data-winner=${row.winnerOptimizerId}>
                 ${this._actionLabel(row.winnerKind)}
                 <span class="detail">(${this._optimizerLabel(row.winnerKind)})</span>
             </td>
@@ -398,52 +446,17 @@ export class SchedulingExplanationDialog extends LitElement {
     }
 
     /**
-     * Level 2, in place under the grid rather than in a dialog of its own.
+     * The diagram, in place under the grid rather than in a dialog of its own.
      *
-     * The grid stays on screen while it is open: the matrix answers "why this
+     * The grid stays on screen while it is open: the diagram answers "why this
      * slot", and the question a person asks next is almost always the slot
      * above or below it. Pushing it into a second dialog would make that
      * comparison two closes and two opens.
-     */
-    private _renderConditionMatrix() {
-        const model = this._model;
-        const selected = this._selected;
-        if (model === null || selected === null) {
-            return nothing;
-        }
-        const cell = getExplanationCell(model, selected.optimizerId, selected.rowIndex);
-        if (cell === null) {
-            return nothing;
-        }
-        const column = model.columns.find((entry) => entry.optimizerId === selected.optimizerId);
-        const row = model.rows[selected.rowIndex];
-
-        return html`
-            <scheduling-condition-matrix
-                .localize=${this.localize}
-                .cell=${cell}
-                .conditionKeys=${column?.conditionKeys ?? []}
-                .optimizerKind=${column?.kind ?? ""}
-                .slotLabel=${row === undefined || Number.isNaN(row.startMs)
-                    ? cell.slotId
-                    : formatScheduleTime(row.startMs, this.locale, this.timeZone)}
-                @condition-matrix-node-select=${this._handleNodeSelect}
-            ></scheduling-condition-matrix>
-        `;
-    }
-
-    /**
-     * Level 3, under the matrix for the same reason the matrix sits under the
-     * grid: the diagram answers "why did that condition decide it", and the
-     * next question is nearly always the condition beside it. Keeping all three
-     * levels on one surface makes that a click, not a close-and-reopen.
      *
-     * It renders as soon as a slot is open, not only after a matrix node is
-     * pressed. "Why is this slot like that" is the question the whole dialog
-     * exists for, and hiding its answer behind a click nobody knew to make left
-     * readers on the matrix with no way forward. With nothing pressed the
-     * diagram opens on the group the decision turned on; pressing a node then
-     * re-focuses it rather than being the only way in.
+     * It renders as soon as a slot is pressed. There is no intermediate matrix
+     * to walk through any more -- it restated, as a table of marks, what the
+     * diagram draws as a chain -- so the grid cell is the only click between
+     * the day and its explanation.
      */
     private _renderLogicDiagram() {
         const model = this._model;
@@ -451,7 +464,6 @@ export class SchedulingExplanationDialog extends LitElement {
         if (model === null || selected === null) {
             return nothing;
         }
-        const node = this._node;
         const cell = getExplanationCell(model, selected.optimizerId, selected.rowIndex);
         if (cell === null) {
             return nothing;
@@ -461,8 +473,6 @@ export class SchedulingExplanationDialog extends LitElement {
             <scheduling-logic-diagram
                 .localize=${this.localize}
                 .cell=${cell}
-                .focusConditionKey=${node?.conditionKey ?? null}
-                .focusGroupIndex=${node?.groupIndex ?? null}
                 .slotLabel=${row === undefined || Number.isNaN(row.startMs)
                     ? cell.slotId
                     : formatScheduleTime(row.startMs, this.locale, this.timeZone)}
@@ -470,15 +480,8 @@ export class SchedulingExplanationDialog extends LitElement {
         `;
     }
 
-    private _handleNodeSelect = (event: CustomEvent<ConditionMatrixNodeSelectDetail>): void => {
-        this._node = event.detail;
-    };
-
     private _handleCellClick(column: ExplanationColumn, cell: ExplanationCell): void {
         this._selected = { optimizerId: column.optimizerId, rowIndex: cell.rowIndex };
-        // A different slot's diagram is a different question; drop level 3
-        // rather than leaving the previous slot's blocks under the new matrix.
-        this._node = null;
         const model = this._model;
         this.dispatchEvent(new CustomEvent<ScheduleExplanationCellSelectDetail>(
             "schedule-explanation-cell-select",

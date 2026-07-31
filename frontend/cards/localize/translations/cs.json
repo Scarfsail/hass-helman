@@ -335,14 +335,17 @@
         "context": "Kontext – vyhodnoceno, ale výsledek to nezměnilo",
         "unexplained": "Důvod není v záznamu",
         "stage": {
-          "conditions": "1 · Podmínky každé skupiny",
+          "conditions": "Podmínky každé skupiny",
           "any_group": "aspoň jedna skupina",
-          "gates": "2 · Další rozhodnutí",
-          "final": "3 · Nic to nezablokovalo",
+          "gates": "Další rozhodnutí",
+          "custom": "Vlastní podmínky",
+          "custom_when": "kontrola těsně před spuštěním",
+          "final": "Nic to nezablokovalo",
           "result": "Výsledek"
         },
         "legend_decisive": "Plná čára a plný jas = větev, která o výsledku rozhodla.",
         "legend_dimmed": "Zeslabená čárkovaná větev byla vyhodnocena, ale výsledek nezměnila.",
+        "legend_comparison": "U podmínky je vidět naměřená hodnota, porovnání a nastavený limit; u splněné podmínky se naměřená hodnota nezaznamenává, zůstane jen limit.",
         "legend_and": "musí platit všechno, co do něj vede",
         "legend_or": "stačí, když platí jedna skupina",
         "terminal": {

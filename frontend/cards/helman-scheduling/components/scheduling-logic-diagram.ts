@@ -40,10 +40,33 @@ export interface LogicBlock {
     groupIndex: number | null;
     /** What the block saw, for the inputs that recorded it. */
     actual: unknown;
+    /** What the group configured — the threshold the actual was tested against. */
+    value: unknown;
+    /** `actual <op> value`, where the condition's semantics define one. */
+    comparison: LogicComparison | null;
     x: number;
     y: number;
     width: number;
     height: number;
+}
+
+/**
+ * A condition's test, as the two sides and the operator between them.
+ *
+ * `actual` is null for a node that passed: the record omits it by design, so
+ * the block shows the threshold alone rather than inventing a reading.
+ */
+export interface LogicComparison {
+    actual: string | null;
+    operator: string;
+    value: string;
+}
+
+/** A group's caption, drawn above its own inputs when there is more than one. */
+export interface LogicGroupHeader {
+    index: number;
+    label: string;
+    y: number;
 }
 
 export interface LogicEdge {
@@ -70,6 +93,8 @@ export interface LogicDiagramModel {
     blocks: LogicBlock[];
     edges: LogicEdge[];
     annotations: LogicAnnotation[];
+    /** One per group, or empty for a single group: naming it would be noise. */
+    groupHeaders: LogicGroupHeader[];
     terminal: LogicTerminal;
     /** The group the OR settled on, mirroring `fully or matching[0]`. */
     matchedGroupIndex: number | null;
@@ -82,24 +107,116 @@ export interface LogicDiagramModel {
 }
 
 const BLOCK_H = 26;
-const INPUT_W = 210;
-const GATE_W = 200;
+const INPUT_W = 240;
+const GATE_W = 160;
+const CUSTOM_W = 160;
 const OP_W = 44;
-const TERM_W = 160;
+const TERM_W = 176;
 const V_GAP = 8;
 const GROUP_GAP = 20;
 const PAD_TOP = 30;
+/** The band a group's caption occupies above its own first input. */
+const GROUP_LABEL_H = 15;
 
 const COL_INPUT_X = 8;
-const COL_AND_X = 232;
-const COL_OR_X = 306;
-const COL_SIDE_X = 376;
-const COL_FINAL_X = 598;
-const COL_TERM_X = 676;
+const COL_AND_X = 258;
+const COL_OR_X = 314;
+/** The gates: everything decided outside the groups. */
+const COL_SIDE_X = 370;
+/** The custom conditions, as their own stage at the end of the chain. */
+const COL_CUSTOM_X = 542;
+const COL_FINAL_X = 714;
+const COL_TERM_X = 770;
 const DIAGRAM_W = COL_TERM_X + TERM_W + 8;
 
 /** Where a `→ final` edge turns: past the side column, so it crosses nothing. */
-const FINAL_ELBOW_X = COL_FINAL_X - 14;
+const FINAL_ELBOW_X = COL_FINAL_X - 12;
+
+/**
+ * How each system condition compares, mirrored from the backend masks.
+ *
+ * Read off `conditions/types.py`, one mask at a time — a guessed operator is a
+ * diagram that lies about the record:
+ *
+ * - `when_price_below` (`_export_price_below_mask`) — a slot qualifies when
+ *   *any* of its buckets has `price < threshold`, and the reported actual is the
+ *   cheapest of them. So the drawn test is `actual < value`.
+ * - `max_run_price` (`_max_run_price_mask`) — *every* pending bucket must have
+ *   `price < threshold`, and the actual is the most expensive one. Same
+ *   operator, opposite aggregation, and the aggregation is already baked into
+ *   the number the record carries.
+ * - `min_soc_pct` (`_min_soc_mask`) — every pending bucket needs
+ *   `soc_pct >= threshold`; the actual is the worst.
+ * - `min_solar_coverage_pct` (`_min_solar_coverage_mask`) — `coverage_pct >=
+ *   threshold`.
+ *
+ * `run_when` is not in here on purpose: `_run_when_mask` tests the day's
+ * classification for *membership* of a configured set, and drawing that as `<`
+ * or `>` would be a fabrication. It gets `∈` instead.
+ *
+ * The self-gating pair (`ensure_self_sustainability`, `reserve_floor_soc`) has
+ * no numeric form at all — the optimizer resolves them by simulation — so they
+ * get no comparison and keep showing whatever the record recorded.
+ */
+const CONDITION_OPERATORS: Record<string, string> = {
+    when_price_below: "<",
+    max_run_price: "<",
+    min_soc_pct: "≥",
+    min_solar_coverage_pct: "≥",
+};
+
+/** Conditions whose test is set membership rather than a comparison. */
+const SET_MEMBERSHIP_CONDITIONS = new Set<string>(["run_when"]);
+
+/**
+ * The test a condition node stands for, or null where it has no readable one.
+ *
+ * Only the sides that are actually in the record are drawn. A passing node
+ * carries no `actual` — the backend omits it deliberately — so it renders as
+ * the threshold alone rather than as a number nobody measured.
+ */
+export function conditionComparison(
+    key: string,
+    value: unknown,
+    actual: unknown,
+): LogicComparison | null {
+    const rendered = comparisonSide(value);
+    if (rendered === null) {
+        return null;
+    }
+    if (SET_MEMBERSHIP_CONDITIONS.has(key)) {
+        return { actual: comparisonSide(actual), operator: "∈", value: rendered };
+    }
+    const operator = CONDITION_OPERATORS[key];
+    if (operator === undefined) {
+        return null;
+    }
+    return { actual: comparisonSide(actual), operator, value: rendered };
+}
+
+/** One side of a comparison as a short string; objects have no short form. */
+function comparisonSide(value: unknown): string | null {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value === "number") {
+        return Number.isInteger(value) ? String(value) : value.toFixed(2);
+    }
+    if (typeof value === "string" || typeof value === "boolean") {
+        return String(value);
+    }
+    if (Array.isArray(value)) {
+        return value.map((entry) => String(entry)).join(", ");
+    }
+    return null;
+}
+
+/** The comparison as one line, e.g. `3.43 < 3.50`. */
+export function formatComparison(comparison: LogicComparison): string {
+    return comparison.actual === null
+        ? `${comparison.operator} ${comparison.value}`
+        : `${comparison.actual} ${comparison.operator} ${comparison.value}`;
+}
 
 /**
  * Gates whose `false` is a *report*, never a veto.
@@ -242,6 +359,14 @@ function isAndInput(key: string, state: LogicState, terminal: LogicTerminal): bo
  *
  * **A single group gets no OR.** `≥1` over one input decides nothing and reads
  * as a stage the reader has to account for; the group's `&` wires straight on.
+ * It gets no caption either, for the same reason: with one chain there is
+ * nothing to tell it apart from.
+ *
+ * **The custom conditions are a stage, not a gate.** They are re-checked just
+ * before the action would start, and they are the whole difference between a
+ * run and a `candidate`, so they get the last column before the `&` rather than
+ * a place in the gate pile. They stay a *term of the conjunction*: that is what
+ * keeps the drawn AND equal to the terminal for a candidate too.
  *
  * **Decisiveness walks back from the verdict**, never forward from the inputs:
  *
@@ -260,7 +385,12 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     const blocks: LogicBlock[] = [];
     const edges: LogicEdge[] = [];
     const annotations: LogicAnnotation[] = [];
+    const groupHeaders: LogicGroupHeader[] = [];
     const terminal = resolveTerminal(cell);
+    // With one group there is nothing to tell apart, and a caption over a
+    // single chain is noise. With two or more, "which chain is which" is the
+    // first thing a reader cannot answer.
+    const showGroupLabels = cell.groups.length > 1;
 
     // ---- geometry + states, groups first -------------------------------
     let cursorY = PAD_TOP;
@@ -273,6 +403,10 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     cell.groups.forEach((group, groupPos) => {
         const inputIds: string[] = [];
         const inputStates: LogicState[] = [];
+        if (showGroupLabels) {
+            groupHeaders.push({ index: group.index, label: group.label, y: cursorY + 10 });
+            cursorY += GROUP_LABEL_H;
+        }
         const top = cursorY;
         if (group.conditions.length === 0) {
             // A group with nothing configured still gets a row, so the diagram
@@ -286,6 +420,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
                 decisive: false,
                 groupIndex: group.index,
                 actual: null,
+                value: null,
+                comparison: null,
                 x: COL_INPUT_X,
                 y: cursorY,
                 width: INPUT_W,
@@ -305,6 +441,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
                 decisive: false,
                 groupIndex: group.index,
                 actual: node.actual,
+                value: node.value,
+                comparison: conditionComparison(node.key, node.value, node.actual),
                 x: COL_INPUT_X,
                 y: cursorY,
                 width: INPUT_W,
@@ -326,6 +464,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             decisive: false,
             groupIndex: group.index,
             actual: null,
+            value: null,
+            comparison: null,
             x: COL_AND_X,
             y: andY,
             width: OP_W,
@@ -358,6 +498,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             decisive: false,
             groupIndex: null,
             actual: null,
+            value: null,
+            comparison: null,
             x: COL_OR_X,
             y: orY,
             width: OP_W,
@@ -392,9 +534,16 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         }
     }
 
+    // The custom conditions get a column of their own, at the end of the
+    // chain. They are the last thing checked — re-evaluated just before the
+    // action would start — and burying them among the gates is what made
+    // `candidate` unreadable: a slot every mandatory condition passed, waiting
+    // on a template that is not (yet) true.
     const custom = customState(matchedPos < 0 ? undefined : cell.groups[matchedPos]);
+    let customY: number | null = null;
     if (custom !== "n/a") {
         if (isAndInput("custom", custom, terminal)) {
+            customY = sideY;
             blocks.push({
                 id: "custom",
                 kind: "custom",
@@ -403,14 +552,20 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
                 decisive: false,
                 groupIndex: matchedGroupIndex,
                 actual: null,
-                x: COL_SIDE_X,
-                y: sideY,
-                width: GATE_W,
+                value: null,
+                comparison: null,
+                x: COL_CUSTOM_X,
+                y: customY,
+                width: CUSTOM_W,
                 height: BLOCK_H,
             });
             edges.push({ from: "custom", to: "final", decisive: false });
             finalInputIds.push("custom");
             finalInputStates.push(custom);
+            // The gates start below it even though they sit in another column:
+            // every `→ final` edge turns *past* the custom column, so a gate on
+            // the custom block's own row would draw its edge straight through
+            // it.
             sideY += BLOCK_H + V_GAP;
         } else {
             annotations.push({ key: "custom", kind: "custom", state: custom, params: {} });
@@ -436,6 +591,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             decisive: false,
             groupIndex: null,
             actual: gate.params.rank ?? null,
+            value: null,
+            comparison: null,
             x: COL_SIDE_X,
             y: sideY,
             width: GATE_W,
@@ -459,6 +616,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             decisive: false,
             groupIndex: null,
             actual: null,
+            value: null,
+            comparison: null,
             x: COL_SIDE_X,
             y: sideY,
             width: GATE_W,
@@ -483,6 +642,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         decisive: true,
         groupIndex: null,
         actual: null,
+        value: null,
+        comparison: null,
         x: COL_FINAL_X,
         y: finalY,
         width: OP_W,
@@ -496,6 +657,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         decisive: true,
         groupIndex: null,
         actual: null,
+        value: null,
+        comparison: null,
         x: COL_TERM_X,
         y: finalY,
         width: TERM_W,
@@ -556,6 +719,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         blocks,
         edges,
         annotations,
+        groupHeaders,
         terminal,
         matchedGroupIndex,
         showOr,
@@ -588,9 +752,22 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
  *
  * The stages are captioned in the drawing itself, because "which column is
  * which" was the first thing readers could not answer: conditions of each
- * group, then the other decisions, then "nothing blocked it", then the result.
- * The `≥1` stage is omitted entirely for a single-group cell — an OR over one
- * input is a stage the reader has to account for and that decides nothing.
+ * group, then the other decisions, then the custom conditions that are re-checked
+ * just before the action would start, then "nothing blocked it", then the
+ * result. The `≥1` stage is omitted entirely for a single-group cell — an OR
+ * over one input is a stage the reader has to account for and that decides
+ * nothing — and the custom stage is omitted where the matched group configured
+ * none.
+ *
+ * Each chain is captioned with its group's name where there is more than one.
+ * "Záporná cena" and "Studený bazén" are the two chains of a real record, and
+ * an uncaptioned pair of them is a picture nobody can navigate.
+ *
+ * A condition block shows the *test*, not only the reading: `3.43 < 3.50`, not
+ * `3.43`. The operator is the backend's own — see `CONDITION_OPERATORS` — and
+ * conditions that do not compare (`run_when`'s set membership, the self-gating
+ * pair) never get one invented for them. A passing node has no `actual` in the
+ * record at all, so it shows the threshold alone.
  *
  * There are **four** terminals, not two. `execute` and `not eligible` are the
  * obvious pair; `candidate` (a group's system mask matched but its custom
@@ -642,8 +819,16 @@ export class SchedulingLogicDiagram extends LitElement {
                 overflow-x: auto;
             }
 
+            /* Five stages do not fit a dialog at natural size, and the stage a
+               reader wants most is the last one. So the drawing scales down to
+               whatever width it is given rather than pushing the terminal off
+               the right edge -- down to a floor, below which it goes back to
+               scrolling instead of becoming unreadable. */
             svg {
                 display: block;
+                width: 100%;
+                height: auto;
+                min-width: 760px;
             }
 
             /* Dimmed, never hidden: a branch that was evaluated and did not
@@ -685,9 +870,19 @@ export class SchedulingLogicDiagram extends LitElement {
                 stroke: var(--success-color, #2e7d32);
             }
 
-            g.block[data-state="false"] rect.body,
-            g.block[data-state="errored"] rect.body {
+            g.block[data-state="false"] rect.body {
                 stroke: var(--error-color, #c62828);
+            }
+
+            /* An entry that *threw* is not an entry that said no. Fail-closed
+               evaluation reports both as "not met", so the diagram has to keep
+               them apart by itself: its own colour, its own glyph, and its own
+               dash pattern. Three states, three readings, none of them
+               colour-only. (No backticks in here: this is a tagged template,
+               and one would end it mid-comment.) */
+            g.block[data-state="errored"] rect.body {
+                stroke: var(--warning-color, #ef6c00);
+                stroke-dasharray: 2 2;
             }
 
             g.block[data-state="not_evaluated"] rect.body {
@@ -731,9 +926,12 @@ export class SchedulingLogicDiagram extends LitElement {
                 fill: var(--success-color, #2e7d32);
             }
 
-            g.block[data-state="false"] text.glyph,
-            g.block[data-state="errored"] text.glyph {
+            g.block[data-state="false"] text.glyph {
                 fill: var(--error-color, #c62828);
+            }
+
+            g.block[data-state="errored"] text.glyph {
+                fill: var(--warning-color, #ef6c00);
             }
 
             g.block[data-state="not_evaluated"] text.glyph,
@@ -745,6 +943,23 @@ export class SchedulingLogicDiagram extends LitElement {
             text.actual {
                 font-size: 10px;
                 fill: var(--secondary-text-color);
+            }
+
+            /* The comparison is the block's result stated in numbers, so it
+               reads with the same colour the glyph already carries. The glyph
+               is still the accessible copy of it. */
+            g.block[data-state="true"] text.comparison {
+                fill: var(--success-color, #2e7d32);
+            }
+
+            g.block[data-state="false"] text.comparison {
+                fill: var(--error-color, #c62828);
+            }
+
+            text.group-label {
+                font-size: 10px;
+                font-weight: 600;
+                fill: var(--primary-text-color);
             }
 
             text.op {
@@ -850,7 +1065,14 @@ export class SchedulingLogicDiagram extends LitElement {
 
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public cell: ExplanationCell | null = null;
-    /** The condition the user pressed in the matrix, ringed in the diagram. */
+    /**
+     * The condition the user pressed in the matrix, ringed in the diagram.
+     *
+     * Nothing sets it today: the level-2 matrix that used to is no longer
+     * mounted in the dialog (it said nothing the diagram does not). The focus
+     * ring stays because it is the seam the matrix returns through, and
+     * `focusGroupIndex` alone still decides which chain the diagram opens on.
+     */
     @property({ type: String }) public focusConditionKey: string | null = null;
     @property({ type: Number }) public focusGroupIndex: number | null = null;
     @property({ type: String }) public slotLabel = "";
@@ -883,11 +1105,13 @@ export class SchedulingLogicDiagram extends LitElement {
                         viewBox=${`0 0 ${model.width} ${model.height}`}
                         width=${model.width}
                         height=${model.height}
+                        style=${`max-width:${model.width}px`}
                         role="img"
                         aria-label=${this._text(`diagram.terminal.${model.terminal}`)}
                         data-terminal=${model.terminal}
                     >
                         ${this._renderStages(model)}
+                        ${this._renderGroupHeaders(model)}
                         ${model.edges.map((edge) => this._renderEdge(model, edge))}
                         ${model.blocks.map((block) => this._renderBlock(block, focusGroup))}
                     </svg>
@@ -906,6 +1130,7 @@ export class SchedulingLogicDiagram extends LitElement {
      */
     private _renderStages(model: LogicDiagramModel) {
         const orBlock = model.blocks.find((block) => block.id === "or");
+        const customBlock = model.blocks.find((block) => block.id === "custom");
         return svg`
             <text class="stage" data-stage="conditions" x=${COL_INPUT_X} y="14">
                 ${this._text("diagram.stage.conditions")}
@@ -913,6 +1138,15 @@ export class SchedulingLogicDiagram extends LitElement {
             <text class="stage" data-stage="gates" x=${COL_SIDE_X} y="14">
                 ${this._text("diagram.stage.gates")}
             </text>
+            ${customBlock === undefined ? nothing : svg`
+                <text class="stage" data-stage="custom" x=${COL_CUSTOM_X} y="14">
+                    ${fitText(
+                        this._text("diagram.stage.custom"),
+                        CUSTOM_W + 4,
+                        STAGE_PX_PER_CHAR,
+                    )}
+                </text>
+            `}
             <text class="stage" data-stage="final" x=${COL_FINAL_X} y="14">
                 ${this._text("diagram.stage.final")}
             </text>
@@ -932,7 +1166,43 @@ export class SchedulingLogicDiagram extends LitElement {
                     text-anchor="middle"
                 >${this._text("diagram.stage.any_group")}</text>
             `}
+            ${customBlock === undefined ? nothing : svg`
+                <text
+                    class="hint"
+                    data-stage="custom_when"
+                    x=${customBlock.x}
+                    y=${customBlock.y + customBlock.height + 11}
+                >${fitText(
+                    this._text("diagram.stage.custom_when"),
+                    CUSTOM_W + 40,
+                    ACTUAL_PX_PER_CHAR,
+                )}</text>
+            `}
         `;
+    }
+
+    /**
+     * Which chain is which, where there is more than one.
+     *
+     * Real groups have names — "Záporná cena", "Studený bazén" — and without
+     * them a reader with three chains cannot say which one the diagram is even
+     * about. A group that was never named falls back to its index.
+     */
+    private _renderGroupHeaders(model: LogicDiagramModel) {
+        return model.groupHeaders.map((header) => svg`
+            <text
+                class="group-label"
+                data-group=${header.index}
+                x=${COL_INPUT_X}
+                y=${header.y}
+            >${fitText(
+                header.label.length > 0
+                    ? header.label
+                    : `${this._text("matrix.group")} ${header.index + 1}`,
+                INPUT_W,
+                LABEL_PX_PER_CHAR,
+            )}</text>
+        `);
     }
 
     private _renderEdge(model: LogicDiagramModel, edge: LogicEdge) {
@@ -967,14 +1237,27 @@ export class SchedulingLogicDiagram extends LitElement {
             && (this.focusGroupIndex === null || block.groupIndex === this.focusGroupIndex);
         const isOperator = block.kind === "and" || block.kind === "or" || block.kind === "final";
         const label = this._blockLabel(block);
-        // Objects never reach the block face: a raw `{"code":…,"deltaSocPct":…}`
-        // painted over the neighbouring block is the bug this closes. Scalars
-        // stay inline, everything else lives in the tooltip.
-        const actual = summariseLogicValue(block.actual);
-        const labelBudget = block.width - 26 - 8 - (actual === null ? 0 : ACTUAL_MAX_W + 6);
+        // What the block was *compared against*, not just what it saw: "3.43"
+        // alone never told the reader whether 3.43 was the good side or the bad
+        // one. Where the condition has no comparison to draw — the self-gating
+        // pair, the gates — the recorded value stays on its own.
+        //
+        // Objects never reach the block face either way: a raw
+        // `{"code":…,"deltaSocPct":…}` painted over the neighbouring block is
+        // the bug this closes. Scalars stay inline, everything else lives in
+        // the tooltip.
+        const comparison = block.comparison;
+        const actual = comparison === null ? summariseLogicValue(block.actual) : null;
+        const right = comparison === null ? actual : formatComparison(comparison);
+        const rightWidth = comparison === null ? ACTUAL_MAX_W : COMPARE_MAX_W;
+        const labelBudget = block.width - 26 - 8 - (right === null ? 0 : rightWidth + 6);
         const fullValue = fullLogicValue(block.actual);
+        const fullConfigured = fullLogicValue(block.value);
         const title = [
             `${label} — ${this._labelled("state", block.state)}`,
+            fullConfigured === null
+                ? ""
+                : `${this._text("matrix.configured")}: ${fullConfigured}`,
             fullValue === null ? "" : `${this._text("matrix.actual")}: ${fullValue}`,
         ].filter((part) => part.length > 0).join(" · ");
 
@@ -1014,13 +1297,13 @@ export class SchedulingLogicDiagram extends LitElement {
                     <text class="label" x=${block.x + 26} y=${block.y + block.height / 2 + 4}>
                         ${fitText(label, labelBudget, LABEL_PX_PER_CHAR)}
                     </text>
-                    ${actual === null ? nothing : svg`
+                    ${right === null ? nothing : svg`
                         <text
-                            class="actual"
+                            class=${comparison === null ? "actual" : "actual comparison"}
                             x=${block.x + block.width - 8}
                             y=${block.y + block.height / 2 + 4}
                             text-anchor="end"
-                        >${fitText(actual, ACTUAL_MAX_W, ACTUAL_PX_PER_CHAR)}</text>
+                        >${fitText(right, rightWidth, ACTUAL_PX_PER_CHAR)}</text>
                     `}
                 `}
             </g>
@@ -1063,6 +1346,9 @@ export class SchedulingLogicDiagram extends LitElement {
                 <span class="legend-item" data-legend="dimmed">
                     <span class="swatch dimmed"></span>
                     ${this._text("diagram.legend_dimmed")}
+                </span>
+                <span class="legend-item" data-legend="comparison">
+                    ${this._text("diagram.legend_comparison")}
                 </span>
                 <span class="legend-item" data-legend="and">
                     <span class="op">&amp;</span>
@@ -1146,8 +1432,11 @@ function stateGlyph(state: LogicState): string {
 
 /** Room reserved for a block's `actual`, and the widths text is fitted to. */
 const ACTUAL_MAX_W = 46;
+/** Room for `actual <op> value`, which is three things rather than one. */
+const COMPARE_MAX_W = 104;
 const LABEL_PX_PER_CHAR = 5.9;
 const ACTUAL_PX_PER_CHAR = 5.4;
+const STAGE_PX_PER_CHAR = 5.0;
 
 /**
  * Fit `text` inside `maxPx`, with an ellipsis when it does not.

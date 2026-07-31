@@ -51,8 +51,13 @@ const SLOT_IDS = [
  * - **14:00** group 0 passes and its custom condition says no: a candidate.
  * - **14:30** every condition passes and the writer vetoes: blocked.
  */
-function conditionColumn(key: string, states: unknown[], actual: Record<string, unknown>) {
-    return { key, scope: "slot", state: states, value: [[1.0, 4]], actual };
+function conditionColumn(
+    key: string,
+    states: unknown[],
+    actual: Record<string, unknown>,
+    value: unknown = 1.0,
+) {
+    return { key, scope: "slot", state: states, value: [[value, 4]], actual };
 }
 
 const PAYLOAD = {
@@ -99,6 +104,7 @@ const PAYLOAD = {
                         "when_price_below",
                         [["true", 1], ["false", 1], ["true", 2]],
                         { "1": 3.1 },
+                        2.0,
                     ),
                     conditionColumn("min_soc_pct", [["true", 4]], {}),
                 ],
@@ -167,6 +173,14 @@ const SINGLE_GROUP_PAYLOAD = {
                     actual: { "1": 3.43 },
                 },
                 {
+                    // Set membership, not a comparison: `_run_when_mask` tests
+                    // the day's classification against the configured set.
+                    key: "run_when",
+                    scope: "day",
+                    state: [["true", 2]],
+                    value: [[["workday", "weekend"], 2]],
+                },
+                {
                     key: "ensure_self_sustainability",
                     scope: "slot",
                     state: [["true", 1], ["false", 1]],
@@ -201,6 +215,42 @@ const SINGLE_GROUP_PAYLOAD = {
     }],
 };
 
+/**
+ * One slot whose only custom condition *threw*.
+ *
+ * Fail-closed evaluation gives the group `met=false` whether the template said
+ * no or blew up, so the tri-state is the only thing that separates them --
+ * and "your template is broken" is the one a person has to act on.
+ */
+const ERRORED_CUSTOM_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["candidate", 1]],
+        groups: [{
+            index: 0,
+            label: "Studený bazén",
+            paramsSource: [["slot_matched", 1]],
+            params: [[{ max_run_price: 2.0 }, 1]],
+            customResults: [[[null], 1]],
+            conditions: [{
+                key: "max_run_price",
+                scope: "slot",
+                state: [["true", 1]],
+                value: [[2.0, 1]],
+            }],
+        }],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
 async function mountDialog(page: Page, fixture: unknown = PAYLOAD): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
@@ -225,21 +275,25 @@ async function mountDialog(page: Page, fixture: unknown = PAYLOAD): Promise<void
     );
 }
 
+/** An SVG `<text>`'s content: `innerText` is an HTML-only property. */
+async function svgText(locator: ReturnType<Page["locator"]>): Promise<string> {
+    return (await locator.evaluate((node) => node.textContent ?? ""))
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 function diagram(page: Page) {
     return page.locator("scheduling-explanation-dialog scheduling-logic-diagram");
 }
 
-/** Drill to a slot's matrix, then press a node to open its diagram. */
-async function openDiagram(page: Page, rowIndex: number, group = 0): Promise<void> {
-    await page
-        .locator("scheduling-explanation-dialog")
-        .locator(`tbody tr[data-row="${rowIndex}"] td[data-optimizer="export_price"] .cell-body`)
-        .click();
-    await page
-        .locator("scheduling-explanation-dialog scheduling-condition-matrix")
-        .locator(`tbody tr[data-group="${group}"] td[data-condition="when_price_below"] .node`)
-        .click();
-    await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
+/**
+ * Open a slot's diagram.
+ *
+ * One click, not two: the level-2 matrix that used to sit between the grid and
+ * the diagram is no longer mounted, so the grid cell *is* the drill.
+ */
+async function openDiagram(page: Page, rowIndex: number): Promise<void> {
+    await selectSlot(page, rowIndex, "export_price");
 }
 
 /** Open a slot's diagram the way a reader does: by pressing the level-1 cell. */
@@ -299,18 +353,19 @@ async function decisiveness(page: Page): Promise<Record<string, string>> {
 }
 
 test.describe("the condition logic diagram", () => {
-    test("a matrix node opens the diagram for that slot", async ({ page }) => {
+    test("a grid cell opens the diagram, with no matrix in between", async ({ page }) => {
         await mountDialog(page);
         await expect(diagram(page)).toHaveCount(0);
 
         await openDiagram(page, 1);
-        // The matrix stays: the diagram is a drill, not a replacement.
+        // The level-2 matrix is gone: it restated as a table of marks what the
+        // diagram draws as a chain, and readers had to walk through it.
         await expect(page.locator("scheduling-explanation-dialog scheduling-condition-matrix"))
+            .toHaveCount(0);
+        // With nothing pressed the diagram still opens on a branch, rather than
+        // on none.
+        await expect(diagram(page).locator('g.block[data-focus-group="true"]').first())
             .toHaveCount(1);
-        // The pressed condition is ringed so the diagram answers the question
-        // that was actually asked.
-        await expect(diagram(page).locator('g.block[data-focus="true"]').first())
-            .toHaveAttribute("data-key", "when_price_below");
     });
 
     test("a false AND marks only its false inputs decisive", async ({ page }) => {
@@ -341,7 +396,7 @@ test.describe("the condition logic diagram", () => {
     test("a true OR marks only the first satisfied group", async ({ page }) => {
         await mountDialog(page);
         // 13:00: groups 1 and 2 both pass. `fully or matching[0]` stops at 1.
-        await openDiagram(page, 0, 1);
+        await openDiagram(page, 0);
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "execute");
         await expect(diagram(page).locator(".matched")).toHaveAttribute("data-group", "1");
 
@@ -396,7 +451,7 @@ test.describe("the condition logic diagram", () => {
 
     test("branches that did not matter are dimmed, not removed", async ({ page }) => {
         await mountDialog(page);
-        await openDiagram(page, 0, 1);
+        await openDiagram(page, 0);
 
         // The losing group is still drawn.
         const dimmed = diagram(page).locator('g.block[data-id="and-0"]');
@@ -524,21 +579,184 @@ test.describe("the logic diagram never contradicts its terminal", () => {
         await mountDialog(page, SINGLE_GROUP_PAYLOAD);
         await expect(diagram(page)).toHaveCount(0);
 
-        // No node press: opening the slot is enough.
+        // Opening the slot is the whole drill.
         await selectSlot(page, 0, "appliance_runtime");
         await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
         await expect(diagram(page).locator('g.block[data-focus="true"]')).toHaveCount(0);
         // And it opens on the group the decision turned on.
         await expect(diagram(page).locator('g.block[data-focus-group="true"]').first())
             .toHaveCount(1);
+    });
+});
 
-        // Pressing a node then only re-focuses it.
-        await page
-            .locator("scheduling-explanation-dialog scheduling-condition-matrix")
-            .locator('tbody tr[data-group="0"] td[data-condition="when_price_below"] .node')
-            .click();
-        await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
-        await expect(diagram(page).locator('g.block[data-focus="true"]').first())
-            .toHaveAttribute("data-key", "when_price_below");
+/**
+ * What the block *compared*, which chain it belongs to, and when the custom
+ * conditions run.
+ *
+ * All three are the same complaint from a reader looking at live data: the
+ * picture showed results without showing the test, three unnamed chains, and a
+ * `candidate` that looked like a rejection with an odd label.
+ */
+test.describe("the diagram shows the test, not only the result", () => {
+    test("a failing condition reads actual, operator, threshold", async ({ page }) => {
+        await mountDialog(page);
+        // 13:00, group 0: the price was 1.50 and the group wanted below 1.
+        await openDiagram(page, 0);
+
+        const block = diagram(page)
+            .locator('g.block[data-group="0"][data-key="when_price_below"]');
+        await expect(block).toHaveAttribute("data-state", "false");
+        expect(await svgText(block.locator("text.comparison"))).toBe("1.50 < 1");
+        // Both sides of the record are one hover away, in full.
+        await expect(block.locator("title")).toContainText("matrix.configured");
+        await expect(block.locator("title")).toContainText("matrix.actual");
+    });
+
+    test("a passing condition shows the threshold, never an invented actual", async ({ page }) => {
+        await mountDialog(page);
+        await openDiagram(page, 0);
+
+        // Group 1 passed, so the record carries no `actual` for it at all --
+        // the backend omits it by design. The threshold is what can be shown.
+        const block = diagram(page)
+            .locator('g.block[data-group="1"][data-key="when_price_below"]');
+        await expect(block).toHaveAttribute("data-state", "true");
+        expect(await svgText(block.locator("text.comparison"))).toBe("< 2");
+    });
+
+    test("the two sides read differently, and not by colour alone", async ({ page }) => {
+        await mountDialog(page);
+        await openDiagram(page, 0);
+
+        const failing = diagram(page)
+            .locator('g.block[data-group="0"][data-key="when_price_below"]');
+        const passing = diagram(page)
+            .locator('g.block[data-group="1"][data-key="when_price_below"]');
+        const colours = await Promise.all([
+            failing.locator("text.comparison").evaluate((node) => getComputedStyle(node).fill),
+            passing.locator("text.comparison").evaluate((node) => getComputedStyle(node).fill),
+        ]);
+        expect(colours[0]).not.toBe(colours[1]);
+        // The glyph says it a second time, with no colour involved.
+        const glyphs = await Promise.all([
+            svgText(failing.locator("text.glyph")),
+            svgText(passing.locator("text.glyph")),
+        ]);
+        expect(glyphs[0]).toBe("✗");
+        expect(glyphs[1]).toBe("✓");
+    });
+
+    test("membership and self-gating conditions get no </> invented", async ({ page }) => {
+        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 1, "appliance_runtime");
+
+        // `run_when` is a set test (`_run_when_mask`), so it reads as one.
+        const membership = await svgText(diagram(page)
+            .locator('g.block[data-key="run_when"] text.comparison'));
+        expect(membership).toContain("∈");
+        expect(membership).not.toMatch(/[<>≥≤]/);
+
+        // The self-gating pair has no numeric form the record could carry, and
+        // "strict" is not something to put an operator in front of.
+        await expect(diagram(page)
+            .locator('g.block[data-key="ensure_self_sustainability"] text.comparison'))
+            .toHaveCount(0);
+
+        // And a plain comparison still is one.
+        expect(await svgText(diagram(page)
+            .locator('g.block[data-key="when_price_below"] text.comparison')))
+            .toBe("3.43 < 3.50");
+    });
+
+    test("each chain is named where there is more than one", async ({ page }) => {
+        await mountDialog(page);
+        await openDiagram(page, 0);
+
+        const labels = await diagram(page).locator("text.group-label")
+            .evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim() ?? ""));
+        expect(labels).toEqual(["Ráno", "Poledne", "Večer"]);
+
+        // One group has nothing to be told apart from, so it gets no caption.
+        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("text.group-label")).toHaveCount(0);
+    });
+
+    test("the custom conditions are their own stage before the result", async ({ page }) => {
+        await mountDialog(page);
+        // 14:00: every mandatory condition passed and the template said no.
+        await openDiagram(page, 2);
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "candidate");
+
+        // Its own captioned column, saying when it is checked.
+        await expect(diagram(page).locator('text.stage[data-stage="custom"]')).toHaveCount(1);
+        await expect(diagram(page).locator('text[data-stage="custom_when"]')).toHaveCount(1);
+
+        // Last before the `&`, and after every gate.
+        const geometry = await diagram(page).locator("svg.logic").evaluate((svg) => {
+            const x = (selector: string) => {
+                const rect = svg.querySelector(`${selector} rect.body`) as SVGRectElement | null;
+                return rect === null ? null : rect.x.baseVal.value;
+            };
+            return {
+                custom: x('g.block[data-id="custom"]'),
+                final: x('g.block[data-id="final"]'),
+                gate: x('g.block[data-kind="gate"]'),
+                or: x('g.block[data-id="or"]'),
+            };
+        });
+        expect(geometry.custom).not.toBeNull();
+        expect(geometry.custom!).toBeGreaterThan(geometry.or!);
+        expect(geometry.custom!).toBeLessThan(geometry.final!);
+        if (geometry.gate !== null) {
+            expect(geometry.custom!).toBeGreaterThan(geometry.gate);
+        }
+    });
+
+    test("a candidate's falsehood is the custom stage, and the AND says so", async ({ page }) => {
+        await mountDialog(page);
+        await openDiagram(page, 2);
+
+        // The invariant, for the terminal that is neither a run nor a
+        // rejection: the drawn AND resolves false, and the input that makes it
+        // false is the custom stage.
+        const result = await andInvariant(page);
+        expect(result.inputs).toContain("custom");
+        expect(result.computed).toBe(result.final);
+        expect(result.final).toBe("false");
+        expect(result.terminal).toBe("candidate");
+
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveAttribute("data-state", "false");
+        await expect(custom).toHaveAttribute("data-decisive", "true");
+        expect(await svgText(custom.locator("text.glyph"))).toBe("✗");
+    });
+
+    test("an errored custom entry is not a failed one", async ({ page }) => {
+        await mountDialog(page, ERRORED_CUSTOM_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+
+        // Fail-closed evaluation reports "threw" and "said no" identically. The
+        // diagram keeps them apart: its own glyph, its own colour, its own
+        // dash pattern.
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveAttribute("data-state", "errored");
+        expect(await svgText(custom.locator("text.glyph"))).toBe("!");
+
+        const errored = await custom.locator("rect.body").evaluate((node) => ({
+            stroke: getComputedStyle(node).stroke,
+            dash: getComputedStyle(node).strokeDasharray,
+        }));
+
+        await mountDialog(page);
+        await openDiagram(page, 2);
+        const failed = await diagram(page).locator('g.block[data-id="custom"] rect.body')
+            .evaluate((node) => ({
+                stroke: getComputedStyle(node).stroke,
+                dash: getComputedStyle(node).strokeDasharray,
+            }));
+        expect(errored.stroke).not.toBe(failed.stroke);
+        expect(errored.dash).not.toBe(failed.dash);
     });
 });

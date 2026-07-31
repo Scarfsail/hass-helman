@@ -16,8 +16,10 @@ import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
  * - **`not_evaluated`, `false` and absent are three states, not two.** A node
  *   that was never consulted is not a node that failed, and neither is a slot
  *   the optimizer never looked at.
- * - **The layout does not adapt.** An appliance lane with one optimizer is the
- *   same table with one column.
+ * - **A candidate is not a run.** Result reports the winning cell's *verdict*,
+ *   so a slot that is merely placed never reads as the optimizer's action.
+ * - **Result is dropped for a single-optimizer lane**, where it could only ever
+ *   restate the one column beside it. That is the only way the layout adapts.
  */
 
 const BUNDLE = resolve(
@@ -187,6 +189,65 @@ const APPLIANCE_PAYLOAD = {
     }],
 };
 
+/**
+ * A lane whose first slot is *placed but not running*.
+ *
+ * A candidate has every mandatory condition satisfied and a custom condition
+ * that is not (yet) true; it is displayed and re-checked at start time. Nothing
+ * landed the write, so the row has no winner -- and reporting the optimizer's
+ * action there would promise a run that will not happen.
+ */
+const CANDIDATE_PAYLOAD = {
+    targetKey: "appliance:pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 2),
+    runAt: RUN_AT,
+    optimizers: [
+        {
+            optimizerId: "appliance_runtime:pool",
+            kind: "appliance_runtime",
+            targetKey: "appliance:pool",
+            status: "ok",
+            runAt: [[RUN_AT, 2]],
+            verdict: [["candidate", 1], ["execute", 1]],
+            winningOptimizer: { "1": "appliance_runtime:pool" },
+            groups: [{
+                index: 0,
+                label: "Studený bazén",
+                paramsSource: [["slot_matched", 2]],
+                customResults: [[[false], 1], [[true], 1]],
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: [["true", 2]],
+                    value: [[2.0, 2]],
+                }],
+            }],
+            gates: [{ key: "slot_available", state: [["true", 2]] }],
+        },
+        {
+            optimizerId: "charge_hold",
+            kind: "charge_hold",
+            targetKey: "appliance:pool",
+            status: "ok",
+            runAt: [[RUN_AT, 2]],
+            verdict: [["skip", 2]],
+            groups: [{
+                index: 0,
+                label: "",
+                paramsSource: [["slot_matched", 2]],
+                conditions: [{
+                    key: "min_soc_pct",
+                    scope: "slot",
+                    state: [["false", 2]],
+                    value: [[40, 2]],
+                    actual: { "0": 21, "1": 22 },
+                }],
+            }],
+        },
+    ],
+};
+
 async function mountDialog(page: Page, payload: unknown): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
@@ -349,18 +410,43 @@ test.describe("lane explanation, level 1", () => {
         });
     });
 
-    test("an appliance lane with one optimizer is the same table", async ({ page }) => {
+    test("a single-optimizer lane drops the Result column", async ({ page }) => {
         await mountDialog(page, APPLIANCE_PAYLOAD);
 
         const dialog = page.locator("scheduling-explanation-dialog");
-        // Time + one optimizer + Result: no adaptive layout, just fewer columns.
-        await expect(dialog.locator("thead th")).toHaveCount(3);
-        await expect(dialog.locator("thead th").nth(2)).toHaveText(/result_column/);
+        // Time + the one optimizer. With nobody to lose the slot to, Result can
+        // only restate the cell beside it, so it is not drawn at all.
+        await expect(dialog.locator("thead th")).toHaveCount(2);
+        const heads = await dialog.locator("thead th").evaluateAll(
+            (nodes) => nodes.map((node) => node.textContent ?? ""),
+        );
+        expect(heads.join(" ")).not.toContain("result_column");
+        await expect(dialog.locator(".result-cell")).toHaveCount(0);
         await expect(dialog.locator("tbody tr")).toHaveCount(2);
-        await expect(dialog.locator('tbody tr[data-row="0"] .result-cell'))
-            .toHaveAttribute("data-winner", "appliance_runtime:boiler");
+        await expect(cell(page, 0, "appliance_runtime:boiler"))
+            .toHaveAttribute("data-outcome", "wrote");
         await expect(cell(page, 1, "appliance_runtime:boiler"))
             .toHaveAttribute("data-outcome", "not_eligible");
+    });
+
+    test("Result names a candidate as a candidate, not as the action", async ({ page }) => {
+        await mountDialog(page, CANDIDATE_PAYLOAD);
+
+        const dialog = page.locator("scheduling-explanation-dialog");
+        // 13:00 was placed and its custom conditions were not met: it is on
+        // screen and it will not run, so it must not read "zapnout".
+        const candidate = dialog.locator('tbody tr[data-row="0"] .result-cell');
+        await expect(candidate).toHaveAttribute("data-result", "candidate");
+        await expect(candidate).toContainText("outcome.candidate");
+
+        // 13:30 really did run, and still says so -- and the two rows do not
+        // read the same, which is the whole bug: they used to.
+        const wrote = dialog.locator('tbody tr[data-row="1"] .result-cell');
+        await expect(wrote).toHaveAttribute("data-result", "wrote");
+        await expect(wrote).toContainText("appliance_runtime");
+        await expect(wrote).not.toContainText("outcome.candidate");
+        expect((await candidate.innerText()).trim())
+            .not.toBe((await wrote.innerText()).trim());
     });
 
     test("nothing recorded says so rather than drawing an empty grid", async ({ page }) => {
@@ -383,19 +469,155 @@ test.describe("lane explanation, level 1", () => {
     });
 });
 
-/** The matrix mounted under the grid, for the cell that was pressed. */
-function matrix(page: Page) {
-    return page.locator("scheduling-explanation-dialog scheduling-condition-matrix");
+/** A condition node, spelled out the way the parsed model carries it. */
+function node(
+    key: string,
+    scope: string,
+    state: string,
+    options: { value?: unknown; actual?: unknown; children?: unknown[] } = {},
+) {
+    return {
+        key,
+        scope,
+        state,
+        value: options.value ?? null,
+        actual: options.actual ?? null,
+        children: options.children ?? [],
+    };
 }
 
-/** Open the level-2 matrix for one optimizer on one row. */
-async function drill(page: Page, rowIndex: number, optimizerId: string): Promise<void> {
-    await cell(page, rowIndex, optimizerId).locator(".cell-body").click();
+/**
+ * 15:00 of the inverter lane's `charge_hold`, as the parsed cell.
+ *
+ * The same slot the level-1 fixture describes, written out rather than decoded:
+ * the matrix is mounted on its own now, so it is handed a cell instead of
+ * reaching one through the dialog.
+ */
+const CHARGE_HOLD_CELL = {
+    optimizerId: "charge_hold",
+    slotId: SLOT_IDS[4],
+    rowIndex: 4,
+    present: true,
+    verdict: "skip",
+    runAt: RUN_AT,
+    winningOptimizer: null,
+    outcome: "not_eligible",
+    decisiveKey: "hold_room",
+    decisiveState: "false",
+    decisiveScope: "slot",
+    gates: [],
+    groups: [
+        {
+            index: 0,
+            label: "Ráno",
+            // Resolved once for the day, so possibly from another group.
+            paramsSource: "day_resolved",
+            params: { min_soc_pct: 40, target_soc_pct: 80 },
+            // Two entries: one plainly false, one that threw.
+            customResults: [false, null],
+            conditions: [
+                // Never consulted past the hold window: not false.
+                node("min_soc_pct", "slot", "not_evaluated", {
+                    value: 40,
+                    children: [node("window_soc_known", "slot", "true")],
+                }),
+                node("hold_room", "slot", "false", { value: 5, actual: 0.4 }),
+                // One result for the whole expensive band, not five.
+                node("reserve_floor_soc", "window", "true", { value: 20 }),
+            ],
+        },
+        {
+            index: 1,
+            label: "Večer",
+            paramsSource: "day_resolved",
+            params: { min_soc_pct: 60 },
+            customResults: [true],
+            conditions: [
+                // This group does not configure it at all.
+                node("min_soc_pct", "slot", "not_applicable"),
+                node("reserve_floor_soc", "window", "true", { value: 20 }),
+            ],
+        },
+    ],
+};
+
+/** 13:30 of the appliance lane: one group, and a gate carrying an ordinal. */
+const APPLIANCE_CELL = {
+    optimizerId: "appliance_runtime:boiler",
+    slotId: SLOT_IDS[1],
+    rowIndex: 1,
+    present: true,
+    verdict: "skip",
+    runAt: RUN_AT,
+    winningOptimizer: null,
+    outcome: "not_eligible",
+    decisiveKey: "max_run_price",
+    decisiveState: "false",
+    decisiveScope: "slot",
+    groups: [{
+        index: 0,
+        label: "",
+        paramsSource: "slot_matched",
+        params: {},
+        customResults: [],
+        conditions: [node("max_run_price", "slot", "false", { actual: 3.4 })],
+    }],
+    gates: [{ key: "cheapest_rank", state: "false", params: { rank: 9 } }],
+};
+
+function matrix(page: Page) {
+    return page.locator("scheduling-condition-matrix");
+}
+
+/**
+ * Mount the matrix on its own, with one already-parsed cell.
+ *
+ * It is no longer mounted by the dialog -- the diagram says everything it said,
+ * without the second hop -- so it is exercised directly. The component and this
+ * coverage stay because the level-2 view may well come back, and its parse is
+ * what the diagram reuses.
+ */
+async function mountMatrix(
+    page: Page,
+    cellFixture: unknown,
+    conditionKeys: string[],
+): Promise<void> {
+    await page.setContent("<!doctype html><html><body></body></html>");
+    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.addScriptTag({ path: BUNDLE, type: "module" });
+    await page.waitForFunction(() => !!customElements.get("scheduling-condition-matrix"));
+
+    await page.evaluate(({ cellFixture, conditionKeys }) => {
+        const element = document.createElement("scheduling-condition-matrix") as HTMLElement
+            & Record<string, unknown>;
+        element.localize = (key: string) => key;
+        element.cell = cellFixture;
+        element.conditionKeys = conditionKeys;
+        element.optimizerKind = "charge_hold";
+        element.slotLabel = "15:00";
+        document.body.appendChild(element);
+    }, { cellFixture, conditionKeys });
+
+    await expect(matrix(page).locator(".matrix")).toHaveCount(1);
+}
+
+/** The union column set the dialog would have handed it for that lane. */
+const CHARGE_HOLD_KEYS = ["min_soc_pct", "hold_room", "reserve_floor_soc"];
+
+/** Open the matrix for the charge_hold slot the level-2 tests all use. */
+async function drill(page: Page): Promise<void> {
+    await mountMatrix(page, CHARGE_HOLD_CELL, CHARGE_HOLD_KEYS);
     await expect(matrix(page).locator("table.nodes")).toHaveCount(1);
 }
 
 /**
  * Level 2: one optimizer, one slot, every condition it consulted.
+ *
+ * **Not mounted in the dialog any more.** The user's reading after living with
+ * it: the matrix added nothing over the diagram, which draws the same record as
+ * a chain instead of a table of marks. The component and these tests are kept
+ * standalone rather than deleted -- the seam is worth keeping, and the diagram
+ * reuses its parsed data.
  *
  * The distinctions this level exists to preserve are all ones a plain
  * checkbox grid would erase:
@@ -409,13 +631,20 @@ async function drill(page: Page, rowIndex: number, optimizerId: string): Promise
  *   slot's own.
  */
 test.describe("lane explanation, level 2", () => {
-    test("pressing a level-1 cell opens that slot's condition matrix", async ({ page }) => {
+    test("the dialog no longer mounts the matrix at all", async ({ page }) => {
         await mountDialog(page, INVERTER_PAYLOAD);
-        await expect(matrix(page)).toHaveCount(0);
+        await cell(page, 4, "charge_hold").locator(".cell-body").click();
 
-        await drill(page, 4, "charge_hold");
-        // The grid stays: the next question is usually the slot next door.
-        await expect(page.locator("scheduling-explanation-dialog").locator("table.grid")).toHaveCount(1);
+        // The drill is grid -> diagram now; nothing sits between them.
+        await expect(page.locator("scheduling-explanation-dialog scheduling-logic-diagram"))
+            .toHaveCount(1);
+        await expect(page.locator("scheduling-explanation-dialog scheduling-condition-matrix"))
+            .toHaveCount(0);
+    });
+
+    test("one row per group, one column per condition", async ({ page }) => {
+        await drill(page);
+
         await expect(matrix(page).locator(".verdict-badge")).toHaveAttribute("data-verdict", "skip");
         // One row per group, one column per condition the optimizer ever used.
         await expect(matrix(page).locator("tbody tr")).toHaveCount(2);
@@ -426,8 +655,7 @@ test.describe("lane explanation, level 2", () => {
     });
 
     test("the resolved params carry the marker for how they were resolved", async ({ page }) => {
-        await mountDialog(page, INVERTER_PAYLOAD);
-        await drill(page, 4, "charge_hold");
+        await drill(page);
 
         // charge_hold resolves through `for_day`, which can pick another group.
         const source = matrix(page).locator('.params-row[data-group="0"] .params-source');
@@ -438,8 +666,7 @@ test.describe("lane explanation, level 2", () => {
     });
 
     test("a condition header expands into its inner conditions", async ({ page }) => {
-        await mountDialog(page, INVERTER_PAYLOAD);
-        await drill(page, 4, "charge_hold");
+        await drill(page);
 
         await expect(matrix(page).locator('th.sub-head[data-sub="window_soc_known"]')).toHaveCount(0);
         await matrix(page).locator('th.condition-head[data-condition="min_soc_pct"] .expander').click();
@@ -453,8 +680,7 @@ test.describe("lane explanation, level 2", () => {
     });
 
     test("the custom column expands into one sub-column per entry", async ({ page }) => {
-        await mountDialog(page, INVERTER_PAYLOAD);
-        await drill(page, 4, "charge_hold");
+        await drill(page);
 
         await matrix(page).locator('th.condition-head[data-condition="custom"] .expander').click();
         await expect(matrix(page).locator('th.sub-head[data-condition="custom"]')).toHaveCount(2);
@@ -471,8 +697,7 @@ test.describe("lane explanation, level 2", () => {
     });
 
     test("not evaluated, false, not applicable and absent are four cells", async ({ page }) => {
-        await mountDialog(page, INVERTER_PAYLOAD);
-        await drill(page, 4, "charge_hold");
+        await drill(page);
 
         const unevaluated = matrix(page).locator('tbody tr[data-group="0"] td[data-condition="min_soc_pct"]');
         const failed = matrix(page).locator('tbody tr[data-group="0"] td[data-condition="hold_room"]');
@@ -505,8 +730,7 @@ test.describe("lane explanation, level 2", () => {
     });
 
     test("a window-scoped node is drawn once, spanning the groups", async ({ page }) => {
-        await mountDialog(page, INVERTER_PAYLOAD);
-        await drill(page, 4, "charge_hold");
+        await drill(page);
 
         const spanning = matrix(page).locator('td[data-condition="reserve_floor_soc"]');
         // One cell for two groups, not two identical checkmarks.
@@ -520,8 +744,7 @@ test.describe("lane explanation, level 2", () => {
     });
 
     test("the gates that are not conditions are shown with their ordinals", async ({ page }) => {
-        await mountDialog(page, APPLIANCE_PAYLOAD);
-        await drill(page, 1, "appliance_runtime:boiler");
+        await mountMatrix(page, APPLIANCE_CELL, ["max_run_price"]);
 
         const gate = matrix(page).locator('.gate[data-gate="cheapest_rank"]');
         await expect(gate).toHaveAttribute("data-state", "false");
@@ -531,12 +754,11 @@ test.describe("lane explanation, level 2", () => {
     });
 
     test("a node hands its coordinates to the level-3 seam", async ({ page }) => {
-        await mountDialog(page, INVERTER_PAYLOAD);
-        await drill(page, 4, "charge_hold");
+        await drill(page);
 
         await page.evaluate(() => {
             (window as unknown as Record<string, unknown>).__nodeSelects = [];
-            document.querySelector("scheduling-explanation-dialog")!.addEventListener(
+            document.body.addEventListener(
                 "condition-matrix-node-select",
                 (event: Event) => {
                     ((window as unknown as Record<string, unknown>).__nodeSelects as unknown[])
