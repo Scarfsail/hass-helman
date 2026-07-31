@@ -71,11 +71,35 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     schedule_document_to_dict,
 )
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from custom_components.helman.automation.explain import (  # noqa: E402
+    OptimizerExplanation,
+)
 from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
 )
+
+
+def _explanation(trace) -> OptimizerExplanation:
+    """The first step's explanation record, decoded from the payload."""
+    payload = trace.to_dict()
+    return OptimizerExplanation.from_dict(
+        payload["steps"][0]["explanation"], payload["slotIds"]
+    )
+
+
+def _slots_by_id(explanation: OptimizerExplanation) -> dict:
+    return {slot.slot_id: slot for slot in explanation.slots}
+
+
+def _node(slot, key: str, group_index: int = 0):
+    group = next(group for group in slot.groups if group.index == group_index)
+    return next(node for node in group.conditions if node.key == key)
+
+
+def _gate(slot, key: str):
+    return next((gate for gate in slot.gates if gate.key == key), None)
 
 
 def _make_optimizer_config(
@@ -466,7 +490,47 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         step = trace.to_dict()["steps"][0]
         applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
         self.assertEqual(len(applied), 1)
-        self.assertEqual(applied[0]["reason"]["code"], "price_below_threshold")
+        self.assertIn(CURRENT_SLOT_ID, applied[0]["slotIds"])
+
+        slots = _slots_by_id(_explanation(trace))
+        written = slots[CURRENT_SLOT_ID]
+        self.assertEqual(written.verdict, "execute")
+        self.assertEqual(_node(written, "when_price_below").state, "true")
+        self.assertEqual(_gate(written, "stop_export_supported").state, "true")
+
+    def test_a_rejected_slot_names_the_failing_condition_and_its_actual(self) -> None:
+        """The whole rationale for a rejection is now the condition matrix.
+
+        No reason code says "price not below threshold" any more: the node for
+        `when_price_below` is false, carries the configured threshold as its
+        `value` and the price the slot actually presented as its `actual`.
+        """
+        snapshot = _make_snapshot(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            export_price_points=[
+                {"timestamp": CURRENT_SLOT_ID, "value": -0.1},
+                {"timestamp": NEXT_SLOT_ID, "value": 1.5},
+            ],
+            current_price=-0.1,
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            ExportPriceOptimizer(id="avoid-negative-export", stop_export_supported=True),
+            snapshot,
+            _make_optimizer_config(),
+            reference_time=REFERENCE_TIME,
+        )
+
+        assert_trace_contract(self, trace)
+        slots = _slots_by_id(_explanation(trace))
+        rejected = slots[NEXT_SLOT_ID]
+        self.assertEqual(rejected.verdict, "skip")
+        node = _node(rejected, "when_price_below")
+        self.assertEqual(node.state, "false")
+        self.assertEqual(node.value, 0.0)
+        self.assertEqual(node.actual, 1.5)
+        # A rejected slot never reaches the capability gate.
+        self.assertIsNone(_gate(rejected, "stop_export_supported"))
 
     def test_no_candidates_is_fully_derivable(self) -> None:
         snapshot = _make_snapshot(current_price=5.0)
@@ -477,6 +541,11 @@ class ExportPriceTraceContractTests(unittest.TestCase):
             reference_time=REFERENCE_TIME,
         )
         assert_trace_contract(self, trace)
+        explanation = _explanation(trace)
+        self.assertEqual(explanation.status, "ok")
+        self.assertEqual(
+            {slot.verdict for slot in explanation.slots}, {"skip"}
+        )
 
     def test_blocked_user_owned_is_emitted(self) -> None:
         schedule_document = ScheduleDocument(
@@ -505,6 +574,12 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         self.assertEqual(len(blocked), 1)
         self.assertEqual(blocked[0]["reason"]["code"], "blocked_user_owned")
 
+        # Every condition passed and nothing was placed: the verdict must not
+        # claim otherwise.
+        slots = _slots_by_id(_explanation(trace))
+        self.assertEqual(_node(slots[CURRENT_SLOT_ID], "when_price_below").state, "true")
+        self.assertEqual(slots[CURRENT_SLOT_ID].verdict, "skip")
+
     def test_unsupported_capability_emits_note(self) -> None:
         snapshot = _make_snapshot(
             export_price_points=[{"timestamp": CURRENT_SLOT_ID, "value": -0.1}],
@@ -521,6 +596,17 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         self.assertTrue(
             any(note["code"] == "stop_export_unsupported" for note in step["notes"])
         )
+
+        # A capability the inverter lacks is not "every slot false": it is a
+        # skipped step, and the status is what keeps the two distinguishable.
+        explanation = _explanation(trace)
+        self.assertEqual(explanation.status, "skipped")
+        self.assertEqual(explanation.status_reason, "stop_export_unsupported")
+        slots = _slots_by_id(explanation)
+        gate = _gate(slots[CURRENT_SLOT_ID], "stop_export_supported")
+        self.assertEqual(gate.state, "false")
+        self.assertEqual(gate.params["skippedSlots"], 6)
+        self.assertEqual(slots[CURRENT_SLOT_ID].verdict, "skip")
 
 
 if __name__ == "__main__":

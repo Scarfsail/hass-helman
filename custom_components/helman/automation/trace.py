@@ -33,6 +33,8 @@ from .explain import (
     NODE_STATES,
     OPTIMIZER_STATUSES,
     STATUS_OK,
+    VERDICT_SKIP,
+    VERDICTS,
     ConditionNode,
     GateNode,
     GroupExplanation,
@@ -156,12 +158,14 @@ class _MutableStep:
     )
     # slot_id -> gate key -> gate node, in first-recorded order.
     gates: dict[str, dict[str, GateNode]] = field(default_factory=dict)
+    # slot_id -> terminal verdict; unrecorded slots fall back to ``skip``.
+    verdicts: dict[str, str] = field(default_factory=dict)
     # ``None`` until stamped; ``end_step`` falls back to its own status.
     explain_status: str | None = None
     explain_status_reason: str | None = None
 
     def has_explanation(self) -> bool:
-        return bool(self.group_explanations or self.gates)
+        return bool(self.group_explanations or self.gates or self.verdicts)
 
     def explanation(self, slot_ids: Sequence[str]) -> OptimizerExplanation:
         """Assemble what was recorded into an :class:`OptimizerExplanation`.
@@ -174,13 +178,15 @@ class _MutableStep:
         for slot_id in slot_ids:
             groups = self.group_explanations.get(slot_id) or {}
             gates = self.gates.get(slot_id) or {}
-            if not groups and not gates:
+            verdict = self.verdicts.get(slot_id)
+            if not groups and not gates and verdict is None:
                 continue
             slots.append(
                 SlotExplanation(
                     slot_id=slot_id,
                     groups=tuple(groups[index] for index in sorted(groups)),
                     gates=tuple(gates.values()),
+                    verdict=verdict or VERDICT_SKIP,
                 )
             )
         return OptimizerExplanation(
@@ -498,6 +504,26 @@ class OptimizerTrace:
         node = GateNode(key=key, state=state, params=dict(params or {}))
         for slot_id in self._horizon_slots(slot_ids, f"gate {key!r}"):
             step.gates.setdefault(slot_id, {})[key] = node
+
+    def set_verdict(self, *, slot_ids: Sequence[str], verdict: str) -> None:
+        """Record the terminal verdict for a set of slots.
+
+        ``execute`` = written and meant to run, ``candidate`` = written with
+        ``condition_met=false`` (kept for display, never executed), ``skip`` =
+        nothing placed. Slots an optimizer never stamps default to ``skip``,
+        which is the honest reading of "the conditions said something about this
+        slot and nothing was placed".
+
+        Re-recording overwrites: the last word wins, so an optimizer may stamp a
+        horizon-wide ``skip`` baseline and then upgrade the slots it wrote.
+        """
+        step = self._current
+        if step is None:
+            return
+        if verdict not in VERDICTS:
+            _LOGGER.warning("trace has unknown verdict %r", verdict)
+        for slot_id in self._horizon_slots(slot_ids, f"verdict {verdict!r}"):
+            step.verdicts[slot_id] = verdict
 
     def resolve_condition(
         self,
