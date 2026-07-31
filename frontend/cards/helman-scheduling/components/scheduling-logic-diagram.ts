@@ -8,6 +8,7 @@ import type {
     ExplanationGate,
     ExplanationGroup,
     ExplanationNodeState,
+    ExplanationParamsSource,
 } from "../model/schedule-explanation-model";
 import { BLOCKED_USER_OWNED_GATE } from "../model/schedule-explanation-model";
 
@@ -25,6 +26,8 @@ export type LogicBlockKind =
     | "or"
     | "custom"
     | "gate"
+    /** The one term that *defeats* the conditions instead of joining them. */
+    | "override"
     | "final"
     | "terminal";
 
@@ -44,6 +47,17 @@ export interface LogicBlock {
     value: unknown;
     /** `actual <op> value`, where the condition's semantics define one. */
     comparison: LogicComparison | null;
+    /**
+     * The block's own numbers, in full. Rendered in the tooltip; the one or two
+     * that actually decided it are on the face as `detail`.
+     */
+    params: Record<string, unknown>;
+    /**
+     * The gate's own decisive numbers, short enough for the block face — the
+     * window it tested, the ordinal it placed at, the count it was short of.
+     * Never an invented comparison: see `gateDetail`.
+     */
+    detail: string | null;
     x: number;
     y: number;
     width: number;
@@ -62,10 +76,22 @@ export interface LogicComparison {
     value: string;
 }
 
-/** A group's caption, drawn above its own inputs when there is more than one. */
+/**
+ * A group's caption band, above its own inputs.
+ *
+ * Two independent things live here. The **label** names the chain and is drawn
+ * only where there is more than one to tell apart. The **params source** badge
+ * says where the group's numbers came from, and is drawn always — a group whose
+ * params were resolved for the *day* (possibly from another group entirely, or
+ * from master fallback) shows numbers that would otherwise read as this slot's
+ * own. So a single-group cell still gets a band, carrying the badge alone.
+ */
 export interface LogicGroupHeader {
     index: number;
     label: string;
+    /** False for a single group: a caption over one chain is noise. */
+    showLabel: boolean;
+    paramsSource: ExplanationParamsSource;
     y: number;
 }
 
@@ -100,6 +126,8 @@ export interface LogicDiagramModel {
     matchedGroupIndex: number | null;
     /** False for a single-group cell: an OR over one input decides nothing. */
     showOr: boolean;
+    /** True where an override gate is one of the OR's inputs. */
+    hasOverride: boolean;
     /** The group the diagram opens on when nothing was pressed in the matrix. */
     defaultGroupIndex: number | null;
     width: number;
@@ -108,7 +136,14 @@ export interface LogicDiagramModel {
 
 const BLOCK_H = 26;
 const INPUT_W = 240;
-const GATE_W = 160;
+/**
+ * The gate blocks, widened to the column they already had.
+ *
+ * A gate now carries its own numbers on its face, and 160px left the label with
+ * ~10 characters. 168 is what fits between `COL_SIDE_X` and `COL_CUSTOM_X`
+ * without moving either, so the diagram does not get one pixel wider.
+ */
+const GATE_W = 168;
 const CUSTOM_W = 160;
 const OP_W = 44;
 const TERM_W = 176;
@@ -117,6 +152,8 @@ const GROUP_GAP = 20;
 const PAD_TOP = 30;
 /** The band a group's caption occupies above its own first input. */
 const GROUP_LABEL_H = 15;
+/** The line under the override block that says what it is. */
+const OVERRIDE_HINT_H = 12;
 
 const COL_INPUT_X = 8;
 const COL_AND_X = 258;
@@ -237,6 +274,120 @@ const ALWAYS_ADVISORY_GATES = new Set<string>([
     "placement_capacity",
     "cheap_window_capacity",
 ]);
+
+/**
+ * Gates that are neither a requirement nor a report, but an **override**.
+ *
+ * `consecutive_skip_override` (`appliance_runtime.py:30-35, :125-127`) is the
+ * one construct in the pipeline that *defeats the whole OR chain*: after
+ * `max_consecutive_skips` consecutive short days the optimizer "runs anyway,
+ * past every group's `custom` conditions and past every slot condition, over the
+ * full window, carrying its own `consecutive_skip_override` gate so a forced run
+ * never reads as an unexplained one."
+ *
+ * So it does not AND with the conditions — it ORs with them, and the OR is what
+ * ANDs with the real vetoes. Drawn as an AND input it would claim the opposite:
+ * that a forced run *required* it, and, via `isAndInput`'s second rule, that the
+ * failed conditions it overrode were mere context. That is a run with no visible
+ * cause, which is exactly what the gate exists to prevent.
+ *
+ * The gate is emitted only on a forced day — "absence means 'not forced'" — so
+ * there is never a false one to synthesise.
+ *
+ * **The other gates were checked against their docstrings, not their names:**
+ *
+ * - `before_release` (`charge_hold.py:69-71`) — a *requirement*. "The slot
+ *   precedes the day's release"; `false` is stamped for `after_release_by_day`,
+ *   whose slots are not held. It vetoes.
+ * - `hold_room` (`charge_hold.py:66-68`) — a *requirement*, day-scoped. "The
+ *   day's remaining solar can still refill the battery from *somewhere* in the
+ *   window", and where it is false "even releasing at the window start leaves
+ *   the day's remaining solar short of the need, so no slot of it can be held"
+ *   (`charge_hold.py:438-445`). Nothing is placed, unlike the two advisory
+ *   capacity gates whose `false` still places what it can.
+ */
+const OVERRIDE_GATES = new Set<string>(["consecutive_skip_override"]);
+
+/**
+ * The one or two numbers a gate was actually decided by, for its own face.
+ *
+ * Every pair here reads **have / need** — `2/2` skips of the allowed maximum,
+ * `1.5/4 h` of the daily minimum already delivered, `4.2/3.1 kWh` of surplus
+ * against the need — except `cheapest_rank`, whose `1/16` is a *position out of
+ * a total* and is universally read as one.
+ *
+ * Nothing is invented. An ordinal gets no operator, a window gets no threshold,
+ * and a gate this does not know about gets no face numbers at all; its params
+ * are still whole in the tooltip. Read off the `GATE_*` docstrings in
+ * `appliance_runtime.py`, `charge_hold.py` and `charge_from_grid.py`.
+ */
+export function gateDetail(key: string, params: Record<string, unknown>): string | null {
+    switch (key) {
+        case "run_window":
+        case "hold_window":
+            return range(shortTime(params.start), shortTime(params.end));
+        case "before_release":
+            return shortTime(params.releaseSlot);
+        case "daily_minimum_remaining":
+            return ratio(params.doneHours, params.minHours, "h");
+        case "consecutive_skip_override":
+            return ratio(params.consecutiveSkips, params.maxConsecutiveSkips);
+        case "cheapest_rank":
+            return ratio(params.rank, params.rankOf);
+        case "hold_room":
+            return ratio(params.surplusAtWindowStart, params.neededKwh, "kWh");
+        case "cheap_window_capacity":
+            return ratio(params.slotsAvailable, params.slotsNeeded);
+        case "placement_capacity":
+            return ratio(params.slotsPlaceable, params.slotsNeeded);
+        default:
+            return null;
+    }
+}
+
+/**
+ * One side of a gate's numbers, as short as it can honestly be.
+ *
+ * Unlike a condition's threshold — where `3.50` beside `3.43` is the point —
+ * a gate's counts are read at a glance and `1.50/4 h` of a daily minimum is
+ * two characters of noise. Trailing zeros go; nothing else is rounded away.
+ */
+function detailSide(value: unknown): string | null {
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? String(Number(value.toFixed(2))) : null;
+    }
+    return comparisonSide(value);
+}
+
+/** `have/need`, or one side alone where the record only carries one. */
+function ratio(have: unknown, need: unknown, unit = ""): string | null {
+    const left = detailSide(have);
+    const right = detailSide(need);
+    const suffix = unit === "" ? "" : ` ${unit}`;
+    if (left === null && right === null) return null;
+    if (left === null) return `${right}${suffix}`;
+    if (right === null) return `${left}${suffix}`;
+    return `${left}/${right}${suffix}`;
+}
+
+function range(start: string | null, end: string | null): string | null {
+    if (start === null && end === null) return null;
+    if (start === null || end === null) return start ?? end;
+    return `${start}–${end}`;
+}
+
+/**
+ * `HH:MM` from either shape the backend records.
+ *
+ * `appliance_runtime` writes the configured `"08:00"` straight through;
+ * `charge_hold` writes a whole slot id. Both mean a time of day.
+ */
+function shortTime(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const inSlotId = /T(\d{2}:\d{2})/.exec(value);
+    if (inSlotId !== null) return inSlotId[1];
+    return /^\d{1,2}:\d{2}$/.test(value) ? value : null;
+}
 
 /** The synthetic input that keeps a rejected slot's AND honestly false. */
 const UNEXPLAINED_AND_INPUT = "unexplained_veto";
@@ -362,6 +513,16 @@ function isAndInput(key: string, state: LogicState, terminal: LogicTerminal): bo
  * It gets no caption either, for the same reason: with one chain there is
  * nothing to tell it apart from.
  *
+ * **An override is the OR's other input, never an AND's.**
+ * `consecutive_skip_override` defeats the conditions rather than joining them
+ * (`appliance_runtime.py:30-35`), so the drawn shape is
+ * `(conditions ∨ override) ∧ vetoes`. That is what keeps a forced day readable:
+ * the conditions spine stays on screen, failed, with the block that overrode it
+ * wired alongside — rather than the whole spine being demoted to context by
+ * `isAndInput`'s second rule and the run reading as uncaused. It also keeps the
+ * invariant: on a forced day the OR is `true`, so the final AND is `true`, so
+ * the terminal is `execute`.
+ *
  * **The custom conditions are a stage, not a gate.** They are re-checked just
  * before the action would start, and they are the whole difference between a
  * run and a `candidate`, so they get the last column before the `&` rather than
@@ -389,8 +550,13 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     const terminal = resolveTerminal(cell);
     // With one group there is nothing to tell apart, and a caption over a
     // single chain is noise. With two or more, "which chain is which" is the
-    // first thing a reader cannot answer.
+    // first thing a reader cannot answer. The header band itself is drawn
+    // either way: it carries the params-source badge, which a single group
+    // needs just as much.
     const showGroupLabels = cell.groups.length > 1;
+    // The override, pulled out before the gate loop: it is not a term of the
+    // conjunction at all, it is the *other input of the OR*.
+    const overrideGate = cell.gates.find((gate) => OVERRIDE_GATES.has(gate.key)) ?? null;
 
     // ---- geometry + states, groups first -------------------------------
     let cursorY = PAD_TOP;
@@ -403,10 +569,14 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     cell.groups.forEach((group, groupPos) => {
         const inputIds: string[] = [];
         const inputStates: LogicState[] = [];
-        if (showGroupLabels) {
-            groupHeaders.push({ index: group.index, label: group.label, y: cursorY + 10 });
-            cursorY += GROUP_LABEL_H;
-        }
+        groupHeaders.push({
+            index: group.index,
+            label: group.label,
+            showLabel: showGroupLabels,
+            paramsSource: group.paramsSource,
+            y: cursorY + 10,
+        });
+        cursorY += GROUP_LABEL_H;
         const top = cursorY;
         if (group.conditions.length === 0) {
             // A group with nothing configured still gets a row, so the diagram
@@ -422,6 +592,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
                 actual: null,
                 value: null,
                 comparison: null,
+                params: {},
+                detail: null,
                 x: COL_INPUT_X,
                 y: cursorY,
                 width: INPUT_W,
@@ -443,6 +615,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
                 actual: node.actual,
                 value: node.value,
                 comparison: conditionComparison(node.key, node.value, node.actual),
+                params: {},
+                detail: null,
                 x: COL_INPUT_X,
                 y: cursorY,
                 width: INPUT_W,
@@ -466,6 +640,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             actual: null,
             value: null,
             comparison: null,
+            params: {},
+            detail: null,
             x: COL_AND_X,
             y: andY,
             width: OP_W,
@@ -482,13 +658,51 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         cursorY += GROUP_GAP;
     });
 
+    // ---- the override: the other input of the OR, never a requirement ---
+    //
+    // Drawn only when the record carries it, because the gate is emitted only
+    // on a forced day and its absence *is* "not forced". Synthesising a false
+    // one would put a veto on screen that the optimizer never applied.
+    const overrideId = "override";
+    const overrideCenters: number[] = [];
+    if (overrideGate !== null) {
+        blocks.push({
+            id: overrideId,
+            kind: "override",
+            key: overrideGate.key,
+            state: overrideGate.state,
+            decisive: false,
+            groupIndex: null,
+            actual: null,
+            value: null,
+            comparison: null,
+            params: overrideGate.params,
+            detail: gateDetail(overrideGate.key, overrideGate.params),
+            x: COL_INPUT_X,
+            y: cursorY,
+            width: INPUT_W,
+            height: BLOCK_H,
+        });
+        overrideCenters.push(cursorY + BLOCK_H / 2);
+        cursorY += BLOCK_H + V_GAP + OVERRIDE_HINT_H;
+    }
+
     // ---- the OR, only where there is anything to choose between ---------
-    const showOr = cell.groups.length > 1;
+    //
+    // An override makes there be something to choose between even for a single
+    // group: "the conditions held, *or* the run was forced". That is the whole
+    // shape `max_consecutive_skips` has in the optimizer.
+    const showOr = cell.groups.length > 1 || overrideGate !== null;
     const orId = "or";
-    const orValue = orState(groupAndStates);
-    const orY = andCenters.length === 0
+    const orInputIds = overrideGate === null ? groupAndIds : [...groupAndIds, overrideId];
+    const orInputStates: LogicState[] = overrideGate === null
+        ? groupAndStates
+        : [...groupAndStates, overrideGate.state];
+    const orValue = orState(orInputStates);
+    const orCenters = [...andCenters, ...overrideCenters];
+    const orY = orCenters.length === 0
         ? PAD_TOP
-        : Math.round((Math.min(...andCenters) + Math.max(...andCenters)) / 2 - BLOCK_H / 2);
+        : Math.round((Math.min(...orCenters) + Math.max(...orCenters)) / 2 - BLOCK_H / 2);
     if (showOr) {
         blocks.push({
             id: orId,
@@ -500,13 +714,15 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             actual: null,
             value: null,
             comparison: null,
+            params: {},
+            detail: null,
             x: COL_OR_X,
             y: orY,
             width: OP_W,
             height: BLOCK_H,
         });
-        for (const andId of groupAndIds) {
-            edges.push({ from: andId, to: orId, decisive: false });
+        for (const inputId of orInputIds) {
+            edges.push({ from: inputId, to: orId, decisive: false });
         }
     }
 
@@ -554,6 +770,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
                 actual: null,
                 value: null,
                 comparison: null,
+                params: {},
+                detail: null,
                 x: COL_CUSTOM_X,
                 y: customY,
                 width: CUSTOM_W,
@@ -573,6 +791,10 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     }
 
     cell.gates.forEach((gate: ExplanationGate, gatePos) => {
+        // Already drawn, as the OR's other input.
+        if (OVERRIDE_GATES.has(gate.key)) {
+            return;
+        }
         if (!isAndInput(gate.key, gate.state, terminal)) {
             annotations.push({
                 key: gate.key,
@@ -590,9 +812,11 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             state: gate.state,
             decisive: false,
             groupIndex: null,
-            actual: gate.params.rank ?? null,
+            actual: null,
             value: null,
             comparison: null,
+            params: gate.params,
+            detail: gateDetail(gate.key, gate.params),
             x: COL_SIDE_X,
             y: sideY,
             width: GATE_W,
@@ -618,6 +842,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             actual: null,
             value: null,
             comparison: null,
+            params: {},
+            detail: null,
             x: COL_SIDE_X,
             y: sideY,
             width: GATE_W,
@@ -644,6 +870,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         actual: null,
         value: null,
         comparison: null,
+        params: {},
+        detail: null,
         x: COL_FINAL_X,
         y: finalY,
         width: OP_W,
@@ -659,6 +887,8 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         actual: null,
         value: null,
         comparison: null,
+        params: {},
+        detail: null,
         x: COL_TERM_X,
         y: finalY,
         width: TERM_W,
@@ -685,10 +915,15 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     if (spineId !== null && byId.get(spineId)?.decisive === true) {
         if (showOr) {
             if (orValue === "true") {
-                // Only the first satisfied group. The rest were never reached.
-                if (matchedPos >= 0) mark(groupAndIds[matchedPos]);
+                // Only the first satisfied input. The rest were never reached.
+                // The group ANDs come first, so this is still "the first
+                // satisfied group" wherever one satisfied it; where none did
+                // and the run was forced, the override is the input that
+                // carries the truth, and it is the one that gets marked.
+                const firstTrue = orInputStates.findIndex((state) => state === "true");
+                if (firstTrue >= 0) mark(orInputIds[firstTrue]);
             } else {
-                for (const andId of groupAndIds) mark(andId);
+                for (const inputId of orInputIds) mark(inputId);
             }
         }
     }
@@ -723,6 +958,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         terminal,
         matchedGroupIndex,
         showOr,
+        hasOverride: overrideGate !== null,
         defaultGroupIndex: matchedGroupIndex ?? cell.groups[0]?.index ?? null,
         width: DIAGRAM_W,
         height,
@@ -768,6 +1004,25 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
  * conditions that do not compare (`run_when`'s set membership, the self-gating
  * pair) never get one invented for them. A passing node has no `actual` in the
  * record at all, so it shows the threshold alone.
+ *
+ * A block also shows **its own numbers**, not only its result. A gate carries
+ * the window it tested, the ordinal it placed at or the count it fell short of,
+ * on its face, in `have/need` form; the whole param set is one hover away. The
+ * self-gating conditions, which record no `actual` and have no numeric test,
+ * show the level the group configured. Nothing is invented for a block that has
+ * no such number, and nothing is allowed to overflow its block — `fitText`
+ * truncates, and the tooltip is where the full string lives.
+ *
+ * Each group's caption band also carries **where its params came from**.
+ * `day_resolved` and `master_fallback` params can be a *different* group's, so
+ * without the badge the numbers silently read as this slot's own. The two loud
+ * sources say so twice: a leading `!` and the warning colour. A single group
+ * gets the badge without a caption — the marker matters more than the label.
+ *
+ * A condition a group **does not configure** is drawn too, dotted and greyed
+ * with a `–`. Leaving it out made a group look like it checked fewer things than
+ * it did. It takes no part in the AND (`andState` skips it) and is never marked
+ * decisive.
  *
  * There are **four** terminals, not two. `execute` and `not eligible` are the
  * obvious pair; `candidate` (a group's system mask matched but its custom
@@ -887,6 +1142,54 @@ export class SchedulingLogicDiagram extends LitElement {
 
             g.block[data-state="not_evaluated"] rect.body {
                 stroke-dasharray: 4 3;
+            }
+
+            /* A condition the group does not configure. It is drawn -- leaving
+               it out made a group look like it checked fewer things than it
+               did -- and it must be tellable apart at a glance from a condition
+               that failed and from one that was deliberately never consulted.
+               Its own dash (fine dots, against 4 3 and 2 2), its own muted
+               stroke, and the same greyed treatment on its text. It takes no
+               part in the AND: see andState. */
+            g.block[data-state="not_applicable"] rect.body {
+                stroke: var(--disabled-text-color, var(--secondary-text-color));
+                stroke-dasharray: 1 3;
+                fill: none;
+            }
+
+            g.block[data-state="not_applicable"] text.label,
+            g.block[data-state="not_applicable"] text.actual {
+                fill: var(--disabled-text-color, var(--secondary-text-color));
+            }
+
+            /* The override is the OR's other input, so it is drawn as its own
+               kind of thing rather than as one more condition. */
+            g.block[data-kind="override"] rect.body {
+                stroke: var(--warning-color, #ef6c00);
+                stroke-width: 2;
+                fill: color-mix(in srgb, var(--warning-color, #ef6c00) 8%, var(--card-background-color));
+            }
+
+            text.override-hint {
+                font-size: 9px;
+                font-weight: 600;
+                fill: var(--warning-color, #ef6c00);
+            }
+
+            /* Where the group's numbers came from. Day-resolved and
+               master-fallback params can be another group's entirely, so they
+               are the loud ones -- and they say so with a leading mark as well
+               as with colour. (No backticks in here: this is a tagged template
+               and one would end it mid-comment.) */
+            text.params-source {
+                font-size: 9px;
+                fill: var(--secondary-text-color);
+            }
+
+            text.params-source[data-source="day_resolved"],
+            text.params-source[data-source="master_fallback"] {
+                font-weight: 700;
+                fill: var(--warning-color, #ef6c00);
             }
 
             /* The group the diagram opened on, so a diagram nobody clicked
@@ -1131,6 +1434,7 @@ export class SchedulingLogicDiagram extends LitElement {
     private _renderStages(model: LogicDiagramModel) {
         const orBlock = model.blocks.find((block) => block.id === "or");
         const customBlock = model.blocks.find((block) => block.id === "custom");
+        const overrideBlock = model.blocks.find((block) => block.id === "override");
         return svg`
             <text class="stage" data-stage="conditions" x=${COL_INPUT_X} y="14">
                 ${this._text("diagram.stage.conditions")}
@@ -1160,11 +1464,29 @@ export class SchedulingLogicDiagram extends LitElement {
             ${orBlock === undefined ? nothing : svg`
                 <text
                     class="hint"
-                    data-stage="any_group"
+                    data-stage=${model.hasOverride ? "any_group_or_forced" : "any_group"}
                     x=${orBlock.x + orBlock.width / 2}
                     y=${orBlock.y + orBlock.height + 11}
                     text-anchor="middle"
-                >${this._text("diagram.stage.any_group")}</text>
+                >${fitText(
+                    this._text(model.hasOverride
+                        ? "diagram.stage.any_group_or_forced"
+                        : "diagram.stage.any_group"),
+                    OP_W + 80,
+                    ACTUAL_PX_PER_CHAR,
+                )}</text>
+            `}
+            ${overrideBlock === undefined ? nothing : svg`
+                <text
+                    class="override-hint"
+                    data-stage="forced_run"
+                    x=${overrideBlock.x}
+                    y=${overrideBlock.y + overrideBlock.height + 10}
+                >${fitText(
+                    this._text("diagram.override_hint"),
+                    INPUT_W + 40,
+                    ACTUAL_PX_PER_CHAR,
+                )}</text>
             `}
             ${customBlock === undefined ? nothing : svg`
                 <text
@@ -1190,18 +1512,35 @@ export class SchedulingLogicDiagram extends LitElement {
      */
     private _renderGroupHeaders(model: LogicDiagramModel) {
         return model.groupHeaders.map((header) => svg`
+            ${header.showLabel ? svg`
+                <text
+                    class="group-label"
+                    data-group=${header.index}
+                    x=${COL_INPUT_X}
+                    y=${header.y}
+                >${fitText(
+                    header.label.length > 0
+                        ? header.label
+                        : `${this._text("matrix.group")} ${header.index + 1}`,
+                    INPUT_W - SOURCE_MAX_W - 8,
+                    LABEL_PX_PER_CHAR,
+                )}</text>
+            ` : nothing}
             <text
-                class="group-label"
+                class="params-source"
                 data-group=${header.index}
-                x=${COL_INPUT_X}
+                data-source=${header.paramsSource}
+                x=${header.showLabel ? COL_INPUT_X + INPUT_W : COL_INPUT_X}
                 y=${header.y}
-            >${fitText(
-                header.label.length > 0
-                    ? header.label
-                    : `${this._text("matrix.group")} ${header.index + 1}`,
-                INPUT_W,
-                LABEL_PX_PER_CHAR,
-            )}</text>
+                text-anchor=${header.showLabel ? "end" : "start"}
+            ><title>${
+                this._text(`params_source_detail.${header.paramsSource}`)
+            }</title><tspan class="badge">${fitText(
+                `${header.paramsSource === "slot_matched" ? "" : "! "}${
+                    this._text(`params_source.${header.paramsSource}`)}`,
+                SOURCE_MAX_W,
+                SOURCE_PX_PER_CHAR,
+            )}</tspan></text>
         `);
     }
 
@@ -1217,9 +1556,14 @@ export class SchedulingLogicDiagram extends LitElement {
         const y2 = to.y + to.height / 2;
         // Everything entering the final AND turns past the side column, so the
         // spine never runs through a gate block on its way there.
+        // Everything entering the OR turns in the gap *after* the AND column,
+        // so the override's long edge up from below the groups never runs
+        // through a group's own `&` block on its way there.
         const mid = edge.to === "final"
             ? Math.max(x1 + 8, FINAL_ELBOW_X)
-            : x1 + Math.max(8, (x2 - x1) / 2);
+            : edge.to === "or"
+                ? Math.max(x1 + 6, COL_OR_X - 6)
+                : x1 + Math.max(8, (x2 - x1) / 2);
         return svg`
             <path
                 class="edge"
@@ -1246,19 +1590,38 @@ export class SchedulingLogicDiagram extends LitElement {
         // `{"code":…,"deltaSocPct":…}` painted over the neighbouring block is
         // the bug this closes. Scalars stay inline, everything else lives in
         // the tooltip.
+        //
+        // Where nothing was compared, the block still owns numbers worth
+        // showing: a gate's own `detail` (the window it tested, the ordinal it
+        // placed at, the count it fell short of), the `actual` the node
+        // recorded, or — for the self-gating conditions, which record no actual
+        // and have no numeric test — the level the group configured. Full
+        // params always live in the tooltip.
         const comparison = block.comparison;
-        const actual = comparison === null ? summariseLogicValue(block.actual) : null;
-        const right = comparison === null ? actual : formatComparison(comparison);
-        const rightWidth = comparison === null ? ACTUAL_MAX_W : COMPARE_MAX_W;
-        const labelBudget = block.width - 26 - 8 - (right === null ? 0 : rightWidth + 6);
+        const right = comparison !== null
+            ? formatComparison(comparison)
+            : block.detail
+                ?? summariseLogicValue(block.actual)
+                ?? summariseLogicValue(block.value);
+        // The right-hand text gets a *cap*, and the label gets back whatever it
+        // did not use: reserving the full cap for `1/16` cost the label six
+        // characters it had no reason to lose.
+        const rightCap = comparison !== null
+            ? COMPARE_MAX_W
+            : block.detail !== null ? DETAIL_MAX_W : ACTUAL_MAX_W;
+        const rightText = right === null ? null : fitText(right, rightCap, ACTUAL_PX_PER_CHAR);
+        const labelBudget = block.width - 26 - 8
+            - (rightText === null ? 0 : rightText.length * ACTUAL_PX_PER_CHAR + 6);
         const fullValue = fullLogicValue(block.actual);
         const fullConfigured = fullLogicValue(block.value);
         const title = [
             `${label} — ${this._labelled("state", block.state)}`,
+            block.kind === "override" ? this._text("diagram.override_detail") : "",
             fullConfigured === null
                 ? ""
                 : `${this._text("matrix.configured")}: ${fullConfigured}`,
             fullValue === null ? "" : `${this._text("matrix.actual")}: ${fullValue}`,
+            this._paramsText(block.params),
         ].filter((part) => part.length > 0).join(" · ");
 
         return svg`
@@ -1297,13 +1660,15 @@ export class SchedulingLogicDiagram extends LitElement {
                     <text class="label" x=${block.x + 26} y=${block.y + block.height / 2 + 4}>
                         ${fitText(label, labelBudget, LABEL_PX_PER_CHAR)}
                     </text>
-                    ${right === null ? nothing : svg`
+                    ${rightText === null ? nothing : svg`
                         <text
-                            class=${comparison === null ? "actual" : "actual comparison"}
+                            class=${comparison !== null
+                                ? "actual comparison"
+                                : block.detail !== null ? "actual detail" : "actual"}
                             x=${block.x + block.width - 8}
                             y=${block.y + block.height / 2 + 4}
                             text-anchor="end"
-                        >${fitText(right, rightWidth, ACTUAL_PX_PER_CHAR)}</text>
+                        >${rightText}</text>
                     `}
                 `}
             </g>
@@ -1323,12 +1688,7 @@ export class SchedulingLogicDiagram extends LitElement {
                         <span class="glyph">${stateGlyph(entry.state)}</span>
                         <span class="label">${this._annotationLabel(entry)}</span>
                         ${Object.entries(entry.params).length === 0 ? nothing : html`
-                            <span class="params">
-                                ${Object.entries(entry.params)
-                                    .map(([key, value]) =>
-                                        `${this._labelled("param", key)}: ${fullLogicValue(value) ?? "—"}`)
-                                    .join(", ")}
-                            </span>
+                            <span class="params">${this._paramsText(entry.params)}</span>
                         `}
                     </div>
                 `)}
@@ -1336,7 +1696,19 @@ export class SchedulingLogicDiagram extends LitElement {
         `;
     }
 
+    /** Every number the block or gate carries, named, for the tooltip. */
+    private _paramsText(params: Record<string, unknown>): string {
+        return Object.entries(params)
+            .map(([key, value]) =>
+                `${this._labelled("param", key)}: ${fullLogicValue(value) ?? "—"}`)
+            .join(", ");
+    }
+
     private _renderLegend(model: LogicDiagramModel) {
+        const hasNotApplicable = model.blocks.some(
+            (block) => block.state === "not_applicable",
+        );
+        const hasDetail = model.blocks.some((block) => block.detail !== null);
         return html`
             <div class="legend">
                 <span class="legend-item" data-legend="decisive">
@@ -1360,6 +1732,24 @@ export class SchedulingLogicDiagram extends LitElement {
                         ${this._text("diagram.legend_or")}
                     </span>
                 ` : nothing}
+                ${model.hasOverride ? html`
+                    <span class="legend-item" data-legend="override">
+                        ${this._text("diagram.legend_override")}
+                    </span>
+                ` : nothing}
+                ${hasNotApplicable ? html`
+                    <span class="legend-item" data-legend="not_applicable">
+                        ${this._text("diagram.legend_not_applicable")}
+                    </span>
+                ` : nothing}
+                ${hasDetail ? html`
+                    <span class="legend-item" data-legend="params">
+                        ${this._text("diagram.legend_params")}
+                    </span>
+                ` : nothing}
+                <span class="legend-item" data-legend="params_source">
+                    ${this._text("diagram.legend_params_source")}
+                </span>
             </div>
         `;
     }
@@ -1370,6 +1760,8 @@ export class SchedulingLogicDiagram extends LitElement {
                 return this._text(`diagram.terminal.${block.key}`);
             case "custom":
                 return this._text("matrix.custom");
+            case "override":
+                return this._text("diagram.override");
             case "input":
                 return block.key === ""
                     ? this._text("matrix.no_conditions")
@@ -1434,6 +1826,11 @@ function stateGlyph(state: LogicState): string {
 const ACTUAL_MAX_W = 46;
 /** Room for `actual <op> value`, which is three things rather than one. */
 const COMPARE_MAX_W = 104;
+/** Room for a gate's own numbers: `08:00–18:00` is the widest of them. */
+const DETAIL_MAX_W = 62;
+/** Room for the params-source badge, right-aligned in the group's caption. */
+const SOURCE_MAX_W = 86;
+const SOURCE_PX_PER_CHAR = 4.7;
 const LABEL_PX_PER_CHAR = 5.9;
 const ACTUAL_PX_PER_CHAR = 5.4;
 const STAGE_PX_PER_CHAR = 5.0;
