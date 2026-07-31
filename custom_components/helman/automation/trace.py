@@ -30,6 +30,7 @@ from ..scheduling.schedule import (
     parse_slot_id,
 )
 from .explain import (
+    NODE_SCOPES,
     NODE_STATES,
     OPTIMIZER_STATUSES,
     STATUS_OK,
@@ -227,6 +228,7 @@ def _resolve_nodes(
     state: str,
     value: Any,
     actual: Any,
+    scope: str | None,
 ) -> tuple[tuple[ConditionNode, ...], bool]:
     """Replace the ``key`` node (at any depth) with its resolved result."""
     resolved: list[ConditionNode] = []
@@ -239,12 +241,13 @@ def _resolve_nodes(
                     state=state,
                     value=node.value if value is None else value,
                     actual=actual,
+                    scope=node.scope if scope is None else scope,
                 )
             )
             changed = True
             continue
         children, child_changed = _resolve_nodes(
-            node.children, key, state, value, actual
+            node.children, key, state, value, actual, scope
         )
         if child_changed:
             node = replace(node, children=children)
@@ -534,6 +537,7 @@ class OptimizerTrace:
         value: Any = None,
         actual: Any = None,
         group_index: int | None = None,
+        scope: str | None = None,
     ) -> None:
         """Resolve a self-gating condition node the rails could not decide.
 
@@ -541,8 +545,14 @@ class OptimizerTrace:
         contribute an all-true mask, so ``build_eligibility`` can only leave
         them ``not_evaluated``; only the optimizer that consults them knows
         their real result — and, for a capped run, which slots it never got as
-        far as consulting. This overwrites the placeholder in place, leaving the
-        node's ``scope`` (``reserve_floor_soc`` is window-scoped) untouched.
+        far as consulting. This overwrites the placeholder in place.
+
+        ``scope`` re-scopes the node, because only the optimizer knows how
+        finely its answer discriminates: ``reserve_floor_soc`` is registered
+        RUN-scoped (one configured floor per run) but *resolves* per expensive
+        band, so leaving it run-scoped would render one spanning cell over a
+        horizon where the answer changes from window to window. ``None`` keeps
+        the scope the condition type declared.
 
         ``group_index=None`` resolves the node in every group that carries it.
         Slots where no such node exists are skipped with a warning: a condition
@@ -556,6 +566,10 @@ class OptimizerTrace:
             _LOGGER.warning(
                 "trace condition resolution %r has unknown state %r", key, state
             )
+        if scope is not None and scope not in NODE_SCOPES:
+            _LOGGER.warning(
+                "trace condition resolution %r has unknown scope %r", key, scope
+            )
         missing = 0
         for slot_id in self._horizon_slots(slot_ids, f"condition {key!r}"):
             groups = step.group_explanations.get(slot_id)
@@ -567,7 +581,7 @@ class OptimizerTrace:
                 if group_index is not None and index != group_index:
                     continue
                 conditions, changed = _resolve_nodes(
-                    group.conditions, key, state, value, actual
+                    group.conditions, key, state, value, actual, scope
                 )
                 if changed:
                     groups[index] = replace(group, conditions=conditions)

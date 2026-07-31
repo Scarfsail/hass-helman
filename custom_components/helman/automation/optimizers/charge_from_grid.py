@@ -44,6 +44,16 @@ from ...scheduling.schedule import (
 )
 from ..base import ScheduleWriter
 from ..conditions import build_eligibility
+from ..explain import (
+    SCOPE_WINDOW,
+    STATE_FALSE,
+    STATE_NOT_EVALUATED,
+    STATE_TRUE,
+    STATUS_SKIPPED,
+    VERDICT_CANDIDATE,
+    VERDICT_EXECUTE,
+    VERDICT_SKIP,
+)
 from ..ownership import is_user_owned_inverter_action
 from ..rails import horizon_slots_between, read_price_by_bucket, read_soc_by_bucket
 from ..trace import NULL_TRACE
@@ -58,6 +68,30 @@ if TYPE_CHECKING:
 _SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
 _ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC}
+
+# The gates this kind owns. Every one of them is *per bridging window*: a cheap
+# slot only ever meets them because some expensive band ahead of it needs
+# bridging, and a slot no band reaches has none of these columns at all.
+#: The SoC trajectory covers the expensive band (and the two points the sizing
+#: reads). Without it nothing downstream can be evaluated, false or otherwise.
+GATE_WINDOW_SOC_KNOWN = "window_soc_known"
+#: Charging is actually needed: the battery does not already enter the cheap
+#: window at or above the target the dip implies.
+GATE_CHARGE_NEEDED = "charge_needed"
+#: The cheap window holds enough writable slots for the whole deficit. False
+#: still charges — as much as the window allows — so this reads as "the bridge
+#: is short", not "nothing was placed".
+GATE_CHEAP_WINDOW_CAPACITY = "cheap_window_capacity"
+#: Where the slot placed in the cheap window's price ranking. **An ordinal, not
+#: a truth value**: `params.rank` / `params.rankOf` carry the position and
+#: `state` only says whether it made the cut ("you lost to 4 cheaper slots" is
+#: not a boolean).
+GATE_CHEAPEST_RANK = "cheapest_rank"
+#: The slot is writable at all — user-owned cheap slots are dropped before the
+#: ranking, so the writer never sees them and cannot veto them itself.
+GATE_SLOT_AVAILABLE = "slot_available"
+
+
 @dataclass(frozen=True)
 class ChargeFromGridOptimizer:
     id: str
@@ -75,6 +109,9 @@ class ChargeFromGridOptimizer:
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
         eligibility = build_eligibility(snapshot, config, trace)
         writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
+        trace.set_verdict(
+            slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
+        )
 
         battery_state = snapshot.context.battery_state
         usable_capacity_kwh = snapshot.context.battery_usable_capacity_kwh
@@ -89,10 +126,18 @@ class ChargeFromGridOptimizer:
             or max_charge_power_kw is None
             or not max_charge_power_kw > 0
         ):
+            # Nothing was evaluated; without the status this is indistinguishable
+            # from a horizon on which every window turned out to be covered.
+            trace.set_step_status(
+                status=STATUS_SKIPPED, reason="battery_params_missing"
+            )
             return writer.flush(action=_ACTION)
 
         soc_by_bucket = read_soc_by_bucket(snapshot)
         if not soc_by_bucket:
+            trace.set_step_status(
+                status=STATUS_SKIPPED, reason="soc_forecast_unavailable"
+            )
             return writer.flush(action=_ACTION)
         import_price_by_bucket = read_price_by_bucket(
             snapshot.context.import_price_forecast
@@ -100,6 +145,18 @@ class ChargeFromGridOptimizer:
 
         horizon_start = build_horizon_start(snapshot.context.now)
         horizon_end = build_horizon_end(snapshot.context.now)
+
+        # Re-scope the self-gating floor node before anything resolves it: it is
+        # registered RUN-scoped (one configured floor per run) but *answered*
+        # per expensive band, and the payload carries one scope per column. Slots
+        # no bridging window reaches keep the `not_evaluated` placeholder — the
+        # floor was never consulted there, which is not the same as passing it.
+        trace.resolve_condition(
+            slot_ids=eligibility.horizon_slot_ids,
+            key="reserve_floor_soc",
+            state=STATE_NOT_EVALUATED,
+            scope=SCOPE_WINDOW,
+        )
 
         emit = _ChargeFromGridEmission(trace)
         for day_context in snapshot.context.day_contexts.values():
@@ -171,40 +228,83 @@ class ChargeFromGridOptimizer:
             format_slot_id(expensive_band.start),
             format_slot_id(expensive_band.end),
         ]
+        floor = resolved.condition_value("reserve_floor_soc")
+        group_index = resolved.group.index
         window_min_soc = _min_soc_over(
             soc_by_bucket, expensive_band.start, expensive_band.end
         )
         if window_min_soc is None:
+            emit.window_unknown(
+                cheap_slots,
+                expensive_window=expensive_window,
+                floor=_FloorResolution(STATE_NOT_EVALUATED, floor, None, group_index),
+            )
             return
+        soc_known = _Gate(
+            GATE_WINDOW_SOC_KNOWN,
+            STATE_TRUE,
+            {
+                "expensiveWindow": expensive_window,
+                "projectedMinSoc": round(window_min_soc, 1),
+            },
+        )
         # The floor is read by value, not as a mask — see the module docstring.
-        dip = resolved.condition_value("reserve_floor_soc") - window_min_soc
+        # It is the condition's own result, so it is resolved onto the condition
+        # node rather than recorded as a gate — window-scoped, because it is
+        # answered once per expensive band and differs between bands.
+        dip = floor - window_min_soc
         if dip <= 0:
             # covered — SoC never dips below the reserve floor.
             emit.window_covered(
                 cheap_slots,
-                expensive_window=expensive_window,
-                projected_min_soc=round(window_min_soc, 1),
+                gates=[soc_known],
+                floor=_FloorResolution(
+                    STATE_FALSE, floor, round(window_min_soc, 1), group_index
+                ),
             )
             return
+        breached = _FloorResolution(STATE_TRUE, floor, None, group_index)
 
         window_start_soc = _soc_at(soc_by_bucket, expensive_band.start)
         if window_start_soc is None:
+            emit.window_unknown(
+                cheap_slots,
+                expensive_window=expensive_window,
+                floor=breached,
+            )
             return
         target = window_start_soc + dip * (1 + resolved.params["margin_pct"] / 100)
         target = max(lower_target, min(upper_target, target))
 
         cheap_start_soc = _soc_at(soc_by_bucket, cheap_band.start)
         if cheap_start_soc is None:
+            emit.window_unknown(
+                cheap_slots,
+                expensive_window=expensive_window,
+                floor=breached,
+            )
             return
         soc_gap = target - cheap_start_soc
-        if soc_gap <= 0:
-            return  # already at/above target entering the cheap window.
-
-        required_energy_kwh = soc_gap / 100 * usable_capacity_kwh / charge_efficiency
+        charge_needed_params = {
+            "targetSoc": round(target, 1),
+            "cheapStartSoc": round(cheap_start_soc, 1),
+        }
+        required_energy_kwh = (
+            max(soc_gap, 0.0) / 100 * usable_capacity_kwh / charge_efficiency
+        )
         slots_needed = ceil(
             required_energy_kwh / (max_charge_power_kw * _SLOT_HOURS)
         )
-        if slots_needed <= 0:
+        if soc_gap <= 0 or slots_needed <= 0:
+            # already at/above target entering the cheap window.
+            emit.charge_not_needed(
+                cheap_slots,
+                gates=[
+                    soc_known,
+                    _Gate(GATE_CHARGE_NEEDED, STATE_FALSE, charge_needed_params),
+                ],
+                floor=breached,
+            )
             return
 
         target_soc = int(round(target))
@@ -213,8 +313,61 @@ class ChargeFromGridOptimizer:
             cheap_slots=cheap_slots,
             import_price_by_bucket=import_price_by_bucket,
         )
+        window_gates = [
+            soc_known,
+            _Gate(GATE_CHARGE_NEEDED, STATE_TRUE, charge_needed_params),
+            _Gate(
+                GATE_CHEAP_WINDOW_CAPACITY,
+                STATE_TRUE if len(ranked) >= slots_needed else STATE_FALSE,
+                {
+                    "slotsNeeded": slots_needed,
+                    "slotsAvailable": len(ranked),
+                    "requiredEnergyKwh": round(required_energy_kwh, 3),
+                },
+            ),
+        ]
+
+        rankable = {slot_id for _price, slot_id in ranked}
+        unavailable = [
+            slot_id for slot_id in cheap_slots if slot_id not in rankable
+        ]
+        if unavailable:
+            # Dropped before the ranking, so the writer never sees them and the
+            # writer-level veto cannot speak for them.
+            emit.slot_unavailable(
+                unavailable,
+                gates=[*window_gates, _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {})],
+                floor=breached,
+            )
+
         chosen = ranked[:slots_needed]
-        for _price, slot_id in chosen:
+        chosen_price = max((price for price, _ in chosen), default=0.0)
+
+        def _rank_gates(index: int, price: float, made_the_cut: bool) -> list["_Gate"]:
+            return [
+                *window_gates,
+                _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}),
+                _Gate(
+                    GATE_CHEAPEST_RANK,
+                    STATE_TRUE if made_the_cut else STATE_FALSE,
+                    {
+                        "rank": index + 1,
+                        "rankOf": len(ranked),
+                        "slotsNeeded": slots_needed,
+                        "price": None if price == float("inf") else round(price, 4),
+                        "chosenPrice": round(chosen_price, 4),
+                    },
+                ),
+            ]
+
+        for index, (price, slot_id) in enumerate(ranked):
+            if index >= slots_needed:
+                emit.cheaper_slot_chosen(
+                    slot_id,
+                    gates=_rank_gates(index, price, made_the_cut=False),
+                    floor=breached,
+                )
+                continue
             writer.set_inverter(
                 slot_id,
                 kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
@@ -222,13 +375,10 @@ class ChargeFromGridOptimizer:
             )
             emit.applied(
                 slot_id,
-                expensive_window=expensive_window,
-                deficit_kwh=round(required_energy_kwh, 3),
-                target_soc=target_soc,
+                gates=_rank_gates(index, price, made_the_cut=True),
+                floor=breached,
+                condition_met=resolved.condition_met,
             )
-        chosen_price = max((price for price, _ in chosen), default=0.0)
-        for _price, slot_id in ranked[slots_needed:]:
-            emit.cheaper_slot_chosen(slot_id, chosen_price=round(chosen_price, 4))
 
 
 def _rank_cheapest_slots(
@@ -252,83 +402,190 @@ def _rank_cheapest_slots(
     return [(price, slot_id) for price, _, slot_id in candidates]
 
 
+@dataclass(frozen=True)
+class _Gate:
+    """One gate node, held until the emission accumulator resolves the slot."""
+
+    key: str
+    state: str
+    params: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _FloorResolution:
+    """The ``reserve_floor_soc`` node's real result for one expensive band."""
+
+    state: str
+    value: Any
+    actual: Any
+    group_index: int
+
+
+@dataclass(frozen=True)
+class _SlotRecord:
+    priority: int
+    outcome: str | None
+    gates: tuple[_Gate, ...]
+    floor: _FloorResolution | None
+    verdict: str | None = None
+
+
 class _ChargeFromGridEmission:
-    """Accumulate per-slot decisions, dedupe by priority, and flush as groups.
+    """Accumulate per-slot records, dedupe by priority, and flush as groups.
 
     The same cheap slot can be evaluated by more than one expensive window, so
-    decisions are resolved per slot (applied > cheaper_slot_chosen >
-    window_covered) before grouping — a slot never lands in two groups.
+    a slot is resolved to a single record (applied > cheaper_slot_chosen >
+    unavailable > covered/not-needed) before anything is emitted. Gates and the
+    floor resolution ride along with the record rather than being written as the
+    windows are walked: emitting them eagerly would let a later, weaker window
+    overwrite the gates of the window that actually placed the action, leaving a
+    slot whose verdict says `execute` and whose gates say `window_covered`.
     """
 
-    _APPLIED = 3
-    _CHEAPER = 2
+    _APPLIED = 4
+    _CHEAPER = 3
+    _UNAVAILABLE = 2
     _COVERED = 1
 
     def __init__(self, trace) -> None:
         self._trace = trace
-        self._by_slot: dict[str, tuple[int, str, str, dict[str, Any]]] = {}
+        self._by_slot: dict[str, _SlotRecord] = {}
 
-    def _add(self, slot_id, priority, outcome, code, params) -> None:
+    def _add(self, slot_id: str, record: _SlotRecord) -> None:
         current = self._by_slot.get(slot_id)
-        if current is None or priority > current[0]:
-            self._by_slot[slot_id] = (priority, outcome, code, params)
+        if current is None or record.priority > current.priority:
+            self._by_slot[slot_id] = record
 
-    def applied(self, slot_id, *, expensive_window, deficit_kwh, target_soc) -> None:
+    def applied(self, slot_id, *, gates, floor, condition_met) -> None:
         self._add(
             slot_id,
-            self._APPLIED,
-            "applied",
-            "bridge_window",
-            {
-                "expensiveWindow": expensive_window,
-                "deficitKwh": deficit_kwh,
-                "targetSoc": target_soc,
-            },
+            _SlotRecord(
+                priority=self._APPLIED,
+                outcome="applied",
+                gates=tuple(gates),
+                floor=floor,
+                verdict=VERDICT_EXECUTE if condition_met else VERDICT_CANDIDATE,
+            ),
         )
 
-    def cheaper_slot_chosen(self, slot_id, *, chosen_price) -> None:
+    def cheaper_slot_chosen(self, slot_id, *, gates, floor) -> None:
         self._add(
             slot_id,
-            self._CHEAPER,
-            "rejected",
-            "cheaper_slot_chosen",
-            {"chosenPrice": chosen_price},
+            _SlotRecord(
+                priority=self._CHEAPER,
+                outcome="rejected",
+                gates=tuple(gates),
+                floor=floor,
+            ),
         )
 
-    def window_covered(self, slot_ids, *, expensive_window, projected_min_soc) -> None:
+    def slot_unavailable(self, slot_ids, *, gates, floor) -> None:
         for slot_id in slot_ids:
             self._add(
                 slot_id,
-                self._COVERED,
-                "rejected",
-                "window_covered",
-                {
-                    "expensiveWindow": expensive_window,
-                    "projectedMinSoc": projected_min_soc,
-                },
+                _SlotRecord(
+                    priority=self._UNAVAILABLE,
+                    # The v1 layer never claimed these slots; they stay covered
+                    # by the kind's horizon-wide `declare_derivable`.
+                    outcome=None,
+                    gates=tuple(gates),
+                    floor=floor,
+                ),
+            )
+
+    def window_covered(self, slot_ids, *, gates, floor) -> None:
+        for slot_id in slot_ids:
+            self._add(
+                slot_id,
+                _SlotRecord(
+                    priority=self._COVERED,
+                    outcome="rejected",
+                    gates=tuple(gates),
+                    floor=floor,
+                ),
+            )
+
+    def charge_not_needed(self, slot_ids, *, gates, floor) -> None:
+        for slot_id in slot_ids:
+            self._add(
+                slot_id,
+                _SlotRecord(
+                    priority=self._COVERED,
+                    outcome="rejected",
+                    gates=tuple(gates),
+                    floor=floor,
+                ),
+            )
+
+    def window_unknown(self, slot_ids, *, expensive_window, floor) -> None:
+        """The SoC trajectory does not cover this window: nothing is decidable."""
+        for slot_id in slot_ids:
+            self._add(
+                slot_id,
+                _SlotRecord(
+                    priority=self._COVERED,
+                    outcome=None,
+                    gates=(
+                        _Gate(
+                            GATE_WINDOW_SOC_KNOWN,
+                            STATE_FALSE,
+                            {"expensiveWindow": expensive_window},
+                        ),
+                    ),
+                    floor=floor,
+                ),
             )
 
     def flush(self) -> None:
-        groups: dict[str, tuple[str, str, dict[str, Any], list[str]]] = {}
-        for slot_id, (_priority, outcome, code, params) in self._by_slot.items():
-            key = json.dumps([outcome, code, params], sort_keys=True)
-            groups.setdefault(key, (outcome, code, params, []))[3].append(slot_id)
-        for outcome, code, params, slot_ids in groups.values():
-            reason: dict[str, Any] = {"code": code, "params": params}
-            action: dict[str, Any] | None = None
-            if code == "bridge_window":
-                action = {
-                    "domain": "inverter",
-                    "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                }
-            if code == "cheaper_slot_chosen":
-                reason["signals"] = ["importPrice"]
+        by_outcome: dict[str, list[str]] = {}
+        by_gate: dict[str, tuple[_Gate, list[str]]] = {}
+        by_floor: dict[str, tuple[_FloorResolution, list[str]]] = {}
+        by_verdict: dict[str, list[str]] = {}
+        for slot_id, record in self._by_slot.items():
+            if record.outcome is not None:
+                by_outcome.setdefault(record.outcome, []).append(slot_id)
+            if record.verdict is not None:
+                by_verdict.setdefault(record.verdict, []).append(slot_id)
+            for gate in record.gates:
+                key = json.dumps(
+                    [gate.key, gate.state, gate.params], sort_keys=True
+                )
+                by_gate.setdefault(key, (gate, []))[1].append(slot_id)
+            if record.floor is not None:
+                floor = record.floor
+                key = json.dumps(
+                    [floor.state, floor.value, floor.actual, floor.group_index],
+                    sort_keys=True,
+                )
+                by_floor.setdefault(key, (floor, []))[1].append(slot_id)
+
+        for outcome, slot_ids in by_outcome.items():
             self._trace.decision(
                 slot_ids=slot_ids,
                 outcome=outcome,
-                action=action,
-                reason=reason,
+                action=_ACTION if outcome == "applied" else None,
             )
+        for gate, slot_ids in by_gate.values():
+            self._trace.gate(
+                slot_ids=slot_ids,
+                key=gate.key,
+                state=gate.state,
+                params=gate.params,
+            )
+        for floor, slot_ids in by_floor.values():
+            self._trace.resolve_condition(
+                slot_ids=slot_ids,
+                key="reserve_floor_soc",
+                state=floor.state,
+                value=floor.value,
+                actual=floor.actual,
+                group_index=floor.group_index,
+                # Answered once per expensive band, not once per run: a
+                # run-scoped cell would span a horizon whose answer changes.
+                scope=SCOPE_WINDOW,
+            )
+        for verdict, slot_ids in by_verdict.items():
+            self._trace.set_verdict(slot_ids=slot_ids, verdict=verdict)
 
 
 def _find_preceding_cheap_band(

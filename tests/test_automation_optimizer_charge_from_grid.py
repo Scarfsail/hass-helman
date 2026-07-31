@@ -68,11 +68,34 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
 )
 from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from custom_components.helman.automation.explain import (  # noqa: E402
+    OptimizerExplanation,
+)
 from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
 )
+
+
+def _explanation(trace) -> OptimizerExplanation:
+    payload = trace.to_dict()
+    return OptimizerExplanation.from_dict(
+        payload["steps"][0]["explanation"], payload["slotIds"]
+    )
+
+
+def _slots_by_id(trace) -> dict:
+    return {slot.slot_id: slot for slot in _explanation(trace).slots}
+
+
+def _gate(slot, key: str):
+    return next((gate for gate in slot.gates if gate.key == key), None)
+
+
+def _node(slot, key: str, group_index: int = 0):
+    group = next(group for group in slot.groups if group.index == group_index)
+    return next(node for node in group.conditions if node.key == key)
 
 
 def _at(hour: int, minute: int = 0) -> datetime:
@@ -300,15 +323,85 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
         step = trace.to_dict()["steps"][0]
         applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
         self.assertEqual(len(applied), 1)
-        self.assertEqual(applied[0]["reason"]["code"], "bridge_window")
-        self.assertTrue(
-            any(
-                d["reason"]["code"] == "cheaper_slot_chosen"
-                for d in step["decisions"]
-            )
+        self.assertEqual(applied[0]["slotIds"], [_slot_id(7, 0)])
+
+        slots = _slots_by_id(trace)
+        chosen = slots[_slot_id(7, 0)]
+        self.assertEqual(chosen.verdict, "execute")
+        self.assertEqual(_gate(chosen, "window_soc_known").state, "true")
+        self.assertEqual(_gate(chosen, "charge_needed").state, "true")
+        self.assertEqual(_gate(chosen, "slot_available").state, "true")
+        rank = _gate(chosen, "cheapest_rank")
+        self.assertEqual(rank.state, "true")
+        self.assertEqual(rank.params["rank"], 1)
+        self.assertEqual(rank.params["slotsNeeded"], 1)
+
+    def test_ranking_is_an_ordinal_not_a_boolean(self) -> None:
+        """A slot that lost to cheaper ones carries its position, not a code."""
+        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        prices = _import_points({6: 3.0, 8: 6.0})
+        prices_map = {p["timestamp"]: p for p in prices}
+        prices_map[_slot_id(7, 0)]["value"] = 1.0
+        optimizer = build_charge_from_grid_optimizer(_make_config())
+        snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
         )
 
-    def test_window_covered_reason_emitted(self) -> None:
+        assert_trace_contract(self, trace)
+        slots = _slots_by_id(trace)
+        loser = slots[_slot_id(6, 0)]
+        self.assertEqual(loser.verdict, "skip")
+        rank = _gate(loser, "cheapest_rank")
+        self.assertEqual(rank.state, "false")
+        self.assertGreater(rank.params["rank"], rank.params["slotsNeeded"])
+        self.assertEqual(rank.params["rankOf"], 4)  # 06:00..07:30
+        self.assertEqual(rank.params["chosenPrice"], 1.0)
+        # Everything upstream of the ranking still passed for this slot.
+        self.assertEqual(_gate(loser, "charge_needed").state, "true")
+        self.assertEqual(_gate(loser, "cheap_window_capacity").state, "true")
+
+    def test_a_user_owned_cheap_slot_never_reaches_the_ranking(self) -> None:
+        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        prices = _import_points({6: 3.0, 8: 6.0})
+        prices_map = {p["timestamp"]: p for p in prices}
+        prices_map[_slot_id(7, 0)]["value"] = 1.0
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                _slot_id(7, 0): {
+                    "inverter": {"kind": "normal", "setBy": "user"},
+                    "appliances": {},
+                }
+            },
+        )
+        optimizer = build_charge_from_grid_optimizer(_make_config())
+        snapshot = _make_snapshot(
+            soc_series=soc,
+            import_points=prices,
+            bands=_BANDS,
+            schedule_document=schedule_document,
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        owned = _slots_by_id(trace)[_slot_id(7, 0)]
+        self.assertEqual(owned.verdict, "skip")
+        self.assertEqual(_gate(owned, "slot_available").state, "false")
+        # Dropped before the ranking, so it has no rank at all.
+        self.assertIsNone(_gate(owned, "cheapest_rank"))
+
+    def test_window_covered_resolves_the_floor_as_a_window_scoped_node(self) -> None:
+        """`reserve_floor_soc` is self-gating: the rails leave it unevaluated.
+
+        It is answered per *expensive* band while the slots carrying the answer
+        lie in the *preceding cheap* one, so the node is window-scoped — a
+        run-scoped cell would span a horizon whose answer changes per band.
+        """
         soc = _soc_series({0: 80, 6: 80, 8: 70, 9: 60, 10: 60})
         prices = _import_points({6: 2.0, 8: 6.0})
         optimizer = build_charge_from_grid_optimizer(_make_config())
@@ -318,10 +411,42 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
             optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        self.assertTrue(
-            any(d["reason"]["code"] == "window_covered" for d in step["decisions"])
+
+        slots = _slots_by_id(trace)
+        cheap = slots[_slot_id(6, 0)]
+        floor = _node(cheap, "reserve_floor_soc")
+        self.assertEqual(floor.state, "false")  # covered: no dip below the floor
+        self.assertEqual(floor.scope, "window")
+        self.assertEqual(floor.value, 30)
+        self.assertEqual(floor.actual, 60.0)  # the window's projected minimum
+        self.assertEqual(cheap.verdict, "skip")
+
+        # A slot no bridging window reaches keeps the unevaluated placeholder:
+        # nothing consulted the floor there.
+        untouched = slots[_slot_id(20, 0)]
+        self.assertEqual(_node(untouched, "reserve_floor_soc").state, "not_evaluated")
+        self.assertIsNone(_gate(untouched, "window_soc_known"))
+
+    def test_battery_params_missing_is_a_skipped_step(self) -> None:
+        soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
+        prices = _import_points({6: 3.0, 8: 6.0})
+        optimizer = build_charge_from_grid_optimizer(_make_config())
+        snapshot = _make_snapshot(
+            soc_series=soc,
+            import_points=prices,
+            bands=_BANDS,
+            battery_configured=False,
         )
+
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        explanation = _explanation(trace)
+        self.assertEqual(explanation.status, "skipped")
+        self.assertEqual(explanation.status_reason, "battery_params_missing")
+        self.assertEqual({slot.verdict for slot in explanation.slots}, {"skip"})
 
 
 if __name__ == "__main__":
