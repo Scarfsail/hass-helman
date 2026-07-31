@@ -68,6 +68,13 @@ export interface EntityDayBandLaneSelectDetail {
     laneKey: string;
 }
 
+/** "Why does this lane's day look like this", for the day the band is showing. */
+export interface EntityDayBandLaneExplainDetail {
+    laneKey: string;
+    dayKey: string;
+    laneName: string;
+}
+
 export interface EntityDayBandRangeChangeDetail {
     startMs: number;
     endMs: number;
@@ -196,7 +203,16 @@ export class SchedulingEntityDayBand extends LitElement {
                 font-size: 0.6rem;
             }
 
+            /* The name and the "why" button are two intents, so they are two
+               controls -- a button inside a button is not a thing, and
+               overloading the name's click would make "which entity" and "why
+               this plan" the same press. */
             .lane-label {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                flex: 1 1 auto;
+                min-width: 0;
                 padding: 0 2px;
                 border: none;
                 border-radius: 6px;
@@ -206,6 +222,32 @@ export class SchedulingEntityDayBand extends LitElement {
                 font-size: 0.72rem;
                 text-align: start;
                 cursor: pointer;
+            }
+
+            .lane-explain {
+                flex: 0 0 auto;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 16px;
+                height: 16px;
+                padding: 0;
+                border: none;
+                border-radius: 50%;
+                background: none;
+                color: var(--secondary-text-color);
+                cursor: pointer;
+                opacity: 0.55;
+            }
+
+            .lane-explain:hover,
+            .lane-explain:focus-visible {
+                opacity: 1;
+                background: var(--secondary-background-color);
+            }
+
+            .lane-explain ha-icon {
+                --mdc-icon-size: 13px;
             }
 
             .lane-label ha-icon {
@@ -367,6 +409,12 @@ export class SchedulingEntityDayBand extends LitElement {
                it is a control of its own. */
             .track-label state-badge {
                 --mdc-icon-size: 13px;
+                pointer-events: auto;
+            }
+
+            /* The second exception, for the same reason: asking why is a
+               control, not part of the caption. */
+            .track-label .lane-explain {
                 pointer-events: auto;
             }
 
@@ -750,6 +798,15 @@ export class SchedulingEntityDayBand extends LitElement {
      */
     @property({ type: String }) public laneLabels: "column" | "track" = "column";
     /**
+     * Whether a lane can be asked "why is it planned like this".
+     *
+     * Opt-in, because the affordance is only meaningful where the host is
+     * willing to answer: a host that does not listen for
+     * `entity-day-band-lane-explain` would otherwise show a button that does
+     * nothing.
+     */
+    @property({ type: Boolean }) public explainable = false;
+    /**
      * Stretches of the day to wash, whatever it is that makes them special.
      *
      * The band is told which times matter rather than working it out: what
@@ -1049,17 +1106,20 @@ export class SchedulingEntityDayBand extends LitElement {
         return html`
             <div class=${classes} data-lane=${lane.key}>
                 ${inTrackLabels ? nothing : html`
-                    <button
-                        class="row-label lane-label"
-                        type="button"
-                        aria-pressed=${selected}
-                        title=${lane.name}
-                        @click=${() => this._emitLaneSelect(lane.key)}
-                    >
-                        ${this._renderLaneIcon(lane)}
-                        <span class="lane-name">${lane.name}</span>
-                        ${this._renderLaneTotal(lane)}
-                    </button>
+                    <div class="row-label lane-label-row">
+                        <button
+                            class="lane-label"
+                            type="button"
+                            aria-pressed=${selected}
+                            title=${lane.name}
+                            @click=${() => this._emitLaneSelect(lane.key)}
+                        >
+                            ${this._renderLaneIcon(lane)}
+                            <span class="lane-name">${lane.name}</span>
+                            ${this._renderLaneTotal(lane)}
+                        </button>
+                        ${this._renderLaneExplain(lane)}
+                    </div>
                 `}
                 <!--
                     Bare track: the elapsed stretch carries no gap button, so a
@@ -1087,6 +1147,53 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
+     * The "why is it planned like this" button, next to the lane's name.
+     *
+     * A dedicated control rather than a modifier on the name: the name already
+     * means "this entity", and a press that means one thing normally and
+     * another thing with a key held is a press nobody finds. It carries the
+     * day it is showing, so the host has nothing to infer.
+     *
+     * Rendered in both label modes. In `laneLabels === "track"` it rides in the
+     * in-track caption, which is otherwise inert: `.track-label` takes no
+     * pointer events so the runs under it stay the thing being pointed at, and
+     * this button re-enables them for itself the way `state-badge` already
+     * does. Its click stops propagating, so the track's own press -- which
+     * means "this lane" -- does not fire behind it.
+     *
+     * Only rendered where the host opted in via `explainable`; a host that does
+     * not answer the event gets no button.
+     */
+    private _renderLaneExplain(lane: EntityDayBandLane) {
+        if (!this.explainable) {
+            return nothing;
+        }
+        const label = this.localize("scheduling.explanation.open");
+        return html`
+            <button
+                class="lane-explain"
+                type="button"
+                title=${label}
+                aria-label=${label}
+                @click=${(event: MouseEvent) => this._handleLaneExplainClick(event, lane)}
+            >
+                <ha-icon .icon=${"mdi:information-outline"}></ha-icon>
+            </button>
+        `;
+    }
+
+    private _handleLaneExplainClick(event: MouseEvent, lane: EntityDayBandLane): void {
+        // The name's own click sits next to this one; without stopping here a
+        // press on the button would also select the lane.
+        event.stopPropagation();
+        this.dispatchEvent(new CustomEvent<EntityDayBandLaneExplainDetail>("entity-day-band-lane-explain", {
+            bubbles: true,
+            composed: true,
+            detail: { laneKey: lane.key, dayKey: this.day.dayKey, laneName: lane.name },
+        }));
+    }
+
+    /**
      * The lane's name inside its own track, for hosts with no label column.
      *
      * It floats over whatever is there rather than pushing the track's start to
@@ -1106,6 +1213,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 ${this._renderLaneIcon(lane)}
                 <span class="lane-name">${lane.name}</span>
                 ${this._renderLaneTotal(lane)}
+                ${this._renderLaneExplain(lane)}
             </span>
         `;
     }

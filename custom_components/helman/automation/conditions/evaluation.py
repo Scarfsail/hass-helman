@@ -19,13 +19,24 @@ is placed at all.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from ...scheduling.schedule import parse_slot_id
+from ..explain import (
+    PARAMS_SOURCE_DAY_RESOLVED,
+    PARAMS_SOURCE_MASTER_FALLBACK,
+    PARAMS_SOURCE_SLOT_MATCHED,
+    STATE_FALSE,
+    STATE_NOT_APPLICABLE,
+    STATE_NOT_EVALUATED,
+    STATE_TRUE,
+    ConditionNode,
+    GroupExplanation,
+)
 from ..trace import NULL_TRACE, TraceConditionGroup
-from .types import CONDITION_TYPES, MaskInputs, horizon_slot_ids
+from .types import CONDITION_TYPES, MaskInputs, Scope, evaluate_mask, horizon_slot_ids
 
 if TYPE_CHECKING:
     from ..config import OptimizerInstanceConfig
@@ -46,6 +57,10 @@ class GroupResolution:
     # Per-condition masks before the AND, so `Eligibility.rejection` can name
     # *which* condition excluded a slot rather than just that one did.
     masks_by_key: dict[str, frozenset[str]]
+    # What each slot actually presented, per condition, for the conditions that
+    # report it (price, SoC, solar coverage). Explanation-only: nothing in
+    # `Eligibility` reads it.
+    actuals_by_key: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -156,7 +171,13 @@ class Eligibility:
                 yield resolved
 
     def rejection(self, slot_id: str) -> tuple[str, Any] | None:
-        """``(reason_code, value)`` for an ineligible slot, from the first group.
+        """``(condition_key, value)`` for an ineligible slot, from the first group.
+
+        The key is the condition's own key — the same string the condition
+        matrix columns are keyed by — so a caller branching on a rejection and
+        the explanation payload cannot drift apart. (It used to be a separate
+        ``reason_code`` string, one per type, which had to be kept in sync by
+        hand.) ``value`` is what the group configured for that condition.
 
         The first group is the one the user reads as the primary intent, so its
         failing condition is the explanation worth showing. ``None`` when the
@@ -170,7 +191,7 @@ class Eligibility:
             if condition.self_gating:
                 continue
             if slot_id not in group.masks_by_key[key]:
-                return (condition.reason_code, value)
+                return (condition.key, value)
         return None
 
 
@@ -186,19 +207,23 @@ def build_eligibility(
     groups: list[GroupResolution] = []
     for group in config.conditions:
         masks_by_key: dict[str, frozenset[str]] = {}
+        actuals_by_key: dict[str, dict[str, Any]] = {}
         system_mask = frozenset(slot_ids)
         for key, value in group.condition_values.items():
-            mask = CONDITION_TYPES[key].build_mask(
+            result = evaluate_mask(
+                CONDITION_TYPES[key],
                 MaskInputs(
                     snapshot=snapshot,
                     value=value,
                     target=config.target,
                     master_params=config.params,
                     horizon_slot_ids=slot_ids,
-                )
+                ),
             )
-            masks_by_key[key] = mask
-            system_mask &= mask
+            masks_by_key[key] = result.mask
+            if result.actuals_by_slot:
+                actuals_by_key[key] = dict(result.actuals_by_slot)
+            system_mask &= result.mask
         groups.append(
             GroupResolution(
                 index=group.index,
@@ -208,10 +233,12 @@ def build_eligibility(
                 custom_met=custom_met_by_group[group.index],
                 system_mask=system_mask,
                 masks_by_key=masks_by_key,
+                actuals_by_key=actuals_by_key,
             )
         )
 
-    (trace or NULL_TRACE).set_condition_groups(
+    recorder = trace or NULL_TRACE
+    recorder.set_condition_groups(
         TraceConditionGroup(
             index=group.index,
             label=group.label,
@@ -220,7 +247,160 @@ def build_eligibility(
         )
         for group in groups
     )
-    return Eligibility(groups=tuple(groups), horizon_slot_ids=slot_ids)
+    eligibility = Eligibility(groups=tuple(groups), horizon_slot_ids=slot_ids)
+    if trace is not None:
+        # A node per group per condition per horizon slot is real work, and the
+        # forecast/projection paths (which pass no trace) would throw all of it
+        # away — `NULL_TRACE` has no current step to record onto.
+        trace.set_group_explanations(
+            build_group_explanations(snapshot, config, eligibility)
+        )
+    return eligibility
+
+
+# --- explanation ------------------------------------------------------------
+
+
+def _condition_column_keys(
+    groups: tuple[GroupResolution, ...],
+) -> tuple[str, ...]:
+    """The union of every group's condition keys, in first-appearance order.
+
+    Groups may configure different condition sets, so the matrix has one column
+    per key any group uses; the groups that don't use it report
+    ``not_applicable`` there rather than an unearned ``true``.
+    """
+    keys: list[str] = []
+    for group in groups:
+        for key in group.condition_values:
+            if key not in keys:
+                keys.append(key)
+    return tuple(keys)
+
+
+def _condition_nodes(
+    group: GroupResolution,
+    column_keys: tuple[str, ...],
+    slot_id: str,
+) -> tuple[ConditionNode, ...]:
+    nodes: list[ConditionNode] = []
+    for key in column_keys:
+        condition = CONDITION_TYPES[key]
+        if key not in group.condition_values:
+            nodes.append(
+                ConditionNode(
+                    key=key,
+                    scope=condition.explain_scope,
+                    state=STATE_NOT_APPLICABLE,
+                )
+            )
+            continue
+        value = group.condition_values[key]
+        if condition.self_gating:
+            # `_all_slots_mask` is a placeholder, not a result: reading it here
+            # would render "always true" for a condition that has not been
+            # consulted yet. The optimizer that does consult it overwrites this
+            # node through `OptimizerTrace.resolve_condition`.
+            nodes.append(
+                ConditionNode(
+                    key=key,
+                    scope=condition.explain_scope,
+                    state=STATE_NOT_EVALUATED,
+                    value=value,
+                )
+            )
+            continue
+        passed = slot_id in group.masks_by_key[key]
+        nodes.append(
+            ConditionNode(
+                key=key,
+                scope=condition.explain_scope,
+                state=STATE_TRUE if passed else STATE_FALSE,
+                value=value,
+                # Passing nodes carry no actual: it costs payload and answers a
+                # question nobody asked.
+                actual=(
+                    None
+                    if passed
+                    else group.actuals_by_key.get(key, {}).get(slot_id)
+                ),
+            )
+        )
+    return tuple(nodes)
+
+
+def _custom_results(
+    snapshot: "OptimizationSnapshot",
+    config: "OptimizerInstanceConfig",
+) -> dict[int, tuple[bool | None, ...]]:
+    """Per-entry ``custom`` results by group index.
+
+    ``None`` is an entry that *errored* rather than one that evaluated false —
+    the whole point of ``CustomConditionResult.errored``. A run that never
+    evaluated custom conditions (forecast/projection) contributes nothing, and
+    the groups' ``custom_results`` stay empty.
+    """
+    detailed = snapshot.context.custom_condition_results_by_optimizer_id.get(config.id)
+    if not detailed:
+        return {}
+    return {
+        result.index: tuple(
+            None if entry.errored else entry.met for entry in result.entries
+        )
+        for result in detailed
+    }
+
+
+def build_group_explanations(
+    snapshot: "OptimizationSnapshot",
+    config: "OptimizerInstanceConfig",
+    eligibility: Eligibility,
+) -> dict[str, tuple[GroupExplanation, ...]]:
+    """The per-slot condition matrix: every group, every column, every slot.
+
+    Every configured group appears in every horizon slot — the matrix is what a
+    reader compares across groups, so a group that matched nothing must still
+    show *why*, column by column.
+
+    ``params_source`` follows the kind's ``param_scope`` rather than the group:
+    a SLOT-scoped kind reads the params of whichever group ``at(slot)`` matched,
+    while a DAY/RUN-scoped kind resolves them once per day through
+    :meth:`Eligibility.for_day`, which may pick a different group than the one
+    matching the slot. Where ``for_day`` finds no group at all, such a kind falls
+    back to master params — ``master_fallback``. Without the marker the params
+    column silently shows numbers the optimizer never ran under.
+    """
+    column_keys = _condition_column_keys(eligibility.groups)
+    custom_results = _custom_results(snapshot, config)
+    day_scoped = config.spec.param_scope is not Scope.SLOT
+
+    source_by_date: dict[date, str] = {}
+    explanations: dict[str, tuple[GroupExplanation, ...]] = {}
+    for slot_id in eligibility.horizon_slot_ids:
+        if day_scoped:
+            local_date = parse_slot_id(slot_id).date()
+            params_source = source_by_date.get(local_date)
+            if params_source is None:
+                params_source = (
+                    PARAMS_SOURCE_DAY_RESOLVED
+                    if eligibility.for_day(local_date) is not None
+                    else PARAMS_SOURCE_MASTER_FALLBACK
+                )
+                source_by_date[local_date] = params_source
+        else:
+            params_source = PARAMS_SOURCE_SLOT_MATCHED
+        explanations[slot_id] = tuple(
+            GroupExplanation(
+                index=group.index,
+                label=group.label,
+                params=dict(group.params),
+                params_source=params_source,
+                custom_results=custom_results.get(group.index, ()),
+                conditions=_condition_nodes(group, column_keys, slot_id),
+            )
+            for group in eligibility.groups
+        )
+    return explanations
 
 
 def _custom_met_by_group(

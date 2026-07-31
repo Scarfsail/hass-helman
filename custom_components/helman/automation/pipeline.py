@@ -13,6 +13,7 @@ from homeassistant.util import dt as dt_util
 from .config import AutomationConfig
 from .input_bundle import AutomationInputBundle
 from .conditions.types import ConditionRailsUnavailable
+from .explain import RunExplanation
 from .ownership import (
     count_automation_owned_actions,
     is_user_owned_appliance_action,
@@ -234,6 +235,10 @@ class _PipelineExecutionResult:
     snapshot: OptimizationSnapshot
     optimizers: tuple[OptimizerRunSummary, ...]
     trace: OptimizerTrace
+    #: The per-slot condition record for this run. Only assembled on the success
+    #: path — a failed loop raises before this point, so the coordinator's
+    #: accumulated record is never clobbered by a partial one.
+    explanation: RunExplanation | None = None
 
 
 @dataclass(frozen=True)
@@ -382,6 +387,12 @@ class AutomationRunner:
                         latest_snapshot = execution_result.snapshot
                         latest_optimizers = execution_result.optimizers
                         latest_trace = execution_result.trace
+                        # Success path only: a failed loop takes the `except`
+                        # branch above and leaves the previous good record
+                        # standing rather than clobbering it with a partial one.
+                        self._coordinator.record_run_explanation(
+                            execution_result.explanation
+                        )
                         current_stage = "final_persist"
                         run_post_write_side_effects = (
                             await self._coordinator._persist_automation_result_locked(
@@ -555,7 +566,14 @@ def run_optimizer_loop_pure(
     )
     for optimizer_config in execution_optimizers:
         optimizer_started_at = time.perf_counter()
-        trace.begin_step(optimizer_config.id, optimizer_config.kind)
+        trace.begin_step(
+            optimizer_config.id,
+            optimizer_config.kind,
+            # The lane this step writes, so the explanation record can be
+            # queried by the lane the user clicked and winner attribution can
+            # match writes against the step that made them.
+            target_key=optimizer_config.target_key,
+        )
         # Stamp the step with its execution-condition state so the run
         # explanation can present this optimizer's placements as candidates
         # (tentative, won't execute) rather than as planned-for-execution.
@@ -671,6 +689,13 @@ def run_optimizer_loop_pure(
         snapshot=snapshot,
         optimizers=tuple(optimizer_summaries),
         trace=trace,
+        # Assembled here, where the whole run is in hand: the winner of each
+        # slot is only knowable once every step has written.
+        explanation=RunExplanation(
+            run_at=reference_time,
+            slot_ids=trace.slot_ids,
+            optimizers=trace.optimizer_explanations(),
+        ),
     )
 
 

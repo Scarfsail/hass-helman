@@ -68,11 +68,29 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
 )
 from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from custom_components.helman.automation.explain import (  # noqa: E402
+    OptimizerExplanation,
+)
 from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
 )
+
+
+def _explanation(trace) -> OptimizerExplanation:
+    payload = trace.to_dict()
+    return OptimizerExplanation.from_dict(
+        payload["steps"][0]["explanation"], payload["slotIds"]
+    )
+
+
+def _slots_by_id(trace) -> dict:
+    return {slot.slot_id: slot for slot in _explanation(trace).slots}
+
+
+def _gate(slot, key: str):
+    return next((gate for gate in slot.gates if gate.key == key), None)
 
 
 def _slot_id(hour: int, minute: int) -> str:
@@ -358,10 +376,68 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         step = trace.to_dict()["steps"][0]
         applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
         self.assertEqual(len(applied), 1)
-        self.assertEqual(applied[0]["reason"]["code"], "hold_window_applied")
-        self.assertEqual(applied[0]["reason"]["params"]["boundBy"], "surplus")
 
-    def test_non_matched_day_emits_day_not_matched(self) -> None:
+        slots = _slots_by_id(trace)
+        held = slots[_slot_id(7, 0)]
+        self.assertEqual(held.verdict, "execute")
+        self.assertEqual(_gate(held, "day_context").state, "true")
+        self.assertEqual(_gate(held, "day_group_matched").state, "true")
+        self.assertEqual(_gate(held, "hold_window").state, "true")
+        self.assertEqual(_gate(held, "hold_room").state, "true")
+        release = _gate(held, "before_release")
+        self.assertEqual(release.state, "true")
+        self.assertEqual(release.params["boundBy"], "surplus")
+
+    def test_the_release_is_recorded_as_a_gate_on_both_sides_of_it(self) -> None:
+        """The day-hold release is the one thing no condition can express."""
+        day_context = _day_context(
+            day_min_window=DayMinWindow(
+                start=datetime(2026, 7, 10, 13, 0, tzinfo=TZ),
+                end=datetime(2026, 7, 10, 13, 30, tzinfo=TZ),
+            )
+        )
+        optimizer = build_charge_hold_optimizer(_make_config())
+        snapshot = _make_snapshot(day_context=day_context)
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        slots = _slots_by_id(trace)
+        released = slots[_slot_id(12, 0)]
+        self.assertEqual(released.verdict, "skip")
+        self.assertEqual(_gate(released, "hold_window").state, "true")
+        self.assertEqual(_gate(released, "hold_room").state, "true")
+        self.assertEqual(_gate(released, "before_release").state, "false")
+        self.assertEqual(
+            _gate(released, "before_release").params["releaseSlot"],
+            _slot_id(12, 0),
+        )
+
+        # Outside the window the release never applies: absent, not false.
+        outside = slots[_slot_id(5, 30)]
+        self.assertEqual(_gate(outside, "hold_window").state, "false")
+        self.assertIsNone(_gate(outside, "hold_room"))
+        self.assertIsNone(_gate(outside, "before_release"))
+
+    def test_no_room_to_hold_is_a_day_scoped_gate(self) -> None:
+        # target 100, current 10 -> needed 9 kWh > 8 kWh total surplus.
+        optimizer = build_charge_hold_optimizer(_make_config())
+        snapshot = _make_snapshot(day_context=_day_context(), current_soc=10.0)
+        _result, trace = run_optimizer_with_trace(
+            optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
+        )
+
+        assert_trace_contract(self, trace)
+        in_window = _slots_by_id(trace)[_slot_id(7, 0)]
+        self.assertEqual(in_window.verdict, "skip")
+        room = _gate(in_window, "hold_room")
+        self.assertEqual(room.state, "false")
+        self.assertGreater(room.params["neededKwh"], room.params["surplusAtWindowStart"])
+        # The release is never computed for a day with no room.
+        self.assertIsNone(_gate(in_window, "before_release"))
+
+    def test_non_matched_day_names_the_failing_condition(self) -> None:
         day_context = _day_context(classification="deficit")
         optimizer = build_charge_hold_optimizer(_make_config())
         snapshot = _make_snapshot(day_context=day_context)
@@ -369,13 +445,16 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
             optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        self.assertTrue(
-            any(
-                d["reason"]["code"] == "day_not_matched"
-                for d in step["decisions"]
-            )
-        )
+
+        slot = _slots_by_id(trace)[_slot_id(7, 0)]
+        self.assertEqual(slot.verdict, "skip")
+        self.assertEqual(_gate(slot, "day_context").state, "true")
+        matched = _gate(slot, "day_group_matched")
+        self.assertEqual(matched.state, "false")
+        self.assertEqual(matched.params["classification"], "deficit")
+        self.assertEqual(matched.params["failingCondition"], "run_when")
+        # The window is never reached once the day itself is out.
+        self.assertIsNone(_gate(slot, "hold_window"))
 
     def test_battery_params_missing_emits_note(self) -> None:
         day_context = _day_context()
@@ -389,6 +468,13 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         self.assertTrue(
             any(note["code"] == "battery_params_missing" for note in step["notes"])
         )
+
+        # Nothing was evaluated at all; only the status keeps that apart from a
+        # horizon where every slot genuinely failed.
+        explanation = _explanation(trace)
+        self.assertEqual(explanation.status, "skipped")
+        self.assertEqual(explanation.status_reason, "battery_params_missing")
+        self.assertEqual({slot.verdict for slot in explanation.slots}, {"skip"})
 
 
 if __name__ == "__main__":

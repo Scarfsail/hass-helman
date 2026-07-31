@@ -1,8 +1,9 @@
 """The catalogue of system condition types.
 
-Each type owns its value schema, its scope, its mask and its trace reason code —
-so adding ``run_when`` to ``export_price`` later is one entry in a tuple, and a
-reason code is emitted from one place per type rather than once per optimizer.
+Each type owns its value schema, its scope, its mask and its label — so adding
+``run_when`` to ``export_price`` later is one entry in a tuple. A type is
+identified everywhere by its ``key``: masks, explanation columns and the
+``(key, value)`` rejections optimizers branch on all speak the same string.
 
 **R1 — a mask reads ``target`` and the *master* params only, never a group's
 override.** Resolved params depend on which group matched, which depends on the
@@ -14,7 +15,7 @@ logic.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -80,15 +81,57 @@ class MaskInputs:
 
 
 @dataclass(frozen=True)
+class MaskResult:
+    """A mask plus, optionally, what each slot actually presented.
+
+    Only the conditions worth annotating build one — price, SoC, solar
+    coverage — so that a slot rejected on price can carry the price that
+    rejected it. ``actuals_by_slot`` is the value the condition's own
+    aggregation compared against the threshold (the *worst* bucket for an
+    all-must-clear condition, the *best* for an any-may-clear one), recorded for
+    every slot; the explanation layer keeps it only where the slot failed.
+    """
+
+    mask: frozenset[str]
+    actuals_by_slot: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ConditionType:
-    """One system condition: value schema, scope, mask and trace reason code."""
+    """One system condition: value schema, scope, mask and label."""
 
     key: str
     scope: Scope
     field: Field
-    reason_code: str
-    build_mask: Callable[[MaskInputs], frozenset[str]]
+    #: Returns the eligible slots, or a :class:`MaskResult` when it also has
+    #: actuals to report. Call through :func:`evaluate_mask`, never directly.
+    build_mask: Callable[[MaskInputs], "frozenset[str] | MaskResult"]
     self_gating: bool = False
+    #: Localization key for the condition's human label, used by the explanation
+    #: UI. Defaults to ``automation.condition.<key>``; a field rather than a
+    #: derived property so a type can point elsewhere without a special case.
+    label_key: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.label_key:
+            object.__setattr__(self, "label_key", f"automation.condition.{self.key}")
+
+    @property
+    def explain_scope(self) -> str:
+        """The node scope string the explanation layer uses (``NODE_SCOPES``)."""
+        return self.scope.value
+
+
+def evaluate_mask(condition: ConditionType, inputs: MaskInputs) -> MaskResult:
+    """Call a condition's mask and normalize it to a :class:`MaskResult`.
+
+    The adapter is what lets only the annotated conditions change shape: a mask
+    that has nothing to report keeps returning a bare ``frozenset``.
+    """
+    result = condition.build_mask(inputs)
+    if isinstance(result, MaskResult):
+        return result
+    return MaskResult(mask=result)
 
 
 def _run_when_mask(inputs: MaskInputs) -> frozenset[str]:
@@ -102,7 +145,7 @@ def _run_when_mask(inputs: MaskInputs) -> frozenset[str]:
     return frozenset(eligible)
 
 
-def _export_price_below_mask(inputs: MaskInputs) -> frozenset[str]:
+def _export_price_below_mask(inputs: MaskInputs) -> MaskResult:
     """Slots where the export price drops below the threshold at any point.
 
     A slot spans two forecast buckets and qualifies when **either** clears the
@@ -122,18 +165,24 @@ def _export_price_below_mask(inputs: MaskInputs) -> frozenset[str]:
     which is what the union has always done. It is deliberately not an override
     — a point that says the current bucket is negative still stops the export
     even when the live sensor has already ticked back above the threshold.
+
+    The reported actual is the **cheapest** price the slot offers, since any
+    bucket clearing the threshold qualifies it: that is the number the slot
+    lost by.
     """
     price_by_bucket = read_export_price_by_bucket(inputs.snapshot)
     threshold = inputs.value
     current_price = read_optional_float(
         inputs.snapshot.context.export_price_forecast.get("currentPrice")
     )
+    now_bucket = canonical_bucket_start(inputs.snapshot.context.now)
     current_bucket = (
-        canonical_bucket_start(inputs.snapshot.context.now)
+        now_bucket
         if current_price is not None and current_price < threshold
         else None
     )
     eligible: set[str] = set()
+    actuals: dict[str, Any] = {}
     for slot_id in inputs.horizon_slot_ids:
         if any(
             bucket_start == current_bucket
@@ -144,10 +193,20 @@ def _export_price_below_mask(inputs: MaskInputs) -> frozenset[str]:
             for bucket_start in slot_bucket_starts(slot_id)
         ):
             eligible.add(slot_id)
-    return frozenset(eligible)
+        known = [
+            price
+            for bucket_start in slot_bucket_starts(slot_id)
+            for price in (
+                current_price if bucket_start == now_bucket else None,
+                price_by_bucket.get(bucket_start),
+            )
+            if price is not None
+        ]
+        actuals[slot_id] = min(known) if known else None
+    return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
 
 
-def _max_run_price_mask(inputs: MaskInputs) -> frozenset[str]:
+def _max_run_price_mask(inputs: MaskInputs) -> MaskResult:
     """Slots whose export price stays at or below the threshold throughout.
 
     ``appliance_runtime`` reads this as permission to consume, the opposite of
@@ -171,6 +230,11 @@ def _max_run_price_mask(inputs: MaskInputs) -> frozenset[str]:
     Buckets that have already elapsed are skipped, mirroring
     :func:`_min_soc_mask`: gating on a bucket that's already history would
     switch the appliance off mid-run over a quarter-hour nothing can change.
+
+    The reported actual is the **most expensive** pending bucket, since every
+    one of them has to clear the threshold: that is the number that failed the
+    slot. Buckets the feed does not cover fail the slot but contribute no
+    number, so an all-unknown slot reports ``None``.
     """
     price_by_bucket = read_export_price_by_bucket(inputs.snapshot)
     threshold = inputs.value
@@ -181,13 +245,17 @@ def _max_run_price_mask(inputs: MaskInputs) -> frozenset[str]:
     current_bucket = canonical_bucket_start(now)
     bucket_duration = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
 
-    def _bucket_clears(bucket_start: datetime) -> bool:
+    def _bucket_price(bucket_start: "datetime") -> float | None:
         if bucket_start == current_bucket and current_price is not None:
-            return current_price < threshold
-        price = price_by_bucket.get(bucket_start)
+            return current_price
+        return price_by_bucket.get(bucket_start)
+
+    def _bucket_clears(bucket_start: "datetime") -> bool:
+        price = _bucket_price(bucket_start)
         return price is not None and price < threshold
 
     eligible: set[str] = set()
+    actuals: dict[str, Any] = {}
     for slot_id in inputs.horizon_slot_ids:
         pending = [
             bucket_start
@@ -196,10 +264,16 @@ def _max_run_price_mask(inputs: MaskInputs) -> frozenset[str]:
         ]
         if pending and all(_bucket_clears(bucket_start) for bucket_start in pending):
             eligible.add(slot_id)
-    return frozenset(eligible)
+        known = [
+            price
+            for price in (_bucket_price(bucket_start) for bucket_start in pending)
+            if price is not None
+        ]
+        actuals[slot_id] = max(known) if known else None
+    return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
 
 
-def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
+def _min_soc_mask(inputs: MaskInputs) -> MaskResult:
     """Slots whose projected SoC stays at or above the threshold throughout.
 
     Every forecast bucket the slot overlaps must clear it, not just the slot's
@@ -233,6 +307,7 @@ def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
     bucket_duration = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
     now = snapshot.context.now
     eligible: set[str] = set()
+    actuals: dict[str, Any] = {}
     for slot_id in inputs.horizon_slot_ids:
         pending = [
             bucket_start
@@ -245,10 +320,18 @@ def _min_soc_mask(inputs: MaskInputs) -> frozenset[str]:
             for bucket_start in pending
         ):
             eligible.add(slot_id)
-    return frozenset(eligible)
+        # The worst pending bucket is the one that decides, so it is the one
+        # worth reporting.
+        known = [
+            soc_pct
+            for soc_pct in (soc_by_bucket.get(bucket) for bucket in pending)
+            if soc_pct is not None
+        ]
+        actuals[slot_id] = min(known) if known else None
+    return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
 
 
-def _min_solar_coverage_mask(inputs: MaskInputs) -> frozenset[str]:
+def _min_solar_coverage_mask(inputs: MaskInputs) -> MaskResult:
     """Slots whose every bucket's surplus covers the appliance's own demand.
 
     "Is this slot's energy free *right now*." For each 15-minute bucket the slot
@@ -292,6 +375,7 @@ def _min_solar_coverage_mask(inputs: MaskInputs) -> frozenset[str]:
 
     threshold = inputs.value
     eligible: set[str] = set()
+    actuals: dict[str, Any] = {}
     for slot_id in inputs.horizon_slot_ids:
         coverage_pct = slot_solar_coverage_pct(
             slot_id=slot_id,
@@ -301,7 +385,8 @@ def _min_solar_coverage_mask(inputs: MaskInputs) -> frozenset[str]:
         )
         if coverage_pct is not None and coverage_pct >= threshold:
             eligible.add(slot_id)
-    return frozenset(eligible)
+        actuals[slot_id] = coverage_pct
+    return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
 
 
 def _all_slots_mask(inputs: MaskInputs) -> frozenset[str]:
@@ -315,7 +400,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="run_when",
             scope=Scope.DAY,
             field=F.day_classifications("run_when", default=DAY_CLASSIFICATIONS),
-            reason_code="day_not_matched",
             build_mask=_run_when_mask,
         ),
         # Optional, and deliberately without a default: a threshold of 0 is a
@@ -327,7 +411,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="when_price_below",
             scope=Scope.SLOT,
             field=F.number("when_price_below", required=False),
-            reason_code="price_not_below_threshold",
             build_mask=_export_price_below_mask,
         ),
         # `appliance_runtime`'s own price condition (issue #5): permission to
@@ -338,7 +421,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="max_run_price",
             scope=Scope.SLOT,
             field=F.number("max_run_price", required=False),
-            reason_code="price_above_run_threshold",
             build_mask=_max_run_price_mask,
         ),
         # Optional and without a default, for the same reason as
@@ -348,7 +430,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="min_soc_pct",
             scope=Scope.SLOT,
             field=F.soc("min_soc_pct", required=False),
-            reason_code="soc_below_threshold",
             build_mask=_min_soc_mask,
         ),
         # Optional and without a default, as above: a coverage floor filled in
@@ -358,17 +439,15 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="min_solar_coverage_pct",
             scope=Scope.SLOT,
             field=F.percent("min_solar_coverage_pct", required=False),
-            reason_code="insufficient_solar_coverage",
             build_mask=_min_solar_coverage_mask,
         ),
         # Self-gating, and for a sharper reason than `reserve_floor_soc`: this
         # condition *couples slots*. Placing at 09:00 changes whether 20:00 is
         # feasible, and `system_mask &= mask` (evaluation.py) assumes slot
         # independence. So the mask is all-true, the optimizer re-simulates the
-        # horizon with its own placements folded in, and the reason codes are
-        # emitted from there rather than from here — a mask cannot say *which*
-        # placement broke the floor. `reason_code` is the one a lone rejection
-        # falls back to.
+        # horizon with its own placements folded in, and the node is resolved
+        # from there rather than from here — a mask cannot say *which* placement
+        # broke the floor.
         #
         # The level is the condition's value rather than a bool beside a
         # separate knob: one key, three states (absent / soft / strict), so they
@@ -381,7 +460,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
                 required=False,
                 choices=("soft", "strict"),
             ),
-            reason_code="would_break_soc_floor",
             build_mask=_all_slots_mask,
             self_gating=True,
         ),
@@ -395,7 +473,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="reserve_floor_soc",
             scope=Scope.RUN,
             field=F.soc("reserve_floor_soc"),
-            reason_code="window_covered",
             build_mask=_all_slots_mask,
             self_gating=True,
         ),

@@ -9,9 +9,11 @@ import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../helman-scheduling/schedule-owner";
 import "../helman-scheduling/components/scheduling-entity-day-band";
 import "../helman-scheduling/dialogs/scheduling-entity-day-editor";
+import "../helman-scheduling/dialogs/scheduling-explanation-dialog";
 import type {
     EntityDayBandBlockSelectDetail,
     EntityDayBandHighlight,
+    EntityDayBandLaneExplainDetail,
     EntityDayBandLaneSelectDetail,
     EntityDayBandPointerMoveDetail,
     EntityDayBandTimeHoverDetail,
@@ -156,6 +158,13 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     @state() private _nowMs = Date.now();
     @state() private _editorTarget: EntityScheduleLane | null = null;
     @state() private _editorOpen = false;
+    @state() private _explanationTargetKey: string | null = null;
+    @state() private _explanationOpen = false;
+    @state() private _explanationLaneName = "";
+    @state() private _explanationPayload: unknown = null;
+    @state() private _explanationLoading = false;
+    @state() private _explanationFailed = false;
+    private _explanationRequestId = 0;
     /** The schedule changed under the open draft; Save will overwrite what arrived. */
     @state() private _editorScheduleChanged = false;
 
@@ -268,8 +277,10 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                     .highlightRanges=${this._buildHighlights(day)}
                     .laneLabels=${"track"}
                     .readonly=${true}
+                    .explainable=${true}
                     .showForecastRows=${false}
                     .showAxis=${false}
+                    @entity-day-band-lane-explain=${this._handleLaneExplain}
                     @entity-day-band-lane-select=${this._handleLaneSelect}
                     @entity-day-band-block-select=${this._handleBlockSelect}
                     @entity-day-band-time-hover=${this._handleTimeHover}
@@ -277,6 +288,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 ></scheduling-entity-day-band>
             </div>
             ${this._renderEditor()}
+            ${this._renderExplanation()}
         `;
     }
 
@@ -318,6 +330,84 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 @entity-schedule-save=${this._handleEditorSave}
             ></scheduling-entity-day-editor>
         `;
+    }
+
+    /**
+     * "Why does this lane's day look like this?", from the read-only strip.
+     *
+     * Hosted here rather than in the day editor because this strip is on the
+     * page, not inside a dialog: the explanation opens as the only modal, and
+     * the band it is explaining stays behind it. Opening it from *inside* the
+     * editor stacks one `ha-dialog` on another, which is a separate problem.
+     */
+    private _renderExplanation() {
+        if (this._explanationTargetKey === null) {
+            return nothing;
+        }
+
+        return html`
+            <scheduling-explanation-dialog
+                .open=${this._explanationOpen}
+                .localize=${this._localize}
+                .payload=${this._explanationPayload}
+                .laneName=${this._explanationLaneName}
+                .loading=${this._explanationLoading}
+                .failed=${this._explanationFailed}
+                .locale=${this._locale}
+                .timeZone=${this.timeZone}
+                @schedule-explanation-close=${this._handleExplanationClosed}
+            ></scheduling-explanation-dialog>
+        `;
+    }
+
+    private _handleLaneExplain = (event: CustomEvent<EntityDayBandLaneExplainDetail>): void => {
+        event.stopPropagation();
+        const { laneKey, dayKey, laneName } = event.detail;
+        this._explanationTargetKey = laneKey;
+        this._explanationLaneName = laneName;
+        this._explanationPayload = null;
+        this._explanationFailed = false;
+        this._explanationOpen = true;
+        void this._loadExplanation(laneKey, dayKey);
+    };
+
+    private _handleExplanationClosed = (): void => {
+        this._explanationOpen = false;
+        this._explanationTargetKey = null;
+    };
+
+    private async _loadExplanation(targetKey: string, date: string): Promise<void> {
+        const hass = this.hass;
+        if (!hass) {
+            return;
+        }
+
+        this._explanationRequestId += 1;
+        const requestId = this._explanationRequestId;
+        this._explanationLoading = true;
+        try {
+            const payload = await hass.callWS<unknown>({
+                type: "helman/get_schedule_explanation",
+                target_key: targetKey,
+                date,
+            });
+            if (requestId !== this._explanationRequestId) {
+                return;
+            }
+            // A null answer is not a failure: it means nothing was recorded for
+            // this lane on this date, which the dialog says in its own words.
+            this._explanationPayload = payload ?? null;
+        } catch {
+            if (requestId !== this._explanationRequestId) {
+                return;
+            }
+            this._explanationPayload = null;
+            this._explanationFailed = true;
+        } finally {
+            if (requestId === this._explanationRequestId) {
+                this._explanationLoading = false;
+            }
+        }
     }
 
     /**

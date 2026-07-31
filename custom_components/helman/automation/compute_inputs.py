@@ -17,6 +17,47 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class CustomConditionResult:
+    """Outcome of one ``custom`` condition entry inside a condition group.
+
+    ``met`` is fail-closed: an entry that could not be built or that raised while
+    evaluating reports ``met=False``. ``errored`` is what makes that case
+    distinguishable from a condition that plainly evaluated to false — the
+    aggregate keeps treating both as not met, but an explanation can tell them
+    apart.
+    """
+
+    met: bool
+    errored: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"met": self.met, "errored": self.errored}
+
+
+@dataclass(frozen=True)
+class CustomConditionGroupResult:
+    """Per-entry ``custom`` results for one condition group, plus the aggregate.
+
+    ``met`` is the AND over ``entries`` (and ``True`` for a group with no custom
+    conditions), i.e. exactly the bool this group contributes to
+    ``ComputeInputs.condition_met_by_optimizer_id``.
+    """
+
+    index: int
+    met: bool
+    errored: bool = False
+    entries: tuple[CustomConditionResult, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "met": self.met,
+            "errored": self.errored,
+            "entries": [entry.to_dict() for entry in self.entries],
+        }
+
+
+@dataclass(frozen=True)
 class ComputeInputs:
     """Immutable snapshot of the I/O-derived inputs a forecast rebuild needs.
 
@@ -35,6 +76,14 @@ class ComputeInputs:
     condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] = field(
         default_factory=dict
     )
+    # The same evaluation, one level finer: per condition group, one result per
+    # ``custom`` entry plus an ``errored`` flag. ``condition_met_by_optimizer_id``
+    # stays what *scheduling* reads (it holds the same aggregate); this detail
+    # exists so an explanation can name which custom condition failed, and
+    # whether it failed or blew up. Absent id == not evaluated, as above.
+    custom_condition_results_by_optimizer_id: dict[
+        str, tuple[CustomConditionGroupResult, ...]
+    ] = field(default_factory=dict)
     # Which appliances are physically running at the moment the run started,
     # by the same definition of "running" the recorder runtime query uses. Read
     # by ``appliance_runtime`` to keep an in-flight run in the plan; see

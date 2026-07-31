@@ -222,7 +222,13 @@ from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_SLOT_MINUTES,
 )
 from custom_components.helman.appliances import build_appliances_runtime_registry  # noqa: E402
-from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
+from custom_components.helman.automation.compute_inputs import (  # noqa: E402
+    CustomConditionGroupResult,
+)
+from custom_components.helman.coordinator import (  # noqa: E402
+    HelmanCoordinator,
+    _condition_met_map,
+)
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleActionError,
@@ -475,7 +481,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator._last_automation_plan_at = now - timedelta(seconds=120)
         coordinator._last_plan_condition_map = {"opt": (True,)}
         coordinator._async_evaluate_optimizer_conditions = AsyncMock(
-            return_value={"opt": (False,)}
+            return_value={"opt": (CustomConditionGroupResult(index=0, met=False),)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
 
@@ -496,7 +502,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator._last_automation_plan_at = now - timedelta(seconds=120)
         coordinator._last_plan_condition_map = {"opt": (True,)}
         coordinator._async_evaluate_optimizer_conditions = AsyncMock(
-            return_value={"opt": (True,)}
+            return_value={"opt": (CustomConditionGroupResult(index=0, met=True),)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
 
@@ -515,7 +521,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator._last_automation_plan_at = now  # just planned
         coordinator._last_plan_condition_map = {"opt": (True,)}
         coordinator._async_evaluate_optimizer_conditions = AsyncMock(
-            return_value={"opt": (False,)}
+            return_value={"opt": (CustomConditionGroupResult(index=0, met=False),)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
 
@@ -1549,6 +1555,276 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+
+class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
+    """``_async_evaluate_optimizer_conditions`` — one result per ``custom`` entry.
+
+    The HA condition machinery is stubbed at ``_build_optimizer_condition_checker``
+    (called once per entry), so these cover the fan-out and the fold, not HA's
+    own condition validation.
+    """
+
+    def _build_coordinator(self, optimizers: list[dict]) -> HelmanCoordinator:
+        storage = FakeStorage(
+            schedule_document={"executionEnabled": False, "slots": {}},
+            config={"automation": {"optimizers": optimizers}},
+        )
+        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator._active_config = storage.config
+        return coordinator
+
+    @staticmethod
+    def _optimizer(*groups: dict) -> dict:
+        return {
+            "id": "export",
+            "kind": "export_price",
+            "conditions": list(groups),
+        }
+
+    @staticmethod
+    def _custom(entity_id: str) -> dict:
+        return {"condition": "state", "entity_id": entity_id, "state": "on"}
+
+    def _stub_checkers(
+        self, coordinator: HelmanCoordinator, outcome_by_entity: dict[str, object]
+    ) -> list[tuple[tuple[str, int], int]]:
+        """Give every entry its own checker, driven by ``outcome_by_entity``.
+
+        ``None`` builds no checker (a build failure); an ``Exception`` instance
+        is raised by ``async_check``; a bool is returned as-is. Returns the list
+        of (key, entry_index) the builder was called with.
+        """
+        built: list[tuple[tuple[str, int], int]] = []
+
+        async def _build(*, key, entry_index, condition_config):
+            built.append((key, entry_index))
+            outcome = outcome_by_entity[condition_config[0]["entity_id"]]
+            if outcome is None:
+                return None
+
+            def _check():
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+            return Mock(async_check=_check, async_unload=Mock())
+
+        coordinator._build_optimizer_condition_checker = _build
+        return built
+
+    async def test_each_custom_entry_gets_its_own_result(self) -> None:
+        coordinator = self._build_coordinator(
+            [
+                self._optimizer(
+                    {
+                        "when_price_below": 1.0,
+                        "custom": [
+                            self._custom("binary_sensor.a"),
+                            self._custom("binary_sensor.b"),
+                            self._custom("binary_sensor.c"),
+                        ],
+                    }
+                )
+            ]
+        )
+        built = self._stub_checkers(
+            coordinator,
+            {
+                "binary_sensor.a": True,
+                "binary_sensor.b": False,
+                "binary_sensor.c": True,
+            },
+        )
+
+        results = await coordinator._async_evaluate_optimizer_conditions()
+
+        group = results["export"][0]
+        self.assertEqual(len(group.entries), 3)
+        self.assertEqual(
+            [(entry.met, entry.errored) for entry in group.entries],
+            [(True, False), (False, False), (True, False)],
+        )
+        # One checker per entry, not one for the whole group.
+        self.assertEqual(
+            built,
+            [(("export", 0), 0), (("export", 0), 1), (("export", 0), 2)],
+        )
+        # The aggregate is still the AND, and still what the optimizers read.
+        self.assertFalse(group.met)
+        self.assertFalse(group.errored)
+        self.assertEqual(_condition_met_map(results), {"export": (False,)})
+
+    async def test_all_entries_true_makes_the_group_met(self) -> None:
+        coordinator = self._build_coordinator(
+            [
+                self._optimizer(
+                    {
+                        "when_price_below": 1.0,
+                        "custom": [
+                            self._custom("binary_sensor.a"),
+                            self._custom("binary_sensor.b"),
+                        ],
+                    }
+                )
+            ]
+        )
+        self._stub_checkers(
+            coordinator, {"binary_sensor.a": True, "binary_sensor.b": True}
+        )
+
+        results = await coordinator._async_evaluate_optimizer_conditions()
+
+        self.assertTrue(results["export"][0].met)
+        self.assertFalse(results["export"][0].errored)
+        self.assertEqual(_condition_met_map(results), {"export": (True,)})
+
+    async def test_a_raising_entry_is_errored_and_still_fails_the_group(self) -> None:
+        coordinator = self._build_coordinator(
+            [
+                self._optimizer(
+                    {
+                        "when_price_below": 1.0,
+                        "custom": [
+                            self._custom("binary_sensor.a"),
+                            self._custom("binary_sensor.boom"),
+                        ],
+                    }
+                )
+            ]
+        )
+        self._stub_checkers(
+            coordinator,
+            {"binary_sensor.a": True, "binary_sensor.boom": RuntimeError("nope")},
+        )
+
+        results = await coordinator._async_evaluate_optimizer_conditions()
+
+        group = results["export"][0]
+        self.assertEqual(
+            [(entry.met, entry.errored) for entry in group.entries],
+            [(True, False), (False, True)],
+        )
+        # Fail-closed for scheduling, but no longer indistinguishable from false.
+        self.assertFalse(group.met)
+        self.assertTrue(group.errored)
+        self.assertEqual(_condition_met_map(results), {"export": (False,)})
+
+    async def test_an_unbuildable_entry_is_errored_too(self) -> None:
+        coordinator = self._build_coordinator(
+            [
+                self._optimizer(
+                    {
+                        "when_price_below": 1.0,
+                        "custom": [self._custom("binary_sensor.bad")],
+                    }
+                )
+            ]
+        )
+        self._stub_checkers(coordinator, {"binary_sensor.bad": None})
+
+        results = await coordinator._async_evaluate_optimizer_conditions()
+
+        group = results["export"][0]
+        self.assertEqual(
+            [(entry.met, entry.errored) for entry in group.entries], [(False, True)]
+        )
+        self.assertFalse(group.met)
+        self.assertTrue(group.errored)
+
+    async def test_a_group_without_custom_conditions_is_met_with_no_entries(
+        self,
+    ) -> None:
+        coordinator = self._build_coordinator(
+            [self._optimizer({"when_price_below": 1.0})]
+        )
+        built = self._stub_checkers(coordinator, {})
+
+        results = await coordinator._async_evaluate_optimizer_conditions()
+
+        group = results["export"][0]
+        self.assertTrue(group.met)
+        self.assertFalse(group.errored)
+        self.assertEqual(group.entries, ())
+        # A group with no custom conditions must not build a checker.
+        self.assertEqual(built, [])
+        self.assertEqual(_condition_met_map(results), {"export": (True,)})
+
+    async def test_group_order_and_index_are_preserved(self) -> None:
+        coordinator = self._build_coordinator(
+            [
+                self._optimizer(
+                    {
+                        "when_price_below": 0.0,
+                        "custom": [self._custom("binary_sensor.a")],
+                    },
+                    {
+                        "when_price_below": 1.0,
+                        "custom": [self._custom("binary_sensor.b")],
+                    },
+                )
+            ]
+        )
+        self._stub_checkers(
+            coordinator, {"binary_sensor.a": False, "binary_sensor.b": True}
+        )
+
+        results = await coordinator._async_evaluate_optimizer_conditions()
+
+        self.assertEqual([group.index for group in results["export"]], [0, 1])
+        self.assertEqual(_condition_met_map(results), {"export": (False, True)})
+
+    async def test_results_reach_compute_inputs_alongside_the_aggregate(self) -> None:
+        coordinator = self._build_coordinator(
+            [
+                self._optimizer(
+                    {
+                        "when_price_below": 1.0,
+                        "custom": [
+                            self._custom("binary_sensor.a"),
+                            self._custom("binary_sensor.b"),
+                        ],
+                    }
+                )
+            ]
+        )
+        self._stub_checkers(
+            coordinator, {"binary_sensor.a": True, "binary_sensor.b": False}
+        )
+
+        compute_inputs = await coordinator._async_gather_compute_inputs(
+            started_at=REFERENCE_TIME, include_condition_flags=True
+        )
+
+        # The aggregate map is unchanged in shape and semantics...
+        self.assertEqual(
+            compute_inputs.condition_met_by_optimizer_id, {"export": (False,)}
+        )
+        # ...with the per-entry detail carried alongside it.
+        detail = compute_inputs.custom_condition_results_by_optimizer_id["export"]
+        self.assertEqual(
+            [(entry.met, entry.errored) for entry in detail[0].entries],
+            [(True, False), (False, False)],
+        )
+
+    async def test_forecast_paths_still_skip_condition_evaluation(self) -> None:
+        coordinator = self._build_coordinator(
+            [
+                self._optimizer(
+                    {
+                        "when_price_below": 1.0,
+                        "custom": [self._custom("binary_sensor.a")],
+                    }
+                )
+            ]
+        )
+        self._stub_checkers(coordinator, {"binary_sensor.a": True})
+
+        compute_inputs = await coordinator._async_gather_compute_inputs(
+            started_at=REFERENCE_TIME
+        )
+
+        self.assertEqual(compute_inputs.condition_met_by_optimizer_id, {})
+        self.assertEqual(compute_inputs.custom_condition_results_by_optimizer_id, {})
 
 if __name__ == "__main__":
     unittest.main()

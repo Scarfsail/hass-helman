@@ -19,6 +19,7 @@ from ..scheduling.schedule import (
 
 if TYPE_CHECKING:
     from ..battery_state import BatteryLiveState
+    from .compute_inputs import CustomConditionGroupResult
     from ..scheduling.forecast_overlay import ScheduleForecastOverlay
     from .day_context import DayContext
 
@@ -59,6 +60,15 @@ class OptimizationContext:
     condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] = field(
         default_factory=dict
     )
+    # The per-entry breakdown behind ``condition_met_by_optimizer_id``: one
+    # ``CustomConditionGroupResult`` per condition group, each carrying one
+    # result per configured ``custom`` entry plus an ``errored`` flag. Purely
+    # explanatory — optimizers gate on ``condition_met_by_optimizer_id``, which
+    # holds the same aggregate. Empty on paths that did not evaluate conditions;
+    # a group with no custom conditions carries no entries. Read-only.
+    custom_condition_results_by_optimizer_id: dict[
+        str, tuple["CustomConditionGroupResult", ...]
+    ] = field(default_factory=dict)
     # A5 — which appliances are physically running right now, resolved by the
     # framework from live state. The one thing a stateless optimizer cannot
     # derive from the schedule it is about to rewrite: the plan for the slot in
@@ -157,6 +167,12 @@ def snapshot_to_dict(snapshot: OptimizationSnapshot) -> dict[str, Any]:
                 optimizer_id: list(met_by_group)
                 for optimizer_id, met_by_group in (
                     snapshot.context.condition_met_by_optimizer_id.items()
+                )
+            },
+            "customConditionResultsByOptimizerId": {
+                optimizer_id: [group.to_dict() for group in groups]
+                for optimizer_id, groups in (
+                    snapshot.context.custom_condition_results_by_optimizer_id.items()
                 )
             },
             "applianceActiveById": dict(snapshot.context.appliance_active_by_id),

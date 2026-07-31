@@ -97,6 +97,18 @@ class OptimizerInstanceConfig:
     def spec(self) -> OptimizerSpec:
         return OPTIMIZER_SPECS[self.kind]
 
+    @property
+    def target_key(self) -> str:
+        """The schedule lane this optimizer writes.
+
+        ``"inverter"`` or ``"appliance:<id>"`` — the same identity as
+        ``TraceWrite.domain`` and the frontend's ``getEntityScheduleTargetKey``,
+        so the explanation record can be queried by the lane the user clicked
+        rather than by optimizer (the inverter lane has three of those).
+        """
+        appliance_id = self.target.get("appliance_id")
+        return f"appliance:{appliance_id}" if appliance_id else "inverter"
+
 
 @dataclass(frozen=True)
 class DayContextConfig:

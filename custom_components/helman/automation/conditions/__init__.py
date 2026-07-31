@@ -13,8 +13,16 @@ from .evaluation import (
     GroupResolution,
     SlotEligibility,
     build_eligibility,
+    build_group_explanations,
 )
-from .types import CONDITION_TYPES, ConditionType, MaskInputs, Scope
+from .types import (
+    CONDITION_TYPES,
+    ConditionType,
+    MaskInputs,
+    MaskResult,
+    Scope,
+    evaluate_mask,
+)
 
 __all__ = [
     "CONDITION_TYPES",
@@ -22,7 +30,10 @@ __all__ = [
     "Eligibility",
     "GroupResolution",
     "MaskInputs",
+    "MaskResult",
     "Scope",
     "SlotEligibility",
     "build_eligibility",
+    "build_group_explanations",
+    "evaluate_mask",
 ]

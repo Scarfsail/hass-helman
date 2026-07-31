@@ -129,6 +129,12 @@
       "applied": "Použito",
       "error": "Chyba běhu"
     },
+    "metric": {
+      "surplus": "Přebytek",
+      "soc": "SoC baterie",
+      "import": "Import ze sítě",
+      "export": "Export do sítě"
+    },
     "authorship": {
       "user": "uživatel",
       "automation": "automatizace",
@@ -137,6 +143,7 @@
       "set_by_automation": "Nastavila automatizace"
     },
     "why": {
+      "title": "Proč?",
       "no_change": "Tento běh hodnotu nezměnil.",
       "automation_generic": "Podrobné zdůvodnění pro tento slot není k dispozici.",
       "manual_note": "Nastaveno ručně — dopad této akce automatizace nesleduje."
@@ -280,6 +287,197 @@
       "edit_hint": "Klepnutím vyberte blok. Táhnutím v grafu ho posunete, za okraje zkrátíte nebo prodloužíte.",
       "title": "Plán zařízení",
       "select_entity": "Vyberte zařízení kliknutím na jeho pruh nebo na jeho blok."
+    },
+    "explanation": {
+      "open": "Proč je to takhle naplánované?",
+      "title": "Vyhodnocení plánu",
+      "close": "Zavřít",
+      "loading": "Načítám vyhodnocení…",
+      "error": "Vyhodnocení se nepodařilo načíst.",
+      "empty": "Pro tento den není u tohoto pruhu zaznamenané žádné vyhodnocení.",
+      "run_at": "Poslední běh",
+      "time_column": "Čas",
+      "result_column": "Výsledek",
+      "result_none": "Nic",
+      "outcome": {
+        "wrote": "zapsáno",
+        "overwritten": "přepsáno později",
+        "candidate": "kandidát",
+        "not_eligible": "nesplněné podmínky",
+        "blocked": "vlastní uživatel",
+        "absent": "nezvažováno",
+        "step_skipped": "krok neproběhl"
+      },
+      "state": {
+        "true": "splněno",
+        "false": "nesplněno",
+        "not_evaluated": "nevyhodnoceno",
+        "not_applicable": "nenastaveno"
+      },
+      "matrix": {
+        "title": "Podmínky slotu",
+        "empty": "Pro tento slot nemá optimalizátor žádný záznam.",
+        "group": "Skupina",
+        "no_params": "bez parametrů",
+        "no_conditions": "Tato skupina nemá nastavené žádné podmínky.",
+        "custom": "Vlastní podmínky",
+        "custom_entry": "Podmínka",
+        "gates": "Další rozhodnutí",
+        "expand": "Rozbalit dílčí podmínky",
+        "collapse": "Sbalit dílčí podmínky",
+        "configured": "nastaveno",
+        "actual": "naměřeno"
+      },
+      "diagram": {
+        "title": "Logika rozhodnutí",
+        "empty": "Pro tento slot nemá optimalizátor žádný záznam.",
+        "matched_group": "Rozhodla skupina:",
+        "context": "Kontext – vyhodnoceno, ale výsledek to nezměnilo",
+        "unexplained": "Důvod není v záznamu",
+        "override": "Vynucený běh",
+        "override_hint": "běží i přes nesplněné podmínky",
+        "override_detail": "Po překročení limitu po sobě jdoucích vynechaných dnů se běh vynutí bez ohledu na podmínky skupin i na vlastní podmínky.",
+        "stage": {
+          "conditions": "Podmínky každé skupiny",
+          "any_group": "aspoň jedna skupina",
+          "any_group_or_forced": "skupina nebo vynucení",
+          "gates": "Další rozhodnutí",
+          "custom": "Vlastní podmínky",
+          "custom_when": "kontrola těsně před spuštěním",
+          "final": "Nic to nezablokovalo",
+          "result": "Výsledek"
+        },
+        "legend_decisive": "Plná čára a plný jas = větev, která o výsledku rozhodla.",
+        "legend_dimmed": "Zeslabená čárkovaná větev byla vyhodnocena, ale výsledek nezměnila.",
+        "legend_comparison": "U podmínky je vidět naměřená hodnota, porovnání a nastavený limit; u splněné podmínky se naměřená hodnota nezaznamenává, zůstane jen limit.",
+        "legend_and": "musí platit všechno, co do něj vede",
+        "legend_or": "stačí, když platí jedna skupina",
+        "legend_override": "Vynucený běh nahrazuje splnění podmínek – proto vede do stejného „≥1“ jako skupiny.",
+        "legend_not_applicable": "Tečkovaně a „–“ = podmínka, kterou skupina nemá nastavenou; do vyhodnocení nevstupuje.",
+        "legend_params": "Čísla v blocích jsou ve tvaru dosaženo/potřeba (u pořadí pozice/celkem); celý rozpis je v popisku po najetí myší.",
+        "legend_params_source": "Štítek u skupiny říká, odkud jsou její parametry; „!“ znamená, že nepocházejí přímo z tohoto slotu.",
+        "terminal": {
+          "execute": "spustit",
+          "candidate": "kandidát (vlastní podmínky nesplněny)",
+          "not_eligible": "nesplněné podmínky",
+          "blocked": "blokováno uživatelem"
+        }
+      },
+      "verdict": {
+        "execute": "spustit",
+        "candidate": "kandidát",
+        "skip": "vynechat"
+      },
+      "params_source": {
+        "slot_matched": "podle slotu",
+        "day_resolved": "podle dne",
+        "master_fallback": "hlavní nastavení"
+      },
+      "params_source_detail": {
+        "slot_matched": "Parametry skupiny, která odpovídá tomuto slotu.",
+        "day_resolved": "Parametry se řeší jednou za den, takže mohou pocházet z jiné skupiny, než jaká odpovídá tomuto slotu.",
+        "master_fallback": "Pro tento den neodpovídala žádná skupina, použilo se hlavní nastavení."
+      },
+      "scope": {
+        "slot": "slot",
+        "day": "den",
+        "window": "okno",
+        "run": "běh"
+      },
+      "scope_detail": {
+        "slot": "Vyhodnoceno pro tento slot.",
+        "day": "Jeden výsledek pro celý den, ne pro tento slot.",
+        "window": "Jeden výsledek pro celé okno, ne pro tento slot.",
+        "run": "Jeden výsledek pro celý běh, ne pro tento slot."
+      },
+      "custom_state": {
+        "true": "splněno",
+        "false": "nesplněno",
+        "errored": "chyba při vyhodnocení"
+      },
+      "param": {
+        "min_export_price": "Minimální cena exportu",
+        "max_price": "Maximální cena",
+        "max_run_price": "Maximální cena běhu",
+        "min_soc_pct": "Minimální SoC",
+        "target_soc_pct": "Cílové SoC",
+        "reserve_floor_soc_pct": "Rezerva SoC",
+        "min_runtime_minutes": "Minimální doba běhu",
+        "daily_minimum_minutes": "Denní minimum",
+        "max_slots": "Maximální počet slotů",
+        "rank": "pořadí",
+        "rank_of": "z",
+        "rankOf": "z celkem",
+        "cost": "cena slotu",
+        "worstChosenCost": "nejdražší vybraný slot",
+        "start": "začátek",
+        "end": "konec",
+        "minHours": "denní minimum (h)",
+        "doneHours": "již odběhnuto (h)",
+        "remainingHours": "zbývá (h)",
+        "slotsNeeded": "potřeba slotů",
+        "slotsPlaceable": "umístitelných slotů",
+        "slotsAvailable": "dostupných slotů",
+        "windowSlots": "slotů v okně",
+        "consecutiveSkips": "vynechaných dnů po sobě",
+        "maxConsecutiveSkips": "limit vynechaných dnů",
+        "neededKwh": "potřeba (kWh)",
+        "marginPct": "rezerva (%)",
+        "surplusAtWindowStart": "přebytek na začátku okna (kWh)",
+        "releaseSlot": "uvolnění",
+        "boundBy": "omezeno čím",
+        "matchedGroup": "odpovídající skupina",
+        "classification": "typ dne",
+        "conditionValue": "nastavená hodnota",
+        "failingCondition": "nesplněná podmínka"
+      },
+      "status": {
+        "skipped": "Přeskočeno",
+        "failed": "Selhalo"
+      },
+      "status_reason": {
+        "condition_rails_unavailable": "podmínky se nepodařilo vyhodnotit",
+        "battery_params_missing": "chybí parametry baterie",
+        "soc_forecast_unavailable": "chybí předpověď SoC",
+        "stop_export_unsupported": "střídač neumí zastavit export"
+      },
+      "optimizer": {
+        "charge_hold": "Držení nabití",
+        "charge_from_grid": "Nabíjení ze sítě",
+        "export_price": "Zastavení exportu",
+        "appliance_runtime": "Běh spotřebiče"
+      },
+      "action": {
+        "charge_hold": "držet",
+        "charge_from_grid": "nabíjet",
+        "export_price": "zastavit export",
+        "appliance_runtime": "zapnout"
+      },
+      "condition": {
+        "run_when": "Kdy spustit",
+        "when_price_below": "Cena pod limitem",
+        "max_run_price": "Maximální cena běhu",
+        "min_soc_pct": "Minimální SoC",
+        "min_solar_coverage_pct": "Minimální pokrytí ze slunce",
+        "ensure_self_sustainability": "Zachovat soběstačnost",
+        "reserve_floor_soc": "Rezerva SoC na drahé pásmo",
+        "run_window": "Okno běhu",
+        "hold_window": "Okno držení",
+        "hold_room": "Prostor pro držení",
+        "before_release": "Před uvolněním",
+        "day_context": "Kontext dne",
+        "day_group_matched": "Skupina pro tento den",
+        "daily_minimum_remaining": "Zbývá do denního minima",
+        "placement_capacity": "Kapacita umístění",
+        "consecutive_skip_override": "Přerušení navazujícího běhu",
+        "slot_available": "Volný slot",
+        "cheapest_rank": "Pořadí podle ceny",
+        "cheap_window_capacity": "Kapacita levného okna",
+        "charge_needed": "Potřeba nabít",
+        "window_soc_known": "Známé SoC v okně",
+        "stop_export_supported": "Podpora zastavení exportu",
+        "blocked_user_owned": "Slot vlastní uživatel"
+      }
     }
   },
   "bias_correction": {

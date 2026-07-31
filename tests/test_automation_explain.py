@@ -1,0 +1,833 @@
+"""The explanation DTOs, their serialization, and the matrix the rails produce.
+
+Most of this file is codec: no optimizer, no pipeline, no store. What is
+guarded there is (a) that a record survives a round trip unchanged, (b) that the
+per-slot columns really are index-aligned and run-length encoded, and (c) that a
+passing node costs nothing in the payload.
+
+:class:`ConditionMatrixTests` is the one behavioural half: it drives the real
+``build_eligibility`` and asserts on the matrix it stamps, end to end through
+serialization — the properties an optimizer will rely on before it ever calls
+``resolve_condition``.
+"""
+
+from __future__ import annotations
+
+import sys
+import types
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TZ = timezone(timedelta(hours=2))
+
+
+def _install_import_stubs() -> None:
+    custom_components_pkg = sys.modules.get("custom_components")
+    if custom_components_pkg is None:
+        custom_components_pkg = types.ModuleType("custom_components")
+        sys.modules["custom_components"] = custom_components_pkg
+    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
+
+    helman_pkg = sys.modules.get("custom_components.helman")
+    if helman_pkg is None:
+        helman_pkg = types.ModuleType("custom_components.helman")
+        sys.modules["custom_components.helman"] = helman_pkg
+    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
+
+    automation_pkg = sys.modules.get("custom_components.helman.automation")
+    if automation_pkg is None:
+        automation_pkg = types.ModuleType("custom_components.helman.automation")
+        sys.modules["custom_components.helman.automation"] = automation_pkg
+    automation_pkg.__path__ = [
+        str(ROOT / "custom_components" / "helman" / "automation")
+    ]
+
+    scheduling_pkg = sys.modules.get("custom_components.helman.scheduling")
+    if scheduling_pkg is None:
+        scheduling_pkg = types.ModuleType("custom_components.helman.scheduling")
+        sys.modules["custom_components.helman.scheduling"] = scheduling_pkg
+    scheduling_pkg.__path__ = [
+        str(ROOT / "custom_components" / "helman" / "scheduling")
+    ]
+
+    homeassistant_pkg = sys.modules.get("homeassistant")
+    if homeassistant_pkg is None:
+        homeassistant_pkg = types.ModuleType("homeassistant")
+        sys.modules["homeassistant"] = homeassistant_pkg
+
+    util_pkg = sys.modules.get("homeassistant.util")
+    if util_pkg is None:
+        util_pkg = types.ModuleType("homeassistant.util")
+        sys.modules["homeassistant.util"] = util_pkg
+
+    dt_mod = sys.modules.get("homeassistant.util.dt")
+    if dt_mod is None:
+        dt_mod = types.ModuleType("homeassistant.util.dt")
+        sys.modules["homeassistant.util.dt"] = dt_mod
+    dt_mod.parse_datetime = datetime.fromisoformat
+    dt_mod.as_local = lambda value: value
+    dt_mod.as_utc = lambda value: value
+    util_pkg.dt = dt_mod
+
+
+_install_import_stubs()
+
+from custom_components.helman.automation.explain import (  # noqa: E402
+    ConditionNode,
+    ExplanationBook,
+    GateNode,
+    GroupExplanation,
+    OptimizerExplanation,
+    RunExplanation,
+    SlotExplanation,
+    decode_runs,
+    decode_sparse,
+    encode_runs,
+    encode_sparse,
+)
+
+RUN_AT = datetime(2026, 7, 31, 20, 15, tzinfo=TZ)
+
+
+def _slot_ids(count: int, *, start_hour: int = 12) -> tuple[str, ...]:
+    base = datetime(2026, 7, 31, start_hour, 0, tzinfo=TZ)
+    return tuple(
+        (base + timedelta(minutes=30 * index)).isoformat() for index in range(count)
+    )
+
+
+class RunLengthCodecTests(unittest.TestCase):
+    def test_all_same_states_collapse_to_one_run(self) -> None:
+        self.assertEqual(encode_runs(["true"] * 96), [["true", 96]])
+
+    def test_alternating_states_do_not_collapse(self) -> None:
+        values = ["true", "false", "true", "false"]
+        self.assertEqual(
+            encode_runs(values),
+            [["true", 1], ["false", 1], ["true", 1], ["false", 1]],
+        )
+
+    def test_empty_column_encodes_to_empty_runs(self) -> None:
+        self.assertEqual(encode_runs([]), [])
+        self.assertEqual(decode_runs([], 0), [])
+
+    def test_round_trip_preserves_order_and_length(self) -> None:
+        values = ["true"] * 3 + ["not_evaluated"] * 2 + [None] * 4 + ["false"]
+        self.assertEqual(decode_runs(encode_runs(values), len(values)), values)
+
+    def test_dict_values_collapse_by_equality(self) -> None:
+        params = {"targetSocPct": 80}
+        self.assertEqual(
+            encode_runs([dict(params), dict(params), None]),
+            [[params, 2], [None, 1]],
+        )
+
+    def test_bool_and_int_are_not_merged(self) -> None:
+        self.assertEqual(encode_runs([True, 1]), [[True, 1], [1, 1]])
+
+    def test_decode_pads_short_columns_with_none(self) -> None:
+        self.assertEqual(
+            decode_runs([["true", 2]], 4), ["true", "true", None, None]
+        )
+
+    def test_decode_truncates_over_long_columns(self) -> None:
+        self.assertEqual(decode_runs([["true", 5]], 2), ["true", "true"])
+
+    def test_malformed_runs_are_skipped_not_raised(self) -> None:
+        self.assertEqual(decode_runs([["true", 1], "junk", ["x", -1]], 1), ["true"])
+        self.assertEqual(decode_runs("not-a-list", 2), [None, None])
+
+
+class SparseCodecTests(unittest.TestCase):
+    def test_none_entries_are_omitted(self) -> None:
+        self.assertEqual(encode_sparse([None, 4.2, None, 0.0]), {"1": 4.2, "3": 0.0})
+
+    def test_all_none_column_encodes_to_empty_map(self) -> None:
+        self.assertEqual(encode_sparse([None, None]), {})
+
+    def test_round_trip(self) -> None:
+        values = [None, 4.2, None]
+        self.assertEqual(decode_sparse(encode_sparse(values), 3), values)
+
+    def test_out_of_range_and_non_integer_keys_are_ignored(self) -> None:
+        self.assertEqual(decode_sparse({"9": 1.0, "x": 2.0}, 2), [None, None])
+
+
+class IndexAlignedShapeTests(unittest.TestCase):
+    def _record(self) -> RunExplanation:
+        slot_ids = _slot_ids(4)
+        # price passes on the first two slots and fails on the last two, which
+        # are the only slots carrying an actual.
+        states = ["true", "true", "false", "false"]
+        actuals = [None, None, 4.10, 4.55]
+        slots = tuple(
+            SlotExplanation(
+                slot_id=slot_id,
+                groups=(
+                    GroupExplanation(
+                        index=0,
+                        label="night",
+                        params={"targetSocPct": 80},
+                        params_source="slot_matched",
+                        custom_results=(True,),
+                        conditions=(
+                            ConditionNode(
+                                key="max_price",
+                                scope="slot",
+                                state=states[index],
+                                value=3.5,
+                                actual=actuals[index],
+                            ),
+                        ),
+                    ),
+                ),
+                gates=(GateNode(key="window", state="true", params={"rank": index}),),
+                verdict="execute" if states[index] == "true" else "skip",
+            )
+            for index, slot_id in enumerate(slot_ids)
+        )
+        return RunExplanation(
+            run_at=RUN_AT,
+            slot_ids=slot_ids,
+            optimizers=(
+                OptimizerExplanation(
+                    optimizer_id="grid-1",
+                    kind="charge_from_grid",
+                    slots=slots,
+                ),
+            ),
+        )
+
+    def test_single_slot_ids_array_lives_on_the_record(self) -> None:
+        payload = self._record().to_dict()
+        self.assertEqual(payload["slotIds"], list(_slot_ids(4)))
+        self.assertEqual(payload["runAt"], RUN_AT.isoformat())
+        step = payload["optimizers"][0]
+        self.assertNotIn("slotIds", step)
+        self.assertNotIn("slotId", str(step.get("groups")))
+
+    def test_node_state_is_run_length_encoded(self) -> None:
+        payload = self._record().to_dict()
+        node = payload["optimizers"][0]["groups"][0]["conditions"][0]
+        self.assertEqual(node["key"], "max_price")
+        self.assertEqual(node["scope"], "slot")
+        self.assertEqual(node["state"], [["true", 2], ["false", 2]])
+        self.assertEqual(node["value"], [[3.5, 4]])
+
+    def test_actuals_are_sparse_and_only_for_failing_slots(self) -> None:
+        payload = self._record().to_dict()
+        node = payload["optimizers"][0]["groups"][0]["conditions"][0]
+        self.assertEqual(node["actual"], {"2": 4.10, "3": 4.55})
+
+    def test_passing_node_omits_the_actual_key_entirely(self) -> None:
+        record = RunExplanation(
+            run_at=RUN_AT,
+            slot_ids=_slot_ids(2),
+            optimizers=(
+                OptimizerExplanation(
+                    optimizer_id="export-1",
+                    kind="export_price",
+                    slots=tuple(
+                        SlotExplanation(
+                            slot_id=slot_id,
+                            groups=(
+                                GroupExplanation(
+                                    index=0,
+                                    conditions=(
+                                        ConditionNode(key="run_when", state="true"),
+                                    ),
+                                ),
+                            ),
+                            verdict="execute",
+                        )
+                        for slot_id in _slot_ids(2)
+                    ),
+                ),
+            ),
+        )
+        node = record.to_dict()["optimizers"][0]["groups"][0]["conditions"][0]
+        self.assertNotIn("actual", node)
+        self.assertNotIn("value", node)
+
+    def test_verdict_column_is_run_length_encoded(self) -> None:
+        payload = self._record().to_dict()
+        self.assertEqual(
+            payload["optimizers"][0]["verdict"],
+            [["execute", 2], ["skip", 2]],
+        )
+
+    def test_gate_params_ride_the_same_column_shape(self) -> None:
+        payload = self._record().to_dict()
+        gate = payload["optimizers"][0]["gates"][0]
+        self.assertEqual(gate["key"], "window")
+        self.assertEqual(gate["state"], [["true", 4]])
+        self.assertEqual(
+            gate["params"],
+            [[{"rank": 0}, 1], [{"rank": 1}, 1], [{"rank": 2}, 1], [{"rank": 3}, 1]],
+        )
+
+    def test_empty_slot_list_serializes_and_round_trips(self) -> None:
+        record = RunExplanation(
+            run_at=RUN_AT,
+            slot_ids=(),
+            optimizers=(
+                OptimizerExplanation(optimizer_id="idle", kind="charge_hold"),
+            ),
+        )
+        payload = record.to_dict()
+        self.assertEqual(payload["slotIds"], [])
+        self.assertEqual(payload["optimizers"][0]["verdict"], [])
+        self.assertEqual(RunExplanation.from_dict(payload), record)
+
+    def test_off_horizon_slot_is_dropped_not_raised(self) -> None:
+        record = RunExplanation(
+            run_at=RUN_AT,
+            slot_ids=_slot_ids(1),
+            optimizers=(
+                OptimizerExplanation(
+                    optimizer_id="grid-1",
+                    kind="charge_from_grid",
+                    slots=(SlotExplanation(slot_id="2020-01-01T00:00:00+02:00"),),
+                ),
+            ),
+        )
+        self.assertEqual(record.to_dict()["optimizers"][0]["verdict"], [[None, 1]])
+
+
+class RoundTripTests(unittest.TestCase):
+    def _rich_record(self) -> RunExplanation:
+        slot_ids = _slot_ids(5)
+        # slot 0: two groups, the second one not configuring max_price at all;
+        # slot 1: the self-gating node was never reached;
+        # slot 2: no groups (the optimizer only ran gates);
+        # slot 3: the optimizer said nothing at all (absent slot);
+        # slot 4: blocked by the writer.
+        slots = (
+            SlotExplanation(
+                slot_id=slot_ids[0],
+                groups=(
+                    GroupExplanation(
+                        index=0,
+                        label="cheap night",
+                        params={"targetSocPct": 80, "powerW": 3000},
+                        params_source="day_resolved",
+                        custom_results=(True, False),
+                        conditions=(
+                            ConditionNode(
+                                key="max_price",
+                                state="false",
+                                value=3.5,
+                                actual=4.2,
+                            ),
+                            ConditionNode(
+                                key="reserve_floor_soc",
+                                scope="window",
+                                state="true",
+                            ),
+                        ),
+                    ),
+                    GroupExplanation(
+                        index=1,
+                        label="fallback",
+                        params_source="master_fallback",
+                        conditions=(
+                            ConditionNode(key="max_price", state="not_applicable"),
+                        ),
+                    ),
+                ),
+                gates=(GateNode(key="capacity", state="true"),),
+                verdict="candidate",
+            ),
+            SlotExplanation(
+                slot_id=slot_ids[1],
+                groups=(
+                    GroupExplanation(
+                        index=0,
+                        label="cheap night",
+                        params={"targetSocPct": 80, "powerW": 3000},
+                        params_source="day_resolved",
+                        custom_results=(True, False),
+                        conditions=(
+                            ConditionNode(
+                                key="ensure_self_sustainability",
+                                state="not_evaluated",
+                            ),
+                        ),
+                    ),
+                ),
+                verdict="skip",
+            ),
+            SlotExplanation(
+                slot_id=slot_ids[2],
+                gates=(
+                    GateNode(key="capacity", state="false", params={"rank": 7}),
+                    GateNode(key="deadline", state="true"),
+                ),
+                verdict="skip",
+            ),
+            SlotExplanation(
+                slot_id=slot_ids[4],
+                gates=(GateNode(key="blocked_user_owned", state="false"),),
+                verdict="execute",
+                winning_optimizer="export_price",
+            ),
+        )
+        return RunExplanation(
+            run_at=RUN_AT,
+            slot_ids=slot_ids,
+            optimizers=(
+                OptimizerExplanation(
+                    optimizer_id="grid-1",
+                    kind="charge_from_grid",
+                    slots=slots,
+                ),
+                OptimizerExplanation(
+                    optimizer_id="boiler",
+                    kind="appliance_runtime",
+                    status="skipped",
+                    status_reason="condition_rails_unavailable",
+                ),
+            ),
+        )
+
+    def test_record_round_trips_losslessly(self) -> None:
+        record = self._rich_record()
+        self.assertEqual(RunExplanation.from_dict(record.to_dict()), record)
+
+    def test_round_trip_survives_json(self) -> None:
+        import json
+
+        record = self._rich_record()
+        payload = json.loads(json.dumps(record.to_dict()))
+        self.assertEqual(RunExplanation.from_dict(payload), record)
+
+    def test_skipped_step_keeps_its_reason_and_stays_distinct(self) -> None:
+        payload = self._rich_record().to_dict()
+        step = payload["optimizers"][1]
+        self.assertEqual(step["status"], "skipped")
+        self.assertEqual(step["statusReason"], "condition_rails_unavailable")
+        # a skipped step has no per-slot matrix at all -- it is not "every slot
+        # false".
+        self.assertEqual(step["verdict"], [[None, 5]])
+        self.assertNotIn("groups", step)
+
+    def test_absent_slot_stays_absent_after_a_round_trip(self) -> None:
+        record = self._rich_record()
+        restored = RunExplanation.from_dict(record.to_dict())
+        explained = {slot.slot_id for slot in restored.optimizers[0].slots}
+        self.assertNotIn(record.slot_ids[3], explained)
+        self.assertEqual(len(explained), 4)
+
+    def test_not_applicable_and_not_evaluated_survive_distinctly(self) -> None:
+        restored = RunExplanation.from_dict(self._rich_record().to_dict())
+        slots = {slot.slot_id: slot for slot in restored.optimizers[0].slots}
+        fallback = slots[restored.slot_ids[0]].groups[1]
+        self.assertEqual(fallback.conditions[0].state, "not_applicable")
+        gated = slots[restored.slot_ids[1]].groups[0].conditions[0]
+        self.assertEqual(gated.state, "not_evaluated")
+
+    def test_per_entry_custom_results_round_trip(self) -> None:
+        """Custom conditions are group-level, never nested under a condition.
+
+        This is the shape the removed ``ConditionNode.children`` field implied
+        and never delivered: no producer ever populated it, so per-entry custom
+        results have always lived here instead.
+        """
+        restored = RunExplanation.from_dict(self._rich_record().to_dict())
+        group = restored.optimizers[0].slots[0].groups[0]
+        self.assertEqual(group.custom_results, (True, False))
+
+    def test_window_scope_is_carried(self) -> None:
+        restored = RunExplanation.from_dict(self._rich_record().to_dict())
+        node = restored.optimizers[0].slots[0].groups[0].conditions[1]
+        self.assertEqual(node.scope, "window")
+
+
+class ConditionMatrixTests(unittest.TestCase):
+    """The matrix ``build_eligibility`` stamps, as an optimizer will read it.
+
+    Driven through the real condition rails and then through serialization, so a
+    property asserted here holds in the payload the frontend receives — not just
+    in the in-memory DTO.
+    """
+
+    REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
+    SLOT_0 = "2026-03-20T21:00:00+01:00"
+    SLOT_1 = "2026-03-20T21:30:00+01:00"
+    SLOT_2 = "2026-03-20T22:00:00+01:00"
+    # SLOT_0 clears either threshold, SLOT_1 only the looser one, SLOT_2 neither.
+    PRICES = {SLOT_0: -1.0, SLOT_1: 0.5, SLOT_2: 5.0}
+
+    def _snapshot(self, *, day_classification: str | None = None):
+        from custom_components.helman.appliances import AppliancesRuntimeRegistry
+        from custom_components.helman.automation.day_context import DayContext
+        from custom_components.helman.automation.snapshot import (
+            OptimizationContext,
+            OptimizationSnapshot,
+        )
+        from custom_components.helman.scheduling.schedule import ScheduleDocument
+
+        local_date = self.REFERENCE_TIME.date()
+        day_contexts = {}
+        if day_classification is not None:
+            day_contexts[local_date] = DayContext(
+                local_date=local_date,
+                classification=day_classification,
+                predicted_solar_kwh=5.0,
+                predicted_consumption_kwh=5.0,
+                export_price_min=1.0,
+                export_price_max=5.0,
+                day_min_window=None,
+                import_bands=(),
+            )
+        return OptimizationSnapshot(
+            schedule=ScheduleDocument(),
+            adjusted_house_forecast={"status": "available", "series": []},
+            battery_forecast={"status": "available", "series": []},
+            grid_forecast={"status": "available", "series": []},
+            context=OptimizationContext(
+                now=self.REFERENCE_TIME,
+                battery_state=None,
+                solar_forecast={"status": "available", "points": []},
+                import_price_forecast={"currentPrice": 7.0, "points": []},
+                export_price_forecast={
+                    "currentPrice": 9.0,
+                    "points": [
+                        {"timestamp": slot_id, "value": value}
+                        for slot_id, value in self.PRICES.items()
+                    ],
+                },
+                appliance_registry=AppliancesRuntimeRegistry(),
+                when_active_hourly_energy_kwh_by_appliance_id={},
+                day_contexts=day_contexts,
+            ),
+        )
+
+    def _record(self, config, snapshot=None):
+        """Build the matrix and push it through a full serialization round trip."""
+        from custom_components.helman.automation.conditions import (
+            build_eligibility,
+            build_group_explanations,
+        )
+
+        snapshot = snapshot if snapshot is not None else self._snapshot()
+        eligibility = build_eligibility(snapshot, config)
+        explanations = build_group_explanations(snapshot, config, eligibility)
+        slot_ids = eligibility.horizon_slot_ids
+        optimizer = OptimizerExplanation(
+            optimizer_id=config.id,
+            kind=config.kind,
+            slots=tuple(
+                SlotExplanation(
+                    slot_id=slot_id,
+                    groups=explanations[slot_id],
+                    verdict=(
+                        "execute"
+                        if slot_id in eligibility.planned_slot_ids
+                        else "candidate"
+                        if slot_id in eligibility.candidate_slot_ids
+                        else "skip"
+                    ),
+                )
+                for slot_id in slot_ids
+            ),
+        )
+        record = RunExplanation(
+            run_at=self.REFERENCE_TIME, slot_ids=slot_ids, optimizers=(optimizer,)
+        )
+        restored = RunExplanation.from_dict(record.to_dict())
+        return {slot.slot_id: slot for slot in restored.optimizers[0].slots}
+
+    def _export_price_config(self, *groups):
+        from automation_config_builders import make_optimizer_config
+
+        return make_optimizer_config(
+            id="export", kind="export_price", conditions=list(groups)
+        )
+
+    def _appliance_config(self, *groups):
+        from automation_config_builders import make_optimizer_config
+
+        return make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=list(groups),
+        )
+
+    def test_a_two_group_or_shows_the_first_failing_and_the_second_passing(
+        self,
+    ) -> None:
+        slots = self._record(
+            self._export_price_config(
+                {"when_price_below": 0.0}, {"when_price_below": 1.0}
+            )
+        )
+
+        slot = slots[self.SLOT_1]
+        self.assertEqual(
+            [group.conditions[0].state for group in slot.groups], ["false", "true"]
+        )
+        # The OR is satisfied, so the slot executes even though group 1 failed.
+        self.assertEqual(slot.verdict, "execute")
+
+    def test_a_slot_failing_on_price_carries_the_actual_price(self) -> None:
+        slots = self._record(self._export_price_config({"when_price_below": 0.0}))
+
+        node = slots[self.SLOT_2].groups[0].conditions[0]
+        self.assertEqual(node.state, "false")
+        self.assertEqual(node.value, 0.0)
+        self.assertEqual(node.actual, 5.0)
+        self.assertEqual(slots[self.SLOT_2].verdict, "skip")
+
+    def test_a_passing_node_costs_nothing_in_the_payload(self) -> None:
+        slots = self._record(self._export_price_config({"when_price_below": 0.0}))
+
+        self.assertIsNone(slots[self.SLOT_0].groups[0].conditions[0].actual)
+
+    def test_a_group_not_configuring_a_condition_is_not_applicable(self) -> None:
+        slots = self._record(
+            self._appliance_config(
+                {"run_when": ["tight"], "max_run_price": 2.0},
+                {"run_when": ["tight"]},
+            ),
+            self._snapshot(day_classification="tight"),
+        )
+
+        states = [
+            next(node for node in group.conditions if node.key == "max_run_price").state
+            for group in slots[self.SLOT_0].groups
+        ]
+        self.assertEqual(states, ["false", "not_applicable"])
+
+    def test_a_self_gating_condition_is_not_evaluated_not_true(self) -> None:
+        slots = self._record(
+            self._appliance_config(
+                {"run_when": ["tight"], "ensure_self_sustainability": "strict"}
+            ),
+            self._snapshot(day_classification="tight"),
+        )
+
+        node = next(
+            node
+            for node in slots[self.SLOT_0].groups[0].conditions
+            if node.key == "ensure_self_sustainability"
+        )
+        self.assertEqual(node.state, "not_evaluated")
+        self.assertEqual(node.scope, "run")
+
+
+class ExplanationBookTests(unittest.TestCase):
+    """The accumulative in-memory record, keyed by ``(target key, date)``.
+
+    The point of accumulating is that a run only covers the rolling 48 h from
+    ``build_horizon_start(now)``: without merging, the 20:00 run would erase the
+    morning and "why did nothing run at 09:00?" would have no answer by lunch.
+    """
+
+    MORNING = _slot_ids(4, start_hour=8)
+    EVENING = _slot_ids(4, start_hour=20)
+
+    RUN_08 = datetime(2026, 7, 31, 8, 0, tzinfo=TZ)
+    RUN_20 = datetime(2026, 7, 31, 20, 0, tzinfo=TZ)
+
+    @staticmethod
+    def _run(
+        run_at: datetime,
+        slot_ids,
+        *,
+        target_key: str = "inverter",
+        optimizer_id: str = "export",
+        kind: str = "export_price",
+        verdict: str = "skip",
+        status: str = "ok",
+    ) -> RunExplanation:
+        return RunExplanation(
+            run_at=run_at,
+            slot_ids=tuple(slot_ids),
+            optimizers=(
+                OptimizerExplanation(
+                    optimizer_id=optimizer_id,
+                    kind=kind,
+                    target_key=target_key,
+                    status=status,
+                    slots=tuple(
+                        SlotExplanation(slot_id=slot_id, verdict=verdict)
+                        for slot_id in slot_ids
+                    ),
+                ),
+            ),
+        )
+
+    def test_a_later_run_merges_instead_of_erasing_the_morning(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING))
+        book.record(self._run(self.RUN_20, self.EVENING))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+
+        self.assertEqual(
+            record["slotIds"], list(self.MORNING) + list(self.EVENING)
+        )
+
+    def test_each_row_carries_the_run_that_produced_it(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING))
+        book.record(self._run(self.RUN_20, self.EVENING))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+        run_ats = decode_runs(
+            record["optimizers"][0]["runAt"], len(record["slotIds"])
+        )
+
+        self.assertEqual(
+            run_ats,
+            [self.RUN_08.isoformat()] * 4 + [self.RUN_20.isoformat()] * 4,
+        )
+        # The header stamp is the newest run contributing to the lane/date.
+        self.assertEqual(record["runAt"], self.RUN_20.isoformat())
+
+    def test_a_newer_run_overwrites_the_same_slot(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, verdict="skip"))
+        book.record(self._run(self.RUN_20, self.MORNING, verdict="execute"))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+        verdicts = decode_runs(record["optimizers"][0]["verdict"], 4)
+
+        self.assertEqual(verdicts, ["execute"] * 4)
+        self.assertEqual(
+            decode_runs(record["optimizers"][0]["runAt"], 4),
+            [self.RUN_20.isoformat()] * 4,
+        )
+
+    def test_a_run_that_explains_nothing_leaves_the_record_intact(self) -> None:
+        # A failed run raises out of the optimizer loop before assembly, so the
+        # book is never told about it at all (see the pipeline tests). Even if
+        # an empty record did arrive, it must not erase what stands.
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, verdict="execute"))
+        before = book.get(target_key="inverter", date="2026-07-31")
+
+        book.record(RunExplanation(run_at=self.RUN_20, slot_ids=self.MORNING))
+
+        self.assertEqual(book.get(target_key="inverter", date="2026-07-31"), before)
+
+    def test_dates_before_the_run_are_evicted(self) -> None:
+        book = ExplanationBook()
+        yesterday = tuple(
+            (datetime(2026, 7, 30, 8, 0, tzinfo=TZ) + timedelta(minutes=30 * i))
+            .isoformat()
+            for i in range(4)
+        )
+        book.record(
+            self._run(datetime(2026, 7, 30, 8, 0, tzinfo=TZ), yesterday)
+        )
+        self.assertIsNotNone(book.get(target_key="inverter", date="2026-07-30"))
+
+        book.record(self._run(self.RUN_08, self.MORNING))
+
+        self.assertIsNone(book.get(target_key="inverter", date="2026-07-30"))
+        self.assertIsNotNone(book.get(target_key="inverter", date="2026-07-31"))
+
+    def test_a_run_is_filed_into_every_date_it_spans(self) -> None:
+        # A 48 h horizon from a slot-floored start spans three calendar dates.
+        crossing = tuple(
+            (datetime(2026, 7, 31, 23, 0, tzinfo=TZ) + timedelta(minutes=30 * i))
+            .isoformat()
+            for i in range(4)
+        )
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_20, crossing))
+
+        self.assertEqual(
+            len(book.get(target_key="inverter", date="2026-07-31")["slotIds"]), 2
+        )
+        self.assertEqual(
+            len(book.get(target_key="inverter", date="2026-08-01")["slotIds"]), 2
+        )
+
+    def test_lanes_are_separate_and_unknown_lanes_return_none(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING))
+        book.record(
+            self._run(
+                self.RUN_08,
+                self.MORNING,
+                target_key="appliance:boiler",
+                optimizer_id="boiler-run",
+                kind="appliance_runtime",
+            )
+        )
+
+        inverter = book.get(target_key="inverter", date="2026-07-31")
+        appliance = book.get(target_key="appliance:boiler", date="2026-07-31")
+
+        self.assertEqual(
+            [entry["optimizerId"] for entry in inverter["optimizers"]], ["export"]
+        )
+        self.assertEqual(
+            [entry["optimizerId"] for entry in appliance["optimizers"]],
+            ["boiler-run"],
+        )
+        self.assertIsNone(book.get(target_key="appliance:heatpump", date="2026-07-31"))
+        self.assertIsNone(book.get(target_key="inverter", date="2026-08-05"))
+
+    def test_every_optimizer_touching_a_lane_is_returned_in_pipeline_order(
+        self,
+    ) -> None:
+        # The inverter lane is written by three optimizer kinds, so one lane
+        # click has no single optimizer to ask.
+        book = ExplanationBook()
+        book.record(
+            RunExplanation(
+                run_at=self.RUN_08,
+                slot_ids=self.MORNING,
+                optimizers=tuple(
+                    OptimizerExplanation(
+                        optimizer_id=optimizer_id,
+                        kind=kind,
+                        target_key="inverter",
+                        slots=tuple(
+                            SlotExplanation(slot_id=slot_id)
+                            for slot_id in self.MORNING
+                        ),
+                    )
+                    for optimizer_id, kind in (
+                        ("export", "export_price"),
+                        ("hold", "charge_hold"),
+                        ("grid", "charge_from_grid"),
+                    )
+                ),
+            )
+        )
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+
+        self.assertEqual(
+            [entry["optimizerId"] for entry in record["optimizers"]],
+            ["export", "hold", "grid"],
+        )
+
+    def test_the_newest_run_owns_the_column_order_and_status(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, status="ok"))
+        book.record(self._run(self.RUN_20, self.EVENING, status="skipped"))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+
+        self.assertEqual(record["optimizers"][0]["status"], "skipped")
+
+    def test_an_optimizer_without_a_target_key_is_not_recorded(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, target_key=""))
+
+        self.assertIsNone(book.get(target_key="inverter", date="2026-07-31"))
+        self.assertIsNone(book.get(target_key="", date="2026-07-31"))
+
+
+if __name__ == "__main__":
+    unittest.main()
