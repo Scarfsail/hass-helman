@@ -572,6 +572,10 @@ class _FakeCoordinator:
         self.persist_calls: list[dict[str, object]] = []
         self.saved_documents: list[ScheduleDocument] = []
         self.post_write_calls: list[tuple[str, datetime, bool]] = []
+        self.recorded_explanations: list[object] = []
+
+    def record_run_explanation(self, explanation) -> None:
+        self.recorded_explanations.append(explanation)
 
     def _build_automation_working_schedule_document_locked(
         self,
@@ -1727,6 +1731,95 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             boiler_writes[0]["after"], {"on": True, "setBy": "automation"}
         )
+
+    async def test_completed_run_hands_the_coordinator_a_run_explanation(
+        self,
+    ) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
+            ),
+        ):
+            await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(len(coordinator.recorded_explanations), 1)
+        explanation = coordinator.recorded_explanations[0]
+        self.assertEqual(explanation.run_at, REFERENCE_TIME)
+        self.assertEqual(
+            list(explanation.slot_ids), iter_horizon_slot_ids(REFERENCE_TIME)
+        )
+        self.assertEqual(
+            [optimizer.optimizer_id for optimizer in explanation.optimizers],
+            ["avoid-negative-export"],
+        )
+
+    async def test_the_run_explanation_carries_each_step_s_lane(self) -> None:
+        coordinator = _FakeCoordinator(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
+            ),
+        ):
+            await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(
+                    _make_optimizer_instance(),
+                    _make_optimizer_instance(
+                        optimizer_id="run-boiler",
+                        kind="appliance_runtime",
+                        params={"appliance_id": "boiler", "action": "on"},
+                        target={"appliance_id": "boiler"},
+                    ),
+                ),
+            ).run(reference_time=REFERENCE_TIME)
+
+        explanation = coordinator.recorded_explanations[0]
+        self.assertEqual(
+            [optimizer.target_key for optimizer in explanation.optimizers],
+            ["inverter", "appliance:boiler"],
+        )
+
+    async def test_a_failed_run_records_no_explanation(self) -> None:
+        # The previous good record must stand: a run that blew up mid-loop has
+        # nothing trustworthy to say about the slots it never reached.
+        coordinator = _FakeCoordinator(
+            schedule_document=ScheduleDocument(execution_enabled=True),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            return_value=SimpleNamespace(
+                optimize=Mock(side_effect=RuntimeError("boom"))
+            ),
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(result.reason, "optimizer_failed")
+        self.assertEqual(coordinator.recorded_explanations, [])
 
     async def test_optimizer_failure_still_attaches_partial_trace(self) -> None:
         coordinator = _FakeCoordinator(

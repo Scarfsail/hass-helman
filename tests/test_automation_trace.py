@@ -59,6 +59,8 @@ from custom_components.helman.automation.explain import (  # noqa: E402
     STATE_FALSE,
     STATE_NOT_EVALUATED,
     STATE_TRUE,
+    VERDICT_EXECUTE,
+    VERDICT_SKIP,
     ConditionNode,
     GroupExplanation,
 )
@@ -628,6 +630,104 @@ class TraceExplanationPayloadTests(unittest.TestCase):
         self.assertEqual(
             step["explanation"]["statusReason"], "battery_params_missing"
         )
+
+
+class TraceWinnerAttributionTests(unittest.TestCase):
+    """``ScheduleWriter.set_inverter`` blind-overwrites among optimizers.
+
+    It guards only against *user*-owned actions, so between optimizers the
+    schedule is last-writer-wins in pipeline order: a step can decide
+    ``execute``, write, and silently lose. A verdict of ``execute`` alone never
+    implies the schedule shows it, so the record names the winner per slot.
+    """
+
+    def _two_step_trace(self, slots: list[str]) -> OptimizerTrace:
+        trace = OptimizerTrace(slot_ids=slots)
+        for optimizer_id in ("early", "late"):
+            trace.begin_step(optimizer_id, "export_price", target_key="inverter")
+            trace.set_verdict(slot_ids=[slots[0]], verdict=VERDICT_EXECUTE)
+            trace.set_verdict(slot_ids=slots[1:], verdict=VERDICT_SKIP)
+            trace.record_writes(
+                [
+                    TraceWrite(
+                        slot_id=slots[0],
+                        domain="inverter",
+                        before=None,
+                        after={"kind": "stop_export"},
+                    )
+                ]
+            )
+            trace.end_step(status="ok")
+        return trace
+
+    def test_the_last_writer_in_pipeline_order_wins_the_slot(self) -> None:
+        slots = _slot_ids(2)
+        trace = self._two_step_trace(slots)
+
+        early, late = trace.optimizer_explanations()
+
+        self.assertEqual(early.slots[0].winning_optimizer, "late")
+        self.assertEqual(late.slots[0].winning_optimizer, "late")
+        # The earlier step decided `execute` and still lost: that is exactly the
+        # "⤫ overwritten" cell.
+        self.assertEqual(early.slots[0].verdict, VERDICT_EXECUTE)
+
+    def test_a_slot_nobody_wrote_has_no_winner(self) -> None:
+        slots = _slot_ids(2)
+        trace = self._two_step_trace(slots)
+
+        early, _late = trace.optimizer_explanations()
+
+        self.assertIsNone(early.slots[1].winning_optimizer)
+
+    def test_winners_do_not_leak_across_lanes(self) -> None:
+        slots = _slot_ids(1)
+        trace = OptimizerTrace(slot_ids=slots)
+        trace.begin_step("inverter-opt", "export_price", target_key="inverter")
+        trace.set_verdict(slot_ids=slots, verdict=VERDICT_EXECUTE)
+        trace.record_writes(
+            [
+                TraceWrite(
+                    slot_id=slots[0],
+                    domain="inverter",
+                    before=None,
+                    after={"kind": "stop_export"},
+                )
+            ]
+        )
+        trace.end_step(status="ok")
+        trace.begin_step(
+            "boiler-opt", "appliance_runtime", target_key="appliance:boiler"
+        )
+        trace.set_verdict(slot_ids=slots, verdict=VERDICT_EXECUTE)
+        trace.record_writes(
+            [
+                TraceWrite(
+                    slot_id=slots[0],
+                    domain="appliance:boiler",
+                    before=None,
+                    after={"on": True},
+                )
+            ]
+        )
+        trace.end_step(status="ok")
+
+        inverter, boiler = trace.optimizer_explanations()
+
+        self.assertEqual(inverter.slots[0].winning_optimizer, "inverter-opt")
+        self.assertEqual(boiler.slots[0].winning_optimizer, "boiler-opt")
+
+    def test_the_target_key_is_carried_on_the_explanation(self) -> None:
+        slots = _slot_ids(1)
+        trace = OptimizerTrace(slot_ids=slots)
+        trace.begin_step("opt", "charge_hold", target_key="inverter")
+        trace.set_verdict(slot_ids=slots, verdict=VERDICT_SKIP)
+        trace.end_step(status="ok")
+
+        payload = trace.to_dict()["steps"][0]["explanation"]
+
+        self.assertEqual(payload["targetKey"], "inverter")
+        self.assertEqual(trace.optimizer_explanations()[0].target_key, "inverter")
 
 
 if __name__ == "__main__":

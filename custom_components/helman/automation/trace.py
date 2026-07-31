@@ -133,6 +133,10 @@ class TraceNote:
 class _MutableStep:
     optimizer_id: str
     kind: str
+    # The lane this step writes ("inverter" | "appliance:<id>"), matching
+    # `TraceWrite.domain`. Set at `begin_step`; empty for callers that do not
+    # supply it (unit tests), which simply forgoes winner attribution.
+    target_key: str = ""
     status: str = "ok"
     complete: bool = True
     # False when this optimizer carries an execution condition that is NOT met:
@@ -168,12 +172,20 @@ class _MutableStep:
     def has_explanation(self) -> bool:
         return bool(self.group_explanations or self.gates or self.verdicts)
 
-    def explanation(self, slot_ids: Sequence[str]) -> OptimizerExplanation:
+    def explanation(
+        self,
+        slot_ids: Sequence[str],
+        winners: Mapping[tuple[str, str], str] | None = None,
+    ) -> OptimizerExplanation:
         """Assemble what was recorded into an :class:`OptimizerExplanation`.
 
         A slot appears only where this step actually said something about it
-        (groups or gates); slots it never looked at stay absent, and serialize
-        as ``null`` in every column rather than claiming a verdict.
+        (groups, gates or a verdict); slots it never looked at stay absent, and
+        serialize as ``null`` in every column rather than claiming a verdict.
+
+        ``winners`` maps ``(lane, slot id)`` to the optimizer whose write
+        survived on that lane, so a row can say "yes I decided execute, and no,
+        that is not what the schedule shows".
         """
         slots: list[SlotExplanation] = []
         for slot_id in slot_ids:
@@ -188,17 +200,25 @@ class _MutableStep:
                     groups=tuple(groups[index] for index in sorted(groups)),
                     gates=tuple(gates.values()),
                     verdict=verdict or VERDICT_SKIP,
+                    winning_optimizer=(winners or {}).get(
+                        (self.target_key, slot_id)
+                    ),
                 )
             )
         return OptimizerExplanation(
             optimizer_id=self.optimizer_id,
             kind=self.kind,
+            target_key=self.target_key,
             status=self.explain_status or STATUS_OK,
             status_reason=self.explain_status_reason,
             slots=tuple(slots),
         )
 
-    def to_dict(self, slot_ids: Sequence[str] = ()) -> dict[str, Any]:
+    def to_dict(
+        self,
+        slot_ids: Sequence[str] = (),
+        winners: Mapping[tuple[str, str], str] | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "optimizerId": self.optimizer_id,
             "kind": self.kind,
@@ -218,7 +238,9 @@ class _MutableStep:
                 group.to_dict() for group in self.condition_groups
             ]
         if self.has_explanation():
-            payload["explanation"] = self.explanation(slot_ids).to_dict(slot_ids)
+            payload["explanation"] = self.explanation(slot_ids, winners).to_dict(
+                slot_ids
+            )
         return payload
 
 
@@ -286,8 +308,18 @@ class OptimizerTrace:
 
     # --- step lifecycle ------------------------------------------------------
 
-    def begin_step(self, optimizer_id: str, kind: str) -> None:
-        self._current = _MutableStep(optimizer_id=optimizer_id, kind=kind)
+    def begin_step(
+        self, optimizer_id: str, kind: str, *, target_key: str = ""
+    ) -> None:
+        """Open a step. ``target_key`` is the lane it writes.
+
+        ``"inverter"`` / ``"appliance:<id>"`` — the same identity as
+        :attr:`TraceWrite.domain`, which is what lets winner attribution match a
+        step's explanation rows against the writes that landed on its lane.
+        """
+        self._current = _MutableStep(
+            optimizer_id=optimizer_id, kind=kind, target_key=target_key
+        )
 
     def set_condition_met(self, condition_met: bool) -> None:
         """Record whether the current step's execution condition is met.
@@ -616,6 +648,26 @@ class OptimizerTrace:
         step.explain_status = status
         step.explain_status_reason = reason
 
+    def winning_optimizers(self) -> dict[tuple[str, str], str]:
+        """``(lane, slot id) -> the optimizer whose write survived``.
+
+        ``ScheduleWriter.set_inverter`` blind-overwrites and guards only against
+        *user*-owned actions, so among optimizers the schedule is
+        **last-writer-wins in pipeline order**: an optimizer can decide
+        ``execute``, write, and silently lose to a later step. Steps are visited
+        in order and each write overwrites the previous claim, so the last one
+        standing is what the schedule actually shows.
+
+        Slots nobody wrote have no entry — an unwritten slot has no winner, and
+        inventing one would read as "you were overwritten" for a step that in
+        fact landed a no-op.
+        """
+        winners: dict[tuple[str, str], str] = {}
+        for step in self._steps:
+            for write in step.writes:
+                winners[(write.domain, write.slot_id)] = step.optimizer_id
+        return winners
+
     def optimizer_explanations(self) -> tuple[OptimizerExplanation, ...]:
         """The recorded explanation data, one entry per ended step.
 
@@ -624,7 +676,10 @@ class OptimizerTrace:
         optimizers=trace.optimizer_explanations())``. The same objects are what
         each step serializes under its ``explanation`` key.
         """
-        return tuple(step.explanation(self._slot_ids) for step in self._steps)
+        winners = self.winning_optimizers()
+        return tuple(
+            step.explanation(self._slot_ids, winners) for step in self._steps
+        )
 
     # --- coverage validation -------------------------------------------------
 
@@ -688,10 +743,13 @@ class OptimizerTrace:
     # --- serialization -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        winners = self.winning_optimizers()
         return {
             "slotIds": list(self._slot_ids),
             "staticRails": self._static_rails,
-            "steps": [step.to_dict(self._slot_ids) for step in self._steps],
+            "steps": [
+                step.to_dict(self._slot_ids, winners) for step in self._steps
+            ],
             "railsFinal": self._rails_final,
         }
 

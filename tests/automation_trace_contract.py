@@ -46,11 +46,7 @@ CONTRACT_TESTED_KINDS: frozenset[str] = frozenset(
 
 #: Key under which a step carries its serialized
 #: :class:`~custom_components.helman.automation.explain.OptimizerExplanation`.
-#: The trace recorder does not populate it yet — that lands with the explanation
-#: plumbing (issue #14 phase A, steps 3/5/9). Until then every step reports no
-#: explanation and the coverage assertion below is skipped per step, which is
-#: deliberate: the contract is correct-by-construction now and becomes
-#: load-bearing the moment an optimizer starts reporting.
+#: Every non-skipped step must populate it, covering the whole horizon.
 EXPLANATION_KEY = "explanation"
 
 
@@ -93,9 +89,8 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
     """The contract, expressed over a serialized trace payload.
 
     Split out from :func:`assert_trace_contract` so the meta-test can exercise
-    the assertions themselves against synthetic payloads — the explanation
-    machinery does not exist in the pipeline yet, so no real optimizer run can
-    cover this code path today.
+    the assertions themselves against synthetic payloads that no real optimizer
+    run would produce.
     """
     slot_ids: list[str] = list(payload.get("slotIds") or [])
     horizon = set(slot_ids)
@@ -122,36 +117,31 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
         explanation = _decode_explanation(step, slot_ids)
 
         # --- explanation coverage (the v2 contract) --------------------------
-        # Every horizon slot must have an entry in the condition matrix. Guarded
-        # on the step actually reporting explanations, so the assertion is
-        # correct-by-construction while the pipeline is mid-migration.
-        #
-        # TIGHTEN HERE (issue #14 phase A, step 9): once `RunExplanation`
-        # assembly is wired into `run_optimizer_loop_pure` and every optimizer
-        # is converted, drop the `if explanation is None: continue`-style guard
-        # and require an explanation on every non-skipped step. That is what
-        # restores the exhaustive-coverage guarantee the retired v1 contract
-        # provided via reason codes.
-        explained: set[str] = set()
-        if explanation is not None:
-            explained = {slot.slot_id for slot in explanation.slots}
-            missing = [
-                slot_id for slot_id in slot_ids if slot_id not in explained
-            ]
-            testcase.assertFalse(
-                missing,
-                f"{prefix} reports an explanation but leaves "
-                f"{len(missing)}/{len(slot_ids)} horizon slot(s) without a "
-                f"condition matrix (first: {missing[0] if missing else None})",
-            )
+        # Every non-skipped step must report an explanation, and it must cover
+        # every horizon slot. This is the exhaustive-coverage guarantee the
+        # retired v1 contract provided through reason codes: an optimizer may
+        # not quietly leave a slot with no account of itself.
+        testcase.assertIsNotNone(
+            explanation,
+            f"{prefix} reports no explanation; every non-skipped step must "
+            "carry a per-slot condition record",
+        )
+        explained = {slot.slot_id for slot in explanation.slots}
+        missing = [slot_id for slot_id in slot_ids if slot_id not in explained]
+        testcase.assertFalse(
+            missing,
+            f"{prefix} leaves {len(missing)}/{len(slot_ids)} horizon slot(s) "
+            f"without a condition matrix "
+            f"(first: {missing[0] if missing else None})",
+        )
 
         # --- every committed write is attributable ---------------------------
-        # Either through an `applied` decision (pre-conversion) or through an
-        # explanation whose verdict for that slot is execute/candidate
-        # (post-conversion). A write nothing accounts for is always a bug.
+        # Either through an `applied` decision or through an explanation whose
+        # verdict for that slot is execute/candidate. A write nothing accounts
+        # for is always a bug.
         attributable = applied | {
             slot.slot_id
-            for slot in (explanation.slots if explanation is not None else ())
+            for slot in explanation.slots
             if slot.verdict in (VERDICT_EXECUTE, VERDICT_CANDIDATE)
         }
         for write in step["writes"]:

@@ -76,6 +76,7 @@ _install_import_stubs()
 
 from custom_components.helman.automation.explain import (  # noqa: E402
     ConditionNode,
+    ExplanationBook,
     GateNode,
     GroupExplanation,
     OptimizerExplanation,
@@ -619,6 +620,215 @@ class ConditionMatrixTests(unittest.TestCase):
         )
         self.assertEqual(node.state, "not_evaluated")
         self.assertEqual(node.scope, "run")
+
+
+class ExplanationBookTests(unittest.TestCase):
+    """The accumulative in-memory record, keyed by ``(target key, date)``.
+
+    The point of accumulating is that a run only covers the rolling 48 h from
+    ``build_horizon_start(now)``: without merging, the 20:00 run would erase the
+    morning and "why did nothing run at 09:00?" would have no answer by lunch.
+    """
+
+    MORNING = _slot_ids(4, start_hour=8)
+    EVENING = _slot_ids(4, start_hour=20)
+
+    RUN_08 = datetime(2026, 7, 31, 8, 0, tzinfo=TZ)
+    RUN_20 = datetime(2026, 7, 31, 20, 0, tzinfo=TZ)
+
+    @staticmethod
+    def _run(
+        run_at: datetime,
+        slot_ids,
+        *,
+        target_key: str = "inverter",
+        optimizer_id: str = "export",
+        kind: str = "export_price",
+        verdict: str = "skip",
+        status: str = "ok",
+    ) -> RunExplanation:
+        return RunExplanation(
+            run_at=run_at,
+            slot_ids=tuple(slot_ids),
+            optimizers=(
+                OptimizerExplanation(
+                    optimizer_id=optimizer_id,
+                    kind=kind,
+                    target_key=target_key,
+                    status=status,
+                    slots=tuple(
+                        SlotExplanation(slot_id=slot_id, verdict=verdict)
+                        for slot_id in slot_ids
+                    ),
+                ),
+            ),
+        )
+
+    def test_a_later_run_merges_instead_of_erasing_the_morning(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING))
+        book.record(self._run(self.RUN_20, self.EVENING))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+
+        self.assertEqual(
+            record["slotIds"], list(self.MORNING) + list(self.EVENING)
+        )
+
+    def test_each_row_carries_the_run_that_produced_it(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING))
+        book.record(self._run(self.RUN_20, self.EVENING))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+        run_ats = decode_runs(
+            record["optimizers"][0]["runAt"], len(record["slotIds"])
+        )
+
+        self.assertEqual(
+            run_ats,
+            [self.RUN_08.isoformat()] * 4 + [self.RUN_20.isoformat()] * 4,
+        )
+        # The header stamp is the newest run contributing to the lane/date.
+        self.assertEqual(record["runAt"], self.RUN_20.isoformat())
+
+    def test_a_newer_run_overwrites_the_same_slot(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, verdict="skip"))
+        book.record(self._run(self.RUN_20, self.MORNING, verdict="execute"))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+        verdicts = decode_runs(record["optimizers"][0]["verdict"], 4)
+
+        self.assertEqual(verdicts, ["execute"] * 4)
+        self.assertEqual(
+            decode_runs(record["optimizers"][0]["runAt"], 4),
+            [self.RUN_20.isoformat()] * 4,
+        )
+
+    def test_a_run_that_explains_nothing_leaves_the_record_intact(self) -> None:
+        # A failed run raises out of the optimizer loop before assembly, so the
+        # book is never told about it at all (see the pipeline tests). Even if
+        # an empty record did arrive, it must not erase what stands.
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, verdict="execute"))
+        before = book.get(target_key="inverter", date="2026-07-31")
+
+        book.record(RunExplanation(run_at=self.RUN_20, slot_ids=self.MORNING))
+
+        self.assertEqual(book.get(target_key="inverter", date="2026-07-31"), before)
+
+    def test_dates_before_the_run_are_evicted(self) -> None:
+        book = ExplanationBook()
+        yesterday = tuple(
+            (datetime(2026, 7, 30, 8, 0, tzinfo=TZ) + timedelta(minutes=30 * i))
+            .isoformat()
+            for i in range(4)
+        )
+        book.record(
+            self._run(datetime(2026, 7, 30, 8, 0, tzinfo=TZ), yesterday)
+        )
+        self.assertIsNotNone(book.get(target_key="inverter", date="2026-07-30"))
+
+        book.record(self._run(self.RUN_08, self.MORNING))
+
+        self.assertIsNone(book.get(target_key="inverter", date="2026-07-30"))
+        self.assertIsNotNone(book.get(target_key="inverter", date="2026-07-31"))
+
+    def test_a_run_is_filed_into_every_date_it_spans(self) -> None:
+        # A 48 h horizon from a slot-floored start spans three calendar dates.
+        crossing = tuple(
+            (datetime(2026, 7, 31, 23, 0, tzinfo=TZ) + timedelta(minutes=30 * i))
+            .isoformat()
+            for i in range(4)
+        )
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_20, crossing))
+
+        self.assertEqual(
+            len(book.get(target_key="inverter", date="2026-07-31")["slotIds"]), 2
+        )
+        self.assertEqual(
+            len(book.get(target_key="inverter", date="2026-08-01")["slotIds"]), 2
+        )
+
+    def test_lanes_are_separate_and_unknown_lanes_return_none(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING))
+        book.record(
+            self._run(
+                self.RUN_08,
+                self.MORNING,
+                target_key="appliance:boiler",
+                optimizer_id="boiler-run",
+                kind="appliance_runtime",
+            )
+        )
+
+        inverter = book.get(target_key="inverter", date="2026-07-31")
+        appliance = book.get(target_key="appliance:boiler", date="2026-07-31")
+
+        self.assertEqual(
+            [entry["optimizerId"] for entry in inverter["optimizers"]], ["export"]
+        )
+        self.assertEqual(
+            [entry["optimizerId"] for entry in appliance["optimizers"]],
+            ["boiler-run"],
+        )
+        self.assertIsNone(book.get(target_key="appliance:heatpump", date="2026-07-31"))
+        self.assertIsNone(book.get(target_key="inverter", date="2026-08-05"))
+
+    def test_every_optimizer_touching_a_lane_is_returned_in_pipeline_order(
+        self,
+    ) -> None:
+        # The inverter lane is written by three optimizer kinds, so one lane
+        # click has no single optimizer to ask.
+        book = ExplanationBook()
+        book.record(
+            RunExplanation(
+                run_at=self.RUN_08,
+                slot_ids=self.MORNING,
+                optimizers=tuple(
+                    OptimizerExplanation(
+                        optimizer_id=optimizer_id,
+                        kind=kind,
+                        target_key="inverter",
+                        slots=tuple(
+                            SlotExplanation(slot_id=slot_id)
+                            for slot_id in self.MORNING
+                        ),
+                    )
+                    for optimizer_id, kind in (
+                        ("export", "export_price"),
+                        ("hold", "charge_hold"),
+                        ("grid", "charge_from_grid"),
+                    )
+                ),
+            )
+        )
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+
+        self.assertEqual(
+            [entry["optimizerId"] for entry in record["optimizers"]],
+            ["export", "hold", "grid"],
+        )
+
+    def test_the_newest_run_owns_the_column_order_and_status(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, status="ok"))
+        book.record(self._run(self.RUN_20, self.EVENING, status="skipped"))
+
+        record = book.get(target_key="inverter", date="2026-07-31")
+
+        self.assertEqual(record["optimizers"][0]["status"], "skipped")
+
+    def test_an_optimizer_without_a_target_key_is_not_recorded(self) -> None:
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING, target_key=""))
+
+        self.assertIsNone(book.get(target_key="inverter", date="2026-07-31"))
+        self.assertIsNone(book.get(target_key="", date="2026-07-31"))
 
 
 if __name__ == "__main__":

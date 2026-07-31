@@ -38,9 +38,11 @@ Design notes:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 import logging
 from typing import Any, Iterable, Mapping, Sequence
+
+from ..scheduling.schedule import parse_slot_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -471,6 +473,12 @@ class OptimizerExplanation:
 
     optimizer_id: str
     kind: str
+    #: The schedule lane this step writes — ``"inverter"`` or
+    #: ``"appliance:<id>"``, matching ``TraceWrite.domain`` and the frontend's
+    #: ``getEntityScheduleTargetKey``. The record is queried by lane, not by
+    #: optimizer: the inverter lane is written by three optimizer kinds, so one
+    #: lane click has no single optimizer to ask.
+    target_key: str = ""
     status: str = STATUS_OK
     status_reason: str | None = None
     slots: tuple[SlotExplanation, ...] = ()
@@ -508,6 +516,8 @@ class OptimizerExplanation:
                 [slot.verdict if slot is not None else None for slot in aligned]
             ),
         }
+        if self.target_key:
+            payload["targetKey"] = self.target_key
         if self.status_reason is not None:
             payload["statusReason"] = self.status_reason
         winners = encode_sparse(
@@ -553,6 +563,7 @@ class OptimizerExplanation:
         return cls(
             optimizer_id=payload.get("optimizerId", ""),
             kind=payload.get("kind", ""),
+            target_key=payload.get("targetKey", ""),
             status=payload.get("status", STATUS_OK),
             status_reason=payload.get("statusReason"),
             slots=tuple(slots),
@@ -595,3 +606,192 @@ class RunExplanation:
                 if isinstance(entry, Mapping)
             ),
         )
+
+
+# --- the in-memory book ------------------------------------------------------
+#
+# Deliberately **not** persisted. The plan is rebuilt from
+# ``build_horizon_start(now)`` every 15 minutes (plus on edits, reality checks
+# and startup), so the record regenerates on its own within minutes of a
+# restart; writing it to disk would buy ~96 whole-file rewrites/day of a
+# 100-300 KB JSON on SD-card installs and nothing else.
+#
+# It is accumulative *within* the session, because a run only covers the rolling
+# 48 h from ``build_horizon_start(now)``: without merging, a run at 20:00 would
+# erase the 08:00 run's explanation of the morning, and "why did nothing run at
+# 09:00?" — the question the whole feature exists to answer — would have no
+# answer by lunchtime. Every row therefore carries the ``run_at`` of the run
+# that produced it, and a newer run overwrites an older one slot by slot.
+
+
+@dataclass
+class _OptimizerRecord:
+    """One optimizer's accumulated rows for one target on one date."""
+
+    optimizer_id: str
+    kind: str
+    target_key: str
+    status: str
+    status_reason: str | None
+    #: Newest run that reported this optimizer for this date; owns the header
+    #: fields above (status greys the whole column, so it is column-scoped).
+    run_at: datetime
+    #: slot id -> (the run that produced this row, the row).
+    slots: dict[str, tuple[datetime, SlotExplanation]] = field(
+        default_factory=dict
+    )
+
+
+def _slot_start(slot_id: str) -> datetime | None:
+    try:
+        return parse_slot_id(slot_id)
+    except Exception:  # noqa: BLE001 - observability must never fail a run
+        _LOGGER.warning("explanation has unparsable slot id %r", slot_id)
+        return None
+
+
+class ExplanationBook:
+    """Accumulative, in-memory ``(target_key, date)`` index of run records.
+
+    A run spans three calendar dates (96 half-hour slots from a slot-floored
+    start), so each run's slots are filed into per-date buckets rather than
+    replacing a "today" record wholesale. Dates before the recording run's own
+    date are evicted: they can no longer be reached from the schedule editor,
+    and keeping them would grow without bound.
+    """
+
+    def __init__(self) -> None:
+        # date (YYYY-MM-DD) -> target key -> optimizer id -> record, the last
+        # dict in the pipeline order of the newest run that touched it.
+        self._by_date: dict[str, dict[str, dict[str, _OptimizerRecord]]] = {}
+
+    # --- writing -------------------------------------------------------------
+
+    def record(self, explanation: RunExplanation) -> None:
+        """Merge one run's slots into the per-date buckets.
+
+        Only successful runs reach here — a failed run raises out of the
+        optimizer loop before assembly, so the previous good record stands
+        rather than being clobbered by a partial one.
+        """
+        run_at = explanation.run_at
+        touched: dict[tuple[str, str], list[str]] = {}
+        for optimizer in explanation.optimizers:
+            target_key = optimizer.target_key
+            if not target_key:
+                _LOGGER.warning(
+                    "explanation for %s has no target key; not recorded",
+                    optimizer.optimizer_id,
+                )
+                continue
+            for slot in optimizer.slots:
+                slot_start = _slot_start(slot.slot_id)
+                if slot_start is None:
+                    continue
+                date_key = slot_start.date().isoformat()
+                bucket = self._by_date.setdefault(date_key, {}).setdefault(
+                    target_key, {}
+                )
+                record = bucket.get(optimizer.optimizer_id)
+                if record is None:
+                    record = _OptimizerRecord(
+                        optimizer_id=optimizer.optimizer_id,
+                        kind=optimizer.kind,
+                        target_key=target_key,
+                        status=optimizer.status,
+                        status_reason=optimizer.status_reason,
+                        run_at=run_at,
+                    )
+                    bucket[optimizer.optimizer_id] = record
+                elif record.run_at <= run_at:
+                    record.kind = optimizer.kind
+                    record.status = optimizer.status
+                    record.status_reason = optimizer.status_reason
+                    record.run_at = run_at
+                previous = record.slots.get(slot.slot_id)
+                if previous is None or previous[0] <= run_at:
+                    record.slots[slot.slot_id] = (run_at, slot)
+                order = touched.setdefault((date_key, target_key), [])
+                if optimizer.optimizer_id not in order:
+                    order.append(optimizer.optimizer_id)
+
+        # Column order is pipeline order, and the newest run is the authority on
+        # what that is (optimizers can be added, removed or reordered in config).
+        for (date_key, target_key), order in touched.items():
+            bucket = self._by_date[date_key][target_key]
+            reordered = {
+                optimizer_id: bucket[optimizer_id]
+                for optimizer_id in order
+                if optimizer_id in bucket
+            }
+            for optimizer_id, record in bucket.items():
+                reordered.setdefault(optimizer_id, record)
+            self._by_date[date_key][target_key] = reordered
+
+        self.evict_before(run_at.date())
+
+    def evict_before(self, today: date) -> None:
+        """Drop every bucket for a date earlier than ``today``."""
+        cutoff = today.isoformat()
+        for date_key in [key for key in self._by_date if key < cutoff]:
+            del self._by_date[date_key]
+
+    def clear(self) -> None:
+        self._by_date.clear()
+
+    # --- reading -------------------------------------------------------------
+
+    def get(self, *, target_key: str, date: str) -> dict[str, Any] | None:
+        """The serialized record for one lane on one date, or ``None``.
+
+        Returns **every** optimizer that touched the target, in pipeline order —
+        the inverter lane is written by three optimizer kinds, so a lane click
+        has no single optimizer to ask.
+        """
+        records = self._by_date.get(date, {}).get(target_key)
+        if not records:
+            return None
+
+        slot_ids = sorted(
+            {slot_id for record in records.values() for slot_id in record.slots},
+            key=lambda slot_id: (_slot_start(slot_id), slot_id),
+        )
+        optimizers: list[dict[str, Any]] = []
+        newest: datetime | None = None
+        for record in records.values():
+            payload = OptimizerExplanation(
+                optimizer_id=record.optimizer_id,
+                kind=record.kind,
+                target_key=record.target_key,
+                status=record.status,
+                status_reason=record.status_reason,
+                slots=tuple(
+                    record.slots[slot_id][1]
+                    for slot_id in slot_ids
+                    if slot_id in record.slots
+                ),
+            ).to_dict(slot_ids)
+            # Index-aligned, run-length encoded: which run produced each row.
+            # Rows do not all come from the same run — that is the whole point
+            # of accumulating.
+            payload["runAt"] = encode_runs(
+                [
+                    record.slots[slot_id][0].isoformat()
+                    if slot_id in record.slots
+                    else None
+                    for slot_id in slot_ids
+                ]
+            )
+            optimizers.append(payload)
+            if newest is None or record.run_at > newest:
+                newest = record.run_at
+
+        return {
+            "targetKey": target_key,
+            "date": date,
+            "slotIds": slot_ids,
+            # The newest run contributing to this lane/date; per-row provenance
+            # lives in each optimizer's `runAt` column.
+            "runAt": None if newest is None else newest.isoformat(),
+            "optimizers": optimizers,
+        }

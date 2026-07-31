@@ -136,6 +136,7 @@ class TraceContractMetaTests(unittest.TestCase):
         payload = _payload(
             decisions=[{"slotIds": SLOT_IDS, "outcome": "applied"}],
             writes=[{"slotId": SLOT_IDS[0], "domain": "inverter"}],
+            explanation=_explanation(SLOT_IDS),
         )
         assert_trace_payload_contract(self, payload)
 
@@ -157,7 +158,8 @@ class TraceContractMetaTests(unittest.TestCase):
                     "outcome": "rejected",
                     "reason": {"code": "brand_new_code", "params": {}},
                 }
-            ]
+            ],
+            explanation=_explanation(SLOT_IDS),
         )
         assert_trace_payload_contract(self, payload)
 
@@ -172,11 +174,12 @@ class TraceContractMetaTests(unittest.TestCase):
         payload = _payload(explanation=_explanation(SLOT_IDS))
         assert_trace_payload_contract(self, payload)
 
-    def test_step_without_explanation_is_not_asserted_yet(self) -> None:
-        # Deliberately permissive while the pipeline is mid-migration: no
-        # optimizer reports explanations yet. Step 9 of issue #14 phase A must
-        # tighten this into "every non-skipped step reports an explanation".
-        assert_trace_payload_contract(self, _payload())
+    def test_step_without_explanation_fails(self) -> None:
+        # The exhaustive-coverage guarantee the v1 reason catalogue used to
+        # provide: a non-skipped step that accounts for none of its slots is a
+        # contract violation, not a permissible mid-migration state.
+        with self.assertRaises(AssertionError):
+            assert_trace_payload_contract(self, _payload())
 
     def test_skipped_step_is_exempt(self) -> None:
         payload = _payload(explanation=_explanation(SLOT_IDS[:1]), status="skipped")

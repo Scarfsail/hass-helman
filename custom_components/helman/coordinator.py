@@ -54,6 +54,7 @@ from .automation.day_context import (
     build_day_contexts,
 )
 from .automation.day_context_store import DayContextStore
+from .automation.explain import ExplanationBook, RunExplanation
 from .automation.input_bundle import AutomationInputBundle
 from .automation.ownership import (
     has_automation_owned_actions,
@@ -378,6 +379,12 @@ class HelmanCoordinator:
         self._automation_input_bundle: AutomationInputBundle | None = None
         self._day_context_store = DayContextStore(hass)
         self._last_automation_run_result: AutomationRunResult | None = None
+        # Per-slot condition explanations, accumulated in memory and keyed by
+        # (target lane, date). Deliberately not persisted: the plan is rebuilt
+        # from `build_horizon_start(now)` every 15 minutes, so the record
+        # regenerates on its own within minutes of a restart, and writing it out
+        # would cost ~96 whole-file rewrites/day of a 100-300 KB JSON.
+        self._explanation_book = ExplanationBook()
         # (optimizer_id, group_index) -> (custom config, built ConditionChecker
         # | None). Keyed per group because groups are ORed and each carries its
         # own `custom` list.
@@ -433,6 +440,28 @@ class HelmanCoordinator:
         if self._last_automation_run_result is None:
             return None
         return deepcopy(self._last_automation_run_result)
+
+    def record_run_explanation(self, explanation: "RunExplanation | None") -> None:
+        """Merge one successful run's condition record into the book.
+
+        Called only from the optimizer loop's success path — a failed run never
+        gets here, so the accumulated record survives it intact.
+        """
+        if explanation is None:
+            return
+        self._explanation_book.record(explanation)
+
+    def get_schedule_explanation(
+        self, *, target_key: str, date: str
+    ) -> dict[str, Any] | None:
+        """The condition record for one schedule lane on one date.
+
+        ``target_key`` is the lane's identity (``"inverter"`` /
+        ``"appliance:<id>"``), and the result carries **every** optimizer that
+        touched it, in pipeline order: the inverter lane is written by three
+        optimizer kinds, so a lane click has no single optimizer to ask.
+        """
+        return self._explanation_book.get(target_key=target_key, date=date)
 
     def _set_last_automation_run_result(self, result: AutomationRunResult) -> None:
         self._last_automation_run_result = deepcopy(result)
@@ -4012,6 +4041,7 @@ class HelmanCoordinator:
         self._removing_entity_ids.clear()
         self._power_history.clear()
         self._last_automation_run_result = None
+        self._explanation_book.clear()
 
         for unsub in self._unsub_listeners:
             unsub()
