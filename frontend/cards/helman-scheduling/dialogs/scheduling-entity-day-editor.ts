@@ -6,6 +6,7 @@ import type { LocalizeFunction } from "../../localize/localize";
 import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";
 import "../components/scheduling-entity-day-band";
+import "../components/scheduling-explanation-panel";
 import "./scheduling-entity-action-editor";
 import type {
     EntityDayBandBlockSelectDetail,
@@ -13,6 +14,7 @@ import type {
     EntityDayBandLane,
     EntityDayBandLaneSelectDetail,
     EntityDayBandRangeChangeDetail,
+    EntityDayBandSlotSelectDetail,
 } from "../components/scheduling-entity-day-band";
 import type {
     EntityScheduleAction,
@@ -40,6 +42,10 @@ import {
 } from "../model/entity-day-schedule-model";
 import { buildEntityDayBandLanes } from "../model/entity-lane-source";
 import {
+    parseScheduleExplanation,
+    type ScheduleExplanationModel,
+} from "../model/schedule-explanation-model";
+import {
     EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
     type ScheduleApplianceProjectionIndex,
 } from "../model/schedule-appliance-projection";
@@ -54,6 +60,9 @@ import type { EntityScheduleActionChangeDetail } from "./scheduling-entity-actio
 const DIALOG_HISTORY_STATE_KEY = "__helmanEntityScheduleDialogId";
 const DEFAULT_NEW_BLOCK_DURATION_MS = 60 * 60 * 1000;
 let nextDialogHistoryEntryId = 0;
+
+/** What the dialog is for right now: authoring the day, or accounting for it. */
+type EntityDayEditorMode = "edit" | "explain";
 
 interface EntityScheduleEditSession {
     /** Slots the block held when the edit began, so moving it can free them. */
@@ -82,6 +91,14 @@ export interface EntityScheduleSaveDetail {
  * rather than three of each -- and edits to several entities still leave as one
  * write. Nothing is applied until Save, so Cancel is a plain close: there is
  * nothing to undo.
+ *
+ * **The same stack answers "why" as well as "what".** Explain mode keeps the
+ * band and replaces everything under it: the lanes are split into the day's own
+ * slots, pressing one names it, and the explanation for that slot is drawn
+ * where the editor would be. It lives here rather than in a dialog of its own
+ * because a dialog opened from inside this one does not present (#17), and
+ * because the question is asked *of* the day on screen -- keeping the band
+ * above the answer is what lets the next slot be one press away.
  */
 @customElement("scheduling-entity-day-editor")
 export class SchedulingEntityDayEditor extends LitElement {
@@ -92,6 +109,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                control surface here, and it only reads well when an hour is
                wide enough to point at. */
             .dialog-content {
+                position: relative;
                 display: flex;
                 flex-direction: column;
                 gap: 14px;
@@ -111,6 +129,52 @@ export class SchedulingEntityDayEditor extends LitElement {
                 align-items: center;
                 gap: 6px;
                 flex-wrap: wrap;
+                /* Room kept clear for the mode switch in the corner above it,
+                   which is out of the flow. */
+                padding-right: 180px;
+            }
+
+            /* The corner of the dialog, over the day switcher's own row:
+               choosing what the dialog is *for* is a different kind of choice
+               from choosing which day it is about, and putting it in the row of
+               day chips would read as one more chip. */
+            .mode-switch {
+                position: absolute;
+                top: 4px;
+                right: 0;
+                display: flex;
+                gap: 0;
+            }
+
+            .mode-button {
+                padding: 4px 10px;
+                border: 1px solid var(--divider-color);
+                background: var(--card-background-color);
+                color: inherit;
+                font: inherit;
+                font-size: 0.8rem;
+                cursor: pointer;
+            }
+
+            .mode-button:first-child {
+                border-radius: 999px 0 0 999px;
+            }
+
+            .mode-button:last-child {
+                border-radius: 0 999px 999px 0;
+                border-left-width: 0;
+            }
+
+            .mode-button.selected {
+                border-color: color-mix(in srgb, var(--primary-color) 44%, var(--divider-color));
+                background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+                color: var(--primary-color);
+            }
+
+            /* Nothing pressed yet: the band above is the thing to press, and
+               this is where the answer will appear. */
+            .explain-hint {
+                padding: 6px 2px;
             }
 
             .day-chips {
@@ -316,6 +380,28 @@ export class SchedulingEntityDayEditor extends LitElement {
     @state() private _editing: EntityScheduleEditSession | null = null;
     /** The block the pointer is over, in either the list or the band. */
     @state() private _hoveredBlockKey: string | null = null;
+    @state() private _mode: EntityDayEditorMode = "edit";
+    /** The slot Explain mode is accounting for, and the lane it belongs to. */
+    @state() private _explainSelection: { laneKey: string; slotId: string } | null = null;
+    /**
+     * The condition record per lane and day, raw as the backend served it.
+     *
+     * Fetched here rather than by the host: both hosts of this dialog would
+     * otherwise need the same websocket wiring for a mode that only exists
+     * inside it. A record is a whole day of per-slot condition trees for one
+     * lane, so they are asked for once per lane per day and kept for as long as
+     * the dialog is open.
+     */
+    @state() private _explanations: ReadonlyMap<string, unknown> = new Map();
+    /** Lanes whose record could not be fetched, which is not the same as none. */
+    @state() private _explanationFailures: ReadonlySet<string> = new Set();
+    /** The parsed form of `_explanations`, rebuilt only when that map changes. */
+    private _explanationModels: ReadonlyMap<string, ScheduleExplanationModel> = new Map();
+    /**
+     * Lanes already asked about, so re-entering Explain mode does not refetch.
+     * Reset per opening along with the records themselves.
+     */
+    private _explanationsRequested = new Set<string>();
 
     private _draftBeforeEdit: EntityScheduleDraft = {};
     /** Bumped per edit session, so the action editor knows a new one began. */
@@ -364,6 +450,17 @@ export class SchedulingEntityDayEditor extends LitElement {
         if (this.open && (changedProperties.has("open") || changedProperties.has("target"))) {
             this._seedFromSlots();
         }
+
+        if (changedProperties.has("_explanations")) {
+            const parsed = new Map<string, ScheduleExplanationModel>();
+            for (const [key, payload] of this._explanations) {
+                const model = parseScheduleExplanation(payload);
+                if (model !== null) {
+                    parsed.set(key, model);
+                }
+            }
+            this._explanationModels = parsed;
+        }
     }
 
     updated(changedProperties: Map<string, unknown>): void {
@@ -383,7 +480,10 @@ export class SchedulingEntityDayEditor extends LitElement {
             return nothing;
         }
 
-        const bandLanes = this._buildBandLanes(day);
+        const explaining = this._mode === "explain";
+        const bandLanes = explaining
+            ? this._explainableBandLanes(this._buildBandLanes(day), day)
+            : this._buildBandLanes(day);
         const selectedLane = this._selectedLane;
         const blocks = bandLanes.find((lane) => lane.key === selectedLane?.key)?.blocks ?? [];
         const editingBlock = this._resolveEditingBlock(blocks);
@@ -411,6 +511,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     closed the panel it had just opened.
                 -->
                 <div class="dialog-content" @pointerdown=${this._handleContentPointerDown}>
+                    ${this._renderModeSwitch()}
                     ${this._renderDaySwitcher(day, days)}
                     ${this.scheduleChanged ? html`
                         <div class="stale-banner">
@@ -420,39 +521,40 @@ export class SchedulingEntityDayEditor extends LitElement {
                     ` : nothing}
 
                     <!--
-                        Deliberately not \`.explainable\`: this editor is itself
-                        an \`ha-dialog\`, so the explanation opened from inside it
-                        is a second dialog stacked on the first, and it does not
-                        present -- see #17. The solar inspector's read-only strip
-                        carries the same button successfully, because it sits on
-                        the page rather than inside a dialog.
+                        Read-only while explaining: the lanes are a grid of
+                        slots to ask about, and a drag that moved a block would
+                        be answering a question the mode cannot ask.
                     -->
                     <scheduling-entity-day-band
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .day=${day}
                         .lanes=${bandLanes}
-                        .selectedLaneKey=${this._selectedLaneKey}
+                        .selectedLaneKey=${explaining ? null : this._selectedLaneKey}
                         .laneLabels=${"track"}
                         .forecastPoints=${this.forecastPoints}
                         .priceUnit=${this.priceUnit}
                         .nowMs=${this.nowMs}
                         .locale=${this.locale}
                         .timeZone=${this.timeZone}
-                        .editingRange=${this._editing === null ? null : {
+                        .readonly=${explaining}
+                        .slotGrid=${explaining}
+                        .selectedSlotId=${this._explainSelection?.slotId ?? null}
+                        .editingRange=${this._editing === null || explaining ? null : {
                             startMs: this._editing.startMs,
                             endMs: this._editing.endMs,
                         }}
-                        .hoveredBlockKey=${this._hoveredBlockKey}
+                        .hoveredBlockKey=${explaining ? null : this._hoveredBlockKey}
                         @entity-day-band-block-hover=${this._handleBandBlockHover}
                         @entity-day-band-block-select=${this._handleBandBlockSelect}
                         @entity-day-band-lane-select=${this._handleBandLaneSelect}
                         @entity-day-band-context-select=${this._handleBandContextSelect}
                         @entity-day-band-gap-select=${this._handleBandGapSelect}
                         @entity-day-band-range-change=${this._handleBandRangeChange}
+                        @entity-day-band-slot-select=${this._handleBandSlotSelect}
                     ></scheduling-entity-day-band>
 
-                    ${selectedLane === null ? html`
+                    ${explaining ? this._renderExplanation(day) : selectedLane === null ? html`
                         <div class="field-help select-hint">
                             ${this.localize("scheduling.entity_editor.select_entity")}
                         </div>
@@ -506,6 +608,66 @@ export class SchedulingEntityDayEditor extends LitElement {
                 >
                     <ha-icon icon="mdi:chevron-right"></ha-icon>
                 </button>
+            </div>
+        `;
+    }
+
+    /**
+     * Edit or Explain, in the corner of the dialog.
+     *
+     * Two buttons rather than a toggle switch: the modes are named, and a
+     * switch would leave the user to work out which end is which. Edit is the
+     * one every opening starts on -- the dialog is opened by pressing something
+     * a person wants to change far more often than something they want
+     * explained.
+     */
+    private _renderModeSwitch() {
+        return html`
+            <div class="mode-switch" role="group">
+                ${(["edit", "explain"] as const).map((mode) => html`
+                    <button
+                        class=${`mode-button${this._mode === mode ? " selected" : ""}`}
+                        type="button"
+                        data-mode=${mode}
+                        aria-pressed=${this._mode === mode}
+                        @click=${() => this._setMode(mode)}
+                    >
+                        ${this.localize(`scheduling.entity_editor.mode_${mode}`)}
+                    </button>
+                `)}
+            </div>
+        `;
+    }
+
+    /**
+     * The answer for the slot that was pressed, where the editor would be.
+     *
+     * Nothing is preselected: the placeholder says what to press, because a
+     * diagram that appeared on its own would be about a slot the user never
+     * asked about.
+     */
+    private _renderExplanation(day: EntityScheduleDay) {
+        const selection = this._explainSelection;
+        if (selection === null) {
+            return html`
+                <div class="field-help explain-hint">
+                    ${this.localize("scheduling.entity_editor.explain_hint")}
+                </div>
+            `;
+        }
+
+        const key = this._explanationKey(selection.laneKey, day.dayKey);
+        return html`
+            <div class="panel">
+                <scheduling-explanation-panel
+                    .localize=${this.localize}
+                    .payload=${this._explanations.get(key) ?? null}
+                    .slotId=${selection.slotId}
+                    .loading=${!this._explanations.has(key) && !this._explanationFailures.has(key)}
+                    .failed=${this._explanationFailures.has(key)}
+                    .locale=${this.locale}
+                    .timeZone=${this.timeZone}
+                ></scheduling-explanation-panel>
             </div>
         `;
     }
@@ -753,6 +915,17 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._drafts = {};
         this._draftBeforeEdit = {};
         this._editing = null;
+        // Every opening is an opening to edit: the dialog is reached by
+        // pressing something the user means to change far more often than
+        // something they mean to have explained.
+        this._mode = "edit";
+        this._explainSelection = null;
+        // The records are only as good as the run that produced them, and a
+        // save between two openings re-runs the automation: the answer this
+        // dialog gave last time is not the answer to give now.
+        this._explanations = new Map();
+        this._explanationFailures = new Set();
+        this._explanationsRequested = new Set();
         this._selectedLaneKey = this.target === null
             ? this._lanes[0]?.key ?? null
             : getEntityScheduleTargetKey(this.target);
@@ -856,6 +1029,110 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._selectedLaneKey = laneKey;
     }
 
+    /**
+     * Switch between authoring the day and accounting for it.
+     *
+     * The open edit session ends on the way out: it holds a range that only
+     * means anything while there are handles to drag it by. What it wrote is
+     * already in the draft, which survives the trip in both directions -- and
+     * so does the lane selection, so coming back from Explain lands on the lane
+     * that was being edited rather than on nothing.
+     */
+    private _setMode(mode: EntityDayEditorMode): void {
+        if (this._mode === mode) {
+            return;
+        }
+
+        this._commitEditSession();
+        this._hoveredBlockKey = null;
+        this._explainSelection = null;
+        this._mode = mode;
+        if (mode === "explain") {
+            this._requestExplanations();
+        }
+    }
+
+    private _handleBandSlotSelect(event: CustomEvent<EntityDayBandSlotSelectDetail>): void {
+        event.stopPropagation();
+        this._explainSelection = {
+            laneKey: event.detail.laneKey,
+            slotId: event.detail.slotId,
+        };
+    }
+
+    private _explanationKey(laneKey: string, dayKey: string): string {
+        return `${laneKey}|${dayKey}`;
+    }
+
+    /**
+     * Ask for every lane's record for the day on screen.
+     *
+     * Up front rather than on the first press, because the lane list itself is
+     * an answer: a lane no optimizer touched has nothing to explain and does
+     * not belong in this mode, and that cannot be known without the record.
+     * One request per lane per day, ever -- the set outlives both the mode and
+     * the day, so walking back and forth across them is silent.
+     */
+    private _requestExplanations(): void {
+        const day = this._selectedDay();
+        if (day === null) {
+            return;
+        }
+
+        for (const lane of this._lanes) {
+            void this._loadExplanation(lane.key, day.dayKey);
+        }
+    }
+
+    private async _loadExplanation(laneKey: string, dayKey: string): Promise<void> {
+        const hass = this.hass;
+        const key = this._explanationKey(laneKey, dayKey);
+        if (!hass || this._explanationsRequested.has(key)) {
+            return;
+        }
+
+        this._explanationsRequested.add(key);
+        try {
+            const payload = await hass.callWS<unknown>({
+                type: "helman/get_schedule_explanation",
+                target_key: laneKey,
+                date: dayKey,
+            });
+            // A null answer is not a failure: it means nothing was recorded for
+            // this lane on this date, which is exactly what drops the lane out
+            // of Explain mode.
+            this._explanations = new Map(this._explanations).set(key, payload ?? null);
+        } catch {
+            // Asked and unanswered, which is not the same as "nothing recorded"
+            // -- the panel says so rather than reading as an empty day.
+            this._explanationsRequested.delete(key);
+            this._explanationFailures = new Set(this._explanationFailures).add(key);
+        }
+    }
+
+    /**
+     * The lanes worth showing in Explain mode: the ones an optimizer touched.
+     *
+     * A lane whose record has arrived and holds no account of the day is
+     * dropped -- there is nothing to press it for. A lane still waiting for its
+     * record stays, so lanes settle into place rather than appearing and then
+     * vanishing under the pointer.
+     */
+    private _explainableBandLanes(
+        lanes: readonly EntityDayBandLane[],
+        day: EntityScheduleDay,
+    ): EntityDayBandLane[] {
+        return lanes.filter((lane) => {
+            const key = this._explanationKey(lane.key, day.dayKey);
+            const model = this._explanationModels.get(key);
+            if (model === undefined) {
+                return !this._explanations.has(key);
+            }
+
+            return model.columns.some((column) => column.cells.some((cell) => cell.present));
+        });
+    }
+
     /** The block the edit session currently covers, for highlighting. */
     private _resolveEditingBlock(
         blocks: readonly EntityScheduleBlock[],
@@ -880,6 +1157,12 @@ export class SchedulingEntityDayEditor extends LitElement {
         // keeps unsaved work; only the open edit session is day-local.
         this._commitEditSession();
         this._dayIndex = index;
+        // The selected slot belongs to the day it was pressed on, and so does
+        // every record: a new day is a new set of questions.
+        this._explainSelection = null;
+        if (this._mode === "explain") {
+            this._requestExplanations();
+        }
     }
 
     private _handleBandBlockSelect(event: CustomEvent<EntityDayBandBlockSelectDetail>): void {

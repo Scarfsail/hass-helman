@@ -68,11 +68,10 @@ export interface EntityDayBandLaneSelectDetail {
     laneKey: string;
 }
 
-/** "Why does this lane's day look like this", for the day the band is showing. */
-export interface EntityDayBandLaneExplainDetail {
+/** Which slot of which lane was pressed, on a band drawing the slot grid. */
+export interface EntityDayBandSlotSelectDetail {
     laneKey: string;
-    dayKey: string;
-    laneName: string;
+    slotId: string;
 }
 
 export interface EntityDayBandRangeChangeDetail {
@@ -224,32 +223,6 @@ export class SchedulingEntityDayBand extends LitElement {
                 cursor: pointer;
             }
 
-            .lane-explain {
-                flex: 0 0 auto;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                width: 16px;
-                height: 16px;
-                padding: 0;
-                border: none;
-                border-radius: 50%;
-                background: none;
-                color: var(--secondary-text-color);
-                cursor: pointer;
-                opacity: 0.55;
-            }
-
-            .lane-explain:hover,
-            .lane-explain:focus-visible {
-                opacity: 1;
-                background: var(--secondary-background-color);
-            }
-
-            .lane-explain ha-icon {
-                --mdc-icon-size: 13px;
-            }
-
             .lane-label ha-icon {
                 flex: 0 0 auto;
                 --mdc-icon-size: 15px;
@@ -351,6 +324,39 @@ export class SchedulingEntityDayBand extends LitElement {
                 bottom: 0;
             }
 
+            /* One slot of the grid: its own hairline at its start, and the
+               whole of it as a target. Over the runs, because in this mode the
+               slot is what a press means -- the run is what is being asked
+               about. */
+            .slot-pick {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                /* Above the runs and the ramp, below the in-track lane name --
+                   which is the one thing here that is still worth pressing for
+                   its own sake. */
+                z-index: 1;
+                border-left: 1px solid color-mix(in srgb, var(--divider-color) 60%, transparent);
+                cursor: pointer;
+            }
+
+            /* The day's first hairline would draw over the track's own edge. */
+            .slot-pick.day-start {
+                border-left-color: transparent;
+            }
+
+            .slot-pick.hovered {
+                background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+            }
+
+            /* The answered slot stays marked once the pointer has moved on --
+               otherwise the diagram below is about a slot nothing points to. */
+            .slot-pick.selected {
+                background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+                border-left-color: var(--primary-color);
+                box-shadow: inset -1px 0 0 0 var(--primary-color);
+            }
+
             /* Columns stand on the floor of the row; their colour is set
                per column, from the shared SoC palette. */
             .context-bar.soc {
@@ -409,12 +415,6 @@ export class SchedulingEntityDayBand extends LitElement {
                it is a control of its own. */
             .track-label state-badge {
                 --mdc-icon-size: 13px;
-                pointer-events: auto;
-            }
-
-            /* The second exception, for the same reason: asking why is a
-               control, not part of the caption. */
-            .track-label .lane-explain {
                 pointer-events: auto;
             }
 
@@ -798,14 +798,21 @@ export class SchedulingEntityDayBand extends LitElement {
      */
     @property({ type: String }) public laneLabels: "column" | "track" = "column";
     /**
-     * Whether a lane can be asked "why is it planned like this".
+     * Draw the day's own slots on every lane, as a grid to point at.
      *
-     * Opt-in, because the affordance is only meaningful where the host is
-     * willing to answer: a host that does not listen for
-     * `entity-day-band-lane-explain` would otherwise show a button that does
-     * nothing.
+     * The unit the schedule stores, made visible: hairlines between slots, the
+     * slot under the pointer washed, and a press that names one. A host asking
+     * "why this slot" needs the slot to be a target, which a band drawn as runs
+     * does not otherwise offer -- the gap between two runs is not a time you
+     * can press, and a run spans thirty of them.
+     *
+     * The grid comes from `day.slots` rather than from a fixed half hour: the
+     * slot ids are what the answer is keyed by, so a hit that is not a slot is
+     * a hit nothing can be looked up for.
      */
-    @property({ type: Boolean }) public explainable = false;
+    @property({ type: Boolean }) public slotGrid = false;
+    /** The slot the host is showing an answer for, marked in every lane. */
+    @property({ type: String }) public selectedSlotId: string | null = null;
     /**
      * Stretches of the day to wash, whatever it is that makes them special.
      *
@@ -817,6 +824,8 @@ export class SchedulingEntityDayBand extends LitElement {
     @property({ attribute: false }) public highlightRanges: readonly EntityDayBandHighlight[] = [];
 
     @state() private _drag: DragSession | null = null;
+    /** The slot the pointer is over, and the lane it is over it in. */
+    @state() private _hoveredSlot: { laneKey: string; slotId: string } | null = null;
     /**
      * The track's width, measured after each update rather than while
      * rendering: reading it per segment forces a synchronous layout for every
@@ -1118,7 +1127,6 @@ export class SchedulingEntityDayBand extends LitElement {
                             <span class="lane-name">${lane.name}</span>
                             ${this._renderLaneTotal(lane)}
                         </button>
-                        ${this._renderLaneExplain(lane)}
                     </div>
                 `}
                 <!--
@@ -1136,6 +1144,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     ${this._renderGaps(lane)}
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
                     ${this._renderRowOverlays()}
+                    ${this._renderSlotPicks(lane)}
                 </div>
                 <!--
                     Outside the track, which clips: the name has to be free to
@@ -1147,49 +1156,59 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * The "why is it planned like this" button, next to the lane's name.
+     * The day's slots, drawn on one lane as something to point at.
      *
-     * A dedicated control rather than a modifier on the name: the name already
-     * means "this entity", and a press that means one thing normally and
-     * another thing with a key held is a press nobody finds. It carries the
-     * day it is showing, so the host has nothing to infer.
+     * Above the runs rather than behind them: in this mode the question is
+     * about a slot, so the slot is what a press has to name -- the run under it
+     * is the answer being asked about, not the target. Each slot carries its
+     * own hairline at its start, so the grid is the same object as the hit
+     * layer and the two can never disagree.
      *
-     * Rendered in both label modes. In `laneLabels === "track"` it rides in the
-     * in-track caption, which is otherwise inert: `.track-label` takes no
-     * pointer events so the runs under it stay the thing being pointed at, and
-     * this button re-enables them for itself the way `state-badge` already
-     * does. Its click stops propagating, so the track's own press -- which
-     * means "this lane" -- does not fire behind it.
-     *
-     * Only rendered where the host opted in via `explainable`; a host that does
-     * not answer the event gets no button.
+     * Hover is tracked per lane, not per time: the pointer is over one lane's
+     * slot, and washing the same minutes in every lane would say that the
+     * question is about all of them.
      */
-    private _renderLaneExplain(lane: EntityDayBandLane) {
-        if (!this.explainable) {
+    private _renderSlotPicks(lane: EntityDayBandLane) {
+        if (!this.slotGrid) {
             return nothing;
         }
-        const label = this.localize("scheduling.explanation.open");
-        return html`
-            <button
-                class="lane-explain"
-                type="button"
-                title=${label}
-                aria-label=${label}
-                @click=${(event: MouseEvent) => this._handleLaneExplainClick(event, lane)}
-            >
-                <ha-icon .icon=${"mdi:information-outline"}></ha-icon>
-            </button>
-        `;
+
+        return this.day.slots.map((slot, index) => {
+            const classes = [
+                "slot-pick",
+                index === 0 ? "day-start" : "",
+                this._hoveredSlot?.laneKey === lane.key && this._hoveredSlot.slotId === slot.id
+                    ? "hovered"
+                    : "",
+                slot.id === this.selectedSlotId ? "selected" : "",
+            ].filter((value) => value.length > 0).join(" ");
+            return html`
+                <span
+                    class=${classes}
+                    data-slot=${slot.id}
+                    style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%`}
+                    @mouseenter=${() => { this._hoveredSlot = { laneKey: lane.key, slotId: slot.id }; }}
+                    @mouseleave=${() => this._clearHoveredSlot(lane.key, slot.id)}
+                    @click=${(event: Event) => this._handleSlotPickClick(event, lane, slot.id)}
+                ></span>
+            `;
+        });
     }
 
-    private _handleLaneExplainClick(event: MouseEvent, lane: EntityDayBandLane): void {
-        // The name's own click sits next to this one; without stopping here a
-        // press on the button would also select the lane.
+    private _clearHoveredSlot(laneKey: string, slotId: string): void {
+        if (this._hoveredSlot?.laneKey === laneKey && this._hoveredSlot.slotId === slotId) {
+            this._hoveredSlot = null;
+        }
+    }
+
+    private _handleSlotPickClick(event: Event, lane: EntityDayBandLane, slotId: string): void {
+        // The track's own press means "this lane"; a slot press already says
+        // which lane it is in, so letting both fire would answer twice.
         event.stopPropagation();
-        this.dispatchEvent(new CustomEvent<EntityDayBandLaneExplainDetail>("entity-day-band-lane-explain", {
+        this.dispatchEvent(new CustomEvent<EntityDayBandSlotSelectDetail>("entity-day-band-slot-select", {
             bubbles: true,
             composed: true,
-            detail: { laneKey: lane.key, dayKey: this.day.dayKey, laneName: lane.name },
+            detail: { laneKey: lane.key, slotId },
         }));
     }
 
@@ -1213,7 +1232,6 @@ export class SchedulingEntityDayBand extends LitElement {
                 ${this._renderLaneIcon(lane)}
                 <span class="lane-name">${lane.name}</span>
                 ${this._renderLaneTotal(lane)}
-                ${this._renderLaneExplain(lane)}
             </span>
         `;
     }

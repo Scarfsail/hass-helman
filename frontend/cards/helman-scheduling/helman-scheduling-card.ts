@@ -18,9 +18,7 @@ import "./components/scheduling-card-header";
 import "./components/scheduling-running-entities";
 import "./components/scheduling-slot-table";
 import "./dialogs/scheduling-entity-day-editor";
-import "./dialogs/scheduling-explanation-dialog";
 import "./dialogs/scheduling-range-edit-dialog";
-import type { EntityDayBandLaneExplainDetail } from "./components/scheduling-entity-day-band";
 import {
     explanationCacheKey,
     type ScheduleExplanationRequestDetail,
@@ -214,29 +212,12 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     /** What each controllable entity really did earlier today, by entity id. */
     @state() private _entityActualHistory: Record<string, EntityActualHistorySlotDTO[]> = {};
     /**
-     * The lane explanation dialog: which lane and day it is asking about, and
-     * the record that came back.
-     *
-     * Fetched per open rather than held with the rest of the card's data: the
-     * record is a whole day of per-slot condition trees for one lane, nobody
-     * needs it until they ask, and the answer is only as old as the press.
-     */
-    @state() private _explanationOpen = false;
-    @state() private _explanationTargetKey: string | null = null;
-    @state() private _explanationDate = "";
-    @state() private _explanationLaneName = "";
-    @state() private _explanationPayload: unknown = null;
-    @state() private _explanationLoading = false;
-    @state() private _explanationFailed = false;
-    /** Which request is current, so a slow answer cannot overwrite a newer one. */
-    private _explanationRequestId = 0;
-    /**
      * Lane records for the slot table's "why" popover, by lane and day.
      *
-     * Separate from `_explanationPayload`, which belongs to the dialog and is
-     * discarded on close. These accumulate because the popover is asked the same
-     * question about neighbouring rows over and over, and one record answers a
-     * whole day of one lane.
+     * These accumulate because the popover is asked the same question about
+     * neighbouring rows over and over, and one record answers a whole day of
+     * one lane. The day editor's Explain mode fetches its own, because it wants
+     * every lane of one day rather than one lane of whatever is on screen.
      */
     @state() private _explanationCache: ReadonlyMap<string, unknown> = new Map();
     /** Lanes already asked for, so a re-press does not refetch. */
@@ -551,83 +532,10 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                     .busy=${this._ownerSnapshot.writing}
                     .scheduleChanged=${this._entityEditorScheduleChanged}
                     @closed=${this._handleEntityEditorClosed}
-                    @entity-day-band-lane-explain=${this._handleLaneExplain}
                     @entity-schedule-save=${this._handleEntityEditorSave}
                 ></scheduling-entity-day-editor>
             ` : nothing}
-
-            ${this._explanationTargetKey === null ? nothing : html`
-                <scheduling-explanation-dialog
-                    .open=${this._explanationOpen}
-                    .localize=${this._localize}
-                    .payload=${this._explanationPayload}
-                    .laneName=${this._explanationLaneName}
-                    .loading=${this._explanationLoading}
-                    .failed=${this._explanationFailed}
-                    .locale=${this._locale}
-                    .timeZone=${this._hass.config.time_zone ?? "UTC"}
-                    @schedule-explanation-close=${this._handleExplanationClosed}
-                ></scheduling-explanation-dialog>
-            `}
         `;
-    }
-
-    /**
-     * "Why does this lane's day look like this?"
-     *
-     * Keyed by the lane's target key and the day on screen, because that is
-     * how the record is keyed: the inverter lane is written by three optimizer
-     * kinds, so a lane press has no single optimizer to ask.
-     *
-     * Currently unreachable: the only band under this card lives inside the day
-     * editor, which no longer opts into the button because a dialog opened from
-     * inside a dialog does not present (#17). This is kept rather than deleted
-     * because it is correct and is exactly what that issue re-enables; the
-     * working entry point today is the solar inspector's read-only strip.
-     */
-    private _handleLaneExplain(event: CustomEvent<EntityDayBandLaneExplainDetail>): void {
-        const { laneKey, dayKey, laneName } = event.detail;
-        this._explanationTargetKey = laneKey;
-        this._explanationDate = dayKey;
-        this._explanationLaneName = laneName;
-        this._explanationPayload = null;
-        this._explanationFailed = false;
-        this._explanationOpen = true;
-        void this._loadExplanation(laneKey, dayKey);
-    }
-
-    private async _loadExplanation(targetKey: string, date: string): Promise<void> {
-        const hass = this._hass;
-        if (!hass) {
-            return;
-        }
-
-        this._explanationRequestId += 1;
-        const requestId = this._explanationRequestId;
-        this._explanationLoading = true;
-        try {
-            const payload = await hass.callWS<unknown>({
-                type: "helman/get_schedule_explanation",
-                target_key: targetKey,
-                date,
-            });
-            if (requestId !== this._explanationRequestId) {
-                return;
-            }
-            // A null answer is not a failure: it means nothing was recorded for
-            // this lane on this date, which the dialog says in its own words.
-            this._explanationPayload = payload ?? null;
-        } catch {
-            if (requestId !== this._explanationRequestId) {
-                return;
-            }
-            this._explanationPayload = null;
-            this._explanationFailed = true;
-        } finally {
-            if (requestId === this._explanationRequestId) {
-                this._explanationLoading = false;
-            }
-        }
     }
 
     /**
@@ -662,10 +570,6 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
             // Best-effort enhancement: no record just means the generic note.
         }
     }
-
-    private _handleExplanationClosed = (): void => {
-        this._explanationOpen = false;
-    };
 
     private _renderInlineError() {
         if (this._ownerSnapshot.error === null) {

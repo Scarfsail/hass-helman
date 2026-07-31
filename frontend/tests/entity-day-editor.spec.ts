@@ -37,12 +37,14 @@ async function mountEditor(
         neighbour?: boolean;
         straddling?: boolean;
         multiLane?: boolean;
+        /** Hand the editor a backend that answers the explanation query. */
+        explainable?: boolean;
         /** Today as the backend serves it: elapsed slots pruned, then padded
          *  back to midnight by the card, with forecast for those hours. */
         pruned?: boolean;
     } = {},
 ): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling, multiLane, pruned }) => {
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, straddling, multiLane, pruned, explainable }) => {
         const buildSlot = (dayKey: string, hour: number) => {
             const startMs = Date.parse(`${dayKey}T${String(hour).padStart(2, "0")}:00:00Z`);
             const endMs = startMs + 3_600_000;
@@ -179,6 +181,62 @@ async function mountEditor(
             el.priceUnit = "CZK/kWh";
         }
 
+        if (explainable) {
+            // One condition record per lane, over the day's own slot ids --
+            // which is what the band presses hand back. The pump has none at
+            // all, which is what drops it out of Explain mode.
+            const slotIds = slots
+                .filter((slot) => slot.dayKey === dayOne)
+                .map((slot) => slot.id);
+            const runs = (value: unknown) => [[value, slotIds.length]];
+            const optimizer = (id: string, kind: string, verdict: string, state: string) => ({
+                optimizerId: id,
+                kind,
+                targetKey: "",
+                status: "ok",
+                runAt: runs(`${dayOne}T20:15:00Z`),
+                verdict: runs(verdict),
+                groups: [{
+                    index: 0,
+                    label: "",
+                    paramsSource: runs("slot_matched"),
+                    params: runs({ max_price: 2 }),
+                    conditions: [{
+                        key: "max_run_price",
+                        scope: "slot",
+                        state: runs(state),
+                        value: runs(2),
+                    }],
+                }],
+                gates: [],
+            });
+            const payloads: Record<string, unknown> = {
+                "appliance:boiler": {
+                    targetKey: "appliance:boiler",
+                    date: dayOne,
+                    slotIds,
+                    optimizers: [
+                        optimizer("appliance_runtime:boiler", "appliance_runtime", "execute", "true"),
+                        optimizer("charge_hold", "charge_hold", "skip", "false"),
+                    ],
+                },
+                inverter: {
+                    targetKey: "inverter",
+                    date: dayOne,
+                    slotIds,
+                    optimizers: [optimizer("export_price", "export_price", "execute", "true")],
+                },
+                // Nothing recorded: no automation ever touched this lane.
+                "appliance:pump": null,
+            };
+            el.hass = {
+                config: { time_zone: "UTC" },
+                states: {},
+                callWS: async ({ target_key }: { target_key: string }) =>
+                    payloads[target_key] ?? null,
+            };
+        }
+
         el.slots = slots;
         el.entityName = "Boiler";
         el.currentDayKey = dayOne;
@@ -195,6 +253,7 @@ async function mountEditor(
         straddling: options.straddling ?? false,
         multiLane: options.multiLane ?? false,
         pruned: options.pruned ?? false,
+        explainable: options.explainable ?? false,
     });
 
     await page.waitForFunction(() => {
@@ -915,5 +974,147 @@ test.describe("entity day editor", () => {
             expect(state.lanes.find((lane) => lane.selected)?.key).toBe("appliance:pump");
             expect(state.blockListLabel).toContain("Pump");
         });
+    });
+});
+
+/**
+ * Explain mode: the same day, asked "why" instead of "what".
+ *
+ * The two modes share the band and nothing else. What has to hold is that the
+ * mode is a *view* of the day, not a second dialog: the editing surface goes
+ * away entirely, the lanes narrow to the ones an automation actually touched,
+ * and a press anywhere on the stack names one slot of one appliance -- there is
+ * no "first select a lane" step, because the slot already says which lane it is
+ * in.
+ */
+test.describe("entity day editor, explain mode", () => {
+    /** Wait for the day's records to land, which is what settles the lanes. */
+    async function enterExplain(page: Page): Promise<void> {
+        await page.locator("scheduling-entity-day-editor")
+            .locator('.mode-button[data-mode="explain"]')
+            .click();
+        await expect(page.locator("scheduling-entity-day-editor").locator(".explain-hint"))
+            .toHaveCount(1);
+        await page.waitForFunction(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            return band?.shadowRoot?.querySelectorAll(".lane").length === 2;
+        });
+    }
+
+    /** Press the slot covering `atMs` in one lane, as a reader does. */
+    async function pressSlot(page: Page, atMs: number, laneKey: string): Promise<void> {
+        const point = await trackPoint(page, atMs, laneKey);
+        await page.mouse.click(point.x, point.y);
+    }
+
+    function editor(page: Page) {
+        return page.locator("scheduling-entity-day-editor");
+    }
+
+    test("opens in edit mode, with the editing surface intact", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, explainable: true });
+
+        await expect(editor(page).locator('.mode-button[data-mode="edit"]')).toHaveClass(/selected/);
+        await expect(editor(page).locator(".block-list")).toHaveCount(1);
+        await expect(editor(page).locator("scheduling-explanation-panel")).toHaveCount(0);
+    });
+
+    test("explaining hides the editing controls and the lanes with no automation", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, explainable: true });
+        await enterExplain(page);
+
+        // Nothing to author here: the block list and the action editor are the
+        // edit mode's whole surface, and both go.
+        await expect(editor(page).locator(".block-list")).toHaveCount(0);
+        await expect(editor(page).locator(".edit-panel")).toHaveCount(0);
+
+        // The pump's record is null: no optimizer ever touched it, so there is
+        // nothing to press it for.
+        const lanes = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            return [...band.shadowRoot.querySelectorAll(".lane")]
+                .map((lane: Element) => lane.getAttribute("data-lane"));
+        });
+        expect(lanes).toEqual(["inverter", "appliance:boiler"]);
+    });
+
+    test("the lanes are split into the day's slots, and nothing is preselected", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, explainable: true });
+        await enterExplain(page);
+
+        const picks = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            return band.shadowRoot.querySelectorAll('.lane[data-lane="inverter"] .slot-pick').length;
+        });
+        expect(picks).toBe(24);
+
+        // A diagram nobody asked for would be about a slot nobody pressed.
+        await expect(editor(page).locator(".explain-hint")).toHaveCount(1);
+        await expect(editor(page).locator("scheduling-explanation-panel")).toHaveCount(0);
+    });
+
+    test("pressing a slot in any lane explains that lane's slot", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, explainable: true });
+        await enterExplain(page);
+
+        // The dialog was opened on the boiler; the inverter is a lane the user
+        // never selected, and one press is still all it takes.
+        await pressSlot(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
+
+        const panel = editor(page).locator("scheduling-explanation-panel");
+        await expect(panel).toHaveCount(1);
+        await expect(panel.locator("scheduling-logic-diagram")).toHaveCount(1);
+        // One optimizer on this lane, so no strip: a lone chip would restate
+        // what the diagram under it is already about.
+        await expect(panel.locator(".tab-strip")).toHaveCount(0);
+        await expect(editor(page).locator(".explain-hint")).toHaveCount(0);
+    });
+
+    test("a lane two automations write gets a tab each, named and resulted", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, explainable: true });
+        await enterExplain(page);
+
+        await pressSlot(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:boiler");
+
+        const tabs = editor(page).locator("scheduling-explanation-panel").locator(".tab");
+        await expect(tabs).toHaveCount(2);
+        await expect(tabs.nth(0)).toHaveAttribute("data-outcome", "wrote");
+        await expect(tabs.nth(1)).toHaveAttribute("data-outcome", "not_eligible");
+        // The name of the automation, and what it did with the slot.
+        await expect(tabs.nth(0)).toContainText("appliance_runtime");
+        await expect(tabs.nth(1)).toContainText("charge_hold");
+    });
+
+    test("the answered slot stays marked, and switching back restores the editor", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, explainable: true });
+        await enterExplain(page);
+        await pressSlot(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:boiler");
+
+        const marked = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            return [...band.shadowRoot.querySelectorAll(".slot-pick.selected")]
+                .map((pick: Element) => pick.getAttribute("data-slot"));
+        });
+        expect(new Set(marked)).toEqual(new Set([`${DAY_ONE}T13:00:00.000Z`]));
+
+        await editor(page).locator('.mode-button[data-mode="edit"]').click();
+        await expect(editor(page).locator(".block-list")).toHaveCount(1);
+        await expect(editor(page).locator("scheduling-explanation-panel")).toHaveCount(0);
+        // The lane that was being edited is still the lane being edited.
+        const label = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            return el.shadowRoot.querySelector(".block-list .field-label")?.textContent ?? "";
+        });
+        expect(label).toContain("Boiler");
     });
 });

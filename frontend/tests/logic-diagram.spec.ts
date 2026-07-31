@@ -1,6 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
-import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 
 /**
  * Level 3: the logic that produced one slot, as AND/OR blocks.
@@ -385,28 +384,24 @@ const NOT_APPLICABLE_PAYLOAD = {
     }],
 };
 
-async function mountDialog(page: Page, fixture: unknown = PAYLOAD): Promise<void> {
+async function mountPanel(page: Page, fixture: unknown = PAYLOAD): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
-    await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.addScriptTag({ path: BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("scheduling-explanation-dialog"));
+    await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
 
     await page.evaluate((fixture) => {
-        const dialog = document.createElement("scheduling-explanation-dialog") as HTMLElement
+        const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
             & Record<string, unknown>;
-        dialog.localize = (key: string) => key;
-        dialog.payload = fixture;
-        dialog.laneName = "Střídač";
-        dialog.locale = "cs";
-        dialog.timeZone = "Europe/Prague";
-        dialog.open = true;
-        document.body.appendChild(dialog);
+        panel.localize = (key: string) => key;
+        panel.payload = fixture;
+        panel.locale = "cs";
+        panel.timeZone = "Europe/Prague";
+        document.body.appendChild(panel);
     }, fixture);
 
-    await page.waitForFunction(
-        () => !!document.querySelector("scheduling-explanation-dialog")?.shadowRoot
-            ?.querySelector("table.grid"),
-    );
+    // Nothing pressed yet: the panel is mounted and waiting for a slot.
+    await expect(page.locator("scheduling-explanation-panel").locator(".placeholder.no-slot"))
+        .toHaveCount(1);
 }
 
 /** An SVG `<text>`'s content: `innerText` is an HTML-only property. */
@@ -417,25 +412,37 @@ async function svgText(locator: ReturnType<Page["locator"]>): Promise<string> {
 }
 
 function diagram(page: Page) {
-    return page.locator("scheduling-explanation-dialog scheduling-logic-diagram");
+    return page.locator("scheduling-explanation-panel scheduling-logic-diagram");
 }
 
 /**
  * Open a slot's diagram.
  *
- * One click, not two: the level-2 matrix that used to sit between the grid and
- * the diagram is no longer mounted, so the grid cell *is* the drill.
+ * One press, not two: the day-sized grid and the level-2 matrix that used to
+ * sit between a slot and its diagram are both gone, so pressing the slot on
+ * the band *is* the drill.
  */
 async function openDiagram(page: Page, rowIndex: number): Promise<void> {
     await selectSlot(page, rowIndex, "export_price");
 }
 
-/** Open a slot's diagram the way a reader does: by pressing the level-1 cell. */
+/**
+ * Ask about one slot, and about one optimizer's account of it.
+ *
+ * The slot is what the band hands the panel; the optimizer is the tab, which a
+ * lane with a single one does not draw at all.
+ */
 async function selectSlot(page: Page, rowIndex: number, optimizerId: string): Promise<void> {
-    await page
-        .locator("scheduling-explanation-dialog")
-        .locator(`tbody tr[data-row="${rowIndex}"] td[data-optimizer="${optimizerId}"] .cell-body`)
-        .click();
+    await page.evaluate((slotId) => {
+        (document.querySelector("scheduling-explanation-panel") as HTMLElement
+            & Record<string, unknown>).slotId = slotId;
+    }, SLOT_IDS[rowIndex]);
+
+    const tab = page.locator("scheduling-explanation-panel")
+        .locator(`button.tab[data-optimizer="${optimizerId}"]`);
+    if (await tab.count() > 0) {
+        await tab.click();
+    }
     await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
 }
 
@@ -487,15 +494,11 @@ async function decisiveness(page: Page): Promise<Record<string, string>> {
 }
 
 test.describe("the condition logic diagram", () => {
-    test("a grid cell opens the diagram, with no matrix in between", async ({ page }) => {
-        await mountDialog(page);
+    test("pressing a slot opens the diagram, with nothing in between", async ({ page }) => {
+        await mountPanel(page);
         await expect(diagram(page)).toHaveCount(0);
 
         await openDiagram(page, 1);
-        // The level-2 matrix is gone: it restated as a table of marks what the
-        // diagram draws as a chain, and readers had to walk through it.
-        await expect(page.locator("scheduling-explanation-dialog scheduling-condition-matrix"))
-            .toHaveCount(0);
         // With nothing pressed the diagram still opens on a branch, rather than
         // on none.
         await expect(diagram(page).locator('g.block[data-focus-group="true"]').first())
@@ -503,7 +506,7 @@ test.describe("the condition logic diagram", () => {
     });
 
     test("a false AND marks only its false inputs decisive", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         // 13:30: nothing is eligible, so every group's AND is decisive.
         await openDiagram(page, 1);
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "not_eligible");
@@ -528,7 +531,7 @@ test.describe("the condition logic diagram", () => {
     });
 
     test("a true OR marks only the first satisfied group", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         // 13:00: groups 1 and 2 both pass. `fully or matching[0]` stops at 1.
         await openDiagram(page, 0);
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "execute");
@@ -549,7 +552,7 @@ test.describe("the condition logic diagram", () => {
     });
 
     test("candidate and not eligible render as different terminals", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
 
         await openDiagram(page, 2);
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "candidate");
@@ -573,7 +576,7 @@ test.describe("the condition logic diagram", () => {
     });
 
     test("a writer veto is its own terminal, not a failed condition", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 3);
 
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "blocked");
@@ -584,7 +587,7 @@ test.describe("the condition logic diagram", () => {
     });
 
     test("branches that did not matter are dimmed, not removed", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 0);
 
         // The losing group is still drawn.
@@ -616,7 +619,7 @@ test.describe("the condition logic diagram", () => {
  */
 test.describe("the logic diagram never contradicts its terminal", () => {
     test("every terminal reproduces from the drawn AND inputs", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         for (const rowIndex of [0, 1, 2, 3]) {
             await selectSlot(page, rowIndex, "export_price");
             const result = await andInvariant(page);
@@ -628,7 +631,7 @@ test.describe("the logic diagram never contradicts its terminal", () => {
                 .toBe(result.terminal === "execute");
         }
 
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         for (const rowIndex of [0, 1]) {
             await selectSlot(page, rowIndex, "appliance_runtime");
             const result = await andInvariant(page);
@@ -639,7 +642,7 @@ test.describe("the logic diagram never contradicts its terminal", () => {
     });
 
     test("an informational false gate is context, not an AND input", async ({ page }) => {
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
         await expect(diagram(page).locator("svg.logic"))
             .toHaveAttribute("data-terminal", "execute");
@@ -659,7 +662,7 @@ test.describe("the logic diagram never contradicts its terminal", () => {
     });
 
     test("a single group draws no ≥1", async ({ page }) => {
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         // Nothing to choose between: the group's own AND wires straight on.
@@ -671,13 +674,13 @@ test.describe("the logic diagram never contradicts its terminal", () => {
             .toHaveCount(1);
 
         // Three groups still get one.
-        await mountDialog(page);
+        await mountPanel(page);
         await selectSlot(page, 0, "export_price");
         await expect(diagram(page).locator('g.block[data-kind="or"]')).toHaveCount(1);
     });
 
     test("an object actual never escapes its block", async ({ page }) => {
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 1, "appliance_runtime");
 
         const overflow = await diagram(page).locator("svg.logic").evaluate((svg) => {
@@ -710,7 +713,7 @@ test.describe("the logic diagram never contradicts its terminal", () => {
     });
 
     test("the diagram is there as soon as a slot is open", async ({ page }) => {
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await expect(diagram(page)).toHaveCount(0);
 
         // Opening the slot is the whole drill.
@@ -758,7 +761,7 @@ async function overflowingText(page: Page): Promise<unknown[]> {
  */
 test.describe("an override ORs with the conditions, it does not AND with them", () => {
     test("a forced run is the other input of the ≥1, beside the failed spine", async ({ page }) => {
-        await mountDialog(page, FORCED_DAY_PAYLOAD);
+        await mountPanel(page, FORCED_DAY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
         await expect(diagram(page).locator("svg.logic"))
             .toHaveAttribute("data-terminal", "execute");
@@ -792,7 +795,7 @@ test.describe("an override ORs with the conditions, it does not AND with them", 
     });
 
     test("the forced day still reproduces its own terminal", async ({ page }) => {
-        await mountDialog(page, FORCED_DAY_PAYLOAD);
+        await mountPanel(page, FORCED_DAY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         const result = await andInvariant(page);
@@ -806,7 +809,7 @@ test.describe("an override ORs with the conditions, it does not AND with them", 
     });
 
     test("the override is what decided it, and the conditions are dimmed", async ({ page }) => {
-        await mountDialog(page, FORCED_DAY_PAYLOAD);
+        await mountPanel(page, FORCED_DAY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         const marks = await decisiveness(page);
@@ -835,7 +838,7 @@ test.describe("an override ORs with the conditions, it does not AND with them", 
  */
 test.describe("a block shows the numbers it was decided by", () => {
     test("gates render their decisive numbers inline", async ({ page }) => {
-        await mountDialog(page, FORCED_DAY_PAYLOAD);
+        await mountPanel(page, FORCED_DAY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         const detail = async (key: string) => svgText(
@@ -857,7 +860,7 @@ test.describe("a block shows the numbers it was decided by", () => {
     });
 
     test("the full params are one hover away", async ({ page }) => {
-        await mountDialog(page, FORCED_DAY_PAYLOAD);
+        await mountPanel(page, FORCED_DAY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         // The face shows two of the four; the tooltip shows all of them.
@@ -877,7 +880,7 @@ test.describe("a block shows the numbers it was decided by", () => {
     });
 
     test("a self-gating condition shows the level the group configured", async ({ page }) => {
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         // 13:00: the node passed, so the record carries no actual at all. The
         // configured level is what there is to show.
         await selectSlot(page, 0, "appliance_runtime");
@@ -888,11 +891,11 @@ test.describe("a block shows the numbers it was decided by", () => {
 
     test("nothing a block shows escapes the block", async ({ page }) => {
         for (const fixture of [FORCED_DAY_PAYLOAD, NOT_APPLICABLE_PAYLOAD]) {
-            await mountDialog(page, fixture);
+            await mountPanel(page, fixture);
             await selectSlot(page, 0, "appliance_runtime");
             expect(await overflowingText(page)).toEqual([]);
         }
-        await mountDialog(page);
+        await mountPanel(page);
         for (const rowIndex of [0, 1, 2, 3]) {
             await selectSlot(page, rowIndex, "export_price");
             expect(await overflowingText(page)).toEqual([]);
@@ -908,7 +911,7 @@ test.describe("a block shows the numbers it was decided by", () => {
  */
 test.describe("the params source is on screen", () => {
     test("every chain is badged, next to its caption", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 0);
 
         const badges = await diagram(page).locator("text.params-source")
@@ -930,7 +933,7 @@ test.describe("the params source is on screen", () => {
     });
 
     test("a single group gets the badge even with no caption", async ({ page }) => {
-        await mountDialog(page, FORCED_DAY_PAYLOAD);
+        await mountPanel(page, FORCED_DAY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         // The label is still noise with one chain; the marker is not.
@@ -951,7 +954,7 @@ test.describe("the params source is on screen", () => {
  */
 test.describe("unconfigured conditions are drawn, and change nothing", () => {
     test("a not_applicable input is on screen and out of the AND", async ({ page }) => {
-        await mountDialog(page, NOT_APPLICABLE_PAYLOAD);
+        await mountPanel(page, NOT_APPLICABLE_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         const unused = diagram(page).locator('g.block[data-key="min_soc_pct"]');
@@ -972,7 +975,7 @@ test.describe("unconfigured conditions are drawn, and change nothing", () => {
     });
 
     test("unconfigured, failed and never-consulted read differently", async ({ page }) => {
-        await mountDialog(page, FORCED_DAY_PAYLOAD);
+        await mountPanel(page, FORCED_DAY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         const face = async (key: string) => diagram(page)
@@ -1009,7 +1012,7 @@ test.describe("unconfigured conditions are drawn, and change nothing", () => {
  */
 test.describe("the diagram shows the test, not only the result", () => {
     test("a failing condition reads actual, operator, threshold", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         // 13:00, group 0: the price was 1.50 and the group wanted below 1.
         await openDiagram(page, 0);
 
@@ -1023,7 +1026,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     });
 
     test("a passing condition shows the threshold, never an invented actual", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 0);
 
         // Group 1 passed, so the record carries no `actual` for it at all --
@@ -1035,7 +1038,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     });
 
     test("the two sides read differently, and not by colour alone", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 0);
 
         const failing = diagram(page)
@@ -1057,7 +1060,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     });
 
     test("membership and self-gating conditions get no </> invented", async ({ page }) => {
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 1, "appliance_runtime");
 
         // `run_when` is a set test (`_run_when_mask`), so it reads as one.
@@ -1079,7 +1082,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     });
 
     test("each chain is named where there is more than one", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 0);
 
         const labels = await diagram(page).locator("text.group-label")
@@ -1087,13 +1090,13 @@ test.describe("the diagram shows the test, not only the result", () => {
         expect(labels).toEqual(["Ráno", "Poledne", "Večer"]);
 
         // One group has nothing to be told apart from, so it gets no caption.
-        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
         await expect(diagram(page).locator("text.group-label")).toHaveCount(0);
     });
 
     test("the custom conditions are their own stage before the result", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         // 14:00: every mandatory condition passed and the template said no.
         await openDiagram(page, 2);
         await expect(diagram(page).locator("svg.logic"))
@@ -1125,7 +1128,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     });
 
     test("a candidate's falsehood is the custom stage, and the AND says so", async ({ page }) => {
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 2);
 
         // The invariant, for the terminal that is neither a run nor a
@@ -1144,7 +1147,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     });
 
     test("an errored custom entry is not a failed one", async ({ page }) => {
-        await mountDialog(page, ERRORED_CUSTOM_PAYLOAD);
+        await mountPanel(page, ERRORED_CUSTOM_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         // Fail-closed evaluation reports "threw" and "said no" identically. The
@@ -1159,7 +1162,7 @@ test.describe("the diagram shows the test, not only the result", () => {
             dash: getComputedStyle(node).strokeDasharray,
         }));
 
-        await mountDialog(page);
+        await mountPanel(page);
         await openDiagram(page, 2);
         const failed = await diagram(page).locator('g.block[data-id="custom"] rect.body')
             .evaluate((node) => ({
