@@ -412,6 +412,12 @@ export class SchedulingEntityDayBand extends LitElement {
                 pointer-events: auto;
             }
 
+            /* The second exception, for the same reason: asking why is a
+               control, not part of the caption. */
+            .track-label .lane-explain {
+                pointer-events: auto;
+            }
+
             /* The lane under edit, said the same way the label column said it. */
             .lane.selected .track-label {
                 font-weight: 600;
@@ -792,6 +798,15 @@ export class SchedulingEntityDayBand extends LitElement {
      */
     @property({ type: String }) public laneLabels: "column" | "track" = "column";
     /**
+     * Whether a lane can be asked "why is it planned like this".
+     *
+     * Opt-in, because the affordance is only meaningful where the host is
+     * willing to answer: a host that does not listen for
+     * `entity-day-band-lane-explain` would otherwise show a button that does
+     * nothing.
+     */
+    @property({ type: Boolean }) public explainable = false;
+    /**
      * Stretches of the day to wash, whatever it is that makes them special.
      *
      * The band is told which times matter rather than working it out: what
@@ -1139,11 +1154,20 @@ export class SchedulingEntityDayBand extends LitElement {
      * another thing with a key held is a press nobody finds. It carries the
      * day it is showing, so the host has nothing to infer.
      *
-     * Deliberately absent in `laneLabels === "track"`: there is no label
-     * element there, and putting it on the track would collide with the press
-     * that selects the lane -- the one affordance the bare track already has.
+     * Rendered in both label modes. In `laneLabels === "track"` it rides in the
+     * in-track caption, which is otherwise inert: `.track-label` takes no
+     * pointer events so the runs under it stay the thing being pointed at, and
+     * this button re-enables them for itself the way `state-badge` already
+     * does. Its click stops propagating, so the track's own press -- which
+     * means "this lane" -- does not fire behind it.
+     *
+     * Only rendered where the host opted in via `explainable`; a host that does
+     * not answer the event gets no button.
      */
     private _renderLaneExplain(lane: EntityDayBandLane) {
+        if (!this.explainable) {
+            return nothing;
+        }
         const label = this.localize("scheduling.explanation.open");
         return html`
             <button
@@ -1189,6 +1213,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 ${this._renderLaneIcon(lane)}
                 <span class="lane-name">${lane.name}</span>
                 ${this._renderLaneTotal(lane)}
+                ${this._renderLaneExplain(lane)}
             </span>
         `;
     }

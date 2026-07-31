@@ -31,10 +31,12 @@ interface MountOptions {
     /** Hand the band a state machine, so the lane label's icon goes live. */
     live?: boolean;
     /**
-     * Labels in their own column, the way the day editor hosts the band. The
-     * default here is `"track"`, which is the label-less host.
+     * Labels in their own column. The default here is `"track"`, which is what
+     * the day editor -- the only production host of the explain button -- uses.
      */
     columnLabels?: boolean;
+    /** Opt into the "why is it planned like this" button, as the editor does. */
+    explainable?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
@@ -42,7 +44,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, explainable }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const slots = Array.from({ length: 24 }, (_, hour) => ({
             id: new Date(at(hour)).toISOString(),
@@ -117,6 +119,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         band.nowMs = nowMs;
         band.readonly = true;
         band.laneLabels = columnLabels ? "column" : "track";
+        band.explainable = explainable;
         band.showForecastRows = false;
         band.showAxis = false;
         if (windowed) {
@@ -157,6 +160,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         highlight: options.highlight ?? false,
         live: options.live ?? false,
         columnLabels: options.columnLabels ?? false,
+        explainable: options.explainable ?? false,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -366,11 +370,12 @@ test.describe("entity day band, read only", () => {
  *
  * The lane's name already means "this entity"; the explanation is a second
  * intent and gets a second button rather than a modifier on the first, so
- * neither press can be discovered by accident or lost by habit.
+ * neither press can be discovered by accident or lost by habit. It has to reach
+ * the `"track"` host too -- that is the one the day editor actually uses.
  */
 test.describe("entity day band, explain affordance", () => {
     test("the info button asks about this lane on this day", async ({ page }) => {
-        await mountBand(page, { columnLabels: true });
+        await mountBand(page, { columnLabels: true, explainable: true });
 
         const band = page.locator("scheduling-entity-day-band");
         await expect(band.locator(".lane-explain")).toHaveCount(1);
@@ -389,7 +394,7 @@ test.describe("entity day band, explain affordance", () => {
     });
 
     test("the name still selects the lane", async ({ page }) => {
-        await mountBand(page, { columnLabels: true });
+        await mountBand(page, { columnLabels: true, explainable: true });
 
         await page.locator("scheduling-entity-day-band").locator(".lane-label").click();
 
@@ -398,13 +403,31 @@ test.describe("entity day band, explain affordance", () => {
         expect(events.filter((event) => event.type === "entity-day-band-lane-explain")).toHaveLength(0);
     });
 
-    test("a host with no label column gets no info button", async ({ page }) => {
-        // `laneLabels === "track"`: there is no label element to hang it on,
-        // and the bare track's press already means "this lane".
-        await mountBand(page);
+    test("the in-track label carries it too, without selecting the lane", async ({ page }) => {
+        // `laneLabels === "track"` is the only mode production uses, so a button
+        // that lives only in the label column is a button nobody can reach.
+        await mountBand(page, { explainable: true });
 
         const band = page.locator("scheduling-entity-day-band");
-        await expect(band.locator(".lane-explain")).toHaveCount(0);
         await expect(band.locator(".lane-label")).toHaveCount(0);
+        await expect(band.locator(".track-label .lane-explain")).toHaveCount(1);
+        await band.locator(".track-label .lane-explain").click();
+
+        const events = await readEvents(page);
+        const explains = events.filter((event) => event.type === "entity-day-band-lane-explain");
+        expect(explains).toHaveLength(1);
+        expect(explains[0].detail).toMatchObject({ laneKey: "appliance:boiler", dayKey: DAY });
+        // The caption floats over the track, whose own press means "this lane".
+        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
+    });
+
+    test("a host that did not opt in gets no info button", async ({ page }) => {
+        // The solar inspector shares this component and answers no such
+        // question; an unanswerable button is worse than none.
+        await mountBand(page);
+        await expect(page.locator("scheduling-entity-day-band").locator(".lane-explain")).toHaveCount(0);
+
+        await mountBand(page, { columnLabels: true });
+        await expect(page.locator("scheduling-entity-day-band").locator(".lane-explain")).toHaveCount(0);
     });
 });

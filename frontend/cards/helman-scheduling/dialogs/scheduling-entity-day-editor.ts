@@ -426,6 +426,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .lanes=${bandLanes}
                         .selectedLaneKey=${this._selectedLaneKey}
                         .laneLabels=${"track"}
+                        .explainable=${true}
                         .forecastPoints=${this.forecastPoints}
                         .priceUnit=${this.priceUnit}
                         .nowMs=${this.nowMs}
