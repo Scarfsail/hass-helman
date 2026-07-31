@@ -30,6 +30,11 @@ interface MountOptions {
     highlight?: boolean;
     /** Hand the band a state machine, so the lane label's icon goes live. */
     live?: boolean;
+    /**
+     * Labels in their own column, the way the day editor hosts the band. The
+     * default here is `"track"`, which is the label-less host.
+     */
+    columnLabels?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
@@ -37,7 +42,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const slots = Array.from({ length: 24 }, (_, hour) => ({
             id: new Date(at(hour)).toISOString(),
@@ -111,7 +116,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         }];
         band.nowMs = nowMs;
         band.readonly = true;
-        band.laneLabels = "track";
+        band.laneLabels = columnLabels ? "column" : "track";
         band.showForecastRows = false;
         band.showAxis = false;
         if (windowed) {
@@ -129,6 +134,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         for (const type of [
             "entity-day-band-block-select",
             "entity-day-band-lane-select",
+            "entity-day-band-lane-explain",
             "entity-day-band-time-hover",
             "entity-day-band-gap-select",
             "hass-more-info",
@@ -150,6 +156,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         windowed: options.windowed ?? false,
         highlight: options.highlight ?? false,
         live: options.live ?? false,
+        columnLabels: options.columnLabels ?? false,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -351,5 +358,53 @@ test.describe("entity day band, read only", () => {
         expect(events.find((event) => event.type === "hass-more-info")!.detail)
             .toMatchObject({ entityId: "switch.boiler" });
         expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
+    });
+});
+
+/**
+ * "Why is it planned like this?" as a control of its own.
+ *
+ * The lane's name already means "this entity"; the explanation is a second
+ * intent and gets a second button rather than a modifier on the first, so
+ * neither press can be discovered by accident or lost by habit.
+ */
+test.describe("entity day band, explain affordance", () => {
+    test("the info button asks about this lane on this day", async ({ page }) => {
+        await mountBand(page, { columnLabels: true });
+
+        const band = page.locator("scheduling-entity-day-band");
+        await expect(band.locator(".lane-explain")).toHaveCount(1);
+        await band.locator(".lane-explain").click();
+
+        const events = await readEvents(page);
+        const explains = events.filter((event) => event.type === "entity-day-band-lane-explain");
+        expect(explains).toHaveLength(1);
+        expect(explains[0].detail).toMatchObject({
+            laneKey: "appliance:boiler",
+            dayKey: DAY,
+            laneName: "Boiler",
+        });
+        // Two intents, two presses: asking why must not also select the lane.
+        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
+    });
+
+    test("the name still selects the lane", async ({ page }) => {
+        await mountBand(page, { columnLabels: true });
+
+        await page.locator("scheduling-entity-day-band").locator(".lane-label").click();
+
+        const events = await readEvents(page);
+        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(1);
+        expect(events.filter((event) => event.type === "entity-day-band-lane-explain")).toHaveLength(0);
+    });
+
+    test("a host with no label column gets no info button", async ({ page }) => {
+        // `laneLabels === "track"`: there is no label element to hang it on,
+        // and the bare track's press already means "this lane".
+        await mountBand(page);
+
+        const band = page.locator("scheduling-entity-day-band");
+        await expect(band.locator(".lane-explain")).toHaveCount(0);
+        await expect(band.locator(".lane-label")).toHaveCount(0);
     });
 });

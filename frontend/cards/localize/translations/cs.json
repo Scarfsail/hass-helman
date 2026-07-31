@@ -280,6 +280,79 @@
       "edit_hint": "Klepnutím vyberte blok. Táhnutím v grafu ho posunete, za okraje zkrátíte nebo prodloužíte.",
       "title": "Plán zařízení",
       "select_entity": "Vyberte zařízení kliknutím na jeho pruh nebo na jeho blok."
+    },
+    "explanation": {
+      "open": "Proč je to takhle naplánované?",
+      "title": "Vyhodnocení plánu",
+      "close": "Zavřít",
+      "loading": "Načítám vyhodnocení…",
+      "error": "Vyhodnocení se nepodařilo načíst.",
+      "empty": "Pro tento den není u tohoto pruhu zaznamenané žádné vyhodnocení.",
+      "run_at": "Poslední běh",
+      "time_column": "Čas",
+      "result_column": "Výsledek",
+      "result_none": "Nic",
+      "outcome": {
+        "wrote": "zapsáno",
+        "overwritten": "přepsáno později",
+        "candidate": "kandidát",
+        "not_eligible": "nesplněné podmínky",
+        "blocked": "vlastní uživatel",
+        "absent": "nezvažováno",
+        "step_skipped": "krok neproběhl"
+      },
+      "state": {
+        "false": "nesplněno",
+        "not_evaluated": "nevyhodnoceno",
+        "not_applicable": "nenastaveno"
+      },
+      "status": {
+        "skipped": "Přeskočeno",
+        "failed": "Selhalo"
+      },
+      "status_reason": {
+        "condition_rails_unavailable": "podmínky se nepodařilo vyhodnotit",
+        "battery_params_missing": "chybí parametry baterie",
+        "soc_forecast_unavailable": "chybí předpověď SoC",
+        "stop_export_unsupported": "střídač neumí zastavit export"
+      },
+      "optimizer": {
+        "charge_hold": "Držení nabití",
+        "charge_from_grid": "Nabíjení ze sítě",
+        "export_price": "Zastavení exportu",
+        "appliance_runtime": "Běh spotřebiče"
+      },
+      "action": {
+        "charge_hold": "držet",
+        "charge_from_grid": "nabíjet",
+        "export_price": "zastavit export",
+        "appliance_runtime": "zapnout"
+      },
+      "condition": {
+        "run_when": "Kdy spustit",
+        "when_price_below": "Cena pod limitem",
+        "max_run_price": "Maximální cena běhu",
+        "min_soc_pct": "Minimální SoC",
+        "min_solar_coverage_pct": "Minimální pokrytí ze slunce",
+        "ensure_self_sustainability": "Zachovat soběstačnost",
+        "reserve_floor_soc": "Rezerva SoC na drahé pásmo",
+        "run_window": "Okno běhu",
+        "hold_window": "Okno držení",
+        "hold_room": "Prostor pro držení",
+        "before_release": "Před uvolněním",
+        "day_context": "Kontext dne",
+        "day_group_matched": "Skupina pro tento den",
+        "daily_minimum_remaining": "Zbývá do denního minima",
+        "placement_capacity": "Kapacita umístění",
+        "consecutive_skip_override": "Přerušení navazujícího běhu",
+        "slot_available": "Volný slot",
+        "cheapest_rank": "Pořadí podle ceny",
+        "cheap_window_capacity": "Kapacita levného okna",
+        "charge_needed": "Potřeba nabít",
+        "window_soc_known": "Známé SoC v okně",
+        "stop_export_supported": "Podpora zastavení exportu",
+        "blocked_user_owned": "Slot vlastní uživatel"
+      }
     }
   },
   "bias_correction": {
