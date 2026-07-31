@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import date
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
@@ -69,6 +70,23 @@ def _validate_forecast_granularity(value: object) -> int:
     return value
 
 
+def _validate_schedule_date(value: object) -> str:
+    """A calendar date as ``YYYY-MM-DD`` — the explanation book's bucket key."""
+    if not isinstance(value, str):
+        raise vol.Invalid("date must be a string")
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as err:
+        raise vol.Invalid("date must be an ISO calendar date (YYYY-MM-DD)") from err
+
+
+def _validate_target_key(value: object) -> str:
+    """A schedule lane key: ``"inverter"`` or ``"appliance:<id>"``."""
+    if not isinstance(value, str) or not value:
+        raise vol.Invalid("target_key must be a non-empty string")
+    return value
+
+
 def _validate_forecast_days(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise vol.Invalid("forecast_days must be an integer")
@@ -101,6 +119,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_history)
     async_register_command(hass, ws_run_automation)
     async_register_command(hass, ws_get_last_automation_run)
+    async_register_command(hass, ws_get_schedule_explanation)
 
 
 @websocket_api.websocket_command({
@@ -121,6 +140,44 @@ def ws_get_last_automation_run(
 
     result = coordinator.get_last_automation_run_result()
     connection.send_result(msg["id"], None if result is None else result.to_dict())
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_schedule_explanation",
+    vol.Required("target_key"): _validate_target_key,
+    vol.Required("date"): _validate_schedule_date,
+})
+@callback
+def ws_get_schedule_explanation(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Why every slot of one schedule lane looks the way it does, on one date.
+
+    Keyed by the lane the user clicked (``"inverter"`` / ``"appliance:<id>"``),
+    not by optimizer: the inverter lane is written by three optimizer kinds, so
+    one lane click has no single optimizer to ask. The result carries every
+    optimizer that touched the target, in pipeline order.
+
+    ``None`` when nothing is recorded for that lane and date — before the first
+    run, for a lane no optimizer targets, or for a date outside what the
+    accumulated record still covers.
+    """
+    if not _require_admin(connection, msg):
+        return
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    connection.send_result(
+        msg["id"],
+        coordinator.get_schedule_explanation(
+            target_key=msg["target_key"],
+            date=msg["date"],
+        ),
+    )
 
 
 @websocket_api.websocket_command({

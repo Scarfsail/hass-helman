@@ -9,7 +9,7 @@ import types
 import unittest
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -334,6 +334,12 @@ _install_import_stubs()
 from custom_components.helman.appliances import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.config import OptimizerInstanceConfig
+from custom_components.helman.automation.explain import (
+    ExplanationBook,
+    OptimizerExplanation,
+    RunExplanation,
+    SlotExplanation,
+)
 from custom_components.helman.automation.input_bundle import AutomationInputBundle
 from custom_components.helman.automation.conditions.types import (
     ConditionRailsUnavailable,
@@ -366,6 +372,7 @@ from custom_components.helman.scheduling.schedule import (
 )
 from custom_components.helman.websockets import (
     ws_get_last_automation_run,
+    ws_get_schedule_explanation,
     ws_run_automation,
 )
 
@@ -2315,6 +2322,140 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
             connection.errors,
             [(1, "not_loaded", "Helman coordinator not available")],
         )
+
+
+class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
+    """`helman/get_schedule_explanation` — added *alongside*
+    `helman/get_last_automation_run`, which the scheduling card still uses for
+    its rail-delta badges.
+    """
+
+    MESSAGE = {
+        "id": 1,
+        "type": "helman/get_schedule_explanation",
+        "target_key": "inverter",
+        "date": "2026-07-31",
+    }
+
+    def _book_with_a_run(self) -> ExplanationBook:
+        run_at = datetime(2026, 7, 31, 8, 0, tzinfo=timezone(timedelta(hours=2)))
+        slot_ids = tuple(
+            (run_at + timedelta(minutes=30 * index)).isoformat()
+            for index in range(2)
+        )
+        book = ExplanationBook()
+        book.record(
+            RunExplanation(
+                run_at=run_at,
+                slot_ids=slot_ids,
+                optimizers=(
+                    OptimizerExplanation(
+                        optimizer_id="avoid-negative-export",
+                        kind="export_price",
+                        target_key="inverter",
+                        slots=tuple(
+                            SlotExplanation(
+                                slot_id=slot_id,
+                                verdict="execute",
+                                winning_optimizer="avoid-negative-export",
+                            )
+                            for slot_id in slot_ids
+                        ),
+                    ),
+                ),
+            )
+        )
+        return book
+
+    async def test_returns_the_record_for_the_requested_lane_and_date(self) -> None:
+        book = self._book_with_a_run()
+        coordinator = SimpleNamespace(
+            get_schedule_explanation=Mock(
+                side_effect=lambda *, target_key, date: book.get(
+                    target_key=target_key, date=date
+                )
+            )
+        )
+        connection = _FakeConnection(is_admin=True)
+
+        ws_get_schedule_explanation(
+            _FakeHass(coordinator), connection, dict(self.MESSAGE)
+        )
+
+        coordinator.get_schedule_explanation.assert_called_once_with(
+            target_key="inverter", date="2026-07-31"
+        )
+        self.assertEqual(connection.errors, [])
+        payload = connection.results[0][1]
+        self.assertEqual(payload["targetKey"], "inverter")
+        self.assertEqual(payload["date"], "2026-07-31")
+        self.assertEqual(len(payload["slotIds"]), 2)
+        self.assertEqual(payload["runAt"], "2026-07-31T08:00:00+02:00")
+        optimizer = payload["optimizers"][0]
+        self.assertEqual(optimizer["optimizerId"], "avoid-negative-export")
+        self.assertEqual(optimizer["kind"], "export_price")
+        self.assertEqual(optimizer["targetKey"], "inverter")
+        self.assertEqual(optimizer["status"], "ok")
+        self.assertEqual(optimizer["verdict"], [["execute", 2]])
+        self.assertEqual(
+            optimizer["winningOptimizer"],
+            {"0": "avoid-negative-export", "1": "avoid-negative-export"},
+        )
+        self.assertEqual(
+            optimizer["runAt"], [["2026-07-31T08:00:00+02:00", 2]]
+        )
+
+    async def test_returns_null_when_nothing_is_recorded(self) -> None:
+        coordinator = SimpleNamespace(
+            get_schedule_explanation=Mock(return_value=None)
+        )
+        connection = _FakeConnection(is_admin=True)
+
+        ws_get_schedule_explanation(
+            _FakeHass(coordinator),
+            connection,
+            {**self.MESSAGE, "target_key": "appliance:nobody"},
+        )
+
+        self.assertEqual(connection.errors, [])
+        self.assertEqual(connection.results, [(1, None)])
+
+    async def test_requires_admin(self) -> None:
+        coordinator = SimpleNamespace(get_schedule_explanation=Mock())
+        connection = _FakeConnection(is_admin=False)
+
+        ws_get_schedule_explanation(
+            _FakeHass(coordinator), connection, dict(self.MESSAGE)
+        )
+
+        coordinator.get_schedule_explanation.assert_not_called()
+        self.assertEqual(
+            connection.errors,
+            [(1, "unauthorized", "Admin access required")],
+        )
+
+    async def test_returns_not_loaded_when_the_coordinator_is_missing(self) -> None:
+        connection = _FakeConnection(is_admin=True)
+
+        ws_get_schedule_explanation(
+            SimpleNamespace(data={DOMAIN: {}}), connection, dict(self.MESSAGE)
+        )
+
+        self.assertEqual(connection.results, [])
+        self.assertEqual(
+            connection.errors,
+            [(1, "not_loaded", "Helman coordinator not available")],
+        )
+
+    def test_the_request_schema_rejects_a_bad_date_and_an_empty_lane(self) -> None:
+        import voluptuous as vol
+
+        schema = vol.Schema(ws_get_schedule_explanation.websocket_schema)
+        with self.assertRaises(vol.Invalid):
+            schema({**self.MESSAGE, "date": "31.7.2026"})
+        with self.assertRaises(vol.Invalid):
+            schema({**self.MESSAGE, "target_key": ""})
+        self.assertEqual(schema(dict(self.MESSAGE))["date"], "2026-07-31")
 
 
 class _RecordingOptimizer:
