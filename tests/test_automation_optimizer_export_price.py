@@ -580,6 +580,66 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         self.assertEqual(_node(slots[CURRENT_SLOT_ID], "when_price_below").state, "true")
         self.assertEqual(slots[CURRENT_SLOT_ID].verdict, "skip")
 
+    def test_a_user_owned_slot_records_the_veto_rather_than_a_failed_condition(
+        self,
+    ) -> None:
+        """⛨ blocked and ✗ not eligible must not be the same-looking cell.
+
+        Two slots clear the price threshold; the user owns one of them. The
+        owned slot's conditions all pass — nothing in the matrix says "no" —
+        so only the writer's veto node explains why the schedule does not show
+        the action.
+        """
+        schedule_document = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "stop_charging", "setBy": "user"},
+                    "appliances": {},
+                }
+            },
+        )
+        snapshot = _make_snapshot(
+            schedule_document=schedule_document,
+            export_price_points=[
+                {"timestamp": CURRENT_SLOT_ID, "value": -0.1},
+                {"timestamp": NEXT_SLOT_ID, "value": -0.1},
+                {"timestamp": THIRD_SLOT_ID, "value": 1.5},
+            ],
+            current_price=-0.1,
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            ExportPriceOptimizer(id="avoid-negative-export", stop_export_supported=True),
+            snapshot,
+            _make_optimizer_config(),
+            reference_time=REFERENCE_TIME,
+        )
+
+        assert_trace_contract(self, trace)
+        slots = _slots_by_id(_explanation(trace))
+
+        blocked = slots[CURRENT_SLOT_ID]
+        veto = _gate(blocked, "blocked_user_owned")
+        self.assertIsNotNone(veto)
+        self.assertEqual(veto.state, "false")
+        self.assertEqual(veto.params, {"domain": "inverter"})
+        # Not a condition failure: every condition column on this slot is true.
+        self.assertEqual(
+            {node.state for group in blocked.groups for node in group.conditions},
+            {"true"},
+        )
+
+        # The slot the writer did keep records the same node as passed, so the
+        # two are told apart by state and not by absence.
+        written = _gate(slots[NEXT_SLOT_ID], "blocked_user_owned")
+        self.assertIsNotNone(written)
+        self.assertEqual(written.state, "true")
+
+        # A slot the optimizer never offered to the writer has no veto node at
+        # all — the veto has nothing to say about it.
+        self.assertIsNone(_gate(slots[THIRD_SLOT_ID], "blocked_user_owned"))
+
     def test_unsupported_capability_emits_note(self) -> None:
         snapshot = _make_snapshot(
             export_price_points=[{"timestamp": CURRENT_SLOT_ID, "value": -0.1}],

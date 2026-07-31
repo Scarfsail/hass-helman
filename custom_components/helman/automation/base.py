@@ -3,9 +3,9 @@
 All five optimizers ended their run with the same preamble and the same
 bookkeeping: deepcopy the snapshot's slots into a fresh document, skip anything
 the user owns, rebuild ``ScheduleDomains`` around the one domain being touched,
-stamp ``condition_met``, and emit a ``blocked_user_owned`` decision for whatever
+stamp ``condition_met``, and record the ``blocked_user_owned`` veto for whatever
 was skipped. :class:`ScheduleWriter` owns all of it, so an optimizer module
-contains only its decision logic and its own reason codes.
+contains only its decision logic.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from ..scheduling.schedule import (
     ScheduleDomains,
     is_default_domains,
 )
+from .explain import STATE_FALSE, STATE_TRUE
 from .fields import OptimizerConfigError
 from .ownership import (
     is_user_owned_appliance_action,
@@ -36,6 +37,10 @@ if TYPE_CHECKING:
     from .config import OptimizerInstanceConfig
     from .snapshot import OptimizationSnapshot
     from .trace import OptimizerTrace
+
+
+#: The writer's own gate: whether the slot survived the user-ownership check.
+GATE_BLOCKED_USER_OWNED = "blocked_user_owned"
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,7 @@ class ScheduleWriter:
         self._trace = trace or NULL_TRACE
         self._domain = domain
         self._blocked_slot_ids: list[str] = []
+        self._written_slot_ids: list[str] = []
 
     @property
     def blocked_slot_ids(self) -> list[str]:
@@ -166,6 +172,7 @@ class ScheduleWriter:
             inverter=action,
             appliances=dict(current.appliances),
         )
+        self._written_slot_ids.append(slot_id)
         return True
 
     def set_appliance(
@@ -188,11 +195,43 @@ class ScheduleWriter:
             inverter=current.inverter,
             appliances=appliances,
         )
+        self._written_slot_ids.append(slot_id)
         return True
 
     def flush(self, *, action: dict[str, Any] | None = None) -> ScheduleDocument:
-        """Emit the blocked-slot decision and return the finished document."""
+        """Emit the ownership veto and return the finished document.
+
+        The veto is the last thing that can decide a slot, and it sits *after*
+        every condition and every gate: the conditions can all pass, the
+        optimizer can verdict ``execute``, and the slot still not be written
+        because the user owns it. Without a node of its own that case is
+        indistinguishable from a condition failure, so the writer records
+        ``blocked_user_owned`` for every slot it actually reached:
+
+        - ``false`` — reached and vetoed, nothing written (the UI's ⛨ blocked,
+          distinct from ✗ not eligible, which is a condition column going false).
+        - ``true`` — reached and written; the user does not own the slot.
+        - *absent* — the optimizer never offered this slot to the writer, so
+          the veto has nothing to say about it.
+
+        A blocked slot keeps whatever verdict its optimizer stamped: the verdict
+        is the optimizer's intent, and this node is what explains why the
+        schedule does not show it.
+        """
+        if self._written_slot_ids:
+            self._trace.gate(
+                slot_ids=self._written_slot_ids,
+                key=GATE_BLOCKED_USER_OWNED,
+                state=STATE_TRUE,
+                params={"domain": self._domain},
+            )
         if self._blocked_slot_ids:
+            self._trace.gate(
+                slot_ids=self._blocked_slot_ids,
+                key=GATE_BLOCKED_USER_OWNED,
+                state=STATE_FALSE,
+                params={"domain": self._domain},
+            )
             self._trace.decision(
                 slot_ids=self._blocked_slot_ids,
                 outcome="blocked",
