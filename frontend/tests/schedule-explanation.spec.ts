@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
+import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 
 /**
  * Level 1 of the lane explanation: slots down, optimizers across, Result last.
@@ -188,6 +189,7 @@ const APPLIANCE_PAYLOAD = {
 
 async function mountDialog(page: Page, payload: unknown): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
+    await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-explanation-dialog"));
 
@@ -363,7 +365,8 @@ test.describe("lane explanation, level 1", () => {
 
     test("nothing recorded says so rather than drawing an empty grid", async ({ page }) => {
         await page.setContent("<!doctype html><html><body></body></html>");
-        await page.addScriptTag({ path: BUNDLE, type: "module" });
+        await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.addScriptTag({ path: BUNDLE, type: "module" });
         await page.waitForFunction(() => !!customElements.get("scheduling-explanation-dialog"));
         await page.evaluate(() => {
             const dialog = document.createElement("scheduling-explanation-dialog") as HTMLElement & Record<string, unknown>;

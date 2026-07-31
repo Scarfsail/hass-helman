@@ -328,6 +328,19 @@
         "configured": "nastaveno",
         "actual": "naměřeno"
       },
+      "diagram": {
+        "title": "Logika rozhodnutí",
+        "empty": "Pro tento slot nemá optimalizátor žádný záznam.",
+        "matched_group": "Rozhodla skupina:",
+        "legend_decisive": "Plná čára = větev, která o výsledku rozhodla.",
+        "legend_dimmed": "Zeslabená čárkovaná větev byla vyhodnocena, ale výsledek nezměnila.",
+        "terminal": {
+          "execute": "spustit",
+          "candidate": "kandidát (vlastní podmínky nesplněny)",
+          "not_eligible": "nesplněné podmínky",
+          "blocked": "blokováno uživatelem"
+        }
+      },
       "verdict": {
         "execute": "spustit",
         "candidate": "kandidát",

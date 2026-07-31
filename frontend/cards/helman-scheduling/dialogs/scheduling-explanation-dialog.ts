@@ -3,6 +3,8 @@ import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../localize/localize";
 import "../components/scheduling-condition-matrix";
+import "../components/scheduling-logic-diagram";
+import type { ConditionMatrixNodeSelectDetail } from "../components/scheduling-condition-matrix";
 import {
     getExplanationCell,
     parseScheduleExplanation,
@@ -221,12 +223,15 @@ export class SchedulingExplanationDialog extends LitElement {
 
     @state() private _model: ScheduleExplanationModel | null = null;
     @state() private _selected: { optimizerId: string; rowIndex: number } | null = null;
+    /** Level 3: the node pressed in the matrix, or null while it is closed. */
+    @state() private _node: ConditionMatrixNodeSelectDetail | null = null;
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
         if (changedProperties.has("payload")) {
             this._model = parseScheduleExplanation(this.payload);
             this._selected = null;
+            this._node = null;
         }
     }
 
@@ -242,6 +247,7 @@ export class SchedulingExplanationDialog extends LitElement {
                     ${this._renderMeta()}
                     ${this._renderBody()}
                     ${this._renderConditionMatrix()}
+                    ${this._renderLogicDiagram()}
                 </div>
                 <ha-dialog-footer slot="footer">
                     <ha-button slot="primaryAction" @click=${this._handleClose}>
@@ -420,12 +426,50 @@ export class SchedulingExplanationDialog extends LitElement {
                 .slotLabel=${row === undefined || Number.isNaN(row.startMs)
                     ? cell.slotId
                     : formatScheduleTime(row.startMs, this.locale, this.timeZone)}
+                @condition-matrix-node-select=${this._handleNodeSelect}
             ></scheduling-condition-matrix>
         `;
     }
 
+    /**
+     * Level 3, under the matrix for the same reason the matrix sits under the
+     * grid: the diagram answers "why did that condition decide it", and the
+     * next question is nearly always the condition beside it. Keeping all three
+     * levels on one surface makes that a click, not a close-and-reopen.
+     */
+    private _renderLogicDiagram() {
+        const model = this._model;
+        const node = this._node;
+        if (model === null || node === null) {
+            return nothing;
+        }
+        const cell = getExplanationCell(model, node.optimizerId, node.rowIndex);
+        if (cell === null) {
+            return nothing;
+        }
+        const row = model.rows[node.rowIndex];
+        return html`
+            <scheduling-logic-diagram
+                .localize=${this.localize}
+                .cell=${cell}
+                .focusConditionKey=${node.conditionKey}
+                .focusGroupIndex=${node.groupIndex}
+                .slotLabel=${row === undefined || Number.isNaN(row.startMs)
+                    ? cell.slotId
+                    : formatScheduleTime(row.startMs, this.locale, this.timeZone)}
+            ></scheduling-logic-diagram>
+        `;
+    }
+
+    private _handleNodeSelect = (event: CustomEvent<ConditionMatrixNodeSelectDetail>): void => {
+        this._node = event.detail;
+    };
+
     private _handleCellClick(column: ExplanationColumn, cell: ExplanationCell): void {
         this._selected = { optimizerId: column.optimizerId, rowIndex: cell.rowIndex };
+        // A different slot's diagram is a different question; drop level 3
+        // rather than leaving the previous slot's blocks under the new matrix.
+        this._node = null;
         const model = this._model;
         this.dispatchEvent(new CustomEvent<ScheduleExplanationCellSelectDetail>(
             "schedule-explanation-cell-select",
