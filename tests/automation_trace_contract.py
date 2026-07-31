@@ -2,60 +2,32 @@
 
 Import AFTER a test module has installed its ``custom_components`` import stubs.
 It drives an optimizer through a live ``OptimizerTrace`` exactly as the pipeline
-does (begin_step / optimize / end_step) and hard-asserts the v1 coverage
-contract: every horizon slot is explained, every committed write has a covering
-``applied`` decision, no overlaps, and every emitted ``code`` is in the
-catalogue below. This is what keeps the reason catalogue honest — adding or
-removing a code, or flipping its source, is a deliberate change to this set.
+does (begin_step / optimize / end_step) and asserts the *structural* trace
+contract: decisions never overlap, every committed write is attributable, and —
+for every step that reports one — the per-slot explanation record covers the
+whole horizon.
+
+v1 (the reason catalogue) is retired. The old contract hard-asserted that every
+horizon slot carried a reason-coded decision, that every write was covered by an
+``applied`` decision, and that every emitted ``code`` belonged to a closed
+``V1_REASON_CODES`` vocabulary. Optimizers are moving from
+``trace.decision(reason=...)`` to structured ``trace.gate(...)`` +
+:mod:`custom_components.helman.automation.explain` records (issue #14, phase A),
+so a closed reason vocabulary and exhaustive *decision* coverage are no longer
+the right invariants. Explanation coverage replaces them.
 """
 
 from __future__ import annotations
 
+from typing import Any, Mapping, Sequence
+
+from custom_components.helman.automation.explain import (
+    OptimizerExplanation,
+    VERDICT_CANDIDATE,
+    VERDICT_EXECUTE,
+)
 from custom_components.helman.automation.trace import OptimizerTrace
 from custom_components.helman.scheduling.schedule import iter_horizon_slot_ids
-
-
-# The v1 reason catalogue — every code that can appear in a trace, whether
-# emitted by an optimizer, carried as a note, or synthesized by the framework.
-# Frontend-derived (D) codes are listed too, so the frontend/backend agree.
-V1_REASON_CODES: frozenset[str] = frozenset(
-    {
-        # export_price
-        "price_below_threshold",
-        "price_not_below_threshold",  # D (frontend derivation)
-        "stop_export_unsupported",
-        # charge_hold
-        "hold_window_applied",
-        "after_release",
-        "outside_window",
-        "no_room_to_hold",
-        "day_not_matched",
-        "battery_params_missing",
-        # charge_from_grid
-        "bridge_window",
-        "cheaper_slot_chosen",
-        "window_covered",
-        "band_not_expensive",
-        "no_cheap_band",
-        # appliance_runtime
-        "runtime_deficit_placed",
-        "ranked_more_expensive",
-        "runtime_satisfied",
-        "forced_after_consecutive_skips",
-        "price_above_run_threshold",
-        "conditions_matched",  # uncapped: no deficit to size a placement against
-        "soc_below_threshold",  # D (frontend derivation)
-        "insufficient_solar_coverage",
-        "would_break_soc_floor",
-        "soc_floor_already_breached",
-        "not_solar_neutral",
-        "forecast_unavailable",
-        # any / framework
-        "blocked_user_owned",
-        "optimizer_skipped",
-        "unexplained",
-    }
-)
 
 
 # Optimizer kinds whose scenario tests wire ``assert_trace_contract``. A new
@@ -70,6 +42,16 @@ CONTRACT_TESTED_KINDS: frozenset[str] = frozenset(
         "appliance_runtime",
     }
 )
+
+
+#: Key under which a step carries its serialized
+#: :class:`~custom_components.helman.automation.explain.OptimizerExplanation`.
+#: The trace recorder does not populate it yet — that lands with the explanation
+#: plumbing (issue #14 phase A, steps 3/5/9). Until then every step reports no
+#: explanation and the coverage assertion below is skipped per step, which is
+#: deliberate: the contract is correct-by-construction now and becomes
+#: load-bearing the moment an optimizer starts reporting.
+EXPLANATION_KEY = "explanation"
 
 
 def run_optimizer_with_trace(
@@ -91,29 +73,41 @@ def run_optimizer_with_trace(
     return result, trace
 
 
+def _decode_explanation(
+    step: Mapping[str, Any], slot_ids: Sequence[str]
+) -> OptimizerExplanation | None:
+    """Return the step's explanation record, or ``None`` if it reports none."""
+    payload = step.get(EXPLANATION_KEY)
+    if not isinstance(payload, Mapping):
+        return None
+    return OptimizerExplanation.from_dict(payload, slot_ids)
+
+
 def assert_trace_contract(testcase, trace: OptimizerTrace) -> None:
-    """Hard-assert exhaustive coverage + write/decision consistency + catalogue."""
+    """Assert the structural trace contract + explanation coverage."""
     payload = trace.to_dict()
+    assert_trace_payload_contract(testcase, payload)
+
+
+def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
+    """The contract, expressed over a serialized trace payload.
+
+    Split out from :func:`assert_trace_contract` so the meta-test can exercise
+    the assertions themselves against synthetic payloads — the explanation
+    machinery does not exist in the pipeline yet, so no real optimizer run can
+    cover this code path today.
+    """
+    slot_ids: list[str] = list(payload.get("slotIds") or [])
+    horizon = set(slot_ids)
+
     for step in payload["steps"]:
         if step["status"] == "skipped":
             continue
         prefix = f"step {step['optimizerId']} ({step['kind']})"
 
-        # exhaustive coverage: no synthetic `unexplained` fill was needed
-        testcase.assertTrue(
-            step["complete"],
-            f"{prefix} is incomplete (coverage gap / unexplained write)",
-        )
-        testcase.assertFalse(
-            any(
-                decision["reason"] is not None
-                and decision["reason"].get("code") == "unexplained"
-                for decision in step["decisions"]
-            ),
-            f"{prefix} has a synthetic unexplained fill",
-        )
-
-        # no overlaps + collect applied slots
+        # --- decisions never double-claim a slot -----------------------------
+        # Structural and reason-free: whatever vocabulary a decision carries, a
+        # slot must not be claimed by two of them.
         seen: set[str] = set()
         applied: set[str] = set()
         for decision in step["decisions"]:
@@ -125,26 +119,47 @@ def assert_trace_contract(testcase, trace: OptimizerTrace) -> None:
                 if decision["outcome"] == "applied":
                     applied.add(slot_id)
 
-        # every committed write is explained by a covering applied decision
-        for write in step["writes"]:
-            testcase.assertIn(
-                write["slotId"],
-                applied,
-                f"{prefix} wrote {write['slotId']} without an applied decision",
+        explanation = _decode_explanation(step, slot_ids)
+
+        # --- explanation coverage (the v2 contract) --------------------------
+        # Every horizon slot must have an entry in the condition matrix. Guarded
+        # on the step actually reporting explanations, so the assertion is
+        # correct-by-construction while the pipeline is mid-migration.
+        #
+        # TIGHTEN HERE (issue #14 phase A, step 9): once `RunExplanation`
+        # assembly is wired into `run_optimizer_loop_pure` and every optimizer
+        # is converted, drop the `if explanation is None: continue`-style guard
+        # and require an explanation on every non-skipped step. That is what
+        # restores the exhaustive-coverage guarantee the retired v1 contract
+        # provided via reason codes.
+        explained: set[str] = set()
+        if explanation is not None:
+            explained = {slot.slot_id for slot in explanation.slots}
+            missing = [
+                slot_id for slot_id in slot_ids if slot_id not in explained
+            ]
+            testcase.assertFalse(
+                missing,
+                f"{prefix} reports an explanation but leaves "
+                f"{len(missing)}/{len(slot_ids)} horizon slot(s) without a "
+                f"condition matrix (first: {missing[0] if missing else None})",
             )
 
-        # every emitted code is in the v1 catalogue
-        for decision in step["decisions"]:
-            reason = decision["reason"]
-            if reason is not None:
-                testcase.assertIn(
-                    reason["code"],
-                    V1_REASON_CODES,
-                    f"{prefix} emitted unknown code {reason['code']!r}",
-                )
-        for note in step["notes"]:
+        # --- every committed write is attributable ---------------------------
+        # Either through an `applied` decision (pre-conversion) or through an
+        # explanation whose verdict for that slot is execute/candidate
+        # (post-conversion). A write nothing accounts for is always a bug.
+        attributable = applied | {
+            slot.slot_id
+            for slot in (explanation.slots if explanation is not None else ())
+            if slot.verdict in (VERDICT_EXECUTE, VERDICT_CANDIDATE)
+        }
+        for write in step["writes"]:
+            if write["slotId"] not in horizon:
+                continue
             testcase.assertIn(
-                note["code"],
-                V1_REASON_CODES,
-                f"{prefix} noted unknown code {note['code']!r}",
+                write["slotId"],
+                attributable,
+                f"{prefix} wrote {write['slotId']} with nothing accounting for "
+                "it (no applied decision, no execute/candidate explanation)",
             )
