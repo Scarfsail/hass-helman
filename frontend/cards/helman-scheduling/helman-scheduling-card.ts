@@ -560,6 +560,12 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
      * Keyed by the lane's target key and the day on screen, because that is
      * how the record is keyed: the inverter lane is written by three optimizer
      * kinds, so a lane press has no single optimizer to ask.
+     *
+     * Currently unreachable: the only band under this card lives inside the day
+     * editor, which no longer opts into the button because a dialog opened from
+     * inside a dialog does not present (#17). This is kept rather than deleted
+     * because it is correct and is exactly what that issue re-enables; the
+     * working entry point today is the solar inspector's read-only strip.
      */
     private _handleLaneExplain(event: CustomEvent<EntityDayBandLaneExplainDetail>): void {
         const { laneKey, dayKey, laneName } = event.detail;

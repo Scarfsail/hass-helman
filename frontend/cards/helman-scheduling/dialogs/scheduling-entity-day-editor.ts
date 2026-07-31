@@ -419,6 +419,14 @@ export class SchedulingEntityDayEditor extends LitElement {
                         </div>
                     ` : nothing}
 
+                    <!--
+                        Deliberately not \`.explainable\`: this editor is itself
+                        an \`ha-dialog\`, so the explanation opened from inside it
+                        is a second dialog stacked on the first, and it does not
+                        present -- see #17. The solar inspector's read-only strip
+                        carries the same button successfully, because it sits on
+                        the page rather than inside a dialog.
+                    -->
                     <scheduling-entity-day-band
                         .hass=${this.hass}
                         .localize=${this.localize}
@@ -426,7 +434,6 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .lanes=${bandLanes}
                         .selectedLaneKey=${this._selectedLaneKey}
                         .laneLabels=${"track"}
-                        .explainable=${true}
                         .forecastPoints=${this.forecastPoints}
                         .priceUnit=${this.priceUnit}
                         .nowMs=${this.nowMs}
