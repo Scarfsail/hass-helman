@@ -2,7 +2,9 @@ import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../localize/localize";
+import "../components/scheduling-condition-matrix";
 import {
+    getExplanationCell,
     parseScheduleExplanation,
     type ExplanationCell,
     type ExplanationColumn,
@@ -389,23 +391,37 @@ export class SchedulingExplanationDialog extends LitElement {
     }
 
     /**
-     * ---------------------------------------------------------------------
-     * LEVEL 2 SEAM.
+     * Level 2, in place under the grid rather than in a dialog of its own.
      *
-     * Pressing a level-1 cell selects it and publishes
-     * `schedule-explanation-cell-select`. The condition matrix for that
-     * optimizer and that slot mounts here: everything it needs is already
-     * parsed and reachable as
-     * `getExplanationCell(this._model, optimizerId, rowIndex)` -- the cell's
-     * `groups` (params, `paramsSource`, `customResults`, condition nodes with
-     * their `scope`) and `gates` -- and the union condition-column set is
-     * `this._model.conditionKeys` (per optimizer: `column.conditionKeys`).
-     *
-     * Nothing else in this file needs to change to attach it.
-     * ---------------------------------------------------------------------
+     * The grid stays on screen while it is open: the matrix answers "why this
+     * slot", and the question a person asks next is almost always the slot
+     * above or below it. Pushing it into a second dialog would make that
+     * comparison two closes and two opens.
      */
     private _renderConditionMatrix() {
-        return nothing;
+        const model = this._model;
+        const selected = this._selected;
+        if (model === null || selected === null) {
+            return nothing;
+        }
+        const cell = getExplanationCell(model, selected.optimizerId, selected.rowIndex);
+        if (cell === null) {
+            return nothing;
+        }
+        const column = model.columns.find((entry) => entry.optimizerId === selected.optimizerId);
+        const row = model.rows[selected.rowIndex];
+
+        return html`
+            <scheduling-condition-matrix
+                .localize=${this.localize}
+                .cell=${cell}
+                .conditionKeys=${column?.conditionKeys ?? []}
+                .optimizerKind=${column?.kind ?? ""}
+                .slotLabel=${row === undefined || Number.isNaN(row.startMs)
+                    ? cell.slotId
+                    : formatScheduleTime(row.startMs, this.locale, this.timeZone)}
+            ></scheduling-condition-matrix>
+        `;
     }
 
     private _handleCellClick(column: ExplanationColumn, cell: ExplanationCell): void {

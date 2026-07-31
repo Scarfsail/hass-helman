@@ -302,9 +302,69 @@
         "step_skipped": "krok neproběhl"
       },
       "state": {
+        "true": "splněno",
         "false": "nesplněno",
         "not_evaluated": "nevyhodnoceno",
         "not_applicable": "nenastaveno"
+      },
+      "matrix": {
+        "title": "Podmínky slotu",
+        "empty": "Pro tento slot nemá optimalizátor žádný záznam.",
+        "group": "Skupina",
+        "no_params": "bez parametrů",
+        "no_conditions": "Tato skupina nemá nastavené žádné podmínky.",
+        "custom": "Vlastní podmínky",
+        "custom_entry": "Podmínka",
+        "gates": "Další rozhodnutí",
+        "expand": "Rozbalit dílčí podmínky",
+        "collapse": "Sbalit dílčí podmínky",
+        "configured": "nastaveno",
+        "actual": "naměřeno"
+      },
+      "verdict": {
+        "execute": "spustit",
+        "candidate": "kandidát",
+        "skip": "vynechat"
+      },
+      "params_source": {
+        "slot_matched": "podle slotu",
+        "day_resolved": "podle dne",
+        "master_fallback": "hlavní nastavení"
+      },
+      "params_source_detail": {
+        "slot_matched": "Parametry skupiny, která odpovídá tomuto slotu.",
+        "day_resolved": "Parametry se řeší jednou za den, takže mohou pocházet z jiné skupiny, než jaká odpovídá tomuto slotu.",
+        "master_fallback": "Pro tento den neodpovídala žádná skupina, použilo se hlavní nastavení."
+      },
+      "scope": {
+        "slot": "slot",
+        "day": "den",
+        "window": "okno",
+        "run": "běh"
+      },
+      "scope_detail": {
+        "slot": "Vyhodnoceno pro tento slot.",
+        "day": "Jeden výsledek pro celý den, ne pro tento slot.",
+        "window": "Jeden výsledek pro celé okno, ne pro tento slot.",
+        "run": "Jeden výsledek pro celý běh, ne pro tento slot."
+      },
+      "custom_state": {
+        "true": "splněno",
+        "false": "nesplněno",
+        "errored": "chyba při vyhodnocení"
+      },
+      "param": {
+        "min_export_price": "Minimální cena exportu",
+        "max_price": "Maximální cena",
+        "max_run_price": "Maximální cena běhu",
+        "min_soc_pct": "Minimální SoC",
+        "target_soc_pct": "Cílové SoC",
+        "reserve_floor_soc_pct": "Rezerva SoC",
+        "min_runtime_minutes": "Minimální doba běhu",
+        "daily_minimum_minutes": "Denní minimum",
+        "max_slots": "Maximální počet slotů",
+        "rank": "pořadí",
+        "rank_of": "z"
       },
       "status": {
         "skipped": "Přeskočeno",

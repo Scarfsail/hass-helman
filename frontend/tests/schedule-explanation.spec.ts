@@ -80,18 +80,65 @@ const INVERTER_PAYLOAD = {
             runAt: [[RUN_AT, 5]],
             verdict: [["execute", 3], ["skip", 2]],
             winningOptimizer: { "0": "charge_hold", "2": "export_price" },
-            groups: [{
-                index: 0,
-                label: "",
-                paramsSource: [["slot_matched", 5]],
-                conditions: [{
-                    key: "min_soc_pct",
-                    scope: "slot",
-                    // Never consulted past the hold window: not false.
-                    state: [["true", 3], ["not_evaluated", 2]],
-                    value: [[40, 5]],
-                }],
-            }],
+            groups: [
+                {
+                    index: 0,
+                    label: "Ráno",
+                    // Resolved once for the day, so possibly from another group.
+                    paramsSource: [["day_resolved", 5]],
+                    params: [[{ min_soc_pct: 40, target_soc_pct: 80 }, 5]],
+                    // Two entries: one plainly false, one that threw.
+                    customResults: [[[true, null], 3], [[false, null], 2]],
+                    conditions: [
+                        {
+                            key: "min_soc_pct",
+                            scope: "slot",
+                            // Never consulted past the hold window: not false.
+                            state: [["true", 3], ["not_evaluated", 2]],
+                            value: [[40, 5]],
+                            children: [
+                                { key: "window_soc_known", scope: "slot", state: [["true", 5]] },
+                            ],
+                        },
+                        {
+                            // Fails only at 15:00, and says what it saw there.
+                            key: "hold_room",
+                            scope: "slot",
+                            state: [["true", 4], ["false", 1]],
+                            value: [[5, 5]],
+                            actual: { "4": 0.4 },
+                        },
+                        {
+                            // One result for the whole expensive band, not five.
+                            key: "reserve_floor_soc",
+                            scope: "window",
+                            state: [["true", 5]],
+                            value: [[20, 5]],
+                        },
+                    ],
+                },
+                {
+                    index: 1,
+                    label: "Večer",
+                    paramsSource: [["day_resolved", 5]],
+                    params: [[{ min_soc_pct: 60 }, 5]],
+                    customResults: [[[true, null], 5]],
+                    conditions: [
+                        {
+                            // This group does not configure it at all.
+                            key: "min_soc_pct",
+                            scope: "slot",
+                            state: [["not_applicable", 5]],
+                        },
+                        {
+                            key: "reserve_floor_soc",
+                            scope: "window",
+                            state: [["true", 5]],
+                            value: [[20, 5]],
+                        },
+                    ],
+                },
+            ],
             gates: [
                 // Unreached past 14:00: absent, never false.
                 { key: "hold_window", state: [["true", 3], [null, 2]] },
@@ -330,5 +377,185 @@ test.describe("lane explanation, level 1", () => {
         const dialog = page.locator("scheduling-explanation-dialog");
         await expect(dialog.locator(".placeholder.empty")).toHaveText(/empty/);
         await expect(dialog.locator("table.grid")).toHaveCount(0);
+    });
+});
+
+/** The matrix mounted under the grid, for the cell that was pressed. */
+function matrix(page: Page) {
+    return page.locator("scheduling-explanation-dialog scheduling-condition-matrix");
+}
+
+/** Open the level-2 matrix for one optimizer on one row. */
+async function drill(page: Page, rowIndex: number, optimizerId: string): Promise<void> {
+    await cell(page, rowIndex, optimizerId).locator(".cell-body").click();
+    await expect(matrix(page).locator("table.nodes")).toHaveCount(1);
+}
+
+/**
+ * Level 2: one optimizer, one slot, every condition it consulted.
+ *
+ * The distinctions this level exists to preserve are all ones a plain
+ * checkbox grid would erase:
+ *
+ * - `not_evaluated` is neither `false` nor absent. Three claims, three marks.
+ * - A condition a group does not configure is `not_applicable`, never `true`.
+ * - A window-scoped node is one result, not one per row.
+ * - An errored custom entry and a false one both give the group `met=false`;
+ *   only the tri-state separates them.
+ * - Params without their `paramsSource` are numbers that only look like this
+ *   slot's own.
+ */
+test.describe("lane explanation, level 2", () => {
+    test("pressing a level-1 cell opens that slot's condition matrix", async ({ page }) => {
+        await mountDialog(page, INVERTER_PAYLOAD);
+        await expect(matrix(page)).toHaveCount(0);
+
+        await drill(page, 4, "charge_hold");
+        // The grid stays: the next question is usually the slot next door.
+        await expect(page.locator("scheduling-explanation-dialog").locator("table.grid")).toHaveCount(1);
+        await expect(matrix(page).locator(".verdict-badge")).toHaveAttribute("data-verdict", "skip");
+        // One row per group, one column per condition the optimizer ever used.
+        await expect(matrix(page).locator("tbody tr")).toHaveCount(2);
+        const heads = await matrix(page).locator("thead th.condition-head").evaluateAll(
+            (nodes) => nodes.map((node) => node.getAttribute("data-condition")),
+        );
+        expect(heads).toEqual(["min_soc_pct", "hold_room", "reserve_floor_soc", "custom"]);
+    });
+
+    test("the resolved params carry the marker for how they were resolved", async ({ page }) => {
+        await mountDialog(page, INVERTER_PAYLOAD);
+        await drill(page, 4, "charge_hold");
+
+        // charge_hold resolves through `for_day`, which can pick another group.
+        const source = matrix(page).locator('.params-row[data-group="0"] .params-source');
+        await expect(source).toHaveAttribute("data-source", "day_resolved");
+        await expect(source).toHaveText(/day_resolved/);
+        await expect(matrix(page).locator('.params-row[data-group="0"] .param[data-param="min_soc_pct"]'))
+            .toContainText("40");
+    });
+
+    test("a condition header expands into its inner conditions", async ({ page }) => {
+        await mountDialog(page, INVERTER_PAYLOAD);
+        await drill(page, 4, "charge_hold");
+
+        await expect(matrix(page).locator('th.sub-head[data-sub="window_soc_known"]')).toHaveCount(0);
+        await matrix(page).locator('th.condition-head[data-condition="min_soc_pct"] .expander').click();
+
+        await expect(matrix(page).locator('th.condition-head[data-condition="min_soc_pct"]'))
+            .toHaveAttribute("data-expanded", "true");
+        await expect(matrix(page).locator('th.sub-head[data-sub="window_soc_known"]')).toHaveCount(1);
+        await expect(matrix(page)
+            .locator('tbody tr[data-group="0"] td[data-condition="min_soc_pct"][data-sub="window_soc_known"]'))
+            .toHaveAttribute("data-state", "true");
+    });
+
+    test("the custom column expands into one sub-column per entry", async ({ page }) => {
+        await mountDialog(page, INVERTER_PAYLOAD);
+        await drill(page, 4, "charge_hold");
+
+        await matrix(page).locator('th.condition-head[data-condition="custom"] .expander').click();
+        await expect(matrix(page).locator('th.sub-head[data-condition="custom"]')).toHaveCount(2);
+
+        // Group 0's two entries: one plainly false, one that threw. Fail-closed
+        // evaluation calls both "not met"; only these read differently.
+        const failed = matrix(page).locator('tbody tr[data-group="0"] td[data-condition="custom"][data-sub="0"]');
+        const errored = matrix(page).locator('tbody tr[data-group="0"] td[data-condition="custom"][data-sub="1"]');
+        await expect(failed).toHaveAttribute("data-custom", "false");
+        await expect(errored).toHaveAttribute("data-custom", "errored");
+        expect(await failed.locator(".glyph").innerText())
+            .not.toBe(await errored.locator(".glyph").innerText());
+        await expect(errored.locator(".custom-entry")).toHaveAttribute("title", /custom_state.errored/);
+    });
+
+    test("not evaluated, false, not applicable and absent are four cells", async ({ page }) => {
+        await mountDialog(page, INVERTER_PAYLOAD);
+        await drill(page, 4, "charge_hold");
+
+        const unevaluated = matrix(page).locator('tbody tr[data-group="0"] td[data-condition="min_soc_pct"]');
+        const failed = matrix(page).locator('tbody tr[data-group="0"] td[data-condition="hold_room"]');
+        const inapplicable = matrix(page).locator('tbody tr[data-group="1"] td[data-condition="min_soc_pct"]');
+        const absent = matrix(page).locator('tbody tr[data-group="1"] td[data-condition="hold_room"]');
+
+        await expect(unevaluated).toHaveAttribute("data-state", "not_evaluated");
+        await expect(failed).toHaveAttribute("data-state", "false");
+        // A condition the group does not configure is never an unearned true.
+        await expect(inapplicable).toHaveAttribute("data-state", "not_applicable");
+        // Nothing recorded at all: no state to read, and nothing to press.
+        await expect(absent).toHaveClass(/node-absent/);
+        await expect(absent.locator(".node")).toHaveCount(0);
+
+        const glyphs = await Promise.all([
+            unevaluated.locator(".glyph").innerText(),
+            failed.locator(".glyph").innerText(),
+            inapplicable.locator(".glyph").innerText(),
+        ]);
+        expect(new Set(glyphs).size).toBe(3);
+        // And they do not lean on the glyph alone.
+        const colours = await Promise.all([
+            unevaluated.locator(".glyph").evaluate((node) => getComputedStyle(node).color),
+            failed.locator(".glyph").evaluate((node) => getComputedStyle(node).color),
+        ]);
+        expect(colours[0]).not.toBe(colours[1]);
+
+        // The failing node says what the slot actually presented.
+        await expect(failed).toContainText("0.40");
+    });
+
+    test("a window-scoped node is drawn once, spanning the groups", async ({ page }) => {
+        await mountDialog(page, INVERTER_PAYLOAD);
+        await drill(page, 4, "charge_hold");
+
+        const spanning = matrix(page).locator('td[data-condition="reserve_floor_soc"]');
+        // One cell for two groups, not two identical checkmarks.
+        await expect(spanning).toHaveCount(1);
+        await expect(spanning).toHaveAttribute("rowspan", "2");
+        await expect(spanning).toHaveAttribute("data-scope", "window");
+        await expect(spanning.locator(".scope-badge")).toHaveText(/scope.window/);
+
+        // A slot-scoped node stays one cell per group.
+        await expect(matrix(page).locator('td[data-condition="min_soc_pct"]')).toHaveCount(2);
+    });
+
+    test("the gates that are not conditions are shown with their ordinals", async ({ page }) => {
+        await mountDialog(page, APPLIANCE_PAYLOAD);
+        await drill(page, 1, "appliance_runtime:boiler");
+
+        const gate = matrix(page).locator('.gate[data-gate="cheapest_rank"]');
+        await expect(gate).toHaveAttribute("data-state", "false");
+        // Ranking is an ordinal: "you lost to eight cheaper slots" is a number,
+        // not a truth value.
+        await expect(gate).toContainText("9");
+    });
+
+    test("a node hands its coordinates to the level-3 seam", async ({ page }) => {
+        await mountDialog(page, INVERTER_PAYLOAD);
+        await drill(page, 4, "charge_hold");
+
+        await page.evaluate(() => {
+            (window as unknown as Record<string, unknown>).__nodeSelects = [];
+            document.querySelector("scheduling-explanation-dialog")!.addEventListener(
+                "condition-matrix-node-select",
+                (event: Event) => {
+                    ((window as unknown as Record<string, unknown>).__nodeSelects as unknown[])
+                        .push((event as CustomEvent).detail);
+                },
+            );
+        });
+        await matrix(page)
+            .locator('tbody tr[data-group="0"] td[data-condition="hold_room"] .node')
+            .click();
+
+        const selects = await page.evaluate(
+            () => (window as unknown as Record<string, unknown>).__nodeSelects as Record<string, unknown>[],
+        );
+        expect(selects).toHaveLength(1);
+        expect(selects[0]).toMatchObject({
+            optimizerId: "charge_hold",
+            slotId: SLOT_IDS[4],
+            rowIndex: 4,
+            groupIndex: 0,
+            conditionKey: "hold_room",
+            subKey: null,
+        });
     });
 });
