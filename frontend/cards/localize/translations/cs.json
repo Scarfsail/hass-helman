@@ -286,19 +286,16 @@
       "schedule_changed": "Rozvrh se mezitím změnil. Uložení přepíše načtené změny pro toto zařízení.",
       "edit_hint": "Klepnutím vyberte blok. Táhnutím v grafu ho posunete, za okraje zkrátíte nebo prodloužíte.",
       "title": "Plán zařízení",
-      "select_entity": "Vyberte zařízení kliknutím na jeho pruh nebo na jeho blok."
+      "select_entity": "Vyberte zařízení kliknutím na jeho pruh nebo na jeho blok.",
+      "mode_edit": "Upravit",
+      "mode_explain": "Vysvětlit automatiku",
+      "explain_hint": "Klepnutím na slot v některém pruhu zobrazíte, proč je naplánovaný takhle."
     },
     "explanation": {
-      "open": "Proč je to takhle naplánované?",
-      "title": "Vyhodnocení plánu",
-      "close": "Zavřít",
       "loading": "Načítám vyhodnocení…",
       "error": "Vyhodnocení se nepodařilo načíst.",
       "empty": "Pro tento den není u tohoto pruhu zaznamenané žádné vyhodnocení.",
-      "run_at": "Poslední běh",
-      "time_column": "Čas",
-      "result_column": "Výsledek",
-      "result_none": "Nic",
+      "no_slot": "Vyberte v pruhu půlhodinový slot, u kterého chcete vidět vyhodnocení.",
       "outcome": {
         "wrote": "zapsáno",
         "overwritten": "přepsáno později",
@@ -363,11 +360,6 @@
           "blocked": "blokováno uživatelem"
         }
       },
-      "verdict": {
-        "execute": "spustit",
-        "candidate": "kandidát",
-        "skip": "vynechat"
-      },
       "params_source": {
         "slot_matched": "podle slotu",
         "day_resolved": "podle dne",
@@ -377,23 +369,6 @@
         "slot_matched": "Parametry skupiny, která odpovídá tomuto slotu.",
         "day_resolved": "Parametry se řeší jednou za den, takže mohou pocházet z jiné skupiny, než jaká odpovídá tomuto slotu.",
         "master_fallback": "Pro tento den neodpovídala žádná skupina, použilo se hlavní nastavení."
-      },
-      "scope": {
-        "slot": "slot",
-        "day": "den",
-        "window": "okno",
-        "run": "běh"
-      },
-      "scope_detail": {
-        "slot": "Vyhodnoceno pro tento slot.",
-        "day": "Jeden výsledek pro celý den, ne pro tento slot.",
-        "window": "Jeden výsledek pro celé okno, ne pro tento slot.",
-        "run": "Jeden výsledek pro celý běh, ne pro tento slot."
-      },
-      "custom_state": {
-        "true": "splněno",
-        "false": "nesplněno",
-        "errored": "chyba při vyhodnocení"
       },
       "param": {
         "min_export_price": "Minimální cena exportu",

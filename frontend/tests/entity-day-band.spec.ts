@@ -32,11 +32,15 @@ interface MountOptions {
     live?: boolean;
     /**
      * Labels in their own column. The default here is `"track"`, which is what
-     * the day editor -- the only production host of the explain button -- uses.
+     * the day editor -- the production host that matters -- uses.
      */
     columnLabels?: boolean;
-    /** Opt into the "why is it planned like this" button, as the editor does. */
-    explainable?: boolean;
+    /** Draw the day's slots as targets, as the editor's Explain mode does. */
+    slotGrid?: boolean;
+    /** A second lane, for the marks that are meant to be per lane. */
+    twoLanes?: boolean;
+    /** The hour whose slot the host is showing an answer for. */
+    selectedSlot?: number;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
@@ -44,7 +48,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, explainable }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, twoLanes, selectedSlot }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const slots = Array.from({ length: 24 }, (_, hour) => ({
             id: new Date(at(hour)).toISOString(),
@@ -83,7 +87,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
                 },
             };
         }
-        band.lanes = [{
+        const boilerLane = {
             key: "appliance:boiler",
             entityId: "switch.boiler",
             name: "Boiler",
@@ -115,11 +119,17 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             // every one of these geometry assertions is about.
             blockProjections: new Map(),
             blockVehicleSoc: new Map(),
-        }];
+        };
+        band.lanes = twoLanes
+            ? [boilerLane, { ...boilerLane, key: "appliance:pump", name: "Pump", blocks: [] }]
+            : [boilerLane];
         band.nowMs = nowMs;
         band.readonly = true;
         band.laneLabels = columnLabels ? "column" : "track";
-        band.explainable = explainable;
+        band.slotGrid = slotGrid;
+        band.selectedSlotId = selectedSlot === undefined
+            ? null
+            : new Date(at(selectedSlot)).toISOString();
         band.showForecastRows = false;
         band.showAxis = false;
         if (windowed) {
@@ -137,7 +147,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         for (const type of [
             "entity-day-band-block-select",
             "entity-day-band-lane-select",
-            "entity-day-band-lane-explain",
+            "entity-day-band-slot-select",
             "entity-day-band-time-hover",
             "entity-day-band-gap-select",
             "hass-more-info",
@@ -160,7 +170,9 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         highlight: options.highlight ?? false,
         live: options.live ?? false,
         columnLabels: options.columnLabels ?? false,
-        explainable: options.explainable ?? false,
+        slotGrid: options.slotGrid ?? false,
+        twoLanes: options.twoLanes ?? false,
+        selectedSlot: options.selectedSlot,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -366,68 +378,75 @@ test.describe("entity day band, read only", () => {
 });
 
 /**
- * "Why is it planned like this?" as a control of its own.
+ * The slot grid: the day's own slots, as something to point at.
  *
- * The lane's name already means "this entity"; the explanation is a second
- * intent and gets a second button rather than a modifier on the first, so
- * neither press can be discovered by accident or lost by habit. It has to reach
- * the `"track"` host too -- that is the one the day editor actually uses.
+ * The unit the schedule stores is a slot, and the explanation record is keyed
+ * by slot id -- so what the grid draws has to be `day.slots` rather than a
+ * hardcoded half hour, and a press has to name the slot's id, not a time the
+ * host would then have to match back to a row.
+ *
+ * Hover is per lane, not per time. The question is "why is *this* appliance
+ * doing this at this hour", so washing the same minutes in every lane would
+ * mark forty slots nobody asked about.
  */
-test.describe("entity day band, explain affordance", () => {
-    test("the info button asks about this lane on this day", async ({ page }) => {
-        await mountBand(page, { columnLabels: true, explainable: true });
-
-        const band = page.locator("scheduling-entity-day-band");
-        await expect(band.locator(".lane-explain")).toHaveCount(1);
-        await band.locator(".lane-explain").click();
-
-        const events = await readEvents(page);
-        const explains = events.filter((event) => event.type === "entity-day-band-lane-explain");
-        expect(explains).toHaveLength(1);
-        expect(explains[0].detail).toMatchObject({
-            laneKey: "appliance:boiler",
-            dayKey: DAY,
-            laneName: "Boiler",
-        });
-        // Two intents, two presses: asking why must not also select the lane.
-        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
-    });
-
-    test("the name still selects the lane", async ({ page }) => {
-        await mountBand(page, { columnLabels: true, explainable: true });
-
-        await page.locator("scheduling-entity-day-band").locator(".lane-label").click();
-
-        const events = await readEvents(page);
-        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(1);
-        expect(events.filter((event) => event.type === "entity-day-band-lane-explain")).toHaveLength(0);
-    });
-
-    test("the in-track label carries it too, without selecting the lane", async ({ page }) => {
-        // `laneLabels === "track"` is the only mode production uses, so a button
-        // that lives only in the label column is a button nobody can reach.
-        await mountBand(page, { explainable: true });
-
-        const band = page.locator("scheduling-entity-day-band");
-        await expect(band.locator(".lane-label")).toHaveCount(0);
-        await expect(band.locator(".track-label .lane-explain")).toHaveCount(1);
-        await band.locator(".track-label .lane-explain").click();
-
-        const events = await readEvents(page);
-        const explains = events.filter((event) => event.type === "entity-day-band-lane-explain");
-        expect(explains).toHaveLength(1);
-        expect(explains[0].detail).toMatchObject({ laneKey: "appliance:boiler", dayKey: DAY });
-        // The caption floats over the track, whose own press means "this lane".
-        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
-    });
-
-    test("a host that did not opt in gets no info button", async ({ page }) => {
-        // The solar inspector shares this component and answers no such
-        // question; an unanswerable button is worse than none.
+test.describe("entity day band, slot grid", () => {
+    test("off by default, so the editing hosts are untouched", async ({ page }) => {
         await mountBand(page);
-        await expect(page.locator("scheduling-entity-day-band").locator(".lane-explain")).toHaveCount(0);
+        await expect(page.locator("scheduling-entity-day-band").locator(".slot-pick")).toHaveCount(0);
+    });
 
-        await mountBand(page, { columnLabels: true });
-        await expect(page.locator("scheduling-entity-day-band").locator(".lane-explain")).toHaveCount(0);
+    test("one target per slot of the day", async ({ page }) => {
+        await mountBand(page, { slotGrid: true });
+
+        // 24 slots in the fixture: the grid comes from the day, not from a
+        // fixed half hour -- a band showing hourly slots draws 24 hairlines.
+        const picks = page.locator("scheduling-entity-day-band").locator(".slot-pick");
+        await expect(picks).toHaveCount(24);
+        const geometry = await readGeometry(page, '.slot-pick[data-slot="' + new Date(DAY_START_MS + 12 * HOUR_MS).toISOString() + '"]');
+        expect(geometry.left).toBeCloseTo(50, 1);
+        expect(geometry.width).toBeCloseTo(100 / 24, 1);
+    });
+
+    test("hovering marks the slot under the pointer, in that lane alone", async ({ page }) => {
+        await mountBand(page, { slotGrid: true, twoLanes: true });
+
+        const band = page.locator("scheduling-entity-day-band");
+        const slotId = new Date(DAY_START_MS + 12 * HOUR_MS).toISOString();
+        await band.locator('.lane[data-lane="appliance:boiler"] .slot-pick[data-slot="' + slotId + '"]').hover();
+
+        await expect(band.locator(".slot-pick.hovered")).toHaveCount(1);
+        await expect(
+            band.locator('.lane[data-lane="appliance:boiler"] .slot-pick[data-slot="' + slotId + '"]'),
+        ).toHaveClass(/hovered/);
+    });
+
+    test("pressing a slot names it and its lane, and nothing else", async ({ page }) => {
+        await mountBand(page, { slotGrid: true });
+
+        const slotId = new Date(DAY_START_MS + 12 * HOUR_MS).toISOString();
+        await page
+            .locator("scheduling-entity-day-band")
+            .locator('.slot-pick[data-slot="' + slotId + '"]')
+            .click();
+
+        const events = await readEvents(page);
+        const picks = events.filter((event) => event.type === "entity-day-band-slot-select");
+        expect(picks).toHaveLength(1);
+        expect(picks[0].detail).toEqual({ laneKey: "appliance:boiler", slotId });
+        // The slot already says which lane it is in; the track's own press
+        // would answer the same question a second time.
+        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
+        // A slot over a run is still a slot: the block underneath is what is
+        // being asked about, not what is being picked.
+        expect(events.filter((event) => event.type === "entity-day-band-block-select")).toHaveLength(0);
+    });
+
+    test("the answered slot stays marked in every lane", async ({ page }) => {
+        // Once the pointer moves to the diagram below, the only thing saying
+        // which slot it is about is the mark left behind on the band.
+        await mountBand(page, { slotGrid: true, twoLanes: true, selectedSlot: 12 });
+
+        const band = page.locator("scheduling-entity-day-band");
+        await expect(band.locator(".slot-pick.selected")).toHaveCount(2);
     });
 });
