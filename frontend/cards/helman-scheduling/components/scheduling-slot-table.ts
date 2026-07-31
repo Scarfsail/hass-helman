@@ -3,10 +3,17 @@ import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../localize/localize";
 import type {
-    AutomationInspectorModel,
+    AutomationRunModel,
     ActionExplanation,
     RailDelta,
-} from "../../helman-automation-inspector/automation-inspector-model";
+} from "../model/automation-run-model";
+import {
+    findExplanationNode,
+    getWinningExplanationCell,
+    parseScheduleExplanation,
+    type ExplanationCell,
+    type ScheduleExplanationModel,
+} from "../model/schedule-explanation-model";
 import "./scheduling-action-chip";
 import "./scheduling-appliance-chip";
 import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
@@ -62,14 +69,47 @@ import type {
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import { helmanColorVars, helmanMetricVars } from "../../color-vars";
 
+/** The lane and day one "why" line needs the condition record for. */
+export interface ScheduleExplanationRequestDetail {
+    /** `"inverter"` or `"appliance:<id>"` — the record's own lane key. */
+    targetKey: string;
+    /** `YYYY-MM-DD` in the display time zone. */
+    date: string;
+}
+
+/** Cache key for one lane on one day, shared with the card that fetches it. */
+export function explanationCacheKey(targetKey: string, date: string): string {
+    return `${targetKey}|${date}`;
+}
+
+/**
+ * What the structured condition record says about one action's slot.
+ *
+ * This replaced the reason-code prose. The record names the *condition* that
+ * decided the slot and what the slot actually presented to it, so the popover
+ * shows a localized condition label and a number instead of a backend code the
+ * card had to keep a hand-maintained catalogue for.
+ */
+interface WhyConditionView {
+    outcome: string;
+    /** The optimizer that landed (or placed) the action, when one did. */
+    optimizerKind: string | null;
+    /** The condition that decided a rejected/candidate slot, when named. */
+    conditionKey: string | null;
+    /** What that condition saw. Only failing nodes carry it. */
+    actual: unknown;
+}
+
 /** One action's line in a row's "why" popover. */
 interface WhyActionEntry {
     /** Human label, e.g. "Boiler · Charge" or "Hold charging". */
     label: string;
     hasAutomation: boolean;
     hasUser: boolean;
-    /** Automation reason + this-run impact; null when not attributable. */
+    /** This-run rail impact; null when the action is not attributable. */
     explanation: ActionExplanation | null;
+    /** The condition record's account of the slot; null when none is loaded. */
+    condition: WhyConditionView | null;
 }
 
 /** The popover shown from a row's "why" button — every action in that row. */
@@ -84,6 +124,21 @@ function _isZeroSolarDisplayValue(wh: number): boolean {
 
 function _isZeroPriceDisplayValue(value: number): boolean {
     return Math.abs(value) < ZERO_KWH_DISPLAY_THRESHOLD;
+}
+
+/** The value a deciding condition saw, as one short string. */
+function formatWhyActual(value: unknown): string {
+    if (typeof value === "number") {
+        return Number.isInteger(value) ? String(value) : value.toFixed(2);
+    }
+    if (typeof value === "string" || typeof value === "boolean") {
+        return String(value);
+    }
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
 }
 
 /** Fixed-precision value for a "why" impact chip; em dash when unavailable. */
@@ -207,7 +262,26 @@ export class SchedulingSlotTable extends LitElement {
                 color: var(--schedule-authorship-mixed-color, #ea7a18);
                 background: color-mix(in srgb, var(--schedule-authorship-mixed-color, #ea7a18) 16%, transparent);
             }
-            .why-detail { margin-top: 6px; }
+            .why-detail {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: baseline;
+                gap: 4px 8px;
+                margin-top: 6px;
+            }
+            .why-outcome { font-weight: 600; }
+            .why-optimizer,
+            .why-condition {
+                color: var(--secondary-text-color);
+            }
+            .why-detail[data-outcome="not_eligible"] .why-condition,
+            .why-detail[data-outcome="blocked"] .why-condition {
+                color: var(--error-color, #c62828);
+            }
+            .why-actual {
+                font-variant-numeric: tabular-nums;
+                font-weight: 600;
+            }
             .why-note {
                 margin-top: 6px;
                 color: var(--secondary-text-color);
@@ -247,13 +321,6 @@ export class SchedulingSlotTable extends LitElement {
                 font-weight: 400;
                 margin-left: 2px;
             }
-            .why-code {
-                margin-top: 8px;
-                color: var(--disabled-text-color, #999);
-                font-size: 11px;
-                font-family: monospace;
-            }
-
             .table-shell {
                 min-width: 0;
                 overflow-x: auto;
@@ -1066,7 +1133,22 @@ export class SchedulingSlotTable extends LitElement {
     @property({ type: Boolean }) public busy = false;
     @property({ type: Boolean }) public executionEnabled = false;
     @property({ type: Boolean }) public expandedApplianceActions = false;
-    @property({ attribute: false }) public automationModel: AutomationInspectorModel | null = null;
+    @property({ attribute: false }) public automationModel: AutomationRunModel | null = null;
+    /**
+     * Raw `helman/get_schedule_explanation` payloads, keyed by
+     * `explanationCacheKey`.
+     *
+     * Fetched lazily by the card: a record is a whole day of per-slot condition
+     * trees for one lane, so the table asks for the lanes a "why" press actually
+     * needs rather than the card loading every lane of every visible day. They
+     * arrive unparsed so the card stays a plain cache and the run-length /
+     * sparse decoding happens in exactly one place.
+     */
+    @property({ attribute: false })
+    public explanations: ReadonlyMap<string, unknown> = new Map();
+
+    /** The parsed form of `explanations`, rebuilt only when that map changes. */
+    private _explanationModels: Map<string, ScheduleExplanationModel> = new Map();
 
     @state() private _why: WhyRowExplanation | null = null;
 
@@ -1077,6 +1159,14 @@ export class SchedulingSlotTable extends LitElement {
         }
         if (changedProperties.has("selectedSlotIds")) {
             this._selectedSet = new Set(this.selectedSlotIds);
+        }
+        if (changedProperties.has("explanations")) {
+            const parsed = new Map<string, ScheduleExplanationModel>();
+            for (const [key, payload] of this.explanations) {
+                const model = parseScheduleExplanation(payload);
+                if (model !== null) parsed.set(key, model);
+            }
+            this._explanationModels = parsed;
         }
     }
 
@@ -1186,7 +1276,7 @@ export class SchedulingSlotTable extends LitElement {
                         ${this._renderDayAggregate("price", section.dayAggregate)}
                     </td>
                 </tr>
-                ${expanded ? section.rows.map((row) => this._renderTableRow(row)) : nothing}
+                ${expanded ? section.rows.map((row) => this._renderTableRow(row, section.dayKey)) : nothing}
             </tbody>
         `;
     }
@@ -1218,18 +1308,18 @@ export class SchedulingSlotTable extends LitElement {
         });
     }
 
-    private _renderTableRow(row: ScheduleTableRowModel) {
+    private _renderTableRow(row: ScheduleTableRowModel, dayKey: string) {
         switch (row.kind) {
             case "detail":
                 return this._renderDetailRow(row);
             case "hour":
-                return this._renderHourRow(row);
+                return this._renderHourRow(row, dayKey);
             case "slot":
-                return this._renderSlotRow(row);
+                return this._renderSlotRow(row, dayKey);
         }
     }
 
-    private _renderSlotRow(row: ScheduleTableSlotRowModel) {
+    private _renderSlotRow(row: ScheduleTableSlotRowModel, dayKey: string) {
         const selected = row.interactiveSlotId !== null && this._selectedSet.has(row.interactiveSlotId);
         const classes = `schedule-row slot-row${row.isCurrent ? " current" : ""}${selected ? " selected" : ""}${row.variant === "hour-child" ? " hour-child" : ""}${this._getRuntimeRowClass(row.runtimeCompliance)}`;
         const timeButtonClasses = `button-reset time-button${selected ? " selected" : ""}${row.isCurrent ? " current" : ""}${row.variant === "hour-child" ? " hour-child" : ""}`;
@@ -1253,13 +1343,13 @@ export class SchedulingSlotTable extends LitElement {
                         </button>
                     </div>
                 </th>
-                ${this._renderActionCell(row.actionCell, row.rangeLabel, row.interactiveSlotId)}
+                ${this._renderActionCell(row.actionCell, row.rangeLabel, dayKey, row.interactiveSlotId)}
                 ${this._renderForecastCells(row.forecast)}
             </tr>
         `;
     }
 
-    private _renderHourRow(row: ScheduleTableHourRowModel) {
+    private _renderHourRow(row: ScheduleTableHourRowModel, dayKey: string) {
         const selectedCount = row.slotIds.filter((slotId) => this._selectedSet.has(slotId)).length;
         const fullySelected = selectedCount === row.slotIds.length && row.slotIds.length > 0;
         const partiallySelected = selectedCount > 0 && !fullySelected;
@@ -1291,7 +1381,7 @@ export class SchedulingSlotTable extends LitElement {
                         </button>
                     </div>
                 </th>
-                ${this._renderActionCell(row.actionCell, row.rangeLabel, row.slotIds[0] ?? null, row.slotIds)}
+                ${this._renderActionCell(row.actionCell, row.rangeLabel, dayKey, row.slotIds[0] ?? null, row.slotIds)}
                 ${this._renderForecastCells(row.forecast)}
             </tr>
         `;
@@ -1315,6 +1405,7 @@ export class SchedulingSlotTable extends LitElement {
     private _renderActionCell(
         actionCell: ScheduleTableActionCellModel,
         rangeLabel: string,
+        dayKey: string,
         slotId: string | null,
         slotIds?: readonly string[],
     ) {
@@ -1340,7 +1431,7 @@ export class SchedulingSlotTable extends LitElement {
                             ${visibleItems.map((item) => this._renderActionItem(item))}
                         </span>
                     </button>
-                    ${this._renderRowWhyButton(actionCell.items, rangeLabel)}
+                    ${this._renderRowWhyButton(actionCell.items, rangeLabel, dayKey)}
                 </div>
             </td>
         `;
@@ -1407,6 +1498,7 @@ export class SchedulingSlotTable extends LitElement {
     private _renderRowWhyButton(
         items: readonly ScheduleTableActionItemModel[],
         rangeLabel: string,
+        dayKey: string,
     ) {
         const actions = this._explainableActionItems(items);
         if (actions.length === 0) return nothing;
@@ -1415,10 +1507,10 @@ export class SchedulingSlotTable extends LitElement {
                 class="why-badge"
                 role="button"
                 tabindex="0"
-                title=${this.localize("automation.inspector.why")}
-                @click=${(e: Event) => this._openRowWhy(e, actions, rangeLabel)}
+                title=${this.localize("scheduling.why.title")}
+                @click=${(e: Event) => this._openRowWhy(e, actions, rangeLabel, dayKey)}
                 @keydown=${(e: KeyboardEvent) => {
-                    if (e.key === "Enter" || e.key === " ") this._openRowWhy(e, actions, rangeLabel);
+                    if (e.key === "Enter" || e.key === " ") this._openRowWhy(e, actions, rangeLabel, dayKey);
                 }}
             >?</span>
         `;
@@ -1428,20 +1520,65 @@ export class SchedulingSlotTable extends LitElement {
         event: Event,
         actions: (ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel)[],
         rangeLabel: string,
+        dayKey: string,
     ) {
         event.stopPropagation();
         event.preventDefault();
+        this._requestExplanations(actions, dayKey);
         this._why = {
             title: rangeLabel,
-            entries: actions.map((item) => this._buildWhyEntry(item)),
+            entries: actions.map((item) => this._buildWhyEntry(item, dayKey)),
         };
+    }
+
+    /**
+     * Ask the card for any lane record this popover needs and does not have.
+     *
+     * Only on press: a record is a day of per-slot condition trees for one lane,
+     * and most rows are never asked about. The popover renders with whatever is
+     * cached now and re-renders when the answer lands, so a first press shows
+     * the generic note rather than blocking on a websocket round-trip.
+     */
+    private _requestExplanations(
+        actions: readonly (ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel)[],
+        dayKey: string,
+    ): void {
+        const seen = new Set<string>();
+        for (const item of actions) {
+            if (item.authorship.counts.automation === 0) continue;
+            const targetKey = this._targetKeyFor(item);
+            const key = explanationCacheKey(targetKey, dayKey);
+            if (seen.has(key) || this.explanations.has(key)) continue;
+            seen.add(key);
+            this.dispatchEvent(new CustomEvent<ScheduleExplanationRequestDetail>(
+                "schedule-explanation-request",
+                {
+                    bubbles: true,
+                    composed: true,
+                    detail: { targetKey, date: dayKey },
+                },
+            ));
+        }
+    }
+
+    /**
+     * The lane key this action belongs to.
+     *
+     * Identical to the trace's write `domain` and to the record's `targetKey`:
+     * `getEntityScheduleTargetKey` produces the same two forms, so one string
+     * addresses both the rail deltas and the condition record.
+     */
+    private _targetKeyFor(
+        item: ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel,
+    ): string {
+        return item.kind === "inverter" ? "inverter" : `appliance:${item.appliance.id}`;
     }
 
     private _buildWhyEntry(
         item: ScheduleTableInverterActionItemModel | ScheduleTableApplianceActionItemModel,
+        dayKey: string,
     ): WhyActionEntry {
-        const domain =
-            item.kind === "inverter" ? "inverter" : `appliance:${item.appliance.id}`;
+        const domain = this._targetKeyFor(item);
         const label =
             item.kind === "inverter"
                 ? getScheduleActionLabel(item.action, this.localize)
@@ -1460,7 +1597,45 @@ export class SchedulingSlotTable extends LitElement {
             hasAutomation,
             hasUser: item.authorship.counts.user > 0,
             explanation,
+            condition: hasAutomation
+                ? this._buildWhyCondition(domain, dayKey, item.firstSlotId)
+                : null,
         };
+    }
+
+    /**
+     * The condition record's account of one slot on one lane.
+     *
+     * The winner's cell is the one that matches the schedule -- writing is
+     * last-writer-wins, so the first optimizer to decide `execute` is not
+     * necessarily the one on screen.
+     */
+    private _buildWhyCondition(
+        targetKey: string,
+        dayKey: string,
+        slotId: string,
+    ): WhyConditionView | null {
+        const model = this._explanationModels.get(explanationCacheKey(targetKey, dayKey));
+        if (model === undefined) {
+            return null;
+        }
+        const cell = getWinningExplanationCell(model, slotId);
+        if (cell === null) {
+            return null;
+        }
+        const column = model.columns.find((entry) => entry.optimizerId === cell.optimizerId);
+        return {
+            outcome: cell.outcome,
+            optimizerKind: column?.kind ?? null,
+            conditionKey: cell.decisiveKey,
+            actual: this._whyActual(cell),
+        };
+    }
+
+    /** What the deciding condition saw. Passing nodes carry no `actual`. */
+    private _whyActual(cell: ExplanationCell): unknown {
+        if (cell.decisiveKey === null) return null;
+        return findExplanationNode(cell, cell.decisiveKey)?.actual ?? null;
     }
 
     private _renderWhyPopover() {
@@ -1480,9 +1655,19 @@ export class SchedulingSlotTable extends LitElement {
         `;
     }
 
+    /**
+     * One action's line.
+     *
+     * The reason-code prose this used to print is gone: the structured record
+     * names the condition that decided the slot and what that condition saw, so
+     * the line reads as a localized condition and a number rather than as a
+     * backend identifier the card had to carry a catalogue for. The rail deltas
+     * stay -- they are the run's measured effect, which the record does not
+     * duplicate.
+     */
     private _renderWhyEntry(entry: WhyActionEntry) {
-        const reason = entry.hasAutomation ? entry.explanation?.reason ?? null : null;
         const deltas = entry.explanation?.deltas ?? [];
+        const condition = entry.condition;
         return html`
             <div class="why-entry">
                 <div class="why-entry-head">
@@ -1490,13 +1675,12 @@ export class SchedulingSlotTable extends LitElement {
                     ${this._renderWhyTag(entry)}
                 </div>
                 ${entry.hasAutomation
-                    ? reason
+                    ? condition
                         ? html`
-                              <div class="why-detail">${reason.detail || reason.code}</div>
+                              ${this._renderWhyCondition(condition)}
                               ${deltas.length
                                   ? this._renderWhyDeltas(deltas)
                                   : html`<div class="why-note">${this.localize("scheduling.why.no_change")}</div>`}
-                              <div class="why-code">${reason.code}</div>
                           `
                         : html`<div class="why-note">${this.localize("scheduling.why.automation_generic")}</div>`
                     : nothing}
@@ -1505,6 +1689,36 @@ export class SchedulingSlotTable extends LitElement {
                     : nothing}
             </div>
         `;
+    }
+
+    private _renderWhyCondition(condition: WhyConditionView) {
+        return html`
+            <div class="why-detail" data-outcome=${condition.outcome}>
+                <span class="why-outcome">
+                    ${this.localize(`scheduling.explanation.outcome.${condition.outcome}`)}
+                </span>
+                ${condition.optimizerKind === null ? nothing : html`
+                    <span class="why-optimizer">
+                        ${this._explanationLabel("optimizer", condition.optimizerKind)}
+                    </span>
+                `}
+                ${condition.conditionKey === null ? nothing : html`
+                    <span class="why-condition" data-condition=${condition.conditionKey}>
+                        ${this._explanationLabel("condition", condition.conditionKey)}
+                    </span>
+                `}
+                ${condition.actual === null || condition.actual === undefined ? nothing : html`
+                    <span class="why-actual">${formatWhyActual(condition.actual)}</span>
+                `}
+            </div>
+        `;
+    }
+
+    /** A record label, falling back to the raw backend key when untranslated. */
+    private _explanationLabel(group: string, key: string): string {
+        const full = `scheduling.explanation.${group}.${key}`;
+        const translated = this.localize(full);
+        return translated === full || translated === undefined ? key : translated;
     }
 
     private _renderWhyTag(entry: WhyActionEntry) {
@@ -1525,7 +1739,7 @@ export class SchedulingSlotTable extends LitElement {
                     (d) => html`
                         <div class="why-effect metric-${d.metric.id}">
                             <span class="why-effect-swatch"></span>
-                            <span class="why-effect-name">${this.localize(`automation.inspector.metric.${d.metric.id}`)}</span>
+                            <span class="why-effect-name">${this.localize(`scheduling.metric.${d.metric.id}`)}</span>
                             <span class="why-effect-val">
                                 ${fmtWhyMetric(d.before, d.metric.precision)}
                                 <span class="why-arrow">→</span>

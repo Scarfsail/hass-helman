@@ -4,7 +4,7 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import type { AutomationRunPayload, ForecastPayload, SchedulePayload } from "../helman-api";
-import { AutomationInspectorModel } from "../helman-automation-inspector/automation-inspector-model";
+import { AutomationRunModel } from "./model/automation-run-model";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
 import type { ControllableEntityDTO, EntityActualHistorySlotDTO } from "../helman-api";
@@ -21,6 +21,11 @@ import "./dialogs/scheduling-entity-day-editor";
 import "./dialogs/scheduling-explanation-dialog";
 import "./dialogs/scheduling-range-edit-dialog";
 import type { EntityDayBandLaneExplainDetail } from "./components/scheduling-entity-day-band";
+import {
+    explanationCacheKey,
+    type ScheduleExplanationRequestDetail,
+} from "./components/scheduling-slot-table";
+
 import type { OpenEntityScheduleDetail } from "./components/scheduling-running-entities";
 import type { EntityScheduleSaveDetail } from "./dialogs/scheduling-entity-day-editor";
 import type {
@@ -189,7 +194,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     @state() private _expandedApplianceActions = false;
     @state() private _nowMs = Date.now();
     @state() private _invalidScheduleAuthorship = false;
-    @state() private _automationModel: AutomationInspectorModel | null = null;
+    @state() private _automationModel: AutomationRunModel | null = null;
     @state() private _controllableEntities: ControllableEntityDTO[] = [];
     @state() private _runningExpanded = false;
     @state() private _entityEditorTarget: EntityScheduleTarget | null = null;
@@ -225,6 +230,17 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
     @state() private _explanationFailed = false;
     /** Which request is current, so a slow answer cannot overwrite a newer one. */
     private _explanationRequestId = 0;
+    /**
+     * Lane records for the slot table's "why" popover, by lane and day.
+     *
+     * Separate from `_explanationPayload`, which belongs to the dialog and is
+     * discarded on close. These accumulate because the popover is asked the same
+     * question about neighbouring rows over and over, and one record answers a
+     * whole day of one lane.
+     */
+    @state() private _explanationCache: ReadonlyMap<string, unknown> = new Map();
+    /** Lanes already asked for, so a re-press does not refetch. */
+    private readonly _explanationRequested = new Set<string>();
 
     private _automationRequested = false;
 
@@ -280,7 +296,7 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                 type: "helman/get_last_automation_run",
             });
             this._automationModel = payload
-                ? AutomationInspectorModel.fromPayload(payload)
+                ? AutomationRunModel.fromPayload(payload)
                 : null;
         } catch {
             // The "why" popover is a best-effort enhancement; a failed load just
@@ -496,6 +512,8 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
                                 .executionEnabled=${this._ownerSnapshot.schedule?.executionEnabled ?? false}
                                 .expandedApplianceActions=${this._expandedApplianceActions}
                                 .automationModel=${this._automationModel}
+                                .explanations=${this._explanationCache}
+                                @schedule-explanation-request=${this._handleExplanationRequest}
                             ></scheduling-slot-table>
                         `}
                 </div>
@@ -609,6 +627,39 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
             if (requestId === this._explanationRequestId) {
                 this._explanationLoading = false;
             }
+        }
+    }
+
+    /**
+     * Fetch the lane record the slot table asked for, once.
+     *
+     * Failures are silent: the popover falls back to its generic note, which is
+     * the same thing it says when the backend recorded nothing for the lane.
+     */
+    private async _handleExplanationRequest(
+        event: CustomEvent<ScheduleExplanationRequestDetail>,
+    ): Promise<void> {
+        const { targetKey, date } = event.detail;
+        const key = explanationCacheKey(targetKey, date);
+        const hass = this._hass;
+        if (!hass || this._explanationRequested.has(key)) {
+            return;
+        }
+        this._explanationRequested.add(key);
+        try {
+            const payload = await hass.callWS<unknown>({
+                type: "helman/get_schedule_explanation",
+                target_key: targetKey,
+                date,
+            });
+            if (payload === null || payload === undefined) {
+                return;
+            }
+            const next = new Map(this._explanationCache);
+            next.set(key, payload);
+            this._explanationCache = next;
+        } catch {
+            // Best-effort enhancement: no record just means the generic note.
         }
     }
 

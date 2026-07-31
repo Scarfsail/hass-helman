@@ -129,6 +129,12 @@
       "applied": "Použito",
       "error": "Chyba běhu"
     },
+    "metric": {
+      "surplus": "Přebytek",
+      "soc": "SoC baterie",
+      "import": "Import ze sítě",
+      "export": "Export do sítě"
+    },
     "authorship": {
       "user": "uživatel",
       "automation": "automatizace",
@@ -137,6 +143,7 @@
       "set_by_automation": "Nastavila automatizace"
     },
     "why": {
+      "title": "Proč?",
       "no_change": "Tento běh hodnotu nezměnil.",
       "automation_generic": "Podrobné zdůvodnění pro tento slot není k dispozici.",
       "manual_note": "Nastaveno ručně — dopad této akce automatizace nesleduje."

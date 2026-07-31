@@ -575,6 +575,78 @@ export function parseScheduleExplanation(payload: unknown): ScheduleExplanationM
     };
 }
 
+/**
+ * The cell that accounts for what the schedule actually shows in one slot.
+ *
+ * Writing is last-writer-wins, so the account that matches the schedule is the
+ * *winner's*, not the first column that decided `execute`. Where nothing landed
+ * (no winner recorded) the first cell that placed anything is the next best
+ * answer -- a candidate placement is still what put the action on screen.
+ */
+export function getWinningExplanationCell(
+    model: ScheduleExplanationModel,
+    slotId: string,
+): ExplanationCell | null {
+    const row = model.rows.find((entry) => entry.slotId === slotId);
+    if (row === undefined) {
+        return null;
+    }
+    if (row.winnerOptimizerId !== null) {
+        const cell = getExplanationCell(model, row.winnerOptimizerId, row.index);
+        if (cell !== null) {
+            return cell;
+        }
+    }
+    // Nothing landed. A candidate placement is still what put an action on
+    // screen, so it answers before anything else; failing that, the last
+    // optimizer in pipeline order that had any opinion at all is the closest
+    // thing to an account of the slot -- including "nobody would take it".
+    for (const column of model.columns) {
+        const cell = column.cells[row.index];
+        if (cell !== undefined && cell.outcome === "candidate") {
+            return cell;
+        }
+    }
+    for (let index = model.columns.length - 1; index >= 0; index -= 1) {
+        const cell = model.columns[index].cells[row.index];
+        if (cell !== undefined && cell.present) {
+            return cell;
+        }
+    }
+    return null;
+}
+
+/**
+ * One condition node of a cell by key, searched depth-first across its groups.
+ *
+ * Inner conditions are searched too, so a decisive key that named an inner node
+ * still finds the node that carries the `actual`.
+ */
+export function findExplanationNode(
+    cell: ExplanationCell,
+    key: string,
+): ExplanationConditionNode | null {
+    const walk = (nodes: readonly ExplanationConditionNode[]): ExplanationConditionNode | null => {
+        for (const node of nodes) {
+            if (node.key === key) {
+                return node;
+            }
+            const inner = walk(node.children);
+            if (inner !== null) {
+                return inner;
+            }
+        }
+        return null;
+    };
+    for (const group of cell.groups) {
+        const node = walk(group.conditions);
+        if (node !== null) {
+            return node;
+        }
+    }
+    return null;
+}
+
 /** The cell at one row of one column, or null when the grid has no such cell. */
 export function getExplanationCell(
     model: ScheduleExplanationModel,
