@@ -437,24 +437,32 @@ export class SchedulingExplanationDialog extends LitElement {
      * grid: the diagram answers "why did that condition decide it", and the
      * next question is nearly always the condition beside it. Keeping all three
      * levels on one surface makes that a click, not a close-and-reopen.
+     *
+     * It renders as soon as a slot is open, not only after a matrix node is
+     * pressed. "Why is this slot like that" is the question the whole dialog
+     * exists for, and hiding its answer behind a click nobody knew to make left
+     * readers on the matrix with no way forward. With nothing pressed the
+     * diagram opens on the group the decision turned on; pressing a node then
+     * re-focuses it rather than being the only way in.
      */
     private _renderLogicDiagram() {
         const model = this._model;
-        const node = this._node;
-        if (model === null || node === null) {
+        const selected = this._selected;
+        if (model === null || selected === null) {
             return nothing;
         }
-        const cell = getExplanationCell(model, node.optimizerId, node.rowIndex);
+        const node = this._node;
+        const cell = getExplanationCell(model, selected.optimizerId, selected.rowIndex);
         if (cell === null) {
             return nothing;
         }
-        const row = model.rows[node.rowIndex];
+        const row = model.rows[selected.rowIndex];
         return html`
             <scheduling-logic-diagram
                 .localize=${this.localize}
                 .cell=${cell}
-                .focusConditionKey=${node.conditionKey}
-                .focusGroupIndex=${node.groupIndex}
+                .focusConditionKey=${node?.conditionKey ?? null}
+                .focusGroupIndex=${node?.groupIndex ?? null}
                 .slotLabel=${row === undefined || Number.isNaN(row.startMs)
                     ? cell.slotId
                     : formatScheduleTime(row.startMs, this.locale, this.timeZone)}

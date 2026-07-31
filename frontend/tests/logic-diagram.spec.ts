@@ -125,7 +125,83 @@ const PAYLOAD = {
     }],
 };
 
-async function mountDialog(page: Page): Promise<void> {
+/**
+ * One optimizer, **one** condition group, and the gates that are not vetoes.
+ *
+ * This is the shape the real screenshots had and the old diagram could not
+ * draw honestly:
+ *
+ * - **13:00** executes while `placement_capacity` is `false`. That gate reports
+ *   "the day will under-run", it does not block the slot
+ *   (`appliance_runtime.py:124`), so it must never appear as an input of an AND
+ *   whose terminal says the slot ran.
+ * - **13:30** is rejected by `ensure_self_sustainability`, whose `actual` is a
+ *   whole object — the raw JSON that used to paint over the next block.
+ *
+ * One group also means there is nothing for a `≥1` to choose between.
+ */
+const SINGLE_GROUP_PAYLOAD = {
+    targetKey: "appliance.dryer",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 2),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.dryer",
+        status: "ok",
+        runAt: [[RUN_AT, 2]],
+        verdict: [["execute", 1], ["skip", 1]],
+        winningOptimizer: { "0": "appliance_runtime" },
+        groups: [{
+            index: 0,
+            label: "Den",
+            paramsSource: [["slot_matched", 2]],
+            params: [[{ max_price: 3.5 }, 2]],
+            conditions: [
+                {
+                    key: "when_price_below",
+                    scope: "slot",
+                    state: [["true", 2]],
+                    value: [[3.5, 2]],
+                    actual: { "1": 3.43 },
+                },
+                {
+                    key: "ensure_self_sustainability",
+                    scope: "slot",
+                    state: [["true", 1], ["false", 1]],
+                    value: [["strict", 2]],
+                    // The overflow case, verbatim in shape: an object `actual`
+                    // far wider than the 210px block it has to live in.
+                    actual: {
+                        "1": {
+                            code: "not_solar_neutral",
+                            deltaSocPct: -3.05,
+                            importKwh: 0.42,
+                            exportKwh: 0.0,
+                        },
+                    },
+                },
+            ],
+        }],
+        gates: [
+            // False, and not a veto: the day under-runs and this slot still ran.
+            {
+                key: "placement_capacity",
+                state: [["false", 2]],
+                params: [[{ slotsNeeded: 6, slotsPlaceable: 4, windowSlots: 8 }, 2]],
+            },
+            { key: "slot_available", state: [["true", 2]] },
+            {
+                key: "cheapest_rank",
+                state: [["true", 2]],
+                params: [[{ rank: 2, rankOf: 9 }, 2]],
+            },
+        ],
+    }],
+};
+
+async function mountDialog(page: Page, fixture: unknown = PAYLOAD): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.addScriptTag({ path: BUNDLE, type: "module" });
@@ -141,7 +217,7 @@ async function mountDialog(page: Page): Promise<void> {
         dialog.timeZone = "Europe/Prague";
         dialog.open = true;
         document.body.appendChild(dialog);
-    }, PAYLOAD);
+    }, fixture);
 
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-explanation-dialog")?.shadowRoot
@@ -164,6 +240,51 @@ async function openDiagram(page: Page, rowIndex: number, group = 0): Promise<voi
         .locator(`tbody tr[data-group="${group}"] td[data-condition="when_price_below"] .node`)
         .click();
     await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
+}
+
+/** Open a slot's diagram the way a reader does: by pressing the level-1 cell. */
+async function selectSlot(page: Page, rowIndex: number, optimizerId: string): Promise<void> {
+    await page
+        .locator("scheduling-explanation-dialog")
+        .locator(`tbody tr[data-row="${rowIndex}"] td[data-optimizer="${optimizerId}"] .cell-body`)
+        .click();
+    await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
+}
+
+/**
+ * Recompute the drawn AND and compare it with the drawn terminal.
+ *
+ * The single invariant the whole picture rests on: whatever is wired into the
+ * final `&` must resolve to the terminal's own truth value. A `✗` input above
+ * a `✓ spustit` terminal is the diagram calling itself a liar, and it is the
+ * failure a real reader hit first.
+ */
+async function andInvariant(page: Page): Promise<{
+    inputs: string[];
+    computed: string;
+    final: string;
+    terminal: string;
+}> {
+    return diagram(page).locator("svg.logic").evaluate((svg) => {
+        const inputIds = Array.from(svg.querySelectorAll('path.edge[data-to="final"]'))
+            .map((edge) => edge.getAttribute("data-from") ?? "");
+        const states = inputIds.map((id) =>
+            svg.querySelector(`g.block[data-id="${id}"]`)?.getAttribute("data-state") ?? "");
+        const considered = states.filter((state) => state !== "not_applicable" && state !== "n/a");
+        const computed = considered.length === 0
+            ? "true"
+            : considered.includes("false") || considered.includes("errored")
+                ? "false"
+                : considered.includes("not_evaluated")
+                    ? "not_evaluated"
+                    : "true";
+        return {
+            inputs: inputIds,
+            computed,
+            final: svg.querySelector('g.block[data-id="final"]')?.getAttribute("data-state") ?? "",
+            terminal: svg.getAttribute("data-terminal") ?? "",
+        };
+    });
 }
 
 /** Every block's decisiveness, keyed by the block id the model assigns. */
@@ -293,5 +414,131 @@ test.describe("the condition logic diagram", () => {
         const solid = await diagram(page).locator('path.edge[data-from="and-1"]')
             .evaluate((node) => getComputedStyle(node).strokeDasharray);
         expect(dashed).not.toBe(solid);
+    });
+});
+
+/**
+ * The picture has to agree with itself, and it has to be readable.
+ *
+ * These pin the four things a real reader could not get from the first cut: an
+ * AND that contradicted its own terminal, raw JSON painted across two blocks,
+ * a `≥1` over a single group, and a diagram that only existed after a click
+ * nobody knew to make.
+ */
+test.describe("the logic diagram never contradicts its terminal", () => {
+    test("every terminal reproduces from the drawn AND inputs", async ({ page }) => {
+        await mountDialog(page);
+        for (const rowIndex of [0, 1, 2, 3]) {
+            await selectSlot(page, rowIndex, "export_price");
+            const result = await andInvariant(page);
+            // The final block is what the drawn inputs actually say.
+            expect(result.computed, `row ${rowIndex} inputs ${result.inputs.join()}`)
+                .toBe(result.final);
+            // And that is true exactly when the terminal says the slot ran.
+            expect(result.final === "true", `row ${rowIndex}`)
+                .toBe(result.terminal === "execute");
+        }
+
+        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        for (const rowIndex of [0, 1]) {
+            await selectSlot(page, rowIndex, "appliance_runtime");
+            const result = await andInvariant(page);
+            expect(result.computed, `appliance row ${rowIndex}`).toBe(result.final);
+            expect(result.final === "true", `appliance row ${rowIndex}`)
+                .toBe(result.terminal === "execute");
+        }
+    });
+
+    test("an informational false gate is context, not an AND input", async ({ page }) => {
+        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
+
+        // `placement_capacity` is false and the slot ran. It is not drawn as a
+        // block at all, and nothing wires it into the AND.
+        await expect(diagram(page).locator('g.block[data-key="placement_capacity"]'))
+            .toHaveCount(0);
+        const { inputs } = await andInvariant(page);
+        expect(inputs.some((id) => id.includes("placement"))).toBe(false);
+
+        // It is still on screen, in the area that says what it is: recorded,
+        // and not what decided the slot.
+        const annotation = diagram(page).locator('.annotation[data-key="placement_capacity"]');
+        await expect(annotation).toHaveCount(1);
+        await expect(annotation).toHaveAttribute("data-state", "false");
+    });
+
+    test("a single group draws no ≥1", async ({ page }) => {
+        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+
+        // Nothing to choose between: the group's own AND wires straight on.
+        await expect(diagram(page).locator('g.block[data-kind="or"]')).toHaveCount(0);
+        const ops = await diagram(page).locator("text.op")
+            .evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim() ?? ""));
+        expect(ops).not.toContain("≥1");
+        await expect(diagram(page).locator('path.edge[data-from="and-0"][data-to="final"]'))
+            .toHaveCount(1);
+
+        // Three groups still get one.
+        await mountDialog(page);
+        await selectSlot(page, 0, "export_price");
+        await expect(diagram(page).locator('g.block[data-kind="or"]')).toHaveCount(1);
+    });
+
+    test("an object actual never escapes its block", async ({ page }) => {
+        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 1, "appliance_runtime");
+
+        const overflow = await diagram(page).locator("svg.logic").evaluate((svg) => {
+            const worst: { id: string; overflow: number }[] = [];
+            for (const block of Array.from(svg.querySelectorAll("g.block"))) {
+                const rect = block.querySelector("rect.body") as SVGRectElement | null;
+                if (rect === null) continue;
+                const left = rect.x.baseVal.value;
+                const right = left + rect.width.baseVal.value;
+                for (const text of Array.from(block.querySelectorAll("text"))) {
+                    const box = (text as SVGGraphicsElement).getBBox();
+                    const escaped = Math.max(left - box.x, box.x + box.width - right);
+                    if (escaped > 0.5) {
+                        worst.push({ id: block.getAttribute("data-id") ?? "", overflow: escaped });
+                    }
+                }
+            }
+            return worst;
+        });
+        expect(overflow).toEqual([]);
+
+        // The object is summarised on the face and kept whole in the tooltip.
+        const block = diagram(page)
+            .locator('g.block[data-key="ensure_self_sustainability"]');
+        const face = await block.locator("text.actual").evaluate((node) =>
+            node.textContent?.trim() ?? "");
+        expect(face).not.toContain("{");
+        expect(face.length).toBeLessThanOrEqual(12);
+        await expect(block.locator("title")).toContainText("deltaSocPct");
+    });
+
+    test("the diagram is there as soon as a slot is open", async ({ page }) => {
+        await mountDialog(page, SINGLE_GROUP_PAYLOAD);
+        await expect(diagram(page)).toHaveCount(0);
+
+        // No node press: opening the slot is enough.
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
+        await expect(diagram(page).locator('g.block[data-focus="true"]')).toHaveCount(0);
+        // And it opens on the group the decision turned on.
+        await expect(diagram(page).locator('g.block[data-focus-group="true"]').first())
+            .toHaveCount(1);
+
+        // Pressing a node then only re-focuses it.
+        await page
+            .locator("scheduling-explanation-dialog scheduling-condition-matrix")
+            .locator('tbody tr[data-group="0"] td[data-condition="when_price_below"] .node')
+            .click();
+        await expect(diagram(page).locator("svg.logic")).toHaveCount(1);
+        await expect(diagram(page).locator('g.block[data-focus="true"]').first())
+            .toHaveAttribute("data-key", "when_price_below");
     });
 });
