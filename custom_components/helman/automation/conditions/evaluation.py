@@ -171,7 +171,13 @@ class Eligibility:
                 yield resolved
 
     def rejection(self, slot_id: str) -> tuple[str, Any] | None:
-        """``(reason_code, value)`` for an ineligible slot, from the first group.
+        """``(condition_key, value)`` for an ineligible slot, from the first group.
+
+        The key is the condition's own key — the same string the condition
+        matrix columns are keyed by — so a caller branching on a rejection and
+        the explanation payload cannot drift apart. (It used to be a separate
+        ``reason_code`` string, one per type, which had to be kept in sync by
+        hand.) ``value`` is what the group configured for that condition.
 
         The first group is the one the user reads as the primary intent, so its
         failing condition is the explanation worth showing. ``None`` when the
@@ -185,7 +191,7 @@ class Eligibility:
             if condition.self_gating:
                 continue
             if slot_id not in group.masks_by_key[key]:
-                return (condition.reason_code, value)
+                return (condition.key, value)
         return None
 
 

@@ -226,7 +226,7 @@ class RejectionTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            eligibility.rejection(SLOT_2), ("price_not_below_threshold", 0.0)
+            eligibility.rejection(SLOT_2), ("when_price_below", 0.0)
         )
 
     def test_an_eligible_slot_has_no_rejection(self) -> None:

@@ -452,7 +452,7 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         matched = _gate(slot, "day_group_matched")
         self.assertEqual(matched.state, "false")
         self.assertEqual(matched.params["classification"], "deficit")
-        self.assertEqual(matched.params["failingCondition"], "day_not_matched")
+        self.assertEqual(matched.params["failingCondition"], "run_when")
         # The window is never reached once the day itself is out.
         self.assertIsNone(_gate(slot, "hold_window"))
 

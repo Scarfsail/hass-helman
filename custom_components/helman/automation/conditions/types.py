@@ -1,8 +1,9 @@
 """The catalogue of system condition types.
 
-Each type owns its value schema, its scope, its mask and its trace reason code —
-so adding ``run_when`` to ``export_price`` later is one entry in a tuple, and a
-reason code is emitted from one place per type rather than once per optimizer.
+Each type owns its value schema, its scope, its mask and its label — so adding
+``run_when`` to ``export_price`` later is one entry in a tuple. A type is
+identified everywhere by its ``key``: masks, explanation columns and the
+``(key, value)`` rejections optimizers branch on all speak the same string.
 
 **R1 — a mask reads ``target`` and the *master* params only, never a group's
 override.** Resolved params depend on which group matched, which depends on the
@@ -97,12 +98,11 @@ class MaskResult:
 
 @dataclass(frozen=True)
 class ConditionType:
-    """One system condition: value schema, scope, mask and trace reason code."""
+    """One system condition: value schema, scope, mask and label."""
 
     key: str
     scope: Scope
     field: Field
-    reason_code: str
     #: Returns the eligible slots, or a :class:`MaskResult` when it also has
     #: actuals to report. Call through :func:`evaluate_mask`, never directly.
     build_mask: Callable[[MaskInputs], "frozenset[str] | MaskResult"]
@@ -400,7 +400,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="run_when",
             scope=Scope.DAY,
             field=F.day_classifications("run_when", default=DAY_CLASSIFICATIONS),
-            reason_code="day_not_matched",
             build_mask=_run_when_mask,
         ),
         # Optional, and deliberately without a default: a threshold of 0 is a
@@ -412,7 +411,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="when_price_below",
             scope=Scope.SLOT,
             field=F.number("when_price_below", required=False),
-            reason_code="price_not_below_threshold",
             build_mask=_export_price_below_mask,
         ),
         # `appliance_runtime`'s own price condition (issue #5): permission to
@@ -423,7 +421,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="max_run_price",
             scope=Scope.SLOT,
             field=F.number("max_run_price", required=False),
-            reason_code="price_above_run_threshold",
             build_mask=_max_run_price_mask,
         ),
         # Optional and without a default, for the same reason as
@@ -433,7 +430,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="min_soc_pct",
             scope=Scope.SLOT,
             field=F.soc("min_soc_pct", required=False),
-            reason_code="soc_below_threshold",
             build_mask=_min_soc_mask,
         ),
         # Optional and without a default, as above: a coverage floor filled in
@@ -443,17 +439,15 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="min_solar_coverage_pct",
             scope=Scope.SLOT,
             field=F.percent("min_solar_coverage_pct", required=False),
-            reason_code="insufficient_solar_coverage",
             build_mask=_min_solar_coverage_mask,
         ),
         # Self-gating, and for a sharper reason than `reserve_floor_soc`: this
         # condition *couples slots*. Placing at 09:00 changes whether 20:00 is
         # feasible, and `system_mask &= mask` (evaluation.py) assumes slot
         # independence. So the mask is all-true, the optimizer re-simulates the
-        # horizon with its own placements folded in, and the reason codes are
-        # emitted from there rather than from here — a mask cannot say *which*
-        # placement broke the floor. `reason_code` is the one a lone rejection
-        # falls back to.
+        # horizon with its own placements folded in, and the node is resolved
+        # from there rather than from here — a mask cannot say *which* placement
+        # broke the floor.
         #
         # The level is the condition's value rather than a bool beside a
         # separate knob: one key, three states (absent / soft / strict), so they
@@ -466,7 +460,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
                 required=False,
                 choices=("soft", "strict"),
             ),
-            reason_code="would_break_soc_floor",
             build_mask=_all_slots_mask,
             self_gating=True,
         ),
@@ -480,7 +473,6 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             key="reserve_floor_soc",
             scope=Scope.RUN,
             field=F.soc("reserve_floor_soc"),
-            reason_code="window_covered",
             build_mask=_all_slots_mask,
             self_gating=True,
         ),

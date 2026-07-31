@@ -1135,7 +1135,7 @@ def _trace_unmatched_day(
             ),
         },
     )
-    if rejection is not None and rejection[0] != "day_not_matched":
+    if rejection is not None and rejection[0] != "run_when":
         _trace_window_exclusions(
             trace=trace,
             eligibility=eligibility,
@@ -1161,10 +1161,11 @@ def _trace_window_exclusions(
     solar coverage this appliance's demand achieved. What is left here is the
     outcome vocabulary the retained trace consumers still read.
 
-    Which slots that vocabulary covers is unchanged, and still keyed off
-    ``reason_code``: price and solar coverage are claimed here, everything else
-    stays with the frontend's own derivation. Re-keying this to the condition
-    key is step 7 of issue #14, together with the ``reason_code`` removal.
+    Which slots that vocabulary covers is unchanged: price and solar coverage
+    are claimed here, everything else (a SoC floor, an unmatched day) stays with
+    the frontend's own derivation. The set is now named by condition key rather
+    than by the retired ``reason_code`` — the same two conditions, so the slots
+    that get a ``rejected`` decision are exactly the slots that got one before.
     """
     rejected = []
     for slot_id in window_slots:
@@ -1173,7 +1174,7 @@ def _trace_window_exclusions(
         rejection = eligibility.rejection(slot_id)
         if rejection is None:
             continue
-        if rejection[0] in ("insufficient_solar_coverage", "price_above_run_threshold"):
+        if rejection[0] in ("min_solar_coverage_pct", "max_run_price"):
             rejected.append(slot_id)
     if rejected:
         trace.decision(slot_ids=rejected, outcome="rejected")

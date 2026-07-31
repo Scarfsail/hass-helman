@@ -369,8 +369,11 @@ def _emit_charge_hold_gates(
         )
     for classification, slot_ids in day_not_matched.items():
         # `rejection` names which condition of the first group excluded the day
-        # — the failing column, rather than "no group matched".
-        code, value = eligibility.rejection(slot_ids[0]) or ("day_not_matched", ())
+        # — the failing column, rather than "no group matched". The fallback is
+        # `run_when` because a day landing here was classified and rejected on
+        # its classification; the only way `rejection` returns `None` is a
+        # config with no condition groups at all.
+        key, value = eligibility.rejection(slot_ids[0]) or ("run_when", ())
         trace.gate(slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
         trace.gate(
             slot_ids=slot_ids,
@@ -378,7 +381,7 @@ def _emit_charge_hold_gates(
             state=STATE_FALSE,
             params={
                 "classification": classification,
-                "failingCondition": code,
+                "failingCondition": key,
                 "runWhen": list(value),
             },
         )

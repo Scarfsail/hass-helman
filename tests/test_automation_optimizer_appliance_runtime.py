@@ -965,7 +965,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         matched = _gate(priced_out, "day_group_matched")
         self.assertEqual(matched.state, "false")
         self.assertEqual(
-            matched.params["failingCondition"], "price_above_run_threshold"
+            matched.params["failingCondition"], "max_run_price"
         )
         self.assertEqual(matched.params["conditionValue"], 0.5)
         self.assertEqual(matched.params["classification"], "tight")
@@ -999,7 +999,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
             matched.params,
             {
                 "classification": "deficit",
-                "failingCondition": "day_not_matched",
+                "failingCondition": "run_when",
                 "conditionValue": ["surplus"],
             },
         )
