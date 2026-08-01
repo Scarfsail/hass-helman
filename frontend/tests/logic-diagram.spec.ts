@@ -741,16 +741,10 @@ test.describe("the logic diagram never contradicts its terminal", () => {
             // the candidate: planned, placed, waiting on its own conditions.
             expect(result.final === "true", where)
                 .toBe(result.terminal === "execute" || result.terminal === "candidate");
-            // The second stage, where it is drawn, closes the same way.
-            if (result.exec !== null) {
-                expect(result.execComputed, `${where} exec`).toBe(result.exec);
-                expect(result.exec === "true", `${where} exec`)
-                    .toBe(result.terminal === "execute");
-            } else {
-                // No re-check: the verdict is the result, so a planned slot ran.
-                expect(result.final === "true", `${where} no exec`)
-                    .toBe(result.terminal === "execute");
-            }
+            // The second stage is always drawn, and closes the same way.
+            expect(result.execComputed, `${where} exec`).toBe(result.exec);
+            expect(result.exec === "true", `${where} exec`)
+                .toBe(result.terminal === "execute");
         };
 
         await mountPanel(page);
@@ -1321,19 +1315,34 @@ test.describe("the diagram shows the test, not only the result", () => {
         await expect(diagram(page).locator('.annotation[data-key="custom"]')).toHaveCount(0);
     });
 
-    test("with no custom conditions there is no second stage at all", async ({ page }) => {
-        // Nothing to retake means the plan is the result. A stage saying "and
-        // then nothing was checked" is a column of nothing.
+    test("with no custom conditions the stage is still drawn, saying so", async ({ page }) => {
+        // A stage that appears only when it has something to complain about is
+        // a stage nobody can read: two slots of one automation, one with a
+        // re-check column and one without, look like two different pipelines.
         await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
 
-        await expect(diagram(page).locator('g.block[data-id="custom"]')).toHaveCount(0);
-        await expect(diagram(page).locator('g.block[data-id="exec"]')).toHaveCount(0);
-        await expect(diagram(page).locator("line.stage-divider")).toHaveCount(0);
+        await expect(diagram(page).locator("line.stage-divider")).toHaveCount(1);
+        await expect(diagram(page).locator('text.stage[data-stage="recheck"]')).toHaveCount(1);
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveCount(1);
+        // None configured: the same reading a condition a group does not set
+        // gets everywhere else on this drawing, and it takes no part in the AND.
+        await expect(custom).toHaveAttribute("data-state", "n/a");
+        await expect(custom).toHaveAttribute("data-decisive", "false");
+
+        // Nothing is timed and nothing is retaken, so the two time notes give
+        // way to the one line that is true.
+        await expect(diagram(page).locator('text[data-stage="custom_none"]')).toHaveCount(1);
         await expect(diagram(page).locator('text[data-stage="custom_when"]')).toHaveCount(0);
-        // The verdict wires straight into the result.
-        await expect(diagram(page).locator('path.edge[data-from="verdict"][data-to="terminal"]'))
-            .toHaveCount(1);
+        await expect(diagram(page).locator('.legend-item[data-legend="no_custom"]')).toHaveCount(1);
+
+        // And the result still hangs off the second stage, which resolves true
+        // because an unconfigured stage vetoes nothing.
+        await expect(diagram(page).locator('g.block[data-id="exec"]'))
+            .toHaveAttribute("data-state", "true");
     });
 
     test("a candidate is planned, and its falsehood is the second stage", async ({ page }) => {

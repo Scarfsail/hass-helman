@@ -342,6 +342,7 @@
           "plan": "Rozhodnutí o plánu",
           "recheck": "Ověření před spuštěním",
           "custom_when": "znovu se ověří těsně před spuštěním",
+          "custom_none": "žádné nejsou nastavené",
           "result": "Výsledek"
         },
         "plan_decided_when": "rozhodnuto při plánování",
@@ -351,7 +352,7 @@
           "not_planned": "Nespouštět"
         },
         "legend_stages": "Vlevo od čárkované čáry je rozhodnutí, jestli slot vůbec naplánovat – to je hotové a nemění se. Vpravo jsou vlastní podmínky: platily v době plánování a znovu se ověřují těsně před spuštěním, takže se výsledek ještě může změnit.",
-        "legend_no_custom": "Skupina nemá žádné vlastní podmínky, takže se před spuštěním už nic neověřuje – výsledek je konečný.",
+        "legend_no_custom": "Tato skupina nemá žádné vlastní podmínky, takže se před spuštěním nic nepřehodnocuje – výsledek je konečný.",
         "legend_decisive": "Plná čára a plný jas = větev, která o výsledku rozhodla.",
         "legend_dimmed": "Zeslabená čárkovaná větev byla vyhodnocena, ale výsledek nezměnila.",
         "legend_comparison": "U podmínky je vidět naměřená hodnota, porovnání a nastavený limit; u splněné podmínky se naměřená hodnota nezaznamenává, zůstane jen limit.",

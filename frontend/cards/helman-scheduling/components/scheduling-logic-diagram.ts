@@ -130,13 +130,10 @@ export interface LogicDiagramModel {
     /** What the planning stage decided, on its own: was the slot planned? */
     planState: LogicState;
     /**
-     * Is the pre-execution stage drawn at all?
-     *
-     * False where the matched group configures no custom conditions: with
-     * nothing to re-check, the plan *is* the result, and a stage saying so
-     * would be a column of nothing.
+     * What the pre-execution stage found. `n/a` is "none configured" — the
+     * stage is still drawn, saying so; only what it decided changes.
      */
-    showRecheck: boolean;
+    customState: LogicState;
     /** The group the OR settled on, mirroring `fully or matching[0]`. */
     matchedGroupIndex: number | null;
     /** False for a single-group cell: an OR over one input decides nothing. */
@@ -191,8 +188,6 @@ const DIVIDER_X = 770;
 const COL_CUSTOM_X = 786;
 const COL_EXEC_X = 958;
 const COL_TERM_X = 1014;
-/** Without a re-check stage the terminal follows the verdict directly. */
-const COL_TERM_X_NO_RECHECK = COL_VERDICT_X + VERDICT_W + 12;
 
 /** Where a `→ final` edge turns: past the side column, so it crosses nothing. */
 const FINAL_ELBOW_X = COL_FINAL_X - 12;
@@ -950,6 +945,14 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     // `candidate`, and the executor takes them again before the action starts
     // (`coordinator.py:3575-3620`) — none of which a term sitting in the gate
     // pile can say.
+    //
+    // **Always drawn, whatever it found.** A stage that appears only when it
+    // has something to complain about is a stage nobody can read: two slots of
+    // one automation, one with a re-check column and one without, look like two
+    // different pipelines rather than two answers from the same one. Where the
+    // group configures no custom conditions the block says exactly that, and
+    // takes no part in the AND — which is what `n/a` already means everywhere
+    // else on this drawing.
     const recorded = matchedPos < 0 ? "n/a" : groupCustomStates[matchedPos];
     // A candidate is a candidate *because* its custom conditions failed. Where
     // the matched group's record does not carry that falsehood, the stage says
@@ -961,60 +964,54 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     // ordinary multi-group records; what is left is a record that disagrees
     // with itself, and the honest place for that is beside the chain.
     const contradictsRun = terminal === "execute" && (recorded === "false" || recorded === "errored");
-    const custom: LogicState = unexplainedCustom ? "false" : recorded;
-    const showRecheck = custom !== "n/a" && !contradictsRun;
     if (contradictsRun) {
         annotations.push({ key: "custom", kind: "custom", state: recorded, params: {} });
     }
+    const custom: LogicState = unexplainedCustom
+        ? "false"
+        : contradictsRun ? "n/a" : recorded;
 
-    let customY: number | null = null;
-    if (showRecheck) {
-        customY = finalY + BLOCK_H + V_GAP + 6;
-        blocks.push({
-            id: "custom",
-            kind: "custom",
-            key: unexplainedCustom ? UNEXPLAINED_AND_INPUT : "custom",
-            state: custom,
-            decisive: false,
-            groupIndex: matchedGroupIndex,
-            actual: null,
-            value: null,
-            comparison: null,
-            params: {},
-            detail: null,
-            x: COL_CUSTOM_X,
-            y: customY,
-            width: CUSTOM_W,
-            height: BLOCK_H,
-        });
-    }
+    const customY = finalY + BLOCK_H + V_GAP + 6;
+    blocks.push({
+        id: "custom",
+        kind: "custom",
+        key: unexplainedCustom ? UNEXPLAINED_AND_INPUT : "custom",
+        state: custom,
+        decisive: false,
+        groupIndex: matchedGroupIndex,
+        actual: null,
+        value: null,
+        comparison: null,
+        params: {},
+        detail: null,
+        x: COL_CUSTOM_X,
+        y: customY,
+        width: CUSTOM_W,
+        height: BLOCK_H,
+    });
 
     // ---- the terminal --------------------------------------------------
     const execInputIds = ["verdict", "custom"];
-    const execY = customY === null
-        ? finalY
-        : Math.round((finalY + customY) / 2);
-    if (showRecheck) {
-        blocks.push({
-            id: "exec",
-            kind: "execution",
-            key: "",
-            state: finalAndState([finalState, custom]),
-            decisive: true,
-            groupIndex: null,
-            actual: null,
-            value: null,
-            comparison: null,
-            params: {},
-            detail: null,
-            x: COL_EXEC_X,
-            y: execY,
-            width: OP_W,
-            height: BLOCK_H,
-        });
-        edges.push({ from: "verdict", to: "exec", decisive: false });
-        edges.push({ from: "custom", to: "exec", decisive: false });
-    }
+    const execY = Math.round((finalY + customY) / 2);
+    blocks.push({
+        id: "exec",
+        kind: "execution",
+        key: "",
+        state: finalAndState([finalState, custom]),
+        decisive: true,
+        groupIndex: null,
+        actual: null,
+        value: null,
+        comparison: null,
+        params: {},
+        detail: null,
+        x: COL_EXEC_X,
+        y: execY,
+        width: OP_W,
+        height: BLOCK_H,
+    });
+    edges.push({ from: "verdict", to: "exec", decisive: false });
+    edges.push({ from: "custom", to: "exec", decisive: false });
     blocks.push({
         id: "terminal",
         kind: "terminal",
@@ -1027,12 +1024,12 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         comparison: null,
         params: {},
         detail: null,
-        x: showRecheck ? COL_TERM_X : COL_TERM_X_NO_RECHECK,
+        x: COL_TERM_X,
         y: execY,
         width: TERM_W,
         height: BLOCK_H,
     });
-    edges.push({ from: showRecheck ? "exec" : "verdict", to: "terminal", decisive: true });
+    edges.push({ from: "exec", to: "terminal", decisive: true });
 
     // ---- decisiveness, per stage ----------------------------------------
     const byId = new Map(blocks.map((block) => [block.id, block]));
@@ -1043,13 +1040,12 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
 
     // The execution stage names exactly one reason, because only one of them
     // can be it: a run needed both, a candidate is its custom conditions, and
-    // anything else never reached the re-check at all.
-    if (showRecheck) {
-        if (terminal === "execute") {
-            for (const id of execInputIds) mark(id);
-        } else {
-            mark(terminal === "candidate" ? "custom" : "verdict");
-        }
+    // anything else never reached the re-check at all. A stage with nothing
+    // configured decided nothing either way, so the verdict carries the run.
+    if (terminal === "execute") {
+        for (const id of custom === "n/a" ? ["verdict"] : execInputIds) mark(id);
+    } else {
+        mark(terminal === "candidate" ? "custom" : "verdict");
     }
 
     // The planning AND, walked back from *its own* answer rather than from the
@@ -1103,7 +1099,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         sideY,
         cursorY,
         finalY + BLOCK_H,
-        customY === null ? 0 : customY + BLOCK_H + RECHECK_HINT_H,
+        customY + BLOCK_H + RECHECK_HINT_H,
     ) + 10;
     return {
         blocks,
@@ -1112,12 +1108,12 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         groupHeaders,
         terminal,
         planState: finalState,
-        showRecheck,
+        customState: custom,
         matchedGroupIndex,
         showOr,
         hasOverride: overrideGate !== null,
         defaultGroupIndex: matchedGroupIndex ?? cell.groups[0]?.index ?? null,
-        width: (showRecheck ? COL_TERM_X : COL_TERM_X_NO_RECHECK) + TERM_W + 8,
+        width: COL_TERM_X + TERM_W + 8,
         height,
     };
 }
@@ -1712,8 +1708,22 @@ export class SchedulingLogicDiagram extends LitElement {
                 what says a candidate is waiting rather than refused. Saying it
                 only in one of the two cases is what made "kandidát" read as a
                 verdict instead of as a pending question.
+
+                With none configured there is nothing to time and nothing to
+                retake, so the one honest line says that instead.
             -->
-            ${customBlock === undefined ? nothing : svg`
+            ${customBlock === undefined ? nothing : (customBlock.state === "n/a" ? svg`
+                <text
+                    class="hint"
+                    data-stage="custom_none"
+                    x=${customBlock.x}
+                    y=${customBlock.y + customBlock.height + 11}
+                >${fitText(
+                    this._text("diagram.stage.custom_none"),
+                    CUSTOM_W + 80,
+                    ACTUAL_PX_PER_CHAR,
+                )}</text>
+            ` : svg`
                 <text
                     class="hint"
                     data-stage="custom_evaluated"
@@ -1734,7 +1744,7 @@ export class SchedulingLogicDiagram extends LitElement {
                     CUSTOM_W + 80,
                     ACTUAL_PX_PER_CHAR,
                 )}</text>
-            `}
+            `)}
         `;
     }
 
@@ -1961,15 +1971,14 @@ export class SchedulingLogicDiagram extends LitElement {
         const hasDetail = model.blocks.some((block) => block.detail !== null);
         return html`
             <div class="legend">
-                ${model.showRecheck ? html`
-                    <span class="legend-item" data-legend="stages">
-                        ${this._text("diagram.legend_stages")}
-                    </span>
-                ` : html`
+                <span class="legend-item" data-legend="stages">
+                    ${this._text("diagram.legend_stages")}
+                </span>
+                ${model.customState === "n/a" ? html`
                     <span class="legend-item" data-legend="no_custom">
                         ${this._text("diagram.legend_no_custom")}
                     </span>
-                `}
+                ` : nothing}
                 <span class="legend-item" data-legend="decisive">
                     <span class="swatch solid"></span>
                     ${this._text("diagram.legend_decisive")}
