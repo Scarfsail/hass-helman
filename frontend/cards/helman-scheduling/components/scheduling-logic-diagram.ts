@@ -28,7 +28,12 @@ export type LogicBlockKind =
     | "gate"
     /** The one term that *defeats* the conditions instead of joining them. */
     | "override"
+    /** The AND that closes the planning stage: conditions, groups, gates. */
     | "final"
+    /** What that AND decided, named: plan it, or do not. */
+    | "verdict"
+    /** The AND that closes the pre-execution stage: the plan and the custom. */
+    | "execution"
     | "terminal";
 
 export interface LogicBlock {
@@ -122,6 +127,16 @@ export interface LogicDiagramModel {
     /** One per group, or empty for a single group: naming it would be noise. */
     groupHeaders: LogicGroupHeader[];
     terminal: LogicTerminal;
+    /** What the planning stage decided, on its own: was the slot planned? */
+    planState: LogicState;
+    /**
+     * Is the pre-execution stage drawn at all?
+     *
+     * False where the matched group configures no custom conditions: with
+     * nothing to re-check, the plan *is* the result, and a stage saying so
+     * would be a column of nothing.
+     */
+    showRecheck: boolean;
     /** The group the OR settled on, mirroring `fully or matching[0]`. */
     matchedGroupIndex: number | null;
     /** False for a single-group cell: an OR over one input decides nothing. */
@@ -146,10 +161,14 @@ const INPUT_W = 240;
 const GATE_W = 168;
 const CUSTOM_W = 160;
 const OP_W = 44;
-const TERM_W = 176;
+const TERM_W = 196;
+/** The named plan verdict: wide enough for "Naplánovat" and its glyph. */
+const VERDICT_W = 150;
 const V_GAP = 8;
 const GROUP_GAP = 20;
 const PAD_TOP = 30;
+/** Room under the two-line note the pre-execution stage carries. */
+const RECHECK_HINT_H = 24;
 /** The band a group's caption occupies above its own first input. */
 const GROUP_LABEL_H = 15;
 /** The line under the override block that says what it is. */
@@ -160,11 +179,20 @@ const COL_AND_X = 258;
 const COL_OR_X = 314;
 /** The gates: everything decided outside the groups. */
 const COL_SIDE_X = 370;
-/** The custom conditions, as their own stage at the end of the chain. */
-const COL_CUSTOM_X = 542;
-const COL_FINAL_X = 714;
-const COL_TERM_X = 770;
-const DIAGRAM_W = COL_TERM_X + TERM_W + 8;
+/** The AND that closes planning, and the verdict it produces. */
+const COL_FINAL_X = 550;
+const COL_VERDICT_X = 606;
+/**
+ * The seam between the two stages: everything left of it was settled when the
+ * plan was built, everything right of it is taken again before the action runs.
+ */
+const DIVIDER_X = 770;
+/** The custom conditions: the whole of the pre-execution stage. */
+const COL_CUSTOM_X = 786;
+const COL_EXEC_X = 958;
+const COL_TERM_X = 1014;
+/** Without a re-check stage the terminal follows the verdict directly. */
+const COL_TERM_X_NO_RECHECK = COL_VERDICT_X + VERDICT_W + 12;
 
 /** Where a `→ final` edge turns: past the side column, so it crosses nothing. */
 const FINAL_ELBOW_X = COL_FINAL_X - 12;
@@ -268,7 +296,7 @@ export function formatComparison(comparison: LogicComparison): string {
  *   as much as the window allows — so this reads as 'the bridge is short'".
  *
  * Every other gate *can* veto, and whether it did is decided by the terminal
- * rather than by this list: see `isAndInput`.
+ * rather than by this list: see `isPlanInput`.
  */
 const ALWAYS_ADVISORY_GATES = new Set<string>([
     "placement_capacity",
@@ -287,7 +315,7 @@ const ALWAYS_ADVISORY_GATES = new Set<string>([
  *
  * So it does not AND with the conditions — it ORs with them, and the OR is what
  * ANDs with the real vetoes. Drawn as an AND input it would claim the opposite:
- * that a forced run *required* it, and, via `isAndInput`'s second rule, that the
+ * that a forced run *required* it, and, via `isPlanInput`'s second rule, that the
  * failed conditions it overrode were mere context. That is a run with no visible
  * cause, which is exactly what the gate exists to prevent.
  *
@@ -476,20 +504,34 @@ function resolveTerminal(cell: ExplanationCell): LogicTerminal {
 }
 
 /**
- * May this term be wired into the final AND?
+ * Did the planning stage decide to plan the slot?
+ *
+ * Both terminals that got *past* planning say so: `execute` ran, and
+ * `candidate` is a slot that was planned and placed and is waiting on its
+ * custom conditions (`conditions/evaluation.py:1-17`). `not_eligible` and
+ * `blocked` never got that far.
+ */
+function planHeld(terminal: LogicTerminal): boolean {
+    return terminal === "execute" || terminal === "candidate";
+}
+
+/**
+ * May this term be wired into the planning AND?
  *
  * **The diagram must never contradict its own terminal.** Two rules, in order:
  *
  * 1. A gate documented as non-blocking is never a term of the conjunction, in
  *    either state. It reports on the run, it does not gate the slot.
- * 2. If the terminal is `execute` then, by definition, *nothing vetoed* — so
- *    any term that is not `true` cannot have been part of what made the slot
- *    run, and is reported as context instead. This is what stops
- *    `✗ placement_capacity → & → ✓ execute` from ever being drawn again.
+ * 2. If the terminal says planning held, then, by definition, *nothing vetoed
+ *    it* — so any term that is not `true` cannot have been part of what got the
+ *    slot planned, and is reported as context instead. This is what stops
+ *    `✗ placement_capacity → & → ✓ execute` from ever being drawn again. It
+ *    covers `candidate` as well as `execute`: a candidate's own falsehood is
+ *    the custom stage, which is not a term of this AND at all.
  */
-function isAndInput(key: string, state: LogicState, terminal: LogicTerminal): boolean {
+function isPlanInput(key: string, state: LogicState, terminal: LogicTerminal): boolean {
     if (ALWAYS_ADVISORY_GATES.has(key)) return false;
-    if (terminal === "execute" && state !== "true" && state !== "not_applicable") return false;
+    if (planHeld(terminal) && state !== "true" && state !== "not_applicable") return false;
     return true;
 }
 
@@ -500,12 +542,34 @@ function isAndInput(key: string, state: LogicState, terminal: LogicTerminal): bo
  * a group, groups OR against each other, and the winner is then ANDed with the
  * group's custom conditions and with the gates that actually vetoed.
  *
- * **The AND chain is built to reproduce the terminal.** `finalAndState` over
- * the drawn inputs equals the final block's state, and that state is `true` if
- * and only if the terminal is `execute`. Terms that cannot have vetoed are
- * moved to `annotations` — drawn beside the chain, never in it. Where a
- * rejected slot names no veto at all, one synthetic `unexplained_veto` input
- * carries the falsehood, because a picture that resolves `true` above the word
+ * **Two stages, not one.** The record is decided in two passes and the picture
+ * says so:
+ *
+ * ```
+ * planned[s]   = any(g.system_mask[s] and g.custom_met)
+ * candidate[s] = (not planned[s]) and any(g.system_mask[s])
+ * ```
+ *
+ * (`conditions/evaluation.py:1-17`.) So the groups, the OR and the gates settle
+ * *whether the slot is planned at all*, and that answer gets a block of its own
+ * — `Naplánovat` / `Nespouštět` — rather than being an unlabelled `&`. The
+ * custom conditions are then a second stage against that verdict, and their
+ * falsehood is the whole of what makes a `candidate`.
+ *
+ * Splitting them is not decoration. It is what lets a slot that *is* planned
+ * read as planned even when its custom conditions are false, and what lets a
+ * slot that will run say that its custom conditions held **when the plan was
+ * built** and are taken again before the action starts
+ * (`coordinator.py:3575-3620`) — a claim a single conjunction cannot make.
+ *
+ * **Each AND chain is built to reproduce its own answer.** `finalAndState` over
+ * the planning inputs equals the verdict block's state, which is `true` if and
+ * only if the terminal is `execute` or `candidate`; the execution AND over
+ * [verdict, custom] is `true` if and only if the terminal is `execute`. Terms
+ * that cannot have vetoed are moved to `annotations` — drawn beside the chain,
+ * never in it. Where a rejected slot names no veto at all, one synthetic
+ * `unexplained_veto` input carries the falsehood — in the stage that is
+ * missing it — because a picture that resolves `true` above the word
  * "nesplněné podmínky" is worse than an admission of ignorance.
  *
  * **A single group gets no OR.** `≥1` over one input decides nothing and reads
@@ -519,17 +583,12 @@ function isAndInput(key: string, state: LogicState, terminal: LogicTerminal): bo
  * `(conditions ∨ override) ∧ vetoes`. That is what keeps a forced day readable:
  * the conditions spine stays on screen, failed, with the block that overrode it
  * wired alongside — rather than the whole spine being demoted to context by
- * `isAndInput`'s second rule and the run reading as uncaused. It also keeps the
+ * `isPlanInput`'s second rule and the run reading as uncaused. It also keeps the
  * invariant: on a forced day the OR is `true`, so the final AND is `true`, so
  * the terminal is `execute`.
  *
- * **The custom conditions are a stage, not a gate.** They are re-checked just
- * before the action would start, and they are the whole difference between a
- * run and a `candidate`, so they get the last column before the `&` rather than
- * a place in the gate pile. They stay a *term of the conjunction*: that is what
- * keeps the drawn AND equal to the terminal for a candidate too.
- *
- * **Decisiveness walks back from the verdict**, never forward from the inputs:
+ * **Decisiveness walks back from each stage's own answer**, never forward from
+ * the inputs, and never across the seam:
  *
  * - **AND false** → only its *false* inputs are decisive.
  * - **AND true** → all its inputs are decisive.
@@ -538,6 +597,16 @@ function isAndInput(key: string, state: LogicState, terminal: LogicTerminal): bo
  *   passed never got looked at, and highlighting it would put the diagram at
  *   odds with the "matched group" the matrix names.
  * - **OR false** → all its inputs are decisive; every group had to fail.
+ *
+ * The planning stage is walked back from the **verdict**, not from the
+ * terminal. That is the difference between "these conditions are why it is
+ * planned" and the old reading, where a false custom condition greyed out the
+ * entire conditions spine — the answer to "why is this planned" went dim
+ * exactly on the slots where it was most worth reading.
+ *
+ * The execution stage names one input, because only one of them can be the
+ * reason: `execute` → both held; `candidate` → the custom conditions;
+ * anything else → the verdict, since the re-check is not what stopped it.
  *
  * A block that is not decisive is dimmed, never removed: "this was checked and
  * did not matter" is a different claim from "this was not checked".
@@ -735,13 +804,13 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     const spineId = showOr ? orId : (groupAndIds[0] ?? null);
     const spineState: LogicState = showOr ? orValue : (groupAndStates[0] ?? "n/a");
 
-    // ---- the terms of the final AND, and what is only context -----------
+    // ---- the terms of the planning AND, and what is only context --------
     let sideY = Math.max(cursorY, orY + BLOCK_H + GROUP_GAP);
     const finalInputIds: string[] = [];
     const finalInputStates: LogicState[] = [];
 
     if (spineId !== null) {
-        if (isAndInput("", spineState, terminal)) {
+        if (isPlanInput("", spineState, terminal)) {
             edges.push({ from: spineId, to: "final", decisive: false });
             finalInputIds.push(spineId);
             finalInputStates.push(spineState);
@@ -750,52 +819,12 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         }
     }
 
-    // The custom conditions get a column of their own, at the end of the
-    // chain. They are the last thing checked — re-evaluated just before the
-    // action would start — and burying them among the gates is what made
-    // `candidate` unreadable: a slot every mandatory condition passed, waiting
-    // on a template that is not (yet) true.
-    const custom = customState(matchedPos < 0 ? undefined : cell.groups[matchedPos]);
-    let customY: number | null = null;
-    if (custom !== "n/a") {
-        if (isAndInput("custom", custom, terminal)) {
-            customY = sideY;
-            blocks.push({
-                id: "custom",
-                kind: "custom",
-                key: "custom",
-                state: custom,
-                decisive: false,
-                groupIndex: matchedGroupIndex,
-                actual: null,
-                value: null,
-                comparison: null,
-                params: {},
-                detail: null,
-                x: COL_CUSTOM_X,
-                y: customY,
-                width: CUSTOM_W,
-                height: BLOCK_H,
-            });
-            edges.push({ from: "custom", to: "final", decisive: false });
-            finalInputIds.push("custom");
-            finalInputStates.push(custom);
-            // The gates start below it even though they sit in another column:
-            // every `→ final` edge turns *past* the custom column, so a gate on
-            // the custom block's own row would draw its edge straight through
-            // it.
-            sideY += BLOCK_H + V_GAP;
-        } else {
-            annotations.push({ key: "custom", kind: "custom", state: custom, params: {} });
-        }
-    }
-
     cell.gates.forEach((gate: ExplanationGate, gatePos) => {
         // Already drawn, as the OR's other input.
         if (OVERRIDE_GATES.has(gate.key)) {
             return;
         }
-        if (!isAndInput(gate.key, gate.state, terminal)) {
+        if (!isPlanInput(gate.key, gate.state, terminal)) {
             annotations.push({
                 key: gate.key,
                 kind: "gate",
@@ -828,9 +857,11 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         sideY += BLOCK_H + V_GAP;
     });
 
-    // A rejected slot whose every drawn term passed would resolve `true` above
-    // a terminal that says otherwise. One honest block, rather than a lie.
-    if (terminal !== "execute" && finalAndState(finalInputStates) !== "false") {
+    // A slot that was never planned, whose every drawn term passed, would
+    // resolve `true` above a terminal that says otherwise. One honest block,
+    // rather than a lie. A `candidate` is not such a slot: it *was* planned,
+    // and the falsehood it needs lives in the stage after this one.
+    if (!planHeld(terminal) && finalAndState(finalInputStates) !== "false") {
         const id = `gate-${UNEXPLAINED_AND_INPUT}`;
         blocks.push({
             id,
@@ -855,7 +886,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         sideY += BLOCK_H + V_GAP;
     }
 
-    // ---- the terminal --------------------------------------------------
+    // ---- the plan verdict: what the first stage decided ------------------
     const finalState = finalAndState(finalInputStates);
     const finalY = Math.round(
         (orY + Math.max(orY + BLOCK_H, sideY - V_GAP)) / 2 - BLOCK_H / 2,
@@ -878,6 +909,96 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         height: BLOCK_H,
     });
     blocks.push({
+        id: "verdict",
+        kind: "verdict",
+        key: finalState === "true" ? "planned" : "not_planned",
+        state: finalState,
+        decisive: true,
+        groupIndex: null,
+        actual: null,
+        value: null,
+        comparison: null,
+        params: {},
+        detail: null,
+        x: COL_VERDICT_X,
+        y: finalY,
+        width: VERDICT_W,
+        height: BLOCK_H,
+    });
+    edges.push({ from: "final", to: "verdict", decisive: true });
+
+    // ---- the second stage: the custom conditions, re-taken later ---------
+    //
+    // A stage rather than a gate. They are group-level and constant per run
+    // (`evaluation.py:1-17`), they are the whole difference between a run and a
+    // `candidate`, and the executor takes them again before the action starts
+    // (`coordinator.py:3575-3620`) — none of which a term sitting in the gate
+    // pile can say.
+    const recorded = customState(matchedPos < 0 ? undefined : cell.groups[matchedPos]);
+    // A candidate is a candidate *because* its custom conditions failed. Where
+    // the matched group's record does not carry that falsehood, the stage says
+    // so rather than resolving true above the word "kandidát".
+    const unexplainedCustom = terminal === "candidate" && recorded !== "false" && recorded !== "errored";
+    // The mirror of `isPlanInput`'s second rule: a slot that ran cannot have
+    // failed the stage that would have stopped it. That happens where the
+    // matched group is not the group whose custom conditions carried the plan,
+    // and the honest place for it is beside the chain.
+    const contradictsRun = terminal === "execute" && (recorded === "false" || recorded === "errored");
+    const custom: LogicState = unexplainedCustom ? "false" : recorded;
+    const showRecheck = custom !== "n/a" && !contradictsRun;
+    if (contradictsRun) {
+        annotations.push({ key: "custom", kind: "custom", state: recorded, params: {} });
+    }
+
+    let customY: number | null = null;
+    if (showRecheck) {
+        customY = finalY + BLOCK_H + V_GAP + 6;
+        blocks.push({
+            id: "custom",
+            kind: "custom",
+            key: unexplainedCustom ? UNEXPLAINED_AND_INPUT : "custom",
+            state: custom,
+            decisive: false,
+            groupIndex: matchedGroupIndex,
+            actual: null,
+            value: null,
+            comparison: null,
+            params: {},
+            detail: null,
+            x: COL_CUSTOM_X,
+            y: customY,
+            width: CUSTOM_W,
+            height: BLOCK_H,
+        });
+    }
+
+    // ---- the terminal --------------------------------------------------
+    const execInputIds = ["verdict", "custom"];
+    const execY = customY === null
+        ? finalY
+        : Math.round((finalY + customY) / 2);
+    if (showRecheck) {
+        blocks.push({
+            id: "exec",
+            kind: "execution",
+            key: "",
+            state: finalAndState([finalState, custom]),
+            decisive: true,
+            groupIndex: null,
+            actual: null,
+            value: null,
+            comparison: null,
+            params: {},
+            detail: null,
+            x: COL_EXEC_X,
+            y: execY,
+            width: OP_W,
+            height: BLOCK_H,
+        });
+        edges.push({ from: "verdict", to: "exec", decisive: false });
+        edges.push({ from: "custom", to: "exec", decisive: false });
+    }
+    blocks.push({
         id: "terminal",
         kind: "terminal",
         key: terminal,
@@ -889,23 +1010,35 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         comparison: null,
         params: {},
         detail: null,
-        x: COL_TERM_X,
-        y: finalY,
+        x: showRecheck ? COL_TERM_X : COL_TERM_X_NO_RECHECK,
+        y: execY,
         width: TERM_W,
         height: BLOCK_H,
     });
-    edges.push({ from: "final", to: "terminal", decisive: true });
+    edges.push({ from: showRecheck ? "exec" : "verdict", to: "terminal", decisive: true });
 
-    // ---- decisiveness, walked back from the terminal --------------------
+    // ---- decisiveness, per stage ----------------------------------------
     const byId = new Map(blocks.map((block) => [block.id, block]));
     const mark = (id: string): void => {
         const block = byId.get(id);
         if (block !== undefined) block.decisive = true;
     };
 
-    // The final AND: true means every input mattered; false means only the
-    // inputs that failed it did.
-    const decisiveFinal = terminal === "execute"
+    // The execution stage names exactly one reason, because only one of them
+    // can be it: a run needed both, a candidate is its custom conditions, and
+    // anything else never reached the re-check at all.
+    if (showRecheck) {
+        if (terminal === "execute") {
+            for (const id of execInputIds) mark(id);
+        } else {
+            mark(terminal === "candidate" ? "custom" : "verdict");
+        }
+    }
+
+    // The planning AND, walked back from *its own* answer rather than from the
+    // terminal: "why is this planned" has to stay lit on a slot whose custom
+    // conditions then held it back.
+    const decisiveFinal = finalState === "true"
         ? finalInputIds.map((_, index) => index)
         : decisiveInputsOfFalseAnd(finalInputStates);
     for (const index of decisiveFinal) {
@@ -949,18 +1082,25 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             && byId.get(edge.to)?.decisive === true;
     }
 
-    const height = Math.max(sideY, cursorY, finalY + BLOCK_H) + 10;
+    const height = Math.max(
+        sideY,
+        cursorY,
+        finalY + BLOCK_H,
+        customY === null ? 0 : customY + BLOCK_H + RECHECK_HINT_H,
+    ) + 10;
     return {
         blocks,
         edges,
         annotations,
         groupHeaders,
         terminal,
+        planState: finalState,
+        showRecheck,
         matchedGroupIndex,
         showOr,
         hasOverride: overrideGate !== null,
         defaultGroupIndex: matchedGroupIndex ?? cell.groups[0]?.index ?? null,
-        width: DIAGRAM_W,
+        width: (showRecheck ? COL_TERM_X : COL_TERM_X_NO_RECHECK) + TERM_W + 8,
         height,
     };
 }
@@ -1220,6 +1360,33 @@ export class SchedulingLogicDiagram extends LitElement {
                 fill: var(--secondary-text-color);
             }
 
+            /* The seam between what is settled and what is taken again. It is
+               drawn as a rule rather than said in prose because the reader has
+               to be able to see, at a glance, which side of it a block is on. */
+            line.stage-divider {
+                stroke: var(--divider-color, #888);
+                stroke-width: 1;
+                stroke-dasharray: 3 4;
+            }
+
+            /* The one note on the drawing that is about the future rather than
+               about what happened. */
+            text.hint.recheck {
+                font-style: italic;
+            }
+
+            /* What the planning stage decided, as a thing with a name. It is
+               the answer to "will this run at all", so it is drawn heavier than
+               a condition and lighter than the terminal -- a stage's result,
+               not the result. */
+            g.block[data-kind="verdict"] rect.body {
+                stroke-width: 2;
+            }
+
+            g.block[data-kind="verdict"] text.label {
+                font-weight: 600;
+            }
+
             text.glyph {
                 font-size: 12px;
                 font-weight: 700;
@@ -1379,6 +1546,15 @@ export class SchedulingLogicDiagram extends LitElement {
     @property({ type: String }) public focusConditionKey: string | null = null;
     @property({ type: Number }) public focusGroupIndex: number | null = null;
     @property({ type: String }) public slotLabel = "";
+    /**
+     * When the plan this record came from was built.
+     *
+     * The left half of the diagram is only readable with it: every state on
+     * that side was taken at this moment, and the custom conditions on the
+     * right are taken again later. Empty where the record carries no run time,
+     * in which case the notes say *that* it is re-taken without saying when.
+     */
+    @property({ type: String }) public planLabel = "";
 
     render() {
         const cell = this.cell;
@@ -1426,14 +1602,19 @@ export class SchedulingLogicDiagram extends LitElement {
     }
 
     /**
-     * The stage captions.
+     * The stage captions, and the seam between the two stages.
      *
-     * Readers could not name the two halves of the picture, which made every
-     * other question unanswerable. Each stage says what it is, in order.
+     * Readers could not name the halves of the picture, which made every other
+     * question unanswerable. Each stage says what it is, in order — and the
+     * rule down the middle says which of them is already settled and which one
+     * is taken again before the action starts. That seam is the whole reason a
+     * `candidate` is readable: everything left of it is history, everything
+     * right of it can still change.
      */
     private _renderStages(model: LogicDiagramModel) {
         const orBlock = model.blocks.find((block) => block.id === "or");
         const customBlock = model.blocks.find((block) => block.id === "custom");
+        const verdictBlock = model.blocks.find((block) => block.id === "verdict");
         const overrideBlock = model.blocks.find((block) => block.id === "override");
         return svg`
             <text class="stage" data-stage="conditions" x=${COL_INPUT_X} y="14">
@@ -1442,22 +1623,29 @@ export class SchedulingLogicDiagram extends LitElement {
             <text class="stage" data-stage="gates" x=${COL_SIDE_X} y="14">
                 ${this._text("diagram.stage.gates")}
             </text>
+            <text class="stage" data-stage="plan" x=${COL_FINAL_X} y="14">
+                ${fitText(this._text("diagram.stage.plan"), VERDICT_W + OP_W, STAGE_PX_PER_CHAR)}
+            </text>
             ${customBlock === undefined ? nothing : svg`
-                <text class="stage" data-stage="custom" x=${COL_CUSTOM_X} y="14">
+                <line
+                    class="stage-divider"
+                    x1=${DIVIDER_X}
+                    y1="4"
+                    x2=${DIVIDER_X}
+                    y2=${model.height - 4}
+                ></line>
+                <text class="stage" data-stage="recheck" x=${COL_CUSTOM_X} y="14">
                     ${fitText(
-                        this._text("diagram.stage.custom"),
-                        CUSTOM_W + 4,
+                        this._text("diagram.stage.recheck"),
+                        CUSTOM_W + OP_W,
                         STAGE_PX_PER_CHAR,
                     )}
                 </text>
             `}
-            <text class="stage" data-stage="final" x=${COL_FINAL_X} y="14">
-                ${this._text("diagram.stage.final")}
-            </text>
             <text
                 class="stage"
                 data-stage="result"
-                x=${DIAGRAM_W - 8}
+                x=${model.width - 8}
                 y="14"
                 text-anchor="end"
             >${this._text("diagram.stage.result")}</text>
@@ -1488,19 +1676,61 @@ export class SchedulingLogicDiagram extends LitElement {
                     ACTUAL_PX_PER_CHAR,
                 )}</text>
             `}
+            ${verdictBlock === undefined ? nothing : svg`
+                <text
+                    class="hint"
+                    data-stage="plan_when"
+                    x=${verdictBlock.x}
+                    y=${verdictBlock.y + verdictBlock.height + 11}
+                >${fitText(
+                    this._when("diagram.plan_decided_when", this.planLabel),
+                    VERDICT_W + 40,
+                    ACTUAL_PX_PER_CHAR,
+                )}</text>
+            `}
+            <!--
+                Both lines, whatever the custom conditions came out as. When
+                they held, the reader has to know the answer has a timestamp on
+                it and can still turn; when they did not, the same two facts are
+                what says a candidate is waiting rather than refused. Saying it
+                only in one of the two cases is what made "kandidát" read as a
+                verdict instead of as a pending question.
+            -->
             ${customBlock === undefined ? nothing : svg`
                 <text
                     class="hint"
-                    data-stage="custom_when"
+                    data-stage="custom_evaluated"
                     x=${customBlock.x}
                     y=${customBlock.y + customBlock.height + 11}
                 >${fitText(
-                    this._text("diagram.stage.custom_when"),
-                    CUSTOM_W + 40,
+                    this._when("diagram.plan_when", this.planLabel),
+                    CUSTOM_W + 80,
+                    ACTUAL_PX_PER_CHAR,
+                )}</text>
+                <text
+                    class="hint recheck"
+                    data-stage="custom_when"
+                    x=${customBlock.x}
+                    y=${customBlock.y + customBlock.height + 22}
+                >${fitText(
+                    this._when("diagram.stage.custom_when", this.slotLabel),
+                    CUSTOM_W + 80,
                     ACTUAL_PX_PER_CHAR,
                 )}</text>
             `}
         `;
+    }
+
+    /**
+     * A note about *when*, with its clock time where there is one.
+     *
+     * The label alone is still the whole claim — "it is taken again before the
+     * action starts" is true with or without a time on it — so a record that
+     * carries no run time drops the time rather than the note.
+     */
+    private _when(key: string, at: string): string {
+        const text = this._text(key);
+        return at === "" ? text : `${text} · ${at}`;
     }
 
     /**
@@ -1579,7 +1809,10 @@ export class SchedulingLogicDiagram extends LitElement {
         const focus = block.kind === "input"
             && block.key === this.focusConditionKey
             && (this.focusGroupIndex === null || block.groupIndex === this.focusGroupIndex);
-        const isOperator = block.kind === "and" || block.kind === "or" || block.kind === "final";
+        const isOperator = block.kind === "and"
+            || block.kind === "or"
+            || block.kind === "final"
+            || block.kind === "execution";
         const label = this._blockLabel(block);
         // What the block was *compared against*, not just what it saw: "3.43"
         // alone never told the reader whether 3.43 was the good side or the bad
@@ -1711,6 +1944,15 @@ export class SchedulingLogicDiagram extends LitElement {
         const hasDetail = model.blocks.some((block) => block.detail !== null);
         return html`
             <div class="legend">
+                ${model.showRecheck ? html`
+                    <span class="legend-item" data-legend="stages">
+                        ${this._text("diagram.legend_stages")}
+                    </span>
+                ` : html`
+                    <span class="legend-item" data-legend="no_custom">
+                        ${this._text("diagram.legend_no_custom")}
+                    </span>
+                `}
                 <span class="legend-item" data-legend="decisive">
                     <span class="swatch solid"></span>
                     ${this._text("diagram.legend_decisive")}
@@ -1758,8 +2000,14 @@ export class SchedulingLogicDiagram extends LitElement {
         switch (block.kind) {
             case "terminal":
                 return this._text(`diagram.terminal.${block.key}`);
+            case "verdict":
+                return this._text(`diagram.verdict.${block.key}`);
             case "custom":
-                return this._text("matrix.custom");
+                // A candidate whose record does not name the failing condition
+                // says so, rather than blaming a template it cannot show.
+                return block.key === UNEXPLAINED_AND_INPUT
+                    ? `${this._text("matrix.custom")} — ${this._text("diagram.unexplained")}`
+                    : this._text("matrix.custom");
             case "override":
                 return this._text("diagram.override");
             case "input":

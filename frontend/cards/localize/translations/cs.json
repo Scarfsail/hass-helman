@@ -339,11 +339,19 @@
           "any_group": "aspoň jedna skupina",
           "any_group_or_forced": "skupina nebo vynucení",
           "gates": "Další rozhodnutí",
-          "custom": "Vlastní podmínky",
-          "custom_when": "kontrola těsně před spuštěním",
-          "final": "Nic to nezablokovalo",
+          "plan": "Rozhodnutí o plánu",
+          "recheck": "Ověření před spuštěním",
+          "custom_when": "znovu se ověří těsně před spuštěním",
           "result": "Výsledek"
         },
+        "plan_decided_when": "rozhodnuto při plánování",
+        "plan_when": "vyhodnoceno při plánování",
+        "verdict": {
+          "planned": "Naplánovat",
+          "not_planned": "Nespouštět"
+        },
+        "legend_stages": "Vlevo od čárkované čáry je rozhodnutí, jestli slot vůbec naplánovat – to je hotové a nemění se. Vpravo jsou vlastní podmínky: platily v době plánování a znovu se ověřují těsně před spuštěním, takže se výsledek ještě může změnit.",
+        "legend_no_custom": "Skupina nemá žádné vlastní podmínky, takže se před spuštěním už nic neověřuje – výsledek je konečný.",
         "legend_decisive": "Plná čára a plný jas = větev, která o výsledku rozhodla.",
         "legend_dimmed": "Zeslabená čárkovaná větev byla vyhodnocena, ale výsledek nezměnila.",
         "legend_comparison": "U podmínky je vidět naměřená hodnota, porovnání a nastavený limit; u splněné podmínky se naměřená hodnota nezaznamenává, zůstane jen limit.",
@@ -355,7 +363,7 @@
         "legend_params_source": "Štítek u skupiny říká, odkud jsou její parametry; „!“ znamená, že nepocházejí přímo z tohoto slotu.",
         "terminal": {
           "execute": "spustit",
-          "candidate": "kandidát (vlastní podmínky nesplněny)",
+          "candidate": "kandidát – čeká na podmínky",
           "not_eligible": "nesplněné podmínky",
           "blocked": "blokováno uživatelem"
         }

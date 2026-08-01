@@ -189,6 +189,7 @@ export class SchedulingExplanationPanel extends LitElement {
                         .localize=${this.localize}
                         .cell=${active.cell}
                         .slotLabel=${this._slotLabel()}
+                        .planLabel=${this._planLabel(active.cell)}
                     ></scheduling-logic-diagram>
                 `}
             </div>
@@ -296,6 +297,22 @@ export class SchedulingExplanationPanel extends LitElement {
             ? undefined
             : tabs.find((tab) => tab.column.optimizerId === winning.optimizerId);
         return winningTab ?? tabs[0];
+    }
+
+    /**
+     * When the run that decided this slot happened.
+     *
+     * Per cell, not per panel: rows do not all come from one run, so the plan
+     * time has to be the one this account was written by. An unparseable or
+     * missing `runAt` yields nothing rather than a wrong clock time -- the
+     * diagram's notes still say the conditions are re-taken, just not when.
+     */
+    private _planLabel(cell: ExplanationCell): string {
+        if (cell.runAt === null) {
+            return "";
+        }
+        const atMs = Date.parse(cell.runAt);
+        return Number.isNaN(atMs) ? "" : formatScheduleTime(atMs, this.locale, this.timeZone);
     }
 
     private _slotLabel(): string {
