@@ -3354,6 +3354,15 @@ class HelmanCoordinator:
         ``appliance_runtime`` optimizer — the only appliances whose recorder history
         needs resolving. Returns ``None`` when no such optimizer references a
         valid appliance.
+
+        **The appliance lives on ``target``, not on ``params``.** It is identity,
+        which a condition group may never override, and every other reader takes
+        it from there (``config.target_key``, ``base.py:67``,
+        ``conditions/types.py:309``). Reading ``params`` found nothing, so this
+        returned ``None``, the runtime map came back empty, and every appliance's
+        ``delivered_hours`` was 0 for every day — a daily minimum that never
+        counted what had already run, and a consecutive-skip guard walking back
+        over days that all looked idle.
         """
         automation_config = read_automation_config(self._active_config)
         if automation_config is None or not automation_config.enabled:
@@ -3363,7 +3372,7 @@ class HelmanCoordinator:
         for optimizer in automation_config.execution_optimizers:
             if optimizer.kind != "appliance_runtime":
                 continue
-            appliance_id = optimizer.params.get("appliance_id")
+            appliance_id = optimizer.target.get("appliance_id")
             if isinstance(appliance_id, str) and appliance_id:
                 appliance_ids.add(appliance_id)
             skip = optimizer.params.get("skip")
