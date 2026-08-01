@@ -1921,6 +1921,7 @@ export class SchedulingLogicDiagram extends LitElement {
         const fullConfigured = fullLogicValue(block.value);
         const title = [
             `${label} — ${this._labelled("state", block.state)}`,
+            this._conditionDetail(block.key),
             block.kind === "override" ? this._text("diagram.override_detail") : "",
             fullConfigured === null
                 ? ""
@@ -2122,6 +2123,24 @@ export class SchedulingLogicDiagram extends LitElement {
         const full = `${KEY_PREFIX}.${group}.${key}`;
         const translated = this.localize(full);
         return translated === full || translated === undefined ? key : translated;
+    }
+
+    /**
+     * What a condition or gate *means*, for the hover, where saying it is worth
+     * the words.
+     *
+     * A block's face has room for a name and a number, which is enough for a
+     * threshold and not enough for a requirement whose direction is not obvious
+     * from its name — `blocked_user_owned` is `true` when the user does *not*
+     * own the slot, and a reader has no way to know that from a tick. Only the
+     * keys that have an entry get one; the rest return nothing and the tooltip
+     * is what it was.
+     */
+    private _conditionDetail(key: string): string {
+        if (key.length === 0) return "";
+        const full = `${KEY_PREFIX}.condition_detail.${key}`;
+        const translated = this.localize(full);
+        return translated === full || translated === undefined ? "" : translated;
     }
 }
 

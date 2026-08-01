@@ -461,7 +461,11 @@
         "charge_needed": "Potřeba nabít",
         "window_soc_known": "Známé SoC v okně",
         "stop_export_supported": "Podpora zastavení exportu",
-        "blocked_user_owned": "Slot vlastní uživatel"
+        "blocked_user_owned": "Slot bez ručního plánu"
+      },
+      "condition_detail": {
+        "blocked_user_owned": "Automatizace zapisuje jen do slotů, které si nenastavil uživatel. Splněno = slot není obsazen uživatelským plánem, je volný pro automatizaci; nesplněno = slot vlastní uživatel a automatizace do něj nezapíše.",
+        "slot_available": "Slot, se kterým optimalizátor vůbec může počítat — sloty nastavené uživatelem se vyřazují ještě před výběrem, takže se do nich neplánuje."
       }
     }
   },

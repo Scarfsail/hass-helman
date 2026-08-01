@@ -576,20 +576,34 @@ const NOT_APPLICABLE_PAYLOAD = {
     }],
 };
 
-async function mountPanel(page: Page, fixture: unknown = PAYLOAD): Promise<void> {
+/**
+ * `translations` is for the keys whose *presence* is the behaviour under test.
+ *
+ * The default localize echoes the key back, which is what a missing key looks
+ * like too — so a lookup that falls back when it finds nothing (the optional
+ * per-condition explanations) cannot be told apart from one that found
+ * something. Giving those keys a real string is the only way to see the
+ * difference from outside.
+ */
+async function mountPanel(
+    page: Page,
+    fixture: unknown = PAYLOAD,
+    translations: Record<string, string> = {},
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
 
-    await page.evaluate((fixture) => {
+    await page.evaluate(([fixture, translations]) => {
         const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
             & Record<string, unknown>;
-        panel.localize = (key: string) => key;
+        const strings = translations as Record<string, string>;
+        panel.localize = (key: string) => strings[key] ?? key;
         panel.payload = fixture;
         panel.locale = "cs";
         panel.timeZone = "Europe/Prague";
         document.body.appendChild(panel);
-    }, fixture);
+    }, [fixture, translations] as const);
 
     // Nothing pressed yet: the panel is mounted and waiting for a slot.
     await expect(page.locator("scheduling-explanation-panel").locator(".placeholder.no-slot"))
@@ -784,7 +798,10 @@ test.describe("the condition logic diagram", () => {
     });
 
     test("a writer veto is its own terminal, not a failed condition", async ({ page }) => {
-        await mountPanel(page);
+        await mountPanel(page, PAYLOAD, {
+            "scheduling.explanation.condition_detail.blocked_user_owned":
+                "Splněno = slot je volný pro automatizaci",
+        });
         await openDiagram(page, 3);
 
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "blocked");
@@ -792,6 +809,20 @@ test.describe("the condition logic diagram", () => {
         // Every condition passed; the veto is the only thing that decided it.
         expect(marks["gate-0"]).toBe("true");
         expect(marks.or).toBe("false");
+
+        // The gate is a *requirement*: true means the user does NOT own the
+        // slot (`base.py:212`). A block whose direction is not obvious from its
+        // name says which way round it is, on hover.
+        const title = await svgText(
+            diagram(page).locator('g.block[data-key="blocked_user_owned"] title'),
+        );
+        expect(title).toContain("Splněno = slot je volný pro automatizaci");
+
+        // A condition with nothing to explain gets no empty separator for it.
+        const plain = await svgText(
+            diagram(page).locator('g.block[data-key="when_price_below"]').first().locator("title"),
+        );
+        expect(plain).not.toContain(" ·  · ");
     });
 
     test("branches that did not matter are dimmed, not removed", async ({ page }) => {
