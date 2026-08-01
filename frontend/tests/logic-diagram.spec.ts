@@ -348,6 +348,65 @@ const SECOND_GROUP_CUSTOM_PAYLOAD = {
 };
 
 /**
+ * Both groups match, and the slot runs under the one with no template.
+ *
+ * Taken from a real record (`pool-heatpump`, two groups: "Záporná cena" with no
+ * custom conditions, "Studený bazén" with a pool-temperature one that is false
+ * all day). On the cheap slots both groups' masks match, so `fully or
+ * matching[0]` settles on the group whose custom conditions held — the one that
+ * has none — and the slot runs. On every other slot only the second group
+ * matches, and its false template makes a candidate.
+ *
+ * Which is correct, and unreadable if the empty stage does not say *whose*
+ * conditions are missing: the reader wrote that template and is looking right
+ * at a diagram that appears to deny it exists.
+ */
+const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["execute", 1]],
+        winningOptimizer: { "0": "appliance_runtime" },
+        groups: [
+            {
+                index: 0,
+                label: "Záporná cena",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ max_run_price: 2.0 }, 1]],
+                // No custom conditions at all: the column is absent, not false.
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[2.0, 1]],
+                }],
+            },
+            {
+                index: 1,
+                label: "Studený bazén",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ min_soc_pct: 40 }, 1]],
+                customResults: [[[false], 1]],
+                conditions: [{
+                    key: "min_soc_pct",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[40, 1]],
+                }],
+            },
+        ],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
+/**
  * A **forced** day: every condition failed and the appliance ran anyway.
  *
  * `max_consecutive_skips` is the one construct that defeats the whole OR chain
@@ -1259,9 +1318,14 @@ test.describe("the diagram shows the test, not only the result", () => {
         // decided, and that it is taken again before the action starts. Saying
         // it only for the run made "kandidát" read as a refusal, and saying it
         // only for the candidate would make "spustit" read as settled.
+        // The wording, without the clock time: the two fixtures are different
+        // slots of different runs, so the times differ and the *claim* is what
+        // has to be identical.
         const notes = async (): Promise<string[]> => diagram(page)
             .locator('text[data-stage="custom_evaluated"], text[data-stage="custom_when"]')
-            .evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim() ?? ""));
+            .evaluateAll((nodes) => nodes.map(
+                (node) => (node.textContent?.trim() ?? "").split(" · ")[0],
+            ));
 
         await mountPanel(page);
         await openDiagram(page, 2);
@@ -1315,6 +1379,28 @@ test.describe("the diagram shows the test, not only the result", () => {
         await expect(diagram(page).locator('.annotation[data-key="custom"]')).toHaveCount(0);
     });
 
+    test("an empty stage says whose conditions are missing", async ({ page }) => {
+        // Both groups match; the slot runs under the one with no template, so
+        // the stage is empty -- while the group beside it has a template the
+        // reader wrote and can see failing on the very next slot. Unqualified,
+        // "none configured" reads as "this automation has none" and is simply
+        // disbelieved.
+        await mountPanel(page, GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
+
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveAttribute("data-state", "n/a");
+        // The group it ran under, named on the note itself.
+        expect(await svgText(diagram(page).locator('text[data-stage="custom_none"]')))
+            .toContain("Záporná cena");
+        // And the fact that resolves the disbelief: another group does have
+        // them, and this slot did not run under it.
+        await expect(diagram(page).locator('text[data-stage="custom_other_group"]'))
+            .toHaveCount(1);
+    });
+
     test("with no custom conditions the stage is still drawn, saying so", async ({ page }) => {
         // A stage that appears only when it has something to complain about is
         // a stage nobody can read: two slots of one automation, one with a
@@ -1337,6 +1423,9 @@ test.describe("the diagram shows the test, not only the result", () => {
         // way to the one line that is true.
         await expect(diagram(page).locator('text[data-stage="custom_none"]')).toHaveCount(1);
         await expect(diagram(page).locator('text[data-stage="custom_when"]')).toHaveCount(0);
+        // Only one group here, so there is no other group to point at.
+        await expect(diagram(page).locator('text[data-stage="custom_other_group"]'))
+            .toHaveCount(0);
         await expect(diagram(page).locator('.legend-item[data-legend="no_custom"]')).toHaveCount(1);
 
         // And the result still hangs off the second stage, which resolves true

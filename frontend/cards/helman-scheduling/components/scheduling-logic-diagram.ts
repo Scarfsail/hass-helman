@@ -134,6 +134,18 @@ export interface LogicDiagramModel {
      * stage is still drawn, saying so; only what it decided changes.
      */
     customState: LogicState;
+    /**
+     * Does a group this slot did *not* run under configure custom conditions?
+     *
+     * The one fact that makes an empty stage readable. Custom conditions belong
+     * to a group, and `Eligibility` settles a slot on the first group that
+     * matched *and* whose custom conditions held — so on a lane where one group
+     * has a template and another does not, the slots that run are exactly the
+     * ones that ran under the group without it. "None configured" then reads as
+     * "this automation has no custom conditions", which is false and is the
+     * first thing a reader disbelieves.
+     */
+    otherGroupsHaveCustom: boolean;
     /** The group the OR settled on, mirroring `fully or matching[0]`. */
     matchedGroupIndex: number | null;
     /** False for a single-group cell: an OR over one input decides nothing. */
@@ -1109,6 +1121,9 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         terminal,
         planState: finalState,
         customState: custom,
+        otherGroupsHaveCustom: groupCustomStates.some(
+            (state, groupPos) => state !== "n/a" && groupPos !== matchedPos,
+        ),
         matchedGroupIndex,
         showOr,
         hasOverride: overrideGate !== null,
@@ -1719,10 +1734,22 @@ export class SchedulingLogicDiagram extends LitElement {
                     x=${customBlock.x}
                     y=${customBlock.y + customBlock.height + 11}
                 >${fitText(
-                    this._text("diagram.stage.custom_none"),
-                    CUSTOM_W + 80,
+                    this._customNone(model),
+                    CUSTOM_W + 200,
                     ACTUAL_PX_PER_CHAR,
                 )}</text>
+                ${model.otherGroupsHaveCustom ? svg`
+                    <text
+                        class="hint"
+                        data-stage="custom_other_group"
+                        x=${customBlock.x}
+                        y=${customBlock.y + customBlock.height + 22}
+                    >${fitText(
+                        this._text("diagram.stage.custom_other_group"),
+                        CUSTOM_W + 200,
+                        ACTUAL_PX_PER_CHAR,
+                    )}</text>
+                ` : nothing}
             ` : svg`
                 <text
                     class="hint"
@@ -1731,7 +1758,7 @@ export class SchedulingLogicDiagram extends LitElement {
                     y=${customBlock.y + customBlock.height + 11}
                 >${fitText(
                     this._when("diagram.plan_when", this.planLabel),
-                    CUSTOM_W + 80,
+                    CUSTOM_W + 200,
                     ACTUAL_PX_PER_CHAR,
                 )}</text>
                 <text
@@ -1741,11 +1768,24 @@ export class SchedulingLogicDiagram extends LitElement {
                     y=${customBlock.y + customBlock.height + 22}
                 >${fitText(
                     this._when("diagram.stage.custom_when", this.slotLabel),
-                    CUSTOM_W + 80,
+                    CUSTOM_W + 200,
                     ACTUAL_PX_PER_CHAR,
                 )}</text>
             `)}
         `;
+    }
+
+    /**
+     * "None configured" — said of the group it is true of.
+     *
+     * Custom conditions are a group's, so an unqualified "none" is read as the
+     * automation's and disbelieved on the spot by anybody who wrote one.
+     */
+    private _customNone(model: LogicDiagramModel): string {
+        const text = this._text("diagram.stage.custom_none");
+        return model.matchedGroupIndex === null
+            ? text
+            : `${this._groupLabel(model.matchedGroupIndex)}: ${text}`;
     }
 
     /**
