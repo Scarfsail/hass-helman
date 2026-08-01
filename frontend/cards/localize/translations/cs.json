@@ -452,7 +452,7 @@
         "before_release": "Před uvolněním",
         "day_context": "Kontext dne",
         "day_group_matched": "Skupina pro tento den",
-        "daily_minimum_remaining": "Zbývá do denního minima",
+        "daily_minimum_remaining": "Denní minimum",
         "placement_capacity": "Kapacita umístění",
         "consecutive_skip_override": "Přerušení navazujícího běhu",
         "slot_available": "Volný slot",
@@ -465,7 +465,9 @@
       },
       "condition_detail": {
         "blocked_user_owned": "Automatizace zapisuje jen do slotů, které si nenastavil uživatel. Splněno = slot není obsazen uživatelským plánem, je volný pro automatizaci; nesplněno = slot vlastní uživatel a automatizace do něj nezapíše.",
-        "slot_available": "Slot, se kterým optimalizátor vůbec může počítat — sloty nastavené uživatelem se vyřazují ještě před výběrem, takže se do nich neplánuje."
+        "slot_available": "Slot, se kterým optimalizátor vůbec může počítat — sloty nastavené uživatelem se vyřazují ještě před výběrem, takže se do nich neplánuje.",
+        "daily_minimum_remaining": "Kolik hodin má spotřebič za den odběhnout a kolik jich už podle měřené historie odběhl v době plánování. Platí pro celý den, ne pro tento slot — na všech slotech dne je stejné a nezapočítává hodiny, které plán teprve odběhne.",
+        "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot."
       }
     }
   },
