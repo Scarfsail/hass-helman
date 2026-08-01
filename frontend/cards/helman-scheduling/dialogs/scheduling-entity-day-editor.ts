@@ -548,7 +548,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .locale=${this.locale}
                         .timeZone=${this.timeZone}
                         .readonly=${explaining}
-                        .slotGrid=${explaining}
+                        .slotGrid=${true}
+                        .slotPicks=${explaining}
                         .selectedSlot=${this._explainSelection}
                         .editingRange=${this._editing === null || explaining ? null : {
                             startMs: this._editing.startMs,

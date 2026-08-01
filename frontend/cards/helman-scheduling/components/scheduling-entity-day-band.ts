@@ -45,6 +45,15 @@ const MIN_SOC_END_WIDTH_PX = 44;
 const MIN_SOC_BOTH_WIDTH_PX = 96;
 /** Room the two levels take at a run's edges, which the centre figure gives up. */
 const SOC_ENDPOINT_ALLOWANCE_PX = 52;
+/**
+ * A forecast slot narrower than this keeps its number to its tooltip.
+ *
+ * Half a day of slots on a phone leaves single digits of room each, and a
+ * clipped "12" that reads as "1" is worse than a column with nothing written on
+ * it -- the hovered slot gets its number back regardless, which is the case
+ * where the user is actually asking.
+ */
+const MIN_SLOT_VALUE_WIDTH_PX = 17;
 
 export type { EntityDayBandLane };
 
@@ -271,9 +280,12 @@ export class SchedulingEntityDayBand extends LitElement {
                 font-style: italic;
             }
 
+            /* Tall enough for a row of numbers above the bars: the columns are
+               read for what they say as often as for their shape, and a value
+               nobody can read is a tooltip nobody hovers. */
             .context-row {
                 position: relative;
-                height: 18px;
+                height: 30px;
                 border-radius: 4px;
                 background: var(--secondary-background-color);
                 overflow: hidden;
@@ -281,13 +293,56 @@ export class SchedulingEntityDayBand extends LitElement {
             }
 
             /* Price gets more room: it is drawn around a zero line, so each
-               half only has half the height to work with. */
+               half only has half the height to work with -- and both halves
+               carry numbers, at the top and at the bottom. */
             .context-row.price {
-                height: 26px;
+                height: 38px;
+            }
+
+            /* The bars live below the strip the numbers take, rather than under
+               it: a column scaled to the whole row would grow up through its own
+               label, and a number written over a solid bar is a number read
+               twice as slowly as one written on the row's own background. */
+            .context-row .plot {
+                position: absolute;
+                left: 0;
+                right: 0;
+                top: 11px;
+                bottom: 0;
             }
 
             .context-bar {
                 position: absolute;
+            }
+
+            /* One slot's reading, over the slot it belongs to. Centred on the
+               column and clipped to it, so a number never claims a neighbour's
+               minutes. Inert: the hit layer above it is what answers the
+               pointer, and the whole strip is a readout. */
+            .slot-value {
+                position: absolute;
+                top: 0;
+                height: 11px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                overflow: hidden;
+                color: var(--secondary-text-color);
+                font-size: 8.5px;
+                line-height: 11px;
+                font-variant-numeric: tabular-nums;
+                white-space: nowrap;
+                pointer-events: none;
+            }
+
+            /* The slot being asked about says its number in the row's own ink,
+               which is also what makes a number that did not fit legible when it
+               is drawn anyway. */
+            .slot-value.hovered {
+                z-index: 2;
+                overflow: visible;
+                color: var(--primary-text-color);
+                font-weight: 600;
             }
 
             .context-bar.solar {
@@ -317,17 +372,39 @@ export class SchedulingEntityDayBand extends LitElement {
                 background: color-mix(in srgb, var(--helman-price-negative) 78%, transparent);
             }
 
-            /* Invisible, and only there to be pointed at. */
+            /* One slot of the chart: the same hairline grid the lanes carry, and
+               the same target. The grid is what ties a column to the run under
+               it -- without it a bar is at "about noon" rather than at a slot. */
             .slot-hit {
                 position: absolute;
                 top: 0;
                 bottom: 0;
+                z-index: 1;
             }
 
-            /* One slot of the grid: its own hairline at its start, and the
-               whole of it as a target. Over the runs, because in this mode the
-               slot is what a press means -- the run is what is being asked
-               about. */
+            .slot-hit.grid {
+                border-left: 1px solid color-mix(in srgb, var(--divider-color) 45%, transparent);
+            }
+
+            /* The day's first hairline would draw over the row's own edge. */
+            .slot-hit.grid.day-start {
+                border-left-color: transparent;
+            }
+
+            /* Same wash as the lanes give the slot under the pointer: one slice
+               of time lights up everywhere it is drawn, which is the whole
+               reason the rows share an axis. */
+            .slot-hit.co-hovered {
+                background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+            }
+
+            .slot-hit.hovered {
+                background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+            }
+
+            /* One slot of the grid: its own hairline at its start, and the whole
+               of it as a target. Over the runs, because where the slot is what a
+               press means, the run is what is being asked about. */
             .slot-pick {
                 position: absolute;
                 top: 0;
@@ -337,6 +414,14 @@ export class SchedulingEntityDayBand extends LitElement {
                    its own sake. */
                 z-index: 1;
                 border-left: 1px solid color-mix(in srgb, var(--divider-color) 60%, transparent);
+                /* Nothing to press while the band is being authored: the track
+                   is a drag surface there, and a layer of targets over every run
+                   would swallow the grabs the blocks are drawn to invite. */
+                pointer-events: none;
+            }
+
+            .slot-pick.pickable {
+                pointer-events: auto;
                 cursor: pointer;
             }
 
@@ -345,8 +430,16 @@ export class SchedulingEntityDayBand extends LitElement {
                 border-left-color: transparent;
             }
 
+            /* The slot under the pointer, and the same slot in every other lane.
+               The row being pointed at is the darker of the two: the pointer is
+               on one appliance's hour, and the rest are what that hour costs
+               everywhere else. */
             .slot-pick.hovered {
-                background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+                background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+            }
+
+            .slot-pick.co-hovered {
+                background: color-mix(in srgb, var(--primary-color) 12%, transparent);
             }
 
             /* The answered slot stays marked once the pointer has moved on --
@@ -798,25 +891,37 @@ export class SchedulingEntityDayBand extends LitElement {
      */
     @property({ type: String }) public laneLabels: "column" | "track" = "column";
     /**
-     * Draw the day's own slots on every lane, as a grid to point at.
+     * Draw the day's own slots on every lane and every forecast row.
      *
-     * The unit the schedule stores, made visible: hairlines between slots, the
-     * slot under the pointer washed, and a press that names one. A host asking
-     * "why this slot" needs the slot to be a target, which a band drawn as runs
-     * does not otherwise offer -- the gap between two runs is not a time you
-     * can press, and a run spans thirty of them.
+     * The unit the schedule stores, made visible: hairlines between slots, and
+     * the slot under the pointer washed everywhere it is drawn. Reading a plan
+     * means asking what a run costs, and the answer is in a row three tracks
+     * away -- so the whole stack lights the same slice of time, which is the
+     * only reason it shares one axis.
      *
      * The grid comes from `day.slots` rather than from a fixed half hour: the
-     * slot ids are what the answer is keyed by, so a hit that is not a slot is
-     * a hit nothing can be looked up for.
+     * slot ids are what an answer is keyed by, so a cell that is not a slot is
+     * a cell nothing can be looked up for.
      */
     @property({ type: Boolean }) public slotGrid = false;
     /**
+     * Let a press on the grid name the slot it landed on.
+     *
+     * Separate from drawing the grid, because a band being authored draws it
+     * too: there the track is a drag surface, and a layer of slot targets over
+     * every run would take the grabs the blocks exist to invite. A host asking
+     * "why this slot" turns this on and gets the targets the runs cannot offer
+     * -- the gap between two runs is not a time you can press, and a run spans
+     * thirty of them.
+     */
+    @property({ type: Boolean }) public slotPicks = false;
+    /**
      * The slot the host is showing an answer for, marked where it was pressed.
      *
-     * A lane and a slot, for the same reason hover is per lane: the answer
-     * below is about one appliance at one hour, and marking those minutes in
-     * every lane would say it was about all of them.
+     * A lane and a slot, unlike hover: hovering asks what the whole house is
+     * doing at an hour, but the answer below is about one appliance at one
+     * hour, and marking those minutes in every lane would say it was about all
+     * of them.
      */
     @property({ attribute: false }) public selectedSlot: EntityDayBandSlotSelectDetail | null = null;
     /**
@@ -830,8 +935,23 @@ export class SchedulingEntityDayBand extends LitElement {
     @property({ attribute: false }) public highlightRanges: readonly EntityDayBandHighlight[] = [];
 
     @state() private _drag: DragSession | null = null;
-    /** The slot the pointer is over, and the lane it is over it in. */
-    @state() private _hoveredSlot: { laneKey: string; slotId: string } | null = null;
+    /**
+     * The slot the pointer is over, taken from where it is on the time axis
+     * rather than from what it is on top of.
+     *
+     * A slice of time, not a cell: the pointer is over one row, but the question
+     * a hovered slot asks -- what else is happening then -- is answered by the
+     * other rows, so all of them mark it.
+     */
+    @state() private _hoveredSlotId: string | null = null;
+    /**
+     * Which lane the pointer is actually in, when it is in one at all.
+     *
+     * The marked slot is the same everywhere; this is what makes one of them
+     * the one being pointed at, and it is null over the forecast rows and over
+     * the gaps between tracks.
+     */
+    @state() private _hoveredLaneKey: string | null = null;
     /**
      * The track's width, measured after each update rather than while
      * rendering: reading it per segment forces a synchronous layout for every
@@ -900,7 +1020,7 @@ export class SchedulingEntityDayBand extends LitElement {
             <div
                 class=${classes}
                 @mousemove=${this._handleTimeHover}
-                @mouseleave=${() => this._emitTimeHover(null)}
+                @mouseleave=${() => { this._clearHoveredSlot(); this._emitTimeHover(null); }}
             >
                 ${this.showForecastRows ? html`
                     ${this._renderSolarRow()}
@@ -979,12 +1099,15 @@ export class SchedulingEntityDayBand extends LitElement {
         return html`
             ${this._renderContextHeading("scheduling.forecast.battery_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
-                ${columns.map(({ slot, socPct, direction }) => html`
-                    <span
-                        class="context-bar soc"
-                        style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${socPct}%; background: ${socColumnBackground(direction)}`}
-                    ></span>
-                `)}
+                <div class="plot">
+                    ${columns.map(({ slot, socPct, direction }) => html`
+                        <span
+                            class="context-bar soc"
+                            style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${socPct}%; background: ${socColumnBackground(direction)}`}
+                        ></span>
+                    `)}
+                </div>
+                ${this._renderSlotValues("battery")}
                 ${this._renderSlotHits("battery")}
                 ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.battery_label")}
@@ -1031,12 +1154,15 @@ export class SchedulingEntityDayBand extends LitElement {
         return html`
             ${this._renderContextHeading("scheduling.forecast.solar_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
-                ${values.map(({ slot, value }) => value === 0 ? nothing : html`
-                    <span
-                        class="context-bar solar"
-                        style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
-                    ></span>
-                `)}
+                <div class="plot">
+                    ${values.map(({ slot, value }) => value === 0 ? nothing : html`
+                        <span
+                            class="context-bar solar"
+                            style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
+                        ></span>
+                    `)}
+                </div>
+                ${this._renderSlotValues("solar")}
                 ${this._renderSlotHits("solar")}
                 ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.solar_label")}
@@ -1055,23 +1181,26 @@ export class SchedulingEntityDayBand extends LitElement {
         return html`
             ${this._renderContextHeading("scheduling.forecast.price_label")}
             <div class="context-row price" @pointerdown=${this._handleContextPointerDown}>
-                <span class="zero-line"></span>
-                ${values.map(({ slot, value }) => {
-                    if (value === 0) {
-                        return nothing;
-                    }
+                <div class="plot">
+                    <span class="zero-line"></span>
+                    ${values.map(({ slot, value }) => {
+                        if (value === 0) {
+                            return nothing;
+                        }
 
-                    const positive = value > 0;
-                    // Each half owns 50% of the row, so a bar's own percentage
-                    // is halved to stay inside it.
-                    const heightPct = this._toBarPct(Math.abs(value), positive ? maxPositive : maxNegative) / 2;
-                    return html`
-                        <span
-                            class=${`context-bar ${positive ? "price-positive" : "price-negative"}`}
-                            style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${heightPct}%`}
-                        ></span>
-                    `;
-                })}
+                        const positive = value > 0;
+                        // Each half owns 50% of the plot, so a bar's own
+                        // percentage is halved to stay inside it.
+                        const heightPct = this._toBarPct(Math.abs(value), positive ? maxPositive : maxNegative) / 2;
+                        return html`
+                            <span
+                                class=${`context-bar ${positive ? "price-positive" : "price-negative"}`}
+                                style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${heightPct}%`}
+                            ></span>
+                        `;
+                    })}
+                </div>
+                ${this._renderSlotValues("price")}
                 ${this._renderSlotHits("price")}
                 ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.price_label")}
@@ -1162,17 +1291,17 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * The day's slots, drawn on one lane as something to point at.
+     * The day's slots, drawn on one lane.
      *
-     * Above the runs rather than behind them: in this mode the question is
-     * about a slot, so the slot is what a press has to name -- the run under it
-     * is the answer being asked about, not the target. Each slot carries its
-     * own hairline at its start, so the grid is the same object as the hit
+     * Above the runs rather than behind them: the grid is what says where a run
+     * starts in the unit the schedule is actually kept in, and a hairline hidden
+     * under the one bar it is there to measure says nothing. Each slot carries
+     * its own hairline at its start, so the grid is the same object as the hit
      * layer and the two can never disagree.
      *
-     * Hover is tracked per lane, not per time: the pointer is over one lane's
-     * slot, and washing the same minutes in every lane would say that the
-     * question is about all of them.
+     * Every lane marks the same slot, and the lane the pointer is in marks it
+     * harder. The question a hovered hour asks is what else is going on then,
+     * and one washed cell in one track cannot answer it.
      */
     private _renderSlotPicks(lane: EntityDayBandLane) {
         if (!this.slotGrid) {
@@ -1180,12 +1309,12 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         return this.day.slots.map((slot, index) => {
+            const hovered = this._hoveredSlotId === slot.id;
             const classes = [
                 "slot-pick",
                 index === 0 ? "day-start" : "",
-                this._hoveredSlot?.laneKey === lane.key && this._hoveredSlot.slotId === slot.id
-                    ? "hovered"
-                    : "",
+                this.slotPicks ? "pickable" : "",
+                hovered ? (this._hoveredLaneKey === lane.key ? "hovered" : "co-hovered") : "",
                 this.selectedSlot?.laneKey === lane.key && this.selectedSlot.slotId === slot.id
                     ? "selected"
                     : "",
@@ -1195,18 +1324,57 @@ export class SchedulingEntityDayBand extends LitElement {
                     class=${classes}
                     data-slot=${slot.id}
                     style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%`}
-                    @mouseenter=${() => { this._hoveredSlot = { laneKey: lane.key, slotId: slot.id }; }}
-                    @mouseleave=${() => this._clearHoveredSlot(lane.key, slot.id)}
                     @click=${(event: Event) => this._handleSlotPickClick(event, lane, slot.id)}
                 ></span>
             `;
         });
     }
 
-    private _clearHoveredSlot(laneKey: string, slotId: string): void {
-        if (this._hoveredSlot?.laneKey === laneKey && this._hoveredSlot.slotId === slotId) {
-            this._hoveredSlot = null;
+    /**
+     * Which slot -- and which lane's copy of it -- the pointer is on.
+     *
+     * Read off the time axis rather than off the element under the cursor,
+     * because the mark has to appear in rows the pointer is nowhere near. The
+     * lane comes from the DOM, since that is the one part of it that really is
+     * about what is being pointed at; over a forecast row there is no lane, and
+     * the slot is marked in every track equally.
+     *
+     * Both are held still unless they change: this runs at pointer rate, and
+     * re-rendering forty slots across seven lanes for a cursor that moved two
+     * pixels inside the same half hour is forty slots redrawn for nothing.
+     */
+    private _trackHoveredSlot(atMs: number | null, event: MouseEvent): void {
+        if (!this.slotGrid) {
+            return;
         }
+
+        const slotId = atMs === null ? null : this._resolveSlotIdAt(atMs);
+        const target = event.target;
+        const laneKey = slotId === null || !(target instanceof Element)
+            ? null
+            : target.closest(".lane[data-lane]")?.getAttribute("data-lane") ?? null;
+        if (this._hoveredSlotId !== slotId) {
+            this._hoveredSlotId = slotId;
+        }
+
+        if (this._hoveredLaneKey !== laneKey) {
+            this._hoveredLaneKey = laneKey;
+        }
+    }
+
+    private _clearHoveredSlot(): void {
+        this._hoveredSlotId = null;
+        this._hoveredLaneKey = null;
+    }
+
+    private _resolveSlotIdAt(atMs: number): string | null {
+        for (const slot of this.day.slots) {
+            if (atMs >= slot.startMs && atMs < (slot.endMs ?? slot.startMs)) {
+                return slot.id;
+            }
+        }
+
+        return null;
     }
 
     private _handleSlotPickClick(event: Event, lane: EntityDayBandLane, slotId: string): void {
@@ -1584,25 +1752,132 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * One hover target per slot, so a chart can say what it is showing.
+     * One cell per slot on a forecast row: the grid, the hover mark, and the
+     * tooltip that says what the column is worth in full.
      *
      * A layer of its own rather than titles on the bars: a slot with no solar
-     * draws no bar, and the battery line is one path for the whole day, so
-     * there is nothing per-hour to hang a tooltip on. Invisible and inert
-     * beyond the tooltip -- pressing still falls through to the row, which
-     * clears the lane selection.
+     * draws no bar, and a slot with no reading at all draws nothing anywhere,
+     * so there is nothing per-hour to hang either a hairline or a tooltip on.
+     * Inert beyond that -- pressing still falls through to the row, which clears
+     * the lane selection.
+     *
+     * Every slot gets a cell even when its reading is missing, because the grid
+     * is a ruler: skipping the hours the forecast has nothing to say about would
+     * leave gaps that read as wider slots.
      */
     private _renderSlotHits(kind: "battery" | "solar" | "price") {
-        return this.day.slots.map((slot) => {
+        return this.day.slots.map((slot, index) => {
             const title = this._buildSlotHitTitle(kind, slot);
-            return title === null ? nothing : html`
+            const classes = [
+                "slot-hit",
+                this.slotGrid ? "grid" : "",
+                this.slotGrid && index === 0 ? "day-start" : "",
+                this._hoveredSlotId === slot.id
+                    ? (this._hoveredLaneKey === null ? "hovered" : "co-hovered")
+                    : "",
+            ].filter((value) => value.length > 0).join(" ");
+            return html`
                 <span
-                    class="slot-hit"
-                    title=${title}
+                    class=${classes}
+                    title=${title ?? nothing}
                     style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%`}
                 ></span>
             `;
         });
+    }
+
+    /**
+     * What each slot of a forecast row is worth, written over the row.
+     *
+     * The strip along the top rather than a label on each bar: the bars are the
+     * shape of the day and the numbers are the day itself, and a value pinned to
+     * the top of its own column moves as the column does, which makes a row of
+     * readings impossible to scan across. Above the plot, so no number is ever
+     * written on a bar.
+     *
+     * A slot too narrow to hold its number goes without one -- except the slot
+     * under the pointer, which is the one slot somebody is asking about, and
+     * which is allowed to spill over its neighbours to be legible.
+     */
+    private _renderSlotValues(kind: "battery" | "solar" | "price") {
+        return this.day.slots.map((slot) => {
+            const text = this._buildSlotValueText(kind, slot);
+            if (text === null) {
+                return nothing;
+            }
+
+            const hovered = this._hoveredSlotId === slot.id;
+            const widthPct = this._toSlotWidthPercent(slot);
+            if (!hovered && !this._isWideEnoughForValue(widthPct)) {
+                return nothing;
+            }
+
+            return html`
+                <span
+                    class=${`slot-value${hovered ? " hovered" : ""}`}
+                    style=${`left: ${this._toPercent(slot.startMs)}%; width: ${widthPct}%`}
+                >${text}</span>
+            `;
+        });
+    }
+
+    /**
+     * The slot's reading, short enough to fit in a slot's worth of room.
+     *
+     * Shorter than the tooltip on purpose: the tooltip names the series and the
+     * hours, which the row and the axis already say to anyone reading the strip
+     * -- what is left is the number, and the units are the row's, not the
+     * cell's.
+     */
+    private _buildSlotValueText(
+        kind: "battery" | "solar" | "price",
+        slot: { id: string; startMs: number; endMs: number | null },
+    ): string | null {
+        const point = this.forecastPoints.get(slot.id);
+        if (point === undefined) {
+            return null;
+        }
+
+        if (kind === "battery") {
+            return point.socPct === null || point.socPct === undefined
+                ? null
+                : `${Math.round(point.socPct)}`;
+        }
+
+        if (kind === "solar") {
+            return point.solarWh === 0 ? null : this._formatSolarRate(slot);
+        }
+
+        return point.price === null || point.price === undefined
+            ? null
+            : point.price.toFixed(1);
+    }
+
+    /**
+     * A slot's sun as kWh over a whole hour, whatever the slot's own length is.
+     *
+     * The forecast is energy per slot, so on a quarter-hour schedule the same
+     * sunshine reads as a quarter of the number it does on an hourly one -- and
+     * a row of figures that changes meaning with the slot length is a row nobody
+     * can hold against the yield they know their roof gets at noon. Scaling to
+     * the hour makes every reading the same reading, and it is the rate the
+     * bars already draw.
+     */
+    private _formatSolarRate(slot: { id: string; startMs: number; endMs: number | null }): string | null {
+        const solarWh = this.forecastPoints.get(slot.id)?.solarWh;
+        if (solarWh === null || solarWh === undefined) {
+            return null;
+        }
+
+        const durationMs = (slot.endMs ?? slot.startMs) - slot.startMs;
+        const perHour = durationMs <= 0 ? solarWh : solarWh * (3_600_000 / durationMs);
+        const kwh = perHour / 1000;
+        return kwh >= 10 ? `${Math.round(kwh)}` : kwh.toFixed(1);
+    }
+
+    private _isWideEnoughForValue(widthPct: number): boolean {
+        return this._trackWidthPx === 0
+            || (widthPct / 100) * this._trackWidthPx >= MIN_SLOT_VALUE_WIDTH_PX;
     }
 
     private _buildSlotHitTitle(
@@ -1623,13 +1898,10 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         if (kind === "solar") {
-            if (point.solarWh === null || point.solarWh === undefined) {
-                return null;
-            }
-
-            const kwh = point.solarWh / 1000;
-            const value = kwh >= 10 ? `${Math.round(kwh)}` : kwh.toFixed(1);
-            return `${this.localize("scheduling.forecast.solar_label")} · ${value} kWh · ${range}`;
+            const value = this._formatSolarRate(slot);
+            return value === null
+                ? null
+                : `${this.localize("scheduling.forecast.solar_label")} · ${value} kWh/h · ${range}`;
         }
 
         if (point.price === null || point.price === undefined) {
@@ -1695,6 +1967,7 @@ export class SchedulingEntityDayBand extends LitElement {
         const atMs = ratio < 0 || ratio > 1
             ? null
             : this._windowStartMs + ratio * (this._windowEndMs - this._windowStartMs);
+        this._trackHoveredSlot(atMs, event);
         this._emitTimeHover(atMs);
         this.dispatchEvent(new CustomEvent<EntityDayBandPointerMoveDetail>("entity-day-band-pointer-move", {
             bubbles: true,

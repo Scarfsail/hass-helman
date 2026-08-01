@@ -35,12 +35,21 @@ interface MountOptions {
      * the day editor -- the production host that matters -- uses.
      */
     columnLabels?: boolean;
-    /** Draw the day's slots as targets, as the editor's Explain mode does. */
+    /** Draw the day's slots, as both of the editor's modes do. */
     slotGrid?: boolean;
+    /** And let a press on one name it, as the editor's Explain mode does. */
+    slotPicks?: boolean;
     /** A second lane, for the marks that are meant to be per lane. */
     twoLanes?: boolean;
     /** The hour whose slot the host is showing an answer for. */
     selectedSlot?: number;
+    /**
+     * Half-hour slots with a solar forecast, and the forecast rows on.
+     *
+     * The one shape that tells a per-slot figure apart from a per-hour one:
+     * on an hourly day the two are the same number.
+     */
+    halfHourly?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
@@ -48,13 +57,14 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, twoLanes, selectedSlot }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
-        const slots = Array.from({ length: 24 }, (_, hour) => ({
-            id: new Date(at(hour)).toISOString(),
-            index: hour,
-            startMs: at(hour),
-            endMs: at(hour + 1),
+        const stepMs = halfHourly ? hourMs / 2 : hourMs;
+        const slots = Array.from({ length: halfHourly ? 48 : 24 }, (_, index) => ({
+            id: new Date(dayStartMs + index * stepMs).toISOString(),
+            index,
+            startMs: dayStartMs + index * stepMs,
+            endMs: dayStartMs + (index + 1) * stepMs,
             dayKey: "2026-07-24",
             timeLabel: "",
             endLabel: "",
@@ -127,11 +137,19 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         band.readonly = true;
         band.laneLabels = columnLabels ? "column" : "track";
         band.slotGrid = slotGrid;
+        band.slotPicks = slotPicks;
         band.selectedSlot = selectedSlot === undefined
             ? null
             : { laneKey: "appliance:boiler", slotId: new Date(at(selectedSlot)).toISOString() };
-        band.showForecastRows = false;
+        band.showForecastRows = halfHourly;
         band.showAxis = false;
+        if (halfHourly) {
+            // 600 Wh in a half hour is 1.2 kWh over the hour it sits in.
+            band.forecastPoints = new Map(slots.map((slot) => [
+                slot.id,
+                { socPct: 50, solarWh: 600, price: 1.5 },
+            ]));
+        }
         if (windowed) {
             band.windowStartMs = windowStartMs;
             band.windowEndMs = windowEndMs;
@@ -171,8 +189,10 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         live: options.live ?? false,
         columnLabels: options.columnLabels ?? false,
         slotGrid: options.slotGrid ?? false,
+        slotPicks: options.slotPicks ?? false,
         twoLanes: options.twoLanes ?? false,
         selectedSlot: options.selectedSlot,
+        halfHourly: options.halfHourly ?? false,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -385,9 +405,9 @@ test.describe("entity day band, read only", () => {
  * hardcoded half hour, and a press has to name the slot's id, not a time the
  * host would then have to match back to a row.
  *
- * Hover is per lane, not per time. The question is "why is *this* appliance
- * doing this at this hour", so washing the same minutes in every lane would
- * mark forty slots nobody asked about.
+ * Hover is per time, and every lane marks it. The question a hovered hour asks
+ * is what else the house is doing then, and the answer is in the other tracks
+ * -- so the lane under the pointer is marked harder, and the rest go along.
  */
 test.describe("entity day band, slot grid", () => {
     test("off by default, so the editing hosts are untouched", async ({ page }) => {
@@ -407,21 +427,45 @@ test.describe("entity day band, slot grid", () => {
         expect(geometry.width).toBeCloseTo(100 / 24, 1);
     });
 
-    test("hovering marks the slot under the pointer, in that lane alone", async ({ page }) => {
+    test("hovering marks that hour in every lane, and the pointed one hardest", async ({ page }) => {
         await mountBand(page, { slotGrid: true, twoLanes: true });
 
         const band = page.locator("scheduling-entity-day-band");
         const slotId = new Date(DAY_START_MS + 12 * HOUR_MS).toISOString();
-        await band.locator('.lane[data-lane="appliance:boiler"] .slot-pick[data-slot="' + slotId + '"]').hover();
+        const cell = (lane: string) =>
+            band.locator(`.lane[data-lane="${lane}"] .slot-pick[data-slot="${slotId}"]`);
+        // Through the run drawn there: the grid takes no pointer events here,
+        // and hovering an hour the boiler is busy is exactly the case worth
+        // pinning -- that is when the other rows are worth reading.
+        await cell("appliance:boiler").hover({ force: true });
 
+        // One lane is being pointed at, and the other is the context that makes
+        // the first one worth pointing at.
         await expect(band.locator(".slot-pick.hovered")).toHaveCount(1);
-        await expect(
-            band.locator('.lane[data-lane="appliance:boiler"] .slot-pick[data-slot="' + slotId + '"]'),
-        ).toHaveClass(/hovered/);
+        await expect(cell("appliance:boiler")).toHaveClass(/hovered/);
+        await expect(band.locator(".slot-pick.co-hovered")).toHaveCount(1);
+        await expect(cell("appliance:pump")).toHaveClass(/co-hovered/);
+    });
+
+    test("the grid is inert until a host asks for presses", async ({ page }) => {
+        // Drawn in both of the editor's modes, but only pressable in Explain:
+        // while a day is being authored the track is a drag surface, and a
+        // layer of slot targets over every run would swallow the grabs.
+        await mountBand(page, { slotGrid: true });
+
+        await expect(page.locator("scheduling-entity-day-band").locator(".slot-pick.pickable"))
+            .toHaveCount(0);
+        const slotId = new Date(DAY_START_MS + 12 * HOUR_MS).toISOString();
+        await page
+            .locator("scheduling-entity-day-band")
+            .locator('.slot-pick[data-slot="' + slotId + '"]')
+            .click({ force: true });
+        const events = await readEvents(page);
+        expect(events.filter((event) => event.type === "entity-day-band-slot-select")).toHaveLength(0);
     });
 
     test("pressing a slot names it and its lane, and nothing else", async ({ page }) => {
-        await mountBand(page, { slotGrid: true });
+        await mountBand(page, { slotGrid: true, slotPicks: true });
 
         const slotId = new Date(DAY_START_MS + 12 * HOUR_MS).toISOString();
         await page
@@ -452,5 +496,34 @@ test.describe("entity day band, slot grid", () => {
         await expect(
             band.locator('.lane[data-lane="appliance:boiler"] .slot-pick.selected'),
         ).toHaveCount(1);
+    });
+});
+
+/**
+ * The forecast rows read as one chart with the tracks under them, so what they
+ * say per slot has to be comparable slot to slot -- and comparable to the yield
+ * the user knows their roof gets, which is a per-hour figure.
+ */
+test.describe("entity day band, forecast rows", () => {
+    test("solar reads as kWh over a whole hour, whatever the slot is", async ({ page }) => {
+        await mountBand(page, { halfHourly: true, slotGrid: true });
+
+        const band = page.locator("scheduling-entity-day-band");
+        const solarRow = band.locator(".context-row").first();
+        // 600 Wh in a half-hour slot: the slot holds 0.6 kWh, and the hour it
+        // sits in is on course for 1.2.
+        await expect(solarRow.locator(".slot-value").first()).toHaveText("1.2");
+        await expect(solarRow.locator(".slot-hit").first())
+            .toHaveAttribute("title", /1\.2 kWh\/h/);
+    });
+
+    test("the grid runs through the charts too", async ({ page }) => {
+        await mountBand(page, { halfHourly: true, slotGrid: true });
+
+        // Three rows of 48 slots: the charts are ruled in the same unit the
+        // tracks under them are, or a column is at "about noon" rather than at
+        // a slot.
+        await expect(page.locator("scheduling-entity-day-band").locator(".slot-hit.grid"))
+            .toHaveCount(3 * 48);
     });
 });

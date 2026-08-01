@@ -750,8 +750,93 @@ test.describe("entity day editor", () => {
 
         expect(titles.battery).toBe("scheduling.forecast.battery_label · 76 % · 09:00–10:00");
         expect(titles.price).toBe("scheduling.forecast.price_label · 2.5 CZK/kWh · 09:00–10:00");
-        expect(titles.solarAtMidnight).toBe("scheduling.forecast.solar_label · 0.0 kWh · 00:00–01:00");
+        expect(titles.solarAtMidnight).toBe("scheduling.forecast.solar_label · 0.0 kWh/h · 00:00–01:00");
         expect(titles.hitsPerRow).toBe(24);
+    });
+
+    /**
+     * A chart of bars answers "which hour is best" and nothing else; the number
+     * over each slot is what makes it answer "and by how much", which is the
+     * question that decides whether moving a run is worth doing.
+     */
+    test("every hour of every chart says what it is worth", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { pruned: true });
+
+        const values = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const read = (row: Element) =>
+                [...row.querySelectorAll(".slot-value")].map((cell) => cell.textContent?.trim());
+            const chartRows = band.shadowRoot.querySelectorAll(".context-row:not(.price)");
+            return {
+                solar: read(chartRows[0]),
+                battery: read(chartRows[1]),
+                price: read(band.shadowRoot.querySelector(".context-row.price")),
+            };
+        });
+
+        // Solar is kWh, the battery is whole percent, the price is its own unit
+        // to one decimal -- the units belong to the row, not to the cell.
+        // 09:00 is the tenth hour: 0.81 kWh, 76 %, 2.45. The solar row is one
+        // short of the others -- midnight has no sun, and an explicit zero
+        // would be a reading where the row already says there is none.
+        expect(values.solar).toHaveLength(23);
+        expect(values.solar[8]).toBe("0.8");
+        expect(values.battery).toHaveLength(24);
+        expect(values.battery[9]).toBe("76");
+        expect(values.price[9]).toBe("2.5");
+    });
+
+    /**
+     * Hovering an hour is a question about the whole house at that hour, so the
+     * mark lands in every lane and in every chart -- while the row the pointer
+     * is actually in is marked harder, because that is the one being pointed at.
+     */
+    test("hovering an hour marks it down the whole stack, charts included", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, pruned: true });
+
+        const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:30:00Z`), "appliance:boiler");
+        await page.mouse.move(point.x, point.y);
+
+        const marked = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const slots = (selector: string) =>
+                [...band.shadowRoot.querySelectorAll(selector)]
+                    .map((cell: Element) => cell.getAttribute("data-slot"));
+            return {
+                pointed: slots(".slot-pick.hovered"),
+                alongside: slots(".slot-pick.co-hovered").length,
+                charts: band.shadowRoot.querySelectorAll(".context-row .slot-hit.co-hovered").length,
+            };
+        });
+
+        expect(marked.pointed).toEqual([`${DAY_ONE}T13:00:00.000Z`]);
+        expect(marked.alongside).toBeGreaterThan(0);
+        // Solar, battery and price all light the same hour.
+        expect(marked.charts).toBe(3);
+    });
+
+    /**
+     * The grid is drawn while a day is being authored too -- a run's edge means
+     * nothing until you can see which slot it landed on -- but it must not take
+     * the presses and drags the blocks are drawn to invite.
+     */
+    test("the slot grid is drawn while editing, and does not take the presses", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { pruned: true });
+
+        const band = () => page.locator("scheduling-entity-day-band");
+        await expect(band().locator(".slot-pick")).not.toHaveCount(0);
+        await expect(band().locator(".slot-pick.pickable")).toHaveCount(0);
+        await expect(band().locator(".context-row .slot-hit.grid")).not.toHaveCount(0);
+
+        // The block underneath still opens for editing, through the grid.
+        await band().locator(".segment").first().click();
+        await expect(page.locator("scheduling-entity-day-editor").locator(".edit-panel"))
+            .toHaveCount(1);
     });
 
     test("a past block cannot be edited from the band either", async ({ page }) => {
