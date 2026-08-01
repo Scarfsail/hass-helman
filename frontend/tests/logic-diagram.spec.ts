@@ -556,6 +556,104 @@ function selfSustainabilityPayload(level = "strict") {
 const SELF_SUSTAINABILITY_PAYLOAD = selfSustainabilityPayload();
 
 /**
+ * A refusal the `≥1` used to swallow: the real pool-heatpump record, one slot.
+ *
+ * Two groups own the same 15:00 slot. `Eligibility` matches **group 0** — the
+ * self-gating nodes contribute an all-true mask, so matching never reads them —
+ * and the optimizer then consults `ensure_self_sustainability` for that group
+ * and drops the slot (`appliance_runtime.py:539-541`). Group 1 is never
+ * offered the slot, and its own conditions stand untouched and true.
+ *
+ * Drawn as a term of group 0's AND, that refusal is lost the moment the `≥1`
+ * sees group 1: the slot is not planned with every drawn term true, and the
+ * picture falls back to `unexplained_veto` — over a refusal the record names,
+ * with the failing test and the numbers, in the block right next to it.
+ */
+const SELF_GATING_TWO_GROUP_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "pool-heatpump",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["skip", 1]],
+        winningOptimizer: { "0": "pool-heatpump" },
+        groups: [
+            {
+                index: 0,
+                label: "Záporná cena",
+                paramsSource: [["day_resolved", 1]],
+                params: [[{ max_run_price: 0.5 }, 1]],
+                conditions: [
+                    {
+                        key: "run_when",
+                        scope: "day",
+                        state: [["true", 1]],
+                        value: [[["surplus", "tight"], 1]],
+                        actual: { "0": "surplus" },
+                    },
+                    {
+                        key: "max_run_price",
+                        scope: "slot",
+                        state: [["true", 1]],
+                        value: [[0.5, 1]],
+                        actual: { "0": 0.164 },
+                    },
+                    {
+                        key: "ensure_self_sustainability",
+                        scope: "run",
+                        state: [["false", 1]],
+                        value: [["strict", 1]],
+                        actual: {
+                            "0": {
+                                code: "would_break_soc_floor",
+                                floor: 40,
+                                projectedMinSoc: 31.2,
+                                atSlot: `${DATE}T19:00:00+02:00`,
+                            },
+                        },
+                    },
+                ],
+            },
+            {
+                index: 1,
+                label: "Studený bazén",
+                paramsSource: [["day_resolved", 1]],
+                params: [[{}, 1]],
+                customResults: [[[false], 1]],
+                conditions: [
+                    {
+                        key: "run_when",
+                        scope: "day",
+                        state: [["true", 1]],
+                        value: [[["surplus", "tight"], 1]],
+                        actual: { "0": "surplus" },
+                    },
+                    {
+                        key: "max_run_price",
+                        scope: "slot",
+                        state: [["not_applicable", 1]],
+                    },
+                    {
+                        key: "ensure_self_sustainability",
+                        scope: "run",
+                        state: [["not_applicable", 1]],
+                    },
+                ],
+            },
+        ],
+        gates: [
+            { key: "run_window", state: [["true", 1]], params: [[{ start: "08:00", end: "18:00" }, 1]] },
+            { key: "blocked_user_owned", state: [["true", 1]] },
+        ],
+    }],
+};
+
+/**
  * A **forced** day: every condition failed and the appliance ran anyway.
  *
  * `max_consecutive_skips` is the one construct that defeats the whole OR chain
@@ -1022,6 +1120,37 @@ test.describe("self-sustainability says which test refused the slot", () => {
         await expect(block(page).locator("text.comparison")).toHaveCount(0);
         // The mode, in words rather than as the config token.
         expect(await svgText(block(page).locator("text.actual"))).toBe("přísný");
+    });
+
+    test("a refusal vetoes the slot, not the group that configured it", async ({ page }) => {
+        await mountPanel(page, SELF_GATING_TWO_GROUP_PAYLOAD);
+        await selectSlot(page, 0, "pool-heatpump");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "not_eligible");
+
+        // Group 1's conditions did hold, so the `≥1` is true — and the slot was
+        // still not planned. The refusal is what says so, wired past both.
+        const { inputs, computed, final } = await andInvariant(page);
+        expect(inputs).toContain("input-0-2");
+        expect(computed).toBe("false");
+        expect(final).toBe("false");
+        await expect(diagram(page).locator('g.block[data-id="or"]'))
+            .toHaveAttribute("data-state", "true");
+
+        // Never an admission of ignorance over a refusal the record names.
+        await expect(diagram(page).locator('g.block[data-key="unexplained_veto"]'))
+            .toHaveCount(0);
+        await expect(diagram(page).locator('.annotation[data-key="unexplained_veto"]'))
+            .toHaveCount(0);
+
+        // And it is the one block lit: matching never read the node, so group 0
+        // matched — the group the backend matched too — and its own conditions
+        // passed.
+        const marks = await decisiveness(page);
+        expect(marks["input-0-2"]).toBe("true");
+        expect(marks["input-0-0"]).toBe("false");
+        expect(marks["and-0"]).toBe("false");
+        await expect(diagram(page).locator(".matched")).toHaveAttribute("data-group", "0");
     });
 });
 

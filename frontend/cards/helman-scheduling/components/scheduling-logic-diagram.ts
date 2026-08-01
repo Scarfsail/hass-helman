@@ -251,6 +251,33 @@ const SET_MEMBERSHIP_CONDITIONS = new Set<string>(["run_when"]);
  */
 export const SELF_SUSTAINABILITY = "ensure_self_sustainability";
 
+/**
+ * The nodes that gate the **slot**, not the group that configured them.
+ *
+ * Both contribute an all-true mask to `build_eligibility` (`trace.py:572-578`),
+ * so group matching never looks at them: the optimizer that consults them
+ * resolves the placeholder afterwards, on the slots it actually reached, and
+ * *for the group it had already matched*. Two consequences, and the drawing
+ * needs both.
+ *
+ * They are **not terms of their group's AND**. Drawing them there claims the
+ * group failed to match on a node matching never read, which is the opposite of
+ * what the record says — and it hands the frontend a different matched group
+ * from the backend's.
+ *
+ * They **are terms of the planning AND**. A refusal stops the placement whatever
+ * else held: `_optimize_uncapped` drops the slot on the spot
+ * (`appliance_runtime.py:539-541`) and never offers it to another group. Left
+ * inside the group, that falsehood is swallowed by the `≥1` the moment a second
+ * group's own conditions hold — the slot is then not planned with every drawn
+ * term true, and the diagram falls back to `unexplained_veto` over a refusal
+ * the record names in full.
+ */
+const SELF_GATING_CONDITIONS = new Set<string>([
+    SELF_SUSTAINABILITY,
+    "reserve_floor_soc",
+]);
+
 /** The tolerances strict allows before a day counts as not paying for itself. */
 const STRICT_SOC_TOLERANCE_PCT = 0.5;
 const STRICT_IMPORT_TOLERANCE_KWH = 0.05;
@@ -703,6 +730,15 @@ function isPlanInput(key: string, state: LogicState, terminal: LogicTerminal): b
  * missing it — because a picture that resolves `true` above the word
  * "nesplněné podmínky" is worse than an admission of ignorance.
  *
+ * **The self-gating nodes gate the slot, not their group.** Group matching
+ * never reads them — they contribute an all-true mask and the optimizer
+ * resolves them afterwards, for the group it had already matched — so they are
+ * drawn in their group's column and wired past its `&` and past the `≥1`,
+ * straight into the planning AND. See `SELF_GATING_CONDITIONS` for what goes
+ * wrong when they sit inside the group: a second group's conditions hold, the
+ * `≥1` swallows the refusal, and a slot the record explains in full comes out
+ * as `unexplained_veto`.
+ *
  * **A single group gets no OR.** `≥1` over one input decides nothing and reads
  * as a stage the reader has to account for; the group's `&` wires straight on.
  * It gets no caption either, for the same reason: with one chain there is
@@ -768,6 +804,10 @@ export function buildLogicDiagram(
     const groupInputIds: string[][] = [];
     const groupInputStates: LogicState[][] = [];
     const andCenters: number[] = [];
+    // The self-gating nodes, hoisted out of the groups they are configured in:
+    // drawn in their group's column, wired past its `&` and past the `≥1`
+    // straight into the planning AND. See `SELF_GATING_CONDITIONS`.
+    const selfGating: { id: string; key: string; state: LogicState }[] = [];
 
     cell.groups.forEach((group, groupPos) => {
         const inputIds: string[] = [];
@@ -781,9 +821,12 @@ export function buildLogicDiagram(
         });
         cursorY += GROUP_LABEL_H;
         const top = cursorY;
-        if (group.conditions.length === 0) {
+        if (group.conditions.every((node) => SELF_GATING_CONDITIONS.has(node.key))) {
             // A group with nothing configured still gets a row, so the diagram
-            // never silently drops a branch that exists in the record.
+            // never silently drops a branch that exists in the record. A group
+            // that configured *only* self-gating nodes is the same case: none of
+            // them is a term of this AND, so without the row the `&` would be
+            // drawn with nothing feeding it.
             const id = `input-${groupPos}-none`;
             blocks.push({
                 id,
@@ -825,8 +868,12 @@ export function buildLogicDiagram(
                 width: INPUT_W,
                 height: BLOCK_H,
             });
-            inputIds.push(id);
-            inputStates.push(node.state);
+            if (SELF_GATING_CONDITIONS.has(node.key)) {
+                selfGating.push({ id, key: node.key, state: node.state });
+            } else {
+                inputIds.push(id);
+                inputStates.push(node.state);
+            }
             cursorY += BLOCK_H + V_GAP;
         });
         const bottom = cursorY - V_GAP;
@@ -967,6 +1014,21 @@ export function buildLogicDiagram(
         } else {
             annotations.push({ key: "groups", kind: "groups", state: spineState, params: {} });
         }
+    }
+
+    // The self-gating nodes, already drawn in their group's column: only their
+    // wiring is settled here. `isPlanInput` applies to them exactly as it does
+    // to a gate — a slot that ran cannot have been refused by the node that
+    // would have stopped it, and a record that says otherwise is reported
+    // beside the chain rather than drawn as a veto the terminal contradicts.
+    for (const node of selfGating) {
+        if (!isPlanInput(node.key, node.state, terminal)) {
+            annotations.push({ key: node.key, kind: "gate", state: node.state, params: {} });
+            continue;
+        }
+        edges.push({ from: node.id, to: "final", decisive: false });
+        finalInputIds.push(node.id);
+        finalInputStates.push(node.state);
     }
 
     cell.gates.forEach((gate: ExplanationGate, gatePos) => {
