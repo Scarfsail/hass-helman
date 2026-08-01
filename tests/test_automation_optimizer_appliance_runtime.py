@@ -1995,6 +1995,9 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         self.assertEqual(_gate(placed, "run_window").state, "true")
         self.assertEqual(_gate(placed, "day_group_matched").state, "true")
         self.assertEqual(_gate(placed, "slot_available").state, "true")
+        # `slot_available` is the ownership node in capped mode; the writer's
+        # veto would say the same thing a second time, so it stays out.
+        self.assertIsNone(_gate(placed, "blocked_user_owned"))
         remaining = _gate(placed, "daily_minimum_remaining")
         self.assertEqual(remaining.state, "true")
         self.assertEqual(remaining.params["minHours"], 1)
@@ -2234,6 +2237,34 @@ class UncappedModeTests(unittest.TestCase):
             set(placed),
             {_slot_id(8, 0), _slot_id(8, 30), _slot_id(9, 0), _slot_id(9, 30)},
         )
+
+    def test_the_writer_veto_is_the_ownership_node_without_a_cap(self) -> None:
+        # Uncapped mode never ranks, so there is no `slot_available` to state
+        # ownership — the writer's veto keeps its say here.
+        appliance = _generic()
+        cfg = _uncapped_config(
+            appliance_id=appliance.id, window={"start": "08:00", "end": "09:00"}
+        )
+        snapshot = _make_snapshot(
+            appliance=appliance, export_points=_export_points(set())
+        )
+
+        _result, trace = run_optimizer_with_trace(
+            build_appliance_runtime_optimizer(
+                cfg,
+                appliance_registry=AppliancesRuntimeRegistry.from_appliances(
+                    (appliance,)
+                ),
+            ),
+            snapshot,
+            cfg,
+            reference_time=REFERENCE_TIME,
+        )
+
+        assert_trace_contract(self, trace)
+        placed = _slots_by_id(trace)[_slot_id(8, 0)]
+        self.assertIsNone(_gate(placed, "slot_available"))
+        self.assertEqual(_gate(placed, "blocked_user_owned").state, "true")
 
     def test_price_does_not_rank_when_there_is_no_cap(self) -> None:
         # The capped path would take only the two cheap slots; uncapped takes

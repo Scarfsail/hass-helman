@@ -331,6 +331,9 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
         self.assertEqual(_gate(chosen, "window_soc_known").state, "true")
         self.assertEqual(_gate(chosen, "charge_needed").state, "true")
         self.assertEqual(_gate(chosen, "slot_available").state, "true")
+        # Ownership is stated once, by the node the ranking owns; the writer's
+        # veto would only repeat it.
+        self.assertIsNone(_gate(chosen, "blocked_user_owned"))
         rank = _gate(chosen, "cheapest_rank")
         self.assertEqual(rank.state, "true")
         self.assertEqual(rank.params["rank"], 1)

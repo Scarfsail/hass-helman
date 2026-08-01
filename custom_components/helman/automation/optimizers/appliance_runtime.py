@@ -208,18 +208,24 @@ class ApplianceRuntimeOptimizer:
         )
         appliance_id = self.target.appliance.id
         appliance_domain = f"appliance:{appliance_id}"
+        # Capped mode ranks, and `_rank_slots` drops user-owned slots and reports
+        # that as `slot_available`, so the writer's veto would only restate it.
+        # Uncapped mode does not rank at all: there the veto is the only node
+        # that speaks about ownership, so it keeps its say.
+        capped = config.params.get("daily_minimum") is not None
         writer = ScheduleWriter(
             snapshot,
             eligibility=eligibility,
             trace=trace,
             domain=appliance_domain,
+            pre_filters_ownership=capped,
         )
         action = {"domain": appliance_domain, **self.target.authored_action}
 
         # Master params decide the mode: `daily_minimum` is not something a group
         # can introduce (its required, non-overridable `max_consecutive_skips`
         # makes a partial override unreadable), so this is stable across groups.
-        if config.params.get("daily_minimum") is None:
+        if not capped:
             return self._optimize_uncapped(
                 snapshot=snapshot,
                 config=config,

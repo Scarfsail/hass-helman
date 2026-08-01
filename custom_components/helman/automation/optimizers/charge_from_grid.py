@@ -108,7 +108,14 @@ class ChargeFromGridOptimizer:
         # slot is "not considered" and left to a frontend default (D).
         trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
         eligibility = build_eligibility(snapshot, config, trace)
-        writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
+        writer = ScheduleWriter(
+            snapshot,
+            eligibility=eligibility,
+            trace=trace,
+            # Every write comes out of the ranking, and the ranking already
+            # dropped user-owned slots under `slot_available`.
+            pre_filters_ownership=True,
+        )
         trace.set_verdict(
             slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
         )

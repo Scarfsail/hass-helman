@@ -119,6 +119,15 @@ class ScheduleWriter:
     ``condition_met`` is taken per slot from the matched group, so a group whose
     ``custom`` conditions failed places candidates while a sibling group that
     matched fully places real actions — in the same run, on the same optimizer.
+
+    ``pre_filters_ownership`` says the optimizer drops user-owned slots itself,
+    before its ranking, and reports that as its own ``slot_available`` node. For
+    those optimizers the writer's veto can only ever come out ``true``, and a
+    node that cannot fail is noise in the diagram — the reader sees the same
+    fact stated twice — so the ``true`` emission is suppressed. The ``false``
+    branch stays wired up regardless: it costs nothing, and if a route ever does
+    reach the writer with a user-owned slot the trace still says so instead of
+    the slot vanishing without a reason.
     """
 
     def __init__(
@@ -128,6 +137,7 @@ class ScheduleWriter:
         eligibility: "Eligibility",
         trace: "OptimizerTrace | None" = None,
         domain: str = "inverter",
+        pre_filters_ownership: bool = False,
     ) -> None:
         self.document = ScheduleDocument(
             execution_enabled=snapshot.schedule.execution_enabled,
@@ -136,6 +146,7 @@ class ScheduleWriter:
         self._eligibility = eligibility
         self._trace = trace or NULL_TRACE
         self._domain = domain
+        self._pre_filters_ownership = pre_filters_ownership
         self._blocked_slot_ids: list[str] = []
         self._written_slot_ids: list[str] = []
 
@@ -212,13 +223,14 @@ class ScheduleWriter:
           distinct from ✗ not eligible, which is a condition column going false).
         - ``true`` — reached and written; the user does not own the slot.
         - *absent* — the optimizer never offered this slot to the writer, so
-          the veto has nothing to say about it.
+          the veto has nothing to say about it, or the optimizer pre-filters
+          ownership and owns the node itself (``pre_filters_ownership``).
 
         A blocked slot keeps whatever verdict its optimizer stamped: the verdict
         is the optimizer's intent, and this node is what explains why the
         schedule does not show it.
         """
-        if self._written_slot_ids:
+        if self._written_slot_ids and not self._pre_filters_ownership:
             self._trace.gate(
                 slot_ids=self._written_slot_ids,
                 key=GATE_BLOCKED_USER_OWNED,
