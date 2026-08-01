@@ -795,9 +795,25 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         }
     }
 
-    // The group the OR settled on: the *first* satisfied one, never "all that
-    // passed". `build_eligibility` stops there and so does this.
-    const matchedPos = groupAndStates.findIndex((state) => state === "true");
+    // The group the OR settled on, mirroring `Eligibility.__init__`:
+    //
+    //     fully = next(g for g in matching if g.custom_met)
+    //     self._matched[slot_id] = fully or matching[0]
+    //
+    // The *first satisfied* group, never "all that passed" — but a group whose
+    // custom conditions also held wins over an earlier one whose did not. Take
+    // the mask alone and a slot that ran under group 2 gets read against group
+    // 1's failed template, which is a false custom stage over a `spustit`
+    // terminal: the whole re-check then reads as a contradiction and drops out
+    // of the picture, on exactly the slots that ran.
+    const groupCustomStates = cell.groups.map((group) => customState(group));
+    const systemMatched = groupAndStates.flatMap(
+        (state, groupPos) => state === "true" ? [groupPos] : [],
+    );
+    const matchedPos = systemMatched.find(
+        (groupPos) => groupCustomStates[groupPos] !== "false"
+            && groupCustomStates[groupPos] !== "errored",
+    ) ?? systemMatched[0] ?? -1;
     const matchedGroupIndex = matchedPos < 0 ? null : cell.groups[matchedPos].index;
 
     // The spine: the one term that carries "some group's conditions held".
@@ -934,15 +950,16 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
     // `candidate`, and the executor takes them again before the action starts
     // (`coordinator.py:3575-3620`) — none of which a term sitting in the gate
     // pile can say.
-    const recorded = customState(matchedPos < 0 ? undefined : cell.groups[matchedPos]);
+    const recorded = matchedPos < 0 ? "n/a" : groupCustomStates[matchedPos];
     // A candidate is a candidate *because* its custom conditions failed. Where
     // the matched group's record does not carry that falsehood, the stage says
     // so rather than resolving true above the word "kandidát".
     const unexplainedCustom = terminal === "candidate" && recorded !== "false" && recorded !== "errored";
-    // The mirror of `isPlanInput`'s second rule: a slot that ran cannot have
-    // failed the stage that would have stopped it. That happens where the
-    // matched group is not the group whose custom conditions carried the plan,
-    // and the honest place for it is beside the chain.
+    // The mirror of `isPlanInput`'s second rule, and a last resort: a slot that
+    // ran cannot have failed the stage that would have stopped it. Picking the
+    // matched group the way the backend does is what keeps this from firing on
+    // ordinary multi-group records; what is left is a record that disagrees
+    // with itself, and the honest place for that is beside the chain.
     const contradictsRun = terminal === "execute" && (recorded === "false" || recorded === "errored");
     const custom: LogicState = unexplainedCustom ? "false" : recorded;
     const showRecheck = custom !== "n/a" && !contradictsRun;

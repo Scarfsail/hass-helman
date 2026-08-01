@@ -292,6 +292,62 @@ const MET_CUSTOM_PAYLOAD = {
 };
 
 /**
+ * Two groups match, and only the second one's custom conditions held.
+ *
+ * `Eligibility.__init__` settles on `fully or matching[0]` — the first group
+ * that matched *and* whose custom conditions held, falling back to the first
+ * that matched at all. Reading `matching[0]` instead gives a false custom stage
+ * over a `spustit` terminal, which the diagram then has to suppress as a
+ * contradiction: a slot that ran with no re-check stage at all, next to a
+ * candidate that has one. That was the reported inconsistency.
+ */
+const SECOND_GROUP_CUSTOM_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["execute", 1]],
+        winningOptimizer: { "0": "appliance_runtime" },
+        groups: [
+            {
+                index: 0,
+                label: "Ráno",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ max_run_price: 2.0 }, 1]],
+                // Matched on the mask, and its template said no.
+                customResults: [[[false], 1]],
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[2.0, 1]],
+                }],
+            },
+            {
+                index: 1,
+                label: "Poledne",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ max_run_price: 3.0 }, 1]],
+                customResults: [[[true], 1]],
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[3.0, 1]],
+                }],
+            },
+        ],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
+/**
  * A **forced** day: every condition failed and the appliance ran anyway.
  *
  * `max_consecutive_skips` is the one construct that defeats the whole OR chain
@@ -1243,6 +1299,26 @@ test.describe("the diagram shows the test, not only the result", () => {
         const custom = diagram(page).locator('g.block[data-id="custom"]');
         await expect(custom).toHaveAttribute("data-state", "true");
         await expect(custom).toHaveAttribute("data-decisive", "true");
+    });
+
+    test("the matched group is the one whose custom conditions held", async ({ page }) => {
+        // Two groups match; the first one's template said no and the second
+        // one's did not, so the slot ran under the second. Reading the first
+        // would put a false re-check over a run, which the diagram suppresses
+        // -- and the stage would vanish on exactly the slots that ran, while
+        // the candidate beside them kept theirs.
+        await mountPanel(page, SECOND_GROUP_CUSTOM_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
+
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveCount(1);
+        await expect(custom).toHaveAttribute("data-state", "true");
+        // Which is to say: the second group's, not the first's.
+        await expect(custom).toHaveAttribute("data-group", "1");
+        // Nothing gets pushed into the context panel to hide a contradiction.
+        await expect(diagram(page).locator('.annotation[data-key="custom"]')).toHaveCount(0);
     });
 
     test("with no custom conditions there is no second stage at all", async ({ page }) => {
