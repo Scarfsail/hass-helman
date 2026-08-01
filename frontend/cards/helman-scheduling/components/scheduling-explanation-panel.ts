@@ -190,6 +190,7 @@ export class SchedulingExplanationPanel extends LitElement {
                         .cell=${active.cell}
                         .slotLabel=${this._slotLabel()}
                         .planLabel=${this._planLabel(active.cell)}
+                        .plannedBeforeHours=${this._plannedBeforeHours(active)}
                     ></scheduling-logic-diagram>
                 `}
             </div>
@@ -297,6 +298,47 @@ export class SchedulingExplanationPanel extends LitElement {
             ? undefined
             : tabs.find((tab) => tab.column.optimizerId === winning.optimizerId);
         return winningTab ?? tabs[0];
+    }
+
+    /**
+     * How many hours this optimizer places earlier in the day than this slot.
+     *
+     * The daily-minimum gate is stamped once per day from *measured* history,
+     * so it reads the same on every slot: "0 of 8 done" is as true of the
+     * evening as of the morning, and on a slot in the middle of an eight-hour
+     * run it reads as though nothing were planned at all. This is the other
+     * half — what the plan itself puts before this slot — and with it the
+     * block can say how far into the day's quota the slot sits.
+     *
+     * Counted from the plan rather than from the optimizer's arithmetic,
+     * because the optimizer has no such number: it ranks the day's candidates
+     * by cost and takes the cheapest `slots_needed` of them, in cost order.
+     * "How many run before this one" is a property of the result, and the
+     * result is exactly what this panel is holding.
+     *
+     * Slot length comes from the row spacing, so a lane on a granularity other
+     * than half-hourly counts in its own units. Null where the record is too
+     * thin to measure one (a single row, unparsable ids).
+     */
+    private _plannedBeforeHours(tab: ExplanationTab): number | null {
+        const model = this._model;
+        const row = model?.rows.find((entry) => entry.slotId === this.slotId);
+        if (model === undefined || model === null || row === undefined) {
+            return null;
+        }
+
+        const spacings = model.rows
+            .slice(1)
+            .map((entry, index) => entry.startMs - model.rows[index].startMs)
+            .filter((span) => Number.isFinite(span) && span > 0);
+        if (spacings.length === 0) {
+            return null;
+        }
+
+        const slotHours = Math.min(...spacings) / 3_600_000;
+        const placed = tab.column.cells.filter((cell, index) =>
+            index < row.index && (cell.outcome === "wrote" || cell.outcome === "overwritten"));
+        return placed.length * slotHours;
     }
 
     /**

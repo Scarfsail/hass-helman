@@ -408,6 +408,49 @@ const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
 };
 
 /**
+ * Four half-hour slots, all of them placed, against a two-hour daily minimum.
+ *
+ * The shape that made the daily-minimum block unreadable: the gate is stamped
+ * once per day from *measured* history (`appliance_runtime.py:232,263`), so
+ * every slot of an eight-hour run carries the same "nothing done yet" the
+ * morning did. The plan's own hours are the missing half.
+ */
+const DAILY_MINIMUM_RUN_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS,
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 4]],
+        verdict: [["execute", 4]],
+        winningOptimizer: { "0": "appliance_runtime", "1": "appliance_runtime", "2": "appliance_runtime", "3": "appliance_runtime" },
+        groups: [{
+            index: 0,
+            label: "Den",
+            paramsSource: [["slot_matched", 4]],
+            params: [[{ max_run_price: 9.0 }, 4]],
+            conditions: [{
+                key: "max_run_price",
+                scope: "slot",
+                state: [["true", 4]],
+                value: [[9.0, 4]],
+            }],
+        }],
+        gates: [{
+            key: "daily_minimum_remaining",
+            state: [["true", 4]],
+            // Nothing had run when the plan was built, and the day owes two
+            // hours: the same params on all four slots.
+            params: [[{ minHours: 2, doneHours: 0, remainingHours: 2 }, 4]],
+        }],
+    }],
+};
+
+/**
  * One group, with a custom condition, and a slot no group matched.
  *
  * The slot has no matched group at all, so the re-check stage has nothing to
@@ -1107,6 +1150,29 @@ test.describe("a block shows the numbers it was decided by", () => {
             .evaluateAll((nodes) => nodes.map((node) => node.textContent ?? "")
                 .filter((text) => /[<>≥≤=]/.test(text)));
         expect(invented).toEqual([]);
+    });
+
+    test("the daily minimum counts up to the slot, not to the morning", async ({ page }) => {
+        // Every slot of the run carries the same recorded "0 of 2 done" -- true
+        // of the whole day and useless on a slot in the middle of the run. The
+        // block adds what the plan puts before the slot, which is the unit the
+        // gate itself works in: slots_needed = ceil(remaining_hours / 0.5).
+        await mountPanel(page, DAILY_MINIMUM_RUN_PAYLOAD);
+        const detail = async () => svgText(
+            diagram(page).locator('g.block[data-key="daily_minimum_remaining"] text.detail'),
+        );
+
+        await selectSlot(page, 0, "appliance_runtime");
+        expect(await detail()).toBe("0/2 h");
+
+        // Two placed slots behind it, at half an hour each.
+        await selectSlot(page, 2, "appliance_runtime");
+        expect(await detail()).toBe("1/2 h");
+
+        // The last slot of the run: the quota is all but met by the time it
+        // starts, which is why nothing follows it.
+        await selectSlot(page, 3, "appliance_runtime");
+        expect(await detail()).toBe("1.5/2 h");
     });
 
     test("the full params are one hover away", async ({ page }) => {

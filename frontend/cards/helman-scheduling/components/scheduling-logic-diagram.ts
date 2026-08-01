@@ -363,6 +363,7 @@ export function gateDetail(
     key: string,
     params: Record<string, unknown>,
     slotId = "",
+    plannedBeforeHours: number | null = null,
 ): string | null {
     // The gates that test *the slot's own time* against a configured one, said
     // as the comparison they are. A window on its own is the same half-a-test a
@@ -383,7 +384,20 @@ export function gateDetail(
             return atMs === null ? release : `${atMs} < ${release}`;
         }
         case "daily_minimum_remaining":
-            return ratio(params.doneHours, params.minHours, "h");
+            // The day's quota, counted up to *this* slot. `doneHours` alone is
+            // measured history taken once for the whole day, so it reads "0 of
+            // 8" on a slot four hours into an eight-hour run — a true number
+            // answering a question nobody asked at that moment. Adding what the
+            // plan puts before the slot makes the block say how far into the
+            // quota the slot sits, which is the unit the gate itself works in:
+            // `slots_needed = ceil(remaining_hours / 0.5)`.
+            return ratio(
+                plannedBeforeHours === null
+                    ? params.doneHours
+                    : asHours(params.doneHours) + plannedBeforeHours,
+                params.minHours,
+                "h",
+            );
         case "consecutive_skip_override":
             return ratio(params.consecutiveSkips, params.maxConsecutiveSkips);
         case "cheapest_rank":
@@ -411,6 +425,11 @@ function detailSide(value: unknown): string | null {
         return Number.isFinite(value) ? String(Number(value.toFixed(2))) : null;
     }
     return comparisonSide(value);
+}
+
+/** A recorded hour count as a number, or 0 where the record carries none. */
+function asHours(value: unknown): number {
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 /** `have/need`, or one side alone where the record only carries one. */
@@ -637,7 +656,10 @@ function isPlanInput(key: string, state: LogicState, terminal: LogicTerminal): b
  * A block that is not decisive is dimmed, never removed: "this was checked and
  * did not matter" is a different claim from "this was not checked".
  */
-export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
+export function buildLogicDiagram(
+    cell: ExplanationCell,
+    plannedBeforeHours: number | null = null,
+): LogicDiagramModel {
     const blocks: LogicBlock[] = [];
     const edges: LogicEdge[] = [];
     const annotations: LogicAnnotation[] = [];
@@ -772,7 +794,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             value: null,
             comparison: null,
             params: overrideGate.params,
-            detail: gateDetail(overrideGate.key, overrideGate.params, cell.slotId),
+            detail: gateDetail(overrideGate.key, overrideGate.params, cell.slotId, plannedBeforeHours),
             x: COL_INPUT_X,
             y: cursorY,
             width: INPUT_W,
@@ -887,7 +909,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             value: null,
             comparison: null,
             params: gate.params,
-            detail: gateDetail(gate.key, gate.params, cell.slotId),
+            detail: gateDetail(gate.key, gate.params, cell.slotId, plannedBeforeHours),
             x: COL_SIDE_X,
             y: sideY,
             width: GATE_W,
@@ -1609,13 +1631,23 @@ export class SchedulingLogicDiagram extends LitElement {
      * in which case the notes say *that* it is re-taken without saying when.
      */
     @property({ type: String }) public planLabel = "";
+    /**
+     * How many hours the plan places earlier in the day than this slot.
+     *
+     * The daily-minimum gate counts in hours and is stamped once per day from
+     * measured history; this is what the plan adds to it by the time the slot
+     * arrives, so the block can say how far into the day's quota the slot sits
+     * rather than repeating the morning's zero all evening. Null leaves the
+     * block on the recorded figure alone.
+     */
+    @property({ type: Number }) public plannedBeforeHours: number | null = null;
 
     render() {
         const cell = this.cell;
         if (cell === null || !cell.present) {
             return html`<div class="diagram"><div class="empty">${this._text("diagram.empty")}</div></div>`;
         }
-        const model = buildLogicDiagram(cell);
+        const model = buildLogicDiagram(cell, this.plannedBeforeHours);
         // Nothing pressed in the matrix still opens on the branch the decision
         // turned on, rather than on nothing at all.
         const focusGroup = this.focusGroupIndex ?? model.defaultGroupIndex;
