@@ -583,10 +583,15 @@ class ConditionMatrixTests(unittest.TestCase):
         self.assertEqual(node.actual, 5.0)
         self.assertEqual(slots[self.SLOT_2].verdict, "skip")
 
-    def test_a_passing_node_costs_nothing_in_the_payload(self) -> None:
+    def test_a_passing_node_carries_the_price_it_passed_with(self) -> None:
+        # The margin is the point: a threshold on its own says what was asked
+        # for and nothing about what the slot brought, and two slots that both
+        # pass by wildly different margins mean different things.
         slots = self._record(self._export_price_config({"when_price_below": 0.0}))
 
-        self.assertIsNone(slots[self.SLOT_0].groups[0].conditions[0].actual)
+        node = slots[self.SLOT_0].groups[0].conditions[0]
+        self.assertEqual(node.state, "true")
+        self.assertEqual(node.actual, -1.0)
 
     def test_a_group_not_configuring_a_condition_is_not_applicable(self) -> None:
         slots = self._record(

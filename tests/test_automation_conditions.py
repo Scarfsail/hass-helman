@@ -597,11 +597,57 @@ class GroupExplanationTests(unittest.TestCase):
         self.assertEqual(rejected.value, 0.0)
         self.assertEqual(rejected.actual, 5.0)
 
-    def test_a_passing_slot_carries_no_actual(self) -> None:
+    def test_a_passing_slot_carries_the_reading_it_passed_with(self) -> None:
         config = _config({"when_price_below": 0.0})
         explanations = self._explanations(_snapshot(prices=_PRICES), config)
 
-        self.assertIsNone(explanations[SLOT_0][0].conditions[0].actual)
+        passed = explanations[SLOT_0][0].conditions[0]
+        self.assertEqual(passed.state, "true")
+        self.assertEqual(passed.actual, -1.0)
+
+    def test_run_when_reports_the_classification_it_found(self) -> None:
+        # Which kinds of day are allowed, without which kind today *is*, is a
+        # test the reader cannot complete from the drawing.
+        from dataclasses import replace
+
+        from custom_components.helman.automation.day_context import DayContext
+
+        local_date = REFERENCE_TIME.date()
+        snapshot = _snapshot(prices=_PRICES)
+        snapshot = replace(
+            snapshot,
+            context=replace(
+                snapshot.context,
+                day_contexts={
+                    local_date: DayContext(
+                        local_date=local_date,
+                        classification="surplus",
+                        predicted_solar_kwh=5.0,
+                        predicted_consumption_kwh=5.0,
+                        export_price_min=1.0,
+                        export_price_max=5.0,
+                        day_min_window=None,
+                        import_bands=(),
+                    )
+                },
+            ),
+        )
+        config = make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"appliance_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=[{"run_when": ["tight"]}],
+        )
+        explanations = self._explanations(snapshot, config)
+
+        node = next(
+            node
+            for node in explanations[SLOT_0][0].conditions
+            if node.key == "run_when"
+        )
+        self.assertEqual(node.state, "false")
+        self.assertEqual(node.actual, "surplus")
 
     def test_a_group_that_does_not_configure_a_condition_is_not_applicable(self) -> None:
         config = make_optimizer_config(

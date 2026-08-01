@@ -102,7 +102,8 @@ const PAYLOAD = {
                     conditionColumn(
                         "when_price_below",
                         [["true", 1], ["false", 1], ["true", 2]],
-                        { "1": 3.1 },
+                        // Every slot carries its reading now, passing or not.
+                        { "0": 0.9, "1": 3.1 },
                         2.0,
                     ),
                     conditionColumn("min_soc_pct", [["true", 4]], {}),
@@ -1091,8 +1092,10 @@ test.describe("a block shows the numbers it was decided by", () => {
         const detail = async (key: string) => svgText(
             diagram(page).locator(`g.block[data-key="${key}"] text.detail`),
         );
-        // A window is a range, not a threshold.
-        expect(await detail("run_window")).toBe("08:00–18:00");
+        // A window is a range, and the slot's own time is what was tested
+        // against it -- the configured side alone never said which side of the
+        // window this slot falls on.
+        expect(await detail("run_window")).toBe("13:00 ∈ 08:00–18:00");
         // An ordinal is not a truth value: position out of total, no operator.
         expect(await detail("cheapest_rank")).toBe("1/16");
         // have / need, which is what the gate actually tested.
@@ -1272,16 +1275,34 @@ test.describe("the diagram shows the test, not only the result", () => {
         await expect(block.locator("title")).toContainText("matrix.actual");
     });
 
-    test("a passing condition shows the threshold, never an invented actual", async ({ page }) => {
+    test("a passing condition shows the reading it passed with", async ({ page }) => {
         await mountPanel(page);
         await openDiagram(page, 0);
 
-        // Group 1 passed, so the record carries no `actual` for it at all --
-        // the backend omits it by design. The threshold is what can be shown.
+        // The margin is the answer to the next question a reader has: a
+        // threshold on its own says what was asked for and nothing about what
+        // the slot brought, and two slots that both pass by wildly different
+        // margins do not mean the same thing.
         const block = diagram(page)
             .locator('g.block[data-group="1"][data-key="when_price_below"]');
         await expect(block).toHaveAttribute("data-state", "true");
-        expect(await svgText(block.locator("text.comparison"))).toBe("< 2");
+        // Two decimals on a reading, the threshold as configured: the same
+        // formatting the failing side has always used.
+        expect(await svgText(block.locator("text.comparison"))).toBe("0.90 < 2");
+    });
+
+    test("a condition that measures nothing gets no reading invented", async ({ page }) => {
+        // The self-gating pair resolves by simulation rather than by comparing
+        // a number, so it records no reading in either direction. Showing the
+        // configured level alone is the whole of what is known.
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+
+        const block = diagram(page)
+            .locator('g.block[data-key="ensure_self_sustainability"]');
+        await expect(block).toHaveAttribute("data-state", "true");
+        await expect(block.locator("text.comparison")).toHaveCount(0);
+        expect(await svgText(block.locator("text.actual"))).toBe("strict");
     });
 
     test("the two sides read differently, and not by colour alone", async ({ page }) => {

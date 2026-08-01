@@ -26,9 +26,11 @@ Design notes:
   slot* — an absent group, an unevaluated-because-absent node, an optimizer that
   never looked at the slot. It is distinct from ``"not_evaluated"``, which means
   the node exists and was deliberately not consulted.
-- Builders record ``actual`` **only for nodes that did not pass**; a passing
-  node leaves it ``None``, contributes nothing to the sparse map, and the key
-  disappears from the payload entirely.
+- Builders record ``actual`` for every node that *has* one, passing or not: a
+  threshold with no reading beside it is half a test. A node whose condition
+  reports no reading at all (the self-gating pair, whose result is a
+  simulation rather than a comparison) leaves it ``None``, contributes nothing
+  to the sparse map, and the key disappears from the payload entirely.
 - Serialization canonicalizes ordering: nodes and groups are emitted in
   first-appearance order across slots, and slots in horizon order. A round trip
   is lossless for records built that way (every builder in this package is).
@@ -156,8 +158,9 @@ def decode_runs(runs: Any, length: int | None = None) -> list[Any]:
 def encode_sparse(values: Sequence[Any]) -> dict[str, Any]:
     """Encode an index-aligned column as ``{index: value}``, omitting ``None``.
 
-    Passing nodes carry no ``actual``, so an all-passing column encodes to an
-    empty map and its key is dropped from the payload entirely.
+    A condition that reports no reading carries no ``actual`` at all, so its
+    column encodes to an empty map and its key is dropped from the payload
+    entirely.
     """
     return {
         str(index): value
@@ -189,8 +192,9 @@ class ConditionNode:
     """One condition as it resolved for one slot.
 
     ``value`` is what the condition was configured with (the threshold);
-    ``actual`` is what the slot actually presented, recorded only when the node
-    did not pass.
+    ``actual`` is what the slot actually presented, recorded whether the node
+    passed or not -- the margin a slot passed by is as much a part of the test
+    as the reading that failed it.
 
     Nodes are flat. Conditions do not nest: ``build_group_explanations`` emits
     one node per configured condition and nothing below it. Per-entry custom

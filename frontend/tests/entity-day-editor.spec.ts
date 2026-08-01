@@ -307,6 +307,27 @@ async function savedPatches(page: Page) {
 }
 
 test.describe("entity day editor", () => {
+    test("takes the whole screen, and the content takes the whole dialog", async ({ page }) => {
+        // A whole day on one time axis, with a decision diagram under it: both
+        // are read across rather than down, and an hour has to be wide enough
+        // to point at. Nothing here gains from a margin.
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const layout = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const dialog = el.shadowRoot.querySelector("ha-dialog") as HTMLElement;
+            const content = el.shadowRoot.querySelector(".dialog-content") as HTMLElement;
+            return {
+                width: dialog.getAttribute("width"),
+                contentWidth: getComputedStyle(content).width,
+            };
+        });
+        expect(layout.width).toBe("full");
+        // Not a width of its own: whatever the dialog hands it.
+        expect(layout.contentWidth).not.toMatch(/^9\d\dpx$/);
+    });
+
     test("merges adjacent slots into blocks and locks the past ones", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);

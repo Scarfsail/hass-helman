@@ -15,8 +15,8 @@
  * - **Run-length encoding.** Every per-slot column arrives as `[[value, count],
  *   ...]`, index-aligned to `slotIds`.
  * - **Sparse maps.** `actual` and `winningOptimizer` arrive as `{rowIndex:
- *   value}` and are present only where they mean something -- a passing node
- *   carries no `actual` at all.
+ *   value}` and are present only where they mean something -- a condition that
+ *   measures nothing carries no `actual` at all.
  * - **`null` is structural.** `null` in a per-slot column means *this element
  *   does not exist in that slot*: an absent group, an optimizer that never
  *   looked at the slot. It is not `"not_evaluated"` (the node exists and was
@@ -74,7 +74,7 @@ export interface ExplanationConditionNode {
     state: ExplanationNodeState;
     /** What the condition was configured with (the threshold). */
     value: unknown;
-    /** What the slot presented. Recorded only for nodes that did not pass. */
+    /** What the slot presented, passing or failing; null where nothing is measured. */
     actual: unknown;
 }
 

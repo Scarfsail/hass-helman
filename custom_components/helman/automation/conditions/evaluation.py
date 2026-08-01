@@ -317,13 +317,13 @@ def _condition_nodes(
                 scope=condition.explain_scope,
                 state=STATE_TRUE if passed else STATE_FALSE,
                 value=value,
-                # Passing nodes carry no actual: it costs payload and answers a
-                # question nobody asked.
-                actual=(
-                    None
-                    if passed
-                    else group.actuals_by_key.get(key, {}).get(slot_id)
-                ),
+                # Recorded whether the slot passed or failed. A threshold on its
+                # own is only half a test: "≥ 40" says what was asked for and
+                # nothing about what the slot brought, so a passing node was
+                # unreadable exactly where a reader wants to know the margin --
+                # 41 % and 95 % pass the same condition and mean very different
+                # things about tomorrow.
+                actual=group.actuals_by_key.get(key, {}).get(slot_id),
             )
         )
     return tuple(nodes)

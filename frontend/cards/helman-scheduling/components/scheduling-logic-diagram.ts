@@ -72,8 +72,9 @@ export interface LogicBlock {
 /**
  * A condition's test, as the two sides and the operator between them.
  *
- * `actual` is null for a node that passed: the record omits it by design, so
- * the block shows the threshold alone rather than inventing a reading.
+ * `actual` is null for a condition that reports no reading at all -- the
+ * self-gating pair, whose result is a simulation rather than a comparison --
+ * and the block then shows the threshold alone rather than inventing one.
  */
 export interface LogicComparison {
     actual: string | null;
@@ -161,13 +162,14 @@ export interface LogicDiagramModel {
 const BLOCK_H = 26;
 const INPUT_W = 240;
 /**
- * The gate blocks, widened to the column they already had.
+ * The gate blocks, wide enough for a comparison rather than a number.
  *
- * A gate now carries its own numbers on its face, and 160px left the label with
- * ~10 characters. 168 is what fits between `COL_SIDE_X` and `COL_CUSTOM_X`
- * without moving either, so the diagram does not get one pixel wider.
+ * A window gate says `10:00 ∈ 08:00–18:00` — the slot's own time against the
+ * configured window — which at 168px left "Okno běhu" about four characters.
+ * 214 fits the longest of those beside its longest label; the columns to the
+ * right move with it, and the drawing scales to whatever width it is given.
  */
-const GATE_W = 168;
+const GATE_W = 214;
 const CUSTOM_W = 160;
 const OP_W = 44;
 const TERM_W = 196;
@@ -189,17 +191,17 @@ const COL_OR_X = 314;
 /** The gates: everything decided outside the groups. */
 const COL_SIDE_X = 370;
 /** The AND that closes planning, and the verdict it produces. */
-const COL_FINAL_X = 550;
-const COL_VERDICT_X = 606;
+const COL_FINAL_X = 596;
+const COL_VERDICT_X = 652;
 /**
  * The seam between the two stages: everything left of it was settled when the
  * plan was built, everything right of it is taken again before the action runs.
  */
-const DIVIDER_X = 770;
+const DIVIDER_X = 816;
 /** The custom conditions: the whole of the pre-execution stage. */
-const COL_CUSTOM_X = 786;
-const COL_EXEC_X = 958;
-const COL_TERM_X = 1014;
+const COL_CUSTOM_X = 832;
+const COL_EXEC_X = 1004;
+const COL_TERM_X = 1060;
 
 /** Where a `→ final` edge turns: past the side column, so it crosses nothing. */
 const FINAL_ELBOW_X = COL_FINAL_X - 12;
@@ -243,9 +245,10 @@ const SET_MEMBERSHIP_CONDITIONS = new Set<string>(["run_when"]);
 /**
  * The test a condition node stands for, or null where it has no readable one.
  *
- * Only the sides that are actually in the record are drawn. A passing node
- * carries no `actual` — the backend omits it deliberately — so it renders as
- * the threshold alone rather than as a number nobody measured.
+ * Only the sides that are actually in the record are drawn. A condition that
+ * measures nothing carries no `actual`, so it renders as the threshold alone
+ * rather than as a number nobody measured; everything that does measure
+ * carries its reading whether it passed or failed.
  */
 export function conditionComparison(
     key: string,
@@ -356,13 +359,29 @@ const OVERRIDE_GATES = new Set<string>(["consecutive_skip_override"]);
  * are still whole in the tooltip. Read off the `GATE_*` docstrings in
  * `appliance_runtime.py`, `charge_hold.py` and `charge_from_grid.py`.
  */
-export function gateDetail(key: string, params: Record<string, unknown>): string | null {
+export function gateDetail(
+    key: string,
+    params: Record<string, unknown>,
+    slotId = "",
+): string | null {
+    // The gates that test *the slot's own time* against a configured one, said
+    // as the comparison they are. A window on its own is the same half-a-test a
+    // bare threshold is: "08:00–18:00" never said which side of it this slot
+    // falls on, and the slot's time is the one number the drawing has always
+    // had to hand.
+    const atMs = shortTime(slotId);
     switch (key) {
         case "run_window":
-        case "hold_window":
-            return range(shortTime(params.start), shortTime(params.end));
-        case "before_release":
-            return shortTime(params.releaseSlot);
+        case "hold_window": {
+            const window = range(shortTime(params.start), shortTime(params.end));
+            if (window === null) return null;
+            return atMs === null ? window : `${atMs} ∈ ${window}`;
+        }
+        case "before_release": {
+            const release = shortTime(params.releaseSlot);
+            if (release === null) return null;
+            return atMs === null ? release : `${atMs} < ${release}`;
+        }
         case "daily_minimum_remaining":
             return ratio(params.doneHours, params.minHours, "h");
         case "consecutive_skip_override":
@@ -753,7 +772,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             value: null,
             comparison: null,
             params: overrideGate.params,
-            detail: gateDetail(overrideGate.key, overrideGate.params),
+            detail: gateDetail(overrideGate.key, overrideGate.params, cell.slotId),
             x: COL_INPUT_X,
             y: cursorY,
             width: INPUT_W,
@@ -868,7 +887,7 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
             value: null,
             comparison: null,
             params: gate.params,
-            detail: gateDetail(gate.key, gate.params),
+            detail: gateDetail(gate.key, gate.params, cell.slotId),
             x: COL_SIDE_X,
             y: sideY,
             width: GATE_W,
@@ -1175,8 +1194,10 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
  * A condition block shows the *test*, not only the reading: `3.43 < 3.50`, not
  * `3.43`. The operator is the backend's own — see `CONDITION_OPERATORS` — and
  * conditions that do not compare (`run_when`'s set membership, the self-gating
- * pair) never get one invented for them. A passing node has no `actual` in the
- * record at all, so it shows the threshold alone.
+ * pair) never get one invented for them. A node whose condition measures
+ * nothing has no `actual` in the record at all, so it shows the threshold
+ * alone; every other node shows the reading it was tested with, passing or
+ * failing -- 41 % and 95 % clear `≥ 40` and do not mean the same thing.
  *
  * A block also shows **its own numbers**, not only its result. A gate carries
  * the window it tested, the ordinal it placed at or the count it fell short of,
@@ -2162,10 +2183,18 @@ function stateGlyph(state: LogicState): string {
 
 /** Room reserved for a block's `actual`, and the widths text is fitted to. */
 const ACTUAL_MAX_W = 46;
-/** Room for `actual <op> value`, which is three things rather than one. */
-const COMPARE_MAX_W = 104;
-/** Room for a gate's own numbers: `08:00–18:00` is the widest of them. */
-const DETAIL_MAX_W = 62;
+/**
+ * Room for `actual <op> value`, which is three things rather than one.
+ *
+ * Sized for the longest honest case rather than the average: `surplus ∈
+ * surplus, tight` is a set membership with two words either side, and it is the
+ * comparison a reader is least able to reconstruct from the label. What is left
+ * still holds "Kdy spustit"; anything longer truncates and lives in full in the
+ * tooltip, as it always has.
+ */
+const COMPARE_MAX_W = 130;
+/** Room for a gate's own numbers: `10:00 ∈ 08:00–18:00` is the widest. */
+const DETAIL_MAX_W = 106;
 /** Room for the params-source badge, right-aligned in the group's caption. */
 const SOURCE_MAX_W = 86;
 const SOURCE_PX_PER_CHAR = 4.7;

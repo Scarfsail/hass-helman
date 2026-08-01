@@ -107,14 +107,19 @@ export class SchedulingEntityDayEditor extends LitElement {
         css`
             /* A day of blocks next to a full-width band: the band is the
                control surface here, and it only reads well when an hour is
-               wide enough to point at. */
+               wide enough to point at. So it takes every pixel the dialog is
+               given -- which is every pixel the screen has, see the dialog's
+               own width preset below -- rather than stopping at a width of its
+               own. The band's hours and the logic diagram beside it both read
+               better the wider they get, and neither has anything to gain from
+               a margin. (No backticks in here: this is a tagged template, and
+               one would end it mid-comment.) */
             .dialog-content {
                 position: relative;
                 display: flex;
                 flex-direction: column;
                 gap: 14px;
-                width: min(960px, calc(100vw - 48px));
-                max-width: 100%;
+                width: 100%;
                 padding-top: 4px;
             }
 
@@ -489,9 +494,14 @@ export class SchedulingEntityDayEditor extends LitElement {
         const editingBlock = this._resolveEditingBlock(blocks);
         const heading = selectedLane?.name ?? this.localize("scheduling.entity_editor.title");
         return html`
+            <!--
+                The widest preset there is -- min(95vw, safe-width): this
+                dialog is a whole day on one time axis with a decision diagram
+                under it, and both are read across rather than down.
+            -->
             <ha-dialog
                 .open=${this.open}
-                width="large"
+                width="full"
                 .heading=${heading}
                 .headerTitle=${heading}
                 @closed=${this._onClosed}
