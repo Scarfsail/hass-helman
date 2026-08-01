@@ -1121,9 +1121,14 @@ export function buildLogicDiagram(cell: ExplanationCell): LogicDiagramModel {
         terminal,
         planState: finalState,
         customState: custom,
-        otherGroupsHaveCustom: groupCustomStates.some(
-            (state, groupPos) => state !== "n/a" && groupPos !== matchedPos,
-        ),
+        // "Another group has them" needs another group to exist. Without the
+        // count, a lone group trips it whenever no group matched at all
+        // (`matchedPos` is -1, so every group counts as "not the matched one")
+        // and the note points at a group that is not there.
+        otherGroupsHaveCustom: cell.groups.length > 1
+            && groupCustomStates.some(
+                (state, groupPos) => state !== "n/a" && groupPos !== matchedPos,
+            ),
         matchedGroupIndex,
         showOr,
         hasOverride: overrideGate !== null,

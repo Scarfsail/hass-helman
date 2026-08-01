@@ -366,7 +366,7 @@
         "terminal": {
           "execute": "spustit",
           "candidate": "kandidát – čeká na podmínky",
-          "not_eligible": "nesplněné podmínky",
+          "not_eligible": "nespouštět",
           "blocked": "blokováno uživatelem"
         }
       },

@@ -407,6 +407,44 @@ const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
 };
 
 /**
+ * One group, with a custom condition, and a slot no group matched.
+ *
+ * The slot has no matched group at all, so the re-check stage has nothing to
+ * report on — and every group in the cell is "not the matched one", which is
+ * enough to claim that *another* group carries the template. There is no other
+ * group: the note would point at nothing.
+ */
+const LONE_GROUP_UNMATCHED_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["skip", 1]],
+        groups: [{
+            index: 0,
+            label: "Den",
+            paramsSource: [["slot_matched", 1]],
+            params: [[{ max_run_price: 2.0 }, 1]],
+            customResults: [[[true], 1]],
+            conditions: [{
+                key: "max_run_price",
+                scope: "slot",
+                state: [["false", 1]],
+                value: [[2.0, 1]],
+                actual: { "0": 4.1 },
+            }],
+        }],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
+/**
  * A **forced** day: every condition failed and the appliance ran anyway.
  *
  * `max_consecutive_skips` is the one construct that defeats the whole OR chain
@@ -1399,6 +1437,22 @@ test.describe("the diagram shows the test, not only the result", () => {
         // them, and this slot did not run under it.
         await expect(diagram(page).locator('text[data-stage="custom_other_group"]'))
             .toHaveCount(1);
+    });
+
+    test("no other group, no claim that another group has them", async ({ page }) => {
+        // Nothing matched, so every group counts as "not the matched one" --
+        // which on a lone group is enough to promise a second group that does
+        // not exist.
+        await mountPanel(page, LONE_GROUP_UNMATCHED_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "not_eligible");
+
+        await expect(diagram(page).locator('g.block[data-id="custom"]'))
+            .toHaveAttribute("data-state", "n/a");
+        await expect(diagram(page).locator('text[data-stage="custom_none"]')).toHaveCount(1);
+        await expect(diagram(page).locator('text[data-stage="custom_other_group"]'))
+            .toHaveCount(0);
     });
 
     test("with no custom conditions the stage is still drawn, saying so", async ({ page }) => {
