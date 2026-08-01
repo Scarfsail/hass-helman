@@ -85,11 +85,13 @@ class MaskResult:
     """A mask plus, optionally, what each slot actually presented.
 
     Only the conditions worth annotating build one — price, SoC, solar
-    coverage — so that a slot rejected on price can carry the price that
-    rejected it. ``actuals_by_slot`` is the value the condition's own
+    coverage, the day's classification — so that a slot rejected on price can
+    carry the price that rejected it, and a slot that passed can carry the
+    price it passed with. ``actuals_by_slot`` is the value the condition's own
     aggregation compared against the threshold (the *worst* bucket for an
     all-must-clear condition, the *best* for an any-may-clear one), recorded for
-    every slot; the explanation layer keeps it only where the slot failed.
+    every slot and kept for every slot: a threshold without the reading beside
+    it is half a test, and which half is missing does not depend on the answer.
     """
 
     mask: frozenset[str]
@@ -134,15 +136,23 @@ def evaluate_mask(condition: ConditionType, inputs: MaskInputs) -> MaskResult:
     return MaskResult(mask=result)
 
 
-def _run_when_mask(inputs: MaskInputs) -> frozenset[str]:
+def _run_when_mask(inputs: MaskInputs) -> MaskResult:
+    """Slots whose day is classified as one of the configured kinds.
+
+    Reports the classification it found, like the numeric conditions report the
+    number they found: "which kinds are allowed" without "and what kind is
+    today" is half a test, and the half the reader cannot supply themselves.
+    """
     day_contexts = inputs.snapshot.context.day_contexts
     allowed = set(inputs.value)
     eligible: set[str] = set()
+    actuals: dict[str, Any] = {}
     for slot_id in inputs.horizon_slot_ids:
         day_context = day_contexts.get(parse_slot_id(slot_id).date())
+        actuals[slot_id] = None if day_context is None else day_context.classification
         if day_context is not None and day_context.classification in allowed:
             eligible.add(slot_id)
-    return frozenset(eligible)
+    return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
 
 
 def _export_price_below_mask(inputs: MaskInputs) -> MaskResult:

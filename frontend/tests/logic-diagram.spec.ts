@@ -102,7 +102,8 @@ const PAYLOAD = {
                     conditionColumn(
                         "when_price_below",
                         [["true", 1], ["false", 1], ["true", 2]],
-                        { "1": 3.1 },
+                        // Every slot carries its reading now, passing or not.
+                        { "0": 0.9, "1": 3.1 },
                         2.0,
                     ),
                     conditionColumn("min_soc_pct", [["true", 4]], {}),
@@ -186,14 +187,14 @@ const SINGLE_GROUP_PAYLOAD = {
                     scope: "slot",
                     state: [["true", 1], ["false", 1]],
                     value: [["strict", 2]],
-                    // The overflow case, verbatim in shape: an object `actual`
-                    // far wider than the 210px block it has to live in.
+                    // The overflow case, verbatim in shape: a refusal comes
+                    // back as an object naming which test failed and with
+                    // what, far wider than the block it has to live in.
                     actual: {
                         "1": {
                             code: "not_solar_neutral",
                             deltaSocPct: -3.05,
-                            importKwh: 0.42,
-                            exportKwh: 0.0,
+                            deltaImportKwh: 0.42,
                         },
                     },
                 },
@@ -253,6 +254,308 @@ const ERRORED_CUSTOM_PAYLOAD = {
 };
 
 /**
+ * A slot that will run, whose custom condition held **at planning time**.
+ *
+ * The case the two-stage picture exists for. Every state on this diagram was
+ * taken when the plan was built; the custom condition is taken again before the
+ * action starts (`coordinator.py:3575-3620`), so "spustit" here is a conditional
+ * claim about the future, not a settled fact — and the drawing has to say so
+ * without downgrading it to a candidate.
+ */
+const MET_CUSTOM_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["execute", 1]],
+        winningOptimizer: { "0": "appliance_runtime" },
+        groups: [{
+            index: 0,
+            label: "Studený bazén",
+            paramsSource: [["slot_matched", 1]],
+            params: [[{ max_run_price: 2.0 }, 1]],
+            customResults: [[[true], 1]],
+            conditions: [{
+                key: "max_run_price",
+                scope: "slot",
+                state: [["true", 1]],
+                value: [[2.0, 1]],
+            }],
+        }],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
+/**
+ * Two groups match, and only the second one's custom conditions held.
+ *
+ * `Eligibility.__init__` settles on `fully or matching[0]` — the first group
+ * that matched *and* whose custom conditions held, falling back to the first
+ * that matched at all. Reading `matching[0]` instead gives a false custom stage
+ * over a `spustit` terminal, which the diagram then has to suppress as a
+ * contradiction: a slot that ran with no re-check stage at all, next to a
+ * candidate that has one. That was the reported inconsistency.
+ */
+const SECOND_GROUP_CUSTOM_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["execute", 1]],
+        winningOptimizer: { "0": "appliance_runtime" },
+        groups: [
+            {
+                index: 0,
+                label: "Ráno",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ max_run_price: 2.0 }, 1]],
+                // Matched on the mask, and its template said no.
+                customResults: [[[false], 1]],
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[2.0, 1]],
+                }],
+            },
+            {
+                index: 1,
+                label: "Poledne",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ max_run_price: 3.0 }, 1]],
+                customResults: [[[true], 1]],
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[3.0, 1]],
+                }],
+            },
+        ],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
+/**
+ * Both groups match, and the slot runs under the one with no template.
+ *
+ * Taken from a real record (`pool-heatpump`, two groups: "Záporná cena" with no
+ * custom conditions, "Studený bazén" with a pool-temperature one that is false
+ * all day). On the cheap slots both groups' masks match, so `fully or
+ * matching[0]` settles on the group whose custom conditions held — the one that
+ * has none — and the slot runs. On every other slot only the second group
+ * matches, and its false template makes a candidate.
+ *
+ * Which is correct, and unreadable if the empty stage does not say *whose*
+ * conditions are missing: the reader wrote that template and is looking right
+ * at a diagram that appears to deny it exists.
+ */
+const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["execute", 1]],
+        winningOptimizer: { "0": "appliance_runtime" },
+        groups: [
+            {
+                index: 0,
+                label: "Záporná cena",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ max_run_price: 2.0 }, 1]],
+                // No custom conditions at all: the column is absent, not false.
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[2.0, 1]],
+                }],
+            },
+            {
+                index: 1,
+                label: "Studený bazén",
+                paramsSource: [["slot_matched", 1]],
+                params: [[{ min_soc_pct: 40 }, 1]],
+                customResults: [[[false], 1]],
+                conditions: [{
+                    key: "min_soc_pct",
+                    scope: "slot",
+                    state: [["true", 1]],
+                    value: [[40, 1]],
+                }],
+            },
+        ],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
+/**
+ * Four half-hour slots, all of them placed, against a two-hour daily minimum.
+ *
+ * The shape that made the daily-minimum block unreadable: the gate is stamped
+ * once per day from *measured* history (`appliance_runtime.py:232,263`), so
+ * every slot of an eight-hour run carries the same "nothing done yet" the
+ * morning did. The plan's own hours are the missing half.
+ */
+const DAILY_MINIMUM_RUN_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS,
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 4]],
+        verdict: [["execute", 4]],
+        winningOptimizer: { "0": "appliance_runtime", "1": "appliance_runtime", "2": "appliance_runtime", "3": "appliance_runtime" },
+        groups: [{
+            index: 0,
+            label: "Den",
+            paramsSource: [["slot_matched", 4]],
+            params: [[{ max_run_price: 9.0 }, 4]],
+            conditions: [{
+                key: "max_run_price",
+                scope: "slot",
+                state: [["true", 4]],
+                value: [[9.0, 4]],
+            }],
+        }],
+        gates: [{
+            key: "daily_minimum_remaining",
+            state: [["true", 4]],
+            // Nothing had run when the plan was built, and the day owes two
+            // hours: the same params on all four slots.
+            params: [[{ minHours: 2, doneHours: 0, remainingHours: 2 }, 4]],
+        }],
+    }],
+};
+
+/**
+ * One group, with a custom condition, and a slot no group matched.
+ *
+ * The slot has no matched group at all, so the re-check stage has nothing to
+ * report on — and every group in the cell is "not the matched one", which is
+ * enough to claim that *another* group carries the template. There is no other
+ * group: the note would point at nothing.
+ */
+const LONE_GROUP_UNMATCHED_PAYLOAD = {
+    targetKey: "appliance.pool",
+    date: DATE,
+    slotIds: SLOT_IDS.slice(0, 1),
+    runAt: RUN_AT,
+    optimizers: [{
+        optimizerId: "appliance_runtime",
+        kind: "appliance_runtime",
+        targetKey: "appliance.pool",
+        status: "ok",
+        runAt: [[RUN_AT, 1]],
+        verdict: [["skip", 1]],
+        groups: [{
+            index: 0,
+            label: "Den",
+            paramsSource: [["slot_matched", 1]],
+            params: [[{ max_run_price: 2.0 }, 1]],
+            customResults: [[[true], 1]],
+            conditions: [{
+                key: "max_run_price",
+                scope: "slot",
+                state: [["false", 1]],
+                value: [[2.0, 1]],
+                actual: { "0": 4.1 },
+            }],
+        }],
+        gates: [{ key: "slot_available", state: [["true", 1]] }],
+    }],
+};
+
+/**
+ * The three ways self-sustainability refuses a slot.
+ *
+ * It resolves by re-simulating the horizon rather than by comparing a number,
+ * so its `actual` is a *reason* -- which test failed, and what it saw
+ * (`appliance_runtime.py:817, 827, 885`). One slot per code, plus one that
+ * passed, because the passing case has no numbers at all and must not grow any.
+ */
+function selfSustainabilityPayload(level = "strict") {
+    return {
+        targetKey: "appliance.pool",
+        date: DATE,
+        slotIds: SLOT_IDS,
+        runAt: RUN_AT,
+        optimizers: [{
+            optimizerId: "appliance_runtime",
+            kind: "appliance_runtime",
+            targetKey: "appliance.pool",
+            status: "ok",
+            runAt: [[RUN_AT, 4]],
+            verdict: [["execute", 1], ["skip", 3]],
+            winningOptimizer: { "0": "appliance_runtime" },
+            groups: [{
+                index: 0,
+                label: "Den",
+                paramsSource: [["slot_matched", 4]],
+                params: [[{ max_run_price: 9.0 }, 4]],
+                conditions: [
+                    {
+                        key: "max_run_price",
+                        scope: "slot",
+                        state: [["true", 4]],
+                        value: [[9.0, 4]],
+                    },
+                    {
+                        key: "ensure_self_sustainability",
+                        scope: "slot",
+                        state: [["true", 1], ["false", 3]],
+                        value: [[level, 4]],
+                        actual: {
+                            "1": {
+                                code: "would_break_soc_floor",
+                                floor: 25,
+                                projectedMinSoc: 18.4,
+                                atSlot: `${DATE}T19:00:00+02:00`,
+                            },
+                            "2": {
+                                code: "soc_floor_already_breached",
+                                floor: 25,
+                                baselineMinSoc: 22.1,
+                            },
+                            "3": {
+                                code: "not_solar_neutral",
+                                deltaSocPct: -3.05,
+                                deltaImportKwh: 0.42,
+                            },
+                        },
+                    },
+                ],
+            }],
+            gates: [{ key: "slot_available", state: [["true", 4]] }],
+        }],
+    };
+}
+
+const SELF_SUSTAINABILITY_PAYLOAD = selfSustainabilityPayload();
+
+/**
  * A **forced** day: every condition failed and the appliance ran anyway.
  *
  * `max_consecutive_skips` is the one construct that defeats the whole OR chain
@@ -262,7 +565,7 @@ const ERRORED_CUSTOM_PAYLOAD = {
  * gate so a forced run never reads as an unexplained one".
  *
  * Drawn as an AND input it would claim a forced run *required* it, and the
- * failed conditions would be demoted to context by `isAndInput`'s second rule —
+ * failed conditions would be demoted to context by `isPlanInput`'s second rule —
  * a run with no visible cause, which is the exact opposite of what the gate is
  * for. It ORs with the conditions instead.
  *
@@ -384,20 +687,34 @@ const NOT_APPLICABLE_PAYLOAD = {
     }],
 };
 
-async function mountPanel(page: Page, fixture: unknown = PAYLOAD): Promise<void> {
+/**
+ * `translations` is for the keys whose *presence* is the behaviour under test.
+ *
+ * The default localize echoes the key back, which is what a missing key looks
+ * like too — so a lookup that falls back when it finds nothing (the optional
+ * per-condition explanations) cannot be told apart from one that found
+ * something. Giving those keys a real string is the only way to see the
+ * difference from outside.
+ */
+async function mountPanel(
+    page: Page,
+    fixture: unknown = PAYLOAD,
+    translations: Record<string, string> = {},
+): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
 
-    await page.evaluate((fixture) => {
+    await page.evaluate(([fixture, translations]) => {
         const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
             & Record<string, unknown>;
-        panel.localize = (key: string) => key;
+        const strings = translations as Record<string, string>;
+        panel.localize = (key: string) => strings[key] ?? key;
         panel.payload = fixture;
         panel.locale = "cs";
         panel.timeZone = "Europe/Prague";
         document.body.appendChild(panel);
-    }, fixture);
+    }, [fixture, translations] as const);
 
     // Nothing pressed yet: the panel is mounted and waiting for a slot.
     await expect(page.locator("scheduling-explanation-panel").locator(".placeholder.no-slot"))
@@ -447,36 +764,49 @@ async function selectSlot(page: Page, rowIndex: number, optimizerId: string): Pr
 }
 
 /**
- * Recompute the drawn AND and compare it with the drawn terminal.
+ * Recompute both drawn ANDs and compare each with what it claims to have
+ * decided.
  *
- * The single invariant the whole picture rests on: whatever is wired into the
- * final `&` must resolve to the terminal's own truth value. A `✗` input above
- * a `✓ spustit` terminal is the diagram calling itself a liar, and it is the
- * failure a real reader hit first.
+ * The invariants the whole picture rests on, one per stage: whatever is wired
+ * into the planning `&` must resolve to the verdict it produces, and that
+ * verdict is `true` exactly when the slot got planned — `execute` *or*
+ * `candidate`, since a candidate is a planned slot waiting on its custom
+ * conditions. The execution `&` over [verdict, custom] must then resolve to
+ * `true` exactly when the terminal says the slot ran.
+ *
+ * A `✗` input above a `✓ spustit` terminal is the diagram calling itself a
+ * liar, and it is the failure a real reader hit first.
  */
 async function andInvariant(page: Page): Promise<{
     inputs: string[];
     computed: string;
     final: string;
+    /** The execution AND over the verdict and the custom stage, where drawn. */
+    execComputed: string | null;
+    exec: string | null;
     terminal: string;
 }> {
     return diagram(page).locator("svg.logic").evaluate((svg) => {
+        const stateOf = (id: string): string =>
+            svg.querySelector(`g.block[data-id="${id}"]`)?.getAttribute("data-state") ?? "";
+        const and = (states: string[]): string => {
+            const considered = states.filter(
+                (state) => state !== "not_applicable" && state !== "n/a",
+            );
+            if (considered.length === 0) return "true";
+            if (considered.includes("false") || considered.includes("errored")) return "false";
+            return considered.includes("not_evaluated") ? "not_evaluated" : "true";
+        };
         const inputIds = Array.from(svg.querySelectorAll('path.edge[data-to="final"]'))
             .map((edge) => edge.getAttribute("data-from") ?? "");
-        const states = inputIds.map((id) =>
-            svg.querySelector(`g.block[data-id="${id}"]`)?.getAttribute("data-state") ?? "");
-        const considered = states.filter((state) => state !== "not_applicable" && state !== "n/a");
-        const computed = considered.length === 0
-            ? "true"
-            : considered.includes("false") || considered.includes("errored")
-                ? "false"
-                : considered.includes("not_evaluated")
-                    ? "not_evaluated"
-                    : "true";
+        const execIds = Array.from(svg.querySelectorAll('path.edge[data-to="exec"]'))
+            .map((edge) => edge.getAttribute("data-from") ?? "");
         return {
             inputs: inputIds,
-            computed,
-            final: svg.querySelector('g.block[data-id="final"]')?.getAttribute("data-state") ?? "",
+            computed: and(inputIds.map(stateOf)),
+            final: stateOf("final"),
+            execComputed: execIds.length === 0 ? null : and(execIds.map(stateOf)),
+            exec: svg.querySelector('g.block[data-id="exec"]') === null ? null : stateOf("exec"),
             terminal: svg.getAttribute("data-terminal") ?? "",
         };
     });
@@ -557,10 +887,13 @@ test.describe("the condition logic diagram", () => {
         await openDiagram(page, 2);
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "candidate");
         // A candidate is decided by the custom condition, not by the mask: the
-        // group matched, and the template said no.
+        // group matched, and the template said no. The mask is decisive too --
+        // for the plan verdict, which is a different question and a different
+        // stage.
         const candidateMarks = await decisiveness(page);
         expect(candidateMarks.custom).toBe("true");
-        expect(candidateMarks.or).toBe("false");
+        expect(candidateMarks.verdict).toBe("true");
+        expect(candidateMarks.or).toBe("true");
         const candidateGlyph = await diagram(page)
             .locator('g.block[data-kind="terminal"] text.glyph')
             .evaluate((node) => node.textContent?.trim() ?? "");
@@ -576,7 +909,10 @@ test.describe("the condition logic diagram", () => {
     });
 
     test("a writer veto is its own terminal, not a failed condition", async ({ page }) => {
-        await mountPanel(page);
+        await mountPanel(page, PAYLOAD, {
+            "scheduling.explanation.condition_detail.blocked_user_owned":
+                "Splněno = slot je volný pro automatizaci",
+        });
         await openDiagram(page, 3);
 
         await expect(diagram(page).locator("svg.logic")).toHaveAttribute("data-terminal", "blocked");
@@ -584,6 +920,20 @@ test.describe("the condition logic diagram", () => {
         // Every condition passed; the veto is the only thing that decided it.
         expect(marks["gate-0"]).toBe("true");
         expect(marks.or).toBe("false");
+
+        // The gate is a *requirement*: true means the user does NOT own the
+        // slot (`base.py:212`). A block whose direction is not obvious from its
+        // name says which way round it is, on hover.
+        const title = await svgText(
+            diagram(page).locator('g.block[data-key="blocked_user_owned"] title'),
+        );
+        expect(title).toContain("Splněno = slot je volný pro automatizaci");
+
+        // A condition with nothing to explain gets no empty separator for it.
+        const plain = await svgText(
+            diagram(page).locator('g.block[data-key="when_price_below"]').first().locator("title"),
+        );
+        expect(plain).not.toContain(" ·  · ");
     });
 
     test("branches that did not matter are dimmed, not removed", async ({ page }) => {
@@ -610,6 +960,72 @@ test.describe("the condition logic diagram", () => {
 });
 
 /**
+ * A refusal that is a reason, not a reading.
+ *
+ * Every other condition compares a number it measured against a number it was
+ * configured with. This one re-simulates the horizon and comes back with an
+ * object saying which of three tests failed. Rendered as the raw `code` it was
+ * eight truncated characters of backend vocabulary; rendered as raw JSON in the
+ * tooltip it was unreadable. Both halves are the test it actually ran.
+ */
+test.describe("self-sustainability says which test refused the slot", () => {
+    const block = (page: Page) =>
+        diagram(page).locator('g.block[data-key="ensure_self_sustainability"]');
+
+    test("a slot that would break the floor reads as that comparison", async ({ page }) => {
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
+        await selectSlot(page, 1, "appliance_runtime");
+
+        await expect(block(page)).toHaveAttribute("data-state", "false");
+        expect(await svgText(block(page).locator("text.comparison"))).toBe("18.40 < 25");
+
+        // The hour the floor breaks has nowhere to go on the face, and it is
+        // the most useful part of the answer.
+        const title = await svgText(block(page).locator("title"));
+        expect(title).toContain("self_sustainability.would_break_soc_floor");
+        expect(title).toContain("19:00");
+        expect(title).not.toContain("{");
+    });
+
+    test("a floor already breached without the appliance says so", async ({ page }) => {
+        // The same shape of comparison as the case above, and a different cause
+        // entirely: the appliance is not to blame and must not read as if it
+        // were. Only the tooltip can tell them apart.
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
+        await selectSlot(page, 2, "appliance_runtime");
+
+        expect(await svgText(block(page).locator("text.comparison"))).toBe("22.10 < 25");
+        expect(await svgText(block(page).locator("title")))
+            .toContain("self_sustainability.soc_floor_already_breached");
+    });
+
+    test("strict's day balance reads against the tolerance it broke", async ({ page }) => {
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
+        await selectSlot(page, 3, "appliance_runtime");
+
+        // Two numbers in different units, so the face carries the one that
+        // failed, with its unit; -3.05 % is past the -0.5 % the day is allowed.
+        expect(await svgText(block(page).locator("text.comparison"))).toBe("-3.05 % < -0.50 %");
+        const title = await svgText(block(page).locator("title"));
+        expect(title).toContain("self_sustainability.not_solar_neutral");
+        // Both numbers are named, whichever one the face had room for.
+        expect(title).toContain("deltaImportKwh");
+    });
+
+    test("a slot it accepted carries the level, and no invented numbers", async ({ page }) => {
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD, {
+            "scheduling.explanation.self_sustainability.level.strict": "přísný",
+        });
+        await selectSlot(page, 0, "appliance_runtime");
+
+        await expect(block(page)).toHaveAttribute("data-state", "true");
+        await expect(block(page).locator("text.comparison")).toHaveCount(0);
+        // The mode, in words rather than as the config token.
+        expect(await svgText(block(page).locator("text.actual"))).toBe("přísný");
+    });
+});
+
+/**
  * The picture has to agree with itself, and it has to be readable.
  *
  * These pin the four things a real reader could not get from the first cut: an
@@ -619,25 +1035,33 @@ test.describe("the condition logic diagram", () => {
  */
 test.describe("the logic diagram never contradicts its terminal", () => {
     test("every terminal reproduces from the drawn AND inputs", async ({ page }) => {
+        const check = (
+            result: Awaited<ReturnType<typeof andInvariant>>,
+            where: string,
+        ): void => {
+            // The planning block is what the drawn inputs actually say.
+            expect(result.computed, `${where} inputs ${result.inputs.join()}`)
+                .toBe(result.final);
+            // And that is true exactly when the slot was planned, which covers
+            // the candidate: planned, placed, waiting on its own conditions.
+            expect(result.final === "true", where)
+                .toBe(result.terminal === "execute" || result.terminal === "candidate");
+            // The second stage is always drawn, and closes the same way.
+            expect(result.execComputed, `${where} exec`).toBe(result.exec);
+            expect(result.exec === "true", `${where} exec`)
+                .toBe(result.terminal === "execute");
+        };
+
         await mountPanel(page);
         for (const rowIndex of [0, 1, 2, 3]) {
             await selectSlot(page, rowIndex, "export_price");
-            const result = await andInvariant(page);
-            // The final block is what the drawn inputs actually say.
-            expect(result.computed, `row ${rowIndex} inputs ${result.inputs.join()}`)
-                .toBe(result.final);
-            // And that is true exactly when the terminal says the slot ran.
-            expect(result.final === "true", `row ${rowIndex}`)
-                .toBe(result.terminal === "execute");
+            check(await andInvariant(page), `row ${rowIndex}`);
         }
 
         await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         for (const rowIndex of [0, 1]) {
             await selectSlot(page, rowIndex, "appliance_runtime");
-            const result = await andInvariant(page);
-            expect(result.computed, `appliance row ${rowIndex}`).toBe(result.final);
-            expect(result.final === "true", `appliance row ${rowIndex}`)
-                .toBe(result.terminal === "execute");
+            check(await andInvariant(page), `appliance row ${rowIndex}`);
         }
     });
 
@@ -702,14 +1126,16 @@ test.describe("the logic diagram never contradicts its terminal", () => {
         });
         expect(overflow).toEqual([]);
 
-        // The object is summarised on the face and kept whole in the tooltip.
+        // The object becomes the comparison it stands for on the face, and its
+        // numbers are named in the tooltip. Neither is raw JSON.
         const block = diagram(page)
             .locator('g.block[data-key="ensure_self_sustainability"]');
         const face = await block.locator("text.actual").evaluate((node) =>
             node.textContent?.trim() ?? "");
         expect(face).not.toContain("{");
-        expect(face.length).toBeLessThanOrEqual(12);
+        expect(face.length).toBeLessThanOrEqual(24);
         await expect(block.locator("title")).toContainText("deltaSocPct");
+        await expect(block.locator("title")).not.toContainText("{");
     });
 
     test("the diagram is there as soon as a slot is open", async ({ page }) => {
@@ -756,7 +1182,7 @@ async function overflowingText(page: Page): Promise<unknown[]> {
  *
  * `consecutive_skip_override` defeats the conditions rather than joining them.
  * Wired into the final AND it would read as something the run *needed*, and
- * `isAndInput` would then quietly reclassify the failed conditions as context —
+ * `isPlanInput` would then quietly reclassify the failed conditions as context —
  * leaving a run on screen with nothing visible that caused it.
  */
 test.describe("an override ORs with the conditions, it does not AND with them", () => {
@@ -844,8 +1270,10 @@ test.describe("a block shows the numbers it was decided by", () => {
         const detail = async (key: string) => svgText(
             diagram(page).locator(`g.block[data-key="${key}"] text.detail`),
         );
-        // A window is a range, not a threshold.
-        expect(await detail("run_window")).toBe("08:00–18:00");
+        // A window is a range, and the slot's own time is what was tested
+        // against it -- the configured side alone never said which side of the
+        // window this slot falls on.
+        expect(await detail("run_window")).toBe("13:00 ∈ 08:00–18:00");
         // An ordinal is not a truth value: position out of total, no operator.
         expect(await detail("cheapest_rank")).toBe("1/16");
         // have / need, which is what the gate actually tested.
@@ -857,6 +1285,29 @@ test.describe("a block shows the numbers it was decided by", () => {
             .evaluateAll((nodes) => nodes.map((node) => node.textContent ?? "")
                 .filter((text) => /[<>≥≤=]/.test(text)));
         expect(invented).toEqual([]);
+    });
+
+    test("the daily minimum counts up to the slot, not to the morning", async ({ page }) => {
+        // Every slot of the run carries the same recorded "0 of 2 done" -- true
+        // of the whole day and useless on a slot in the middle of the run. The
+        // block adds what the plan puts before the slot, which is the unit the
+        // gate itself works in: slots_needed = ceil(remaining_hours / 0.5).
+        await mountPanel(page, DAILY_MINIMUM_RUN_PAYLOAD);
+        const detail = async () => svgText(
+            diagram(page).locator('g.block[data-key="daily_minimum_remaining"] text.detail'),
+        );
+
+        await selectSlot(page, 0, "appliance_runtime");
+        expect(await detail()).toBe("0/2 h");
+
+        // Two placed slots behind it, at half an hour each.
+        await selectSlot(page, 2, "appliance_runtime");
+        expect(await detail()).toBe("1/2 h");
+
+        // The last slot of the run: the quota is all but met by the time it
+        // starts, which is why nothing follows it.
+        await selectSlot(page, 3, "appliance_runtime");
+        expect(await detail()).toBe("1.5/2 h");
     });
 
     test("the full params are one hover away", async ({ page }) => {
@@ -1025,16 +1476,34 @@ test.describe("the diagram shows the test, not only the result", () => {
         await expect(block.locator("title")).toContainText("matrix.actual");
     });
 
-    test("a passing condition shows the threshold, never an invented actual", async ({ page }) => {
+    test("a passing condition shows the reading it passed with", async ({ page }) => {
         await mountPanel(page);
         await openDiagram(page, 0);
 
-        // Group 1 passed, so the record carries no `actual` for it at all --
-        // the backend omits it by design. The threshold is what can be shown.
+        // The margin is the answer to the next question a reader has: a
+        // threshold on its own says what was asked for and nothing about what
+        // the slot brought, and two slots that both pass by wildly different
+        // margins do not mean the same thing.
         const block = diagram(page)
             .locator('g.block[data-group="1"][data-key="when_price_below"]');
         await expect(block).toHaveAttribute("data-state", "true");
-        expect(await svgText(block.locator("text.comparison"))).toBe("< 2");
+        // Two decimals on a reading, the threshold as configured: the same
+        // formatting the failing side has always used.
+        expect(await svgText(block.locator("text.comparison"))).toBe("0.90 < 2");
+    });
+
+    test("a condition that measures nothing gets no reading invented", async ({ page }) => {
+        // The self-gating pair resolves by simulation rather than by comparing
+        // a number, so it records no reading in either direction. Showing the
+        // configured level alone is the whole of what is known.
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+
+        const block = diagram(page)
+            .locator('g.block[data-key="ensure_self_sustainability"]');
+        await expect(block).toHaveAttribute("data-state", "true");
+        await expect(block.locator("text.comparison")).toHaveCount(0);
+        expect(await svgText(block.locator("text.actual"))).toBe("strict");
     });
 
     test("the two sides read differently, and not by colour alone", async ({ page }) => {
@@ -1069,11 +1538,16 @@ test.describe("the diagram shows the test, not only the result", () => {
         expect(membership).toContain("∈");
         expect(membership).not.toMatch(/[<>≥≤]/);
 
-        // The self-gating pair has no numeric form the record could carry, and
-        // "strict" is not something to put an operator in front of.
+        // A self-gating condition that *passed* has no numeric form the record
+        // could carry, and "strict" is not something to put an operator in
+        // front of. (The slot that failed is a different matter: see the
+        // self-sustainability suite, where the refusal carries the test the
+        // simulator actually ran.)
+        await selectSlot(page, 0, "appliance_runtime");
         await expect(diagram(page)
             .locator('g.block[data-key="ensure_self_sustainability"] text.comparison'))
             .toHaveCount(0);
+        await selectSlot(page, 1, "appliance_runtime");
 
         // And a plain comparison still is one.
         expect(await svgText(diagram(page)
@@ -1095,55 +1569,208 @@ test.describe("the diagram shows the test, not only the result", () => {
         await expect(diagram(page).locator("text.group-label")).toHaveCount(0);
     });
 
-    test("the custom conditions are their own stage before the result", async ({ page }) => {
+    test("the custom conditions are a stage of their own, past the plan", async ({ page }) => {
         await mountPanel(page);
         // 14:00: every mandatory condition passed and the template said no.
         await openDiagram(page, 2);
         await expect(diagram(page).locator("svg.logic"))
             .toHaveAttribute("data-terminal", "candidate");
 
-        // Its own captioned column, saying when it is checked.
-        await expect(diagram(page).locator('text.stage[data-stage="custom"]')).toHaveCount(1);
-        await expect(diagram(page).locator('text[data-stage="custom_when"]')).toHaveCount(1);
+        // Its own captioned stage, on the far side of the seam.
+        await expect(diagram(page).locator('text.stage[data-stage="recheck"]')).toHaveCount(1);
+        await expect(diagram(page).locator("line.stage-divider")).toHaveCount(1);
 
-        // Last before the `&`, and after every gate.
+        // Past the plan verdict, and past every gate: the whole point is that
+        // it is decided after the question of "is this planned at all".
         const geometry = await diagram(page).locator("svg.logic").evaluate((svg) => {
             const x = (selector: string) => {
                 const rect = svg.querySelector(`${selector} rect.body`) as SVGRectElement | null;
                 return rect === null ? null : rect.x.baseVal.value;
             };
+            const divider = svg.querySelector("line.stage-divider") as SVGLineElement | null;
             return {
                 custom: x('g.block[data-id="custom"]'),
-                final: x('g.block[data-id="final"]'),
+                verdict: x('g.block[data-id="verdict"]'),
+                exec: x('g.block[data-id="exec"]'),
+                terminal: x('g.block[data-kind="terminal"]'),
                 gate: x('g.block[data-kind="gate"]'),
-                or: x('g.block[data-id="or"]'),
+                divider: divider === null ? null : divider.x1.baseVal.value,
             };
         });
         expect(geometry.custom).not.toBeNull();
-        expect(geometry.custom!).toBeGreaterThan(geometry.or!);
-        expect(geometry.custom!).toBeLessThan(geometry.final!);
+        expect(geometry.custom!).toBeGreaterThan(geometry.verdict!);
+        expect(geometry.custom!).toBeLessThan(geometry.exec!);
+        expect(geometry.exec!).toBeLessThan(geometry.terminal!);
         if (geometry.gate !== null) {
             expect(geometry.custom!).toBeGreaterThan(geometry.gate);
         }
+        // The seam falls between the two stages, not through one of them.
+        expect(geometry.divider!).toBeGreaterThan(geometry.verdict!);
+        expect(geometry.divider!).toBeLessThan(geometry.custom!);
     });
 
-    test("a candidate's falsehood is the custom stage, and the AND says so", async ({ page }) => {
+    test("both time notes are drawn whatever the custom conditions said", async ({ page }) => {
+        // A candidate has to say the same two things a run does: when this was
+        // decided, and that it is taken again before the action starts. Saying
+        // it only for the run made "kandidát" read as a refusal, and saying it
+        // only for the candidate would make "spustit" read as settled.
+        // The wording, without the clock time: the two fixtures are different
+        // slots of different runs, so the times differ and the *claim* is what
+        // has to be identical.
+        const notes = async (): Promise<string[]> => diagram(page)
+            .locator('text[data-stage="custom_evaluated"], text[data-stage="custom_when"]')
+            .evaluateAll((nodes) => nodes.map(
+                (node) => (node.textContent?.trim() ?? "").split(" · ")[0],
+            ));
+
+        await mountPanel(page);
+        await openDiagram(page, 2);
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "candidate");
+        const onCandidate = await notes();
+        expect(onCandidate).toHaveLength(2);
+
+        await mountPanel(page, MET_CUSTOM_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
+        // The same two notes, word for word: a run and a candidate are the same
+        // claim about the future, differing only in what is true today.
+        expect(await notes()).toEqual(onCandidate);
+
+        // The notes are only worth anything with the two times in them: when
+        // the plan was built, and when the slot starts.
+        const labels = await page.evaluate(() => {
+            const panel = document.querySelector("scheduling-explanation-panel") as any;
+            const el = panel.shadowRoot.querySelector("scheduling-logic-diagram") as any;
+            return { plan: el.planLabel as string, slot: el.slotLabel as string };
+        });
+        expect(labels.plan).toMatch(/\d{1,2}[:.]\d{2}/);
+        expect(labels.slot).toMatch(/\d{1,2}[:.]\d{2}/);
+
+        // And the stage is still drawn, true and decisive -- it is half of why
+        // the slot runs, not a formality.
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveAttribute("data-state", "true");
+        await expect(custom).toHaveAttribute("data-decisive", "true");
+    });
+
+    test("the matched group is the one whose custom conditions held", async ({ page }) => {
+        // Two groups match; the first one's template said no and the second
+        // one's did not, so the slot ran under the second. Reading the first
+        // would put a false re-check over a run, which the diagram suppresses
+        // -- and the stage would vanish on exactly the slots that ran, while
+        // the candidate beside them kept theirs.
+        await mountPanel(page, SECOND_GROUP_CUSTOM_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
+
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveCount(1);
+        await expect(custom).toHaveAttribute("data-state", "true");
+        // Which is to say: the second group's, not the first's.
+        await expect(custom).toHaveAttribute("data-group", "1");
+        // Nothing gets pushed into the context panel to hide a contradiction.
+        await expect(diagram(page).locator('.annotation[data-key="custom"]')).toHaveCount(0);
+    });
+
+    test("an empty stage says whose conditions are missing", async ({ page }) => {
+        // Both groups match; the slot runs under the one with no template, so
+        // the stage is empty -- while the group beside it has a template the
+        // reader wrote and can see failing on the very next slot. Unqualified,
+        // "none configured" reads as "this automation has none" and is simply
+        // disbelieved.
+        await mountPanel(page, GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
+
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveAttribute("data-state", "n/a");
+        // The group it ran under, named on the note itself.
+        expect(await svgText(diagram(page).locator('text[data-stage="custom_none"]')))
+            .toContain("Záporná cena");
+        // And the fact that resolves the disbelief: another group does have
+        // them, and this slot did not run under it.
+        await expect(diagram(page).locator('text[data-stage="custom_other_group"]'))
+            .toHaveCount(1);
+    });
+
+    test("no other group, no claim that another group has them", async ({ page }) => {
+        // Nothing matched, so every group counts as "not the matched one" --
+        // which on a lone group is enough to promise a second group that does
+        // not exist.
+        await mountPanel(page, LONE_GROUP_UNMATCHED_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "not_eligible");
+
+        await expect(diagram(page).locator('g.block[data-id="custom"]'))
+            .toHaveAttribute("data-state", "n/a");
+        await expect(diagram(page).locator('text[data-stage="custom_none"]')).toHaveCount(1);
+        await expect(diagram(page).locator('text[data-stage="custom_other_group"]'))
+            .toHaveCount(0);
+    });
+
+    test("with no custom conditions the stage is still drawn, saying so", async ({ page }) => {
+        // A stage that appears only when it has something to complain about is
+        // a stage nobody can read: two slots of one automation, one with a
+        // re-check column and one without, look like two different pipelines.
+        await mountPanel(page, SINGLE_GROUP_PAYLOAD);
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator("svg.logic"))
+            .toHaveAttribute("data-terminal", "execute");
+
+        await expect(diagram(page).locator("line.stage-divider")).toHaveCount(1);
+        await expect(diagram(page).locator('text.stage[data-stage="recheck"]')).toHaveCount(1);
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveCount(1);
+        // None configured: the same reading a condition a group does not set
+        // gets everywhere else on this drawing, and it takes no part in the AND.
+        await expect(custom).toHaveAttribute("data-state", "n/a");
+        await expect(custom).toHaveAttribute("data-decisive", "false");
+
+        // Nothing is timed and nothing is retaken, so the two time notes give
+        // way to the one line that is true.
+        await expect(diagram(page).locator('text[data-stage="custom_none"]')).toHaveCount(1);
+        await expect(diagram(page).locator('text[data-stage="custom_when"]')).toHaveCount(0);
+        // Only one group here, so there is no other group to point at.
+        await expect(diagram(page).locator('text[data-stage="custom_other_group"]'))
+            .toHaveCount(0);
+        await expect(diagram(page).locator('.legend-item[data-legend="no_custom"]')).toHaveCount(1);
+
+        // And the result still hangs off the second stage, which resolves true
+        // because an unconfigured stage vetoes nothing.
+        await expect(diagram(page).locator('g.block[data-id="exec"]'))
+            .toHaveAttribute("data-state", "true");
+    });
+
+    test("a candidate is planned, and its falsehood is the second stage", async ({ page }) => {
         await mountPanel(page);
         await openDiagram(page, 2);
 
-        // The invariant, for the terminal that is neither a run nor a
-        // rejection: the drawn AND resolves false, and the input that makes it
-        // false is the custom stage.
+        // The terminal that is neither a run nor a rejection: the planning
+        // stage resolves *true* -- it was planned and placed -- and the
+        // execution stage is what resolves false.
         const result = await andInvariant(page);
-        expect(result.inputs).toContain("custom");
         expect(result.computed).toBe(result.final);
-        expect(result.final).toBe("false");
+        expect(result.final).toBe("true");
+        expect(result.exec).toBe("false");
         expect(result.terminal).toBe("candidate");
 
+        await expect(diagram(page).locator('g.block[data-id="verdict"]'))
+            .toHaveAttribute("data-state", "true");
         const custom = diagram(page).locator('g.block[data-id="custom"]');
         await expect(custom).toHaveAttribute("data-state", "false");
         await expect(custom).toHaveAttribute("data-decisive", "true");
         expect(await svgText(custom.locator("text.glyph"))).toBe("✗");
+
+        // And the conditions that got it planned stay lit: "why is this
+        // planned" is a separate question from "why is it only a candidate",
+        // and it is answered on the same picture.
+        const marks = await decisiveness(page);
+        expect(marks.or).toBe("true");
     });
 
     test("an errored custom entry is not a failed one", async ({ page }) => {

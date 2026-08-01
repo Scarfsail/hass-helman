@@ -782,5 +782,62 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class RuntimeHistoryRequirementsTests(unittest.TestCase):
+    """Which appliances the recorder is queried for, and how far back.
+
+    The daily minimum and the consecutive-skip guard both run on what the
+    appliance *actually* did, and both read it out of the map this decides. An
+    empty map is not an error anywhere downstream: ``delivered_hours`` falls
+    back to 0.0, so the day looks untouched however long the appliance ran, and
+    every past day looks idle to the skip guard. Nothing raises, nothing warns,
+    and the plan is quietly wrong -- which is why this needs pinning at the
+    seam rather than only in the optimizers, whose tests hand the map in ready
+    made.
+    """
+
+    @staticmethod
+    def _coordinator():
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._active_config = {}
+        return coordinator
+
+    def test_the_appliance_is_read_from_target_not_params(self) -> None:
+        # `target` is identity -- a condition group may never override it --
+        # and every other reader takes the appliance from there.
+        coordinator = self._coordinator()
+        config = SimpleNamespace(
+            enabled=True,
+            execution_optimizers=[
+                SimpleNamespace(
+                    kind="appliance_runtime",
+                    target={"appliance_id": "pool-filtration"},
+                    params={"skip": {"max_consecutive_skips": 2}},
+                ),
+            ],
+        )
+
+        with patch.object(
+            coordinator_module, "read_automation_config", return_value=config
+        ):
+            requirements = coordinator._resolve_runtime_history_requirements()
+
+        # The skip window plus today, and the appliance that needs the history.
+        self.assertEqual(requirements, (3, {"pool-filtration"}))
+
+    def test_optimizers_of_other_kinds_need_no_history(self) -> None:
+        coordinator = self._coordinator()
+        config = SimpleNamespace(
+            enabled=True,
+            execution_optimizers=[
+                SimpleNamespace(kind="charge_hold", target={}, params={}),
+            ],
+        )
+
+        with patch.object(
+            coordinator_module, "read_automation_config", return_value=config
+        ):
+            self.assertIsNone(coordinator._resolve_runtime_history_requirements())
+
+
 if __name__ == "__main__":
     unittest.main()

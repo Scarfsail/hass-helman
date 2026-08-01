@@ -1227,11 +1227,11 @@ class SolarCoverageConditionTests(unittest.TestCase):
         self.assertEqual(gated.value, 80.0)
         self.assertEqual(gated.actual, 40.0)
         self.assertEqual(slots[_slot_id(12, 30)].verdict, "skip")
-        # The slot that cleared the gate is placed, and a passing node keeps no
-        # actual at all.
+        # The slot that cleared the gate is placed, and says by how much: the
+        # margin is what tells a coverage of 81 % apart from one of 100 %.
         cleared = _node(slots[_slot_id(12, 0)], "min_solar_coverage_pct")
         self.assertEqual(cleared.state, "true")
-        self.assertIsNone(cleared.actual)
+        self.assertEqual(cleared.actual, 81.0)
         self.assertEqual(slots[_slot_id(12, 0)].verdict, "execute")
 
 
