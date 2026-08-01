@@ -414,7 +414,13 @@
         "matchedGroup": "odpovídající skupina",
         "classification": "typ dne",
         "conditionValue": "nastavená hodnota",
-        "failingCondition": "nesplněná podmínka"
+        "failingCondition": "nesplněná podmínka",
+        "floor": "podlaha SoC (%)",
+        "projectedMinSoc": "projektované minimum SoC (%)",
+        "baselineMinSoc": "minimum SoC bez spotřebiče (%)",
+        "atSlot": "kdy",
+        "deltaSocPct": "rozdíl SoC na konci dne (%)",
+        "deltaImportKwh": "nákup ze sítě navíc (kWh)"
       },
       "status": {
         "skipped": "Přeskočeno",
@@ -444,7 +450,7 @@
         "max_run_price": "Maximální cena běhu",
         "min_soc_pct": "Minimální SoC",
         "min_solar_coverage_pct": "Minimální pokrytí ze slunce",
-        "ensure_self_sustainability": "Zachovat soběstačnost",
+        "ensure_self_sustainability": "Soběstačnost",
         "reserve_floor_soc": "Rezerva SoC na drahé pásmo",
         "run_window": "Okno běhu",
         "hold_window": "Okno držení",
@@ -467,7 +473,17 @@
         "blocked_user_owned": "Automatizace zapisuje jen do slotů, které si nenastavil uživatel. Splněno = slot není obsazen uživatelským plánem, je volný pro automatizaci; nesplněno = slot vlastní uživatel a automatizace do něj nezapíše.",
         "slot_available": "Slot, se kterým optimalizátor vůbec může počítat — sloty nastavené uživatelem se vyřazují ještě před výběrem, takže se do nich neplánuje.",
         "daily_minimum_remaining": "Kolik hodin denního minima je za tímto slotem: co spotřebič dnes už odběhl podle měřené historie plus to, co má plán naplánováno před tímto slotem. Samotné rozhodnutí padlo jednou pro celý den — brána říká, že den ještě nějaké hodiny dlužil, a podle toho se vybral počet slotů.",
-        "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot."
+        "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot.",
+        "ensure_self_sustainability": "Co běh spotřebiče udělá s baterií: horizont se přepočítá s tímto slotem navíc a porovná se s průběhem bez spotřebiče. Měkký režim hlídá jen podlahu SoC, přísný navíc chce, aby se den zaplatil sám. Vyhodnocuje se postupně v pořadí podle ceny, takže výsledek závisí i na tom, které sloty byly přijaty před tímto."
+      },
+      "self_sustainability": {
+        "would_break_soc_floor": "S tímto slotem by baterie klesla pod nastavenou podlahu",
+        "soc_floor_already_breached": "Baterie klesá pod podlahu i bez spotřebiče, takže se nepřidává nic dalšího — příčinou není tento spotřebič",
+        "not_solar_neutral": "Přísný režim: den se musí zaplatit sám. S tímto slotem by baterie skončila den níž nebo by se navíc nakoupilo ze sítě (tolerance 0,5 % a 0,05 kWh)",
+        "level": {
+          "soft": "měkký",
+          "strict": "přísný"
+        }
       }
     }
   },

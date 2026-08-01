@@ -243,6 +243,89 @@ const CONDITION_OPERATORS: Record<string, string> = {
 const SET_MEMBERSHIP_CONDITIONS = new Set<string>(["run_when"]);
 
 /**
+ * The one condition whose `actual` is a *reason*, not a reading.
+ *
+ * It resolves by re-simulating the horizon rather than by comparing a number
+ * (`self_sustainability.py:1-17`), so a refusal comes back as an object naming
+ * which of three tests failed and with what — see `selfSustainabilityComparison`.
+ */
+export const SELF_SUSTAINABILITY = "ensure_self_sustainability";
+
+/** The tolerances strict allows before a day counts as not paying for itself. */
+const STRICT_SOC_TOLERANCE_PCT = 0.5;
+const STRICT_IMPORT_TOLERANCE_KWH = 0.05;
+
+/**
+ * A self-sustainability refusal, as the comparison that produced it.
+ *
+ * Three tests, three shapes (`appliance_runtime.py:817, 827, 885`), and the
+ * block face has room for exactly one line of each:
+ *
+ * - **`would_break_soc_floor`** — the horizon re-simulated *with* this slot
+ *   dips below the floor. `projectedMinSoc < floor`, and `atSlot` says when,
+ *   which goes in the tooltip because it will not fit here.
+ * - **`soc_floor_already_breached`** — the horizon dips below the floor
+ *   *without* the appliance, so nothing more is added. `baselineMinSoc <
+ *   floor`. Same shape as the case above and a different cause entirely, which
+ *   is the tooltip's job to keep apart.
+ * - **`not_solar_neutral`** — strict's extra test: the day must end no worse
+ *   off. Two one-sided comparisons against fixed tolerances, of which the face
+ *   shows whichever actually failed, and the SoC side when both did. It
+ *   carries its unit: unlike the pair above, the two numbers are not in the
+ *   same one.
+ *
+ * Returns null for anything else, including an accepted slot -- the record
+ * carries no numbers for one, and there is nothing to compare.
+ */
+export function selfSustainabilityComparison(actual: unknown): LogicComparison | null {
+    if (typeof actual !== "object" || actual === null || Array.isArray(actual)) {
+        return null;
+    }
+
+    const detail = actual as Record<string, unknown>;
+    const at = (key: string): number | null =>
+        typeof detail[key] === "number" ? detail[key] as number : null;
+    switch (detail.code) {
+        case "would_break_soc_floor":
+            return numericComparison(at("projectedMinSoc"), "<", at("floor"));
+        case "soc_floor_already_breached":
+            return numericComparison(at("baselineMinSoc"), "<", at("floor"));
+        case "not_solar_neutral": {
+            const deltaSoc = at("deltaSocPct");
+            const deltaImport = at("deltaImportKwh");
+            // The SoC side reads as "the battery ended the day this much
+            // lower", so the tolerance it broke is a negative bound.
+            if (deltaSoc !== null && -deltaSoc > STRICT_SOC_TOLERANCE_PCT) {
+                return numericComparison(deltaSoc, "<", -STRICT_SOC_TOLERANCE_PCT, " %");
+            }
+            if (deltaImport !== null && deltaImport > STRICT_IMPORT_TOLERANCE_KWH) {
+                return numericComparison(deltaImport, ">", STRICT_IMPORT_TOLERANCE_KWH, " kWh");
+            }
+            return null;
+        }
+        default:
+            return null;
+    }
+}
+
+/** Both sides of a numeric test, or null where the record is missing one. */
+function numericComparison(
+    actual: number | null,
+    operator: string,
+    value: number | null,
+    unit = "",
+): LogicComparison | null {
+    if (actual === null || value === null) {
+        return null;
+    }
+    return {
+        actual: `${comparisonSide(actual)}${unit}`,
+        operator,
+        value: `${comparisonSide(value)}${unit}`,
+    };
+}
+
+/**
  * The test a condition node stands for, or null where it has no readable one.
  *
  * Only the sides that are actually in the record are drawn. A condition that
@@ -255,6 +338,9 @@ export function conditionComparison(
     value: unknown,
     actual: unknown,
 ): LogicComparison | null {
+    if (key === SELF_SUSTAINABILITY) {
+        return selfSustainabilityComparison(actual);
+    }
     const rendered = comparisonSide(value);
     if (rendered === null) {
         return null;
@@ -1959,6 +2045,7 @@ export class SchedulingLogicDiagram extends LitElement {
         const right = comparison !== null
             ? formatComparison(comparison)
             : block.detail
+                ?? this._configuredLevel(block)
                 ?? summariseLogicValue(block.actual)
                 ?? summariseLogicValue(block.value);
         // The right-hand text gets a *cap*, and the label gets back whatever it
@@ -1972,14 +2059,24 @@ export class SchedulingLogicDiagram extends LitElement {
             - (rightText === null ? 0 : rightText.length * ACTUAL_PX_PER_CHAR + 6);
         const fullValue = fullLogicValue(block.actual);
         const fullConfigured = fullLogicValue(block.value);
+        // A refusal that came back as a reason rather than a reading says which
+        // test it failed, in words, with its own numbers named -- the raw
+        // `{"code":…}` it replaces was on screen and unreadable.
+        const reason = this._reasonText(block);
         const title = [
             `${label} — ${this._labelled("state", block.state)}`,
             this._conditionDetail(block.key),
+            reason,
             block.kind === "override" ? this._text("diagram.override_detail") : "",
             fullConfigured === null
                 ? ""
-                : `${this._text("matrix.configured")}: ${fullConfigured}`,
-            fullValue === null ? "" : `${this._text("matrix.actual")}: ${fullValue}`,
+                : `${this._text("matrix.configured")}: ${
+                    this._configuredLevel(block) ?? fullConfigured}`,
+            // The reason has already said everything the object holds, in a
+            // form a person can read.
+            reason !== "" || fullValue === null
+                ? ""
+                : `${this._text("matrix.actual")}: ${fullValue}`,
             this._paramsText(block.params),
         ].filter((part) => part.length > 0).join(" · ");
 
@@ -2176,6 +2273,60 @@ export class SchedulingLogicDiagram extends LitElement {
         const full = `${KEY_PREFIX}.${group}.${key}`;
         const translated = this.localize(full);
         return translated === full || translated === undefined ? key : translated;
+    }
+
+    /**
+     * A configured level said in words, where the config token is not one.
+     *
+     * `strict` and `soft` are the two settings self-sustainability takes, and
+     * the raw token is what the block has always shown. It is the only value on
+     * this drawing that is a *mode* rather than a number, so it is the only one
+     * with anything to translate.
+     */
+    private _configuredLevel(block: LogicBlock): string | null {
+        if (block.key !== SELF_SUSTAINABILITY || typeof block.value !== "string") {
+            return null;
+        }
+        const full = `${KEY_PREFIX}.self_sustainability.level.${block.value}`;
+        const translated = this.localize(full);
+        return translated === full || translated === undefined ? block.value : translated;
+    }
+
+    /**
+     * Why a self-gating condition refused this slot, in words and numbers.
+     *
+     * Its `actual` is a *reason* rather than a reading: which of three tests
+     * failed, and what it saw (`appliance_runtime.py:817, 827, 885`). The face
+     * carries the comparison; this is where the rest goes -- most importantly
+     * `atSlot`, the hour the floor would break, which has nowhere else to be,
+     * and the difference between "this slot would break the floor" and "the
+     * floor breaks anyway, without the appliance", which the two comparisons
+     * cannot tell apart on their own.
+     */
+    private _reasonText(block: LogicBlock): string {
+        const actual = block.actual;
+        if (
+            block.key !== SELF_SUSTAINABILITY
+            || typeof actual !== "object"
+            || actual === null
+            || Array.isArray(actual)
+        ) {
+            return "";
+        }
+
+        const detail = actual as Record<string, unknown>;
+        if (typeof detail.code !== "string") {
+            return "";
+        }
+
+        const sentence = this._text(`self_sustainability.${detail.code}`);
+        const numbers = Object.entries(detail)
+            .filter(([key]) => key !== "code")
+            .map(([key, value]) => `${this._labelled("param", key)}: ${
+                key === "atSlot" ? shortTime(value) ?? fullLogicValue(value) : fullLogicValue(value)
+            }`)
+            .join(", ");
+        return [sentence, numbers].filter((part) => part.length > 0).join(" — ");
     }
 
     /**

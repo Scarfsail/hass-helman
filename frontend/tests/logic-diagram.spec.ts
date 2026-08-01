@@ -187,14 +187,14 @@ const SINGLE_GROUP_PAYLOAD = {
                     scope: "slot",
                     state: [["true", 1], ["false", 1]],
                     value: [["strict", 2]],
-                    // The overflow case, verbatim in shape: an object `actual`
-                    // far wider than the 210px block it has to live in.
+                    // The overflow case, verbatim in shape: a refusal comes
+                    // back as an object naming which test failed and with
+                    // what, far wider than the block it has to live in.
                     actual: {
                         "1": {
                             code: "not_solar_neutral",
                             deltaSocPct: -3.05,
-                            importKwh: 0.42,
-                            exportKwh: 0.0,
+                            deltaImportKwh: 0.42,
                         },
                     },
                 },
@@ -487,6 +487,73 @@ const LONE_GROUP_UNMATCHED_PAYLOAD = {
         gates: [{ key: "slot_available", state: [["true", 1]] }],
     }],
 };
+
+/**
+ * The three ways self-sustainability refuses a slot.
+ *
+ * It resolves by re-simulating the horizon rather than by comparing a number,
+ * so its `actual` is a *reason* -- which test failed, and what it saw
+ * (`appliance_runtime.py:817, 827, 885`). One slot per code, plus one that
+ * passed, because the passing case has no numbers at all and must not grow any.
+ */
+function selfSustainabilityPayload(level = "strict") {
+    return {
+        targetKey: "appliance.pool",
+        date: DATE,
+        slotIds: SLOT_IDS,
+        runAt: RUN_AT,
+        optimizers: [{
+            optimizerId: "appliance_runtime",
+            kind: "appliance_runtime",
+            targetKey: "appliance.pool",
+            status: "ok",
+            runAt: [[RUN_AT, 4]],
+            verdict: [["execute", 1], ["skip", 3]],
+            winningOptimizer: { "0": "appliance_runtime" },
+            groups: [{
+                index: 0,
+                label: "Den",
+                paramsSource: [["slot_matched", 4]],
+                params: [[{ max_run_price: 9.0 }, 4]],
+                conditions: [
+                    {
+                        key: "max_run_price",
+                        scope: "slot",
+                        state: [["true", 4]],
+                        value: [[9.0, 4]],
+                    },
+                    {
+                        key: "ensure_self_sustainability",
+                        scope: "slot",
+                        state: [["true", 1], ["false", 3]],
+                        value: [[level, 4]],
+                        actual: {
+                            "1": {
+                                code: "would_break_soc_floor",
+                                floor: 25,
+                                projectedMinSoc: 18.4,
+                                atSlot: `${DATE}T19:00:00+02:00`,
+                            },
+                            "2": {
+                                code: "soc_floor_already_breached",
+                                floor: 25,
+                                baselineMinSoc: 22.1,
+                            },
+                            "3": {
+                                code: "not_solar_neutral",
+                                deltaSocPct: -3.05,
+                                deltaImportKwh: 0.42,
+                            },
+                        },
+                    },
+                ],
+            }],
+            gates: [{ key: "slot_available", state: [["true", 4]] }],
+        }],
+    };
+}
+
+const SELF_SUSTAINABILITY_PAYLOAD = selfSustainabilityPayload();
 
 /**
  * A **forced** day: every condition failed and the appliance ran anyway.
@@ -893,6 +960,72 @@ test.describe("the condition logic diagram", () => {
 });
 
 /**
+ * A refusal that is a reason, not a reading.
+ *
+ * Every other condition compares a number it measured against a number it was
+ * configured with. This one re-simulates the horizon and comes back with an
+ * object saying which of three tests failed. Rendered as the raw `code` it was
+ * eight truncated characters of backend vocabulary; rendered as raw JSON in the
+ * tooltip it was unreadable. Both halves are the test it actually ran.
+ */
+test.describe("self-sustainability says which test refused the slot", () => {
+    const block = (page: Page) =>
+        diagram(page).locator('g.block[data-key="ensure_self_sustainability"]');
+
+    test("a slot that would break the floor reads as that comparison", async ({ page }) => {
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
+        await selectSlot(page, 1, "appliance_runtime");
+
+        await expect(block(page)).toHaveAttribute("data-state", "false");
+        expect(await svgText(block(page).locator("text.comparison"))).toBe("18.40 < 25");
+
+        // The hour the floor breaks has nowhere to go on the face, and it is
+        // the most useful part of the answer.
+        const title = await svgText(block(page).locator("title"));
+        expect(title).toContain("self_sustainability.would_break_soc_floor");
+        expect(title).toContain("19:00");
+        expect(title).not.toContain("{");
+    });
+
+    test("a floor already breached without the appliance says so", async ({ page }) => {
+        // The same shape of comparison as the case above, and a different cause
+        // entirely: the appliance is not to blame and must not read as if it
+        // were. Only the tooltip can tell them apart.
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
+        await selectSlot(page, 2, "appliance_runtime");
+
+        expect(await svgText(block(page).locator("text.comparison"))).toBe("22.10 < 25");
+        expect(await svgText(block(page).locator("title")))
+            .toContain("self_sustainability.soc_floor_already_breached");
+    });
+
+    test("strict's day balance reads against the tolerance it broke", async ({ page }) => {
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
+        await selectSlot(page, 3, "appliance_runtime");
+
+        // Two numbers in different units, so the face carries the one that
+        // failed, with its unit; -3.05 % is past the -0.5 % the day is allowed.
+        expect(await svgText(block(page).locator("text.comparison"))).toBe("-3.05 % < -0.50 %");
+        const title = await svgText(block(page).locator("title"));
+        expect(title).toContain("self_sustainability.not_solar_neutral");
+        // Both numbers are named, whichever one the face had room for.
+        expect(title).toContain("deltaImportKwh");
+    });
+
+    test("a slot it accepted carries the level, and no invented numbers", async ({ page }) => {
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD, {
+            "scheduling.explanation.self_sustainability.level.strict": "přísný",
+        });
+        await selectSlot(page, 0, "appliance_runtime");
+
+        await expect(block(page)).toHaveAttribute("data-state", "true");
+        await expect(block(page).locator("text.comparison")).toHaveCount(0);
+        // The mode, in words rather than as the config token.
+        expect(await svgText(block(page).locator("text.actual"))).toBe("přísný");
+    });
+});
+
+/**
  * The picture has to agree with itself, and it has to be readable.
  *
  * These pin the four things a real reader could not get from the first cut: an
@@ -993,14 +1126,16 @@ test.describe("the logic diagram never contradicts its terminal", () => {
         });
         expect(overflow).toEqual([]);
 
-        // The object is summarised on the face and kept whole in the tooltip.
+        // The object becomes the comparison it stands for on the face, and its
+        // numbers are named in the tooltip. Neither is raw JSON.
         const block = diagram(page)
             .locator('g.block[data-key="ensure_self_sustainability"]');
         const face = await block.locator("text.actual").evaluate((node) =>
             node.textContent?.trim() ?? "");
         expect(face).not.toContain("{");
-        expect(face.length).toBeLessThanOrEqual(12);
+        expect(face.length).toBeLessThanOrEqual(24);
         await expect(block.locator("title")).toContainText("deltaSocPct");
+        await expect(block.locator("title")).not.toContainText("{");
     });
 
     test("the diagram is there as soon as a slot is open", async ({ page }) => {
@@ -1403,11 +1538,16 @@ test.describe("the diagram shows the test, not only the result", () => {
         expect(membership).toContain("∈");
         expect(membership).not.toMatch(/[<>≥≤]/);
 
-        // The self-gating pair has no numeric form the record could carry, and
-        // "strict" is not something to put an operator in front of.
+        // A self-gating condition that *passed* has no numeric form the record
+        // could carry, and "strict" is not something to put an operator in
+        // front of. (The slot that failed is a different matter: see the
+        // self-sustainability suite, where the refusal carries the test the
+        // simulator actually ran.)
+        await selectSlot(page, 0, "appliance_runtime");
         await expect(diagram(page)
             .locator('g.block[data-key="ensure_self_sustainability"] text.comparison'))
             .toHaveCount(0);
+        await selectSlot(page, 1, "appliance_runtime");
 
         // And a plain comparison still is one.
         expect(await svgText(diagram(page)
