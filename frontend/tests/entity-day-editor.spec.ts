@@ -1103,9 +1103,14 @@ test.describe("entity day editor, explain mode", () => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
             const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
             return [...band.shadowRoot.querySelectorAll(".slot-pick.selected")]
-                .map((pick: Element) => pick.getAttribute("data-slot"));
+                .map((pick: Element) => [
+                    pick.closest(".lane")?.getAttribute("data-lane"),
+                    pick.getAttribute("data-slot"),
+                ]);
         });
-        expect(new Set(marked)).toEqual(new Set([`${DAY_ONE}T13:00:00.000Z`]));
+        // The lane that was pressed, and no other: the diagram below is about
+        // one appliance at one hour.
+        expect(marked).toEqual([["appliance:boiler", `${DAY_ONE}T13:00:00.000Z`]]);
 
         await editor(page).locator('.mode-button[data-mode="edit"]').click();
         await expect(editor(page).locator(".block-list")).toHaveCount(1);

@@ -811,8 +811,14 @@ export class SchedulingEntityDayBand extends LitElement {
      * a hit nothing can be looked up for.
      */
     @property({ type: Boolean }) public slotGrid = false;
-    /** The slot the host is showing an answer for, marked in every lane. */
-    @property({ type: String }) public selectedSlotId: string | null = null;
+    /**
+     * The slot the host is showing an answer for, marked where it was pressed.
+     *
+     * A lane and a slot, for the same reason hover is per lane: the answer
+     * below is about one appliance at one hour, and marking those minutes in
+     * every lane would say it was about all of them.
+     */
+    @property({ attribute: false }) public selectedSlot: EntityDayBandSlotSelectDetail | null = null;
     /**
      * Stretches of the day to wash, whatever it is that makes them special.
      *
@@ -1180,7 +1186,9 @@ export class SchedulingEntityDayBand extends LitElement {
                 this._hoveredSlot?.laneKey === lane.key && this._hoveredSlot.slotId === slot.id
                     ? "hovered"
                     : "",
-                slot.id === this.selectedSlotId ? "selected" : "",
+                this.selectedSlot?.laneKey === lane.key && this.selectedSlot.slotId === slot.id
+                    ? "selected"
+                    : "",
             ].filter((value) => value.length > 0).join(" ");
             return html`
                 <span

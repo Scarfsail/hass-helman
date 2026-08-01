@@ -127,9 +127,9 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         band.readonly = true;
         band.laneLabels = columnLabels ? "column" : "track";
         band.slotGrid = slotGrid;
-        band.selectedSlotId = selectedSlot === undefined
+        band.selectedSlot = selectedSlot === undefined
             ? null
-            : new Date(at(selectedSlot)).toISOString();
+            : { laneKey: "appliance:boiler", slotId: new Date(at(selectedSlot)).toISOString() };
         band.showForecastRows = false;
         band.showAxis = false;
         if (windowed) {
@@ -441,12 +441,16 @@ test.describe("entity day band, slot grid", () => {
         expect(events.filter((event) => event.type === "entity-day-band-block-select")).toHaveLength(0);
     });
 
-    test("the answered slot stays marked in every lane", async ({ page }) => {
+    test("the answered slot stays marked, in its own lane alone", async ({ page }) => {
         // Once the pointer moves to the diagram below, the only thing saying
-        // which slot it is about is the mark left behind on the band.
+        // which slot it is about is the mark left behind on the band -- and the
+        // question was about one appliance, so one lane carries the mark.
         await mountBand(page, { slotGrid: true, twoLanes: true, selectedSlot: 12 });
 
         const band = page.locator("scheduling-entity-day-band");
-        await expect(band.locator(".slot-pick.selected")).toHaveCount(2);
+        await expect(band.locator(".slot-pick.selected")).toHaveCount(1);
+        await expect(
+            band.locator('.lane[data-lane="appliance:boiler"] .slot-pick.selected'),
+        ).toHaveCount(1);
     });
 });
