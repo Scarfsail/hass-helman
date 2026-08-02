@@ -969,21 +969,26 @@ class HelmanCoordinator:
 
         return True
 
-    async def _async_build_canonical_solar_forecast(
+    def _build_canonical_solar_forecast(
         self,
+        raw_solar: dict[str, Any],
         *,
         reference_time: datetime,
     ) -> dict[str, Any]:
-        builder = HelmanForecastBuilder(self._hass, self._active_config)
-        raw_result = await builder.build(reference_time=reference_time)
-        canonical_raw = build_solar_forecast_response(
-            raw_result["solar"],
+        # ``build_solar_forecast_response`` returns a freshly built structure —
+        # every point dict is minted by the aggregation — so the snapshot shares
+        # nothing with ``raw_solar`` and needs no copy of its own.
+        snapshot = build_solar_forecast_response(
+            raw_solar,
             granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days=MAX_FORECAST_DAYS,
         )
-        snapshot = deepcopy(canonical_raw)
         raw_points = snapshot.get("points", []) or []
-        snapshot["rawPoints"] = deepcopy(raw_points)
+        # rawPoints is the untouched record of what the forecaster said, so it
+        # stays independent of ``points``, which consumers are handed live. The
+        # points are flat {timestamp, value} dicts, so a per-point dict() is a
+        # full copy at a fraction of deepcopy's cost.
+        snapshot["rawPoints"] = [dict(point) for point in raw_points]
         solar_bias_service = getattr(self, "_solar_bias_service", None)
         if solar_bias_service is not None:
             bias_result = solar_bias_service.build_adjustment_result(
@@ -995,9 +1000,9 @@ class HelmanCoordinator:
                     bias_result
                 )
                 if bias_result.effective_variant == "adjusted":
-                    snapshot["correctedPoints"] = deepcopy(
-                        bias_result.adjusted_points
-                    )
+                    # The adjuster mints new point dicts per call and the
+                    # service keeps no reference to them.
+                    snapshot["correctedPoints"] = bias_result.adjusted_points
         snapshot["generatedAt"] = reference_time.isoformat()
         return snapshot
 
@@ -1049,6 +1054,9 @@ class HelmanCoordinator:
         result = {
             "solar": solar_response,
         }
+        # Built per request, not read off the refresh: the price points and the
+        # "price now" they carry are derived at the reference time, and a card
+        # asking mid-quarter-hour must not be told the last refresh's price.
         raw_result = await HelmanForecastBuilder(
             self._hass,
             self._active_config,
@@ -1949,8 +1957,15 @@ class HelmanCoordinator:
                 forecast_days=MAX_FORECAST_DAYS,
                 padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
             )
-            solar_snapshot = await self._async_build_canonical_solar_forecast(
-                reference_time=request_now
+            # One HelmanForecastBuilder.build() per refresh: its solar half
+            # feeds the canonical snapshot, its grid half the automation bundle.
+            raw_forecast = await HelmanForecastBuilder(
+                self._hass,
+                self._active_config,
+            ).build(reference_time=request_now)
+            solar_snapshot = self._build_canonical_solar_forecast(
+                raw_forecast["solar"],
+                reference_time=request_now,
             )
             self._cached_forecast = house_snapshot
             self._cached_solar_forecast = solar_snapshot
@@ -1983,6 +1998,7 @@ class HelmanCoordinator:
         bundle_ready = await self._async_refresh_automation_input_bundle(
             reference_time=request_now,
             house_forecast=house_snapshot,
+            raw_forecast=raw_forecast,
         )
         return _ForecastRefreshResult(
             forecast_refreshed=True,
@@ -2023,11 +2039,13 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
         house_forecast: dict[str, Any],
+        raw_forecast: dict[str, Any],
     ) -> bool:
         try:
             bundle = await self._async_build_automation_input_bundle(
                 reference_time=reference_time,
                 house_forecast=house_forecast,
+                raw_forecast=raw_forecast,
             )
         except Exception:
             _LOGGER.exception("Error refreshing automation input bundle")
@@ -2043,20 +2061,17 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
         house_forecast: dict[str, Any],
+        raw_forecast: dict[str, Any],
     ) -> AutomationInputBundle | None:
         if house_forecast.get("status") != "available":
             return None
 
-        raw_result = await HelmanForecastBuilder(
-            self._hass,
-            self._active_config,
-        ).build(reference_time=reference_time)
         solar_forecast = await self._async_get_canonical_solar_forecast(
             reference_time=reference_time
         )
         if solar_forecast is None:
             solar_forecast = build_solar_forecast_response(
-                raw_result["solar"],
+                raw_forecast["solar"],
                 granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
                 forecast_days=MAX_FORECAST_DAYS,
             )
@@ -2064,7 +2079,7 @@ class HelmanCoordinator:
             original_house_forecast=deepcopy(house_forecast),
             solar_forecast=_build_corrected_solar_forecast_view(solar_forecast),
             grid_price_forecast=build_grid_price_forecast_response(
-                raw_result["grid"],
+                raw_forecast["grid"],
                 granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
                 forecast_days=MAX_FORECAST_DAYS,
             ),

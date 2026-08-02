@@ -492,15 +492,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        builder_instance = SimpleNamespace(
-            build=AsyncMock(return_value=_make_raw_forecast_result())
-        )
         with (
-            patch.object(
-                coordinator_module,
-                "HelmanForecastBuilder",
-                return_value=builder_instance,
-            ),
             patch.object(
                 coordinator,
                 "_async_resolve_when_active_hourly_energy_kwh_by_appliance_id",
@@ -525,6 +517,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             await coordinator._async_refresh_automation_input_bundle(
                 reference_time=REFERENCE_TIME,
                 house_forecast=house_forecast,
+                raw_forecast=_make_raw_forecast_result(),
             )
 
         self.assertEqual(
@@ -713,18 +706,18 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._automation_input_bundle = previous_bundle
 
-        builder_instance = SimpleNamespace(build=AsyncMock(side_effect=RuntimeError()))
         with (
             patch.object(
-                coordinator_module,
-                "HelmanForecastBuilder",
-                return_value=builder_instance,
+                coordinator,
+                "_async_resolve_when_active_hourly_energy_kwh_by_appliance_id",
+                AsyncMock(side_effect=RuntimeError()),
             ),
             patch.object(coordinator_module._LOGGER, "exception"),
         ):
             refreshed = await coordinator._async_refresh_automation_input_bundle(
                 reference_time=REFERENCE_TIME,
                 house_forecast=_make_house_forecast(),
+                raw_forecast=_make_raw_forecast_result(),
             )
 
         self.assertFalse(refreshed)
@@ -751,13 +744,21 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             "rawPoints": [],
         }
         builder_instance = SimpleNamespace(build=AsyncMock(return_value=snapshot))
-        coordinator._async_build_canonical_solar_forecast = AsyncMock(
-            return_value=solar_snapshot
-        )
-        with patch.object(
-            coordinator_module,
-            "ConsumptionForecastBuilder",
-            return_value=builder_instance,
+        coordinator._build_canonical_solar_forecast = Mock(return_value=solar_snapshot)
+        raw_forecast = _make_raw_forecast_result()
+        with (
+            patch.object(
+                coordinator_module,
+                "ConsumptionForecastBuilder",
+                return_value=builder_instance,
+            ),
+            patch.object(
+                coordinator_module,
+                "HelmanForecastBuilder",
+                return_value=SimpleNamespace(
+                    build=AsyncMock(return_value=raw_forecast)
+                ),
+            ),
         ):
             refresh_result = await coordinator._async_build_forecast_snapshots(
                 reference_time=REFERENCE_TIME
@@ -779,6 +780,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._async_refresh_automation_input_bundle.assert_awaited_once_with(
             reference_time=REFERENCE_TIME,
             house_forecast=snapshot,
+            raw_forecast=raw_forecast,
         )
 
 

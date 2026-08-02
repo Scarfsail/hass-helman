@@ -414,5 +414,120 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         self.assertEqual(estimate, 1.3333)
 
 
+class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
+    """The attributes join on the cumulative-energy query is conditional.
+
+    The unit is sampled once from the live state and every row falls back to
+    it, so the join buys nothing when that sample lands. When it does not, the
+    join is the only source of a unit and has to stay: without it every row
+    normalizes to None and the history comes back empty.
+    """
+
+    LOCAL_START = datetime(2026, 3, 20, 10, 0, tzinfo=TZ)
+    LOCAL_END = datetime(2026, 3, 20, 10, 15, tzinfo=TZ)
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._dt_patcher = patch.object(
+            recorder_hourly_series,
+            "dt_util",
+            _FakeDtUtil,
+        )
+        cls._dt_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._dt_patcher.stop()
+
+    async def _query(self, *, live_state, states) -> tuple[dict, bool]:
+        recorded_no_attributes: list[bool] = []
+
+        def _fake_state_changes_during_period(*args):
+            recorded_no_attributes.append(args[4])
+            return {"sensor.house_energy": states}
+
+        hass = SimpleNamespace(
+            states=SimpleNamespace(get=lambda entity_id: live_state)
+        )
+        recorder = SimpleNamespace(
+            async_add_executor_job=lambda job: _run_now(job)
+        )
+        with (
+            patch.object(
+                recorder_hourly_series,
+                "state_changes_during_period",
+                _fake_state_changes_during_period,
+            ),
+            patch.object(
+                recorder_hourly_series,
+                "get_instance",
+                lambda hass: recorder,
+            ),
+        ):
+            changes = await recorder_hourly_series.query_cumulative_slot_energy_changes(
+                hass,
+                "sensor.house_energy",
+                local_start=self.LOCAL_START,
+                local_end=self.LOCAL_END,
+                interval_minutes=15,
+            )
+        return changes, recorded_no_attributes[0]
+
+    async def test_live_unit_drops_the_join_and_parses_the_same(self) -> None:
+        # What the recorder hands back with no_attributes=True: no unit on any
+        # row, only the live state's sample to normalize with.
+        states = [
+            SimpleNamespace(
+                state="1.0",
+                attributes={},
+                last_updated=datetime(2026, 3, 20, 9, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="1.5",
+                attributes={},
+                last_updated=datetime(2026, 3, 20, 9, 15, tzinfo=UTC),
+            ),
+        ]
+
+        changes, no_attributes = await self._query(
+            live_state=SimpleNamespace(
+                attributes={"unit_of_measurement": "kWh"},
+            ),
+            states=states,
+        )
+
+        self.assertTrue(no_attributes)
+        self.assertEqual(
+            changes,
+            {datetime(2026, 3, 20, 9, 0, tzinfo=UTC): 0.5},
+        )
+
+    async def test_missing_live_state_keeps_the_join(self) -> None:
+        states = [
+            SimpleNamespace(
+                state="1.0",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 20, 9, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="1.5",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 20, 9, 15, tzinfo=UTC),
+            ),
+        ]
+
+        changes, no_attributes = await self._query(live_state=None, states=states)
+
+        self.assertFalse(no_attributes)
+        self.assertEqual(
+            changes,
+            {datetime(2026, 3, 20, 9, 0, tzinfo=UTC): 0.5},
+        )
+
+
+async def _run_now(job):
+    return job()
+
+
 if __name__ == "__main__":
     unittest.main()

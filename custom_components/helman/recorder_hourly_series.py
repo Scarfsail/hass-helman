@@ -148,13 +148,19 @@ async def query_cumulative_slot_energy_changes(
     if current_state is not None:
         default_unit = current_state.attributes.get("unit_of_measurement")
 
+    # A sensor's unit does not change across its history, so once the live
+    # state has given us one the attributes join buys nothing. Without one the
+    # join is the only source of a unit, and dropping it would normalize every
+    # row to None and hand back an empty history.
+    no_attributes = default_unit is not None
+
     def _query_and_parse() -> dict[datetime, float]:
         history = state_changes_during_period(
             hass,
             utc_boundaries[0],
             utc_boundaries[-1],
             entity_id,
-            False,
+            no_attributes,
             False,
             None,
             True,

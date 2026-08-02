@@ -161,14 +161,24 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             }
 
             builder_instance = SimpleNamespace(build=AsyncMock(return_value=house_snapshot))
-            coordinator._async_build_canonical_solar_forecast = AsyncMock(
+            coordinator._build_canonical_solar_forecast = Mock(
                 return_value=solar_snapshot
             )
+            raw_forecast_builder = SimpleNamespace(
+                build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            )
 
-            with patch.object(
-                coordinator_module,
-                "ConsumptionForecastBuilder",
-                return_value=builder_instance,
+            with (
+                patch.object(
+                    coordinator_module,
+                    "ConsumptionForecastBuilder",
+                    return_value=builder_instance,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "HelmanForecastBuilder",
+                    return_value=raw_forecast_builder,
+                ),
             ):
                 await coordinator._async_build_forecast_snapshots(
                     reference_time=REFERENCE_TIME
@@ -209,14 +219,24 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             builder_instance = SimpleNamespace(
                 build=AsyncMock(return_value={"status": "available"})
             )
-            coordinator._async_build_canonical_solar_forecast = AsyncMock(
+            coordinator._build_canonical_solar_forecast = Mock(
                 return_value={"status": "available", "points": [], "rawPoints": []}
             )
+            raw_forecast_builder = SimpleNamespace(
+                build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            )
 
-            with patch.object(
-                coordinator_module,
-                "ConsumptionForecastBuilder",
-                return_value=builder_instance,
+            with (
+                patch.object(
+                    coordinator_module,
+                    "ConsumptionForecastBuilder",
+                    return_value=builder_instance,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "HelmanForecastBuilder",
+                    return_value=raw_forecast_builder,
+                ),
             ):
                 await coordinator._async_build_forecast_snapshots(
                     reference_time=REFERENCE_TIME
@@ -250,14 +270,24 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             builder_instance = SimpleNamespace(
                 build=AsyncMock(return_value={"status": "available"})
             )
-            coordinator._async_build_canonical_solar_forecast = AsyncMock(
+            coordinator._build_canonical_solar_forecast = Mock(
                 return_value={"status": "available", "points": [], "rawPoints": []}
             )
+            raw_forecast_builder = SimpleNamespace(
+                build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            )
 
-            with patch.object(
-                coordinator_module,
-                "ConsumptionForecastBuilder",
-                return_value=builder_instance,
+            with (
+                patch.object(
+                    coordinator_module,
+                    "ConsumptionForecastBuilder",
+                    return_value=builder_instance,
+                ),
+                patch.object(
+                    coordinator_module,
+                    "HelmanForecastBuilder",
+                    return_value=raw_forecast_builder,
+                ),
             ):
                 await coordinator._async_build_forecast_snapshots(
                     reference_time=REFERENCE_TIME
@@ -669,13 +699,6 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 {"timestamp": "2026-05-05T10:00:00+02:00", "value": 750.0},
             ]
 
-            builder_instance = SimpleNamespace(
-                build=AsyncMock(
-                    return_value={
-                        "solar": {"status": "available", "points": raw_points}
-                    }
-                )
-            )
             bias_result = SimpleNamespace(
                 status="applied",
                 effective_variant="adjusted",
@@ -686,26 +709,22 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 build_adjustment_result=Mock(return_value=bias_result)
             )
 
-            with (
-                patch.object(
-                    coordinator_module,
-                    "HelmanForecastBuilder",
-                    return_value=builder_instance,
-                    create=True,
-                ),
-                patch.object(
-                    coordinator_module,
-                    "build_solar_forecast_response",
-                    return_value={"status": "available", "points": raw_points},
-                    create=True,
-                ),
+            with patch.object(
+                coordinator_module,
+                "build_solar_forecast_response",
+                return_value={"status": "available", "points": raw_points},
+                create=True,
             ):
-                snapshot = await coordinator._async_build_canonical_solar_forecast(
-                    reference_time=REFERENCE_TIME
+                snapshot = coordinator._build_canonical_solar_forecast(
+                    {"status": "available", "points": raw_points},
+                    reference_time=REFERENCE_TIME,
                 )
 
             self.assertEqual(snapshot["points"], raw_points)
             self.assertEqual(snapshot["rawPoints"], raw_points)
+            # rawPoints must survive anything a consumer does to the live points.
+            self.assertIsNot(snapshot["rawPoints"], snapshot["points"])
+            self.assertIsNot(snapshot["rawPoints"][0], snapshot["points"][0])
             self.assertEqual(snapshot["correctedPoints"], adjusted_points)
             self.assertEqual(snapshot["biasCorrection"]["status"], "applied")
             self.assertEqual(
