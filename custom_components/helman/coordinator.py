@@ -14,10 +14,8 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
-    async_track_state_change_event,
     async_track_time_change,
     async_track_time_interval,
 )
@@ -83,6 +81,7 @@ from .const import (
     DEFAULT_FORECAST_DAYS,
     DEFAULT_FORECAST_GRANULARITY_MINUTES,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    FORECAST_STALE_AFTER_SECONDS,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
@@ -168,6 +167,10 @@ _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 # How far back the unmeasured remainder looks when smoothing away meter skew.
 # See _smooth_unmeasured for why the raw remainder cannot be published as-is.
 _UNMEASURED_SMOOTHING_WINDOW_S = 15.0
+_FORECAST_STALE_HINT = (
+    "Forecast data has not been rebuilt for over an hour. "
+    "Check the Home Assistant log for forecast refresh errors."
+)
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
@@ -188,6 +191,37 @@ def _resolve_runtime_entity_and_states(
     if isinstance(appliance, ClimateApplianceRuntime):
         return appliance.climate_entity_id, ("heat", "cool")
     return None, ()
+
+
+def _build_forecast_staleness(
+    generated_at: Any,
+    *,
+    reference_time: datetime,
+) -> dict[str, Any]:
+    """Forecast health for the card's banner.
+
+    Age never makes a forecast unavailable — an aging snapshot is old, not
+    wrong, and blanking the card is worse than showing good data with a
+    warning. So every payload carries when it was last rebuilt and says for
+    itself whether that is long enough ago to be a fault. ``reason`` is a
+    stable machine string; ``hint`` is what the banner shows.
+    """
+    generated_at_dt = (
+        dt_util.parse_datetime(generated_at) if isinstance(generated_at, str) else None
+    )
+    is_stale = (
+        generated_at_dt is None
+        or (
+            dt_util.as_utc(reference_time) - dt_util.as_utc(generated_at_dt)
+        ).total_seconds()
+        > FORECAST_STALE_AFTER_SECONDS
+    )
+    return {
+        "generatedAt": generated_at_dt.isoformat() if generated_at_dt else None,
+        "isStale": is_stale,
+        "reason": "stale_forecast" if is_stale else None,
+        "hint": _FORECAST_STALE_HINT if is_stale else None,
+    }
 
 
 def _iter_local_dates(start: date, end: date) -> list[date]:
@@ -424,7 +458,9 @@ class HelmanCoordinator:
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
         self._solar_bias_scheduler: SolarBiasTrainingScheduler | None = None
-        self._solar_invalidation_debouncer: Debouncer | None = None
+        # The rebuild currently in flight, if any, so a second trigger joins it
+        # instead of starting its own 56-day recorder scan.
+        self._forecast_refresh_task: asyncio.Task[Any] | None = None
         self._last_schedule_control_config_issue: str | None = None
         self._last_schedule_battery_state_issue: str | None = None
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
@@ -576,13 +612,6 @@ class HelmanCoordinator:
                 "today_discharge_energy"
             ),
         )
-        self._solar_invalidation_debouncer = Debouncer(
-            self._hass,
-            _LOGGER,
-            cooldown=30.0,
-            immediate=False,
-            function=self._async_invalidate_and_refresh_solar,
-        )
         await self._solar_bias_service.async_setup()
         if bias_config.enabled:
             self._solar_bias_scheduler = SolarBiasTrainingScheduler(
@@ -611,14 +640,6 @@ class HelmanCoordinator:
                 "device_registry_updated", self._on_registry_updated
             )
         )
-        if bias_config.daily_energy_entity_ids:
-            self._unsub_listeners.append(
-                async_track_state_change_event(
-                    self._hass,
-                    list(bias_config.daily_energy_entity_ids),
-                    self._on_solar_forecast_source_state_changed,
-                )
-            )
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "helman_solar_bias_trained",
@@ -649,7 +670,12 @@ class HelmanCoordinator:
         self._init_buffers(tree)
         self._start_tick()
 
-        # House forecast: load persisted snapshot and schedule recurring refreshes.
+        # House forecast: load persisted snapshot and schedule recurring
+        # refreshes. The persisted snapshots are served as-is however old they
+        # are — a read never rebuilds, so discarding them on age would leave
+        # the first card opened after a restart with nothing until the startup
+        # refresh below completes. Only a snapshot that answers a *different*
+        # question (entity, window, fingerprint) is thrown away.
         self._cached_forecast = self._storage.forecast_snapshot
         self._cached_solar_forecast = self._storage.solar_forecast_snapshot
         (
@@ -658,7 +684,7 @@ class HelmanCoordinator:
             min_history_days,
             config_fingerprint,
         ) = self._read_house_forecast_config()
-        if not self._has_compatible_forecast_snapshot(
+        if not self._has_matching_forecast_snapshot(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
             min_history_days=min_history_days,
@@ -666,11 +692,6 @@ class HelmanCoordinator:
         ):
             self._cached_forecast = None
         reference_time = dt_util.now()
-        if not self._has_current_slot_solar_forecast(
-            self._cached_solar_forecast,
-            reference_time=reference_time,
-        ):
-            self._cached_solar_forecast = None
         self._start_forecast_refresh()
 
         await self._async_normalize_schedule_document()
@@ -689,7 +710,7 @@ class HelmanCoordinator:
             reference_time=reference_time,
         )
         self._create_tracked_refresh_task(
-            self._async_refresh_forecast_and_request_automation(reason="startup")
+            self._async_refresh_forecast(reason="startup")
         )
 
     @callback
@@ -702,52 +723,14 @@ class HelmanCoordinator:
         self._cached_tree = None
         self._hass.async_create_task(self._async_rebuild_subscriptions())
 
-    async def _async_invalidate_and_refresh_solar(self) -> None:
-        self._cached_solar_forecast = None
-        await self._async_refresh_forecast_and_request_automation(
-            reason="solar_invalidation"
-        )
-
-    @callback
-    def _schedule_solar_invalidation(self) -> None:
-        debouncer = getattr(self, "_solar_invalidation_debouncer", None)
-        if debouncer is None:
-            return
-        create_task = getattr(
-            self._hass,
-            "async_create_task",
-            getattr(self, "_create_task", asyncio.create_task),
-        )
-        create_task(debouncer.async_call())
-
-    @callback
-    def _on_solar_forecast_source_state_changed(self, event) -> None:
-        old_state = event.data.get("old_state")
-        new_state = event.data.get("new_state")
-        if new_state is None:
-            return
-        if old_state is not None:
-            same_state = old_state.state == new_state.state
-            same_period = (
-                old_state.attributes.get("wh_period")
-                == new_state.attributes.get("wh_period")
-            )
-            same_last_changed = (
-                old_state.attributes.get("last_changed")
-                == new_state.attributes.get("last_changed")
-            )
-            if same_state and same_period and same_last_changed:
-                return
-        self._schedule_solar_invalidation()
-
     @callback
     def _on_solar_bias_changed(self, event) -> None:
-        self._schedule_solar_invalidation()
-
-    def invalidate_tree(self) -> None:
-        """Invalidate the cached tree (call after config changes)."""
-        self._cached_tree = None
-        self._hass.async_create_task(self._async_rebuild_subscriptions())
+        # A freshly trained or re-enabled bias profile changes every solar
+        # point, so rebuild at once rather than waiting for the quarter hour.
+        # The single-flight guard absorbs an event landing on a timer tick.
+        self._create_tracked_refresh_task(
+            self._async_refresh_forecast(reason="solar_bias_changed")
+        )
 
     async def _async_rebuild_subscriptions(self) -> None:
         """Rebuild tree and restart tick after tree invalidation."""
@@ -936,6 +919,14 @@ class HelmanCoordinator:
         min_history_days: int,
         config_fingerprint: str,
     ) -> bool:
+        """Whether the cached house snapshot answers the question we are asking.
+
+        The only invalidation there is: entity, training window, minimum
+        history, config fingerprint, model and payload shape. Age is
+        deliberately not part of it — an old snapshot is the right answer,
+        late; a mismatched one answers a question the user has since changed,
+        and must be blanked so the change is visible.
+        """
         if not isinstance(self._cached_forecast, dict):
             return False
 
@@ -977,84 +968,6 @@ class HelmanCoordinator:
             return self._cached_forecast.get("model") == HOUSE_FORECAST_MODEL_ID
 
         return True
-
-    def _has_compatible_forecast_snapshot(
-        self,
-        *,
-        total_energy_entity_id: str | None,
-        training_window_days: int,
-        min_history_days: int,
-        config_fingerprint: str,
-        reference_time: datetime | None = None,
-    ) -> bool:
-        if not self._has_matching_forecast_snapshot(
-            total_energy_entity_id=total_energy_entity_id,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
-        ):
-            return False
-
-        if self._cached_forecast is None or self._cached_forecast.get("status") != "available":
-            return True
-
-        return self._has_current_slot_forecast(
-            self._cached_forecast,
-            reference_time=reference_time,
-        )
-
-    @staticmethod
-    def _has_current_slot_forecast(
-        snapshot: dict[str, Any], reference_time: datetime | None = None
-    ) -> bool:
-        current_slot = snapshot.get("currentSlot")
-        if not isinstance(current_slot, dict):
-            return False
-
-        timestamp = current_slot.get("timestamp")
-        if not isinstance(timestamp, str):
-            return False
-
-        current_slot_dt = dt_util.parse_datetime(timestamp)
-        if current_slot_dt is None:
-            return False
-
-        local_snapshot_slot = get_local_current_slot_start(
-            current_slot_dt,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        )
-        local_current_slot = get_local_current_slot_start(
-            reference_time or dt_util.now(),
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        )
-        return local_snapshot_slot == local_current_slot
-
-    @staticmethod
-    def _has_current_slot_solar_forecast(
-        snapshot: dict[str, Any] | None,
-        *,
-        reference_time: datetime | None = None,
-    ) -> bool:
-        if not isinstance(snapshot, dict):
-            return False
-
-        generated_at = snapshot.get("generatedAt")
-        if not isinstance(generated_at, str):
-            return False
-
-        generated_at_dt = dt_util.parse_datetime(generated_at)
-        if generated_at_dt is None:
-            return False
-
-        local_snapshot_slot = get_local_current_slot_start(
-            generated_at_dt,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        )
-        local_current_slot = get_local_current_slot_start(
-            reference_time or dt_util.now(),
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        )
-        return local_snapshot_slot == local_current_slot
 
     async def _async_build_canonical_solar_forecast(
         self,
@@ -1108,8 +1021,14 @@ class HelmanCoordinator:
             reference_time=request_now
         )
         if canonical_solar_forecast is None:
+            # Stamped now, like the house half's placeholder payload: there is
+            # no snapshot yet rather than an old one, and "never built" is
+            # already visible as the unavailable status. Reporting it stale as
+            # well would put a banner on every card in the seconds between a
+            # restart and the startup refresh.
             canonical_solar_forecast = {
                 "status": "unavailable",
+                "generatedAt": request_now.isoformat(),
                 "points": [],
                 "rawPoints": [],
             }
@@ -1123,6 +1042,10 @@ class HelmanCoordinator:
         bias_correction = canonical_solar_forecast.get("biasCorrection")
         if isinstance(bias_correction, dict):
             solar_response["biasCorrection"] = deepcopy(bias_correction)
+        solar_response["staleness"] = _build_forecast_staleness(
+            canonical_solar_forecast.get("generatedAt"),
+            reference_time=request_now,
+        )
         result = {
             "solar": solar_response,
         }
@@ -1130,50 +1053,9 @@ class HelmanCoordinator:
             self._hass,
             self._active_config,
         ).build(reference_time=request_now)
-        (
-            total_energy_entity_id,
-            training_window_days,
-            min_history_days,
-            config_fingerprint,
-        ) = self._read_house_forecast_config()
-        if self._has_compatible_forecast_snapshot(
-            total_energy_entity_id=total_energy_entity_id,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
-            reference_time=request_now,
-        ):
-            canonical_house_forecast = self._cached_forecast
-        else:
-            if total_energy_entity_id is not None:
-                await self._async_refresh_forecast(reference_time=request_now)
-
-            if self._has_compatible_forecast_snapshot(
-                total_energy_entity_id=total_energy_entity_id,
-                training_window_days=training_window_days,
-                min_history_days=min_history_days,
-                config_fingerprint=config_fingerprint,
-                reference_time=request_now,
-            ):
-                canonical_house_forecast = self._cached_forecast
-            else:
-                self._cached_forecast = None
-                self._invalidate_battery_forecast_cache()
-                canonical_house_forecast = ConsumptionForecastBuilder._make_payload(
-                    status="not_configured"
-                    if total_energy_entity_id is None
-                    else "unavailable",
-                    training_window_days=training_window_days,
-                    min_history_days=min_history_days,
-                    config_fingerprint=config_fingerprint,
-                    resolution=get_forecast_resolution(
-                        FORECAST_CANONICAL_GRANULARITY_MINUTES
-                    ),
-                    horizon_hours=MAX_FORECAST_DAYS * 24,
-                    source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-                    forecast_days_available=MAX_FORECAST_DAYS,
-                    alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
-                )
+        canonical_house_forecast = await self._async_get_canonical_house_forecast(
+            reference_time=request_now
+        )
         pipeline = await self._async_get_appliance_forecast_pipeline(
             solar_forecast=_build_corrected_solar_forecast_view(
                 canonical_solar_forecast
@@ -1185,6 +1067,12 @@ class HelmanCoordinator:
             pipeline.adjusted_house_forecast,
             granularity=granularity,
             forecast_days=forecast_days,
+        )
+        # Read off the canonical snapshot, not the adjusted view the pipeline
+        # derives from it: the adjusted copy is rebuilt per request.
+        result["house_consumption"]["staleness"] = _build_forecast_staleness(
+            canonical_house_forecast.get("generatedAt"),
+            reference_time=request_now,
         )
         canonical_battery_forecast = pipeline.battery_forecast
         grid_price_response = build_grid_price_forecast_response(
@@ -1215,22 +1103,14 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
     ) -> dict[str, Any] | None:
-        cached_solar_forecast = getattr(self, "_cached_solar_forecast", None)
-        if self._has_current_slot_solar_forecast(
-            cached_solar_forecast,
-            reference_time=reference_time,
-        ):
-            return cached_solar_forecast
+        """The cached solar snapshot, however old it is, or None.
 
-        await self._async_refresh_forecast_and_request_automation(
-            reason="request_refresh",
-            reference_time=reference_time,
-        )
+        A pure cache read: rebuilding here would put a 56-day recorder scan on
+        the path of every card open. The snapshot's age reaches the card in the
+        payload's ``staleness`` block instead.
+        """
         cached_solar_forecast = getattr(self, "_cached_solar_forecast", None)
-        if self._has_current_slot_solar_forecast(
-            cached_solar_forecast,
-            reference_time=reference_time,
-        ):
+        if isinstance(cached_solar_forecast, dict):
             return cached_solar_forecast
         return None
 
@@ -1238,31 +1118,24 @@ class HelmanCoordinator:
         self,
         *,
         reference_time: datetime,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
+        """The cached house snapshot, however old it is.
+
+        Like the solar half, a pure cache read. A snapshot that no longer
+        matches the current config is not old but wrong, so it is blanked and
+        reported unavailable until the next refresh rebuilds it.
+        """
         (
             total_energy_entity_id,
             training_window_days,
             min_history_days,
             config_fingerprint,
         ) = self._read_house_forecast_config()
-        if self._has_compatible_forecast_snapshot(
+        if self._has_matching_forecast_snapshot(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
             min_history_days=min_history_days,
             config_fingerprint=config_fingerprint,
-            reference_time=reference_time,
-        ):
-            return self._cached_forecast
-
-        if total_energy_entity_id is not None:
-            await self._async_refresh_forecast(reference_time=reference_time)
-
-        if self._has_compatible_forecast_snapshot(
-            total_energy_entity_id=total_energy_entity_id,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
-            reference_time=reference_time,
         ):
             return self._cached_forecast
 
@@ -1977,12 +1850,6 @@ class HelmanCoordinator:
                 reference_time=request_now,
             )
 
-    def invalidate_forecast(self) -> None:
-        """Trigger a background house forecast refresh."""
-        self._cached_forecast = None
-        self._invalidate_battery_forecast_cache()
-        self._create_tracked_refresh_task(self._async_refresh_forecast())
-
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         if self._automation_input_bundle is None:
             return None
@@ -2003,7 +1870,75 @@ class HelmanCoordinator:
         )
 
     async def _async_refresh_forecast(
-        self, reference_time: datetime | None = None
+        self,
+        *,
+        reason: str,
+        reference_time: datetime | None = None,
+    ) -> None:
+        """The one way to rebuild the forecast. Never called from a read path.
+
+        Single-flight: the writers — the quarter-hour timer, startup, a config
+        save and the bias events — fire independently of each other, and a
+        bias-trained event landing on a quarter hour would otherwise run two
+        56-day recorder scans at once. A caller arriving while a rebuild is in
+        flight joins it and returns when it does. The joiner does not adopt its
+        failure: the run under way already logs it, and the joiner has no
+        recovery of its own to attempt.
+        """
+        in_flight = self._forecast_refresh_task
+        if in_flight is not None and not in_flight.done():
+            await asyncio.wait({in_flight})
+            return
+
+        task = self._create_tracked_refresh_task(
+            self._async_run_forecast_refresh(
+                reason=reason,
+                reference_time=reference_time,
+            )
+        )
+        self._forecast_refresh_task = task
+        try:
+            await task
+        finally:
+            if self._forecast_refresh_task is task:
+                self._forecast_refresh_task = None
+
+    async def _async_run_forecast_refresh(
+        self,
+        *,
+        reason: str,
+        reference_time: datetime | None = None,
+    ) -> None:
+        """Rebuild the snapshots, then ask for a re-plan if one is warranted."""
+        request_now = reference_time or dt_util.now()
+        refresh_result = await self._async_build_forecast_snapshots(
+            reference_time=request_now
+        )
+
+        automation_config = read_automation_config(self._active_config)
+        if automation_config is None:
+            automation_config = AutomationConfig(enabled=False)
+
+        async with self._schedule_lock:
+            schedule_document = await self._load_pruned_schedule_document_locked(
+                reference_time=request_now
+            )
+
+        if not (automation_config.enabled and automation_config.execution_optimizers):
+            if not has_automation_owned_actions(schedule_document):
+                return
+        elif not (
+            refresh_result.forecast_refreshed and refresh_result.bundle_ready
+        ):
+            return
+
+        await self._automation_triggers.request_debounced(
+            reason=reason,
+            reference_time=request_now,
+        )
+
+    async def _async_build_forecast_snapshots(
+        self, *, reference_time: datetime | None = None
     ) -> _ForecastRefreshResult:
         """Build new forecast snapshots, cache them, and persist them."""
         request_now = reference_time or dt_util.now()
@@ -2102,37 +2037,6 @@ class HelmanCoordinator:
             self._automation_input_bundle = bundle
             return True
         return False
-
-    async def _async_refresh_forecast_and_request_automation(
-        self,
-        *,
-        reason: str,
-        reference_time: datetime | None = None,
-    ) -> None:
-        request_now = reference_time or dt_util.now()
-        refresh_result = await self._async_refresh_forecast(reference_time=request_now)
-
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            automation_config = AutomationConfig(enabled=False)
-
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=request_now
-            )
-
-        if not (automation_config.enabled and automation_config.execution_optimizers):
-            if not has_automation_owned_actions(schedule_document):
-                return
-        elif not (
-            refresh_result.forecast_refreshed and refresh_result.bundle_ready
-        ):
-            return
-
-        await self._automation_triggers.request_debounced(
-            reason=reason,
-            reference_time=request_now,
-        )
 
     async def _async_build_automation_input_bundle(
         self,
@@ -3562,7 +3466,7 @@ class HelmanCoordinator:
         @callback
         def _on_forecast_interval(_now: datetime) -> None:
             self._create_tracked_refresh_task(
-                self._async_refresh_forecast_and_request_automation(
+                self._async_refresh_forecast(
                     reason="slot_refresh",
                     reference_time=_now,
                 )

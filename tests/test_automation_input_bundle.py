@@ -759,7 +759,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             "ConsumptionForecastBuilder",
             return_value=builder_instance,
         ):
-            refresh_result = await coordinator._async_refresh_forecast(
+            refresh_result = await coordinator._async_build_forecast_snapshots(
                 reference_time=REFERENCE_TIME
             )
 

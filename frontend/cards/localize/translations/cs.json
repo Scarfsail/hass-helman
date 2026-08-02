@@ -749,5 +749,21 @@
       },
       "why": "Proč?"
     }
+  },
+  "forecast_health": {
+    "source": {
+      "solar": "Předpověď výroby",
+      "house": "Předpověď spotřeby domu"
+    },
+    "reason": {
+      "stale_forecast": "se neobnovila déle než hodinu — obnovovací smyčka je pravděpodobně rozbitá",
+      "unknown": "hlásí problém"
+    },
+    "age": {
+      "never": "nikdy nesestaveno",
+      "minutes": "min zpět",
+      "hours": "h zpět",
+      "days": "d zpět"
+    }
   }
 }

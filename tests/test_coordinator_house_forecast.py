@@ -504,26 +504,6 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
             800.0,
         )
 
-    def test_has_current_slot_forecast_uses_quarter_hour_freshness(self) -> None:
-        snapshot = {
-            "currentSlot": {
-                "timestamp": "2026-03-20T21:00:00+01:00",
-            }
-        }
-
-        self.assertTrue(
-            HelmanCoordinator._has_current_slot_forecast(
-                snapshot,
-                reference_time=datetime.fromisoformat("2026-03-20T21:14:00+01:00"),
-            )
-        )
-        self.assertFalse(
-            HelmanCoordinator._has_current_slot_forecast(
-                snapshot,
-                reference_time=datetime.fromisoformat("2026-03-20T21:16:00+01:00"),
-            )
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

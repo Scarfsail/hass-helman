@@ -674,8 +674,8 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
-        coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
-        coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
+        coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
+        coordinator._async_refresh_forecast = AsyncMock()
 
         adjusted_house_forecast = {
             "status": "available",
@@ -762,7 +762,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await coordinator.get_forecast(granularity=60, forecast_days=1)
 
-        coordinator._async_refresh_forecast_and_request_automation.assert_not_awaited()
+        coordinator._async_refresh_forecast.assert_not_awaited()
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
             solar_forecast={
                 "status": "available",
@@ -810,8 +810,8 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
-        coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
-        coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
+        coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
+        coordinator._async_refresh_forecast = AsyncMock()
         coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
             return_value=SimpleNamespace(
                 adjusted_house_forecast={"status": "available"},
@@ -884,7 +884,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await coordinator.get_forecast(granularity=60, forecast_days=1)
 
-        coordinator._async_refresh_forecast_and_request_automation.assert_not_awaited()
+        coordinator._async_refresh_forecast.assert_not_awaited()
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
             solar_forecast={
                 "status": "available",

@@ -19,6 +19,8 @@ import "./components/scheduling-running-entities";
 import "./components/scheduling-slot-table";
 import "./dialogs/scheduling-entity-day-editor";
 import "./dialogs/scheduling-range-edit-dialog";
+import "../shared/forecast-health-banner";
+import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import {
     explanationCacheKey,
     type ScheduleExplanationRequestDetail,
@@ -477,6 +479,14 @@ export class HelmanSchedulingCard extends LitElement implements LovelaceCard {
 
                     ${this._renderInlineError()}
                     ${this._renderApplianceError()}
+
+                    <!-- One per card, above the table it qualifies: the whole
+                         table is drawn off this forecast, so the warning belongs
+                         to all of it rather than to any one row. -->
+                    <helman-forecast-health-banner
+                        .items=${buildForecastHealthItems(this._forecast, this._localize)}
+                        .localize=${this._localize}
+                    ></helman-forecast-health-banner>
 
                     ${this._ownerSnapshot.schedule === null
                         ? this._renderEmptyState()

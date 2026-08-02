@@ -588,14 +588,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=True,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )
@@ -621,14 +621,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="slot_refresh",
             reference_time=REFERENCE_TIME,
         )
@@ -649,14 +649,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )
@@ -681,14 +681,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )

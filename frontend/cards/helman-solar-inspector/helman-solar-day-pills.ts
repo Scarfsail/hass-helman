@@ -66,6 +66,18 @@ export interface DayPillSelectDetail {
     date: string;
 }
 
+/**
+ * The forecast payload's health, handed up to the inspector.
+ *
+ * The pills are the only always-mounted part of the inspector that fetches the
+ * forecast, so they are where its health becomes known — but the warning is
+ * about the card, not about the pill row, so it is raised rather than drawn
+ * here.
+ */
+export interface DayPillForecastHealthDetail {
+    forecast: ForecastPayload;
+}
+
 @customElement("helman-solar-day-pills")
 export class HelmanSolarDayPills extends LitElement {
     static styles = [helmanColorVars, dayAggregateGaugeStyles, css`
@@ -353,6 +365,11 @@ export class HelmanSolarDayPills extends LitElement {
             const forecast = await this._forecastLoader.load(hass);
             if (this.hass?.connection === hass.connection) {
                 this._forecast = forecast;
+                this.dispatchEvent(new CustomEvent<DayPillForecastHealthDetail>("forecast-health", {
+                    bubbles: true,
+                    composed: true,
+                    detail: { forecast },
+                }));
             }
         } catch (error) {
             console.error("helman-solar-day-pills: failed to load forecast", error);

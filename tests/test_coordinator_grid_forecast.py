@@ -380,7 +380,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
-        coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
+        coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
 
         adjusted_house_forecast = {"status": "available", "generatedAt": "2026-03-20T21:16:00+01:00"}
         canonical_battery_forecast = {
@@ -504,7 +504,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
             solar_forecast=canonical_solar,
-            house_forecast=coordinator._cached_forecast,
+            house_forecast=adjusted_house_forecast,
             started_at=REFERENCE_TIME,
         )
         self.assertEqual(result["solar"], solar_response)

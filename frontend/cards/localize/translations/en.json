@@ -252,5 +252,21 @@
       },
       "why": "Why?"
     }
+  },
+  "forecast_health": {
+    "source": {
+      "solar": "Solar forecast",
+      "house": "House consumption forecast"
+    },
+    "reason": {
+      "stale_forecast": "has not refreshed for over an hour — the background refresh may be broken",
+      "unknown": "reported a problem"
+    },
+    "age": {
+      "never": "never built",
+      "minutes": "min ago",
+      "hours": "h ago",
+      "days": "d ago"
+    }
   }
 }

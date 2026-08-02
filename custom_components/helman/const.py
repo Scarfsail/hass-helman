@@ -67,6 +67,10 @@ FORECAST_GRANULARITY_OPTIONS = (15, 30, 60)
 DEFAULT_FORECAST_GRANULARITY_MINUTES = 60
 DEFAULT_FORECAST_DAYS = 7
 MAX_FORECAST_DAYS = 14
+# When the forecast payload starts reporting itself as stale. The rebuild runs
+# every 15 minutes, so a slow run or one missed tick lands around 30 minutes —
+# jitter, not a fault. An hour means four consecutive failures.
+FORECAST_STALE_AFTER_SECONDS = 3600
 BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS = 300
 BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY = 0.95
 BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY = 0.95

@@ -37,7 +37,10 @@ import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import "./helman-solar-schedule-band-strip";
 import "./helman-solar-day-pills";
-import type { DayPillSelectDetail } from "./helman-solar-day-pills";
+import type { DayPillForecastHealthDetail, DayPillSelectDetail } from "./helman-solar-day-pills";
+import "../shared/forecast-health-banner";
+import { buildForecastHealthItems } from "../shared/forecast-health-banner";
+import type { ForecastPayload } from "../helman-api";
 import {
   buildHistoryDayAggregate,
   NO_PILL_AVAILABILITY,
@@ -385,6 +388,12 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _range: InspectorPayload["range"] | null = null;
   @state() private _loading = false;
   @state() private _error = "";
+  /**
+   * The forecast payload the day pills fetched, kept only for its health
+   * blocks. The inspector's own data comes from a different endpoint, so this
+   * is the card's only view of how fresh the forecast behind the pills is.
+   */
+  @state() private _forecastHealth: ForecastPayload | null = null;
   /**
    * The one slot selection every surface shares: the charts highlight each selected
    * slot, and the schedule-actions strip both renders it and bulk-edits it.
@@ -1035,6 +1044,13 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <div class="body">
         ${this._renderNavigation(payload)}
+        <!-- One per card. The pills and the schedule band each read the
+             forecast, but the warning is about the card's data as a whole, so
+             it is drawn here rather than inside either strip. -->
+        <helman-forecast-health-banner
+          .items=${buildForecastHealthItems(this._forecastHealth, this._localize)}
+          .localize=${this._localize}
+        ></helman-forecast-health-banner>
         ${this._loading ? html`<div class="note">${this._t("bias_correction.inspector.loading")}</div>` : ""}
         ${this._error ? html`<div class="note">${this._error}</div>` : ""}
         ${payload ? this._renderContent(payload) : ""}
@@ -1062,6 +1078,7 @@ export class HelmanSolarInspector extends LitElement {
             .historyDay=${this._historyPillDay(payload)}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
+            @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>
           <button class="icon-button day-arrow" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
         </div>
@@ -3074,6 +3091,11 @@ export class HelmanSolarInspector extends LitElement {
     return { dayKey: date, aggregate, availability };
   }
 
+  private _handleForecastHealth = (event: CustomEvent<DayPillForecastHealthDetail>) => {
+    event.stopPropagation();
+    this._forecastHealth = event.detail.forecast;
+  };
+
   private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
     event.stopPropagation();
     if (event.detail.date === this._selectedDate) {
@@ -3403,6 +3425,9 @@ export class HelmanSolarInspector extends LitElement {
     if (!reason) return translated;
     return `${translated} (${reason})`;
   }
+
+  /** `_t` as a stable function reference, for components taking a localizer. */
+  private _localize: LocalizeFunction = (key: string) => this._t(key);
 
   private _t(key: string): string {
     return this.hass ? getLocalizeFunction(this.hass)(key) : this._fallbackLocalize(key);
