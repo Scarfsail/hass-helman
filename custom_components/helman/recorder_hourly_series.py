@@ -370,6 +370,12 @@ async def _estimate_average_hourly_energy_when_entity_active(
     if current_energy_state is not None:
         default_unit = current_energy_state.attributes.get("unit_of_measurement")
 
+    # A sensor's unit does not change across its history, so once the live
+    # state has given us one the attributes join buys nothing. Without one the
+    # join is the only source of a unit, and dropping it would normalize every
+    # row to None and hand back an empty history.
+    energy_no_attributes = default_unit is not None
+
     recorder = get_instance(hass)
     entity_history = await recorder.async_add_executor_job(
         lambda: state_changes_during_period(
@@ -389,7 +395,7 @@ async def _estimate_average_hourly_energy_when_entity_active(
             utc_start,
             utc_end,
             energy_entity_id,
-            False,
+            energy_no_attributes,
             False,
             None,
             True,

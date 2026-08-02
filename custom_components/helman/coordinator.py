@@ -98,6 +98,7 @@ from .forecast_builder import HelmanForecastBuilder
 from .forecast_request import ensure_supported_forecast_request
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
+from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
@@ -1057,7 +1058,9 @@ class HelmanCoordinator:
         # Built per request, not read off the refresh: the price points and the
         # "price now" they carry are derived at the reference time, and a card
         # asking mid-quarter-hour must not be told the last refresh's price.
-        raw_result = await HelmanForecastBuilder(
+        # Only the grid half: HelmanForecastBuilder would also run the solar
+        # half's same-day recorder scan, and a read has no use for it.
+        raw_grid_price_forecast = GridPriceForecastBuilder(
             self._hass,
             self._active_config,
         ).build(reference_time=request_now)
@@ -1084,7 +1087,7 @@ class HelmanCoordinator:
         )
         canonical_battery_forecast = pipeline.battery_forecast
         grid_price_response = build_grid_price_forecast_response(
-            raw_result["grid"],
+            raw_grid_price_forecast,
             granularity=granularity,
             forecast_days=forecast_days,
         )

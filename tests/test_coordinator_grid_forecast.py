@@ -100,6 +100,16 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     sys.modules[forecast_builder_mod.__name__] = forecast_builder_mod
 
+    grid_price_builder_mod = types.ModuleType(
+        "custom_components.helman.grid_price_forecast_builder"
+    )
+    grid_price_builder_mod.GridPriceForecastBuilder = type(
+        "GridPriceForecastBuilder",
+        (),
+        {},
+    )
+    sys.modules[grid_price_builder_mod.__name__] = grid_price_builder_mod
+
     grid_builder_mod = types.ModuleType(
         "custom_components.helman.grid_flow_forecast_builder"
     )
@@ -411,13 +421,10 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         )
 
         builder_instance = SimpleNamespace(
-            build=AsyncMock(
+            build=Mock(
                 return_value={
-                    "solar": {"status": "available"},
-                    "grid": {
-                        "export": {"status": "available", "currentPrice": 2.5},
-                        "import": {"status": "available", "currentPrice": 7.0},
-                    },
+                    "export": {"status": "available", "currentPrice": 2.5},
+                    "import": {"status": "available", "currentPrice": 7.0},
                 }
             )
         )
@@ -452,7 +459,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "GridPriceForecastBuilder",
                 return_value=builder_instance,
             ),
             patch.object(

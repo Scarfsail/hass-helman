@@ -525,6 +525,132 @@ class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class ActiveEnergyEstimateAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
+    """The lookback estimate's energy query joins attributes conditionally.
+
+    Same trade as the cumulative-energy query: the unit comes from the live
+    state when it is there, and only then is the join redundant. Without it
+    the join has to stay, or every row normalizes to None and the estimate is
+    lost.
+    """
+
+    ENTITY_ID = "climate.living_room"
+    ENERGY_ENTITY_ID = "sensor.living_room_energy"
+    REFERENCE_TIME = datetime(2026, 3, 20, 12, 0, tzinfo=TZ)
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._dt_patcher = patch.object(
+            recorder_hourly_series,
+            "dt_util",
+            _FakeDtUtil,
+        )
+        cls._dt_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._dt_patcher.stop()
+
+    ENTITY_STATES = [
+        SimpleNamespace(
+            state="heat",
+            last_updated=datetime(2026, 3, 19, 20, 0, tzinfo=UTC),
+        ),
+        SimpleNamespace(
+            state="off",
+            last_updated=datetime(2026, 3, 19, 21, 0, tzinfo=UTC),
+        ),
+    ]
+
+    async def _estimate(
+        self, *, live_energy_state, energy_states
+    ) -> tuple[float | None, bool]:
+        recorded_no_attributes: dict[str, bool] = {}
+
+        def _fake_state_changes_during_period(*args):
+            entity_id = args[3]
+            recorded_no_attributes[entity_id] = args[4]
+            if entity_id == self.ENTITY_ID:
+                return {entity_id: self.ENTITY_STATES}
+            return {entity_id: energy_states}
+
+        hass = SimpleNamespace(
+            states=SimpleNamespace(get=lambda entity_id: live_energy_state)
+        )
+        recorder = SimpleNamespace(async_add_executor_job=_run_now)
+        with (
+            patch.object(
+                recorder_hourly_series,
+                "state_changes_during_period",
+                _fake_state_changes_during_period,
+            ),
+            patch.object(
+                recorder_hourly_series,
+                "get_instance",
+                lambda hass: recorder,
+            ),
+        ):
+            estimate = (
+                await recorder_hourly_series._estimate_average_hourly_energy_when_entity_active(
+                    hass,
+                    entity_id=self.ENTITY_ID,
+                    energy_entity_id=self.ENERGY_ENTITY_ID,
+                    reference_time=self.REFERENCE_TIME,
+                    lookback_days=1,
+                    active_states=("heat", "cool"),
+                )
+            )
+        return estimate, recorded_no_attributes[self.ENERGY_ENTITY_ID]
+
+    async def test_live_unit_drops_the_join_and_estimates_the_same(self) -> None:
+        # What the recorder hands back with no_attributes=True: no unit on any
+        # row, only the live state's sample to normalize with.
+        energy_states = [
+            SimpleNamespace(
+                state="1.0",
+                attributes={},
+                last_updated=datetime(2026, 3, 19, 20, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="1.5",
+                attributes={},
+                last_updated=datetime(2026, 3, 19, 21, 0, tzinfo=UTC),
+            ),
+        ]
+
+        estimate, no_attributes = await self._estimate(
+            live_energy_state=SimpleNamespace(
+                attributes={"unit_of_measurement": "kWh"},
+            ),
+            energy_states=energy_states,
+        )
+
+        self.assertTrue(no_attributes)
+        self.assertEqual(estimate, 0.5)
+
+    async def test_missing_live_state_keeps_the_join(self) -> None:
+        energy_states = [
+            SimpleNamespace(
+                state="1.0",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 19, 20, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                state="1.5",
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=datetime(2026, 3, 19, 21, 0, tzinfo=UTC),
+            ),
+        ]
+
+        estimate, no_attributes = await self._estimate(
+            live_energy_state=None,
+            energy_states=energy_states,
+        )
+
+        self.assertFalse(no_attributes)
+        self.assertEqual(estimate, 0.5)
+
+
 async def _run_now(job):
     return job()
 

@@ -60,21 +60,19 @@ def _patched_forecast_response_builders(coordinator_module):
     with ExitStack() as stack:
         for name, kwargs in (
             (
-                "HelmanForecastBuilder",
+                "GridPriceForecastBuilder",
                 {
                     "return_value": SimpleNamespace(
-                        build=AsyncMock(
+                        build=Mock(
                             return_value={
-                                "grid": {
-                                    "export": {
-                                        "status": "available",
-                                        "currentPrice": 2.5,
-                                    },
-                                    "import": {
-                                        "status": "available",
-                                        "currentPrice": 7.0,
-                                    },
-                                }
+                                "export": {
+                                    "status": "available",
+                                    "currentPrice": 2.5,
+                                },
+                                "import": {
+                                    "status": "available",
+                                    "currentPrice": 7.0,
+                                },
                             }
                         )
                     )
@@ -601,12 +599,10 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             )
 
             builder_instance = SimpleNamespace(
-                build=AsyncMock(
+                build=Mock(
                     return_value={
-                        "grid": {
-                            "export": {"status": "available", "currentPrice": 2.5},
-                            "import": {"status": "available", "currentPrice": 7.0},
-                        }
+                        "export": {"status": "available", "currentPrice": 2.5},
+                        "import": {"status": "available", "currentPrice": 7.0},
                     }
                 )
             )
@@ -623,7 +619,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(
                     coordinator_module,
-                    "HelmanForecastBuilder",
+                    "GridPriceForecastBuilder",
                     return_value=builder_instance,
                     create=True,
                 ),
