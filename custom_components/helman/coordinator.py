@@ -808,8 +808,31 @@ class HelmanCoordinator:
             reason="startup",
             reference_time=reference_time,
         )
-        self._create_tracked_refresh_task(
-            self._async_refresh_forecast(reason="startup")
+        self._schedule_startup_forecast_refresh()
+
+    def _schedule_startup_forecast_refresh(self) -> None:
+        """Build the first forecast once Home Assistant has finished starting.
+
+        Deferred for the same reason as ``_schedule_house_profile_refit``: the
+        solar half reads its points straight off the forecast provider's daily
+        energy entities, and on a cold start that integration has not
+        registered them yet — the build comes back ``unavailable`` with no
+        points a fraction of a second after setup. Until this fires the
+        persisted snapshot is served, so the card shows the last known forecast
+        rather than nothing.
+
+        When Home Assistant is already running — a config save reloads the
+        entry — ``async_at_started`` fires immediately, so **G3** is unaffected.
+        """
+
+        @callback
+        def _run_startup_refresh(_hass: HomeAssistant) -> None:
+            self._create_tracked_refresh_task(
+                self._async_refresh_forecast(reason="startup")
+            )
+
+        self._unsub_listeners.append(
+            async_at_started(self._hass, _run_startup_refresh)
         )
 
     @callback
@@ -2189,6 +2212,22 @@ class HelmanCoordinator:
                 raw_forecast["solar"],
                 reference_time=request_now,
             )
+            solar_degraded = self._is_degraded_solar_rebuild(
+                solar_snapshot,
+                self._cached_solar_forecast,
+            )
+            if solar_degraded:
+                # Keep what we already have, including through the save below —
+                # the store only skips a write when the hash is unchanged, so
+                # persisting the empty snapshot would lose the good one for
+                # good. The preserved snapshot keeps its old ``generatedAt``,
+                # which is what makes the staleness banner report this rather
+                # than the card silently going blank.
+                _LOGGER.debug(
+                    "Solar forecast rebuild came back unavailable; keeping the "
+                    "previous snapshot"
+                )
+                solar_snapshot = self._cached_solar_forecast
             self._cached_forecast = house_snapshot
             self._cached_solar_forecast = solar_snapshot
             self._invalidate_battery_forecast_cache()
@@ -2223,8 +2262,37 @@ class HelmanCoordinator:
             raw_forecast=raw_forecast,
         )
         return _ForecastRefreshResult(
-            forecast_refreshed=True,
+            forecast_refreshed=not solar_degraded,
             bundle_ready=bundle_ready,
+        )
+
+    @staticmethod
+    def _is_degraded_solar_rebuild(
+        new_snapshot: dict[str, Any],
+        cached_snapshot: dict[str, Any] | None,
+    ) -> bool:
+        """Would adopting ``new_snapshot`` throw away a forecast we still have?
+
+        Only an outright ``unavailable`` build with nothing in it counts. That
+        is the shape a missing provider produces — its entities are absent, so
+        not one of them yields a point — and it carries no information at all,
+        which is what makes preserving the previous result strictly better.
+
+        ``partial`` deliberately does not count. It means some of the configured
+        daily energy entities have points and some do not, which is the normal
+        steady state whenever the provider publishes fewer days ahead than there
+        are entities: a partial build still carries today and the days that
+        matter most, and it is the only build that configuration will ever
+        produce. Treating it as degraded would freeze the forecast at the first
+        good build and never move again.
+        """
+        if cached_snapshot is None:
+            return False
+        if not cached_snapshot.get("points"):
+            return False
+        return (
+            new_snapshot.get("status") == "unavailable"
+            and not new_snapshot.get("points")
         )
 
     async def _async_warm_appliance_pipeline(

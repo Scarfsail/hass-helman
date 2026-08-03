@@ -752,5 +752,222 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             sys.modules.pop("custom_components.helman.coordinator", None)
 
 
+class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
+    """A build that found nothing must not throw away one that did.
+
+    Regression guard for #30. The store only skips a write when the hash is
+    unchanged, so caching an empty snapshot also persisted it over the good
+    one and the loss survived a further restart.
+    """
+
+    _load_coordinator_module = (
+        CoordinatorSolarForecastCacheTests._load_coordinator_module
+    )
+
+    def _make_build_coordinator(self, coordinator_module, *, cached_solar):
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._hass = SimpleNamespace()
+        coordinator._active_config = {}
+        coordinator._cached_forecast = None
+        coordinator._house_profile = None
+        coordinator._house_profile_trained_at = None
+        coordinator._house_profile_last_outcome = "no_training_yet"
+        coordinator._slot_history = None
+        coordinator._cached_solar_forecast = cached_solar
+        coordinator._solar_forecast_sensors = []
+        coordinator._invalidate_battery_forecast_cache = Mock()
+        coordinator._async_refresh_automation_input_bundle = AsyncMock(
+            return_value=True
+        )
+        coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
+        return coordinator
+
+    @contextmanager
+    def _patched_builders(self, coordinator_module, *, house_snapshot):
+        with (
+            patch.object(
+                coordinator_module,
+                "ConsumptionForecastBuilder",
+                return_value=SimpleNamespace(
+                    build=AsyncMock(return_value=house_snapshot)
+                ),
+            ),
+            patch.object(
+                coordinator_module,
+                "HelmanForecastBuilder",
+                return_value=SimpleNamespace(
+                    build=AsyncMock(return_value={"solar": {}, "grid": {}})
+                ),
+            ),
+        ):
+            yield
+
+    @staticmethod
+    def _good_solar_snapshot() -> dict:
+        return {
+            "status": "available",
+            "generatedAt": "2026-03-20T20:45:00+01:00",
+            "points": [{"timestamp": "2026-03-20T21:00:00+01:00", "value": 1200.0}],
+            "rawPoints": [{"timestamp": "2026-03-20T21:00:00+01:00", "value": 1200.0}],
+        }
+
+    async def test_a_provider_that_is_not_there_yet_keeps_the_stored_forecast(
+        self,
+    ) -> None:
+        """Startup with the provider's entities absent, the #30 scenario."""
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            cached = self._good_solar_snapshot()
+            coordinator = self._make_build_coordinator(
+                coordinator_module, cached_solar=cached
+            )
+            house_snapshot = {"status": "unavailable"}
+            coordinator._build_canonical_solar_forecast = Mock(
+                return_value={
+                    "status": "unavailable",
+                    "generatedAt": REFERENCE_TIME.isoformat(),
+                    "points": [],
+                    "rawPoints": [],
+                }
+            )
+
+            with self._patched_builders(
+                coordinator_module, house_snapshot=house_snapshot
+            ):
+                result = await coordinator._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME
+                )
+
+            self.assertIs(coordinator._cached_solar_forecast, cached)
+            # The persist is the damage that outlives the restart: the good
+            # snapshot has to go back to the store, not the empty one.
+            coordinator._storage.async_save_snapshots.assert_awaited_once_with(
+                house_snapshot=house_snapshot,
+                solar_snapshot=cached,
+            )
+            self.assertIs(result.forecast_refreshed, False)
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_a_fresh_install_still_adopts_its_first_build(self) -> None:
+        """Nothing to preserve means nothing to weigh the empty build against."""
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            coordinator = self._make_build_coordinator(
+                coordinator_module, cached_solar=None
+            )
+            empty = {
+                "status": "unavailable",
+                "generatedAt": REFERENCE_TIME.isoformat(),
+                "points": [],
+                "rawPoints": [],
+            }
+            coordinator._build_canonical_solar_forecast = Mock(return_value=empty)
+
+            with self._patched_builders(
+                coordinator_module, house_snapshot={"status": "unavailable"}
+            ):
+                result = await coordinator._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME
+                )
+
+            self.assertIs(coordinator._cached_solar_forecast, empty)
+            self.assertIs(result.forecast_refreshed, True)
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_a_partial_build_still_replaces_a_full_one(self) -> None:
+        """``partial`` is the steady state whenever the provider publishes fewer
+        days ahead than there are configured entities. Refusing it would freeze
+        the forecast at the first available build and never move again."""
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            coordinator = self._make_build_coordinator(
+                coordinator_module, cached_solar=self._good_solar_snapshot()
+            )
+            partial = {
+                "status": "partial",
+                "generatedAt": REFERENCE_TIME.isoformat(),
+                "points": [
+                    {"timestamp": "2026-03-20T21:15:00+01:00", "value": 800.0}
+                ],
+                "rawPoints": [],
+            }
+            coordinator._build_canonical_solar_forecast = Mock(return_value=partial)
+
+            with self._patched_builders(
+                coordinator_module, house_snapshot={"status": "unavailable"}
+            ):
+                result = await coordinator._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME
+                )
+
+            self.assertIs(coordinator._cached_solar_forecast, partial)
+            self.assertIs(result.forecast_refreshed, True)
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+    async def test_the_preserved_forecast_renders_and_ages_into_the_banner(
+        self,
+    ) -> None:
+        """The card keeps its points; the aging ``generatedAt`` is what tells
+        the user the provider has stopped answering."""
+        coordinator_module, previous_modules = self._load_coordinator_module()
+        try:
+            generated_at = (REFERENCE_TIME - timedelta(minutes=90)).isoformat()
+            cached = self._good_solar_snapshot()
+            cached["generatedAt"] = generated_at
+            coordinator = self._make_build_coordinator(
+                coordinator_module, cached_solar=cached
+            )
+            coordinator._build_canonical_solar_forecast = Mock(
+                return_value={
+                    "status": "unavailable",
+                    "generatedAt": REFERENCE_TIME.isoformat(),
+                    "points": [],
+                    "rawPoints": [],
+                }
+            )
+
+            with self._patched_builders(
+                coordinator_module, house_snapshot={"status": "unavailable"}
+            ):
+                await coordinator._async_build_forecast_snapshots(
+                    reference_time=REFERENCE_TIME
+                )
+
+            coordinator._storage = SimpleNamespace(config={})
+            coordinator._read_house_forecast_config = Mock(
+                return_value=("sensor.house_total", 56, 14, "fp")
+            )
+            coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
+            coordinator._cached_forecast = {
+                "status": "available",
+                "generatedAt": generated_at,
+            }
+            coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+                return_value=SimpleNamespace(
+                    adjusted_house_forecast={"status": "available"},
+                    battery_forecast={"status": "available", "series": []},
+                )
+            )
+
+            with _patched_forecast_response_builders(coordinator_module):
+                result = await coordinator.get_forecast(
+                    granularity=60, forecast_days=7
+                )
+
+            self.assertEqual(result["solar"]["points"][0]["value"], 1200.0)
+            staleness = result["solar"]["staleness"]
+            self.assertIs(staleness["isStale"], True)
+            self.assertEqual(staleness["reason"], "stale_forecast")
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+
 if __name__ == "__main__":
     unittest.main()

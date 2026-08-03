@@ -705,6 +705,72 @@ class HouseProfileRefitDeferralTests(unittest.TestCase):
         self.assertEqual(coordinator._unsub_listeners, [])
 
 
+class StartupForecastRefreshDeferralTests(unittest.TestCase):
+    """The startup forecast refresh waits for Home Assistant to finish starting.
+
+    Regression guard for #30. Run during ``async_setup``, the solar half reads
+    its points off the forecast provider's daily energy entities before that
+    integration has registered them, comes back ``unavailable`` with no points,
+    and — before the guard in ``_async_build_forecast_snapshots`` — overwrote
+    the persisted snapshot with an empty one.
+    """
+
+    def _make_coordinator(self) -> tuple[HelmanCoordinator, list[str]]:
+        reasons: list[str] = []
+
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._hass = types.SimpleNamespace()
+        coordinator._unsub_listeners = []
+        coordinator._async_refresh_forecast = lambda *, reason: reasons.append(reason)
+        coordinator._create_tracked_refresh_task = lambda awaitable: awaitable
+        return coordinator, reasons
+
+    def test_the_refresh_does_not_run_before_home_assistant_has_started(self) -> None:
+        coordinator, reasons = self._make_coordinator()
+        started_callbacks: list = []
+
+        with unittest.mock.patch.object(
+            coordinator_module,
+            "async_at_started",
+            side_effect=lambda hass, cb: (
+                started_callbacks.append(cb) or (lambda: None)
+            ),
+        ):
+            coordinator._schedule_startup_forecast_refresh()
+
+        self.assertEqual(reasons, [])
+        self.assertEqual(len(started_callbacks), 1)
+
+        started_callbacks[0](coordinator._hass)
+
+        self.assertEqual(reasons, ["startup"])
+
+    def test_an_already_running_home_assistant_refreshes_at_once(self) -> None:
+        """A config save reloads the entry while HA runs — G3 is unaffected."""
+        coordinator, reasons = self._make_coordinator()
+
+        with unittest.mock.patch.object(
+            coordinator_module,
+            "async_at_started",
+            side_effect=lambda hass, cb: cb(hass) or (lambda: None),
+        ):
+            coordinator._schedule_startup_forecast_refresh()
+
+        self.assertEqual(reasons, ["startup"])
+
+    def test_the_registration_is_unsubscribed_on_teardown(self) -> None:
+        coordinator, _reasons = self._make_coordinator()
+
+        with unittest.mock.patch.object(
+            coordinator_module,
+            "async_at_started",
+            return_value=lambda: None,
+        ):
+            coordinator._schedule_startup_forecast_refresh()
+
+        self.assertEqual(len(coordinator._unsub_listeners), 1)
+
+
 class ForecastStalenessTests(unittest.TestCase):
     def test_a_healthy_outcome_leaves_the_age_rule_alone(self) -> None:
         self.assertIsNone(
