@@ -2,17 +2,15 @@
 
 The trace makes every automation run explainable: for each schedule slot and
 each optimizer in the pipeline it records what the optimizer saw (rails), what
-it did (framework-recorded writes), and why (emitted decisions + notes). The
+it did (framework-recorded writes and emitted decisions), and — via the
+explanation layer in ``.explain`` — the condition logic that produced it. The
 recorder is a *dumb appender* owned by the optimizer loop — it never raises into
 the run, so an instrumentation bug can never stop the battery from charging.
 
 Design notes:
-- Reasons are opaque ``{code, params, signals?}`` dicts; no formatting happens
-  here (the frontend formats + localizes).
 - The serialized shape uses parallel arrays keyed by ``slotIds`` to stay compact.
-- Coverage validation (below) never fails the run: gaps warn and are filled with
-  a synthetic ``unexplained`` decision so the UI invariant "every cell is
-  clickable and says something" holds unconditionally.
+- Coverage validation (below) never fails the run: an overlap or a write without
+  a covering ``applied`` decision only warns and marks the step incomplete.
 """
 
 from __future__ import annotations
@@ -45,13 +43,10 @@ from .explain import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# outcome vocabulary emitted by optimizers (the synthetic fill reuses
-# ``out_of_scope`` with the ``unexplained`` reason code).
+# outcome vocabulary emitted by optimizers
 DECISION_OUTCOMES: frozenset[str] = frozenset(
     {"applied", "rejected", "blocked", "out_of_scope"}
 )
-
-UNEXPLAINED_REASON_CODE = "unexplained"
 
 
 # --- serialized DTOs ---------------------------------------------------------
@@ -77,12 +72,11 @@ class TraceWrite:
 
 @dataclass(frozen=True)
 class TraceDecision:
-    """A group-encoded decision: one rationale covering a list of slots."""
+    """A group-encoded decision: one outcome covering a list of slots."""
 
     slot_ids: tuple[str, ...]
     outcome: str
     action: dict[str, Any] | None = None
-    reason: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -91,8 +85,6 @@ class TraceDecision:
         }
         if self.action is not None:
             payload["action"] = self.action
-        if self.reason is not None:
-            payload["reason"] = self.reason
         return payload
 
 
@@ -100,10 +92,9 @@ class TraceDecision:
 class TraceConditionGroup:
     """One ORed condition group as it resolved on this run.
 
-    Carried per step so the inspector can (a) name the group a decision matched
-    and (b) derive rejections against *every* group's thresholds rather than a
-    single scraped value — with OR groups there is no single threshold, and a
-    slot is only rejected when it fails all of them.
+    Carried per step so a reader of the raw trace can see the thresholds each
+    group was evaluated against — with OR groups there is no single threshold,
+    and a slot is only rejected when it fails all of them.
     """
 
     index: int
@@ -150,9 +141,6 @@ class _MutableStep:
     writes: list[TraceWrite] = field(default_factory=list)
     decisions: list[TraceDecision] = field(default_factory=list)
     notes: list[TraceNote] = field(default_factory=list)
-    # slots the optimizer intentionally leaves to frontend derivation (the D
-    # rows of the reason catalogue); the coverage validator treats them covered.
-    derivable: set[str] = field(default_factory=set)
     # --- explanation layer (see .explain) ---------------------------------
     # Serialized under the ``explanation`` key (pivoted against the run's
     # ``slotIds``) only once something is actually recorded, so an unconverted
@@ -353,17 +341,6 @@ class OptimizerTrace:
         if self._current is not None:
             self._current.decisions = []
             self._current.notes = []
-            self._current.derivable = set()
-
-    def declare_derivable(self, slot_ids: Iterable[str]) -> None:
-        """Declare slots the optimizer leaves to a frontend derivation rule.
-
-        The coverage validator treats these as explained (the D rows of the v1
-        reason catalogue), so a kind whose ``rejected`` case is frontend-derived
-        need not emit anything for those slots.
-        """
-        if self._current is not None:
-            self._current.derivable.update(slot_ids)
 
     def end_step(self, *, status: str) -> None:
         """Finalize the current step, running coverage validation.
@@ -384,7 +361,7 @@ class OptimizerTrace:
             )
         try:
             if status != "skipped":
-                self._validate_coverage(step, frozenset(step.derivable))
+                self._validate_coverage(step)
         except Exception:  # pragma: no cover - observability must not fail runs
             _LOGGER.exception("trace coverage validation failed; run continues")
         self._steps.append(step)
@@ -397,7 +374,6 @@ class OptimizerTrace:
         slot_ids: Sequence[str],
         outcome: str,
         action: dict[str, Any] | None = None,
-        reason: dict[str, Any] | None = None,
     ) -> None:
         if self._current is None:
             return
@@ -408,7 +384,6 @@ class OptimizerTrace:
                 slot_ids=tuple(slot_ids),
                 outcome=outcome,
                 action=action,
-                reason=reason,
             )
         )
 
@@ -427,16 +402,13 @@ class OptimizerTrace:
         """Record a note and expand it to a horizon-wide decision group.
 
         Used for run-level rationales (battery params missing, forecast
-        unavailable, optimizer skipped) so the whole column stays explained.
+        unavailable, optimizer skipped): the note carries the ``code``, the
+        decision states the outcome it produced across the whole horizon.
         """
         if self._current is None:
             return
         self.note(code=code, params=params)
-        self.decision(
-            slot_ids=self._slot_ids,
-            outcome=outcome,
-            reason={"code": code, "params": params or {}},
-        )
+        self.decision(slot_ids=self._slot_ids, outcome=outcome)
 
     # --- explanation layer ---------------------------------------------------
     #
@@ -681,9 +653,15 @@ class OptimizerTrace:
 
     # --- coverage validation -------------------------------------------------
 
-    def _validate_coverage(
-        self, step: _MutableStep, derivable: frozenset[str]
-    ) -> None:
+    def _validate_coverage(self, step: _MutableStep) -> None:
+        """Warn about decisions that contradict the committed writes.
+
+        Not every slot needs a decision — an optimizer that had nothing to say
+        about a slot says nothing. What must hold is that no two decisions claim
+        the same slot, and that every write is backed by an ``applied`` decision,
+        because that pairing is what attributes a scheduled action to the step
+        that produced it.
+        """
         covered: set[str] = set()
         overlaps: set[str] = set()
         applied: set[str] = set()
@@ -703,39 +681,18 @@ class OptimizerTrace:
             )
 
         # writes must be explained by a covering `applied` decision
-        unexplained_writes = [
+        unbacked_writes = [
             write
             for write in step.writes
             if write.slot_id in self._slot_id_set and write.slot_id not in applied
         ]
-        if unexplained_writes:
+        if unbacked_writes:
             step.complete = False
             _LOGGER.warning(
                 "trace: step %s has %d committed write(s) without an `applied` "
                 "decision",
                 step.optimizer_id,
-                len(unexplained_writes),
-            )
-
-        uncovered = [
-            slot_id
-            for slot_id in self._slot_ids
-            if slot_id not in covered and slot_id not in derivable
-        ]
-        if uncovered:
-            step.complete = False
-            _LOGGER.warning(
-                "trace: step %s left %d/%d slot(s) unexplained; synthetic fill",
-                step.optimizer_id,
-                len(uncovered),
-                len(self._slot_ids),
-            )
-            step.decisions.append(
-                TraceDecision(
-                    slot_ids=tuple(uncovered),
-                    outcome="out_of_scope",
-                    reason={"code": UNEXPLAINED_REASON_CODE, "params": {}},
-                )
+                len(unbacked_writes),
             )
 
     # --- serialization -------------------------------------------------------

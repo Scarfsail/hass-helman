@@ -135,23 +135,22 @@ class PricePointsToSlotsTests(unittest.TestCase):
 
 
 class OptimizerTraceCoverageTests(unittest.TestCase):
-    def test_empty_step_gets_synthetic_fill_and_is_incomplete(self) -> None:
+    def test_step_that_decided_nothing_is_still_complete(self) -> None:
+        # A slot an optimizer never spoke about is not a defect: no decision is
+        # synthesized for it and the step stays complete.
         slots = _slot_ids(3)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
         trace.end_step(status="ok")
         step = trace.to_dict()["steps"][0]
-        self.assertFalse(step["complete"])
-        # one synthetic group covering all slots
-        fills = [d for d in step["decisions"] if d["reason"]["code"] == "unexplained"]
-        self.assertEqual(len(fills), 1)
-        self.assertEqual(set(fills[0]["slotIds"]), set(slots))
+        self.assertTrue(step["complete"])
+        self.assertEqual(step["decisions"], [])
 
-    def test_full_coverage_is_complete_without_fill(self) -> None:
+    def test_partial_coverage_is_complete(self) -> None:
         slots = _slot_ids(3)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
-        trace.decision(slot_ids=slots, outcome="out_of_scope", reason={"code": "x", "params": {}})
+        trace.decision(slot_ids=[slots[0]], outcome="out_of_scope")
         trace.end_step(status="ok")
         step = trace.to_dict()["steps"][0]
         self.assertTrue(step["complete"])
@@ -161,8 +160,8 @@ class OptimizerTraceCoverageTests(unittest.TestCase):
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
-        trace.decision(slot_ids=slots, outcome="out_of_scope", reason={"code": "a", "params": {}})
-        trace.decision(slot_ids=[slots[0]], outcome="out_of_scope", reason={"code": "b", "params": {}})
+        trace.decision(slot_ids=slots, outcome="out_of_scope")
+        trace.decision(slot_ids=[slots[0]], outcome="out_of_scope")
         trace.end_step(status="ok")
         self.assertFalse(trace.to_dict()["steps"][0]["complete"])
 
@@ -171,7 +170,7 @@ class OptimizerTraceCoverageTests(unittest.TestCase):
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
         # cover everything but only out_of_scope, not applied
-        trace.decision(slot_ids=slots, outcome="out_of_scope", reason={"code": "x", "params": {}})
+        trace.decision(slot_ids=slots, outcome="out_of_scope")
         trace.record_writes(
             [TraceWrite(slot_id=slots[0], domain="inverter", before=None, after={"kind": "stop_export"})]
         )
@@ -182,38 +181,36 @@ class OptimizerTraceCoverageTests(unittest.TestCase):
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
-        trace.decision(slot_ids=[slots[0]], outcome="applied", reason={"code": "x", "params": {}})
-        trace.decision(slot_ids=[slots[1]], outcome="out_of_scope", reason={"code": "y", "params": {}})
+        trace.decision(slot_ids=[slots[0]], outcome="applied")
+        trace.decision(slot_ids=[slots[1]], outcome="out_of_scope")
         trace.record_writes(
             [TraceWrite(slot_id=slots[0], domain="inverter", before=None, after={"kind": "stop_export"})]
         )
         trace.end_step(status="ok")
         self.assertTrue(trace.to_dict()["steps"][0]["complete"])
 
-    def test_skipped_step_is_exempt_from_gap_check(self) -> None:
+    def test_skipped_step_records_a_horizon_wide_outcome(self) -> None:
         slots = _slot_ids(3)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "surplus_appliance")
         trace.note_horizon(code="optimizer_skipped", params={"applianceId": "boiler"})
         trace.end_step(status="skipped")
         step = trace.to_dict()["steps"][0]
-        # note_horizon already covers all slots; no synthetic `unexplained` fill
         self.assertEqual(step["status"], "skipped")
         self.assertTrue(step["complete"])
-        self.assertFalse(
-            any(d["reason"]["code"] == "unexplained" for d in step["decisions"])
-        )
+        self.assertEqual(step["notes"][0]["code"], "optimizer_skipped")
+        self.assertEqual(set(step["decisions"][0]["slotIds"]), set(slots))
 
     def test_discard_step_decisions_clears_partial(self) -> None:
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "surplus_appliance")
-        trace.decision(slot_ids=[slots[0]], outcome="applied", reason={"code": "x", "params": {}})
+        trace.decision(slot_ids=[slots[0]], outcome="applied")
         trace.discard_step_decisions()
         trace.note_horizon(code="optimizer_skipped", params={})
         trace.end_step(status="skipped")
         step = trace.to_dict()["steps"][0]
-        self.assertTrue(all(d["reason"]["code"] != "x" for d in step["decisions"]))
+        self.assertTrue(all(d["outcome"] != "applied" for d in step["decisions"]))
 
 
 class OptimizerTraceShapeTests(unittest.TestCase):
@@ -223,7 +220,7 @@ class OptimizerTraceShapeTests(unittest.TestCase):
         trace.set_static_rails({"importPrice": [1.0] * len(slots)})
         trace.begin_step("opt", "export_price")
         trace.set_rails_in({"availableSurplusKwh": [0.0] * len(slots)})
-        trace.decision(slot_ids=slots, outcome="out_of_scope", reason={"code": "x", "params": {}})
+        trace.decision(slot_ids=slots, outcome="out_of_scope")
         trace.end_step(status="ok")
         trace.set_rails_final({"batterySocPct": [50.0] * len(slots)})
         payload = trace.to_dict()
@@ -565,7 +562,7 @@ class TraceExplanationPayloadTests(unittest.TestCase):
         baseline = OptimizerTrace(slot_ids=slots)
         baseline.begin_step("opt", "export_price")
         baseline.decision(
-            slot_ids=slots, outcome="out_of_scope", reason={"code": "x", "params": {}}
+            slot_ids=slots, outcome="out_of_scope"
         )
         baseline.end_step(status="ok")
         return baseline.to_dict()["steps"][0]
@@ -575,7 +572,7 @@ class TraceExplanationPayloadTests(unittest.TestCase):
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
         trace.decision(
-            slot_ids=slots, outcome="out_of_scope", reason={"code": "x", "params": {}}
+            slot_ids=slots, outcome="out_of_scope"
         )
         trace.set_step_status(status="ok")
         trace.end_step(status="ok")
@@ -586,7 +583,7 @@ class TraceExplanationPayloadTests(unittest.TestCase):
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
         trace.decision(
-            slot_ids=slots, outcome="out_of_scope", reason={"code": "x", "params": {}}
+            slot_ids=slots, outcome="out_of_scope"
         )
         trace.set_group_explanations(
             {

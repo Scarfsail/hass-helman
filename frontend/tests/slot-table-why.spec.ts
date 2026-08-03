@@ -231,7 +231,6 @@ test.describe("the scheduling card's why popover", () => {
                 & Record<string, unknown>;
             table.automationModel = {
                 explainAction: () => ({
-                    reason: null,
                     attribution: "write",
                     deltas: [{
                         metric: { id: "soc", key: "batterySocPct", unit: "%", precision: 0, epsilon: 0.5 },

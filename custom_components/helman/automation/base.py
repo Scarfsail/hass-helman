@@ -248,9 +248,5 @@ class ScheduleWriter:
                 slot_ids=self._blocked_slot_ids,
                 outcome="blocked",
                 action=action,
-                reason={
-                    "code": "blocked_user_owned",
-                    "params": {"domain": self._domain},
-                },
             )
         return self.document

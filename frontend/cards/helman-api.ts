@@ -604,12 +604,6 @@ export type TraceDecisionOutcome =
     | "blocked"
     | "out_of_scope";
 
-export interface TraceReasonDTO {
-    code: string;
-    params: Record<string, unknown>;
-    signals?: string[];
-}
-
 export interface TraceActionDTO {
     domain: string;
     kind?: string;
@@ -627,7 +621,6 @@ export interface TraceDecisionDTO {
     slotIds: string[];
     outcome: TraceDecisionOutcome;
     action?: TraceActionDTO | null;
-    reason?: TraceReasonDTO | null;
 }
 
 export interface TraceNoteDTO {

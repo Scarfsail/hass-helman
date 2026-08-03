@@ -1678,11 +1678,21 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(step["railsIn"]["availableSurplusKwh"]), expected_len)
         self.assertEqual(len(trace["railsFinal"]["batterySocPct"]), expected_len)
 
-    async def test_validator_never_fails_the_run_on_coverage_gap(self) -> None:
-        # The mocked optimizer emits nothing, so every step is incomplete, yet
-        # the run still completes (observability must never fail the run).
+    async def test_validator_never_fails_the_run_on_an_unbacked_write(self) -> None:
+        # The mocked optimizer writes the boiler on without emitting an
+        # `applied` decision for it, so the step is flagged incomplete — yet the
+        # run still completes (observability must never fail the run).
+        written_schedule = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": {"kind": "normal"},
+                    "appliances": {"boiler": {"on": True, "setBy": "automation"}},
+                }
+            },
+        )
         coordinator = _FakeCoordinator(
-            schedule_document=_make_schedule_document(),
+            schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
@@ -1691,7 +1701,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             pipeline_module,
             "build_optimizer",
             return_value=SimpleNamespace(
-                optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
+                optimize=lambda snapshot, config, trace=None: deepcopy(written_schedule)
             ),
         ):
             result = await AutomationRunner(
@@ -1702,12 +1712,6 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ran_automation)
         step = result.to_dict()["trace"]["steps"][0]
         self.assertFalse(step["complete"])
-        self.assertTrue(
-            any(
-                decision["reason"]["code"] == "unexplained"
-                for decision in step["decisions"]
-            )
-        )
 
     async def test_appliance_write_records_serialize_before_and_after(self) -> None:
         # An optimizer that turns the boiler on for the current slot -> the
@@ -1916,13 +1920,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(note["code"] == "optimizer_skipped" for note in step["notes"])
         )
-        # skipped column is fully explained -> no synthetic unexplained fill
-        self.assertFalse(
-            any(
-                decision["reason"]["code"] == "unexplained"
-                for decision in step["decisions"]
-            )
-        )
+        # the note's horizon-wide decision stands in for the whole column
+        self.assertEqual(len(step["decisions"]), 1)
 
 
 class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):

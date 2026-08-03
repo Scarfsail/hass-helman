@@ -1590,7 +1590,7 @@ export class SchedulingSlotTable extends LitElement {
         const hasAutomation = item.authorship.counts.automation > 0;
         const explanation =
             hasAutomation && this.automationModel
-                ? this.automationModel.explainAction(item.firstSlotId, domain, this.localize)
+                ? this.automationModel.explainAction(item.firstSlotId, domain)
                 : null;
         return {
             label,
