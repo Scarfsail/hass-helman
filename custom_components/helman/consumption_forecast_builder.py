@@ -4,7 +4,6 @@ import functools
 import hashlib
 import json
 import logging
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -29,9 +28,9 @@ from .consumption_forecast_profiles import (
 from .consumption_forecast_statistics import ForecastBand
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import (
+    TodaySlotEnergyReader,
     get_local_current_slot_start,
     get_today_completed_local_slots,
-    query_slot_energy_changes,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,14 +53,18 @@ class ConsumptionForecastBuilder:
     _MAX_ALIGNMENT_PADDING_SLOTS = (
         max(FORECAST_GRANULARITY_OPTIONS) // _CANONICAL_GRANULARITY_MINUTES
     ) - 1
-    _SLOT_HISTORY_CACHE_TTL_S = 300.0
 
-    def __init__(self, hass: HomeAssistant, config: dict) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config: dict,
+        slot_history: TodaySlotEnergyReader,
+    ) -> None:
         self._hass = hass
         self._config = config
-        self._slot_history_cache: dict[
-            tuple[str, datetime], tuple[float, dict[datetime, float]]
-        ] = {}
+        # Injected because a builder lives for one refresh: a cache of today's
+        # slots is only worth anything to something that outlives it.
+        self._slot_history = slot_history
 
     async def build(
         self,
@@ -350,30 +353,11 @@ class ConsumptionForecastBuilder:
         *,
         reference_time: datetime,
     ) -> dict[datetime, float]:
-        slot_key = reference_time.replace(second=0, microsecond=0).replace(
-            minute=(reference_time.minute // self._CANONICAL_GRANULARITY_MINUTES)
-            * self._CANONICAL_GRANULARITY_MINUTES
-        )
-        cache_key = (entity_id, slot_key)
-        cached = self._slot_history_cache.get(cache_key)
-        now = time.monotonic()
-        if cached is not None and (now - cached[0]) < self._SLOT_HISTORY_CACHE_TTL_S:
-            return cached[1]
-
-        result = await query_slot_energy_changes(
-            self._hass,
+        return await self._slot_history.async_query_slot_energy_changes(
             entity_id,
             reference_time,
             interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
         )
-        self._slot_history_cache[cache_key] = (now, result)
-        # Keep the cache bounded — we only ever need the latest slot per entity.
-        self._slot_history_cache = {
-            k: v
-            for k, v in self._slot_history_cache.items()
-            if k[0] != entity_id or k[1] == slot_key
-        }
-        return result
 
     async def _query_consumer_slot_histories(
         self,

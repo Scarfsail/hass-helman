@@ -110,6 +110,7 @@ from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
 from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
+    TodaySlotEnergyReader,
     estimate_average_hourly_energy_when_climate_active,
     estimate_average_hourly_energy_when_switch_on,
     get_local_current_slot_start,
@@ -526,6 +527,10 @@ class HelmanCoordinator:
         self._house_profile: HouseConsumptionProfile | None = None
         self._house_profile_trained_at: str | None = None
         self._house_profile_last_outcome: str = "no_training_yet"
+        # Today's completed slots are immutable, so the reader keeps the ones it
+        # has already resolved. It lives here because the forecast builder is
+        # rebuilt on every refresh and a cache inside it would never be read.
+        self._slot_history = TodaySlotEnergyReader(hass)
         # The rebuild currently in flight, if any, so a second trigger joins it
         # instead of starting its own 56-day recorder scan.
         self._forecast_refresh_task: asyncio.Task[Any] | None = None
@@ -2158,7 +2163,9 @@ class HelmanCoordinator:
         """Build new forecast snapshots, cache them, and persist them."""
         request_now = reference_time or dt_util.now()
         try:
-            builder = ConsumptionForecastBuilder(self._hass, self._active_config)
+            builder = ConsumptionForecastBuilder(
+                self._hass, self._active_config, self._slot_history
+            )
             house_snapshot = await builder.build(
                 reference_time=request_now,
                 profile=self._house_profile,

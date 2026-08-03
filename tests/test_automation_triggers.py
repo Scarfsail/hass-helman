@@ -131,6 +131,15 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     recorder_slots_mod.query_slot_energy_changes = lambda *args, **kwargs: []
     recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
+
+    class _TodaySlotEnergyReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_slot_energy_changes(self, *args, **kwargs):
+            return {}
+
+    recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")

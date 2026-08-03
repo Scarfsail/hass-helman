@@ -139,6 +139,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._house_profile = None
             coordinator._house_profile_trained_at = None
             coordinator._house_profile_last_outcome = "no_training_yet"
+            coordinator._slot_history = None
             coordinator._cached_solar_forecast = None
             coordinator._solar_forecast_sensors = []
             coordinator._invalidate_battery_forecast_cache = Mock()
@@ -207,6 +208,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._house_profile = None
             coordinator._house_profile_trained_at = None
             coordinator._house_profile_last_outcome = "no_training_yet"
+            coordinator._slot_history = None
             coordinator._cached_solar_forecast = None
             coordinator._invalidate_battery_forecast_cache = Mock()
             coordinator._async_refresh_automation_input_bundle = AsyncMock(
@@ -261,6 +263,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._house_profile = None
             coordinator._house_profile_trained_at = None
             coordinator._house_profile_last_outcome = "no_training_yet"
+            coordinator._slot_history = None
             coordinator._cached_solar_forecast = None
             coordinator._invalidate_battery_forecast_cache = Mock()
             coordinator._async_refresh_automation_input_bundle = AsyncMock(
@@ -377,6 +380,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._house_profile = None
             coordinator._house_profile_trained_at = None
             coordinator._house_profile_last_outcome = "no_training_yet"
+            coordinator._slot_history = None
             coordinator._read_house_forecast_config = Mock(
                 return_value=("sensor.house_total", 56, 14, "new-fingerprint")
             )
@@ -601,6 +605,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             coordinator._house_profile = None
             coordinator._house_profile_trained_at = None
             coordinator._house_profile_last_outcome = "no_training_yet"
+            coordinator._slot_history = None
             coordinator._read_house_forecast_config = Mock(
                 return_value=("sensor.house_total", 56, 14, "fp")
             )
