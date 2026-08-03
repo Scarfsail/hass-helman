@@ -195,12 +195,19 @@ cost — useful if you are wondering what the integration is doing when you are 
 | 6 | **Nightly training batch** | daily at `training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
 | 7 | **Battery capacity forecast** | — (on demand, 300 s cache) | every card read, when its inputs have actually changed | Moderate |
 
-**Opening or refreshing a card never rebuilds a forecast, and never issues a multi-day Recorder
-query.** Forecasts are served from the last prepared snapshot, whatever its age; the work that
-prepares them runs on its own schedule. The one thing a read still computes is the battery
-projection (job #7), and only when its inputs have actually changed — it is anchored to the current
-battery reading, which is what lets the battery curve move the moment you edit a slot. Rebuilding
-it reads today's battery history from Recorder, which is bounded by the length of the day.
+**Opening or refreshing a card never rebuilds the house or solar forecast.** Those are served from
+the last prepared snapshot, whatever its age; the work that prepares them runs on its own schedule.
+What a read still computes is the battery projection and the appliance demand projection feeding it
+(job #7), and only when its inputs have actually changed — it is anchored to the current battery
+reading, which is what lets the battery curve move the moment you edit a slot. That reading is
+itself one of the inputs, so on a battery under load the cache turns over well before its 300 s
+ceiling. Rebuilding reads today's battery history from Recorder, which is bounded by the length of
+the day.
+
+**One case makes a card read multi-day**: a *scheduled* appliance that estimates its energy use from
+history (`projection.strategy: history_average`) has its `lookback_days` window read as part of that
+projection rebuild — see [the knobs below](#the-knobs-that-scale-the-cost). With every appliance on
+`strategy: fixed`, the default, a card read issues no multi-day Recorder query at all.
 
 If a forecast has not been rebuilt for over an hour, the cards show a warning banner rather than
 going blank — old data still beats no data, and the banner is what tells you something is wrong. A
@@ -224,8 +231,9 @@ question you are now asking; that resolves as soon as the rebuild finishes.
    evaluated at planning time and stamped onto each slot. This re-checks them against live state
    before anything is applied, and asks for a re-plan if reality has moved.
 4. **Forecast rebuild** — rebuilds the house consumption, solar and automation forecasts and
-   publishes them to the cards and sensors. It reads only today's history from Recorder; the
-   expensive multi-day training reads belong to job #6.
+   publishes them to the cards and sensors. It reads today's history from Recorder; the expensive
+   multi-day training reads belong to job #6. The one multi-day read left on this path is an
+   appliance on `history_average` — see the knobs below.
 5. **Automation re-plan** — the optimizer loop that decides what goes into each schedule slot. It
    never rebuilds forecasts, it reads the ones job #4 cached, which is why it can also run on its
    own after an edit.
@@ -251,9 +259,13 @@ question you are now asking; that resolves as soon as the rebuild finishes.
   the single biggest driver of job #6's cost. It has no effect on the per-quarter-hour work.
 - An appliance's `history_average.lookback_days` (default 30) — appliances configured to estimate
   their energy use from history are read over this window, and unlike `training_window_days` that
-  read happens on **job #4's** quarter-hour cadence, once per such appliance. It is the largest
-  remaining multi-day read on that path; lower it, or give the appliance a fixed hourly energy
-  figure instead, if you want that cadence cheaper.
+  read does **not** happen off-peak. Each such appliance costs two Recorder queries over the window
+  (its switch/climate entity, and its energy entity) on **job #4's** quarter-hour cadence. An
+  appliance that is also *scheduled* pays them a second time on every appliance projection rebuild,
+  which includes card reads that miss the cache — so a slot edit can trigger it. It is the largest
+  multi-day read outside job #6; lower it, or give the appliance a fixed hourly energy figure
+  instead, if you want it cheaper. With every appliance on `strategy: fixed` (the default), none of
+  this runs.
 
 ### If Home Assistant feels sluggish
 
@@ -273,7 +285,9 @@ Things worth checking, roughly in order:
 - **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the
   nightly cost scales with how many you configure.
 - **Appliances estimating their energy use from history** — each one adds a multi-day read to job
-  #4's quarter-hour cadence, sized by its `history_average.lookback_days`.
+  #4's quarter-hour cadence, sized by its `history_average.lookback_days`, and a scheduled one adds
+  another to every appliance projection rebuild, card reads included. This is the only way a card
+  read can wait on a multi-day Recorder query.
 - **A stale-forecast banner on the cards** means rebuilds have been failing for over an hour; the
   Home Assistant log will say why.
 
