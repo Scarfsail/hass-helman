@@ -89,29 +89,6 @@ class TraceDecision:
 
 
 @dataclass(frozen=True)
-class TraceConditionGroup:
-    """One ORed condition group as it resolved on this run.
-
-    Carried per step so a reader of the raw trace can see the thresholds each
-    group was evaluated against — with OR groups there is no single threshold,
-    and a slot is only rejected when it fails all of them.
-    """
-
-    index: int
-    label: str
-    values: dict[str, Any]
-    custom_met: bool
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "index": self.index,
-            "label": self.label,
-            "values": self.values,
-            "customMet": self.custom_met,
-        }
-
-
-@dataclass(frozen=True)
 class TraceNote:
     code: str
     params: dict[str, Any]
@@ -135,8 +112,6 @@ class _MutableStep:
     # accounting, never executed). The frontend explains its actions as tentative
     # rather than as planned-for-execution. Defaults True (no condition / met).
     condition_met: bool = True
-    # Per-group detail behind that single bool, in config order.
-    condition_groups: list[TraceConditionGroup] = field(default_factory=list)
     rails_in: dict[str, list[float | None]] = field(default_factory=dict)
     writes: list[TraceWrite] = field(default_factory=list)
     decisions: list[TraceDecision] = field(default_factory=list)
@@ -221,10 +196,6 @@ class _MutableStep:
         # fixtures (which never set either) unchanged.
         if not self.condition_met:
             payload["conditionMet"] = False
-        if self.condition_groups:
-            payload["conditionGroups"] = [
-                group.to_dict() for group in self.condition_groups
-            ]
         if self.has_explanation():
             payload["explanation"] = self.explanation(slot_ids, winners).to_dict(
                 slot_ids
@@ -316,17 +287,6 @@ class OptimizerTrace:
         """
         if self._current is not None:
             self._current.condition_met = condition_met
-
-    def set_condition_groups(
-        self, groups: "Iterable[TraceConditionGroup]"
-    ) -> None:
-        """Record how each ORed condition group resolved on this run.
-
-        Stamped once, where the information is born (``build_eligibility``),
-        rather than by each optimizer.
-        """
-        if self._current is not None:
-            self._current.condition_groups = list(groups)
 
     def set_rails_in(self, rails: dict[str, list[float | None]]) -> None:
         if self._current is not None:
@@ -443,9 +403,9 @@ class OptimizerTrace:
 
         ``explanations`` maps slot id -> the ORed condition groups as they
         resolved for that slot. Stamped once where the information is born
-        (``build_eligibility``) rather than by each optimizer, mirroring
-        :meth:`set_condition_groups`. Replaces whatever was recorded before, so
-        a re-evaluating step cannot end up with two generations mixed.
+        (``build_eligibility``) rather than by each optimizer. Replaces whatever
+        was recorded before, so a re-evaluating step cannot end up with two
+        generations mixed.
         """
         step = self._current
         if step is None:
