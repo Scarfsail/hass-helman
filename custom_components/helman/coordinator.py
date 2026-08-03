@@ -79,7 +79,11 @@ from .const import (
     AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS,
     BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
     CONSUMPTION_TOTAL_ENTITY_ID,
+    DATA_CHANGED_KIND_PLAN,
+    DATA_CHANGED_KIND_SCHEDULE,
+    DATA_CHANGED_KIND_SOLAR_BIAS,
     DEFAULT_FORECAST_DAYS,
+    EVENT_DATA_CHANGED,
     DEFAULT_FORECAST_GRANULARITY_MINUTES,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     FORECAST_STALE_AFTER_SECONDS,
@@ -586,6 +590,10 @@ class HelmanCoordinator:
             self._last_plan_condition_map = dict(
                 result.snapshot.context.condition_met_by_optimizer_id
             )
+        # Fired even when the merged result equalled the stored document and no
+        # write happened: the explanation book, the last-run result and the
+        # derived forecasts still moved, and the inspector draws those.
+        self._fire_data_changed(DATA_CHANGED_KIND_PLAN)
 
     @staticmethod
     def collect_qualifying_nodes(tree: dict) -> dict[str, str | None]:
@@ -851,6 +859,10 @@ class HelmanCoordinator:
         self._create_tracked_refresh_task(
             self._async_refresh_forecast(reason="solar_bias_changed")
         )
+        # Bridged rather than subscribed to directly by the cards: the two bias
+        # events are this coordinator's own cache-invalidation wiring, and the
+        # frontend should only ever have to know one event name.
+        self._fire_data_changed(DATA_CHANGED_KIND_SOLAR_BIAS)
 
     async def _async_rebuild_subscriptions(self) -> None:
         """Rebuild tree and restart tick after tree invalidation."""
@@ -1557,8 +1569,27 @@ class HelmanCoordinator:
     def _load_schedule_document(self) -> ScheduleDocument:
         return schedule_document_from_dict(self._storage.schedule_document)
 
+    def _fire_data_changed(self, kind: str) -> None:
+        """Announce that something the cards draw has been rewritten.
+
+        ``async_fire`` is synchronous and non-blocking, so the schedule write
+        sites may call this from inside ``_schedule_lock`` without holding it a
+        moment longer than the dict copy takes.
+
+        No coalescing here on purpose: one automation run legitimately produces
+        both a ``schedule`` and a ``plan`` event, and horizon pruning can add a
+        third. Collapsing them belongs on the subscriber side, where a single
+        debounce covers every emitter at once — including the ones fired by
+        modules that never see this coordinator.
+        """
+        self._hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": kind})
+
     async def _save_schedule_document(self, doc: ScheduleDocument) -> None:
         await self._storage.async_save_schedule_document(schedule_document_to_dict(doc))
+        # Every schedule mutation in this file funnels through here -- user
+        # edits, automation results, execution toggles, pruning and cleanup --
+        # so this is the one place the announcement has to live.
+        self._fire_data_changed(DATA_CHANGED_KIND_SCHEDULE)
 
     def _build_pruned_schedule_document(
         self,

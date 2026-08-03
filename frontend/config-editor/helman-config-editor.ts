@@ -51,6 +51,7 @@ import {
   type ScopeId,
   type TabId,
 } from "./config-editor-scopes";
+import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
 import { renderOptimizerCard } from "./optimizer-card";
 import {
@@ -122,6 +123,7 @@ export class HelmanConfigEditorPanel
     _validating: { state: true },
     _validation: { state: true },
     _message: { state: true },
+    _staleConfigNotice: { state: true },
     _hasLoadedOnce: { state: true },
     _scopeModes: { state: true },
     _scopeYamlValues: { state: true },
@@ -1025,6 +1027,22 @@ export class HelmanConfigEditorPanel
   private _validating = false;
   private _validation: ValidationReport | null = null;
   private _message: StatusMessage | null = null;
+  /**
+   * The stored config moved while a draft was open, and we refused to reload.
+   *
+   * A dirty editor sitting silently on a superseded document is the failure
+   * this whole feature could easily create, so the refusal has to be visible.
+   */
+  private _staleConfigNotice = false;
+  private _unsubscribeDataChanged?: () => void;
+  /**
+   * Swallow the announcement our own save caused.
+   *
+   * A successful save reloads the config entry, which fires the event — so the
+   * machine that just saved hears about its own write. It has already refreshed
+   * everything that write touched, and re-reading would be pure noise.
+   */
+  private _expectOwnDataChange = false;
   private _hasLoadedOnce = false;
   private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
   private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
@@ -1083,12 +1101,45 @@ export class HelmanConfigEditorPanel
       });
   }
 
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this._unsubscribeDataChanged?.();
+    this._unsubscribeDataChanged = undefined;
+  }
+
   protected updated(changedProperties: PropertyValues<this>): void {
     super.updated(changedProperties);
     if (!this._hasLoadedOnce && this.hass) {
       this._hasLoadedOnce = true;
       void this._loadConfig({ showMessage: false });
     }
+    if (this.hass && !this._unsubscribeDataChanged) {
+      this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(
+        () => this._handleDataChanged(),
+      );
+    }
+  }
+
+  /**
+   * The stored config moved somewhere else. Whether we act on it depends
+   * entirely on whether there is a draft to lose.
+   *
+   * The reload button already refuses a dirty reload without a `window.confirm`
+   * (see `_handleReloadClick`). This has no user gesture to hang a confirm on,
+   * so it is strictly more conservative: it never prompts and never discards.
+   */
+  private _handleDataChanged(): void {
+    if (this._expectOwnDataChange) {
+      this._expectOwnDataChange = false;
+      return;
+    }
+
+    if (this._dirty || this._hasBlockingYamlErrors()) {
+      this._staleConfigNotice = true;
+      return;
+    }
+
+    void this._loadConfig({ showMessage: false });
   }
 
   render(): TemplateResult {
@@ -1162,6 +1213,9 @@ export class HelmanConfigEditorPanel
             : nothing}
           ${hasBlockingYamlErrors
             ? html`<span class="badge info">${this._t("editor.status.fix_yaml_errors")}</span>`
+            : nothing}
+          ${this._staleConfigNotice
+            ? html`<span class="badge info">${this._t("editor.status.changed_elsewhere")}</span>`
             : nothing}
         </div>
 
@@ -3718,6 +3772,9 @@ export class HelmanConfigEditorPanel
       }
       const loadedConfig = asJsonObject(loadedResult.value);
       this._config = loadedConfig ? cloneJson(loadedConfig) : {};
+      // Whatever changed elsewhere is now in hand, however the reload was asked
+      // for -- the button, the announcement, or the first load.
+      this._staleConfigNotice = false;
       this._liveApplianceMetadata =
         liveApplianceMetadataResult.status === "fulfilled"
           ? liveApplianceMetadataResult.value
@@ -3799,6 +3856,10 @@ export class HelmanConfigEditorPanel
       });
       this._validation = response.validation;
       if (response.success) {
+        // The backend reloaded the entry and announced it; that announcement is
+        // ours and must not bounce back as a reload or a notice.
+        this._expectOwnDataChange = true;
+        this._staleConfigNotice = false;
         this._liveApplianceMetadata = await this._loadLiveApplianceMetadata();
         this._dirty = this._config
           ? this._normalizeApplianceOptimizerTargets(this._config)

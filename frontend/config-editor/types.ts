@@ -1,3 +1,5 @@
+import type { DataChangedConnection } from "../cards/helman/data-changed";
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
 export type JsonArray = JsonValue[];
@@ -6,6 +8,10 @@ export type PathSegment = string | number;
 
 export interface HomeAssistantLike {
   callWS<T = unknown>(message: Record<string, unknown>): Promise<T>;
+  // Only the events API, and only so the editor can hear that the stored
+  // config was saved from somewhere else. Optional because every existing
+  // caller predates it.
+  connection?: DataChangedConnection | null;
   states: Record<string, unknown>;
   localize?: (key: string) => string | undefined;
   // Lazily loads a frontend translation fragment (e.g. "config") so reused HA

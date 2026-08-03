@@ -1,5 +1,6 @@
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { SchedulePayload } from "../helman-api";
+import { getSharedDataChangedFeed } from "../helman/data-changed";
 import { getSharedHelmanStore, type HelmanStore } from "../helman/store";
 import { getNextScheduleBoundaryDelayMs } from "./model/schedule-time";
 import type {
@@ -60,6 +61,7 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     private _request: Promise<void> | null = null;
     private _mutationRequest: Promise<void> | null = null;
     private _boundaryTimer: number | null = null;
+    private _unsubscribeDataChanged: (() => void) | null = null;
     private readonly _listeners = new Set<ScheduleOwnerListener>();
 
     constructor(hass: HomeAssistant) {
@@ -225,9 +227,30 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         }
 
         this._scheduleNextBoundaryRefresh();
+        this._ensureDataChangedSubscription();
         if (this._schedule === null && !this._loading && !this._refreshing) {
             void this._refreshSchedule();
         }
+    }
+
+    /**
+     * Follow the backend's own announcements, not just the slot clock.
+     *
+     * `refresh()` is the right entry point rather than `_refreshSchedule()`
+     * directly: it already stands down while a mutation this client started is
+     * in flight, so the event caused by our own write does not race the reload
+     * that write is about to do anyway.
+     */
+    private _ensureDataChangedSubscription(): void {
+        if (this._unsubscribeDataChanged !== null) {
+            return;
+        }
+
+        this._unsubscribeDataChanged = getSharedDataChangedFeed(this._hass).subscribe(
+            () => {
+                void this.refresh();
+            },
+        );
     }
 
     private _emit(): void {
@@ -324,6 +347,8 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
 
     private _dispose(): void {
         this._clearBoundaryTimer();
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = null;
     }
 }
 

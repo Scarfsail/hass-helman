@@ -93,6 +93,7 @@ import {
 } from "./slot-selection.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../helman-scheduling/styles/scheduling-shared-styles";
+import { getSharedDataChangedFeed } from "../helman/data-changed";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../helman-scheduling/schedule-owner";
 import type { ScheduleOwnerSnapshot } from "../helman-scheduling/schedule-types";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
@@ -400,6 +401,14 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _range: InspectorPayload["range"] | null = null;
   @state() private _loading = false;
+  /**
+   * A reload the user did not ask for, running under the drawn day.
+   *
+   * Kept apart from `_loading` because the two want opposite things from the
+   * card: a navigation should blank and say so, a background refresh must leave
+   * the day exactly as it is until the new payload is in hand.
+   */
+  @state() private _refreshing = false;
   @state() private _error = "";
   /**
    * The forecast payload the day pills fetched, kept only for its health
@@ -457,6 +466,7 @@ export class HelmanSolarInspector extends LitElement {
   private _observedChartWrap: HTMLElement | null = null;
   private _scheduleOwner?: SharedScheduleOwner;
   private _unsubscribeScheduleOwner?: () => void;
+  private _unsubscribeDataChanged?: () => void;
 
   static styles = [helmanColorVars, schedulingSharedStyles, css`
     :host {
@@ -1044,6 +1054,8 @@ export class HelmanSolarInspector extends LitElement {
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
     this._scheduleOwner = undefined;
+    this._unsubscribeDataChanged?.();
+    this._unsubscribeDataChanged = undefined;
   }
 
   protected updated(changed: Map<string, unknown>) {
@@ -1075,6 +1087,7 @@ export class HelmanSolarInspector extends LitElement {
         this._load();
       }
       this._syncScheduleOwner();
+      this._syncDataChangedSubscription();
     }
     this._syncChartResizeObserver();
   }
@@ -1416,6 +1429,28 @@ export class HelmanSolarInspector extends LitElement {
     this._scheduleSnapshot = owner.getSnapshot();
     this._unsubscribeScheduleOwner = owner.subscribe((snapshot) => {
       this._scheduleSnapshot = snapshot;
+    });
+  }
+
+  /**
+   * Reload the drawn day whenever the backend says its data moved.
+   *
+   * The card's own payload comes from `helman/solar_bias/inspector`, which the
+   * schedule owner knows nothing about — so watching the shared schedule is not
+   * enough, even though the day pills already do.
+   *
+   * Through the shared feed rather than a private `subscribeEvents`, so an
+   * inspector and a scheduling card on one dashboard still cost one
+   * subscription between them.
+   */
+  private _syncDataChangedSubscription(): void {
+    const hass = this.hass;
+    if (!hass || this._unsubscribeDataChanged) {
+      return;
+    }
+
+    this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
+      void this._load({ silent: true });
     });
   }
 
@@ -3070,18 +3105,38 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  private async _load() {
+  /**
+   * Fetch the selected day.
+   *
+   * `silent` is the difference between a navigation and a background refresh.
+   * A navigation is *asked for*: blanking the card and saying "loading" is the
+   * honest answer, because what is drawn is about to be a different day. A
+   * refresh is not asked for -- it happens because the backend re-planned --
+   * so it must leave the day, the selection and the scroll position alone and
+   * swap the payload underneath only once the new one has arrived.
+   */
+  private async _load(options: { silent?: boolean } = {}) {
     if (!this.hass) return;
     if (!this._selectedDate) {
       this._selectedDate = this._todayIso();
     }
+    const silent = options.silent === true;
     const requestedDate = this._selectedDate;
-    if (this._loading && this._activeRequestDate === requestedDate) return;
+    if (
+      (this._loading || this._refreshing) &&
+      this._activeRequestDate === requestedDate
+    ) {
+      return;
+    }
     const requestId = ++this._activeRequestId;
     this._activeRequestDate = requestedDate;
-    this._loading = true;
     this._error = "";
-    this._payload = null;
+    if (silent) {
+      this._refreshing = true;
+    } else {
+      this._loading = true;
+      this._payload = null;
+    }
     try {
       const payload = await this.hass.callWS<InspectorPayload>({
         type: "helman/solar_bias/inspector",
@@ -3133,6 +3188,7 @@ export class HelmanSolarInspector extends LitElement {
     } finally {
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._loading = false;
+        this._refreshing = false;
         this._activeRequestDate = null;
       }
       this.requestUpdate();

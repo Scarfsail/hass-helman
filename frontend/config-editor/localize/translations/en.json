@@ -43,7 +43,8 @@
       "stored_config_loaded": "Stored config loaded",
       "last_validation_passed": "Last validation passed",
       "validation_stale": "Validation results are stale until you validate or save",
-      "fix_yaml_errors": "Fix YAML errors before validating or saving"
+      "fix_yaml_errors": "Fix YAML errors before validating or saving",
+      "changed_elsewhere": "The stored config changed elsewhere — reload to see it"
     },
     "issues": {
       "errors": "Errors",

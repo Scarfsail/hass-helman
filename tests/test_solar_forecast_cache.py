@@ -47,6 +47,15 @@ def _make_refresh_only_coordinator(coordinator_module):
     coordinator._create_task = asyncio.create_task
     coordinator._refresh_tasks = set()
     coordinator._forecast_refresh_task = None
+    # The bias handler also bridges the change onto the bus for the cards.
+    coordinator.fired_events: list[tuple[str, dict]] = []
+    coordinator._hass = SimpleNamespace(
+        bus=SimpleNamespace(
+            async_fire=lambda event_type, event_data=None: (
+                coordinator.fired_events.append((event_type, dict(event_data or {})))
+            )
+        )
+    )
     return coordinator
 
 
@@ -569,6 +578,12 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
             coordinator._async_refresh_forecast.assert_awaited_once_with(
                 reason="solar_bias_changed"
+            )
+            # ...and the cards hear about it under the one event name they
+            # subscribe to, rather than having to know the bias event exists.
+            self.assertEqual(
+                coordinator.fired_events,
+                [("helman_data_changed", {"kind": "solar_bias"})],
             )
         finally:
             _restore_modules(previous_modules)

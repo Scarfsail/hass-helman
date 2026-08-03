@@ -43,7 +43,8 @@
       "stored_config_loaded": "Uložená konfigurace načtena",
       "last_validation_passed": "Poslední validace prošla",
       "validation_stale": "Výsledek validace je zastaralý, dokud nespustíte validaci nebo uložení",
-      "fix_yaml_errors": "Před validací nebo uložením opravte chyby v YAML"
+      "fix_yaml_errors": "Před validací nebo uložením opravte chyby v YAML",
+      "changed_elsewhere": "Uložená konfigurace se mezitím změnila jinde — načtěte ji znovu"
     },
     "issues": {
       "errors": "Chyby",

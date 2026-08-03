@@ -15,6 +15,18 @@ DAY_CONTEXT_STORAGE_VERSION = 1
 DAY_CLASSIFICATION_SURPLUS = "surplus"
 DAY_CLASSIFICATION_TIGHT = "tight"
 DAY_CLASSIFICATION_DEFICIT = "deficit"
+
+# Fired whenever something a helman card draws has been rewritten: the schedule
+# document, the plan, the config, or the solar bias model. Deliberately coarse —
+# the payload's ``kind`` is advisory, and a subscriber is expected to reload
+# everything it renders regardless of which kind arrived. One event type means a
+# new write path cannot be added that forgets to announce itself.
+EVENT_DATA_CHANGED = f"{DOMAIN}_data_changed"
+DATA_CHANGED_KIND_SCHEDULE = "schedule"
+DATA_CHANGED_KIND_PLAN = "plan"
+DATA_CHANGED_KIND_CONFIG = "config"
+DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
+
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
 CONFIG_DOCUMENT_VERSION = 6
