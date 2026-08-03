@@ -93,6 +93,8 @@ import {
 } from "./slot-selection.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../helman-scheduling/styles/scheduling-shared-styles";
+import { getSharedScheduleOwner, type SharedScheduleOwner } from "../helman-scheduling/schedule-owner";
+import type { ScheduleOwnerSnapshot } from "../helman-scheduling/schedule-types";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
@@ -184,6 +186,17 @@ const STACK_HATCH_COLORS = [
   CHART_COLORS.battery,
   CHART_COLORS.grid,
 ] as const;
+
+const EMPTY_SCHEDULE_SNAPSHOT: ScheduleOwnerSnapshot = {
+  schedule: null,
+  loading: false,
+  refreshing: false,
+  writing: false,
+  togglingExecution: false,
+  error: null,
+  updatedAt: null,
+  stale: false,
+};
 
 /** Patterns are referenced by url(#id), so each colour needs a stable id. */
 function hatchId(color: string): string {
@@ -424,6 +437,13 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _priceColumns: PriceColumn[] = [];
   @state() private _priceUnit = "";
+  /**
+   * The shared schedule owner's state, for the execution switch in the
+   * scheduled-actions header. The band strip below subscribes on its own; this
+   * one has to be here because the switch stays visible while the strip is
+   * collapsed.
+   */
+  @state() private _scheduleSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_SNAPSHOT;
 
   /** Whether the opening slot width has been seeded from config or page width. */
   private _slotMinutesInitialized = false;
@@ -435,6 +455,8 @@ export class HelmanSolarInspector extends LitElement {
   private _loadedConnection: unknown = null;
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
+  private _scheduleOwner?: SharedScheduleOwner;
+  private _unsubscribeScheduleOwner?: () => void;
 
   static styles = [helmanColorVars, schedulingSharedStyles, css`
     :host {
@@ -768,6 +790,24 @@ export class HelmanSolarInspector extends LitElement {
       width: 100%;
     }
 
+    .strip-header-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px 12px;
+    }
+
+    .execution-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--secondary-text-color);
+      font-size: 0.85em;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
     .strip-collapse-toggle {
       background: none;
       border: none;
@@ -1001,6 +1041,9 @@ export class HelmanSolarInspector extends LitElement {
   protected disconnectedCallback() {
     super.disconnectedCallback();
     this._disconnectChartResizeObserver();
+    this._unsubscribeScheduleOwner?.();
+    this._unsubscribeScheduleOwner = undefined;
+    this._scheduleOwner = undefined;
   }
 
   protected updated(changed: Map<string, unknown>) {
@@ -1031,6 +1074,7 @@ export class HelmanSolarInspector extends LitElement {
         this._loadedConnection = this.hass.connection;
         this._load();
       }
+      this._syncScheduleOwner();
     }
     this._syncChartResizeObserver();
   }
@@ -1322,21 +1366,63 @@ export class HelmanSolarInspector extends LitElement {
    * row) and may yet come back as a choice.
    */
   private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
+    const executionLabel = this._t("scheduling.execution.toggle");
+    const snapshot = this._scheduleSnapshot;
     return html`
       <div class="strip-section">
-        <button
-          class="strip-collapse-toggle"
-          type="button"
-          aria-expanded=${this._scheduleBandExpanded ? "true" : "false"}
-          @click=${() => { this._scheduleBandExpanded = !this._scheduleBandExpanded; }}
-        >
-          <span class="strip-collapse-icon ${this._scheduleBandExpanded ? "expanded" : ""}">▶</span>
-          ${this._t("bias_correction.inspector.scheduled_actions")}
-        </button>
+        <div class="strip-header-row">
+          <button
+            class="strip-collapse-toggle"
+            type="button"
+            aria-expanded=${this._scheduleBandExpanded ? "true" : "false"}
+            @click=${() => { this._scheduleBandExpanded = !this._scheduleBandExpanded; }}
+          >
+            <span class="strip-collapse-icon ${this._scheduleBandExpanded ? "expanded" : ""}">▶</span>
+            ${this._t("bias_correction.inspector.scheduled_actions")}
+          </button>
+          <label class="execution-toggle">
+            <span>${executionLabel}</span>
+            <ha-switch
+              .checked=${snapshot.schedule?.executionEnabled ?? false}
+              ?disabled=${snapshot.schedule === null || snapshot.loading || snapshot.togglingExecution}
+              aria-label=${executionLabel}
+              @change=${this._handleToggleExecution}
+            ></ha-switch>
+          </label>
+        </div>
         ${this._scheduleBandExpanded ? this._renderScheduleBand(payload, layout) : ""}
       </div>
     `;
   }
+
+  /**
+   * Subscribe to the same schedule owner the scheduling card writes through, so
+   * the execution switch here and the one there are one state, not two.
+   */
+  private _syncScheduleOwner(): void {
+    const hass = this.hass;
+    if (!hass) {
+      return;
+    }
+
+    const owner = getSharedScheduleOwner(hass);
+    if (this._scheduleOwner === owner) {
+      this._scheduleSnapshot = owner.getSnapshot();
+      return;
+    }
+
+    this._unsubscribeScheduleOwner?.();
+    this._scheduleOwner = owner;
+    this._scheduleSnapshot = owner.getSnapshot();
+    this._unsubscribeScheduleOwner = owner.subscribe((snapshot) => {
+      this._scheduleSnapshot = snapshot;
+    });
+  }
+
+  private _handleToggleExecution = (event: Event): void => {
+    const target = event.currentTarget as unknown as { checked: boolean };
+    void this._scheduleOwner?.setExecutionEnabled(target.checked);
+  };
 
   private _renderScheduleBand(payload: InspectorPayload, layout: ChartLayout) {
     return html`
