@@ -267,6 +267,21 @@ def _domains_payload(kind: str, target_soc: int | None = None) -> dict:
     }
 
 
+def _battery_forecast_schedule_signature(coordinator):
+    """The signature as the read path computes it.
+
+    Off the *gated* forecast document, not the stored one: the execution flag is
+    applied there, by emptying the document, so a signature taken from the
+    stored document would not move on a toggle.
+    """
+    documents = coordinator._build_forecast_schedule_documents(
+        schedule_document=coordinator._load_schedule_document()
+    )
+    return coordinator._build_battery_forecast_schedule_signature(
+        documents.forecast_schedule_document
+    )
+
+
 def _valid_appliances_config() -> dict:
     return {
         "appliances": [
@@ -763,9 +778,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invalidate_cache = Mock()
         coordinator._invalidate_battery_forecast_cache = invalidate_cache
-        signature_before = coordinator._build_battery_forecast_schedule_signature(
-            coordinator._load_schedule_document()
-        )
+        signature_before = _battery_forecast_schedule_signature(coordinator)
 
         await coordinator.set_schedule_execution(
             enabled=True,
@@ -775,9 +788,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         invalidate_cache.assert_not_called()
         self.assertNotEqual(
             signature_before,
-            coordinator._build_battery_forecast_schedule_signature(
-                coordinator._load_schedule_document()
-            ),
+            _battery_forecast_schedule_signature(coordinator),
         )
 
     async def test_enable_failure_rolls_back_flag(self) -> None:
@@ -898,9 +909,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invalidate_cache = Mock()
         coordinator._invalidate_battery_forecast_cache = invalidate_cache
-        signature_before = coordinator._build_battery_forecast_schedule_signature(
-            coordinator._load_schedule_document()
-        )
+        signature_before = _battery_forecast_schedule_signature(coordinator)
 
         await coordinator.set_schedule_execution(
             enabled=False,
@@ -910,9 +919,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         invalidate_cache.assert_not_called()
         self.assertNotEqual(
             signature_before,
-            coordinator._build_battery_forecast_schedule_signature(
-                coordinator._load_schedule_document()
-            ),
+            _battery_forecast_schedule_signature(coordinator),
         )
 
     async def test_disable_cannot_fail_and_never_restores_normal(self) -> None:
@@ -1052,9 +1059,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invalidate_cache = Mock()
         coordinator._invalidate_battery_forecast_cache = invalidate_cache
-        signature_before = coordinator._build_battery_forecast_schedule_signature(
-            coordinator._load_schedule_document()
-        )
+        signature_before = _battery_forecast_schedule_signature(coordinator)
 
         await coordinator.set_schedule(
             slots=[
@@ -1069,9 +1074,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         invalidate_cache.assert_not_called()
         self.assertNotEqual(
             signature_before,
-            coordinator._build_battery_forecast_schedule_signature(
-                coordinator._load_schedule_document()
-            ),
+            _battery_forecast_schedule_signature(coordinator),
         )
 
     async def test_set_schedule_uses_shared_post_write_side_effect_helper(self) -> None:

@@ -216,7 +216,10 @@ question you are now asking; that resolves as soon as the rebuild finishes.
 2. **Schedule executor reconcile** — the only job that touches hardware. It finds the slot covering
    now and makes the inverter and each appliance match it, issuing a service call only when the
    desired state differs from what was last applied. With execution disabled, planning still runs;
-   only this apply step is skipped.
+   only this apply step is skipped. The cards then show the plan and the reality side by side: the
+   schedule strips keep showing what Helman would do, while the forecast curves project the
+   unmanaged house — no scheduled inverter action and no scheduled appliance run, because neither
+   will happen while execution is off.
 3. **Pre-execution reality check** — execution conditions ("only when the EV is plugged in") are
    evaluated at planning time and stamped onto each slot. This re-checks them against live state
    before anything is applied, and asks for a re-plan if reality has moved.

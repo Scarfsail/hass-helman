@@ -175,13 +175,11 @@ _LIVE_STATE_UNSET: Any = object()
 _UNAVAILABLE_ENTITY_STATES = {"unknown", "unavailable", "none"}
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
-# The battery-forecast schedule cache key: the execution flag plus the inverter
-# action of every slot. The flag belongs in the key because the forecast overlay
-# prunes to an empty slot set when execution is off, so the same slots project
-# two materially different curves depending on it.
-_BatteryForecastScheduleSignature = tuple[
-    bool, tuple[tuple[str, str, int | None], ...]
-]
+# The battery-forecast schedule cache key: the inverter action of every slot.
+# Built from the forecast schedule document, which is already empty when
+# execution is off, so an execution toggle moves this key without it having to
+# carry the flag itself.
+_BatteryForecastScheduleSignature = tuple[tuple[str, str, int | None], ...]
 # How far back the unmeasured remainder looks when smoothing away meter skew.
 # See _smooth_unmeasured for why the raw remainder cannot be published as-is.
 _UNMEASURED_SMOOTHING_WINDOW_S = 15.0
@@ -2451,9 +2449,30 @@ class HelmanCoordinator:
         *,
         schedule_document: ScheduleDocument,
     ) -> _ForecastScheduleDocuments:
-        # The plan drives the forecast whether or not execution is enabled: with
-        # execution off the schedule still shows what Helman would do, and the
-        # forecast has to reflect that plan rather than an empty one.
+        # The single place ``execution_enabled`` gates the forecast, for both
+        # domains at once.
+        #
+        # With execution off Helman actuates nothing — the executor returns
+        # before it touches either the inverter or an appliance -- so the
+        # forecast projects the unmanaged house: no scheduled inverter action,
+        # and no scheduled appliance run either. The card's schedule strips go
+        # on showing the plan; the curves show what will happen while it is not
+        # being executed, and the two are read as plan against reality.
+        #
+        # Gating both documents here rather than deeper down is what keeps that
+        # honest. Emptying only the inverter side — which is what the overlay
+        # builder used to do on its own -- left the battery unmanaged while the
+        # house forecast still carried appliance runs that could not happen, a
+        # trajectory that was neither the plan nor the reality. It also keeps
+        # both forecast cache signatures correct for free: they are derived from
+        # these documents, so an execution toggle changes them without either
+        # signature having to know the flag exists.
+        if not schedule_document.execution_enabled:
+            unmanaged = ScheduleDocument(execution_enabled=False, slots={})
+            return _ForecastScheduleDocuments(
+                forecast_schedule_document=unmanaged,
+                projection_schedule_document=unmanaged,
+            )
         return _ForecastScheduleDocuments(
             forecast_schedule_document=self._build_battery_forecast_schedule_document(
                 schedule_document=schedule_document
@@ -3140,16 +3159,13 @@ class HelmanCoordinator:
     def _build_battery_forecast_schedule_signature(
         schedule_document: ScheduleDocument,
     ) -> _BatteryForecastScheduleSignature:
-        return (
-            schedule_document.execution_enabled,
-            tuple(
-                (
-                    slot_id,
-                    domains.inverter.kind,
-                    domains.inverter.target_soc,
-                )
-                for slot_id, domains in sorted(schedule_document.slots.items())
-            ),
+        return tuple(
+            (
+                slot_id,
+                domains.inverter.kind,
+                domains.inverter.target_soc,
+            )
+            for slot_id, domains in sorted(schedule_document.slots.items())
         )
 
     def _build_battery_forecast_schedule_document(

@@ -96,10 +96,13 @@ class OptimizationSnapshot:
     #: with every rail, the inspector and ``min_soc_pct`` — and the control
     #: config it would need is not reachable from an optimizer anyway.
     #:
-    #: ``None`` on snapshots built without one. Note that
-    #: ``build_schedule_forecast_overlay`` returns an effectively empty overlay
-    #: when execution is disabled, so a re-simulation then sees no inverter
-    #: actions — correct, since none will be executed.
+    #: ``None`` on snapshots built without one. Note that the overlay is empty
+    #: when execution is disabled — by design, not by accident: the forecast
+    #: then projects the unmanaged house, so a re-simulation sees no inverter
+    #: actions, matching the ``battery_forecast`` it has to agree with. The
+    #: appliance projection is emptied by the same gate, so the two halves of
+    #: that trajectory stay consistent. See
+    #: ``HelmanCoordinator._build_forecast_schedule_documents``.
     #:
     #: Deliberately absent from :func:`snapshot_to_dict`: it is a simulation
     #: input, and serialising it would restate the schedule at canonical
