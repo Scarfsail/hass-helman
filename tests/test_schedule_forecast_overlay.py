@@ -205,7 +205,14 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
         self.assertEqual(second_window.kind, SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
         self.assertEqual(second_window.target_soc, 80)
 
-    def test_overlay_ignores_explicit_actions_when_execution_is_disabled(self) -> None:
+    def test_overlay_materializes_actions_regardless_of_execution_flag(self) -> None:
+        """The builder never reads ``execution_enabled``.
+
+        Emptying the forecast while execution is off is the coordinator's job --
+        it has to do the same to the appliance projection, so the decision lives
+        in one place there rather than half of it here. See
+        ``_build_forecast_schedule_documents`` and its coordinator tests.
+        """
         current_slot_start = build_horizon_start(REFERENCE_TIME)
         overlay = build_schedule_forecast_overlay(
             schedule_document=ScheduleDocument(
@@ -221,7 +228,7 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
 
         self.assertEqual(
             overlay.lookup_action(current_slot_start).kind,
-            SCHEDULE_ACTION_EMPTY,
+            SCHEDULE_ACTION_STOP_DISCHARGING,
         )
 
     def test_overlay_prunes_expired_slots_before_materializing(self) -> None:

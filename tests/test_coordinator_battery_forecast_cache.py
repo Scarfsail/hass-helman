@@ -878,48 +878,109 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(build_mock.call_count, 2)
 
-    async def test_async_get_battery_forecast_rebuilds_when_schedule_changes_while_execution_disabled(
+    def test_forecast_schedule_documents_empty_both_domains_when_execution_disabled(
         self,
     ) -> None:
-        # The plan drives the forecast regardless of the execution flag, so a
-        # changed schedule must invalidate the cache even with execution off.
+        # With execution off Helman actuates nothing, so the forecast projects
+        # the unmanaged house: no inverter action *and* no appliance run. Both
+        # documents have to be emptied together — emptying only the inverter
+        # side would forecast a battery that ignores appliance runs the same
+        # forecast still believes in.
         coordinator = self._make_coordinator()
-        build_mock = Mock(return_value=_make_battery_forecast())
-        coordinator._build_battery_forecast_sync = build_mock
-        coordinator._storage.schedule_document = _make_schedule_document(
+        coordinator._read_schedule_control_config = Mock(
+            return_value=_make_control_config()
+        )
+        slot = _make_schedule_action("stop_charging")
+        slot.appliances = {"boiler": {"kind": "run"}}
+        schedule_document = _make_schedule_document(
             execution_enabled=False,
-            slots={
-                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
-            },
+            slots={"2026-03-20T21:00:00+01:00": slot},
         )
 
-        await coordinator._async_get_battery_forecast(
-            solar_forecast=_make_solar_forecast(),
-            house_forecast=_make_house_forecast(),
-            started_at=REFERENCE_TIME,
-        )
-        coordinator._storage.schedule_document = _make_schedule_document(
-            execution_enabled=False,
-            slots={
-                "2026-03-20T21:30:00+01:00": _make_schedule_action("stop_charging"),
-            },
-        )
-        await coordinator._async_get_battery_forecast(
-            solar_forecast=_make_solar_forecast(),
-            house_forecast=_make_house_forecast(),
-            started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+        documents = coordinator._build_forecast_schedule_documents(
+            schedule_document=schedule_document
         )
 
-        self.assertEqual(build_mock.call_count, 2)
+        self.assertEqual(documents.forecast_schedule_document.slots, {})
+        self.assertEqual(documents.projection_schedule_document.slots, {})
+
+    def test_forecast_schedule_documents_follow_the_plan_when_execution_enabled(
+        self,
+    ) -> None:
+        coordinator = self._make_coordinator()
+        coordinator._read_schedule_control_config = Mock(
+            return_value=_make_control_config()
+        )
+        slot = _make_schedule_action("stop_charging")
+        schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={"2026-03-20T21:00:00+01:00": slot},
+        )
+
+        documents = coordinator._build_forecast_schedule_documents(
+            schedule_document=schedule_document
+        )
+
+        self.assertEqual(
+            documents.forecast_schedule_document.slots,
+            {"2026-03-20T21:00:00+01:00": slot},
+        )
+        self.assertEqual(
+            documents.projection_schedule_document.slots,
+            {"2026-03-20T21:00:00+01:00": slot},
+        )
+
+    def test_schedule_signatures_ignore_slot_changes_while_execution_disabled(
+        self,
+    ) -> None:
+        # Both signatures are derived from the gated documents, which are empty
+        # while execution is off. Editing the plan then cannot change the
+        # forecast, so it must not invalidate the cache either.
+        coordinator = self._make_coordinator()
+        coordinator._read_schedule_control_config = Mock(
+            return_value=_make_control_config()
+        )
+        first = coordinator._build_forecast_schedule_documents(
+            schedule_document=_make_schedule_document(
+                execution_enabled=False,
+                slots={
+                    "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
+                },
+            )
+        )
+        second = coordinator._build_forecast_schedule_documents(
+            schedule_document=_make_schedule_document(
+                execution_enabled=False,
+                slots={
+                    "2026-03-20T21:30:00+01:00": _make_schedule_action("stop_charging"),
+                },
+            )
+        )
+
+        self.assertEqual(
+            coordinator._build_battery_forecast_schedule_signature(
+                first.forecast_schedule_document
+            ),
+            coordinator._build_battery_forecast_schedule_signature(
+                second.forecast_schedule_document
+            ),
+        )
+        self.assertEqual(
+            coordinator._build_appliance_projection_schedule_signature(
+                first.projection_schedule_document
+            ),
+            coordinator._build_appliance_projection_schedule_signature(
+                second.projection_schedule_document
+            ),
+        )
 
     async def test_async_get_battery_forecast_rebuilds_when_only_execution_flag_changes(
         self,
     ) -> None:
-        # The forecast overlay prunes to an empty slot set when execution is
-        # off, so the same slots project the battery's unmanaged trajectory in
-        # one state and the plan's effect in the other. The schedule signature
-        # carries the flag so the read side notices on its own — nothing
-        # invalidates the cache on the execution toggle any more.
+        # Toggling execution swaps the forecast between the unmanaged
+        # trajectory and the plan's effect, and nothing invalidates the cache on
+        # the toggle any more. The signature notices on its own because it is
+        # built from the gated document, which empties with the flag.
         coordinator = self._make_coordinator()
         build_mock = Mock(return_value=_make_battery_forecast())
         overlay = object()
@@ -957,16 +1018,29 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(build_mock.call_count, 2)
+        self.assertEqual(
+            coordinator._build_battery_forecast_schedule_signature(
+                coordinator._build_forecast_schedule_documents(
+                    schedule_document=first_schedule_document
+                ).forecast_schedule_document
+            ),
+            (),
+        )
         self.assertNotEqual(
             coordinator._build_battery_forecast_schedule_signature(
-                first_schedule_document
+                coordinator._build_forecast_schedule_documents(
+                    schedule_document=second_schedule_document
+                ).forecast_schedule_document
             ),
-            coordinator._build_battery_forecast_schedule_signature(
-                second_schedule_document
-            ),
+            (),
         )
-        # Even with execution disabled, the first build overlays the plan.
-        self.assertIs(build_mock.call_args_list[0].kwargs["schedule_overlay"], overlay)
+        # The disabled build gets an overlay built from the emptied document.
+        self.assertEqual(
+            coordinator._build_battery_forecast_schedule_overlay.call_args_list[
+                0
+            ].kwargs["schedule_document"].slots,
+            {},
+        )
 
     async def test_async_get_battery_forecast_reuses_cache_with_matching_schedule_state(
         self,
