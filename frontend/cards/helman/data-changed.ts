@@ -1,5 +1,3 @@
-import type { HomeAssistant } from "../../hass-frontend/src/types";
-
 /**
  * The frontend half of automatic refresh.
  *
@@ -14,7 +12,26 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
  * `getSharedHelmanStore` and `getSharedScheduleOwner`.
  */
 
-type HelmanConnection = HomeAssistant["connection"];
+/**
+ * The events API this feed needs.
+ *
+ * Structural rather than HA's `Connection`, because the config editor is built
+ * as its own bundle against a deliberately narrow `HomeAssistantLike` — and
+ * this module is the one thing both bundles share. HA's real connection
+ * satisfies it.
+ */
+export interface DataChangedConnection {
+    subscribeEvents?<EventType>(
+        callback: (event: EventType) => void,
+        eventType: string,
+    ): Promise<() => void>;
+}
+
+export interface DataChangedHost {
+    connection?: DataChangedConnection | null;
+}
+
+type HelmanConnection = DataChangedConnection;
 
 /** The kinds the backend currently emits. Advisory — see the listener contract. */
 export type DataChangedKind = "schedule" | "plan" | "config" | "solar_bias";
@@ -49,11 +66,19 @@ const COLLECT_WINDOW_MS = 400;
 
 const feeds = new WeakMap<HelmanConnection, DataChangedFeedImpl>();
 
-export function getSharedDataChangedFeed(hass: HomeAssistant): DataChangedFeed {
-    let feed = feeds.get(hass.connection);
+/** Nothing to listen to — the caller still gets a well-behaved unsubscribe. */
+const NOOP_FEED: DataChangedFeed = { subscribe: () => () => undefined };
+
+export function getSharedDataChangedFeed(hass: DataChangedHost): DataChangedFeed {
+    const connection = hass.connection;
+    if (!connection) {
+        return NOOP_FEED;
+    }
+
+    let feed = feeds.get(connection);
     if (!feed) {
-        feed = new DataChangedFeedImpl(hass.connection);
-        feeds.set(hass.connection, feed);
+        feed = new DataChangedFeedImpl(connection);
+        feeds.set(connection, feed);
     }
 
     return feed;
