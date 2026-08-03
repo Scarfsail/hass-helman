@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -20,7 +20,16 @@ from .const import (
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
 )
-from .consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
+from .consumption_forecast_profiles import (
+    NEGATIVE_RESIDUAL_THRESHOLD,
+    ZERO_BAND,
+    ConsumerHistoryData,
+    HouseConsumptionProfile,
+    HourOfWeekWinsorizedMeanProfile,
+    fit_house_profile,
+    rows_to_dict,
+)
+from .consumption_forecast_statistics import ForecastBand
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import (
     get_local_current_slot_start,
@@ -31,18 +40,6 @@ from .recorder_hourly_series import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Threshold for "materially negative" residual (kWh).
-# Tiny negatives (>= threshold) are clamped to 0; values below are dropped.
-_NEGATIVE_RESIDUAL_THRESHOLD = -0.01
-
-
-@dataclass(frozen=True)
-class _ConsumerHistoryData:
-    entity_id: str
-    label: str
-    values_by_ts: dict[int, float]
-    query_succeeded: bool
 
 
 @dataclass(frozen=True)
@@ -146,31 +143,6 @@ class ConsumptionForecastBuilder:
                 alignment_padding_slots=alignment_padding_slots,
             )
 
-        history_days = self._compute_history_days(
-            house_rows,
-            today_local=local_now.date(),
-        )
-
-        if history_days < min_history_days:
-            _LOGGER.warning(
-                "House consumption forecast insufficient_history: "
-                "%d days available, %d required",
-                history_days,
-                min_history_days,
-            )
-            return self._make_payload(
-                status="insufficient_history",
-                training_window_days=training_window_days,
-                min_history_days=min_history_days,
-                history_days=history_days,
-                config_fingerprint=config_fingerprint,
-                resolution=canonical_resolution,
-                horizon_hours=horizon_hours,
-                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
-                forecast_days_available=forecast_days,
-                alignment_padding_slots=alignment_padding_slots,
-            )
-
         consumer_histories = await self._query_consumer_histories(
             consumers_config,
             training_window_days,
@@ -189,7 +161,7 @@ class ConsumptionForecastBuilder:
         # blocks the event loop; this build runs on every slot-aligned refresh.
         return await self._hass.async_add_executor_job(
             functools.partial(
-                self._assemble_available_payload,
+                self._fit_and_assemble,
                 house_rows=house_rows,
                 consumer_histories=consumer_histories,
                 actual_history=actual_history,
@@ -199,43 +171,106 @@ class ConsumptionForecastBuilder:
                 alignment_padding_slots=alignment_padding_slots,
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
-                history_days=history_days,
                 config_fingerprint=config_fingerprint,
                 canonical_resolution=canonical_resolution,
                 horizon_hours=horizon_hours,
             )
         )
 
-    def _assemble_available_payload(
+    def _fit_and_assemble(
         self,
         *,
         house_rows: list[dict],
-        consumer_histories: list[_ConsumerHistoryData],
-        actual_history: Any,
+        consumer_histories: list[ConsumerHistoryData],
+        actual_history: list[dict[str, Any]],
         consumers_config: list[dict[str, Any]],
         local_now: datetime,
         forecast_days: int,
         alignment_padding_slots: int,
         training_window_days: int,
         min_history_days: int,
-        history_days: int,
         config_fingerprint: str,
         canonical_resolution: Any,
         horizon_hours: int,
     ) -> dict[str, Any]:
-        """Assemble the ``available`` forecast payload from already-fetched data.
+        """Fit and assemble in a single executor hop.
+
+        Both halves are pure CPU; they are separate so that the fit can later
+        move to its own schedule, but this build still runs them back to back.
+        """
+        profile = fit_house_profile(
+            house_rows,
+            consumer_histories,
+            today_local=local_now.date(),
+        )
+        return self.assemble(
+            profile,
+            local_now=local_now,
+            consumers_config=consumers_config,
+            actual_history=actual_history,
+            forecast_days=forecast_days,
+            alignment_padding_slots=alignment_padding_slots,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            config_fingerprint=config_fingerprint,
+            canonical_resolution=canonical_resolution,
+            horizon_hours=horizon_hours,
+        )
+
+    def assemble(
+        self,
+        profile: HouseConsumptionProfile,
+        *,
+        local_now: datetime,
+        consumers_config: list[dict[str, Any]],
+        actual_history: list[dict[str, Any]],
+        forecast_days: int,
+        alignment_padding_slots: int,
+        training_window_days: int,
+        min_history_days: int,
+        config_fingerprint: str,
+        canonical_resolution: Any,
+        horizon_hours: int,
+    ) -> dict[str, Any]:
+        """Assemble the forecast payload from an already-fitted profile.
 
         Pure CPU: runs in a worker thread via ``async_add_executor_job`` and
         MUST NOT touch ``self._hass`` or perform any I/O.
         """
-        house_by_ts = self._rows_to_dict(house_rows)
-        (
-            non_deferrable_profile,
-            consumer_profiles,
-        ) = self._build_profiles(
-            house_by_ts,
-            consumer_histories,
-        )
+        if profile.history_days < min_history_days:
+            _LOGGER.warning(
+                "House consumption forecast insufficient_history: "
+                "%d days available, %d required",
+                profile.history_days,
+                min_history_days,
+            )
+            return self._make_payload(
+                status="insufficient_history",
+                training_window_days=training_window_days,
+                min_history_days=min_history_days,
+                history_days=profile.history_days,
+                config_fingerprint=config_fingerprint,
+                resolution=canonical_resolution,
+                horizon_hours=horizon_hours,
+                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                forecast_days_available=forecast_days,
+                alignment_padding_slots=alignment_padding_slots,
+            )
+
+        # A consumer the profile never saw forecasts zero rather than raising:
+        # the profile and the live config are supposed to agree -- a mismatch is
+        # fingerprint-stale -- but a hard failure here would blank the whole
+        # payload over one missing series. Say so once, not 672 times.
+        missing_series = [
+            consumer["energy_entity_id"]
+            for consumer in consumers_config
+            if consumer["energy_entity_id"] not in profile.consumers
+        ]
+        if missing_series:
+            _LOGGER.warning(
+                "House consumption profile has no series for %s; forecasting zero",
+                ", ".join(missing_series),
+            )
 
         current_slot_start = get_local_current_slot_start(
             local_now,
@@ -243,17 +278,17 @@ class ConsumptionForecastBuilder:
         )
         current_slot = self._build_forecast_entry(
             current_slot_start,
-            non_deferrable_profile=non_deferrable_profile,
+            non_deferrable_bands=profile.non_deferrable,
             consumers_config=consumers_config,
-            consumer_profiles=consumer_profiles,
+            consumer_bands=profile.consumers,
             interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
         )
 
         series = self._build_series(
             current_slot_start=current_slot_start,
-            non_deferrable_profile=non_deferrable_profile,
+            non_deferrable_bands=profile.non_deferrable,
             consumers_config=consumers_config,
-            consumer_profiles=consumer_profiles,
+            consumer_bands=profile.consumers,
             forecast_days=forecast_days,
             padding_slots=alignment_padding_slots,
         )
@@ -262,7 +297,7 @@ class ConsumptionForecastBuilder:
             status="available",
             training_window_days=training_window_days,
             min_history_days=min_history_days,
-            history_days=history_days,
+            history_days=profile.history_days,
             model=HOUSE_FORECAST_MODEL_ID,
             config_fingerprint=config_fingerprint,
             actual_history=actual_history,
@@ -281,8 +316,8 @@ class ConsumptionForecastBuilder:
         training_window_days: int,
         *,
         reference_time: datetime,
-    ) -> list[_ConsumerHistoryData]:
-        consumer_histories: list[_ConsumerHistoryData] = []
+    ) -> list[ConsumerHistoryData]:
+        consumer_histories: list[ConsumerHistoryData] = []
         for consumer in consumers_config:
             entity_id = consumer["energy_entity_id"]
             try:
@@ -297,7 +332,7 @@ class ConsumptionForecastBuilder:
                     entity_id,
                 )
                 consumer_histories.append(
-                    _ConsumerHistoryData(
+                    ConsumerHistoryData(
                         entity_id=entity_id,
                         label=consumer["label"],
                         values_by_ts={},
@@ -307,56 +342,15 @@ class ConsumptionForecastBuilder:
                 continue
 
             consumer_histories.append(
-                _ConsumerHistoryData(
+                ConsumerHistoryData(
                     entity_id=entity_id,
                     label=consumer["label"],
-                    values_by_ts=self._rows_to_dict(rows),
+                    values_by_ts=rows_to_dict(rows),
                     query_succeeded=True,
                 )
             )
 
         return consumer_histories
-
-    def _build_profiles(
-        self,
-        house_by_ts: dict[int, float],
-        consumers: list[_ConsumerHistoryData],
-    ) -> tuple[
-        HourOfWeekWinsorizedMeanProfile,
-        dict[str, HourOfWeekWinsorizedMeanProfile],
-    ]:
-        non_deferrable_profile = HourOfWeekWinsorizedMeanProfile()
-        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile] = {
-            consumer.entity_id: HourOfWeekWinsorizedMeanProfile()
-            for consumer in consumers
-        }
-
-        for ts, house_value in house_by_ts.items():
-            local_dt = dt_util.as_local(dt_util.utc_from_timestamp(ts))
-            weekday = local_dt.weekday()
-            hour = local_dt.hour
-            deferrable_sum = sum(
-                consumer.values_by_ts.get(ts, 0.0) for consumer in consumers
-            )
-            residual = house_value - deferrable_sum
-
-            if residual < _NEGATIVE_RESIDUAL_THRESHOLD:
-                _LOGGER.debug(
-                    "Dropping materially negative residual %.4f kWh at %s",
-                    residual,
-                    local_dt.isoformat(),
-                )
-                continue
-
-            non_deferrable_profile.add(weekday, hour, max(0.0, residual))
-            for consumer in consumers:
-                consumer_profiles[consumer.entity_id].add(
-                    weekday,
-                    hour,
-                    max(0.0, consumer.values_by_ts.get(ts, 0.0)),
-                )
-
-        return non_deferrable_profile, consumer_profiles
 
     async def _build_actual_history(
         self,
@@ -431,7 +425,7 @@ class ConsumptionForecastBuilder:
                 continue
 
             non_deferrable = house_total - deferrable_sum
-            if non_deferrable < _NEGATIVE_RESIDUAL_THRESHOLD:
+            if non_deferrable < NEGATIVE_RESIDUAL_THRESHOLD:
                 continue
 
             actual_history.append(
@@ -546,51 +540,30 @@ class ConsumptionForecastBuilder:
         ]
 
     @staticmethod
-    def _compute_history_days(
-        rows: list[dict],
-        *,
-        today_local: date,
-    ) -> int:
-        """Compute number of days of history from Recorder rows."""
-        if not rows:
-            return 0
-        oldest_ts = min(row["start"] for row in rows)
-        oldest_local = dt_util.as_local(dt_util.utc_from_timestamp(oldest_ts))
-        return (today_local - oldest_local.date()).days
-
-    @staticmethod
-    def _rows_to_dict(rows: list[dict]) -> dict[int, float]:
-        """Convert Recorder rows to {unix_timestamp: kWh_change} dict."""
-        result: dict[int, float] = {}
-        for row in rows:
-            ts = row["start"]
-            change = row.get("change")
-            if change is not None:
-                result[ts] = change
-        return result
-
-    @staticmethod
     def _build_forecast_entry(
         forecast_dt: datetime,
         *,
-        non_deferrable_profile: HourOfWeekWinsorizedMeanProfile,
+        non_deferrable_bands: list[ForecastBand],
         consumers_config: list[dict[str, Any]],
-        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile],
+        consumer_bands: dict[str, list[ForecastBand]],
         interval_minutes: int = 60,
     ) -> dict[str, Any]:
-        weekday = forecast_dt.weekday()
-        hour = forecast_dt.hour
+        slot = HourOfWeekWinsorizedMeanProfile.slot_index(
+            forecast_dt.weekday(),
+            forecast_dt.hour,
+        )
         scale = interval_minutes / 60
         non_deferrable_band = ConsumptionForecastBuilder._scale_band(
-            non_deferrable_profile.forecast(weekday, hour).to_dict(),
+            non_deferrable_bands[slot].to_dict(),
             scale=scale,
         )
 
         deferrable_list: list[dict[str, Any]] = []
         for consumer in consumers_config:
             eid = consumer["energy_entity_id"]
+            bands = consumer_bands.get(eid)
             consumer_band = ConsumptionForecastBuilder._scale_band(
-                consumer_profiles[eid].forecast(weekday, hour).to_dict(),
+                (bands[slot] if bands is not None else ZERO_BAND).to_dict(),
                 scale=scale,
             )
             deferrable_list.append({
@@ -609,9 +582,9 @@ class ConsumptionForecastBuilder:
         self,
         *,
         current_slot_start: datetime,
-        non_deferrable_profile: HourOfWeekWinsorizedMeanProfile,
+        non_deferrable_bands: list[ForecastBand],
         consumers_config: list[dict[str, Any]],
-        consumer_profiles: dict[str, HourOfWeekWinsorizedMeanProfile],
+        consumer_bands: dict[str, list[ForecastBand]],
         forecast_days: int,
         padding_slots: int,
     ) -> list[dict[str, Any]]:
@@ -626,9 +599,9 @@ class ConsumptionForecastBuilder:
             series.append(
                 self._build_forecast_entry(
                     forecast_dt,
-                    non_deferrable_profile=non_deferrable_profile,
+                    non_deferrable_bands=non_deferrable_bands,
                     consumers_config=consumers_config,
-                    consumer_profiles=consumer_profiles,
+                    consumer_bands=consumer_bands,
                     interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
                 )
             )
