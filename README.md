@@ -144,7 +144,8 @@ power_devices:
 - `total_energy_entity_id`: required cumulative energy sensor used as the forecast source.
 - `min_history_days` (default 14): minimum history span (from the oldest hourly statistics row)
   before charts can be shown.
-- `training_window_days` (default 42): Recorder lookback window; keep ≥ `min_history_days`.
+- `training_window_days` (default 56): Recorder lookback window; keep ≥ `min_history_days`. This is
+  the main driver of the nightly training cost — see [Scheduled work](#scheduled-work).
 - `deferrable_consumers`: optional per-consumer sub-meters, each a non-overlapping sub-meter already
   included in the house total. Baseline is derived as `house total - sum(deferrables)`.
 
@@ -178,6 +179,92 @@ show_header: true
 - Strange baseline/breakdown numbers: make sure each deferrable consumer is a non-overlapping
   sub-meter already included in the configured house total.
 - Card resource not auto-registering: auto-registration only works with storage-mode (UI) dashboards.
+
+## Scheduled work
+
+Helman runs a handful of jobs on timers. This is what they are, when they fire, and what they
+cost — useful if you are wondering what the integration is doing when you are not looking at it.
+
+| # | Job | Runs on a timer | Also triggered by | Cost |
+|---|---|---|---|---|
+| 1 | **Power tick** | every `history_bucket_duration` s (default **5 s**) | device-tree invalidation (entity/device registry updates, an Energy prefs change); a config save | Cheap |
+| 2 | **Schedule executor reconcile** | every **30 s** | startup; any schedule write; execution enable/disable; restore-normal-state; a config save | Cheap |
+| 3 | **Pre-execution reality check** | inside #2, so in practice every **30 s** | — | Cheap |
+| 4 | **Forecast rebuild** | **:00, :15, :30, :45** | startup; a config save; solar-bias trained/status events; a completed house-consumption fit from #6 | Moderate |
+| 5 | **Automation re-plan** | — | a successful #4 (0.5 s debounce, only when automation has enabled optimizers); a day-editor edit; execution enable; condition drift seen by #3; "run now" | Moderate |
+| 6 | **Nightly training batch** | daily at `training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
+| 7 | **Battery capacity forecast** | — (on demand, 300 s cache) | every card read, when its inputs have actually changed | Moderate |
+
+**Opening or refreshing a card never rebuilds a forecast and never reads Recorder history.**
+Forecasts are served from the last prepared snapshot, whatever its age; the work that prepares them
+runs on its own schedule. The one thing a read does compute is the battery projection (job #7), and
+only when its inputs have actually changed — it is anchored to the current battery reading, which
+is what lets the battery curve move the moment you edit a slot.
+
+If a forecast has not been rebuilt for over an hour, the cards show a warning banner rather than
+going blank — old data still beats no data, and the banner is what tells you something is wrong. A
+card *does* go blank when a setting changes such that the stored data no longer answers the
+question you are now asking; that resolves as soon as the rebuild finishes.
+
+### What each job does
+
+1. **Power tick** — Helman's own live-power sampler, independent of Recorder: it reads your power
+   sensors into ring buffers, works out the "Others" remainder for each parent node, and computes
+   the consumption/production totals and source ratios that colour the bars. Pure state reads and
+   arithmetic, no I/O.
+2. **Schedule executor reconcile** — the only job that touches hardware. It finds the slot covering
+   now and makes the inverter and each appliance match it, issuing a service call only when the
+   desired state differs from what was last applied. With execution disabled, planning still runs;
+   only this apply step is skipped.
+3. **Pre-execution reality check** — execution conditions ("only when the EV is plugged in") are
+   evaluated at planning time and stamped onto each slot. This re-checks them against live state
+   before anything is applied, and asks for a re-plan if reality has moved.
+4. **Forecast rebuild** — rebuilds the house consumption, solar and automation forecasts and
+   publishes them to the cards and sensors. It reads only today's history from Recorder; the
+   expensive multi-day training reads belong to job #6.
+5. **Automation re-plan** — the optimizer loop that decides what goes into each schedule slot. It
+   never rebuilds forecasts, it reads the ones job #4 cached, which is why it can also run on its
+   own after an edit.
+6. **Nightly training batch** — the heavy Recorder work, deliberately parked in the small hours. It
+   runs two jobs one after another (never at the same time — they share Recorder's worker thread):
+   solar bias correction, which learns how your forecast provider is systematically wrong for your
+   roof, and the house consumption profile, which fits an hour-of-week model over
+   `training_window_days` of history. The fitted profile is stored, so a restart reuses it instead
+   of refitting. Changing a forecast-relevant setting refits immediately rather than waiting for
+   the next night, so you see your change take effect.
+7. **Battery capacity forecast** — projects battery state of charge across the horizon: forecast
+   solar minus forecast demand, with the scheduled action for each slot applied, carried forward
+   from the current live reading. It is what draws the battery curve and why editing a slot moves
+   it right away.
+
+### The knobs that scale the cost
+
+- `history_bucket_duration` (default 5 s) — how often job #1 samples. Lower means smoother bars and
+  more work; it is the only job on a seconds-level cadence.
+- `training_time` (default `03:00`) — when the nightly batch runs. Pick a quiet hour: these jobs
+  read a lot of Recorder history and you do not want them competing with anything.
+- `training_window_days` (default 56) — how much history the house consumption fit reads. This is
+  the single biggest driver of job #6's cost. It has no effect on the per-quarter-hour work.
+
+### If Home Assistant feels sluggish
+
+All four quarter-hour boundaries behave the same. Job #4 fires at `:00`, `:15`, `:30` and `:45`,
+and measuring what a card actually waits for across each of them showed no difference between them
+— and no difference from ordinary background variation either. If you see a stall on the hour or
+half hour specifically, it is worth looking outside Helman: Home Assistant runs its own periodic
+Recorder and statistics work on those same boundaries.
+
+Things worth checking, roughly in order:
+
+- **Is it 03:00 (or your `training_time`)?** That is job #6, and it is meant to be heavy. If it is
+  landing at an awkward time, move it.
+- **A very large `training_window_days`** makes job #6 proportionally more expensive.
+- **A very low `history_bucket_duration`** makes job #1 run more often. It does no I/O, so this
+  costs CPU rather than Recorder time.
+- **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the
+  nightly cost scales with how many you configure.
+- **A stale-forecast banner on the cards** means rebuilds have been failing for over an hour; the
+  Home Assistant log will say why.
 
 ## Development
 Frontend TypeScript source lives at repo-root `frontend/` (dev-only, never shipped to users).
