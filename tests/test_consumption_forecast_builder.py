@@ -4,7 +4,7 @@ import importlib
 import sys
 import types
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -19,6 +19,38 @@ UTC = timezone.utc
 async def _inline_executor_job(func, *args):
     """Run the offloaded callable inline so tests don't need a real executor."""
     return func(*args)
+
+
+def _make_hass() -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(time_zone="Europe/Prague"),
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(
+                attributes={"unit_of_measurement": "kWh"}
+            )
+        ),
+        async_add_executor_job=_inline_executor_job,
+    )
+
+
+def _replay_window(
+    states: list[SimpleNamespace], start: datetime, end: datetime
+) -> list[SimpleNamespace]:
+    """What the recorder hands back for [start, end): the end bound is
+    exclusive, and include_start_time_state replays the value in force at the
+    start of the window, stamped with the start."""
+    window = [state for state in states if start <= state.last_updated < end]
+    earlier = [state for state in states if state.last_updated < start]
+    if earlier:
+        window.insert(
+            0,
+            SimpleNamespace(
+                state=earlier[-1].state,
+                attributes=earlier[-1].attributes,
+                last_updated=start,
+            ),
+        )
+    return window
 
 
 def _install_import_stubs() -> None:
@@ -107,31 +139,25 @@ class _FakeDtUtil:
         return datetime.fromtimestamp(timestamp, tz=UTC)
 
 
-class _FakeBand:
-    def __init__(self, value: float, lower: float, upper: float) -> None:
-        self._value = value
-        self._lower = lower
-        self._upper = upper
-
-    def to_dict(self) -> dict[str, float]:
-        return {
-            "value": self._value,
-            "lower": self._lower,
-            "upper": self._upper,
-        }
-
-
-class _FakeProfile:
-    def __init__(self, value: float, lower: float, upper: float) -> None:
-        self._value = value
-        self._lower = lower
-        self._upper = upper
-
-    def forecast(self, weekday: int, hour: int) -> _FakeBand:
-        return _FakeBand(self._value, self._lower, self._upper)
-
-
 _install_import_stubs()
+
+
+class _RecordingSlotHistory:
+    """Stands in for the coordinator-owned reader and records what it was asked.
+
+    The builder no longer queries the recorder itself, so what these tests can
+    still pin is the shape of the request: which entities, at which reference
+    time, and that a build with nothing to serve makes none at all.
+    """
+
+    def __init__(self) -> None:
+        self.queries: list[tuple[str, datetime]] = []
+
+    async def async_query_slot_energy_changes(
+        self, entity_id, reference_time, *, interval_minutes
+    ):
+        self.queries.append((entity_id, reference_time))
+        return {}
 
 
 class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
@@ -167,55 +193,159 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         return (
             consumption_module,
             recorder_module,
-            consumption_module.ConsumptionForecastBuilder(hass, config),
+            consumption_module.ConsumptionForecastBuilder(
+                hass, config, _RecordingSlotHistory()
+            ),
         )
 
-    async def _build_payload(
+    @staticmethod
+    def _flat_profile(consumption_module, *, consumers: bool = True):
+        """A fitted profile whose 168 bands are all the same, so the assertions
+        below are about slot arithmetic and scaling, never about the fit."""
+        band = consumption_module.ForecastBand
+        return consumption_module.HouseConsumptionProfile(
+            schema_version=1,
+            history_days=28,
+            non_deferrable=[band(4.0, 2.0, 6.0)] * 168,
+            consumers=(
+                {"sensor.washer_energy": [band(2.0, 1.0, 3.0)] * 168}
+                if consumers
+                else {}
+            ),
+        )
+
+    def _assemble_payload(
         self,
         *,
         reference_time: datetime,
         forecast_days: int,
+        consumers: bool = True,
     ) -> dict:
         consumption_module, recorder_module, builder = self._make_builder()
-        fake_profiles = (
-            _FakeProfile(4.0, 2.0, 6.0),
-            {"sensor.washer_energy": _FakeProfile(2.0, 1.0, 3.0)},
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+        ):
+            return builder.assemble(
+                self._flat_profile(consumption_module, consumers=consumers),
+                local_now=_FakeDtUtil.as_local(reference_time),
+                consumers_config=[
+                    {"energy_entity_id": "sensor.washer_energy", "label": "Washer"}
+                ],
+                actual_history=[],
+                forecast_days=forecast_days,
+                alignment_padding_slots=0,
+                training_window_days=56,
+                min_history_days=14,
+                config_fingerprint="fingerprint",
+                canonical_resolution=consumption_module.get_forecast_resolution(15),
+                horizon_hours=forecast_days * 24,
+            )
+
+    async def test_build_reports_insufficient_history_below_the_minimum(self) -> None:
+        """A profile fitted from three days against a 14-day minimum: no model,
+        no series."""
+        consumption_module, recorder_module, builder = self._make_builder()
+        profile = consumption_module.HouseConsumptionProfile(
+            schema_version=1,
+            history_days=3,
+            non_deferrable=[consumption_module.ForecastBand(1.0, 1.0, 1.0)] * 168,
+            consumers={},
         )
-        hourly_rows = [
-            {
-                "start": datetime(2026, 2, 20, 0, 0, tzinfo=UTC).timestamp(),
-                "change": 1.0,
-            }
-        ]
 
         with (
             patch.object(consumption_module, "dt_util", _FakeDtUtil),
             patch.object(recorder_module, "dt_util", _FakeDtUtil),
             patch.object(
                 builder,
-                "_query_hourly_history",
-                AsyncMock(return_value=hourly_rows),
-            ),
-            patch.object(builder, "_compute_history_days", return_value=28),
-            patch.object(
-                builder,
-                "_query_consumer_histories",
-                AsyncMock(return_value=[]),
-            ),
-            patch.object(builder, "_build_profiles", return_value=fake_profiles),
-            patch.object(
-                builder,
                 "_build_actual_history",
                 AsyncMock(return_value=[]),
             ),
         ):
-            return await builder.build(
-                reference_time=reference_time,
-                forecast_days=forecast_days,
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=profile,
+                forecast_days=1,
             )
 
-    async def test_build_one_day_series_is_canonical_quarter_hour(self) -> None:
-        payload = await self._build_payload(
+        self.assertEqual(payload["status"], "insufficient_history")
+        self.assertEqual(payload["historyDaysAvailable"], 3)
+        self.assertEqual(payload["requiredHistoryDays"], 14)
+        self.assertIsNone(payload["model"])
+        self.assertEqual(payload["series"], [])
+        self.assertNotIn("currentSlot", payload)
+
+    async def test_build_without_a_profile_is_unavailable_and_queries_nothing(
+        self,
+    ) -> None:
+        """The whole point of the nightly batch: a build with no profile must
+        not reach for the recorder at all, let alone for a training window."""
+        consumption_module, recorder_module, builder = self._make_builder()
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+        ):
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=None,
+                forecast_days=1,
+            )
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["series"], [])
+        self.assertEqual(builder._slot_history.queries, [])
+
+    async def test_build_issues_no_multi_day_recorder_query(self) -> None:
+        """Job #4's acceptance criterion: only today-scoped queries remain."""
+        consumption_module, recorder_module, builder = self._make_builder()
+
+        self.assertFalse(
+            hasattr(builder, "_query_hourly_history"),
+            "the multi-day query belongs to the training job, not the builder",
+        )
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+        ):
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=self._flat_profile(consumption_module),
+                forecast_days=1,
+            )
+
+        self.assertEqual(payload["status"], "available")
+        # Both queries are the today-scoped slot query, one per entity.
+        self.assertEqual(
+            [entity_id for entity_id, _ in builder._slot_history.queries],
+            ["sensor.house_total", "sensor.washer_energy"],
+        )
+
+    async def test_build_carries_the_training_metadata_into_the_payload(self) -> None:
+        consumption_module, recorder_module, builder = self._make_builder()
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(
+                builder, "_build_actual_history", AsyncMock(return_value=[])
+            ),
+        ):
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=self._flat_profile(consumption_module),
+                trained_at="2026-03-20T03:00:00+01:00",
+                last_outcome="profile_trained",
+                forecast_days=1,
+            )
+
+        self.assertEqual(payload["trainedAt"], "2026-03-20T03:00:00+01:00")
+        self.assertEqual(payload["lastOutcome"], "profile_trained")
+
+    def test_assemble_one_day_series_is_canonical_quarter_hour(self) -> None:
+        payload = self._assemble_payload(
             reference_time=REFERENCE_TIME,
             forecast_days=1,
         )
@@ -227,8 +357,8 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payload["series"]), 96)
         self.assertEqual(payload["series"][0]["timestamp"], "2026-03-20T21:15:00+01:00")
 
-    async def test_build_seven_day_series_length_matches_requested_horizon(self) -> None:
-        payload = await self._build_payload(
+    def test_assemble_seven_day_series_length_matches_requested_horizon(self) -> None:
+        payload = self._assemble_payload(
             reference_time=REFERENCE_TIME,
             forecast_days=7,
         )
@@ -236,8 +366,8 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["horizonHours"], 168)
         self.assertEqual(len(payload["series"]), 672)
 
-    async def test_quarter_hour_values_sum_back_to_hourly_band(self) -> None:
-        payload = await self._build_payload(
+    def test_quarter_hour_values_sum_back_to_hourly_band(self) -> None:
+        payload = self._assemble_payload(
             reference_time=REFERENCE_TIME,
             forecast_days=1,
         )
@@ -277,35 +407,44 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             3.0,
         )
 
-    async def test_current_slot_alignment_follows_quarter_hour_boundaries(self) -> None:
-        payload = await self._build_payload(
+    def test_current_slot_alignment_follows_quarter_hour_boundaries(self) -> None:
+        payload = self._assemble_payload(
             reference_time=datetime.fromisoformat("2026-03-20T21:16:00+01:00"),
             forecast_days=1,
         )
 
         self.assertEqual(payload["currentSlot"]["timestamp"], "2026-03-20T21:15:00+01:00")
 
-    def test_assemble_available_payload_is_pure_no_hass_no_await(self) -> None:
-        """The offloaded assembly must be safe to run in a worker thread:
+    def test_assemble_forecasts_zero_for_a_series_the_profile_lacks(self) -> None:
+        """A consumer the profile never saw must not blank the whole payload."""
+        payload = self._assemble_payload(
+            reference_time=REFERENCE_TIME,
+            forecast_days=1,
+            consumers=False,
+        )
+
+        consumer = payload["currentSlot"]["deferrableConsumers"][0]
+        self.assertEqual(consumer["entityId"], "sensor.washer_energy")
+        self.assertEqual(consumer["label"], "Washer")
+        self.assertEqual(
+            (consumer["value"], consumer["lower"], consumer["upper"]),
+            (0.0, 0.0, 0.0),
+        )
+        self.assertEqual(payload["status"], "available")
+
+    def _assert_pure(self, func_object, what: str) -> None:
+        """Both halves of the offloaded work must be safe in a worker thread:
         synchronous and never touching ``self._hass``."""
         import ast
         import inspect
         import textwrap
 
-        consumption_module = importlib.import_module(
-            "custom_components.helman.consumption_forecast_builder"
-        )
-        source = textwrap.dedent(
-            inspect.getsource(
-                consumption_module.ConsumptionForecastBuilder._assemble_available_payload
-            )
-        )
-        func = ast.parse(source).body[0]
+        func = ast.parse(textwrap.dedent(inspect.getsource(func_object))).body[0]
         self.assertNotIsInstance(
-            func, ast.AsyncFunctionDef, "assembly must be synchronous"
+            func, ast.AsyncFunctionDef, f"{what} must be synchronous"
         )
         for node in ast.walk(func):
-            self.assertNotIsInstance(node, ast.Await, "assembly must not await")
+            self.assertNotIsInstance(node, ast.Await, f"{what} must not await")
             if (
                 isinstance(node, ast.Attribute)
                 and isinstance(node.value, ast.Name)
@@ -314,49 +453,168 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotEqual(
                     node.attr,
                     "_hass",
-                    "assembly must not touch self._hass (runs off-loop)",
+                    f"{what} must not touch self._hass (runs off-loop)",
                 )
+
+    def test_assemble_is_pure_no_hass_no_await(self) -> None:
+        consumption_module = importlib.import_module(
+            "custom_components.helman.consumption_forecast_builder"
+        )
+        self._assert_pure(
+            consumption_module.ConsumptionForecastBuilder.assemble,
+            "assembly",
+        )
+
+    def test_fit_house_profile_is_pure_no_hass_no_await(self) -> None:
+        profiles_module = importlib.import_module(
+            "custom_components.helman.consumption_forecast_profiles"
+        )
+        self._assert_pure(profiles_module.fit_house_profile, "the fit")
 
 
 class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
-    def _make_builder(self):
-        importlib.reload(
+    """The slot-history cache lives on the reader the coordinator owns.
+
+    The builder is constructed fresh on every refresh, so a cache held by the
+    builder could never produce a hit. These tests wire it the way the
+    coordinator does — one reader, a new builder per refresh — and fail if
+    today's completed slots go back to being re-read in full.
+    """
+
+    ENTITY_ID = "sensor.a"
+
+    def _make_modules(self):
+        recorder_module = importlib.reload(
             importlib.import_module("custom_components.helman.recorder_hourly_series")
         )
         consumption_module = importlib.reload(
             importlib.import_module("custom_components.helman.consumption_forecast_builder")
         )
-        hass = SimpleNamespace(
-            config=SimpleNamespace(time_zone="Europe/Prague"),
-            states=SimpleNamespace(get=lambda entity_id: None),
-            async_add_executor_job=_inline_executor_job,
+        return consumption_module, recorder_module
+
+    @staticmethod
+    def _states() -> list[SimpleNamespace]:
+        """A counter climbing 0.1 kWh every quarter hour from local midnight."""
+        midnight = datetime(2026, 5, 10, 0, 0, tzinfo=TZ)
+        return [
+            SimpleNamespace(
+                state=str(round(index * 0.1, 4)),
+                attributes={"unit_of_measurement": "kWh"},
+                last_updated=_FakeDtUtil.as_utc(
+                    midnight + timedelta(minutes=15 * index)
+                ),
+            )
+            for index in range(96)
+        ]
+
+    async def _refresh(
+        self,
+        consumption_module,
+        recorder_module,
+        reader,
+        *,
+        reference_time: datetime,
+        windows: list[tuple[datetime, datetime]],
+    ) -> dict:
+        """One production-shaped refresh: a brand new builder, the same reader."""
+        states = self._states()
+
+        def _fake_state_changes_during_period(hass, start, end, entity_id, *args):
+            windows.append((start, end))
+            return {entity_id: _replay_window(states, start, end)}
+
+        builder = consumption_module.ConsumptionForecastBuilder(
+            _make_hass(), {}, reader
         )
-        return (
+        consumers = [{"energy_entity_id": self.ENTITY_ID, "label": "A"}]
+        with (
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(
+                recorder_module,
+                "state_changes_during_period",
+                _fake_state_changes_during_period,
+            ),
+            patch.object(
+                recorder_module,
+                "get_instance",
+                lambda hass: SimpleNamespace(
+                    async_add_executor_job=_inline_executor_job
+                ),
+            ),
+        ):
+            histories = await builder._query_consumer_slot_histories(
+                consumers, reference_time=reference_time
+            )
+        return histories[0].values_by_slot
+
+    async def test_a_later_refresh_reads_only_the_unsettled_tail(self) -> None:
+        consumption_module, recorder_module = self._make_modules()
+        reader = recorder_module.TodaySlotEnergyReader(_make_hass())
+        windows: list[tuple[datetime, datetime]] = []
+
+        await self._refresh(
             consumption_module,
-            consumption_module.ConsumptionForecastBuilder(hass, config={}),
+            recorder_module,
+            reader,
+            reference_time=datetime(2026, 5, 10, 23, 30, tzinfo=TZ),
+            windows=windows,
+        )
+        values = await self._refresh(
+            consumption_module,
+            recorder_module,
+            reader,
+            reference_time=datetime(2026, 5, 10, 23, 50, tzinfo=TZ),
+            windows=windows,
         )
 
-    async def test_consumer_slot_history_cache_avoids_duplicate_recorder_calls(self):
-        """Two builds in quick succession should hit the recorder only once
-        per consumer."""
-        from unittest.mock import AsyncMock, patch
+        # The first refresh of the day has to read the day; the second reads
+        # only what could still change — the slots inside the rebound window.
+        self.assertEqual(
+            windows[0],
+            (
+                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 0, 0, tzinfo=TZ)),
+                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 23, 30, tzinfo=TZ)),
+            ),
+        )
+        self.assertEqual(
+            windows[1],
+            (
+                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 22, 45, tzinfo=TZ)),
+                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 23, 45, tzinfo=TZ)),
+            ),
+        )
+        # And the answer is still the whole day, not just the tail.
+        self.assertEqual(len(values), 95)
 
-        consumption_module, builder = self._make_builder()
+    async def test_the_cached_refresh_matches_a_cold_one(self) -> None:
+        consumption_module, recorder_module = self._make_modules()
+        reader = recorder_module.TodaySlotEnergyReader(_make_hass())
+        windows: list[tuple[datetime, datetime]] = []
 
-        calls: list[str] = []
+        for hour in range(1, 24):
+            await self._refresh(
+                consumption_module,
+                recorder_module,
+                reader,
+                reference_time=datetime(2026, 5, 10, hour, 50, tzinfo=TZ),
+                windows=windows,
+            )
+        warm = await self._refresh(
+            consumption_module,
+            recorder_module,
+            reader,
+            reference_time=datetime(2026, 5, 10, 23, 50, tzinfo=TZ),
+            windows=windows,
+        )
+        cold = await self._refresh(
+            consumption_module,
+            recorder_module,
+            recorder_module.TodaySlotEnergyReader(_make_hass()),
+            reference_time=datetime(2026, 5, 10, 23, 50, tzinfo=TZ),
+            windows=windows,
+        )
 
-        async def _fake_query(_hass, entity_id, _ref, **_kw):
-            calls.append(entity_id)
-            return {}
-
-        consumers = [{"energy_entity_id": "sensor.a", "label": "A"}]
-        ref = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
-
-        with patch.object(consumption_module, "query_slot_energy_changes", _fake_query):
-            await builder._query_consumer_slot_histories(consumers, reference_time=ref)
-            await builder._query_consumer_slot_histories(consumers, reference_time=ref)
-
-        self.assertEqual(calls, ["sensor.a"])  # second call hit the cache
+        self.assertEqual(warm, cold)
 
 
 if __name__ == "__main__":

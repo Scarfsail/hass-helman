@@ -1587,6 +1587,12 @@ export class HelmanConfigEditorPanel
               "editor.fields.show_others_group",
               true,
             )}
+            ${this._renderOptionalTextField(
+              ["training_time"],
+              "editor.fields.training_time",
+              "editor.helpers.training_time",
+              "editor.help.training_time",
+            )}
           </div>
         `,
       )}
@@ -1771,12 +1777,6 @@ export class HelmanConfigEditorPanel
                           "editor.fields.max_training_window_days",
                           "editor.helpers.bias_correction_max_training_window_days",
                           "editor.help.bias_correction_max_training_window_days",
-                        )}
-                        ${this._renderOptionalTextField(
-                          ["power_devices", "solar", "forecast", "bias_correction", "training_time"],
-                          "editor.fields.bias_correction_training_time",
-                          "editor.helpers.bias_correction_training_time",
-                          "editor.help.bias_correction_training_time",
                         )}
                         ${this._renderOptionalNumberField(
                           ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"],

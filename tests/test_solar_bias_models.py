@@ -104,6 +104,26 @@ def test_reads_total_energy_entity_from_bias_correction_config():
     assert bias.total_energy_entity_id == "sensor.bias_total"
 
 
+def test_training_time_is_read_from_the_top_level():
+    bias = read_bias_config({"training_time": "05:15"})
+
+    assert bias.training_time == "05:15"
+
+
+def test_the_retired_bias_training_time_still_wins_when_present():
+    # A document the v5->v6 migration has not touched yet keeps its time.
+    config = {
+        "training_time": "05:15",
+        "power_devices": {
+            "solar": {"forecast": {"bias_correction": {"training_time": "04:00"}}}
+        },
+    }
+
+    bias = read_bias_config(config)
+
+    assert bias.training_time == "04:00"
+
+
 def test_legacy_training_window_days_is_still_accepted_as_fallback():
     config = {
         "power_devices": {

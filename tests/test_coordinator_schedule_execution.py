@@ -140,6 +140,20 @@ def _install_import_stubs() -> None:
             lambda hass, callback, interval: lambda: None
         )
 
+        # Mirrors the real helper: fires at once when HA is already running, which
+        # is the state a test's fake hass is always in.
+        start_mod = sys.modules.get("homeassistant.helpers.start")
+        if start_mod is None:
+            start_mod = types.ModuleType("homeassistant.helpers.start")
+            sys.modules["homeassistant.helpers.start"] = start_mod
+
+        def _async_at_started(hass, at_start_cb):
+            at_start_cb(hass)
+            return lambda: None
+
+        start_mod.async_at_started = _async_at_started
+        helpers_pkg.start = start_mod
+
         storage_mod = sys.modules.get("homeassistant.helpers.storage")
         if storage_mod is None:
             storage_mod = types.ModuleType("homeassistant.helpers.storage")
@@ -736,7 +750,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(executor.events[:2], ["start", "reconcile:enable_request"])
 
-    async def test_enable_invalidates_battery_forecast_cache(self) -> None:
+    async def test_enable_moves_the_battery_forecast_schedule_signature(self) -> None:
+        # Enabling execution does not blow the cache away; it changes the
+        # schedule signature, and the next card read rebuilds off that.
         coordinator, _storage, _executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": False,
@@ -747,13 +763,22 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invalidate_cache = Mock()
         coordinator._invalidate_battery_forecast_cache = invalidate_cache
+        signature_before = coordinator._build_battery_forecast_schedule_signature(
+            coordinator._load_schedule_document()
+        )
 
         await coordinator.set_schedule_execution(
             enabled=True,
             reference_time=REFERENCE_TIME,
         )
 
-        invalidate_cache.assert_called_once_with()
+        invalidate_cache.assert_not_called()
+        self.assertNotEqual(
+            signature_before,
+            coordinator._build_battery_forecast_schedule_signature(
+                coordinator._load_schedule_document()
+            ),
+        )
 
     async def test_enable_failure_rolls_back_flag(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
@@ -862,7 +887,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         # only the runtime status is dropped.
         self.assertEqual(executor.events, ["start", "reset_runtime"])
 
-    async def test_disable_invalidates_battery_forecast_cache(self) -> None:
+    async def test_disable_moves_the_battery_forecast_schedule_signature(self) -> None:
         coordinator, _storage, _executor = self._build_coordinator(
             schedule_document={
                 "executionEnabled": True,
@@ -873,13 +898,22 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         invalidate_cache = Mock()
         coordinator._invalidate_battery_forecast_cache = invalidate_cache
+        signature_before = coordinator._build_battery_forecast_schedule_signature(
+            coordinator._load_schedule_document()
+        )
 
         await coordinator.set_schedule_execution(
             enabled=False,
             reference_time=REFERENCE_TIME,
         )
 
-        invalidate_cache.assert_called_once_with()
+        invalidate_cache.assert_not_called()
+        self.assertNotEqual(
+            signature_before,
+            coordinator._build_battery_forecast_schedule_signature(
+                coordinator._load_schedule_document()
+            ),
+        )
 
     async def test_disable_cannot_fail_and_never_restores_normal(self) -> None:
         coordinator, storage, executor = self._build_coordinator(
@@ -1007,12 +1041,20 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             ["start", "safe_reconcile:schedule_updated"],
         )
 
-    async def test_set_schedule_invalidates_battery_forecast_cache(self) -> None:
+    async def test_set_schedule_moves_the_battery_forecast_schedule_signature(
+        self,
+    ) -> None:
+        # The day editor's drag loop: the write itself leaves the cache alone,
+        # but the edited slot moves the signature, so the next read rebuilds and
+        # the battery curve follows the drag immediately.
         coordinator, _storage, _executor = self._build_coordinator(
             schedule_document={"executionEnabled": True, "slots": {}}
         )
         invalidate_cache = Mock()
         coordinator._invalidate_battery_forecast_cache = invalidate_cache
+        signature_before = coordinator._build_battery_forecast_schedule_signature(
+            coordinator._load_schedule_document()
+        )
 
         await coordinator.set_schedule(
             slots=[
@@ -1024,7 +1066,13 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        invalidate_cache.assert_called_once_with()
+        invalidate_cache.assert_not_called()
+        self.assertNotEqual(
+            signature_before,
+            coordinator._build_battery_forecast_schedule_signature(
+                coordinator._load_schedule_document()
+            ),
+        )
 
     async def test_set_schedule_uses_shared_post_write_side_effect_helper(self) -> None:
         coordinator, _storage, _executor = self._build_coordinator(
@@ -1134,15 +1182,11 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         events: list[tuple[str, bool]] = []
 
-        def invalidate_cache() -> None:
-            events.append(("invalidate", coordinator._schedule_lock.locked()))
-
         async def reconcile(*, reason: str, reference_time: datetime | None = None) -> None:
             self.assertEqual(reason, "automation_updated")
             self.assertEqual(reference_time, REFERENCE_TIME)
             events.append(("reconcile", coordinator._schedule_lock.locked()))
 
-        coordinator._invalidate_battery_forecast_cache = invalidate_cache
         coordinator._async_reconcile_schedule_execution = reconcile
 
         async with coordinator._schedule_lock:
@@ -1166,10 +1210,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(
-            events,
-            [("invalidate", False), ("reconcile", False)],
-        )
+        self.assertEqual(events, [("reconcile", False)])
 
     async def test_set_schedule_normalizes_appliance_actions_using_active_registry(
         self,

@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from .automation.migration import migrate_config_document, needs_migration
 from .const import (
     CONFIG_DOCUMENT_VERSION,
+    DOMAIN,
     FORECAST_SNAPSHOT_STORAGE_KEY,
     FORECAST_SNAPSHOT_STORAGE_VERSION,
     SCHEDULE_STORAGE_KEY,
@@ -17,6 +18,13 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Nightly training artifacts. Deliberately not folded into
+# `helman.forecast_snapshot`: that store holds outputs and is rewritten every
+# 15 minutes behind a hash guard, while these are written once a day and have a
+# lifetime and a versioning story of their own.
+TRAINING_ARTIFACTS_STORAGE_KEY = f"{DOMAIN}.training_artifacts"
+TRAINING_ARTIFACTS_STORAGE_VERSION = 1
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "history_buckets": 60,
@@ -72,12 +80,19 @@ class HelmanStorage:
         if not needs_migration(self._config):
             return
         migrated, migrated_optimizer_ids = migrate_config_document(self._config)
-        _LOGGER.info(
-            "Migrated Helman config to version %s; optimizers moved to the "
-            "target/params/conditions shape: %s",
-            CONFIG_DOCUMENT_VERSION,
-            ", ".join(migrated_optimizer_ids) or "none",
-        )
+        # Not every step reshapes optimizers any more, so only name them when
+        # some were actually rewritten.
+        if migrated_optimizer_ids:
+            _LOGGER.info(
+                "Migrated Helman config to version %s; optimizers moved to the "
+                "target/params/conditions shape: %s",
+                CONFIG_DOCUMENT_VERSION,
+                ", ".join(migrated_optimizer_ids),
+            )
+        else:
+            _LOGGER.info(
+                "Migrated Helman config to version %s", CONFIG_DOCUMENT_VERSION
+            )
         self._config = migrated
         await self._store.async_save(migrated)
 
@@ -142,6 +157,95 @@ class HelmanStorage:
     ) -> None:
         self._schedule_document = schedule_document
         await self._schedule_store.async_save(schedule_document)
+
+
+class TrainingArtifactsStore:
+    """Persistence for what the nightly training batch produces.
+
+    Persisted payload shape (v1)::
+
+        {"version": 1,
+         "house_consumption": {"data": {...}, "fingerprint": str,
+                               "trained_at": str, "last_outcome": str,
+                               "error_reason": str | None}}
+
+    One section only. Solar bias keeps its own store: the bias service already
+    owns its fingerprint, ``trained_at`` and ``last_outcome`` there, and a
+    second copy would be two sources of truth that drift.
+    """
+
+    HOUSE_CONSUMPTION = "house_consumption"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._store = storage.Store(
+            hass,
+            TRAINING_ARTIFACTS_STORAGE_VERSION,
+            TRAINING_ARTIFACTS_STORAGE_KEY,
+        )
+        self._document: dict[str, Any] = {}
+
+    async def async_load(self) -> None:
+        stored = await self._store.async_load()
+        if (
+            not isinstance(stored, dict)
+            or stored.get("version") != TRAINING_ARTIFACTS_STORAGE_VERSION
+        ):
+            self._document = {}
+            return
+        self._document = stored
+
+    @property
+    def house_consumption(self) -> dict[str, Any] | None:
+        section = self._document.get(self.HOUSE_CONSUMPTION)
+        return section if isinstance(section, dict) else None
+
+    async def async_record_house_consumption(
+        self,
+        *,
+        data: dict[str, Any],
+        fingerprint: str,
+        trained_at: str,
+        last_outcome: str,
+    ) -> None:
+        """Store a freshly fitted profile, replacing whatever was there."""
+        await self._async_write_house_consumption({
+            "data": data,
+            "fingerprint": fingerprint,
+            "trained_at": trained_at,
+            "last_outcome": last_outcome,
+            "error_reason": None,
+        })
+
+    async def async_record_house_consumption_failure(
+        self,
+        *,
+        last_outcome: str,
+        error_reason: str | None,
+    ) -> None:
+        """Record a failed refit **without** dropping the previous profile.
+
+        The same rule the bias service applies in ``_should_preserve_profile``:
+        a fit that could not run does not make the last one wrong. This is what
+        makes "older than 48 h, refit fails" keep serving with a banner instead
+        of blanking the card.
+        """
+        previous = self.house_consumption or {}
+        await self._async_write_house_consumption({
+            **{
+                key: previous.get(key)
+                for key in ("data", "fingerprint", "trained_at")
+            },
+            "last_outcome": last_outcome,
+            "error_reason": error_reason,
+        })
+
+    async def _async_write_house_consumption(self, section: dict[str, Any]) -> None:
+        self._document = {
+            **self._document,
+            "version": TRAINING_ARTIFACTS_STORAGE_VERSION,
+            self.HOUSE_CONSUMPTION: section,
+        }
+        await self._store.async_save(self._document)
 
 
 class SolarBiasCorrectionStore:

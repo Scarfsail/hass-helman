@@ -100,6 +100,16 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     sys.modules[forecast_builder_mod.__name__] = forecast_builder_mod
 
+    grid_price_builder_mod = types.ModuleType(
+        "custom_components.helman.grid_price_forecast_builder"
+    )
+    grid_price_builder_mod.GridPriceForecastBuilder = type(
+        "GridPriceForecastBuilder",
+        (),
+        {},
+    )
+    sys.modules[grid_price_builder_mod.__name__] = grid_price_builder_mod
+
     grid_builder_mod = types.ModuleType(
         "custom_components.helman.grid_flow_forecast_builder"
     )
@@ -143,6 +153,13 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         )
     )
     recorder_slots_mod.get_today_completed_local_slots = lambda *args, **kwargs: []
+
+    async def _query_cumulative_hourly_energy_changes(*args, **kwargs):
+        return {}
+
+    recorder_slots_mod.query_cumulative_hourly_energy_changes = (
+        _query_cumulative_hourly_energy_changes
+    )
     async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
         return None
 
@@ -156,6 +173,15 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         _estimate_average_hourly_energy_when_climate_active
     )
     recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
+
+    class _TodaySlotEnergyReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_slot_energy_changes(self, *args, **kwargs):
+            return {}
+
+    recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
@@ -237,6 +263,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
     storage_mod = types.ModuleType("custom_components.helman.storage")
     storage_mod.HelmanStorage = type("HelmanStorage", (), {})
+    storage_mod.TrainingArtifactsStore = type("TrainingArtifactsStore", (), {})
     sys.modules[storage_mod.__name__] = storage_mod
 
     homeassistant_pkg = sys.modules.get("homeassistant")
@@ -332,6 +359,20 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         lambda hass, callback, interval: lambda: None
     )
 
+    # Mirrors the real helper: fires at once when HA is already running, which
+    # is the state a test's fake hass is always in.
+    start_mod = sys.modules.get("homeassistant.helpers.start")
+    if start_mod is None:
+        start_mod = types.ModuleType("homeassistant.helpers.start")
+        sys.modules["homeassistant.helpers.start"] = start_mod
+
+    def _async_at_started(hass, at_start_cb):
+        at_start_cb(hass)
+        return lambda: None
+
+    start_mod.async_at_started = _async_at_started
+    helpers_pkg.start = start_mod
+
     entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
     if entity_registry_mod is None:
         entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
@@ -380,7 +421,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
-        coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
+        coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
 
         adjusted_house_forecast = {"status": "available", "generatedAt": "2026-03-20T21:16:00+01:00"}
         canonical_battery_forecast = {
@@ -411,13 +452,10 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         )
 
         builder_instance = SimpleNamespace(
-            build=AsyncMock(
+            build=Mock(
                 return_value={
-                    "solar": {"status": "available"},
-                    "grid": {
-                        "export": {"status": "available", "currentPrice": 2.5},
-                        "import": {"status": "available", "currentPrice": 7.0},
-                    },
+                    "export": {"status": "available", "currentPrice": 2.5},
+                    "import": {"status": "available", "currentPrice": 7.0},
                 }
             )
         )
@@ -452,7 +490,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "GridPriceForecastBuilder",
                 return_value=builder_instance,
             ),
             patch.object(
@@ -504,7 +542,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
             solar_forecast=canonical_solar,
-            house_forecast=coordinator._cached_forecast,
+            house_forecast=adjusted_house_forecast,
             started_at=REFERENCE_TIME,
         )
         self.assertEqual(result["solar"], solar_response)

@@ -143,6 +143,7 @@ const GENERAL_PROJECTION_KEYS = [
   "power_sensor_name_cleaner_regex",
   "show_empty_groups",
   "show_others_group",
+  "training_time",
   "device_label_text",
 ] as const;
 
@@ -180,7 +181,6 @@ const SOLAR_BIAS_CORRECTION_CONFIG_PROJECTION_MEMBERS = [
   { yamlKey: "enabled", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "enabled"] },
   { yamlKey: "min_history_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_history_days"] },
   { yamlKey: "max_training_window_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "max_training_window_days"] },
-  { yamlKey: "training_time", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "training_time"] },
   { yamlKey: "min_valid_slot_days", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "min_valid_slot_days"] },
   { yamlKey: "clamp_min", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_min"] },
   { yamlKey: "clamp_max", documentPath: ["power_devices", "solar", "forecast", "bias_correction", "clamp_max"] },

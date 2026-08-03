@@ -116,6 +116,13 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     recorder_slots_mod.get_today_completed_local_hours = lambda *args, **kwargs: []
     recorder_slots_mod.get_today_completed_local_slots = lambda *args, **kwargs: []
+
+    async def _query_cumulative_hourly_energy_changes(*args, **kwargs):
+        return {}
+
+    recorder_slots_mod.query_cumulative_hourly_energy_changes = (
+        _query_cumulative_hourly_energy_changes
+    )
     recorder_slots_mod.query_slot_boundary_state_values = (
         lambda *args, **kwargs: {}
     )
@@ -124,6 +131,15 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     recorder_slots_mod.query_slot_energy_changes = lambda *args, **kwargs: []
     recorder_slots_mod.query_active_hours_by_local_date = lambda *args, **kwargs: {}
+
+    class _TodaySlotEnergyReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_slot_energy_changes(self, *args, **kwargs):
+            return {}
+
+    recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")
@@ -203,6 +219,20 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         event_mod.async_track_time_interval = (
             lambda hass, callback, interval: lambda: None
         )
+
+        # Mirrors the real helper: fires at once when HA is already running, which
+        # is the state a test's fake hass is always in.
+        start_mod = sys.modules.get("homeassistant.helpers.start")
+        if start_mod is None:
+            start_mod = types.ModuleType("homeassistant.helpers.start")
+            sys.modules["homeassistant.helpers.start"] = start_mod
+
+        def _async_at_started(hass, at_start_cb):
+            at_start_cb(hass)
+            return lambda: None
+
+        start_mod.async_at_started = _async_at_started
+        helpers_pkg.start = start_mod
 
         storage_mod = sys.modules.get("homeassistant.helpers.storage")
         if storage_mod is None:
@@ -588,14 +618,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=True,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )
@@ -621,14 +651,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="slot_refresh",
             reference_time=REFERENCE_TIME,
         )
@@ -649,14 +679,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )
@@ -681,14 +711,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        coordinator._async_refresh_forecast = AsyncMock(
+        coordinator._async_build_forecast_snapshots = AsyncMock(
             return_value=coordinator_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_refresh_forecast_and_request_automation(
+        await coordinator._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )

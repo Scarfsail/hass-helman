@@ -252,5 +252,24 @@
       },
       "why": "Why?"
     }
+  },
+  "forecast_health": {
+    "source": {
+      "solar": "Solar forecast",
+      "house": "House consumption forecast"
+    },
+    "reason": {
+      "stale_forecast": "has not refreshed for over an hour — the background refresh may be broken",
+      "house_profile_insufficient_history": "does not have enough recorder history yet to fit a consumption profile",
+      "house_profile_entity_missing": "cannot be refitted — the configured house energy entity no longer exists",
+      "house_profile_training_failed": "could not be retrained — check the Home Assistant log",
+      "unknown": "reported a problem"
+    },
+    "age": {
+      "never": "never built",
+      "minutes": "min ago",
+      "hours": "h ago",
+      "days": "d ago"
+    }
   }
 }

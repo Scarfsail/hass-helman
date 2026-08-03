@@ -5,10 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .battery_actual_history_builder import build_battery_actual_history
 from .battery_slot_simulation import (
     is_baseline_schedule_action,
     is_supported_schedule_action,
@@ -18,12 +16,10 @@ from .battery_slot_simulation import (
     slot_end,
 )
 from .battery_state import (
-    BatteryEntityConfig,
     BatteryForecastSettings,
     BatteryLiveState,
     read_battery_entity_config,
     read_battery_forecast_settings,
-    read_battery_live_state,
 )
 from .const import (
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
@@ -52,48 +48,15 @@ class _BatteryForecastSlotInput:
 
 
 class BatteryCapacityForecastBuilder:
-    def __init__(self, hass: HomeAssistant, config: dict[str, Any]) -> None:
-        self._hass = hass
+    """Builds the battery capacity forecast from pre-gathered inputs.
+
+    Deliberately holds no ``hass``: every live and historical input arrives
+    through ``build_with_history``, so there is no way for a recorder read to
+    creep back into the builder and onto the card read path.
+    """
+
+    def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
-
-    async def build(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        forecast_days: int = MAX_FORECAST_DAYS,
-        schedule_overlay: ScheduleForecastOverlay | None = None,
-        live_state: BatteryLiveState | None = None,
-        actual_history: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        """Async entry point.
-
-        Reads the live battery state (``hass.states``) and recorder actual
-        history, then delegates to the pure :meth:`build_with_history` core.
-        Callers that have already gathered these inputs once per run (the
-        automation pipeline) pass them in so the compute path stays off the
-        event loop.
-        """
-        if live_state is None or actual_history is None:
-            entity_config = read_battery_entity_config(self._config)
-            if entity_config is not None:
-                if live_state is None:
-                    live_state = read_battery_live_state(self._hass, entity_config)
-                if actual_history is None and live_state is not None:
-                    actual_history = await self._build_actual_history(
-                        entity_config,
-                        started_at,
-                    )
-        return self.build_with_history(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-            forecast_days=forecast_days,
-            schedule_overlay=schedule_overlay,
-            live_state=live_state,
-            actual_history=actual_history or [],
-        )
 
     def build_with_history(
         self,
@@ -471,25 +434,6 @@ class BatteryCapacityForecastBuilder:
             ]
             adjusted_with_baseline.append(item)
         return adjusted_with_baseline
-
-    async def _build_actual_history(
-        self,
-        entity_config: BatteryEntityConfig,
-        reference_time: datetime,
-    ) -> list[dict[str, Any]]:
-        try:
-            return await build_battery_actual_history(
-                self._hass,
-                entity_config.capacity_entity_id,
-                reference_time,
-                interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-            )
-        except Exception:
-            _LOGGER.exception(
-                "Failed to build battery actual history for %s",
-                entity_config.capacity_entity_id,
-            )
-            return []
 
     def _read_current_slot_house_value(
         self, house_forecast: dict[str, Any], current_slot_start: datetime

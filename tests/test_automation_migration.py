@@ -61,8 +61,10 @@ class VersionGateTests(unittest.TestCase):
         document = {**_document(), "config_version": CONFIG_DOCUMENT_VERSION}
         self.assertFalse(needs_migration(document))
 
-    def test_a_document_without_automation_is_left_alone(self) -> None:
-        self.assertFalse(needs_migration({"history_buckets": 60}))
+    def test_a_document_without_automation_still_migrates(self) -> None:
+        # v5->v6 moves a solar key, so the gate is a plain version check: an
+        # automation-less document has to be migrated too.
+        self.assertTrue(needs_migration({"history_buckets": 60}))
 
     def test_migration_stamps_the_current_version(self) -> None:
         migrated, _ids = migrate_config_document(_document())
@@ -308,6 +310,78 @@ class PriceConditionSplitTests(unittest.TestCase):
         migrated, _ids = migrate_config_document(_document())
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 5)
+
+
+class TrainingTimePromotionTests(unittest.TestCase):
+    """v5->v6: solar bias ``training_time`` -> top-level ``training_time``.
+
+    The nightly training batch is more than bias training, so the schedule
+    stops living under ``bias_correction``. First step that moves a key
+    outside the automation block, which is why the version gate had to stop
+    requiring one.
+    """
+
+    @staticmethod
+    def _migrate_from_v5(document):
+        migrated, ids = migrate_config_document({**document, "config_version": 5})
+        return migrated, ids
+
+    @staticmethod
+    def _bias_document(**bias):
+        return {
+            "power_devices": {
+                "solar": {"forecast": {"bias_correction": {"enabled": True, **bias}}}
+            }
+        }
+
+    def test_training_time_moves_to_the_top_level(self) -> None:
+        migrated, ids = self._migrate_from_v5(self._bias_document(training_time="04:30"))
+
+        bias = migrated["power_devices"]["solar"]["forecast"]["bias_correction"]
+        self.assertNotIn("training_time", bias)
+        self.assertEqual(migrated["training_time"], "04:30")
+        self.assertEqual(bias["enabled"], True)
+        self.assertEqual(ids, [])
+
+    def test_an_existing_top_level_value_wins(self) -> None:
+        document = self._bias_document(training_time="04:30")
+        document["training_time"] = "02:15"
+
+        migrated, _ids = self._migrate_from_v5(document)
+
+        self.assertEqual(migrated["training_time"], "02:15")
+        self.assertNotIn(
+            "training_time",
+            migrated["power_devices"]["solar"]["forecast"]["bias_correction"],
+        )
+
+    def test_a_document_without_the_bias_key_is_untouched(self) -> None:
+        migrated, _ids = self._migrate_from_v5(self._bias_document())
+
+        self.assertNotIn("training_time", migrated)
+
+    def test_a_v5_document_without_automation_is_migrated_and_stamped(self) -> None:
+        document = self._bias_document(training_time="04:30")
+        document["config_version"] = 5
+        self.assertTrue(needs_migration(document))
+
+        migrated, _ids = migrate_config_document(document)
+
+        self.assertNotIn("automation", migrated)
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(migrated["training_time"], "04:30")
+
+    def test_a_v1_document_carries_the_key_through_every_step(self) -> None:
+        document = {
+            **_document({"id": "e", "kind": "export_price"}),
+            **self._bias_document(training_time="04:30"),
+        }
+
+        migrated, ids = migrate_config_document(document)
+
+        self.assertEqual(migrated["training_time"], "04:30")
+        # The optimizer ids from the v1 step survive a later step that moves none.
+        self.assertEqual(ids, ["e"])
 
 
 class RunWhenInversionTests(unittest.TestCase):

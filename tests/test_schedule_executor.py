@@ -65,6 +65,20 @@ def _install_import_stubs() -> None:
             lambda hass, callback, interval: lambda: None
         )
 
+        # Mirrors the real helper: fires at once when HA is already running, which
+        # is the state a test's fake hass is always in.
+        start_mod = sys.modules.get("homeassistant.helpers.start")
+        if start_mod is None:
+            start_mod = types.ModuleType("homeassistant.helpers.start")
+            sys.modules["homeassistant.helpers.start"] = start_mod
+
+        def _async_at_started(hass, at_start_cb):
+            at_start_cb(hass)
+            return lambda: None
+
+        start_mod.async_at_started = _async_at_started
+        helpers_pkg.start = start_mod
+
         util_pkg = sys.modules.get("homeassistant.util")
         if util_pkg is None:
             util_pkg = types.ModuleType("homeassistant.util")

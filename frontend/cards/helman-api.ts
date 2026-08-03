@@ -101,8 +101,30 @@ export interface ForecastPointDTO {
     value: number;
 }
 
+/**
+ * How healthy the snapshot behind a forecast is.
+ *
+ * Reads never rebuild a forecast, so an aging snapshot is served as-is: the
+ * data is old, not wrong, and blanking the card would be worse. This block is
+ * the entire user-visible signal that the refresh loop has stopped. `reason` is
+ * a stable machine string the frontend keys its wording off; `hint` is the
+ * backend's own English wording, used only when `reason` is one we do not know.
+ *
+ * Optional so a payload from an older backend still types.
+ */
+export interface ForecastHealthDTO {
+    /** When the snapshot was last successfully rebuilt; null when never. */
+    generatedAt: string | null;
+    isStale: boolean;
+    /** e.g. "stale_forecast". Null when healthy. */
+    reason: string | null;
+    /** Human-readable, already worded by the backend. Null when healthy. */
+    hint: string | null;
+}
+
 export interface SolarForecastDTO {
     status: ForecastStatus;
+    staleness?: ForecastHealthDTO | null;
     unit: string | null;
     resolution: ForecastResolution;
     horizonHours: number;
@@ -191,6 +213,7 @@ export interface HouseConsumptionActualHourDTO {
 
 export interface HouseConsumptionForecastDTO {
     status: ForecastStatus;
+    staleness?: ForecastHealthDTO | null;
     generatedAt: string | null;
     unit: string;
     resolution: ForecastResolution;

@@ -21,6 +21,22 @@ class _EnergyObservation:
     value_kwh: float
 
 
+@dataclass(frozen=True)
+class _UnwrapState:
+    """Where the unwrap of a resetting counter stands part-way through a series.
+
+    ``offset_kwh`` is what every later reading is lifted by, ``segment_value_kwh``
+    the running maximum reset detection compares against. Both are meaningless
+    on their own and useless apart, so they travel together.
+    """
+
+    offset_kwh: float
+    segment_value_kwh: float | None
+
+
+_INITIAL_UNWRAP_STATE = _UnwrapState(offset_kwh=0.0, segment_value_kwh=None)
+
+
 def get_local_current_slot_start(
     reference_time: datetime,
     *,
@@ -148,13 +164,19 @@ async def query_cumulative_slot_energy_changes(
     if current_state is not None:
         default_unit = current_state.attributes.get("unit_of_measurement")
 
+    # A sensor's unit does not change across its history, so once the live
+    # state has given us one the attributes join buys nothing. Without one the
+    # join is the only source of a unit, and dropping it would normalize every
+    # row to None and hand back an empty history.
+    no_attributes = default_unit is not None
+
     def _query_and_parse() -> dict[datetime, float]:
         history = state_changes_during_period(
             hass,
             utc_boundaries[0],
             utc_boundaries[-1],
             entity_id,
-            False,
+            no_attributes,
             False,
             None,
             True,
@@ -187,6 +209,219 @@ async def query_cumulative_hourly_energy_changes(
         local_end=local_end,
         interval_minutes=60,
     )
+
+
+@dataclass(frozen=True)
+class _FrozenSlotBoundaries:
+    """A day's settled boundary samples, and where to resume reading them."""
+
+    local_date: date
+    interval_minutes: int
+    frozen_through: datetime
+    samples: dict[datetime, float]
+    unwrap_state: _UnwrapState
+
+
+class TodaySlotEnergyReader:
+    """Today's per-slot energy deltas, re-reading only what is new.
+
+    A completed slot is immutable — its value is the difference between two
+    readings that are both in the past — so re-reading the day on every refresh
+    re-derives 95 known values at 23:45 to learn one. Boundary samples old
+    enough to have settled are kept and only the tail is queried again.
+
+    Two things keep this from being a plain memo of the boundary samples. The
+    unwrap that lifts a resetting counter into a monotonic series carries state
+    across the whole day, so a resumed read has to pick up where the frozen
+    prefix left off — a daily meter resets at midnight, which puts every day on
+    that path. And a drop is only known to be a reset rather than a transient
+    dip once the rebound window has passed without a rebound, so the newest
+    boundaries cannot be frozen yet.
+
+    Instances have to outlive a single refresh to be worth anything; the
+    coordinator owns one.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+        self._frozen_by_entity: dict[str, _FrozenSlotBoundaries] = {}
+
+    async def async_query_slot_energy_changes(
+        self,
+        entity_id: str,
+        reference_time: datetime,
+        *,
+        interval_minutes: int,
+    ) -> dict[datetime, float]:
+        local_day_start = _get_local_day_start(reference_time)
+        local_end = get_local_current_slot_start(
+            reference_time,
+            interval_minutes=interval_minutes,
+        )
+        local_slot_starts = _build_local_slot_starts_until(
+            local_day_start,
+            local_end,
+            interval_minutes=interval_minutes,
+        )
+        if not local_slot_starts:
+            return {}
+
+        utc_boundaries = [
+            dt_util.as_utc(boundary) for boundary in [*local_slot_starts, local_end]
+        ]
+        utc_end = utc_boundaries[-1]
+        frozen = self._take_resumable_prefix(
+            entity_id,
+            local_date=local_day_start.date(),
+            interval_minutes=interval_minutes,
+            utc_end=utc_end,
+        )
+        freeze_at = self._find_freeze_boundary(utc_boundaries, utc_end=utc_end)
+
+        query_start = frozen.frozen_through if frozen else utc_boundaries[0]
+        resume_state = frozen.unwrap_state if frozen else _INITIAL_UNWRAP_STATE
+        carried_value = frozen.samples.get(frozen.frozen_through) if frozen else None
+        pending_boundaries = [
+            boundary
+            for boundary in utc_boundaries
+            if frozen is None or boundary > frozen.frozen_through
+        ]
+
+        default_unit = None
+        current_state = self._hass.states.get(entity_id)
+        if current_state is not None:
+            default_unit = current_state.attributes.get("unit_of_measurement")
+
+        # Same conditional join as the full-day read: the unit is stable across
+        # a sensor's history, so the live state's sample makes the join
+        # redundant, and without one the join is the only source of a unit.
+        no_attributes = default_unit is not None
+
+        def _query_and_parse() -> tuple[dict[datetime, float], _UnwrapState]:
+            history = state_changes_during_period(
+                self._hass,
+                query_start,
+                utc_end,
+                entity_id,
+                no_attributes,
+                False,
+                None,
+                True,
+            )
+            states = history.get(entity_id) or history.get(entity_id.lower()) or []
+            observations = _parse_energy_observations(states, default_unit=default_unit)
+            if frozen is not None:
+                # Whatever the recorder replays at the window start is already
+                # folded into the resumed unwrap state and the carried sample.
+                observations = [
+                    observation
+                    for observation in observations
+                    if observation.updated_at > frozen.frozen_through
+                ]
+
+            unwrapped, unwrap_state = _unwrap_energy_observations(
+                observations,
+                resume_state=resume_state,
+                freeze_at=freeze_at,
+            )
+            return (
+                _sample_energy_observations_at_boundaries(
+                    unwrapped,
+                    pending_boundaries,
+                    carried_value=carried_value,
+                ),
+                unwrap_state,
+            )
+
+        pending_samples, unwrap_state = await get_instance(
+            self._hass
+        ).async_add_executor_job(_query_and_parse)
+
+        samples = {**(frozen.samples if frozen else {}), **pending_samples}
+        self._freeze(
+            entity_id,
+            local_date=local_day_start.date(),
+            interval_minutes=interval_minutes,
+            freeze_at=freeze_at,
+            previously_frozen_through=frozen.frozen_through if frozen else None,
+            samples=samples,
+            unwrap_state=unwrap_state,
+        )
+        return _build_slot_energy_changes_from_boundaries(utc_boundaries, samples)
+
+    @staticmethod
+    def _find_freeze_boundary(
+        utc_boundaries: list[datetime],
+        *,
+        utc_end: datetime,
+    ) -> datetime | None:
+        """The newest boundary whose sample can never change again.
+
+        A drop at or before it must have had the full rebound window inside the
+        queried span to be classified, and strictly inside: the recorder's end
+        bound is exclusive, so a rebound landing exactly on ``utc_end`` would be
+        invisible now and visible on the next read.
+        """
+        settled = [
+            boundary
+            for boundary in utc_boundaries
+            if boundary + _TRANSIENT_REBOUND_WINDOW < utc_end
+        ]
+        return settled[-1] if settled else None
+
+    def _take_resumable_prefix(
+        self,
+        entity_id: str,
+        *,
+        local_date: date,
+        interval_minutes: int,
+        utc_end: datetime,
+    ) -> _FrozenSlotBoundaries | None:
+        frozen = self._frozen_by_entity.get(entity_id)
+        if frozen is None:
+            return None
+
+        if (
+            frozen.local_date != local_date
+            or frozen.interval_minutes != interval_minutes
+            or frozen.frozen_through > utc_end
+        ):
+            # A new local day restarts the series, and a clock that stepped
+            # backwards leaves the prefix ahead of the window. Either way the
+            # prefix cannot be resumed and the day is read in full once.
+            del self._frozen_by_entity[entity_id]
+            return None
+
+        return frozen
+
+    def _freeze(
+        self,
+        entity_id: str,
+        *,
+        local_date: date,
+        interval_minutes: int,
+        freeze_at: datetime | None,
+        previously_frozen_through: datetime | None,
+        samples: dict[datetime, float],
+        unwrap_state: _UnwrapState,
+    ) -> None:
+        if freeze_at is None or (
+            previously_frozen_through is not None
+            and freeze_at <= previously_frozen_through
+        ):
+            return
+
+        self._frozen_by_entity[entity_id] = _FrozenSlotBoundaries(
+            local_date=local_date,
+            interval_minutes=interval_minutes,
+            frozen_through=freeze_at,
+            samples={
+                boundary: value
+                for boundary, value in samples.items()
+                if boundary <= freeze_at
+            },
+            unwrap_state=unwrap_state,
+        )
 
 
 async def query_slot_boundary_state_values(
@@ -364,6 +599,12 @@ async def _estimate_average_hourly_energy_when_entity_active(
     if current_energy_state is not None:
         default_unit = current_energy_state.attributes.get("unit_of_measurement")
 
+    # A sensor's unit does not change across its history, so once the live
+    # state has given us one the attributes join buys nothing. Without one the
+    # join is the only source of a unit, and dropping it would normalize every
+    # row to None and hand back an empty history.
+    energy_no_attributes = default_unit is not None
+
     recorder = get_instance(hass)
     entity_history = await recorder.async_add_executor_job(
         lambda: state_changes_during_period(
@@ -383,7 +624,7 @@ async def _estimate_average_hourly_energy_when_entity_active(
             utc_start,
             utc_end,
             energy_entity_id,
-            False,
+            energy_no_attributes,
             False,
             None,
             True,
@@ -473,13 +714,22 @@ def _sample_state_values_at_boundaries(
 def _sample_energy_observations_at_boundaries(
     observations: list[_EnergyObservation],
     boundaries: list[datetime],
+    *,
+    carried_value: float | None = None,
 ) -> dict[datetime, float]:
-    if not observations or not boundaries:
+    """Sample the series at each boundary, carrying the last value forward.
+
+    ``carried_value`` is the value in force before the first observation, which
+    a resumed read has from its frozen prefix. Without it a stretch of
+    boundaries with no readings between them would go unsampled here and its
+    slots would drop out of the result.
+    """
+    if not boundaries:
         return {}
 
     samples: dict[datetime, float] = {}
     observation_index = 0
-    latest_value: float | None = None
+    latest_value: float | None = carried_value
 
     for boundary in boundaries:
         while observation_index < len(observations):
@@ -763,16 +1013,31 @@ def _parse_energy_observations(
 def _build_unwrapped_energy_observations(
     observations: list[_EnergyObservation],
 ) -> list[_EnergyObservation]:
-    if not observations:
-        return []
+    unwrapped, _state = _unwrap_energy_observations(observations)
+    return unwrapped
 
+
+def _unwrap_energy_observations(
+    observations: list[_EnergyObservation],
+    *,
+    resume_state: _UnwrapState = _INITIAL_UNWRAP_STATE,
+    freeze_at: datetime | None = None,
+) -> tuple[list[_EnergyObservation], _UnwrapState]:
+    """Lift a resetting counter into a monotonic series.
+
+    ``resume_state`` continues an unwrap that was cut short earlier: the offset
+    and the running segment maximum are carried across the whole series, so a
+    window read on its own would restart both at zero and mis-read every
+    reading after a reset. The returned state is the one in force after the
+    last observation at or before ``freeze_at``, which is what a caller that
+    intends to resume from that point has to keep.
+    """
     unwrapped: list[_EnergyObservation] = []
-    offset_kwh = 0.0
-    segment_value_kwh: float | None = None
-    index = 0
+    offset_kwh = resume_state.offset_kwh
+    segment_value_kwh = resume_state.segment_value_kwh
+    frozen_state = resume_state
 
-    while index < len(observations):
-        observation = observations[index]
+    for index, observation in enumerate(observations):
         if segment_value_kwh is None:
             segment_value_kwh = max(observation.value_kwh, 0.0)
             unwrapped.append(
@@ -781,10 +1046,7 @@ def _build_unwrapped_energy_observations(
                     value_kwh=offset_kwh + segment_value_kwh,
                 )
             )
-            index += 1
-            continue
-
-        if observation.value_kwh >= segment_value_kwh - _ENERGY_TOLERANCE_KWH:
+        elif observation.value_kwh >= segment_value_kwh - _ENERGY_TOLERANCE_KWH:
             segment_value_kwh = max(segment_value_kwh, observation.value_kwh)
             unwrapped.append(
                 _EnergyObservation(
@@ -792,32 +1054,33 @@ def _build_unwrapped_energy_observations(
                     value_kwh=offset_kwh + segment_value_kwh,
                 )
             )
-            index += 1
-            continue
-
-        if _is_transient_drop(
+        elif _is_transient_drop(
             observations,
             drop_index=index,
             pre_drop_value_kwh=segment_value_kwh,
         ):
-            index += 1
-            continue
-
-        if index == len(observations) - 1:
-            index += 1
-            continue
-
-        offset_kwh += segment_value_kwh
-        segment_value_kwh = max(observation.value_kwh, 0.0)
-        unwrapped.append(
-            _EnergyObservation(
-                updated_at=observation.updated_at,
-                value_kwh=offset_kwh + segment_value_kwh,
+            # A dip that came back: drop the reading, keep the segment.
+            pass
+        elif index == len(observations) - 1:
+            # Nothing follows it yet, so a reset and a dip look the same.
+            pass
+        else:
+            offset_kwh += segment_value_kwh
+            segment_value_kwh = max(observation.value_kwh, 0.0)
+            unwrapped.append(
+                _EnergyObservation(
+                    updated_at=observation.updated_at,
+                    value_kwh=offset_kwh + segment_value_kwh,
+                )
             )
-        )
-        index += 1
 
-    return unwrapped
+        if freeze_at is not None and observation.updated_at <= freeze_at:
+            frozen_state = _UnwrapState(
+                offset_kwh=offset_kwh,
+                segment_value_kwh=segment_value_kwh,
+            )
+
+    return unwrapped, frozen_state
 
 
 def _is_transient_drop(

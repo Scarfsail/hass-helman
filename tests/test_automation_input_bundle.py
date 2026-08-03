@@ -149,6 +149,13 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     recorder_slots_mod.get_today_completed_local_slots = lambda *args, **kwargs: []
 
+    async def _query_cumulative_hourly_energy_changes(*args, **kwargs):
+        return {}
+
+    recorder_slots_mod.query_cumulative_hourly_energy_changes = (
+        _query_cumulative_hourly_energy_changes
+    )
+
     async def _estimate_average_hourly_energy_when_switch_on(*args, **kwargs):
         return None
 
@@ -168,6 +175,15 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     recorder_slots_mod.query_active_hours_by_local_date = (
         _query_active_hours_by_local_date
     )
+
+    class _TodaySlotEnergyReader:
+        def __init__(self, hass):
+            self.hass = hass
+
+        async def async_query_slot_energy_changes(self, *args, **kwargs):
+            return {}
+
+    recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
     sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
 
     schedule_mod = types.ModuleType("custom_components.helman.scheduling.schedule")
@@ -256,6 +272,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
 
     storage_mod = types.ModuleType("custom_components.helman.storage")
     storage_mod.HelmanStorage = type("HelmanStorage", (), {})
+    storage_mod.TrainingArtifactsStore = type("TrainingArtifactsStore", (), {})
     sys.modules[storage_mod.__name__] = storage_mod
 
     homeassistant_pkg = sys.modules.get("homeassistant")
@@ -356,6 +373,20 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     event_mod.async_track_time_interval = (
         lambda hass, callback, interval: lambda: None
     )
+
+    # Mirrors the real helper: fires at once when HA is already running, which
+    # is the state a test's fake hass is always in.
+    start_mod = sys.modules.get("homeassistant.helpers.start")
+    if start_mod is None:
+        start_mod = types.ModuleType("homeassistant.helpers.start")
+        sys.modules["homeassistant.helpers.start"] = start_mod
+
+    def _async_at_started(hass, at_start_cb):
+        at_start_cb(hass)
+        return lambda: None
+
+    start_mod.async_at_started = _async_at_started
+    helpers_pkg.start = start_mod
 
     entity_registry_mod = sys.modules.get("homeassistant.helpers.entity_registry")
     if entity_registry_mod is None:
@@ -492,15 +523,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        builder_instance = SimpleNamespace(
-            build=AsyncMock(return_value=_make_raw_forecast_result())
-        )
         with (
-            patch.object(
-                coordinator_module,
-                "HelmanForecastBuilder",
-                return_value=builder_instance,
-            ),
             patch.object(
                 coordinator,
                 "_async_resolve_when_active_hourly_energy_kwh_by_appliance_id",
@@ -525,6 +548,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             await coordinator._async_refresh_automation_input_bundle(
                 reference_time=REFERENCE_TIME,
                 house_forecast=house_forecast,
+                raw_forecast=_make_raw_forecast_result(),
             )
 
         self.assertEqual(
@@ -713,18 +737,18 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator._automation_input_bundle = previous_bundle
 
-        builder_instance = SimpleNamespace(build=AsyncMock(side_effect=RuntimeError()))
         with (
             patch.object(
-                coordinator_module,
-                "HelmanForecastBuilder",
-                return_value=builder_instance,
+                coordinator,
+                "_async_resolve_when_active_hourly_energy_kwh_by_appliance_id",
+                AsyncMock(side_effect=RuntimeError()),
             ),
             patch.object(coordinator_module._LOGGER, "exception"),
         ):
             refreshed = await coordinator._async_refresh_automation_input_bundle(
                 reference_time=REFERENCE_TIME,
                 house_forecast=_make_house_forecast(),
+                raw_forecast=_make_raw_forecast_result(),
             )
 
         self.assertFalse(refreshed)
@@ -738,8 +762,12 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._invalidate_battery_forecast_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
         coordinator._cached_forecast = None
+        coordinator._house_profile = None
+        coordinator._house_profile_trained_at = None
+        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._cached_solar_forecast = None
         coordinator._solar_forecast_sensors = []
+        coordinator._slot_history = None
 
         snapshot = _make_house_forecast()
         solar_snapshot = {
@@ -751,15 +779,23 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             "rawPoints": [],
         }
         builder_instance = SimpleNamespace(build=AsyncMock(return_value=snapshot))
-        coordinator._async_build_canonical_solar_forecast = AsyncMock(
-            return_value=solar_snapshot
-        )
-        with patch.object(
-            coordinator_module,
-            "ConsumptionForecastBuilder",
-            return_value=builder_instance,
+        coordinator._build_canonical_solar_forecast = Mock(return_value=solar_snapshot)
+        raw_forecast = _make_raw_forecast_result()
+        with (
+            patch.object(
+                coordinator_module,
+                "ConsumptionForecastBuilder",
+                return_value=builder_instance,
+            ),
+            patch.object(
+                coordinator_module,
+                "HelmanForecastBuilder",
+                return_value=SimpleNamespace(
+                    build=AsyncMock(return_value=raw_forecast)
+                ),
+            ),
         ):
-            refresh_result = await coordinator._async_refresh_forecast(
+            refresh_result = await coordinator._async_build_forecast_snapshots(
                 reference_time=REFERENCE_TIME
             )
 
@@ -779,6 +815,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._async_refresh_automation_input_bundle.assert_awaited_once_with(
             reference_time=REFERENCE_TIME,
             house_forecast=snapshot,
+            raw_forecast=raw_forecast,
         )
 
 
