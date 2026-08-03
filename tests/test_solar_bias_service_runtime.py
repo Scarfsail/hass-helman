@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import inspect
 import sys
 import types
 from pathlib import Path
@@ -66,7 +65,6 @@ sys.modules[forecast_history_mod.__name__] = forecast_history_mod
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
 service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
-scheduler_mod = importlib.import_module("custom_components.helman.solar_bias_correction.scheduler")
 
 
 class _DummyStore:
@@ -706,41 +704,6 @@ def test_async_train_uses_configured_max_training_window_days_for_actuals():
         assert payload["usableDays"] == 12
 
     asyncio.run(_inner())
-
-
-def test_scheduler_registers_sync_callback_that_schedules_training():
-    captured: dict[str, object] = {}
-
-    async def _training_callback():
-        captured["ran"] = True
-
-    def _track_time_change(hass, callback, **kwargs):
-        captured["callback"] = callback
-        captured["kwargs"] = kwargs
-        return lambda: None
-
-    scheduler_mod.async_track_time_change = _track_time_change
-
-    created = []
-
-    def _create_task(coro):
-        created.append(coro)
-        return SimpleNamespace()
-
-    scheduler = scheduler_mod.SolarBiasTrainingScheduler(
-        SimpleNamespace(async_create_task=_create_task),
-        _training_callback,
-    )
-
-    scheduler.schedule("03:15")
-
-    callback = captured["callback"]
-    assert not inspect.iscoroutinefunction(callback)
-
-    callback(None)
-    assert len(created) == 1
-    asyncio.run(created[0])
-    assert captured["ran"] is True
 
 
 def test_async_train_save_failure_keeps_previous_profile_active():

@@ -41,6 +41,8 @@ async function renderBanner(
         el.localize = (key: string) =>
             ({
                 "forecast_health.reason.stale_forecast": "has not refreshed for over an hour",
+                "forecast_health.reason.house_profile_training_failed":
+                    "could not be retrained — check the Home Assistant log",
                 "forecast_health.reason.unknown": "reported a problem",
                 "forecast_health.age.minutes": "min ago",
                 "forecast_health.age.hours": "h ago",
@@ -132,5 +134,24 @@ test.describe("helman-forecast-health-banner", () => {
 
         expect(text).toContain("No trained bias profile yet.");
         expect(text).toContain("never built");
+    });
+
+    test("a house profile that failed to refit is localized, not shown as its hint", async ({ page }) => {
+        // The refit failing is the case that needs the user: the snapshot
+        // itself is minutes old, so the age rule would have said nothing.
+        const text = await renderBanner(page, [
+            {
+                label: "House consumption forecast",
+                health: {
+                    generatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+                    isStale: true,
+                    reason: "house_profile_training_failed",
+                    hint: "House consumption profile training failed. Check the Home Assistant log.",
+                },
+            },
+        ]);
+
+        expect(text).toContain("could not be retrained");
+        expect(text).not.toContain("Check the Home Assistant log.");
     });
 });

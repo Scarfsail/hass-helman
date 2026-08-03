@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.components.energy import data as energy_data
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_track_time_change,
@@ -93,6 +94,10 @@ from .const import (
     SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
+from .consumption_forecast_profiles import (
+    HouseConsumptionProfile,
+    profile_from_dict,
+)
 from .forecast_aggregation import get_forecast_resolution
 from .forecast_builder import HelmanForecastBuilder
 from .forecast_request import ensure_supported_forecast_request
@@ -151,9 +156,13 @@ from .scheduling.schedule_executor import (
     ScheduleExecutorDependencies,
 )
 from .solar_bias_correction.models import read_bias_config
-from .solar_bias_correction.scheduler import SolarBiasTrainingScheduler
 from .solar_bias_correction.service import SolarBiasCorrectionService
-from .storage import HelmanStorage
+from .storage import HelmanStorage, TrainingArtifactsStore
+from .training.batch import TrainingBatch
+from .training.house_consumption import (
+    HouseConsumptionTrainingJob,
+    HouseTrainingRequest,
+)
 from .tree_builder import HelmanTreeBuilder
 
 _LOGGER = logging.getLogger(__name__)
@@ -168,6 +177,10 @@ _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
 # How far back the unmeasured remainder looks when smoothing away meter skew.
 # See _smooth_unmeasured for why the raw remainder cannot be published as-is.
 _UNMEASURED_SMOOTHING_WINDOW_S = 15.0
+# When a stored house consumption profile is due for a refit. Long on purpose:
+# the batch runs nightly, so anything under two days is a slipped timer rather
+# than a fault, and the profile keeps being served either way.
+_HOUSE_PROFILE_STALE_AFTER_SECONDS = 48 * 3600
 _FORECAST_STALE_HINT = (
     "Forecast data has not been rebuilt for over an hour. "
     "Check the Home Assistant log for forecast refresh errors."
@@ -198,6 +211,7 @@ def _build_forecast_staleness(
     generated_at: Any,
     *,
     reference_time: datetime,
+    override: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Forecast health for the card's banner.
 
@@ -206,10 +220,23 @@ def _build_forecast_staleness(
     warning. So every payload carries when it was last rebuilt and says for
     itself whether that is long enough ago to be a fault. ``reason`` is a
     stable machine string; ``hint`` is what the banner shows.
+
+    ``override`` is a ``(reason, hint)`` pair that wins outright: the snapshot
+    itself can be minutes old and still be built on a model that failed to
+    refit, and that is the fault the user needs told about. Age remains the
+    rule for everything with no such story of its own.
     """
     generated_at_dt = (
         dt_util.parse_datetime(generated_at) if isinstance(generated_at, str) else None
     )
+    if override is not None:
+        reason, hint = override
+        return {
+            "generatedAt": generated_at_dt.isoformat() if generated_at_dt else None,
+            "isStale": True,
+            "reason": reason,
+            "hint": hint,
+        }
     is_stale = (
         generated_at_dt is None
         or (
@@ -223,6 +250,39 @@ def _build_forecast_staleness(
         "reason": "stale_forecast" if is_stale else None,
         "hint": _FORECAST_STALE_HINT if is_stale else None,
     }
+
+
+def _build_house_profile_health(snapshot: dict[str, Any]) -> tuple[str, str] | None:
+    """The banner's ``(reason, hint)`` for a house profile that failed to refit.
+
+    A profile trained nightly is at most ~24 h old, and past 48 h we keep
+    serving it and refit in the background — a merely slipped timer is no
+    user-visible event. Only a refit that failed or could not run gets a
+    banner, because only that one needs the user. ``reason`` is localized by
+    the card; the numbers stay in ``hint``, which the card falls back to,
+    because ``localize`` takes no interpolation parameters.
+    """
+    last_outcome = snapshot.get("lastOutcome")
+    if last_outcome == "insufficient_history":
+        return (
+            "house_profile_insufficient_history",
+            "Not enough recorder history to fit a house consumption profile: "
+            f"{snapshot.get('historyDaysAvailable')} days available, "
+            f"{snapshot.get('requiredHistoryDays')} required.",
+        )
+    if last_outcome == "entity_missing":
+        return (
+            "house_profile_entity_missing",
+            "The configured house total energy entity no longer exists; "
+            "the house consumption profile cannot be refitted.",
+        )
+    if last_outcome == "training_failed":
+        return (
+            "house_profile_training_failed",
+            "House consumption profile training failed. Check the Home "
+            "Assistant log.",
+        )
+    return None
 
 
 def _iter_local_dates(start: date, end: date) -> list[date]:
@@ -458,7 +518,14 @@ class HelmanCoordinator:
         self._appliances_registry = AppliancesRuntimeRegistry()
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
-        self._solar_bias_scheduler: SolarBiasTrainingScheduler | None = None
+        self._training_artifacts_store: TrainingArtifactsStore | None = None
+        self._training_batch: TrainingBatch | None = None
+        # The fitted house consumption model the forecast is assembled from,
+        # adopted from the training artifacts store at startup and replaced
+        # whenever the nightly batch refits it. None means "nothing to serve".
+        self._house_profile: HouseConsumptionProfile | None = None
+        self._house_profile_trained_at: str | None = None
+        self._house_profile_last_outcome: str = "no_training_yet"
         # The rebuild currently in flight, if any, so a second trigger joins it
         # instead of starting its own 56-day recorder scan.
         self._forecast_refresh_task: asyncio.Task[Any] | None = None
@@ -614,19 +681,28 @@ class HelmanCoordinator:
             ),
         )
         await self._solar_bias_service.async_setup()
-        if bias_config.enabled:
-            self._solar_bias_scheduler = SolarBiasTrainingScheduler(
+        self._training_artifacts_store = TrainingArtifactsStore(self._hass)
+        await self._training_artifacts_store.async_load()
+        # Unconditionally, outside any bias enable gate: with bias correction
+        # off, a gated batch would never fit the house consumption profile and
+        # the house forecast would sit at unavailable forever.
+        self._training_batch = TrainingBatch(
+            self._hass,
+            solar_bias_service=self._solar_bias_service,
+            house_consumption_job=HouseConsumptionTrainingJob(
                 self._hass,
-                self._solar_bias_service.async_train,
+                self._training_artifacts_store,
+                read_request=self._read_house_training_request,
+                on_trained=self._async_on_house_profile_trained,
+            ),
+        )
+        try:
+            self._training_batch.schedule(bias_config.training_time)
+        except ValueError:
+            _LOGGER.warning(
+                "Nightly training batch not scheduled due to invalid training time: %s",
+                bias_config.training_time,
             )
-            try:
-                self._solar_bias_scheduler.schedule(bias_config.training_time)
-            except ValueError:
-                _LOGGER.warning(
-                    "Solar bias training scheduler not started due to invalid training time: %s",
-                    bias_config.training_time,
-                )
-                self._solar_bias_scheduler = None
         self._appliances_registry = build_appliances_runtime_registry(
             self._active_config,
             logger=_LOGGER,
@@ -692,6 +768,16 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         ):
             self._cached_forecast = None
+        # The house profile is loaded against the very same fingerprint, so the
+        # profile and the snapshot can never disagree about what is stale.
+        # A config save is a restart (ws_save_config -> async_reload ->
+        # async_setup), which is why this one path covers startup and config
+        # save both, and why there is no config-save handler anywhere.
+        refit_reason = self._adopt_stored_house_profile(
+            config_fingerprint=config_fingerprint
+        )
+        if refit_reason is not None:
+            self._schedule_house_profile_refit(refit_reason)
         reference_time = dt_util.now()
         self._start_forecast_refresh()
 
@@ -912,6 +998,121 @@ class HelmanCoordinator:
             config_fingerprint,
         )
 
+    def _read_house_training_request(self) -> HouseTrainingRequest:
+        """What the house consumption fit should answer, read live per run."""
+        (
+            total_energy_entity_id,
+            training_window_days,
+            min_history_days,
+            config_fingerprint,
+        ) = self._read_house_forecast_config()
+        return HouseTrainingRequest(
+            total_energy_entity_id=total_energy_entity_id,
+            training_window_days=training_window_days,
+            min_history_days=min_history_days,
+            consumers_config=self._get_house_deferrable_consumers(),
+            config_fingerprint=config_fingerprint,
+        )
+
+    def _adopt_stored_house_profile(self, *, config_fingerprint: str) -> str | None:
+        """Adopt the stored house profile; return why a refit is due, or None.
+
+        Three cases, and they are not the same case:
+
+        * missing (or unreadable) — nothing to serve, refit;
+        * fingerprint-stale — the stored profile answers a question the user
+          has since changed, so it is blanked to make the change visible;
+        * older than 48 h — keep serving it, a 56-day fit does not become
+          wrong because it missed a night, and refit in the background.
+        """
+        self._house_profile = None
+        self._house_profile_trained_at = None
+        self._house_profile_last_outcome = "no_training_yet"
+
+        store = self._training_artifacts_store
+        section = store.house_consumption if store is not None else None
+        if section is None:
+            return "no_stored_profile"
+
+        last_outcome = section.get("last_outcome")
+        if isinstance(last_outcome, str):
+            self._house_profile_last_outcome = last_outcome
+
+        if section.get("fingerprint") != config_fingerprint:
+            return "config_changed"
+
+        profile = profile_from_dict(section.get("data"))
+        if profile is None:
+            return "unreadable_profile"
+
+        self._house_profile = profile
+        trained_at = section.get("trained_at")
+        self._house_profile_trained_at = (
+            trained_at if isinstance(trained_at, str) else None
+        )
+        if self._is_house_profile_expired(self._house_profile_trained_at):
+            return "profile_expired"
+        return None
+
+    def _schedule_house_profile_refit(self, reason: str) -> None:
+        """Refit the house profile once Home Assistant has finished starting.
+
+        Deferred rather than run here. The fit reads the house energy entity,
+        and on a cold start that entity's own integration may not have
+        registered it yet — the job would see ``hass.states.get()`` return
+        ``None``, record ``entity_missing``, and leave the house forecast
+        unavailable until the next nightly run. Observed in practice: the
+        entity appeared about eighty seconds after setup.
+
+        When Home Assistant is already running — a config save reloads the
+        entry — ``async_at_started`` fires immediately, so **G3** is unaffected.
+
+        Never awaited either way: startup must not block on a multi-day
+        recorder read, and the batch's single flight keeps this from colliding
+        with the nightly run.
+        """
+        if self._training_batch is None:
+            return
+
+        @callback
+        def _start_house_refit(_hass: HomeAssistant) -> None:
+            if self._training_batch is None:
+                return
+            self._create_tracked_refresh_task(
+                self._training_batch.async_run_house_consumption(reason=reason)
+            )
+
+        self._unsub_listeners.append(
+            async_at_started(self._hass, _start_house_refit)
+        )
+
+    @staticmethod
+    def _is_house_profile_expired(trained_at: str | None) -> bool:
+        trained_at_dt = (
+            dt_util.parse_datetime(trained_at) if isinstance(trained_at, str) else None
+        )
+        if trained_at_dt is None:
+            return True
+        age = (
+            dt_util.as_utc(dt_util.now()) - dt_util.as_utc(trained_at_dt)
+        ).total_seconds()
+        return age > _HOUSE_PROFILE_STALE_AFTER_SECONDS
+
+    async def _async_on_house_profile_trained(self) -> None:
+        """Adopt what the training job just wrote, then rebuild at once.
+
+        Re-read from the store rather than handed the profile directly: the
+        store is where the preserve-the-previous-fit-on-failure rule lives, so
+        reading it back is the only way the in-memory state agrees with what a
+        failed refit decided. Rebuilding here is what makes a fresh profile
+        show up immediately instead of at the next quarter hour.
+        """
+        (_entity_id, _window, _min_days, config_fingerprint) = (
+            self._read_house_forecast_config()
+        )
+        self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
+        await self._async_refresh_forecast(reason="house_profile_trained")
+
     def _has_matching_forecast_snapshot(
         self,
         *,
@@ -1084,6 +1285,7 @@ class HelmanCoordinator:
         result["house_consumption"]["staleness"] = _build_forecast_staleness(
             canonical_house_forecast.get("generatedAt"),
             reference_time=request_now,
+            override=_build_house_profile_health(canonical_house_forecast),
         )
         canonical_battery_forecast = pipeline.battery_forecast
         grid_price_response = build_grid_price_forecast_response(
@@ -1166,6 +1368,8 @@ class HelmanCoordinator:
             source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=MAX_FORECAST_DAYS,
             alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
+            trained_at=self._house_profile_trained_at,
+            last_outcome=self._house_profile_last_outcome,
         )
 
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
@@ -1957,6 +2161,9 @@ class HelmanCoordinator:
             builder = ConsumptionForecastBuilder(self._hass, self._active_config)
             house_snapshot = await builder.build(
                 reference_time=request_now,
+                profile=self._house_profile,
+                trained_at=self._house_profile_trained_at,
+                last_outcome=self._house_profile_last_outcome,
                 forecast_days=MAX_FORECAST_DAYS,
                 padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
             )
@@ -3948,10 +4155,10 @@ class HelmanCoordinator:
         self._stop_tick()
         self._stop_forecast_refresh()
         await self._async_cancel_refresh_tasks()
-        solar_bias_scheduler = getattr(self, "_solar_bias_scheduler", None)
-        if solar_bias_scheduler is not None:
-            solar_bias_scheduler.cancel()
-            self._solar_bias_scheduler = None
+        training_batch = getattr(self, "_training_batch", None)
+        if training_batch is not None:
+            training_batch.cancel()
+            self._training_batch = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()

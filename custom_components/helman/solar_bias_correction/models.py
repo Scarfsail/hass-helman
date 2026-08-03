@@ -457,7 +457,13 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
             "training_window_days", SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
         ),
     )
-    training_time = bias.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
+    # Top-level since v6 — the schedule drives the whole nightly training
+    # batch. The retired bias key still wins when present so a document the
+    # migration has not touched yet keeps its authored time.
+    training_time = bias.get(
+        "training_time",
+        config.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME),
+    )
     clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
     clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
     raw_min_valid_slot_days = bias.get(

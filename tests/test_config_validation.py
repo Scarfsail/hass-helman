@@ -488,6 +488,39 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertEqual(report.errors[0].path, "device_label_text.rooms.Kitchen")
 
+    def test_training_time_valid_for_hhmm(self) -> None:
+        config = _valid_config()
+        config["training_time"] = "03:00"
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+
+    def test_training_time_invalid_for_bad_string(self) -> None:
+        config = _valid_config()
+        config["training_time"] = "3am"
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(issue.path == "training_time" for issue in report.errors)
+        )
+
+    def test_training_time_invalid_for_out_of_range_time(self) -> None:
+        config = _valid_config()
+        config["training_time"] = "25:00"
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "training_time" and issue.code == "invalid_value"
+                for issue in report.errors
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

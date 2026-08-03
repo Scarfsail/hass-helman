@@ -757,6 +757,9 @@
     },
     "reason": {
       "stale_forecast": "se neobnovila déle než hodinu — obnovovací smyčka je pravděpodobně rozbitá",
+      "house_profile_insufficient_history": "zatím nemá dost historie v rekordéru na sestavení profilu spotřeby",
+      "house_profile_entity_missing": "nelze přetrénovat — nastavená entita spotřeby domu už neexistuje",
+      "house_profile_training_failed": "se nepodařilo přetrénovat — zkontrolujte log Home Assistanta",
       "unknown": "hlásí problém"
     },
     "age": {

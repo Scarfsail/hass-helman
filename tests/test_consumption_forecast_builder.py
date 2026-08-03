@@ -192,28 +192,19 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_build_reports_insufficient_history_below_the_minimum(self) -> None:
-        """Three days of rows against a 14-day minimum: no model, no series."""
+        """A profile fitted from three days against a 14-day minimum: no model,
+        no series."""
         consumption_module, recorder_module, builder = self._make_builder()
-        hourly_rows = [
-            {
-                "start": datetime(2026, 3, 17, 10, 0, tzinfo=UTC).timestamp(),
-                "change": 1.0,
-            }
-        ]
+        profile = consumption_module.HouseConsumptionProfile(
+            schema_version=1,
+            history_days=3,
+            non_deferrable=[consumption_module.ForecastBand(1.0, 1.0, 1.0)] * 168,
+            consumers={},
+        )
 
         with (
             patch.object(consumption_module, "dt_util", _FakeDtUtil),
             patch.object(recorder_module, "dt_util", _FakeDtUtil),
-            patch.object(
-                builder,
-                "_query_hourly_history",
-                AsyncMock(return_value=hourly_rows),
-            ),
-            patch.object(
-                builder,
-                "_query_consumer_histories",
-                AsyncMock(return_value=[]),
-            ),
             patch.object(
                 builder,
                 "_build_actual_history",
@@ -222,6 +213,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         ):
             payload = await builder.build(
                 reference_time=REFERENCE_TIME,
+                profile=profile,
                 forecast_days=1,
             )
 
@@ -231,6 +223,86 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(payload["model"])
         self.assertEqual(payload["series"], [])
         self.assertNotIn("currentSlot", payload)
+
+    async def test_build_without_a_profile_is_unavailable_and_queries_nothing(
+        self,
+    ) -> None:
+        """The whole point of the nightly batch: a build with no profile must
+        not reach for the recorder at all, let alone for a training window."""
+        consumption_module, recorder_module, builder = self._make_builder()
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(
+                consumption_module,
+                "query_slot_energy_changes",
+                AsyncMock(side_effect=AssertionError("no recorder query expected")),
+            ),
+        ):
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=None,
+                forecast_days=1,
+            )
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["series"], [])
+
+    async def test_build_issues_no_multi_day_recorder_query(self) -> None:
+        """Job #4's acceptance criterion: only today-scoped queries remain."""
+        consumption_module, recorder_module, builder = self._make_builder()
+        queried_ranges: list[tuple] = []
+
+        async def _fake_slot_query(_hass, entity_id, reference_time, **_kwargs):
+            queried_ranges.append((entity_id, reference_time))
+            return {}
+
+        self.assertFalse(
+            hasattr(builder, "_query_hourly_history"),
+            "the multi-day query belongs to the training job, not the builder",
+        )
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(
+                consumption_module, "query_slot_energy_changes", _fake_slot_query
+            ),
+        ):
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=self._flat_profile(consumption_module),
+                forecast_days=1,
+            )
+
+        self.assertEqual(payload["status"], "available")
+        # Both queries are the today-scoped slot query, one per entity.
+        self.assertEqual(
+            [entity_id for entity_id, _ in queried_ranges],
+            ["sensor.house_total", "sensor.washer_energy"],
+        )
+
+    async def test_build_carries_the_training_metadata_into_the_payload(self) -> None:
+        consumption_module, recorder_module, builder = self._make_builder()
+
+        with (
+            patch.object(consumption_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(
+                builder, "_build_actual_history", AsyncMock(return_value=[])
+            ),
+        ):
+            payload = await builder.build(
+                reference_time=REFERENCE_TIME,
+                profile=self._flat_profile(consumption_module),
+                trained_at="2026-03-20T03:00:00+01:00",
+                last_outcome="profile_trained",
+                forecast_days=1,
+            )
+
+        self.assertEqual(payload["trainedAt"], "2026-03-20T03:00:00+01:00")
+        self.assertEqual(payload["lastOutcome"], "profile_trained")
 
     def test_assemble_one_day_series_is_canonical_quarter_hour(self) -> None:
         payload = self._assemble_payload(

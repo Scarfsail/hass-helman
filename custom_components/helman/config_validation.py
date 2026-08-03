@@ -144,6 +144,34 @@ def _validate_general_config(
                     message=f"power_sensor_name_cleaner_regex is invalid: {err}",
                 )
 
+    # training_time: HH:MM local-time string. Top-level since v6 — it schedules
+    # the whole nightly training batch, not just solar bias training.
+    training_time = config.get("training_time")
+    if training_time is not None:
+        if not _is_non_empty_string(training_time):
+            report.add_error(
+                section=section,
+                path="training_time",
+                code="invalid_type",
+                message="training_time must be an HH:MM string",
+            )
+        else:
+            match = re.match(r"^(\d{2}):(\d{2})$", training_time.strip())
+            if not match:
+                report.add_error(
+                    section=section,
+                    path="training_time",
+                    code="invalid_format",
+                    message="training_time must be an HH:MM string",
+                )
+            elif not (0 <= int(match.group(1)) <= 23 and 0 <= int(match.group(2)) <= 59):
+                report.add_error(
+                    section=section,
+                    path="training_time",
+                    code="invalid_value",
+                    message="training_time must be a valid time",
+                )
+
     device_label_text = config.get("device_label_text")
     if device_label_text is not None:
         _validate_device_label_text(device_label_text, report)
@@ -372,37 +400,6 @@ def _validate_solar_config(
                 code="invalid_range",
                 message=f"{base_path}.training_window_days must be an integer between 1 and 365",
             )
-
-    # training_time: HH:MM local-time string
-    training_time = bias_map.get("training_time")
-    if training_time is not None:
-        if not _is_non_empty_string(training_time):
-            report.add_error(
-                section=section,
-                path=f"{base_path}.training_time",
-                code="invalid_type",
-                message=f"{base_path}.training_time must be an HH:MM string",
-            )
-        else:
-            tt = training_time.strip()
-            m = re.match(r"^(\d{2}):(\d{2})$", tt)
-            if not m:
-                report.add_error(
-                    section=section,
-                    path=f"{base_path}.training_time",
-                    code="invalid_format",
-                    message=f"{base_path}.training_time must be an HH:MM string",
-                )
-            else:
-                hh = int(m.group(1))
-                mm = int(m.group(2))
-                if not (0 <= hh <= 23 and 0 <= mm <= 59):
-                    report.add_error(
-                        section=section,
-                        path=f"{base_path}.training_time",
-                        code="invalid_value",
-                        message=f"{base_path}.training_time must be a valid time",
-                    )
 
     min_valid_slot_days = bias_map.get("min_valid_slot_days")
     if min_valid_slot_days is not None:

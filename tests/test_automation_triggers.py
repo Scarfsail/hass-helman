@@ -116,6 +116,13 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     )
     recorder_slots_mod.get_today_completed_local_hours = lambda *args, **kwargs: []
     recorder_slots_mod.get_today_completed_local_slots = lambda *args, **kwargs: []
+
+    async def _query_cumulative_hourly_energy_changes(*args, **kwargs):
+        return {}
+
+    recorder_slots_mod.query_cumulative_hourly_energy_changes = (
+        _query_cumulative_hourly_energy_changes
+    )
     recorder_slots_mod.query_slot_boundary_state_values = (
         lambda *args, **kwargs: {}
     )
@@ -203,6 +210,20 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         event_mod.async_track_time_interval = (
             lambda hass, callback, interval: lambda: None
         )
+
+        # Mirrors the real helper: fires at once when HA is already running, which
+        # is the state a test's fake hass is always in.
+        start_mod = sys.modules.get("homeassistant.helpers.start")
+        if start_mod is None:
+            start_mod = types.ModuleType("homeassistant.helpers.start")
+            sys.modules["homeassistant.helpers.start"] = start_mod
+
+        def _async_at_started(hass, at_start_cb):
+            at_start_cb(hass)
+            return lambda: None
+
+        start_mod.async_at_started = _async_at_started
+        helpers_pkg.start = start_mod
 
         storage_mod = sys.modules.get("homeassistant.helpers.storage")
         if storage_mod is None:

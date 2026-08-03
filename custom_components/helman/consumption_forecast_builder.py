@@ -23,19 +23,14 @@ from .const import (
 from .consumption_forecast_profiles import (
     NEGATIVE_RESIDUAL_THRESHOLD,
     ZERO_BAND,
-    ConsumerHistoryData,
     HouseConsumptionProfile,
     HourOfWeekWinsorizedMeanProfile,
-    fit_house_profile,
-    rows_to_dict,
 )
 from .consumption_forecast_statistics import ForecastBand
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import (
     get_local_current_slot_start,
-    get_today_completed_local_hours,
     get_today_completed_local_slots,
-    query_cumulative_hourly_energy_changes,
     query_slot_energy_changes,
 )
 
@@ -72,9 +67,20 @@ class ConsumptionForecastBuilder:
         self,
         reference_time: datetime | None = None,
         *,
+        profile: HouseConsumptionProfile | None,
+        trained_at: str | None = None,
+        last_outcome: str | None = None,
         forecast_days: int = MAX_FORECAST_DAYS,
         padding_slots: int = 0,
     ) -> dict[str, Any]:
+        """Assemble the payload from an already-fitted profile.
+
+        Profile-driven on purpose: the multi-day fit belongs to the nightly
+        training batch, and this runs four times an hour. Without a profile the
+        answer is ``unavailable`` — never a fit here, which is the 56-day
+        recorder scan this path exists to be rid of. The only queries left are
+        today-scoped.
+        """
         power_devices = self._read_dict(self._config.get("power_devices"))
         house_config = self._read_dict(power_devices.get("house"))
         forecast_config = self._read_dict(house_config.get("forecast"))
@@ -106,9 +112,11 @@ class ConsumptionForecastBuilder:
         horizon_hours = forecast_days * 24
         alignment_padding_slots = max(0, padding_slots)
 
-        if total_energy_entity_id is None:
+        if total_energy_entity_id is None or profile is None:
             return self._make_payload(
-                status="not_configured",
+                status="not_configured"
+                if total_energy_entity_id is None
+                else "unavailable",
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
@@ -117,37 +125,9 @@ class ConsumptionForecastBuilder:
                 source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
                 forecast_days_available=forecast_days,
                 alignment_padding_slots=alignment_padding_slots,
+                trained_at=trained_at,
+                last_outcome=last_outcome,
             )
-
-        # Query house total hourly history
-        try:
-            house_rows = await self._query_hourly_history(
-                total_energy_entity_id,
-                training_window_days,
-                reference_time=local_now,
-            )
-        except Exception:
-            _LOGGER.exception(
-                "Failed to query Recorder statistics for %s",
-                total_energy_entity_id,
-            )
-            return self._make_payload(
-                status="unavailable",
-                training_window_days=training_window_days,
-                min_history_days=min_history_days,
-                config_fingerprint=config_fingerprint,
-                resolution=canonical_resolution,
-                horizon_hours=horizon_hours,
-                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
-                forecast_days_available=forecast_days,
-                alignment_padding_slots=alignment_padding_slots,
-            )
-
-        consumer_histories = await self._query_consumer_histories(
-            consumers_config,
-            training_window_days,
-            reference_time=local_now,
-        )
 
         actual_history = await self._build_actual_history(
             total_energy_entity_id=total_energy_entity_id,
@@ -155,15 +135,13 @@ class ConsumptionForecastBuilder:
             reference_time=local_now,
         )
 
-        # The remaining work -- fitting the hour-of-week profiles over the full
-        # training window and assembling the forecast series across the whole
-        # horizon -- is pure CPU with no I/O. Run it in the executor so it never
-        # blocks the event loop; this build runs on every slot-aligned refresh.
+        # Assembling the forecast series across the whole horizon is pure CPU
+        # with no I/O. Run it in the executor so it never blocks the event loop;
+        # this build runs on every slot-aligned refresh.
         return await self._hass.async_add_executor_job(
             functools.partial(
-                self._fit_and_assemble,
-                house_rows=house_rows,
-                consumer_histories=consumer_histories,
+                self.assemble,
+                profile,
                 actual_history=actual_history,
                 consumers_config=consumers_config,
                 local_now=local_now,
@@ -174,47 +152,9 @@ class ConsumptionForecastBuilder:
                 config_fingerprint=config_fingerprint,
                 canonical_resolution=canonical_resolution,
                 horizon_hours=horizon_hours,
+                trained_at=trained_at,
+                last_outcome=last_outcome,
             )
-        )
-
-    def _fit_and_assemble(
-        self,
-        *,
-        house_rows: list[dict],
-        consumer_histories: list[ConsumerHistoryData],
-        actual_history: list[dict[str, Any]],
-        consumers_config: list[dict[str, Any]],
-        local_now: datetime,
-        forecast_days: int,
-        alignment_padding_slots: int,
-        training_window_days: int,
-        min_history_days: int,
-        config_fingerprint: str,
-        canonical_resolution: Any,
-        horizon_hours: int,
-    ) -> dict[str, Any]:
-        """Fit and assemble in a single executor hop.
-
-        Both halves are pure CPU; they are separate so that the fit can later
-        move to its own schedule, but this build still runs them back to back.
-        """
-        profile = fit_house_profile(
-            house_rows,
-            consumer_histories,
-            today_local=local_now.date(),
-        )
-        return self.assemble(
-            profile,
-            local_now=local_now,
-            consumers_config=consumers_config,
-            actual_history=actual_history,
-            forecast_days=forecast_days,
-            alignment_padding_slots=alignment_padding_slots,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
-            canonical_resolution=canonical_resolution,
-            horizon_hours=horizon_hours,
         )
 
     def assemble(
@@ -231,6 +171,8 @@ class ConsumptionForecastBuilder:
         config_fingerprint: str,
         canonical_resolution: Any,
         horizon_hours: int,
+        trained_at: str | None = None,
+        last_outcome: str | None = None,
     ) -> dict[str, Any]:
         """Assemble the forecast payload from an already-fitted profile.
 
@@ -255,6 +197,8 @@ class ConsumptionForecastBuilder:
                 source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
                 forecast_days_available=forecast_days,
                 alignment_padding_slots=alignment_padding_slots,
+                trained_at=trained_at,
+                last_outcome=last_outcome,
             )
 
         # A consumer the profile never saw forecasts zero rather than raising:
@@ -308,49 +252,9 @@ class ConsumptionForecastBuilder:
             source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=forecast_days,
             alignment_padding_slots=alignment_padding_slots,
+            trained_at=trained_at,
+            last_outcome=last_outcome,
         )
-
-    async def _query_consumer_histories(
-        self,
-        consumers_config: list[dict[str, Any]],
-        training_window_days: int,
-        *,
-        reference_time: datetime,
-    ) -> list[ConsumerHistoryData]:
-        consumer_histories: list[ConsumerHistoryData] = []
-        for consumer in consumers_config:
-            entity_id = consumer["energy_entity_id"]
-            try:
-                rows = await self._query_hourly_history(
-                    entity_id,
-                    training_window_days,
-                    reference_time=reference_time,
-                )
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to query history for deferrable consumer %s, using empty",
-                    entity_id,
-                )
-                consumer_histories.append(
-                    ConsumerHistoryData(
-                        entity_id=entity_id,
-                        label=consumer["label"],
-                        values_by_ts={},
-                        query_succeeded=False,
-                    )
-                )
-                continue
-
-            consumer_histories.append(
-                ConsumerHistoryData(
-                    entity_id=entity_id,
-                    label=consumer["label"],
-                    values_by_ts=rows_to_dict(rows),
-                    query_succeeded=True,
-                )
-            )
-
-        return consumer_histories
 
     async def _build_actual_history(
         self,
@@ -511,34 +415,6 @@ class ConsumptionForecastBuilder:
 
         return consumer_histories
 
-    async def _query_hourly_history(
-        self,
-        entity_id: str,
-        training_window_days: int,
-        *,
-        reference_time: datetime,
-    ) -> list[dict]:
-        """Query Recorder-backed hourly cumulative deltas and return raw rows."""
-        local_current_hour = reference_time.replace(
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        local_midnight = local_current_hour.replace(hour=0)
-        values_by_hour = await query_cumulative_hourly_energy_changes(
-            self._hass,
-            entity_id,
-            local_start=local_midnight - timedelta(days=training_window_days),
-            local_end=local_current_hour,
-        )
-        return [
-            {
-                "start": hour_start.timestamp(),
-                "change": change,
-            }
-            for hour_start, change in sorted(values_by_hour.items())
-        ]
-
     @staticmethod
     def _build_forecast_entry(
         forecast_dt: datetime,
@@ -624,6 +500,8 @@ class ConsumptionForecastBuilder:
         actual_history: list[dict[str, Any]] | None = None,
         current_slot: dict[str, Any] | None = None,
         series: list | None = None,
+        trained_at: str | None = None,
+        last_outcome: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "status": status,
@@ -641,6 +519,12 @@ class ConsumptionForecastBuilder:
             "sourceGranularityMinutes": source_granularity_minutes,
             "forecastDaysAvailable": forecast_days_available,
             "alignmentPaddingSlots": alignment_padding_slots,
+            # When the profile behind this payload was fitted and how that fit
+            # went. `build_house_forecast_response` copies unknown keys through
+            # and `_has_matching_forecast_snapshot` does not compare them, so
+            # both are additive.
+            "trainedAt": trained_at,
+            "lastOutcome": last_outcome,
         }
         if current_slot is not None:
             payload["currentSlot"] = current_slot

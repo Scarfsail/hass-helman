@@ -37,7 +37,15 @@ _PARAM_TO_TARGET = ("appliance_id", "climate_mode")
 
 
 def needs_migration(document: Mapping[str, Any] | None) -> bool:
-    if not isinstance(document, Mapping) or "automation" not in document:
+    """A plain version check — deliberately not gated on ``automation``.
+
+    Every step up to v5 was optimizer-shaped, so skipping automation-less
+    documents was harmless. v5->v6 moves a *solar* key, and that gate would
+    have dropped it silently for any config without an automation block. The
+    cost is that such documents now get ``config_version`` stamped and
+    rewritten once.
+    """
+    if not isinstance(document, Mapping):
         return False
     return _document_version(document) < CONFIG_DOCUMENT_VERSION
 
@@ -231,11 +239,48 @@ def _translate_surplus_groups(conditions: Any) -> list[Any]:
     return translated or [{"run_when": ["surplus"], "custom": []}]
 
 
+def _migrate_v5_to_v6(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Solar bias ``training_time`` -> top-level ``training_time``.
+
+    The nightly training batch runs more than solar bias training, so the
+    schedule stops belonging to the bias section. First step that touches no
+    optimizer, hence the empty id list.
+
+    An existing top-level value wins: it was authored against the new location,
+    while the bias key is the leftover being retired.
+    """
+    power_devices = document.get("power_devices")
+    if not isinstance(power_devices, Mapping):
+        return (document, [])
+    solar = power_devices.get("solar")
+    if not isinstance(solar, Mapping):
+        return (document, [])
+    solar_forecast = solar.get("forecast")
+    if not isinstance(solar_forecast, Mapping):
+        return (document, [])
+    bias = solar_forecast.get("bias_correction")
+    if not isinstance(bias, Mapping) or "training_time" not in bias:
+        return (document, [])
+
+    bias = dict(bias)
+    training_time = bias.pop("training_time")
+    document["power_devices"] = {
+        **power_devices,
+        "solar": {
+            **solar,
+            "forecast": {**solar_forecast, "bias_correction": bias},
+        },
+    }
+    document.setdefault("training_time", training_time)
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
+    5: _migrate_v5_to_v6,
 }
 
 

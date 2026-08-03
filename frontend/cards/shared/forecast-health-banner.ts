@@ -40,7 +40,10 @@ export interface ForecastHealthItem {
 function healthMessage(health: ForecastHealthDTO, localize: LocalizeFunction): string {
     switch (health.reason) {
         case "stale_forecast":
-            return localize("forecast_health.reason.stale_forecast");
+        case "house_profile_insufficient_history":
+        case "house_profile_entity_missing":
+        case "house_profile_training_failed":
+            return localize(`forecast_health.reason.${health.reason}`);
         default: {
             const hint = health.hint?.trim();
             return hint ? hint : localize("forecast_health.reason.unknown");
