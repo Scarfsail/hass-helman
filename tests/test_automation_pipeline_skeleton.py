@@ -2078,6 +2078,11 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._active_config = {}
         coordinator._last_automation_run_result = None
+        # Caching a run result also announces the new plan on the bus, so every
+        # run path -- including the escaped-failure one -- needs a bus to fire on.
+        coordinator._hass = SimpleNamespace(
+            bus=SimpleNamespace(async_fire=lambda event_type, event_data=None: None)
+        )
         result = AutomationRunResult.completed(snapshot=_make_snapshot())
 
         class _FakeRunner:
@@ -2109,6 +2114,11 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._active_config = {}
         coordinator._last_automation_run_result = None
+        # Caching a run result also announces the new plan on the bus, so every
+        # run path -- including the escaped-failure one -- needs a bus to fire on.
+        coordinator._hass = SimpleNamespace(
+            bus=SimpleNamespace(async_fire=lambda event_type, event_data=None: None)
+        )
         first_result = AutomationRunResult.skipped(reason="first_run")
         second_result = AutomationRunResult.completed(snapshot=_make_snapshot())
         queued_results = [first_result, second_result]
@@ -2143,6 +2153,11 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._active_config = {}
         coordinator._last_automation_run_result = None
+        # Caching a run result also announces the new plan on the bus, so every
+        # run path -- including the escaped-failure one -- needs a bus to fire on.
+        coordinator._hass = SimpleNamespace(
+            bus=SimpleNamespace(async_fire=lambda event_type, event_data=None: None)
+        )
 
         class _FailingRunner:
             def __init__(self, *, coordinator, automation_config) -> None:

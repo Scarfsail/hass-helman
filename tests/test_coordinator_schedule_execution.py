@@ -392,9 +392,18 @@ class FakeStates:
         return self._states.get(entity_id)
 
 
+class FakeBus:
+    def __init__(self) -> None:
+        self.fired: list[tuple[str, dict]] = []
+
+    def async_fire(self, event_type: str, event_data: dict | None = None) -> None:
+        self.fired.append((event_type, dict(event_data or {})))
+
+
 class FakeHass:
     def __init__(self, states: dict[str, FakeState] | None = None) -> None:
         self.states = FakeStates(states or {})
+        self.bus = FakeBus()
 
 
 class FakeStorage:

@@ -300,6 +300,14 @@ class FakeConfigEntries:
         return self.reload_result
 
 
+class FakeBus:
+    def __init__(self) -> None:
+        self.fired: list[tuple[str, dict]] = []
+
+    def async_fire(self, event_type: str, event_data: dict | None = None) -> None:
+        self.fired.append((event_type, dict(event_data or {})))
+
+
 class FakeHass:
     def __init__(
         self,
@@ -312,6 +320,7 @@ class FakeHass:
             domain_data["storage"] = storage
         self.data = {DOMAIN: domain_data}
         self.config_entries = config_entries or FakeConfigEntries()
+        self.bus = FakeBus()
 
 
 class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
@@ -464,6 +473,28 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.results[0][1]["reloadStarted"])
         self.assertTrue(connection.results[0][1]["reloadSucceeded"])
         self.assertIsNone(connection.results[0][1]["reloadError"])
+        # Announced only after the reload, so an editor that reloads on this
+        # event reads the config the entry is now actually running on.
+        self.assertEqual(
+            hass.bus.fired,
+            [("helman_data_changed", {"kind": "config"})],
+        )
+
+    async def test_save_config_does_not_announce_a_failed_reload(self) -> None:
+        # A save whose reload blew up left the running config untouched; waking
+        # every open editor to re-read it would only show them the old document.
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage, config_entries=FakeConfigEntries(reload_result=False))
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": {}},
+        )
+
+        self.assertFalse(connection.results[0][1]["reloadSucceeded"])
+        self.assertEqual(hass.bus.fired, [])
 
     async def test_save_config_persists_minimal_automation_config(self) -> None:
         storage = FakeStorage()
