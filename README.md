@@ -195,11 +195,12 @@ cost — useful if you are wondering what the integration is doing when you are 
 | 6 | **Nightly training batch** | daily at `training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
 | 7 | **Battery capacity forecast** | — (on demand, 300 s cache) | every card read, when its inputs have actually changed | Moderate |
 
-**Opening or refreshing a card never rebuilds a forecast and never reads Recorder history.**
-Forecasts are served from the last prepared snapshot, whatever its age; the work that prepares them
-runs on its own schedule. The one thing a read does compute is the battery projection (job #7), and
-only when its inputs have actually changed — it is anchored to the current battery reading, which
-is what lets the battery curve move the moment you edit a slot.
+**Opening or refreshing a card never rebuilds a forecast, and never issues a multi-day Recorder
+query.** Forecasts are served from the last prepared snapshot, whatever its age; the work that
+prepares them runs on its own schedule. The one thing a read still computes is the battery
+projection (job #7), and only when its inputs have actually changed — it is anchored to the current
+battery reading, which is what lets the battery curve move the moment you edit a slot. Rebuilding
+it reads today's battery history from Recorder, which is bounded by the length of the day.
 
 If a forecast has not been rebuilt for over an hour, the cards show a warning banner rather than
 going blank — old data still beats no data, and the banner is what tells you something is wrong. A
@@ -245,6 +246,11 @@ question you are now asking; that resolves as soon as the rebuild finishes.
   read a lot of Recorder history and you do not want them competing with anything.
 - `training_window_days` (default 56) — how much history the house consumption fit reads. This is
   the single biggest driver of job #6's cost. It has no effect on the per-quarter-hour work.
+- An appliance's `history_average.lookback_days` (default 30) — appliances configured to estimate
+  their energy use from history are read over this window, and unlike `training_window_days` that
+  read happens on **job #4's** quarter-hour cadence, once per such appliance. It is the largest
+  remaining multi-day read on that path; lower it, or give the appliance a fixed hourly energy
+  figure instead, if you want that cadence cheaper.
 
 ### If Home Assistant feels sluggish
 
@@ -263,6 +269,8 @@ Things worth checking, roughly in order:
   costs CPU rather than Recorder time.
 - **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the
   nightly cost scales with how many you configure.
+- **Appliances estimating their energy use from history** — each one adds a multi-day read to job
+  #4's quarter-hour cadence, sized by its `history_average.lookback_days`.
 - **A stale-forecast banner on the cards** means rebuilds have been failing for over an hour; the
   Home Assistant log will say why.
 
