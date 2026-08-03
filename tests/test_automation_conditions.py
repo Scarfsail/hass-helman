@@ -816,9 +816,6 @@ class GroupExplanationTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.explanations = None
 
-            def set_condition_groups(self, groups) -> None:
-                tuple(groups)
-
             def set_group_explanations(self, explanations) -> None:
                 self.explanations = explanations
 

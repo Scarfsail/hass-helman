@@ -40,7 +40,6 @@ from ...scheduling.schedule import (
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
-    iter_horizon_slot_ids,
 )
 from ..base import ScheduleWriter
 from ..conditions import build_eligibility
@@ -104,9 +103,6 @@ class ChargeFromGridOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
-        # Only band-relative rationales are non-derivable; every other horizon
-        # slot is "not considered" and left to a frontend default (D).
-        trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
         eligibility = build_eligibility(snapshot, config, trace)
         writer = ScheduleWriter(
             snapshot,
@@ -492,8 +488,8 @@ class _ChargeFromGridEmission:
                 slot_id,
                 _SlotRecord(
                     priority=self._UNAVAILABLE,
-                    # The v1 layer never claimed these slots; they stay covered
-                    # by the kind's horizon-wide `declare_derivable`.
+                    # The decision layer never claimed these slots — nothing was
+                    # written and nothing was rejected on their own merits.
                     outcome=None,
                     gates=tuple(gates),
                     floor=floor,

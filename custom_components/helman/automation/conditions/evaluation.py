@@ -35,7 +35,6 @@ from ..explain import (
     ConditionNode,
     GroupExplanation,
 )
-from ..trace import NULL_TRACE, TraceConditionGroup
 from .types import CONDITION_TYPES, MaskInputs, Scope, evaluate_mask, horizon_slot_ids
 
 if TYPE_CHECKING:
@@ -237,16 +236,6 @@ def build_eligibility(
             )
         )
 
-    recorder = trace or NULL_TRACE
-    recorder.set_condition_groups(
-        TraceConditionGroup(
-            index=group.index,
-            label=group.label,
-            values=dict(group.condition_values),
-            custom_met=group.custom_met,
-        )
-        for group in groups
-    )
     eligibility = Eligibility(groups=tuple(groups), horizon_slot_ids=slot_ids)
     if trace is not None:
         # A node per group per condition per horizon slot is real work, and the

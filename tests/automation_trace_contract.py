@@ -7,14 +7,14 @@ contract: decisions never overlap, every committed write is attributable, and �
 for every step that reports one — the per-slot explanation record covers the
 whole horizon.
 
-v1 (the reason catalogue) is retired. The old contract hard-asserted that every
+v1 (the reason catalogue) is gone. The old contract hard-asserted that every
 horizon slot carried a reason-coded decision, that every write was covered by an
 ``applied`` decision, and that every emitted ``code`` belonged to a closed
-``V1_REASON_CODES`` vocabulary. Optimizers are moving from
-``trace.decision(reason=...)`` to structured ``trace.gate(...)`` +
-:mod:`custom_components.helman.automation.explain` records (issue #14, phase A),
-so a closed reason vocabulary and exhaustive *decision* coverage are no longer
-the right invariants. Explanation coverage replaces them.
+``V1_REASON_CODES`` vocabulary. Optimizers now record structured
+``trace.gate(...)`` + :mod:`custom_components.helman.automation.explain`
+records instead, and a decision carries only an outcome — so a closed reason
+vocabulary and exhaustive *decision* coverage are no longer the right
+invariants. Explanation coverage replaces them.
 """
 
 from __future__ import annotations

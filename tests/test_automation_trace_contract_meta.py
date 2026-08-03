@@ -149,16 +149,11 @@ class TraceContractMetaTests(unittest.TestCase):
         )
         assert_trace_payload_contract(self, payload)
 
-    def test_reason_codes_are_no_longer_a_closed_vocabulary(self) -> None:
-        # v1 asserted every `code` was in V1_REASON_CODES; v2 does not care.
+    def test_a_decision_carries_only_an_outcome(self) -> None:
+        # v1 asserted every decision's `code` was in V1_REASON_CODES; a decision
+        # has no reason at all now, and the contract is purely structural.
         payload = _payload(
-            decisions=[
-                {
-                    "slotIds": SLOT_IDS,
-                    "outcome": "rejected",
-                    "reason": {"code": "brand_new_code", "params": {}},
-                }
-            ],
+            decisions=[{"slotIds": SLOT_IDS, "outcome": "rejected"}],
             explanation=_explanation(SLOT_IDS),
         )
         assert_trace_payload_contract(self, payload)

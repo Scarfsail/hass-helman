@@ -604,12 +604,6 @@ export type TraceDecisionOutcome =
     | "blocked"
     | "out_of_scope";
 
-export interface TraceReasonDTO {
-    code: string;
-    params: Record<string, unknown>;
-    signals?: string[];
-}
-
 export interface TraceActionDTO {
     domain: string;
     kind?: string;
@@ -627,7 +621,6 @@ export interface TraceDecisionDTO {
     slotIds: string[];
     outcome: TraceDecisionOutcome;
     action?: TraceActionDTO | null;
-    reason?: TraceReasonDTO | null;
 }
 
 export interface TraceNoteDTO {
@@ -654,18 +647,6 @@ export interface TraceStepDTO {
     /** False when no condition group matched fully, so this optimizer's
      * placements are candidates (tentative, won't execute). Omitted when met. */
     conditionMet?: boolean;
-    /** The ORed condition groups as they resolved on this run, in config order.
-     * Omitted by traces recorded before groups existed. */
-    conditionGroups?: TraceConditionGroupDTO[];
-}
-
-export interface TraceConditionGroupDTO {
-    index: number;
-    /** The group's name, falling back to its position (e.g. "#2"). */
-    label: string;
-    /** System condition values, keyed by condition type. */
-    values: Record<string, unknown>;
-    customMet: boolean;
 }
 
 export interface TraceStaticRailsDTO {

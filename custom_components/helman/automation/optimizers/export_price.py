@@ -58,11 +58,7 @@ class ExportPriceOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
-        # `price_not_below_threshold` (rejected) is a frontend derivation rule
-        # (D) over the exportPrice rail + the groups' thresholds; leave those
-        # slots to it and only emit applied/blocked/notes here.
         horizon_slot_ids = list(iter_horizon_slot_ids(snapshot.context.now))
-        trace.declare_derivable(horizon_slot_ids)
 
         eligibility = build_eligibility(snapshot, config, trace)
         writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)

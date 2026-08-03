@@ -60,7 +60,6 @@ from ...scheduling.schedule import (
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
-    iter_horizon_slot_ids,
     parse_slot_id,
 )
 from ..base import ApplianceTarget, ScheduleWriter, resolve_appliance_target
@@ -96,9 +95,9 @@ if TYPE_CHECKING:
 
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
 
-# "≈ 0" for strict's day-balance test. Both are the inspector's own rail
-# epsilons (`RAIL_METRICS` in automation-inspector-model.ts): a difference the
-# UI would not render as a change is not one to reject a placement over.
+# "≈ 0" for strict's day-balance test. Both are the frontend's own rail
+# epsilons (`RAIL_METRICS` in automation-run-model.ts): a difference the UI
+# would not render as a change is not one to reject a placement over.
 _STRICT_SOC_TOLERANCE_PCT = 0.5
 _STRICT_IMPORT_TOLERANCE_KWH = 0.05
 
@@ -195,10 +194,6 @@ class ApplianceRuntimeOptimizer:
         config: "OptimizerInstanceConfig",
         trace: "OptimizerTrace",
     ) -> ScheduleDocument:
-        # Slots outside the daily window are "not considered" — left to a
-        # frontend default (D); only the placement/ranking rationale is emitted.
-        trace.declare_derivable(iter_horizon_slot_ids(snapshot.context.now))
-
         eligibility = build_eligibility(snapshot, config, trace)
         # Every slot starts at `skip` and is upgraded only where something is
         # actually written: the condition matrix covers the whole horizon, so a

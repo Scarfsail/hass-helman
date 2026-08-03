@@ -572,7 +572,6 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         step = trace.to_dict()["steps"][0]
         blocked = [d for d in step["decisions"] if d["outcome"] == "blocked"]
         self.assertEqual(len(blocked), 1)
-        self.assertEqual(blocked[0]["reason"]["code"], "blocked_user_owned")
 
         # Every condition passed and nothing was placed: the verdict must not
         # claim otherwise.
