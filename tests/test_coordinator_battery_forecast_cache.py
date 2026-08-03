@@ -912,11 +912,14 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(build_mock.call_count, 2)
 
-    async def test_async_get_battery_forecast_reuses_cache_when_only_execution_flag_changes(
+    async def test_async_get_battery_forecast_rebuilds_when_only_execution_flag_changes(
         self,
     ) -> None:
-        # Toggling execution no longer changes what the forecast simulates, so
-        # an otherwise identical schedule keeps the cached result.
+        # The forecast overlay prunes to an empty slot set when execution is
+        # off, so the same slots project the battery's unmanaged trajectory in
+        # one state and the plan's effect in the other. The schedule signature
+        # carries the flag so the read side notices on its own — nothing
+        # invalidates the cache on the execution toggle any more.
         coordinator = self._make_coordinator()
         build_mock = Mock(return_value=_make_battery_forecast())
         overlay = object()
@@ -953,13 +956,25 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
         )
 
-        self.assertEqual(build_mock.call_count, 1)
+        self.assertEqual(build_mock.call_count, 2)
+        self.assertNotEqual(
+            coordinator._build_battery_forecast_schedule_signature(
+                first_schedule_document
+            ),
+            coordinator._build_battery_forecast_schedule_signature(
+                second_schedule_document
+            ),
+        )
         # Even with execution disabled, the first build overlays the plan.
         self.assertIs(build_mock.call_args_list[0].kwargs["schedule_overlay"], overlay)
 
     async def test_async_get_battery_forecast_reuses_cache_with_matching_schedule_state(
         self,
     ) -> None:
+        # A schedule write that leaves the horizon actions alone — the executor
+        # re-persisting a pruned document, an automation run landing on the same
+        # plan — costs nothing: the read side sees the same signature and serves
+        # the cached pipeline.
         coordinator = self._make_coordinator()
         build_mock = Mock(return_value=_make_battery_forecast())
         overlay = object()
@@ -1209,6 +1224,68 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(first, forecast)
         self.assertIs(second, forecast)
         self.assertEqual(build_mock.call_count, 1)
+
+    async def test_async_get_battery_forecast_rebuilds_when_live_soc_drifts(
+        self,
+    ) -> None:
+        # The projected curve starts from the live SoC, so a battery that has
+        # moved beyond the tolerance must not be drawn from a cached curve
+        # anchored to where it used to be. The slot action is a plain one, so
+        # the effective signature is None and only the live-state check can
+        # decide — which is the point of the guard.
+        coordinator = self._make_coordinator()
+        build_mock = Mock(return_value=_make_battery_forecast(
+            current_soc=49.4,
+            current_remaining_energy_kwh=5.0,
+        ))
+        schedule_document = _make_schedule_document(
+            execution_enabled=True,
+            slots={
+                "2026-03-20T21:00:00+01:00": _make_schedule_action("stop_charging"),
+            },
+        )
+        coordinator._build_battery_forecast_sync = build_mock
+        coordinator._build_battery_forecast_schedule_overlay = Mock(
+            return_value=object()
+        )
+        coordinator._read_schedule_control_config = Mock(
+            return_value=_make_control_config()
+        )
+        coordinator._storage.schedule_document = schedule_document
+        live_state = SimpleNamespace(
+            current_soc=49.4,
+            current_remaining_energy_kwh=5.0,
+        )
+
+        with (
+            patch.object(
+                coordinator_module,
+                "read_battery_entity_config",
+                return_value=SimpleNamespace(capacity_entity_id="sensor.battery_capacity"),
+            ),
+            patch.object(
+                coordinator_module,
+                "read_battery_live_state",
+                side_effect=lambda *args, **kwargs: live_state,
+            ),
+        ):
+            await coordinator._async_get_battery_forecast(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=REFERENCE_TIME,
+            )
+            # A couple of minutes of charging: past the 0.1 kWh bound.
+            live_state = SimpleNamespace(
+                current_soc=51.0,
+                current_remaining_energy_kwh=5.2,
+            )
+            await coordinator._async_get_battery_forecast(
+                solar_forecast=_make_solar_forecast(),
+                house_forecast=_make_house_forecast(),
+                started_at=datetime.fromisoformat("2026-03-20T21:11:00+01:00"),
+            )
+
+        self.assertEqual(build_mock.call_count, 2)
 
 
 if __name__ == "__main__":

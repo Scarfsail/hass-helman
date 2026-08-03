@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +168,9 @@ from custom_components.helman import (  # noqa: E402
     battery_forecast_response,
     recorder_hourly_series,
 )
+# The builder no longer imports this itself — it only ever asks whether the
+# battery is configured — so the tests take it from where it lives.
+from custom_components.helman.battery_state import BatteryEntityConfig  # noqa: E402
 
 
 class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
@@ -183,8 +186,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
         module.dt_util = _FakeDtUtil
         recorder_module.dt_util = _FakeDtUtil
-        hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
-        return module, module.BatteryCapacityForecastBuilder(hass, {})
+        return module, module.BatteryCapacityForecastBuilder({})
 
     async def test_build_is_canonical_quarter_hour_and_uses_slot_values(self) -> None:
         module, builder = self._make_builder()
@@ -201,13 +203,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 datetime(2026, 3, 20, 21, 45, tzinfo=TZ): 400.0,
             }
         )
-        actual_history_mock = AsyncMock(return_value=[{"timestamp": "history"}])
-
         with (
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -224,10 +224,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -236,12 +237,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", actual_history_mock),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[{"timestamp": "history"}],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=REFERENCE_TIME,
@@ -250,6 +246,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["status"], "partial")
         self.assertEqual(payload["resolution"], "quarter_hour")
         self.assertEqual(payload["sourceGranularityMinutes"], 15)
+        # The history is echoed back exactly as supplied: the builder has no
+        # recorder access of its own, so what the caller gathers is what ships.
         self.assertEqual(payload["actualHistory"], [{"timestamp": "history"}])
         self.assertEqual(payload["series"][0]["timestamp"], "2026-03-20T21:07:00+01:00")
         self.assertAlmostEqual(payload["series"][0]["durationHours"], 8 / 60, places=4)
@@ -261,12 +259,6 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(payload["series"][0]["solarKwh"], 250.0 / 1000 * (8 / 15), places=4)
         self.assertAlmostEqual(payload["series"][1]["solarKwh"], 0.3, places=4)
         self.assertNotIn("baselineSeries", payload)
-        actual_history_mock.assert_awaited_once_with(
-            builder._hass,
-            "sensor.capacity",
-            REFERENCE_TIME,
-            interval_minutes=15,
-        )
 
     async def test_partial_coverage_uses_existing_reason_and_coverage_until(self) -> None:
         module, builder = self._make_builder()
@@ -286,7 +278,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -303,10 +295,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -315,12 +308,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=REFERENCE_TIME,
@@ -348,7 +336,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -365,10 +353,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -377,12 +366,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=REFERENCE_TIME,
@@ -413,7 +397,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -430,10 +414,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -442,12 +427,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=DST_REFERENCE_TIME,
@@ -485,7 +465,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -502,10 +482,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -514,12 +495,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -566,7 +542,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -583,10 +559,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -595,12 +572,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -642,7 +614,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -659,10 +631,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=10.0,
                     current_soc=100.0,
                     min_soc=0.0,
@@ -671,12 +644,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -713,7 +681,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -730,10 +698,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -742,12 +711,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -790,7 +754,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -807,10 +771,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -819,12 +784,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -875,7 +835,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -892,10 +852,12 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+            patch.object(battery_forecast_response, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -904,13 +866,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-            patch.object(battery_forecast_response, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -960,7 +916,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -977,10 +933,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -989,12 +946,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -1035,7 +987,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -1052,10 +1004,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=7.0,
                     current_soc=70.0,
                     min_soc=0.0,
@@ -1064,12 +1017,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -1114,7 +1062,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -1131,10 +1079,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -1143,12 +1092,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -1193,7 +1137,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -1210,10 +1154,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=3.0,
                     current_soc=30.0,
                     min_soc=0.0,
@@ -1222,12 +1167,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -1272,7 +1212,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -1289,10 +1229,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -1301,12 +1242,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -1347,7 +1283,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -1364,10 +1300,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -1376,12 +1313,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -1428,7 +1360,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 module,
                 "read_battery_entity_config",
-                return_value=module.BatteryEntityConfig(
+                return_value=BatteryEntityConfig(
                     remaining_energy_entity_id="sensor.remaining",
                     capacity_entity_id="sensor.capacity",
                     min_soc_entity_id="sensor.min_soc",
@@ -1445,10 +1377,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     max_discharge_power_w=10000.0,
                 ),
             ),
-            patch.object(
-                module,
-                "read_battery_live_state",
-                return_value=module.BatteryLiveState(
+            patch.object(module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
+        ):
+            payload = builder.build_with_history(
+                live_state=module.BatteryLiveState(
                     current_remaining_energy_kwh=5.0,
                     current_soc=50.0,
                     min_soc=0.0,
@@ -1457,12 +1390,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                     min_energy_kwh=0.0,
                     max_energy_kwh=10.0,
                 ),
-            ),
-            patch.object(module, "build_battery_actual_history", AsyncMock(return_value=[])),
-            patch.object(module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil),
-        ):
-            payload = await builder.build(
+                actual_history=[],
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
                 started_at=started_at,
@@ -1572,9 +1500,7 @@ class ExtractedSimulatorParityTests(unittest.TestCase):
         )
 
         module = self._module()
-        builder = module.BatteryCapacityForecastBuilder(
-            SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None)), {}
-        )
+        builder = module.BatteryCapacityForecastBuilder({})
         live_state = self._live_state(module)
         settings = self._settings(module)
         slot_inputs = self._slot_inputs(module)

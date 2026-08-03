@@ -175,6 +175,13 @@ _LIVE_STATE_UNSET: Any = object()
 _UNAVAILABLE_ENTITY_STATES = {"unknown", "unavailable", "none"}
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
+# The battery-forecast schedule cache key: the execution flag plus the inverter
+# action of every slot. The flag belongs in the key because the forecast overlay
+# prunes to an empty slot set when execution is off, so the same slots project
+# two materially different curves depending on it.
+_BatteryForecastScheduleSignature = tuple[
+    bool, tuple[tuple[str, str, int | None], ...]
+]
 # How far back the unmeasured remainder looks when smoothing away meter skew.
 # See _smooth_unmeasured for why the raw remainder cannot be published as-is.
 _UNMEASURED_SMOOTHING_WINDOW_S = 15.0
@@ -453,7 +460,7 @@ class HelmanCoordinator:
         self._cached_battery_forecast_house_generated_at: str | None = None
         self._cached_battery_forecast_solar_signature: tuple[Any, ...] | None = None
         self._cached_battery_forecast_schedule_signature: (
-            tuple[tuple[str, str, int | None], ...] | None
+            _BatteryForecastScheduleSignature | None
         ) = None
         self._cached_battery_forecast_schedule_effective_signature: (
             tuple[str, str, int | None, str, str] | None
@@ -1885,7 +1892,9 @@ class HelmanCoordinator:
         reason: str,
         reference_time: datetime,
     ) -> None:
-        self._invalidate_battery_forecast_cache()
+        # No cache invalidation here: the schedule signatures the pipeline read
+        # computes cover every slot this write can have touched, so the next
+        # card read rebuilds only if the plan it draws actually changed.
         await self._async_reconcile_schedule_execution(
             reason=reason,
             reference_time=reference_time,
@@ -1945,7 +1954,6 @@ class HelmanCoordinator:
                             slots=current_document.slots,
                         )
                     )
-                    self._invalidate_battery_forecast_cache()
                     should_trigger_automation_on_enable = True
 
             if enabled:
@@ -1978,7 +1986,6 @@ class HelmanCoordinator:
                                         slots=latest_document.slots,
                                     )
                                 )
-                                self._invalidate_battery_forecast_cache()
                         await self._schedule_executor.async_stop()
                     raise
                 if should_trigger_automation_on_enable:
@@ -2018,7 +2025,6 @@ class HelmanCoordinator:
                             slots=latest_document.slots,
                         )
                     )
-                    self._invalidate_battery_forecast_cache()
 
             return False
 
@@ -2048,7 +2054,6 @@ class HelmanCoordinator:
             if cleaned_document == schedule_document:
                 return False
             await self._save_schedule_document(cleaned_document)
-            self._invalidate_battery_forecast_cache()
             return True
 
     async def _async_reconcile_schedule_execution(
@@ -2680,10 +2685,7 @@ class HelmanCoordinator:
         The live battery state and recorder history are pre-gathered, so this
         never touches ``hass`` or the recorder.
         """
-        return BatteryCapacityForecastBuilder(
-            self._hass,
-            self._active_config,
-        ).build_with_history(
+        return BatteryCapacityForecastBuilder(self._active_config).build_with_history(
             solar_forecast=solar_forecast,
             house_forecast=house_forecast,
             started_at=started_at,
@@ -3069,14 +3071,17 @@ class HelmanCoordinator:
     @staticmethod
     def _build_battery_forecast_schedule_signature(
         schedule_document: ScheduleDocument,
-    ) -> tuple[tuple[str, str, int | None], ...]:
-        return tuple(
-            (
-                slot_id,
-                domains.inverter.kind,
-                domains.inverter.target_soc,
-            )
-            for slot_id, domains in sorted(schedule_document.slots.items())
+    ) -> _BatteryForecastScheduleSignature:
+        return (
+            schedule_document.execution_enabled,
+            tuple(
+                (
+                    slot_id,
+                    domains.inverter.kind,
+                    domains.inverter.target_soc,
+                )
+                for slot_id, domains in sorted(schedule_document.slots.items())
+            ),
         )
 
     def _build_battery_forecast_schedule_document(
@@ -3191,7 +3196,7 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
-        schedule_signature: tuple[tuple[str, str, int | None], ...],
+        schedule_signature: _BatteryForecastScheduleSignature,
         appliance_schedule_signature: tuple[
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
             ...,
@@ -3263,7 +3268,7 @@ class HelmanCoordinator:
         solar_forecast: dict[str, Any],
         house_forecast: dict[str, Any],
         started_at: datetime,
-        schedule_signature: tuple[tuple[str, str, int | None], ...],
+        schedule_signature: _BatteryForecastScheduleSignature,
         appliance_schedule_signature: tuple[
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
             ...,
