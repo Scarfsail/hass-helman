@@ -373,6 +373,13 @@ def _emit_charge_hold_gates(
         # `run_when` because a day landing here was classified and rejected on
         # its classification; the only way `rejection` returns `None` is a
         # config with no condition groups at all.
+        #
+        # `list(value)` is safe because `charge_hold` declares
+        # `condition_types=("run_when",)` (spec.py) and the config layer rejects
+        # any other key, so the value here is always a tuple of classifications
+        # — never one of the scalar slot-scoped thresholds (issue #15). The
+        # param is keyed `conditionValue` to match `appliance_runtime`, which is
+        # also what the explanation UI has labels for.
         key, value = eligibility.rejection(slot_ids[0]) or ("run_when", ())
         trace.gate(slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
         trace.gate(
@@ -382,7 +389,7 @@ def _emit_charge_hold_gates(
             params={
                 "classification": classification,
                 "failingCondition": key,
-                "runWhen": list(value),
+                "conditionValue": list(value),
             },
         )
 

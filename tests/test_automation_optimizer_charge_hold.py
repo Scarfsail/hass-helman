@@ -453,6 +453,9 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         self.assertEqual(matched.state, "false")
         self.assertEqual(matched.params["classification"], "deficit")
         self.assertEqual(matched.params["failingCondition"], "run_when")
+        # Keyed `conditionValue`, like appliance_runtime's equivalent gate, and
+        # carrying the classifications the group does allow.
+        self.assertEqual(matched.params["conditionValue"], ["surplus"])
         # The window is never reached once the day itself is out.
         self.assertIsNone(_gate(slot, "hold_window"))
 
