@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
@@ -526,8 +526,8 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 coordinator,
-                "_async_resolve_when_active_hourly_energy_kwh_by_appliance_id",
-                AsyncMock(return_value={"pool-pump": 0.8}),
+                "_resolve_when_active_hourly_energy_kwh_by_appliance_id",
+                MagicMock(return_value={"pool-pump": 0.8}),
             ),
             patch.object(
                 coordinator,
@@ -638,12 +638,10 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                 ]
             }
         )
-        coordinator._async_estimate_projected_appliance = AsyncMock(return_value=0.9)
+        coordinator._appliance_energy_estimates = {"living-room-hvac": 0.9}
 
         resolved = (
-            await coordinator._async_resolve_when_active_hourly_energy_kwh_by_appliance_id(
-                reference_time=REFERENCE_TIME
-            )
+            coordinator._resolve_when_active_hourly_energy_kwh_by_appliance_id()
         )
 
         self.assertEqual(
@@ -706,14 +704,12 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                 ]
             }
         )
-        coordinator._async_estimate_projected_appliance = AsyncMock(
-            side_effect=[0.8, None]
-        )
+        # living-room-hvac is absent from the stored estimates, which is what a
+        # history window that never answered leaves behind.
+        coordinator._appliance_energy_estimates = {"dishwasher": 0.8}
 
         resolved = (
-            await coordinator._async_resolve_when_active_hourly_energy_kwh_by_appliance_id(
-                reference_time=REFERENCE_TIME
-            )
+            coordinator._resolve_when_active_hourly_energy_kwh_by_appliance_id()
         )
 
         self.assertEqual(
@@ -740,8 +736,8 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 coordinator,
-                "_async_resolve_when_active_hourly_energy_kwh_by_appliance_id",
-                AsyncMock(side_effect=RuntimeError()),
+                "_resolve_when_active_hourly_energy_kwh_by_appliance_id",
+                MagicMock(side_effect=RuntimeError()),
             ),
             patch.object(coordinator_module._LOGGER, "exception"),
         ):
@@ -874,6 +870,132 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             coordinator_module, "read_automation_config", return_value=config
         ):
             self.assertIsNone(coordinator._resolve_runtime_history_requirements())
+
+
+class ApplianceEnergyAdoptionTests(unittest.TestCase):
+    """Adopting the nightly estimates, and what the two readers do with them."""
+
+    def _make_coordinator(self, *, section, appliances=None):
+        coordinator = object.__new__(HelmanCoordinator)
+        coordinator._training_artifacts_store = SimpleNamespace(
+            appliance_energy=section
+        )
+        coordinator._appliances_registry = build_appliances_runtime_registry(
+            {"appliances": appliances if appliances is not None else [
+                {
+                    "kind": "generic",
+                    "id": "dishwasher",
+                    "name": "Dishwasher",
+                    "controls": {"switch": {"entity_id": "switch.dishwasher"}},
+                    "projection": {
+                        "strategy": "history_average",
+                        "hourly_energy_kwh": 1.2,
+                        "history_average": {
+                            "energy_entity_id": "sensor.dishwasher_energy",
+                            "lookback_days": 30,
+                        },
+                    },
+                },
+            ]}
+        )
+        return coordinator
+
+    def _fingerprint_for(self, coordinator):
+        return coordinator._read_appliance_energy_training_request().fingerprint
+
+    def test_matching_fingerprint_adopts_without_scheduling_a_refit(self) -> None:
+        coordinator = self._make_coordinator(section=None)
+        section = {
+            "data": {"dishwasher": 0.83},
+            "fingerprint": self._fingerprint_for(coordinator),
+        }
+        coordinator._training_artifacts_store = SimpleNamespace(
+            appliance_energy=section
+        )
+
+        reason = coordinator._adopt_stored_appliance_energy()
+
+        self.assertIsNone(reason)
+        self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
+
+    def test_no_stored_section_asks_for_a_refit(self) -> None:
+        coordinator = self._make_coordinator(section=None)
+
+        reason = coordinator._adopt_stored_appliance_energy()
+
+        self.assertEqual(reason, "no_stored_estimates")
+        self.assertEqual(coordinator._appliance_energy_estimates, {})
+
+    def test_stale_fingerprint_refits_but_keeps_serving_the_old_estimates(self) -> None:
+        """Unlike the house profile, a stale fingerprint does not blank the map.
+
+        The entries are per appliance, so the ones that did not change are still
+        right; dropping them would push those appliances onto their fixed
+        fallback for no reason until the refit lands.
+        """
+        coordinator = self._make_coordinator(
+            section={"data": {"dishwasher": 0.83}, "fingerprint": "stale"}
+        )
+
+        reason = coordinator._adopt_stored_appliance_energy()
+
+        self.assertEqual(reason, "config_changed")
+        self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
+
+    def test_junk_values_in_the_stored_map_are_discarded(self) -> None:
+        coordinator = self._make_coordinator(
+            section={
+                "data": {
+                    "dishwasher": 0.83,
+                    "negative": -1.0,
+                    "zero": 0,
+                    "text": "0.9",
+                    "boolean": True,
+                },
+                "fingerprint": "stale",
+            }
+        )
+
+        coordinator._adopt_stored_appliance_energy()
+
+        self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
+
+    def test_only_history_average_appliances_are_trained(self) -> None:
+        coordinator = self._make_coordinator(
+            section=None,
+            appliances=[
+                {
+                    "kind": "generic",
+                    "id": "pool-pump",
+                    "name": "Pool Pump",
+                    "controls": {"switch": {"entity_id": "switch.pool_pump"}},
+                    "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.7},
+                },
+            ],
+        )
+
+        request = coordinator._read_appliance_energy_training_request()
+
+        self.assertEqual(request.appliances, ())
+
+    def test_projection_reader_returns_stored_values_and_none_for_the_rest(
+        self,
+    ) -> None:
+        """``None`` is what the projection already reads as "use the fixed
+        figure", so an untrained appliance degrades rather than disappearing."""
+        coordinator = self._make_coordinator(section=None)
+        coordinator._appliance_energy_estimates = {"dishwasher": 0.83}
+        appliances = list(coordinator._appliances_registry.appliances)
+        untrained = SimpleNamespace(id="never-trained")
+        coordinator._iter_projected_history_appliances = (
+            lambda **_kwargs: [*appliances, untrained]
+        )
+
+        resolved = coordinator._build_history_projection_hourly_energy_by_appliance_id(
+            schedule_document=object()
+        )
+
+        self.assertEqual(resolved, {"dishwasher": 0.83, "never-trained": None})
 
 
 if __name__ == "__main__":

@@ -167,14 +167,23 @@ class TrainingArtifactsStore:
         {"version": 1,
          "house_consumption": {"data": {...}, "fingerprint": str,
                                "trained_at": str, "last_outcome": str,
-                               "error_reason": str | None}}
+                               "error_reason": str | None},
+         "appliance_energy":  {"data": {appliance_id: kwh_per_hour},
+                               "fingerprint": str, "trained_at": str,
+                               "last_outcome": str, "error_reason": str | None}}
 
-    One section only. Solar bias keeps its own store: the bias service already
-    owns its fingerprint, ``trained_at`` and ``last_outcome`` there, and a
-    second copy would be two sources of truth that drift.
+    Every section is the same shape, so they share the read/write helpers below.
+    No store version bump for ``appliance_energy``: a document written before it
+    existed simply has no such key, and a missing section already means "nothing
+    trained yet" to every reader.
+
+    Solar bias keeps its own store: the bias service already owns its
+    fingerprint, ``trained_at`` and ``last_outcome`` there, and a second copy
+    would be two sources of truth that drift.
     """
 
     HOUSE_CONSUMPTION = "house_consumption"
+    APPLIANCE_ENERGY = "appliance_energy"
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._store = storage.Store(
@@ -196,8 +205,11 @@ class TrainingArtifactsStore:
 
     @property
     def house_consumption(self) -> dict[str, Any] | None:
-        section = self._document.get(self.HOUSE_CONSUMPTION)
-        return section if isinstance(section, dict) else None
+        return self._read_section(self.HOUSE_CONSUMPTION)
+
+    @property
+    def appliance_energy(self) -> dict[str, Any] | None:
+        return self._read_section(self.APPLIANCE_ENERGY)
 
     async def async_record_house_consumption(
         self,
@@ -208,13 +220,13 @@ class TrainingArtifactsStore:
         last_outcome: str,
     ) -> None:
         """Store a freshly fitted profile, replacing whatever was there."""
-        await self._async_write_house_consumption({
-            "data": data,
-            "fingerprint": fingerprint,
-            "trained_at": trained_at,
-            "last_outcome": last_outcome,
-            "error_reason": None,
-        })
+        await self._async_record(
+            self.HOUSE_CONSUMPTION,
+            data=data,
+            fingerprint=fingerprint,
+            trained_at=trained_at,
+            last_outcome=last_outcome,
+        )
 
     async def async_record_house_consumption_failure(
         self,
@@ -222,15 +234,80 @@ class TrainingArtifactsStore:
         last_outcome: str,
         error_reason: str | None,
     ) -> None:
-        """Record a failed refit **without** dropping the previous profile.
+        """Record a failed refit **without** dropping the previous profile."""
+        await self._async_record_failure(
+            self.HOUSE_CONSUMPTION,
+            last_outcome=last_outcome,
+            error_reason=error_reason,
+        )
+
+    async def async_record_appliance_energy(
+        self,
+        *,
+        data: dict[str, float],
+        fingerprint: str,
+        trained_at: str,
+        last_outcome: str,
+    ) -> None:
+        """Store freshly resolved per-appliance when-active hourly energy."""
+        await self._async_record(
+            self.APPLIANCE_ENERGY,
+            data=data,
+            fingerprint=fingerprint,
+            trained_at=trained_at,
+            last_outcome=last_outcome,
+        )
+
+    async def async_record_appliance_energy_failure(
+        self,
+        *,
+        last_outcome: str,
+        error_reason: str | None,
+    ) -> None:
+        """Record a failed resolve without dropping the previous estimates."""
+        await self._async_record_failure(
+            self.APPLIANCE_ENERGY,
+            last_outcome=last_outcome,
+            error_reason=error_reason,
+        )
+
+    def _read_section(self, name: str) -> dict[str, Any] | None:
+        section = self._document.get(name)
+        return section if isinstance(section, dict) else None
+
+    async def _async_record(
+        self,
+        name: str,
+        *,
+        data: Any,
+        fingerprint: str,
+        trained_at: str,
+        last_outcome: str,
+    ) -> None:
+        await self._async_write_section(name, {
+            "data": data,
+            "fingerprint": fingerprint,
+            "trained_at": trained_at,
+            "last_outcome": last_outcome,
+            "error_reason": None,
+        })
+
+    async def _async_record_failure(
+        self,
+        name: str,
+        *,
+        last_outcome: str,
+        error_reason: str | None,
+    ) -> None:
+        """Record a failure while preserving whatever was last trained.
 
         The same rule the bias service applies in ``_should_preserve_profile``:
         a fit that could not run does not make the last one wrong. This is what
         makes "older than 48 h, refit fails" keep serving with a banner instead
         of blanking the card.
         """
-        previous = self.house_consumption or {}
-        await self._async_write_house_consumption({
+        previous = self._read_section(name) or {}
+        await self._async_write_section(name, {
             **{
                 key: previous.get(key)
                 for key in ("data", "fingerprint", "trained_at")
@@ -239,11 +316,11 @@ class TrainingArtifactsStore:
             "error_reason": error_reason,
         })
 
-    async def _async_write_house_consumption(self, section: dict[str, Any]) -> None:
+    async def _async_write_section(self, name: str, section: dict[str, Any]) -> None:
         self._document = {
             **self._document,
             "version": TRAINING_ARTIFACTS_STORAGE_VERSION,
-            self.HOUSE_CONSUMPTION: section,
+            name: section,
         }
         await self._store.async_save(self._document)
 
