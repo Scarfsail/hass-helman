@@ -8,6 +8,18 @@
     "show_more": "Více",
     "show_less": "Méně"
   },
+  "helman_card_editor": {
+    "fields": {
+      "card_size": "Velikost karty",
+      "max_power": "Maximální výkon (W)",
+      "collapsed_consumers_count": "Počet zobrazených spotřebičů ve sbaleném stavu"
+    },
+    "helpers": {
+      "card_size": "Počet řádků mřížky, které karta nahlásí rozvržení dashboardu",
+      "max_power": "Omezuje škálu šipek toku výkonu; nechte prázdné pro automatické škálování",
+      "collapsed_consumers_count": "Počet spotřebičů domu zobrazených před tlačítkem „Více“; výchozí hodnota je 3"
+    }
+  },
   "node_detail": {
     "close": "Zavřít",
     "title": {

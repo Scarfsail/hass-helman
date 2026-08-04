@@ -86,6 +86,18 @@
     "show_more": "More",
     "show_less": "Less"
   },
+  "helman_card_editor": {
+    "fields": {
+      "card_size": "Card size",
+      "max_power": "Max power (W)",
+      "collapsed_consumers_count": "Collapsed consumers count"
+    },
+    "helpers": {
+      "card_size": "Number of grid rows this card reports to the dashboard layout",
+      "max_power": "Caps the power-flow arrow scale; leave empty to auto-scale",
+      "collapsed_consumers_count": "Number of house consumers shown before \"Show more\"; defaults to 3"
+    }
+  },
   "forecast_health": {
     "source": {
       "solar": "Solar forecast",

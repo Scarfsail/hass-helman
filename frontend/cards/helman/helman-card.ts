@@ -20,6 +20,8 @@ import "../helman-simple/node-detail-dialog";
 import "./power-flow-arrows"
 import "./power-device-info"
 import "./power-house-devices-section"
+import "./helman-card-editor"
+import type { LovelaceCardEditor } from "../../hass-frontend/src/panels/lovelace/types";
 
 const EMPTY_ARRAY: readonly DeviceNode[] = Object.freeze([]);
 
@@ -28,6 +30,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     // 1. Static HA configuration methods
     public static async getStubConfig(_hass: HomeAssistant): Promise<Partial<HelmanCardConfig>> {
         return { type: `custom:helman-card` };
+    }
+
+    public static getConfigElement(): LovelaceCardEditor {
+        return document.createElement("helman-card-editor") as unknown as LovelaceCardEditor;
     }
 
     // 2. Static styles
@@ -177,7 +183,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .parentPowerHistory=${houseNode!.powerHistory}
                         .devices_full_width=${true}
                         .sortChildrenByPower=${true}
-                        .initial_show_only_top_children=${3}
+                        .initial_show_only_top_children=${this.config?.collapsed_consumers_count ?? 3}
                         .uiConfig=${this._uiConfig}
                     ></power-house-devices-section>
                 </div>
