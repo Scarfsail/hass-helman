@@ -16,6 +16,12 @@ custom_components/helman/frontend_compiled/
 frontend/node_modules/
 frontend/dist/
 
+# Playwright run artifacts. frontend/.gitignore already covers a run started
+# from there; these catch a run started from the repo root, which writes to the
+# root instead.
+test-results/
+playwright-report/
+
 # Virtual environments
 .venv/
 venv/
