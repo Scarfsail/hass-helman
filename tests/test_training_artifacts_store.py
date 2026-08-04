@@ -151,3 +151,92 @@ def test_first_ever_failure_records_an_outcome_without_data():
         assert section["last_outcome"] == "entity_missing"
 
     asyncio.run(_inner())
+
+
+def test_appliance_energy_round_trips_alongside_house_consumption():
+    """Both sections coexist: writing one must not drop the other."""
+
+    async def _inner():
+        _install_fake_store_backend()
+        storage_mod = _load_storage_module()
+
+        store = storage_mod.TrainingArtifactsStore(object())
+        await store.async_load()
+        assert store.appliance_energy is None
+
+        await store.async_record_house_consumption(
+            data={"schema_version": 1, "history_days": 42},
+            fingerprint="house-fp",
+            trained_at="2026-08-01T03:00:00+02:00",
+            last_outcome="profile_trained",
+        )
+        await store.async_record_appliance_energy(
+            data={"dishwasher": 0.83},
+            fingerprint="appliance-fp",
+            trained_at="2026-08-01T03:01:00+02:00",
+            last_outcome="estimates_trained",
+        )
+
+        reloaded = storage_mod.TrainingArtifactsStore(object())
+        await reloaded.async_load()
+        assert reloaded.appliance_energy == {
+            "data": {"dishwasher": 0.83},
+            "fingerprint": "appliance-fp",
+            "trained_at": "2026-08-01T03:01:00+02:00",
+            "last_outcome": "estimates_trained",
+            "error_reason": None,
+        }
+        assert reloaded.house_consumption["fingerprint"] == "house-fp"
+
+    asyncio.run(_inner())
+
+
+def test_failed_appliance_energy_run_preserves_the_previous_estimates():
+    async def _inner():
+        _install_fake_store_backend()
+        storage_mod = _load_storage_module()
+
+        store = storage_mod.TrainingArtifactsStore(object())
+        await store.async_load()
+        await store.async_record_appliance_energy(
+            data={"dishwasher": 0.83},
+            fingerprint="appliance-fp",
+            trained_at="2026-08-01T03:01:00+02:00",
+            last_outcome="estimates_trained",
+        )
+
+        await store.async_record_appliance_energy_failure(
+            last_outcome="training_failed",
+            error_reason="recorder exploded",
+        )
+
+        section = store.appliance_energy
+        assert section["data"] == {"dishwasher": 0.83}
+        assert section["fingerprint"] == "appliance-fp"
+        assert section["last_outcome"] == "training_failed"
+        assert section["error_reason"] == "recorder exploded"
+
+    asyncio.run(_inner())
+
+
+def test_a_document_written_before_appliance_energy_existed_still_loads():
+    """No store version bump: the key is simply absent on an older document."""
+
+    async def _inner():
+        documents = _install_fake_store_backend()
+        storage_mod = _load_storage_module()
+        documents[storage_mod.TRAINING_ARTIFACTS_STORAGE_KEY] = {
+            "version": storage_mod.TRAINING_ARTIFACTS_STORAGE_VERSION,
+            "house_consumption": {
+                "data": {"schema_version": 1},
+                "fingerprint": "house-fp",
+            },
+        }
+
+        store = storage_mod.TrainingArtifactsStore(object())
+        await store.async_load()
+
+        assert store.appliance_energy is None
+        assert store.house_consumption["fingerprint"] == "house-fp"
+
+    asyncio.run(_inner())

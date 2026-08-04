@@ -12,6 +12,7 @@ from ..solar_bias_correction.service import (
     BiasNotConfiguredError,
     TrainingInProgressError,
 )
+from .appliance_energy import ApplianceEnergyTrainingJob
 from .house_consumption import HouseConsumptionTrainingJob
 
 if TYPE_CHECKING:
@@ -35,10 +36,12 @@ class TrainingBatch:
         *,
         solar_bias_service: SolarBiasCorrectionService,
         house_consumption_job: HouseConsumptionTrainingJob,
+        appliance_energy_job: ApplianceEnergyTrainingJob,
     ) -> None:
         self._hass = hass
         self._solar_bias_service = solar_bias_service
         self._house_consumption_job = house_consumption_job
+        self._appliance_energy_job = appliance_energy_job
         self._create_task = getattr(hass, "async_create_task", asyncio.create_task)
         self._unsub: Callable[[], None] | None = None
         #: The run currently in flight, if any, so a second trigger joins it
@@ -83,6 +86,16 @@ class TrainingBatch:
         """
         await self._async_single_flight(reason, self._async_run_house_consumption)
 
+    async def async_run_appliance_energy(self, *, reason: str) -> None:
+        """Run only the per-appliance when-active energy estimates.
+
+        Same rationale as ``async_run_house_consumption``: a startup or
+        config-save refit wants the estimates refreshed, not the bias profile
+        re-trained. Shares the batch's single flight — these reads queue on the
+        same recorder executor thread as every other sub-job.
+        """
+        await self._async_single_flight(reason, self._async_run_appliance_energy)
+
     async def _async_single_flight(
         self,
         reason: str,
@@ -113,12 +126,21 @@ class TrainingBatch:
         await self._run_subjob(
             "house_consumption", self._house_consumption_job.async_train()
         )
+        await self._run_subjob(
+            "appliance_energy", self._appliance_energy_job.async_train()
+        )
         _LOGGER.info("Training batch finished (%s): %s", reason, self.last_outcomes)
 
     async def _async_run_house_consumption(self, reason: str) -> None:
         _LOGGER.debug("House consumption training starting (%s)", reason)
         await self._run_subjob(
             "house_consumption", self._house_consumption_job.async_train()
+        )
+
+    async def _async_run_appliance_energy(self, reason: str) -> None:
+        _LOGGER.debug("Appliance energy training starting (%s)", reason)
+        await self._run_subjob(
+            "appliance_energy", self._appliance_energy_job.async_train()
         )
 
     async def _run_subjob(self, name: str, coro: Awaitable[str]) -> None:

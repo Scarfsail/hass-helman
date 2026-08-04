@@ -115,8 +115,6 @@ from .point_forecast_response import build_solar_forecast_response
 from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
     TodaySlotEnergyReader,
-    estimate_average_hourly_energy_when_climate_active,
-    estimate_average_hourly_energy_when_switch_on,
     get_local_current_slot_start,
     query_active_hours_by_local_date,
 )
@@ -163,6 +161,10 @@ from .scheduling.schedule_executor import (
 from .solar_bias_correction.models import read_bias_config
 from .solar_bias_correction.service import SolarBiasCorrectionService
 from .storage import HelmanStorage, TrainingArtifactsStore
+from .training.appliance_energy import (
+    ApplianceEnergyTrainingJob,
+    ApplianceEnergyTrainingRequest,
+)
 from .training.batch import TrainingBatch
 from .training.house_consumption import (
     HouseConsumptionTrainingJob,
@@ -536,6 +538,12 @@ class HelmanCoordinator:
         self._house_profile: HouseConsumptionProfile | None = None
         self._house_profile_trained_at: str | None = None
         self._house_profile_last_outcome: str = "no_training_yet"
+        # Per-appliance average hourly energy while running, keyed by appliance
+        # id, adopted from the same store. An appliance missing from the map —
+        # never trained, no usable history, or on a fixed strategy — falls back
+        # to its configured hourly_energy_kwh, which is what the resolvers did
+        # for a failed estimate before this was stored at all.
+        self._appliance_energy_estimates: dict[str, float] = {}
         # Today's completed slots are immutable, so the reader keeps the ones it
         # has already resolved. It lives here because the forecast builder is
         # rebuilt on every refresh and a cache inside it would never be read.
@@ -713,6 +721,12 @@ class HelmanCoordinator:
                 read_request=self._read_house_training_request,
                 on_trained=self._async_on_house_profile_trained,
             ),
+            appliance_energy_job=ApplianceEnergyTrainingJob(
+                self._hass,
+                self._training_artifacts_store,
+                read_request=self._read_appliance_energy_training_request,
+                on_trained=self._async_on_appliance_energy_trained,
+            ),
         )
         try:
             self._training_batch.schedule(bias_config.training_time)
@@ -725,6 +739,11 @@ class HelmanCoordinator:
             self._active_config,
             logger=_LOGGER,
         )
+        # After the registry: the stored estimates are keyed on the appliances
+        # it holds, so there is nothing to adopt them against before this point.
+        refit_reason = self._adopt_stored_appliance_energy()
+        if refit_reason is not None:
+            self._schedule_appliance_energy_refit(refit_reason)
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "entity_registry_updated", self._on_registry_updated
@@ -1130,6 +1149,98 @@ class HelmanCoordinator:
         self._unsub_listeners.append(
             async_at_started(self._hass, _start_house_refit)
         )
+
+    def _read_appliance_energy_training_request(
+        self,
+    ) -> ApplianceEnergyTrainingRequest:
+        """The appliances whose estimates the nightly job resolves.
+
+        Every appliance on ``history_average``, not just the ones an enabled
+        optimizer references: the same estimates feed the demand projection,
+        which runs for anything holding a scheduled action however it got there.
+        """
+        return ApplianceEnergyTrainingRequest(
+            appliances=tuple(
+                appliance
+                for appliance in self._iter_automation_candidate_appliances()
+                if appliance.uses_history_average
+            )
+        )
+
+    def _adopt_stored_appliance_energy(self) -> str | None:
+        """Adopt the stored estimates; return why a refresh is due, or None.
+
+        Mirrors ``_adopt_stored_house_profile``, minus the expiry arm: a
+        30-day average of energy-while-running does not go stale on a clock the
+        way a house profile does, and the nightly run refreshes it anyway. What
+        is left is missing (nothing trained yet) and fingerprint-stale (the
+        appliance set, its entities or a lookback window changed).
+
+        A fingerprint change does **not** blank the estimates the way a stale
+        house profile is blanked. The map is keyed per appliance, so the entries
+        for appliances that did not change are still right, and dropping them
+        would push those appliances onto their fixed fallback for no reason
+        until the refit lands.
+        """
+        self._appliance_energy_estimates = {}
+
+        store = self._training_artifacts_store
+        section = store.appliance_energy if store is not None else None
+        if section is None:
+            # A config with no history_average appliance still refits: the job
+            # records "not_configured" against the current fingerprint, which is
+            # what stops this from rescheduling a refit on every restart.
+            return "no_stored_estimates"
+
+        data = section.get("data")
+        if isinstance(data, dict):
+            self._appliance_energy_estimates = {
+                appliance_id: float(value)
+                for appliance_id, value in data.items()
+                if isinstance(appliance_id, str)
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and value > 0
+            }
+
+        request = self._read_appliance_energy_training_request()
+        if section.get("fingerprint") != request.fingerprint:
+            return "config_changed"
+        return None
+
+    def _schedule_appliance_energy_refit(self, reason: str) -> None:
+        """Resolve the estimates once Home Assistant has finished starting.
+
+        Deferred for the same reason as ``_schedule_house_profile_refit``: these
+        reads touch other integrations' entities, which on a cold start may not
+        exist yet — and the estimate would come back empty rather than wrong,
+        silently pinning every appliance to its fixed figure for the day.
+        """
+        if self._training_batch is None:
+            return
+
+        @callback
+        def _start_appliance_energy_refit(_hass: HomeAssistant) -> None:
+            if self._training_batch is None:
+                return
+            self._create_tracked_refresh_task(
+                self._training_batch.async_run_appliance_energy(reason=reason)
+            )
+
+        self._unsub_listeners.append(
+            async_at_started(self._hass, _start_appliance_energy_refit)
+        )
+
+    async def _async_on_appliance_energy_trained(self) -> None:
+        """Adopt what the job just wrote, then rebuild so it is visible.
+
+        Re-read from the store rather than handed the map directly, for the same
+        reason the house profile is: the preserve-the-previous-value-on-failure
+        rule lives in the store, so reading it back is the only way the
+        in-memory state agrees with what a failed run decided.
+        """
+        self._adopt_stored_appliance_energy()
+        await self._async_refresh_forecast(reason="appliance_energy_trained")
 
     @staticmethod
     def _is_house_profile_expired(trained_at: str | None) -> bool:
@@ -2403,9 +2514,7 @@ class HelmanCoordinator:
                 forecast_days=MAX_FORECAST_DAYS,
             ),
             when_active_hourly_energy_kwh_by_appliance_id=(
-                await self._async_resolve_when_active_hourly_energy_kwh_by_appliance_id(
-                    reference_time=reference_time
-                )
+                self._resolve_when_active_hourly_energy_kwh_by_appliance_id()
             ),
             runtime_hours_by_appliance_id_by_local_date=(
                 await self._async_resolve_runtime_hours_by_appliance_id_by_local_date(
@@ -3112,9 +3221,8 @@ class HelmanCoordinator:
             return self._cached_appliance_forecast_pipeline
 
         history_hourly_energy_kwh_by_appliance_id = (
-            await self._async_build_history_projection_hourly_energy_by_appliance_id(
+            self._build_history_projection_hourly_energy_by_appliance_id(
                 schedule_document=projection_schedule_document,
-                reference_time=started_at,
             )
         )
         compute_inputs = await self._async_gather_compute_inputs(
@@ -3501,47 +3609,55 @@ class HelmanCoordinator:
             for slot_id, domains in sorted(schedule_document.slots.items())
         )
 
-    async def _async_build_history_projection_hourly_energy_by_appliance_id(
+    def _build_history_projection_hourly_energy_by_appliance_id(
         self,
         *,
         schedule_document: ScheduleDocument,
-        reference_time: datetime,
     ) -> dict[str, float | None]:
-        projected_appliances = self._iter_projected_history_appliances(
-            schedule_document=schedule_document
-        )
-        if not projected_appliances:
-            return {}
+        """Stored estimates for the scheduled ``history_average`` appliances.
 
-        estimates: dict[str, float | None] = {}
-        for appliance in projected_appliances:
-            try:
-                estimates[appliance.id] = await self._async_estimate_projected_appliance(
-                    appliance=appliance,
-                    reference_time=reference_time,
-                )
-            except Exception:
-                _LOGGER.exception(
-                    "Error estimating history-average projection for %s appliance %r",
-                    appliance.kind,
-                    appliance.id,
-                )
-                estimates[appliance.id] = None
+        Synchronous, and that is the point: this feeds the appliance projection
+        rebuild, which ``get_forecast`` awaits on the websocket path. It used to
+        issue two 30-day recorder queries per appliance right here, so a card
+        refresh — or a slot edit, which invalidates the pipeline cache — could
+        block for seconds on a cold read. The nightly job owns that read now.
 
-        return estimates
-
-    async def _async_resolve_when_active_hourly_energy_kwh_by_appliance_id(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> dict[str, float]:
-        estimates: dict[str, float] = {}
-        for appliance in self._iter_automation_candidate_appliances():
-            estimates[appliance.id] = await self._async_resolve_when_active_hourly_energy(
-                appliance=appliance,
-                reference_time=reference_time,
+        ``None`` for an appliance with no stored estimate, which is the value
+        the projection already reads as "use the configured hourly energy".
+        """
+        return {
+            appliance.id: self._appliance_energy_estimates.get(appliance.id)
+            for appliance in self._iter_projected_history_appliances(
+                schedule_document=schedule_document
             )
-        return estimates
+        }
+
+    def _resolve_when_active_hourly_energy_kwh_by_appliance_id(
+        self,
+    ) -> dict[str, float]:
+        """Per-appliance when-active demand for the automation input bundle.
+
+        Every candidate appliance gets an entry, ``history_average`` or not:
+        optimizers and conditions read this map by appliance id and a missing key
+        is indistinguishable from an unavailable rail. An appliance on a fixed
+        strategy, or one whose estimate has not been trained, answers with its
+        configured ``hourly_energy_kwh``.
+        """
+        return {
+            appliance.id: self._resolve_when_active_hourly_energy(appliance)
+            for appliance in self._iter_automation_candidate_appliances()
+        }
+
+    def _resolve_when_active_hourly_energy(
+        self,
+        appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
+    ) -> float:
+        if not appliance.uses_history_average:
+            return appliance.hourly_energy_kwh
+        estimate = self._appliance_energy_estimates.get(appliance.id)
+        if estimate is None or estimate <= 0:
+            return appliance.hourly_energy_kwh
+        return estimate
 
     async def _async_resolve_runtime_hours_by_appliance_id_by_local_date(
         self,
@@ -3648,60 +3764,6 @@ class HelmanCoordinator:
             for appliance in self._appliances_registry.appliances
             if isinstance(appliance, (GenericApplianceRuntime, ClimateApplianceRuntime))
         ]
-
-    async def _async_resolve_when_active_hourly_energy(
-        self,
-        *,
-        appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
-        reference_time: datetime,
-    ) -> float:
-        if not appliance.uses_history_average:
-            return appliance.hourly_energy_kwh
-
-        try:
-            historical_hourly_energy_kwh = await self._async_estimate_projected_appliance(
-                appliance=appliance,
-                reference_time=reference_time,
-            )
-        except Exception:
-            _LOGGER.exception(
-                "Error estimating automation demand input for %s appliance %r",
-                appliance.kind,
-                appliance.id,
-            )
-            historical_hourly_energy_kwh = None
-
-        if (
-            historical_hourly_energy_kwh is None
-            or historical_hourly_energy_kwh <= 0
-        ):
-            return appliance.hourly_energy_kwh
-        return historical_hourly_energy_kwh
-
-    async def _async_estimate_projected_appliance(
-        self,
-        *,
-        appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
-        reference_time: datetime,
-    ) -> float | None:
-        energy_entity_id = appliance.history_energy_entity_id
-        if energy_entity_id is None:
-            return None
-        if isinstance(appliance, GenericApplianceRuntime):
-            return await estimate_average_hourly_energy_when_switch_on(
-                self._hass,
-                switch_entity_id=appliance.switch_entity_id,
-                energy_entity_id=energy_entity_id,
-                reference_time=reference_time,
-                lookback_days=appliance.history_lookback_days,
-            )
-        return await estimate_average_hourly_energy_when_climate_active(
-            self._hass,
-            climate_entity_id=appliance.climate_entity_id,
-            energy_entity_id=energy_entity_id,
-            reference_time=reference_time,
-            lookback_days=appliance.history_lookback_days,
-        )
 
     def _iter_projected_history_appliances(
         self,

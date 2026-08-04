@@ -218,12 +218,28 @@ class _FakeBiasService:
         return {}
 
 
+class _StubApplianceEnergyJob:
+    """Stands in for the appliance-energy sub-job in batch-level tests.
+
+    Its own behaviour is covered by ``test_appliance_energy_training``; here it
+    only has to be present so the batch can run.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def async_train(self) -> str:
+        self.calls += 1
+        return "not_configured"
+
+
 class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
-    def _make_batch(self, *, bias_service, house_job):
+    def _make_batch(self, *, bias_service, house_job, appliance_energy_job=None):
         return batch_module.TrainingBatch(
             _make_hass(),
             solar_bias_service=bias_service,
             house_consumption_job=house_job,
+            appliance_energy_job=appliance_energy_job or _StubApplianceEnergyJob(),
         )
 
     def _make_recording_house_job(self, order, *, error=None):
@@ -274,7 +290,11 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order, ["house_start", "house_end"])
         self.assertEqual(
             batch.last_outcomes,
-            {"solar_bias": "training_failed", "house_consumption": "profile_trained"},
+            {
+                "solar_bias": "training_failed",
+                "house_consumption": "profile_trained",
+                "appliance_energy": "not_configured",
+            },
         )
 
     async def test_bias_disabled_still_fits_the_house_profile(self) -> None:
@@ -375,6 +395,7 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(async_create_task=created.append),
             solar_bias_service=_FakeBiasService(),
             house_consumption_job=self._make_recording_house_job([]),
+            appliance_energy_job=_StubApplianceEnergyJob(),
         )
         original = batch_module.async_track_time_change
         batch_module.async_track_time_change = _track_time_change
