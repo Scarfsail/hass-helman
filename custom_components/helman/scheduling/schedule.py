@@ -575,29 +575,6 @@ def prune_expired_slots(
     return dict(sorted(pruned_slots.items()))
 
 
-def validate_slot_patch(
-    *,
-    slot_id: str,
-    domains: ScheduleDomains,
-    reference_time: datetime,
-    battery_soc_bounds: BatterySocBounds | None,
-) -> None:
-    slot_start = parse_slot_id(slot_id)
-    if not _is_slot_aligned(slot_start):
-        raise ScheduleSlotsError(
-            f"Schedule slot '{slot_id}' must align to {SCHEDULE_SLOT_MINUTES}-minute boundaries"
-        )
-    if not _is_slot_in_horizon(slot_start, reference_time):
-        raise ScheduleSlotsError(
-            f"Schedule slot '{slot_id}' must be within the rolling {SCHEDULE_HORIZON_HOURS}-hour horizon"
-        )
-    validate_schedule_domains(
-        domains=domains,
-        battery_soc_bounds=battery_soc_bounds,
-        require_target_soc_bounds=True,
-    )
-
-
 def normalize_slot_patch(
     *,
     slot_id: str,
@@ -707,23 +684,6 @@ def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
     return ScheduleDocument(
         execution_enabled=doc.execution_enabled,
         slots=stripped_slots,
-    )
-
-
-def validate_schedule_domains(
-    *,
-    domains: ScheduleDomains,
-    battery_soc_bounds: BatterySocBounds | None,
-    require_target_soc_bounds: bool,
-    appliances_registry: AppliancesRuntimeRegistry | None = None,
-) -> None:
-    normalize_schedule_domains(
-        domains=domains,
-        battery_soc_bounds=battery_soc_bounds,
-        require_target_soc_bounds=require_target_soc_bounds,
-        appliances_registry=appliances_registry,
-        context="Schedule slot",
-        appliance_mode="strict",
     )
 
 

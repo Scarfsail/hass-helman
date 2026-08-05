@@ -102,13 +102,6 @@ def get_today_completed_local_slot_boundaries(
     return [*completed_slots, current_slot_start]
 
 
-def get_today_completed_local_hour_boundaries(reference_time: datetime) -> list[datetime]:
-    return get_today_completed_local_slot_boundaries(
-        reference_time,
-        interval_minutes=60,
-    )
-
-
 async def query_slot_energy_changes(
     hass: HomeAssistant,
     entity_id: str,
@@ -125,19 +118,6 @@ async def query_slot_energy_changes(
             interval_minutes=interval_minutes,
         ),
         interval_minutes=interval_minutes,
-    )
-
-
-async def query_hourly_energy_changes(
-    hass: HomeAssistant,
-    entity_id: str,
-    reference_time: datetime,
-) -> dict[datetime, float]:
-    return await query_slot_energy_changes(
-        hass,
-        entity_id,
-        reference_time,
-        interval_minutes=60,
     )
 
 
@@ -455,19 +435,6 @@ async def query_slot_boundary_state_values(
     return _sample_state_values_at_boundaries(states, boundaries)
 
 
-async def query_hour_boundary_state_values(
-    hass: HomeAssistant,
-    entity_id: str,
-    reference_time: datetime,
-) -> dict[datetime, float]:
-    return await query_slot_boundary_state_values(
-        hass,
-        entity_id,
-        reference_time,
-        interval_minutes=60,
-    )
-
-
 async def estimate_average_hourly_energy_when_switch_on(
     hass: HomeAssistant,
     *,
@@ -670,13 +637,6 @@ def _build_slot_energy_changes_from_boundaries(
     return values_by_slot
 
 
-def _build_hourly_energy_changes_from_boundaries(
-    boundaries: list[datetime],
-    samples: dict[datetime, float],
-) -> dict[datetime, float]:
-    return _build_slot_energy_changes_from_boundaries(boundaries, samples)
-
-
 def _sample_state_values_at_boundaries(
     states: list[Any],
     boundaries: list[datetime],
@@ -746,24 +706,6 @@ def _sample_energy_observations_at_boundaries(
     return samples
 
 
-def _estimate_average_hourly_energy_kwh_for_on_intervals(
-    *,
-    switch_states: list[Any],
-    energy_states: list[Any],
-    window_start: datetime,
-    window_end: datetime,
-    default_unit: Any,
-) -> float | None:
-    return _estimate_average_hourly_energy_kwh_for_active_intervals(
-        entity_states=switch_states,
-        energy_states=energy_states,
-        window_start=window_start,
-        window_end=window_end,
-        default_unit=default_unit,
-        active_states=("on",),
-    )
-
-
 def _estimate_average_hourly_energy_kwh_for_active_intervals(
     *,
     entity_states: list[Any],
@@ -827,20 +769,6 @@ def _estimate_average_hourly_energy_kwh_for_active_intervals(
     return round(total_energy_kwh / total_active_hours, 4)
 
 
-def _build_switch_on_intervals(
-    *,
-    states: list[Any],
-    window_start: datetime,
-    window_end: datetime,
-) -> list[tuple[datetime, datetime]]:
-    return _build_active_state_intervals(
-        states=states,
-        window_start=window_start,
-        window_end=window_end,
-        active_states=("on",),
-    )
-
-
 def _build_active_state_intervals(
     *,
     states: list[Any],
@@ -888,10 +816,6 @@ def _is_active_state(value: Any, active_states: set[str]) -> bool:
     return isinstance(value, str) and value.strip().lower() in active_states
 
 
-def _is_switch_on_state(value: Any) -> bool:
-    return isinstance(value, str) and value.strip().lower() == "on"
-
-
 def _get_local_day_start(reference_time: datetime) -> datetime:
     local_reference = dt_util.as_local(reference_time)
     tzinfo = local_reference.tzinfo
@@ -923,17 +847,6 @@ def _build_local_slot_starts_until(
         cursor_utc += timedelta(minutes=validated_interval_minutes)
 
     return slots
-
-
-def _build_local_hour_starts_until(
-    local_start: datetime,
-    local_end: datetime,
-) -> list[datetime]:
-    return _build_local_slot_starts_until(
-        local_start,
-        local_end,
-        interval_minutes=60,
-    )
 
 
 def _validate_interval_minutes(interval_minutes: int) -> int:

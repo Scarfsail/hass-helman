@@ -470,11 +470,6 @@ class HelmanCoordinator:
         self._cached_appliance_forecast_pipeline: (
             _ApplianceForecastPipelineSnapshot | None
         ) = None
-        self._cached_appliance_projection_plan: ApplianceProjectionPlan | None = None
-        self._cached_appliance_projection_expires_at: datetime | None = None
-        self._cached_appliance_projection_started_at: datetime | None = None
-        self._cached_appliance_projection_house_generated_at: str | None = None
-        self._cached_appliance_projection_solar_signature: tuple[Any, ...] | None = None
         self._cached_appliance_projection_schedule_signature: tuple[
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
             ...,
@@ -3379,11 +3374,6 @@ class HelmanCoordinator:
         self._invalidate_appliance_projection_cache()
 
     def _invalidate_appliance_projection_cache(self) -> None:
-        self._cached_appliance_projection_plan = None
-        self._cached_appliance_projection_expires_at = None
-        self._cached_appliance_projection_started_at = None
-        self._cached_appliance_projection_house_generated_at = None
-        self._cached_appliance_projection_solar_signature = None
         self._cached_appliance_projection_schedule_signature = None
 
     def _has_valid_battery_forecast_cache(
@@ -3487,79 +3477,7 @@ class HelmanCoordinator:
         self._cached_battery_forecast_schedule_effective_signature = (
             schedule_effective_signature
         )
-        self._cached_appliance_projection_plan = pipeline.projection_plan
-        self._cached_appliance_projection_expires_at = self._cached_battery_forecast_expires_at
-        self._cached_appliance_projection_started_at = started_at
-        self._cached_appliance_projection_house_generated_at = house_forecast.get(
-            "generatedAt"
-        )
-        self._cached_appliance_projection_solar_signature = (
-            self._build_battery_forecast_solar_signature(solar_forecast)
-        )
         self._cached_appliance_projection_schedule_signature = appliance_schedule_signature
-
-    def _has_valid_appliance_projection_cache(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-    ) -> bool:
-        if (
-            self._cached_appliance_projection_plan is None
-            or self._cached_appliance_projection_expires_at is None
-            or self._cached_appliance_projection_started_at is None
-        ):
-            return False
-        if dt_util.as_utc(started_at) >= dt_util.as_utc(
-            self._cached_appliance_projection_expires_at
-        ):
-            return False
-        if dt_util.as_utc(started_at) != dt_util.as_utc(
-            self._cached_appliance_projection_started_at
-        ):
-            return False
-        if (
-            self._cached_appliance_projection_house_generated_at
-            != house_forecast.get("generatedAt")
-        ):
-            return False
-        if (
-            self._cached_appliance_projection_solar_signature
-            != self._build_battery_forecast_solar_signature(solar_forecast)
-        ):
-            return False
-        return self._cached_appliance_projection_schedule_signature == schedule_signature
-
-    def _store_appliance_projection_cache(
-        self,
-        *,
-        plan: ApplianceProjectionPlan,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-    ) -> None:
-        self._cached_appliance_projection_plan = plan
-        self._cached_appliance_projection_expires_at = dt_util.as_local(
-            dt_util.as_utc(started_at)
-            + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
-        )
-        self._cached_appliance_projection_started_at = started_at
-        self._cached_appliance_projection_house_generated_at = house_forecast.get(
-            "generatedAt"
-        )
-        self._cached_appliance_projection_solar_signature = (
-            self._build_battery_forecast_solar_signature(solar_forecast)
-        )
-        self._cached_appliance_projection_schedule_signature = schedule_signature
 
     @staticmethod
     def _build_appliance_projection_schedule_signature(

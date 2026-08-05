@@ -167,61 +167,6 @@ class GridPriceForecastBuilder:
     def _read_import_price_config(self) -> FixedGridImportPriceConfig | None:
         return read_grid_import_price_config(self._config)
 
-    def _read_import_price_window(
-        self,
-        index: int,
-        raw_value: Any,
-    ) -> FixedGridImportPriceWindow:
-        if not isinstance(raw_value, dict):
-            raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.import_price_windows[{index}] must be an object"
-            )
-
-        start_minutes = self._parse_window_time(
-            raw_value.get("start"),
-            field_name=f"import_price_windows[{index}].start",
-        )
-        end_minutes = self._parse_window_time(
-            raw_value.get("end"),
-            field_name=f"import_price_windows[{index}].end",
-        )
-        if start_minutes == end_minutes:
-            raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.import_price_windows[{index}] must not have the same start and end"
-            )
-
-        price = self._read_float(raw_value.get("price"))
-        if price is None:
-            raise GridImportPriceConfigError(
-                f"power_devices.grid.forecast.import_price_windows[{index}].price must be numeric"
-            )
-
-        return FixedGridImportPriceWindow(
-            start_minutes=start_minutes,
-            end_minutes=end_minutes,
-            price=price,
-        )
-
-    def _validate_daily_window_coverage(
-        self,
-        windows: tuple[FixedGridImportPriceWindow, ...],
-    ) -> None:
-        for minute_of_day in range(0, 24 * 60, FORECAST_CANONICAL_GRANULARITY_MINUTES):
-            matching_windows = [
-                window
-                for window in windows
-                if self._window_contains_minute(window, minute_of_day)
-            ]
-            formatted_time = self._format_minute_of_day(minute_of_day)
-            if not matching_windows:
-                raise GridImportPriceConfigError(
-                    f"power_devices.grid.forecast.import_price_windows leave a gap at {formatted_time}"
-                )
-            if len(matching_windows) > 1:
-                raise GridImportPriceConfigError(
-                    f"power_devices.grid.forecast.import_price_windows overlap at {formatted_time}"
-                )
-
     def _lookup_window_price(
         self,
         *,
