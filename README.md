@@ -157,18 +157,6 @@ type: custom:helman-solar-inspector-card
 transparent_background: false
 ```
 
-### `custom:helman-scheduling-card`
-Manual scheduling card, reading the backend's slot-native `helman/get_schedule` response. Shows the
-current slot in a **Now** strip, groups future slots into day sections, and supports editing a single
-slot, a sub-range, or a whole interval.
-
-```yaml
-type: custom:helman-scheduling-card
-transparent_background: false
-default_expanded_days: 1
-show_header: true
-```
-
 ## Tips and troubleshooting
 - No devices shown under house: ensure Energy → Device consumption is configured and your power
   sensors feed the statistics used there.

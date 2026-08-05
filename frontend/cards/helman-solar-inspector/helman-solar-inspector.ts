@@ -1429,12 +1429,6 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * The schedule row under the charts: one track per entity, behind a collapse
    * toggle that starts expanded.
-   *
-   * `helman-solar-schedule-actions-strip` used to hold this place with a column
-   * of action icons per slot. It is left in the tree unmounted -- nothing
-   * imports it, so it is not in the bundle -- because it answers a different
-   * question well ("what is happening at 14:00", across the whole house, in one
-   * row) and may yet come back as a choice.
    */
   private _renderScheduleActionsStrip(payload: InspectorPayload, layout: ChartLayout) {
     const executionLabel = this._t("scheduling.execution.toggle");
