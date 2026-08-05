@@ -1,5 +1,5 @@
 import { svg } from "lit";
-import { getScheduleLocalTimeParts } from "../helman-scheduling/model/schedule-time";
+import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 
 /**
  * The vertical "now" line the schedule band draws, for the SVG charts above it.

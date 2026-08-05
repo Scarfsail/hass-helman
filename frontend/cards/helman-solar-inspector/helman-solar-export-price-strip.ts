@@ -5,7 +5,7 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { getScheduleLocalTimeParts } from "../helman-scheduling/model/schedule-time";
+import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
 import {
     stripMinutesForSvgX,

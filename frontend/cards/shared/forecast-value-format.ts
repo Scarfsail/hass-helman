@@ -1,4 +1,4 @@
-import { GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KWH } from "../helman-scheduling/model/grid-surplus-display";
+import { GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KWH } from "./schedule/model/grid-surplus-display";
 
 /**
  * How the schedule's forecast numbers are written wherever they are shown.

@@ -5,22 +5,22 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { getSharedScheduleOwner, type SharedScheduleOwner } from "../helman-scheduling/schedule-owner";
+import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import {
     applyNormalizedScheduleCurrentState,
     buildNormalizedScheduleStructure,
-} from "../helman-scheduling/model/schedule-normalizer";
-import { buildScheduleTimelineModel } from "../helman-scheduling/model/schedule-timeline-builder";
+} from "../shared/schedule/model/schedule-normalizer";
+import { buildScheduleTimelineModel } from "../shared/schedule/model/schedule-timeline-builder";
 import {
     buildSlotForecastMap,
     deriveScheduleForecastParams,
     EMPTY_SLOT_FORECAST_MAP,
     type SlotForecastMap,
-} from "../helman-scheduling/model/slot-forecast-model";
+} from "../shared/schedule/model/slot-forecast-model";
 import type {
     NormalizedScheduleModel,
     ScheduleOwnerSnapshot,
-} from "../helman-scheduling/schedule-types";
+} from "../shared/schedule/schedule-types";
 import { dayAggregateGaugeStyles, renderDayAggregateGauge } from "../shared/day-aggregate-gauge";
 import {
     buildDayPillKeys,

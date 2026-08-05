@@ -562,11 +562,6 @@ class HelmanCoordinator:
     def config(self) -> dict:
         return self._active_config
 
-    def get_last_automation_run_result(self) -> AutomationRunResult | None:
-        if self._last_automation_run_result is None:
-            return None
-        return deepcopy(self._last_automation_run_result)
-
     def record_run_explanation(self, explanation: "RunExplanation | None") -> None:
         """Merge one successful run's condition record into the book.
 
@@ -1577,24 +1572,6 @@ class HelmanCoordinator:
                 interval_minutes=SCHEDULE_SLOT_MINUTES,
             )
         return history
-
-    async def async_restore_normal_state(self) -> int:
-        """Put everything back to rest, on explicit user request.
-
-        This is the one path allowed to actuate while execution is disabled --
-        the user asked for it from the card -- so it uses an override actuator
-        rather than the gated one. It is best effort: whatever fails stays
-        listed for the user to retry or handle individually.
-        """
-        self._refresh_climate_appliance_capabilities()
-        restored = await async_apply_normal_state(
-            actuator=OverrideScheduleActuator(self._hass),
-            control_config=self._read_schedule_control_config(),
-            registry=self._appliances_registry,
-        )
-        # Whatever the executor remembered about appliance state is stale now.
-        self._schedule_executor.clear_appliance_memories()
-        return restored
 
     def _refresh_climate_appliance_capabilities(self) -> None:
         refreshed_appliances = []

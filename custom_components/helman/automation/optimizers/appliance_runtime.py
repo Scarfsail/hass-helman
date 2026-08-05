@@ -95,9 +95,9 @@ if TYPE_CHECKING:
 
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
 
-# "≈ 0" for strict's day-balance test. Both are the frontend's own rail
-# epsilons (`RAIL_METRICS` in automation-run-model.ts): a difference the UI
-# would not render as a change is not one to reject a placement over.
+# "≈ 0" for strict's day-balance test. Both are the epsilons the frontend
+# once used for its rail metrics: a difference the UI would not render as a
+# change is not one to reject a placement over.
 _STRICT_SOC_TOLERANCE_PCT = 0.5
 _STRICT_IMPORT_TOLERANCE_KWH = 0.05
 

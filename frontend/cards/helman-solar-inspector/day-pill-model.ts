@@ -1,13 +1,13 @@
-import { getScheduleGridScaleMagnitude } from "../helman-scheduling/model/grid-surplus-display";
-import { aggregateScheduleDayForecast, buildScheduleTableForecastMeta } from "../helman-scheduling/model/schedule-table-forecast";
-import { formatScheduleDayLabel } from "../helman-scheduling/model/schedule-time";
-import type { SlotForecastMap } from "../helman-scheduling/model/slot-forecast-model";
+import { getScheduleGridScaleMagnitude } from "../shared/schedule/model/grid-surplus-display";
+import { aggregateScheduleDayForecast, buildScheduleTableForecastMeta } from "../shared/schedule/model/schedule-table-forecast";
+import { formatScheduleDayLabel } from "../shared/schedule/model/schedule-time";
+import type { SlotForecastMap } from "../shared/schedule/model/slot-forecast-model";
 import type {
     ScheduleTableDayAggregateModel,
     ScheduleTableDayAggregateScale,
     ScheduleTableSectionModel,
-} from "../helman-scheduling/schedule-table-types";
-import type { ScheduleDisplaySlot } from "../helman-scheduling/schedule-types";
+} from "../shared/schedule/schedule-table-types";
+import type { ScheduleDisplaySlot } from "../shared/schedule/schedule-types";
 
 /**
  * The days the inspector can be switched to, each carrying the whole-day

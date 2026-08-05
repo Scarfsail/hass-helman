@@ -385,7 +385,6 @@ from custom_components.helman.scheduling.schedule import (
     schedule_document_to_dict,
 )
 from custom_components.helman.websockets import (
-    ws_get_last_automation_run,
     ws_get_schedule_explanation,
     ws_run_automation,
 )
@@ -2074,7 +2073,14 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_automation_stores_last_result_and_returns_copies(self) -> None:
+    """The coordinator's in-memory record of the most recent run.
+
+    The websocket getter that used to read it is gone with the scheduling card,
+    so these assert against the cached attribute directly: the run path must
+    still store a defensive copy of every attempted run, latest wins.
+    """
+
+    async def test_run_automation_stores_a_copy_of_the_last_result(self) -> None:
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._active_config = {}
         coordinator._last_automation_run_result = None
@@ -2101,14 +2107,11 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
                 reason="trigger",
             )
 
-        cached_first = coordinator.get_last_automation_run_result()
-        cached_second = coordinator.get_last_automation_run_result()
+        cached = coordinator._last_automation_run_result
 
         self.assertIs(returned, result)
-        self.assertEqual(cached_first.to_dict(), result.to_dict())
-        self.assertEqual(cached_second.to_dict(), result.to_dict())
-        self.assertIsNot(cached_first, result)
-        self.assertIsNot(cached_second, cached_first)
+        self.assertEqual(cached.to_dict(), result.to_dict())
+        self.assertIsNot(cached, result)
 
     async def test_run_automation_overwrites_cached_result_with_latest_run(self) -> None:
         coordinator = object.__new__(HelmanCoordinator)
@@ -2143,7 +2146,7 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
                 reason="trigger:second",
             )
 
-        cached_result = coordinator.get_last_automation_run_result()
+        cached_result = coordinator._last_automation_run_result
 
         self.assertEqual(cached_result.to_dict(), second_result.to_dict())
 
@@ -2175,7 +2178,7 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
                 reason="trigger",
             )
 
-        cached_result = coordinator.get_last_automation_run_result()
+        cached_result = coordinator._last_automation_run_result
 
         self.assertEqual(result.reason, "runner_failed")
         self.assertEqual(
@@ -2276,86 +2279,10 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
             [(1, "unauthorized", "Admin access required")],
         )
 
-    async def test_get_last_automation_run_returns_null_before_first_run(self) -> None:
-        coordinator = SimpleNamespace(
-            get_last_automation_run_result=Mock(return_value=None),
-            run_automation=AsyncMock(),
-        )
-        connection = _FakeConnection(is_admin=True)
-
-        ws_get_last_automation_run(
-            _FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/get_last_automation_run"},
-        )
-
-        coordinator.get_last_automation_run_result.assert_called_once_with()
-        coordinator.run_automation.assert_not_awaited()
-        self.assertEqual(connection.errors, [])
-        self.assertEqual(connection.results, [(1, None)])
-
-    async def test_get_last_automation_run_returns_serialized_cached_result(self) -> None:
-        coordinator = SimpleNamespace(
-            get_last_automation_run_result=Mock(
-                return_value=AutomationRunResult.completed(snapshot=_make_snapshot())
-            ),
-            run_automation=AsyncMock(),
-        )
-        connection = _FakeConnection(is_admin=True)
-
-        ws_get_last_automation_run(
-            _FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/get_last_automation_run"},
-        )
-
-        coordinator.get_last_automation_run_result.assert_called_once_with()
-        coordinator.run_automation.assert_not_awaited()
-        self.assertEqual(connection.errors, [])
-        self.assertTrue(connection.results[0][1]["ranAutomation"])
-        self.assertIn("snapshot", connection.results[0][1])
-
-    async def test_get_last_automation_run_requires_admin(self) -> None:
-        coordinator = SimpleNamespace(
-            get_last_automation_run_result=Mock(),
-            run_automation=AsyncMock(),
-        )
-        connection = _FakeConnection(is_admin=False)
-
-        ws_get_last_automation_run(
-            _FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/get_last_automation_run"},
-        )
-
-        coordinator.get_last_automation_run_result.assert_not_called()
-        coordinator.run_automation.assert_not_awaited()
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
-
-    async def test_get_last_automation_run_returns_not_loaded_when_missing(self) -> None:
-        connection = _FakeConnection(is_admin=True)
-        hass = SimpleNamespace(data={DOMAIN: {}})
-
-        ws_get_last_automation_run(
-            hass,
-            connection,
-            {"id": 1, "type": "helman/get_last_automation_run"},
-        )
-
-        self.assertEqual(connection.results, [])
-        self.assertEqual(
-            connection.errors,
-            [(1, "not_loaded", "Helman coordinator not available")],
-        )
-
 
 class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
-    """`helman/get_schedule_explanation` — added *alongside*
-    `helman/get_last_automation_run`, which the scheduling card still uses for
-    its rail-delta badges.
+    """`helman/get_schedule_explanation` — the per-lane, per-day "why", read by
+    the daily editor's explanation panel.
     """
 
     MESSAGE = {
