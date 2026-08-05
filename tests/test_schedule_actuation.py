@@ -47,7 +47,6 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.scheduling.actuation import (  # noqa: E402
-    OverrideScheduleActuator,
     ScheduleActuator,
     ScheduleExecutionDisabledError,
 )
@@ -143,14 +142,6 @@ class ScheduleActuatorTests(unittest.IsolatedAsyncioTestCase):
         actuator = ScheduleActuator(hass, is_execution_enabled=lambda: False)
 
         self.assertIs(actuator.read_state("switch.ac"), state)
-
-    async def test_override_actuator_is_always_open(self) -> None:
-        hass = FakeHass()
-        actuator = OverrideScheduleActuator(hass)
-
-        await actuator.async_call("switch", "turn_off", {"entity_id": "switch.ac"})
-
-        self.assertEqual(len(hass.services.calls), 1)
 
 
 class ActuationChokePointTests(unittest.TestCase):

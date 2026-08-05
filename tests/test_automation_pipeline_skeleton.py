@@ -2072,92 +2072,20 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.context.battery_state.current_soc, 50.0)
 
 
-class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
-    """The coordinator's in-memory record of the most recent run.
+class CoordinatorRunAutomationFailureTests(unittest.IsolatedAsyncioTestCase):
+    """What ``run_automation`` returns when the runner escapes.
 
-    The websocket getter that used to read it is gone with the scheduling card,
-    so these assert against the cached attribute directly: the run path must
-    still store a defensive copy of every attempted run, latest wins.
+    An exception that gets past the runner must still come back as a structured
+    ``runner_failed`` result rather than propagating to the caller.
     """
 
-    async def test_run_automation_stores_a_copy_of_the_last_result(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
-        coordinator._active_config = {}
-        coordinator._last_automation_run_result = None
-        # Caching a run result also announces the new plan on the bus, so every
-        # run path -- including the escaped-failure one -- needs a bus to fire on.
-        coordinator._hass = SimpleNamespace(
-            bus=SimpleNamespace(async_fire=lambda event_type, event_data=None: None)
-        )
-        result = AutomationRunResult.completed(snapshot=_make_snapshot())
-
-        class _FakeRunner:
-            def __init__(self, *, coordinator, automation_config) -> None:
-                self._result = result
-
-            async def run(self, *, reference_time=None, run_reason=None):
-                return self._result
-
-        with (
-            patch.object(coordinator_module, "read_automation_config", return_value=None),
-            patch.object(pipeline_module, "AutomationRunner", _FakeRunner),
-        ):
-            returned = await coordinator.run_automation(
-                reference_time=REFERENCE_TIME,
-                reason="trigger",
-            )
-
-        cached = coordinator._last_automation_run_result
-
-        self.assertIs(returned, result)
-        self.assertEqual(cached.to_dict(), result.to_dict())
-        self.assertIsNot(cached, result)
-
-    async def test_run_automation_overwrites_cached_result_with_latest_run(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
-        coordinator._active_config = {}
-        coordinator._last_automation_run_result = None
-        # Caching a run result also announces the new plan on the bus, so every
-        # run path -- including the escaped-failure one -- needs a bus to fire on.
-        coordinator._hass = SimpleNamespace(
-            bus=SimpleNamespace(async_fire=lambda event_type, event_data=None: None)
-        )
-        first_result = AutomationRunResult.skipped(reason="first_run")
-        second_result = AutomationRunResult.completed(snapshot=_make_snapshot())
-        queued_results = [first_result, second_result]
-
-        class _FakeRunner:
-            def __init__(self, *, coordinator, automation_config) -> None:
-                self._result = queued_results.pop(0)
-
-            async def run(self, *, reference_time=None, run_reason=None):
-                return self._result
-
-        with (
-            patch.object(coordinator_module, "read_automation_config", return_value=None),
-            patch.object(pipeline_module, "AutomationRunner", _FakeRunner),
-        ):
-            await coordinator.run_automation(
-                reference_time=REFERENCE_TIME,
-                reason="trigger:first",
-            )
-            await coordinator.run_automation(
-                reference_time=REFERENCE_TIME,
-                reason="trigger:second",
-            )
-
-        cached_result = coordinator._last_automation_run_result
-
-        self.assertEqual(cached_result.to_dict(), second_result.to_dict())
-
-    async def test_run_automation_caches_runner_failed_result_when_runner_escapes(
+    async def test_run_automation_returns_runner_failed_when_runner_escapes(
         self,
     ) -> None:
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._active_config = {}
-        coordinator._last_automation_run_result = None
-        # Caching a run result also announces the new plan on the bus, so every
-        # run path -- including the escaped-failure one -- needs a bus to fire on.
+        # Recording a run also announces the new plan on the bus, so every run
+        # path -- including the escaped-failure one -- needs a bus to fire on.
         coordinator._hass = SimpleNamespace(
             bus=SimpleNamespace(async_fire=lambda event_type, event_data=None: None)
         )
@@ -2178,8 +2106,6 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
                 reason="trigger",
             )
 
-        cached_result = coordinator._last_automation_run_result
-
         self.assertEqual(result.reason, "runner_failed")
         self.assertEqual(
             result.failure,
@@ -2189,8 +2115,6 @@ class CoordinatorLastAutomationRunTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertIsInstance(result.duration_ms, int)
-        self.assertEqual(cached_result.to_dict(), result.to_dict())
-        self.assertIsNot(cached_result, result)
 
 
 class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):

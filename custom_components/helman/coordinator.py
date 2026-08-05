@@ -148,10 +148,8 @@ from .scheduling.runtime_status import (
 )
 from .scheduling.action_resolution import resolve_executed_schedule_action
 from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_history
-from .scheduling.actuation import OverrideScheduleActuator
 from .scheduling.normal_state import (
     ControllableEntityDict,
-    async_restore_normal_state as async_apply_normal_state,
     build_controllable_entities,
 )
 from .scheduling.schedule_executor import (
@@ -485,7 +483,6 @@ class HelmanCoordinator:
         self._refresh_tasks: set[asyncio.Task[Any]] = set()
         self._automation_input_bundle: AutomationInputBundle | None = None
         self._day_context_store = DayContextStore(hass)
-        self._last_automation_run_result: AutomationRunResult | None = None
         # Per-slot condition explanations, accumulated in memory and keyed by
         # (target lane, date). Deliberately not persisted: the plan is rebuilt
         # from `build_horizon_start(now)` every 15 minutes, so the record
@@ -584,8 +581,7 @@ class HelmanCoordinator:
         """
         return self._explanation_book.get(target_key=target_key, date=date)
 
-    def _set_last_automation_run_result(self, result: AutomationRunResult) -> None:
-        self._last_automation_run_result = deepcopy(result)
+    def _record_automation_run(self, result: AutomationRunResult) -> None:
         # Record the condition map + time this plan was built from, so the
         # condition-check poll can detect a flip and trigger a fast re-plan.
         if result.ran_automation and result.snapshot is not None:
@@ -594,8 +590,8 @@ class HelmanCoordinator:
                 result.snapshot.context.condition_met_by_optimizer_id
             )
         # Fired even when the merged result equalled the stored document and no
-        # write happened: the explanation book, the last-run result and the
-        # derived forecasts still moved, and the inspector draws those.
+        # write happened: the explanation book and the derived forecasts still
+        # moved, and the inspector draws those.
         self._fire_data_changed(DATA_CHANGED_KIND_PLAN)
 
     @staticmethod
@@ -1970,7 +1966,7 @@ class HelmanCoordinator:
                 0,
                 result.failure.stage,
             )
-        self._set_last_automation_run_result(result)
+        self._record_automation_run(result)
         return result
 
     async def _async_run_automation_trigger_request(
@@ -4344,7 +4340,6 @@ class HelmanCoordinator:
         self._entry = None
         self._removing_entity_ids.clear()
         self._power_history.clear()
-        self._last_automation_run_result = None
         self._explanation_book.clear()
 
         for unsub in self._unsub_listeners:
