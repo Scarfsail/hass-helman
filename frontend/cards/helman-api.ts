@@ -450,14 +450,6 @@ export interface EntityActualHistoryPayload {
     entities: Record<string, EntityActualHistorySlotDTO[]>;
 }
 
-export interface RestoreNormalStateRequest {
-    type: "helman/restore_normal_state";
-}
-
-export interface RestoreNormalStateResponse {
-    restored: number;
-}
-
 export interface EntityReferenceDTO {
     entityId: string;
 }
@@ -689,8 +681,4 @@ export interface AutomationRunPayload {
     cleanup?: { reason: string; actionsStripped: number };
     failure?: { stage: string; message: string; unexpected: boolean };
     trace?: AutomationTraceDTO;
-}
-
-export interface GetLastAutomationRunRequest {
-    type: "helman/get_last_automation_run";
 }

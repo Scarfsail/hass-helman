@@ -6,8 +6,6 @@ import type {
     EntityActualHistoryPayload,
     GetEntityActualHistoryRequest,
     GetControllableEntitiesRequest,
-    RestoreNormalStateRequest,
-    RestoreNormalStateResponse,
     GetApplianceProjectionsRequest,
     GetAppliancesRequest,
     GetScheduleRequest,
@@ -66,13 +64,6 @@ export class HelmanClient {
             type: "helman/get_entity_actual_history",
         };
         return this._hass.callWS<EntityActualHistoryPayload>(request);
-    }
-
-    public restoreNormalState(): Promise<RestoreNormalStateResponse> {
-        const request: RestoreNormalStateRequest = {
-            type: "helman/restore_normal_state",
-        };
-        return this._hass.callWS<RestoreNormalStateResponse>(request);
     }
 
     public getAppliances(): Promise<AppliancesPayload> {

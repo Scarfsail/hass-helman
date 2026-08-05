@@ -110,7 +110,6 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_set_schedule_execution)
     async_register_command(hass, ws_get_controllable_entities)
     async_register_command(hass, ws_get_entity_actual_history)
-    async_register_command(hass, ws_restore_normal_state)
     async_register_command(hass, ws_get_appliances)
     async_register_command(hass, ws_get_appliance_projections)
     async_register_command(hass, ws_get_device_tree)
@@ -122,28 +121,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_solar_bias_day_aggregates)
     async_register_command(hass, ws_get_history)
     async_register_command(hass, ws_run_automation)
-    async_register_command(hass, ws_get_last_automation_run)
     async_register_command(hass, ws_get_schedule_explanation)
-
-
-@websocket_api.websocket_command({
-    vol.Required("type"): "helman/get_last_automation_run",
-})
-@callback
-def ws_get_last_automation_run(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> None:
-    if not _require_admin(connection, msg):
-        return
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
-        return
-
-    result = coordinator.get_last_automation_run_result()
-    connection.send_result(msg["id"], None if result is None else result.to_dict())
 
 
 @websocket_api.websocket_command({
@@ -461,28 +439,6 @@ async def ws_get_entity_actual_history(
     connection.send_result(
         msg["id"], {"entities": await coordinator.async_get_entity_actual_history()}
     )
-
-
-@websocket_api.websocket_command({
-    vol.Required("type"): "helman/restore_normal_state",
-})
-@websocket_api.async_response
-async def ws_restore_normal_state(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> None:
-    """Put everything back to rest, on explicit user request.
-
-    Best effort: whatever fails stays listed by get_non_normal_entities.
-    """
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
-        return
-
-    restored = await coordinator.async_restore_normal_state()
-    connection.send_result(msg["id"], {"restored": restored})
 
 
 @websocket_api.websocket_command({

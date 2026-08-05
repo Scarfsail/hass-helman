@@ -239,8 +239,8 @@ class OptimizerTrace:
     """Per-run recorder. One instance per automation run, owned by the loop.
 
     All public mutators swallow their own errors: observability must never fail
-    the run. ``to_dict`` produces the serialized shape consumed over the
-    ``helman/get_last_automation_run`` websocket.
+    the run. ``to_dict`` produces the serialized shape returned by the
+    ``helman/run_automation`` websocket.
     """
 
     def __init__(self, *, slot_ids: Sequence[str]) -> None:
