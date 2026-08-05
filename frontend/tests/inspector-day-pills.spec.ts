@@ -827,5 +827,8 @@ test.describe("solar inspector header layout", () => {
         expect(layout.actions.top).toBeLessThan(layout.dayNav.bottom);
         expect(layout.weekNav.left).toBeGreaterThanOrEqual(layout.dayNav.right - 1);
         expect(Math.round(layout.weekNav.left)).toBe(Math.round(layout.actions.left));
+        // Against the last pill rather than out at the card's far edge: a wide
+        // card must not leave the controls a screen away from the days.
+        expect(layout.weekNav.left - layout.dayNav.right).toBeLessThanOrEqual(12);
     });
 });

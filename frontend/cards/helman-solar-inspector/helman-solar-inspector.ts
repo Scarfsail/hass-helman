@@ -509,7 +509,10 @@ export class HelmanSolarInspector extends LitElement {
        and take every chart under it along. */
     .day-nav {
       display: flex;
-      flex: 1 1 auto;
+      /* Only as wide as the days, never growing to fill the line: the controls
+         belong against the last pill, where the hand already is, rather than
+         out at the card's far edge. */
+      flex: 0 1 auto;
       align-items: stretch;
       gap: 8px;
       min-width: 0;
@@ -539,11 +542,12 @@ export class HelmanSolarInspector extends LitElement {
       line-height: 1;
     }
 
+    /* Left-packed, on either line: beside the pills when the header fits, and
+       under their left edge when it wraps. */
     .nav-actions {
       display: flex;
       align-items: center;
       gap: 6px;
-      margin-inline-start: auto;
     }
 
     .icon-button.active {
