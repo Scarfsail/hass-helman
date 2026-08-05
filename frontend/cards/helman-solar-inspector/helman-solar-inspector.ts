@@ -519,11 +519,25 @@ export class HelmanSolarInspector extends LitElement {
       min-width: 0;
     }
 
-    /* Arrows stand as tall as what they step through. */
-    .day-arrow {
+    /* The two week buttons share the height of what they step through, one
+       above the other — the row they page is horizontal, so stacking them is
+       what keeps the pair beside it rather than eating its width twice. */
+    .week-nav {
+      display: flex;
       flex: 0 0 auto;
+      flex-direction: column;
       align-self: stretch;
+      gap: 2px;
+    }
+
+    /* Specific enough to beat the .icon-button tap-target floor further down:
+       the pair as a whole keeps that height, so each half is under it. */
+    .week-nav .week-arrow {
+      flex: 1 1 0;
+      min-height: 0;
       height: auto;
+      padding: 0 6px;
+      line-height: 1;
     }
 
     .nav-actions {
@@ -1116,28 +1130,37 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderNavigation(payload: InspectorPayload | null) {
-    const canGoPrevious = payload?.range.canGoPrevious ?? true;
-    const canGoNext = payload?.range.canGoNext ?? true;
+    const today = this._todayIso();
+    const pillWindow = this._pillWindow(today);
+    const minDate = this._range?.minDate ?? null;
+    const canGoBack = minDate === null || this._selectedDate > minDate;
+    const canGoForward = this._selectedDate < today;
     // The day and its offset used to head the card in words. The pills say the
     // same thing and say it about every day at once, so the words went.
     return html`
       <div class="nav">
-        <!-- Arrows and pills are one control: an arrow that wrapped away from
-             the row it steps would be an orphan. -->
+        <!-- Buttons and pills are one control: a button that wrapped away from
+             the row it pages would be an orphan. -->
         <div class="day-nav">
-          <button class="icon-button day-arrow" title=${this._t("bias_correction.inspector.previous_day")} ?disabled=${!canGoPrevious || this._loading} @click=${() => this._moveDay(-1)}>&lt;</button>
+          <!-- One week per click rather than one day: the row already offers
+               every day of the week it shows, so what the buttons are for is
+               reaching a *different* week — then the pill picks the day. -->
+          <div class="week-nav">
+            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.previous_week")} ?disabled=${!canGoBack || this._loading} @click=${() => this._moveWeek(-1)}>&lsaquo;&lsaquo;</button>
+            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.next_week")} ?disabled=${!canGoForward || this._loading} @click=${() => this._moveWeek(1)}>&rsaquo;&rsaquo;</button>
+          </div>
           <helman-solar-day-pills
             class="day-pills"
             .hass=${this.hass}
             .selectedDate=${this._selectedDate}
-            .startDate=${this._todayIso()}
-            .endDate=${this._range?.maxDate ?? this._todayIso()}
+            .currentDate=${today}
+            .startDate=${pillWindow.start}
+            .endDate=${pillWindow.end}
             .historyDay=${this._historyPillDay(payload)}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
             @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>
-          <button class="icon-button day-arrow" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
         </div>
         <div class="nav-actions">
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
@@ -3195,15 +3218,59 @@ export class HelmanSolarInspector extends LitElement {
     }
   }
 
-  private _moveDay(delta: number) {
-    const current = this._parseIsoDate(this._selectedDate || this._todayIso());
-    const next = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
-    this._selectedDate = this._formatDateParts(
-      next.getUTCFullYear(),
-      next.getUTCMonth() + 1,
-      next.getUTCDate(),
-    );
+  /**
+   * Travel a week at a time, and let the pill row follow.
+   *
+   * Forward stops at today rather than at `maxDate`: today is where the row
+   * turns back into the forward-looking one, and the days beyond it are already
+   * on screen there, so stepping past would only skip over them.
+   */
+  private _moveWeek(delta: number) {
+    const today = this._todayIso();
+    const target = this._addDays(this._selectedDate || today, delta * 7);
+    const minDate = this._range?.minDate ?? null;
+    const clamped = delta < 0
+      ? (minDate !== null && target < minDate ? minDate : target)
+      : (target > today ? today : target);
+    if (clamped === this._selectedDate) {
+      return;
+    }
+    this._selectedDate = clamped;
     this._load();
+  }
+
+  /**
+   * The days the pill row offers, derived from the selected one.
+   *
+   * Forward, the row is what it has always been: today to the end of the
+   * forecast. Backward it becomes a fixed seven-day block, so every day of a
+   * week is one click away and paging lands on whole weeks. The block is a
+   * function of the selection alone — no offset to keep in step with it — and
+   * every day inside one block maps back to that same block, so clicking a pill
+   * never moves the row out from under the click.
+   */
+  private _pillWindow(today: string): { start: string; end: string } {
+    const selected = this._selectedDate || today;
+    if (selected >= today) {
+      return { start: today, end: this._range?.maxDate ?? today };
+    }
+
+    const daysBack = Math.round(
+      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${selected}T00:00:00Z`)) / 86_400_000,
+    );
+    const weeksBack = Math.ceil(daysBack / 7);
+    const start = this._addDays(today, -7 * weeksBack);
+    return { start, end: this._addDays(start, 6) };
+  }
+
+  private _addDays(dayKey: string, delta: number): string {
+    const current = this._parseIsoDate(dayKey);
+    const moved = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
+    return this._formatDateParts(
+      moved.getUTCFullYear(),
+      moved.getUTCMonth() + 1,
+      moved.getUTCDate(),
+    );
   }
 
   /**

@@ -284,12 +284,12 @@ function readCard(page: Page): Promise<CardReadout> {
     });
 }
 
-/** Move to the next day via the header arrow, as a user would. */
-async function pressNextDay(page: Page): Promise<void> {
+/** Leave today via the header's back-a-week button, as a user would. */
+async function pressPreviousWeek(page: Page): Promise<void> {
     await page.evaluate(() => {
         const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
-        const arrows = root?.querySelectorAll(".day-arrow");
-        (arrows?.[1] as HTMLButtonElement | undefined)?.click();
+        const arrows = root?.querySelectorAll(".week-arrow");
+        (arrows?.[0] as HTMLButtonElement | undefined)?.click();
     });
 }
 
@@ -297,7 +297,7 @@ test("a navigation blanks the card and says it is loading", async ({ page }) => 
     await mountInspector(page);
     const startingDay = (await readCard(page)).selectedDay;
 
-    await pressNextDay(page);
+    await pressPreviousWeek(page);
     await page.waitForFunction(() => window.__pendingInspector() === 1);
 
     // Mid-flight: the old day is gone rather than mislabelled as the new one.
@@ -314,7 +314,7 @@ test("an announced change refreshes the drawn day without disturbing it", async 
     await mountInspector(page);
 
     // Leave today, so a refresh that quietly fell back to today would show up.
-    await pressNextDay(page);
+    await pressPreviousWeek(page);
     await page.waitForFunction(() => window.__pendingInspector() === 1);
     await page.evaluate(() => window.__releaseInspector());
     await expect.poll(() => readCard(page)).toMatchObject({ hasChart: true });

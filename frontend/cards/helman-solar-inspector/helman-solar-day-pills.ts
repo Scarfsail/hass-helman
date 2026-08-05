@@ -160,10 +160,16 @@ export class HelmanSolarDayPills extends LitElement {
     @property({ attribute: false }) public hass?: HomeAssistant;
     /** The inspector's selected day, `YYYY-MM-DD`; empty until it settles. */
     @property({ type: String }) public selectedDate = "";
-    /** First day to offer — today, in the house's time zone. */
+    /** First day to offer. Today, or the start of a past week being paged to. */
     @property({ type: String }) public startDate = "";
-    /** Last day the inspector has a forecast for. */
+    /** Last day of the window: the forecast's end, or the week's last day. */
     @property({ type: String }) public endDate = "";
+    /**
+     * Today, in the house's time zone. Named separately from `startDate`
+     * because the window can sit entirely in the past, and it is today that
+     * decides which pill reads "Today" and which "Yesterday".
+     */
+    @property({ type: String }) public currentDate = "";
     @property({ type: String }) public timeZone = "UTC";
     /**
      * The past day the inspector is showing, rebuilt from its measurements.
@@ -190,6 +196,7 @@ export class HelmanSolarDayPills extends LitElement {
         historyDay: unknown;
         startDate: string;
         endDate: string;
+        currentDate: string;
         timeZone: string;
     } | null = null;
     /** The day the row was last scrolled to, so a re-render does not re-scroll. */
@@ -412,6 +419,7 @@ export class HelmanSolarDayPills extends LitElement {
             && previous.historyDay === this.historyDay
             && previous.startDate === this.startDate
             && previous.endDate === this.endDate
+            && previous.currentDate === this.currentDate
             && previous.timeZone === this.timeZone
         ) {
             return;
@@ -423,6 +431,7 @@ export class HelmanSolarDayPills extends LitElement {
             historyDay: this.historyDay,
             startDate: this.startDate,
             endDate: this.endDate,
+            currentDate: this.currentDate,
             timeZone: this.timeZone,
         };
 
@@ -451,7 +460,10 @@ export class HelmanSolarDayPills extends LitElement {
             slots,
             slotForecastMap,
             historyDay: this.historyDay,
-            currentDayKey: this._normalized.currentDayKey ?? this.startDate,
+            // The card's own "today" leads: `startDate` is only today while the
+            // row looks forward, and a past week must not label its first day
+            // "Today".
+            currentDayKey: this.currentDate || this._normalized.currentDayKey || this.startDate,
             locale: this._locale,
             timeZone: this.timeZone,
             todayLabel: this._localize("scheduling.day.today"),

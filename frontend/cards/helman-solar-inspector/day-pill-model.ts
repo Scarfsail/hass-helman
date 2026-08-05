@@ -163,17 +163,24 @@ export function buildSolarInspectorDayPills({
         isHistory: false,
     }));
 
-    // A past day is only ever shown one at a time, and only while it is the
-    // selected one, so it leads the row rather than opening a second history
-    // strip of days nobody asked for.
-    if (historyDay !== null && (dayKeys.length === 0 || historyDay.dayKey < dayKeys[0])) {
-        pills.unshift({
+    // A past day is only ever measured one at a time — the one being shown. It
+    // may already have a pill, when the row is paged onto a past week; then the
+    // measurements simply land on it. When it does not, it leads the row rather
+    // than opening a second history strip of days nobody asked for.
+    if (historyDay !== null) {
+        const existing = pills.findIndex((pill) => pill.dayKey === historyDay.dayKey);
+        const measured = {
             dayKey: historyDay.dayKey,
             label: label(historyDay.dayKey),
             aggregate: historyDay.aggregate,
             availability: historyDay.availability,
             isHistory: true,
-        });
+        };
+        if (existing >= 0) {
+            pills[existing] = measured;
+        } else if (dayKeys.length === 0 || historyDay.dayKey < dayKeys[0]) {
+            pills.unshift(measured);
+        }
     }
 
     return {
