@@ -78,16 +78,3 @@ class ScheduleActuator:
             dict(data),
             blocking=True,
         )
-
-
-class OverrideScheduleActuator(ScheduleActuator):
-    """An actuator that is always open, for explicit user-initiated actions.
-
-    Used only by the "turn everything to normal" action the user triggers from
-    the scheduling card while execution is disabled. It exists so that the one
-    legitimate exception is a distinct, named type rather than a flag threaded
-    through the normal execution path.
-    """
-
-    def __init__(self, hass: HomeAssistant) -> None:
-        super().__init__(hass, is_execution_enabled=lambda: True)

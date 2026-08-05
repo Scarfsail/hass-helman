@@ -148,10 +148,8 @@ from .scheduling.runtime_status import (
 )
 from .scheduling.action_resolution import resolve_executed_schedule_action
 from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_history
-from .scheduling.actuation import OverrideScheduleActuator
 from .scheduling.normal_state import (
     ControllableEntityDict,
-    async_restore_normal_state as async_apply_normal_state,
     build_controllable_entities,
 )
 from .scheduling.schedule_executor import (
@@ -472,11 +470,6 @@ class HelmanCoordinator:
         self._cached_appliance_forecast_pipeline: (
             _ApplianceForecastPipelineSnapshot | None
         ) = None
-        self._cached_appliance_projection_plan: ApplianceProjectionPlan | None = None
-        self._cached_appliance_projection_expires_at: datetime | None = None
-        self._cached_appliance_projection_started_at: datetime | None = None
-        self._cached_appliance_projection_house_generated_at: str | None = None
-        self._cached_appliance_projection_solar_signature: tuple[Any, ...] | None = None
         self._cached_appliance_projection_schedule_signature: tuple[
             tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
             ...,
@@ -485,7 +478,6 @@ class HelmanCoordinator:
         self._refresh_tasks: set[asyncio.Task[Any]] = set()
         self._automation_input_bundle: AutomationInputBundle | None = None
         self._day_context_store = DayContextStore(hass)
-        self._last_automation_run_result: AutomationRunResult | None = None
         # Per-slot condition explanations, accumulated in memory and keyed by
         # (target lane, date). Deliberately not persisted: the plan is rebuilt
         # from `build_horizon_start(now)` every 15 minutes, so the record
@@ -584,8 +576,7 @@ class HelmanCoordinator:
         """
         return self._explanation_book.get(target_key=target_key, date=date)
 
-    def _set_last_automation_run_result(self, result: AutomationRunResult) -> None:
-        self._last_automation_run_result = deepcopy(result)
+    def _record_automation_run(self, result: AutomationRunResult) -> None:
         # Record the condition map + time this plan was built from, so the
         # condition-check poll can detect a flip and trigger a fast re-plan.
         if result.ran_automation and result.snapshot is not None:
@@ -594,8 +585,8 @@ class HelmanCoordinator:
                 result.snapshot.context.condition_met_by_optimizer_id
             )
         # Fired even when the merged result equalled the stored document and no
-        # write happened: the explanation book, the last-run result and the
-        # derived forecasts still moved, and the inspector draws those.
+        # write happened: the explanation book and the derived forecasts still
+        # moved, and the inspector draws those.
         self._fire_data_changed(DATA_CHANGED_KIND_PLAN)
 
     @staticmethod
@@ -1970,7 +1961,7 @@ class HelmanCoordinator:
                 0,
                 result.failure.stage,
             )
-        self._set_last_automation_run_result(result)
+        self._record_automation_run(result)
         return result
 
     async def _async_run_automation_trigger_request(
@@ -3383,11 +3374,6 @@ class HelmanCoordinator:
         self._invalidate_appliance_projection_cache()
 
     def _invalidate_appliance_projection_cache(self) -> None:
-        self._cached_appliance_projection_plan = None
-        self._cached_appliance_projection_expires_at = None
-        self._cached_appliance_projection_started_at = None
-        self._cached_appliance_projection_house_generated_at = None
-        self._cached_appliance_projection_solar_signature = None
         self._cached_appliance_projection_schedule_signature = None
 
     def _has_valid_battery_forecast_cache(
@@ -3491,79 +3477,7 @@ class HelmanCoordinator:
         self._cached_battery_forecast_schedule_effective_signature = (
             schedule_effective_signature
         )
-        self._cached_appliance_projection_plan = pipeline.projection_plan
-        self._cached_appliance_projection_expires_at = self._cached_battery_forecast_expires_at
-        self._cached_appliance_projection_started_at = started_at
-        self._cached_appliance_projection_house_generated_at = house_forecast.get(
-            "generatedAt"
-        )
-        self._cached_appliance_projection_solar_signature = (
-            self._build_battery_forecast_solar_signature(solar_forecast)
-        )
         self._cached_appliance_projection_schedule_signature = appliance_schedule_signature
-
-    def _has_valid_appliance_projection_cache(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-    ) -> bool:
-        if (
-            self._cached_appliance_projection_plan is None
-            or self._cached_appliance_projection_expires_at is None
-            or self._cached_appliance_projection_started_at is None
-        ):
-            return False
-        if dt_util.as_utc(started_at) >= dt_util.as_utc(
-            self._cached_appliance_projection_expires_at
-        ):
-            return False
-        if dt_util.as_utc(started_at) != dt_util.as_utc(
-            self._cached_appliance_projection_started_at
-        ):
-            return False
-        if (
-            self._cached_appliance_projection_house_generated_at
-            != house_forecast.get("generatedAt")
-        ):
-            return False
-        if (
-            self._cached_appliance_projection_solar_signature
-            != self._build_battery_forecast_solar_signature(solar_forecast)
-        ):
-            return False
-        return self._cached_appliance_projection_schedule_signature == schedule_signature
-
-    def _store_appliance_projection_cache(
-        self,
-        *,
-        plan: ApplianceProjectionPlan,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-    ) -> None:
-        self._cached_appliance_projection_plan = plan
-        self._cached_appliance_projection_expires_at = dt_util.as_local(
-            dt_util.as_utc(started_at)
-            + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
-        )
-        self._cached_appliance_projection_started_at = started_at
-        self._cached_appliance_projection_house_generated_at = house_forecast.get(
-            "generatedAt"
-        )
-        self._cached_appliance_projection_solar_signature = (
-            self._build_battery_forecast_solar_signature(solar_forecast)
-        )
-        self._cached_appliance_projection_schedule_signature = schedule_signature
 
     @staticmethod
     def _build_appliance_projection_schedule_signature(
@@ -4344,7 +4258,6 @@ class HelmanCoordinator:
         self._entry = None
         self._removing_entity_ids.clear()
         self._power_history.clear()
-        self._last_automation_run_result = None
         self._explanation_book.clear()
 
         for unsub in self._unsub_listeners:

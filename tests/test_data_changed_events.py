@@ -38,7 +38,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
 
 
 class _StubRunResult:
-    """The two attributes ``_set_last_automation_run_result`` reads.
+    """The two attributes ``_record_automation_run`` reads.
 
     ``ran_automation=False`` is the interesting case: the run happened, the
     merged plan matched what was stored, nothing was written -- and the cards
@@ -118,7 +118,7 @@ class DataChangedEventTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": False, "slots": {}}
         )
 
-        coordinator._set_last_automation_run_result(_StubRunResult())
+        coordinator._record_automation_run(_StubRunResult())
 
         self.assertEqual(
             self._data_changed_kinds(hass),

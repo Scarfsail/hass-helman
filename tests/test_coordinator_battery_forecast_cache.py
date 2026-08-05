@@ -532,11 +532,6 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._cached_battery_forecast_solar_signature = None
         coordinator._cached_battery_forecast_schedule_signature = None
         coordinator._cached_battery_forecast_schedule_effective_signature = None
-        coordinator._cached_appliance_projection_plan = None
-        coordinator._cached_appliance_projection_expires_at = None
-        coordinator._cached_appliance_projection_started_at = None
-        coordinator._cached_appliance_projection_house_generated_at = None
-        coordinator._cached_appliance_projection_solar_signature = None
         coordinator._cached_appliance_projection_schedule_signature = None
         coordinator._schedule_lock = asyncio.Lock()
         coordinator._build_battery_forecast_schedule_overlay = Mock(return_value=None)
@@ -741,20 +736,10 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalidate_battery_forecast_cache_also_clears_projection_cache(self) -> None:
         coordinator = self._make_coordinator()
-        coordinator._cached_appliance_projection_plan = object()
-        coordinator._cached_appliance_projection_expires_at = REFERENCE_TIME
-        coordinator._cached_appliance_projection_started_at = REFERENCE_TIME
-        coordinator._cached_appliance_projection_house_generated_at = "2026-03-20T21:05:00+01:00"
-        coordinator._cached_appliance_projection_solar_signature = ("available", ())
         coordinator._cached_appliance_projection_schedule_signature = ()
 
         coordinator._invalidate_battery_forecast_cache()
 
-        self.assertIsNone(coordinator._cached_appliance_projection_plan)
-        self.assertIsNone(coordinator._cached_appliance_projection_expires_at)
-        self.assertIsNone(coordinator._cached_appliance_projection_started_at)
-        self.assertIsNone(coordinator._cached_appliance_projection_house_generated_at)
-        self.assertIsNone(coordinator._cached_appliance_projection_solar_signature)
         self.assertIsNone(coordinator._cached_appliance_projection_schedule_signature)
 
     async def test_async_get_appliance_projection_plan_reuses_cache_for_same_started_at(

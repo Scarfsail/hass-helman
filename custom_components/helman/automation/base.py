@@ -150,10 +150,6 @@ class ScheduleWriter:
         self._blocked_slot_ids: list[str] = []
         self._written_slot_ids: list[str] = []
 
-    @property
-    def blocked_slot_ids(self) -> list[str]:
-        return list(self._blocked_slot_ids)
-
     def _condition_met(self, slot_id: str) -> bool:
         resolved = self._eligibility.at(slot_id)
         # A slot no group covers is only reachable when an optimizer writes
