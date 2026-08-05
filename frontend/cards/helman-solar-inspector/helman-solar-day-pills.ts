@@ -172,11 +172,11 @@ export class HelmanSolarDayPills extends LitElement {
     @property({ type: String }) public currentDate = "";
     @property({ type: String }) public timeZone = "UTC";
     /**
-     * The past day the inspector is showing, rebuilt from its measurements.
-     * Null whenever the shown day is today or later, which is why the row
-     * carries no history until the arrows are used.
+     * The past days of this window, rebuilt from what was measured for them.
+     * Empty while the row looks forward, which is why it carries no history
+     * until the week buttons are used.
      */
-    @property({ attribute: false }) public historyDay: SolarInspectorHistoryDay | null = null;
+    @property({ attribute: false }) public historyDays: readonly SolarInspectorHistoryDay[] = [];
 
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _forecast: ForecastPayload | null = null;
@@ -193,7 +193,7 @@ export class HelmanSolarDayPills extends LitElement {
     private _modelFor: {
         normalized: unknown;
         forecast: unknown;
-        historyDay: unknown;
+        historyDays: unknown;
         startDate: string;
         endDate: string;
         currentDate: string;
@@ -416,7 +416,7 @@ export class HelmanSolarDayPills extends LitElement {
             previous !== null
             && previous.normalized === this._normalized
             && previous.forecast === this._forecast
-            && previous.historyDay === this.historyDay
+            && previous.historyDays === this.historyDays
             && previous.startDate === this.startDate
             && previous.endDate === this.endDate
             && previous.currentDate === this.currentDate
@@ -428,7 +428,7 @@ export class HelmanSolarDayPills extends LitElement {
         this._modelFor = {
             normalized: this._normalized,
             forecast: this._forecast,
-            historyDay: this.historyDay,
+            historyDays: this.historyDays,
             startDate: this.startDate,
             endDate: this.endDate,
             currentDate: this.currentDate,
@@ -436,7 +436,7 @@ export class HelmanSolarDayPills extends LitElement {
         };
 
         const dayKeys = buildDayPillKeys(this.startDate, this.endDate);
-        if (dayKeys.length === 0 && this.historyDay === null) {
+        if (dayKeys.length === 0 && this.historyDays.length === 0) {
             this._model = EMPTY_DAY_PILL_MODEL;
             return;
         }
@@ -459,7 +459,7 @@ export class HelmanSolarDayPills extends LitElement {
             dayKeys,
             slots,
             slotForecastMap,
-            historyDay: this.historyDay,
+            historyDays: this.historyDays,
             // The card's own "today" leads: `startDate` is only today while the
             // row looks forward, and a past week must not label its first day
             // "Today".

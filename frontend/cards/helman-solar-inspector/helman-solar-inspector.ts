@@ -42,8 +42,8 @@ import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import type { ForecastPayload } from "../helman-api";
 import {
-  buildHistoryDayAggregate,
-  NO_PILL_AVAILABILITY,
+  buildHistoryDaysFromAggregates,
+  type SolarInspectorDayAggregateRow,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
 import "./helman-solar-export-price-strip";
@@ -400,6 +400,10 @@ export class HelmanSolarInspector extends LitElement {
    * reflow the whole card under the pointer.
    */
   @state() private _range: InspectorPayload["range"] | null = null;
+  /** Whole-day measurements for the past days the pill row is showing. */
+  @state() private _historyDays: readonly SolarInspectorHistoryDay[] = [];
+  /** The `start..end` those measurements were read for; null while forward. */
+  private _historyDaysFor: string | null = null;
   @state() private _loading = false;
   /**
    * A reload the user did not ask for, running under the drawn day.
@@ -1114,7 +1118,7 @@ export class HelmanSolarInspector extends LitElement {
     const payload = this._payload?.date === this._selectedDate ? this._payload : null;
     return html`
       <div class="body">
-        ${this._renderNavigation(payload)}
+        ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
              forecast, but the warning is about the card's data as a whole, so
              it is drawn here rather than inside either strip. -->
@@ -1129,9 +1133,12 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  private _renderNavigation(payload: InspectorPayload | null) {
+  private _renderNavigation() {
     const today = this._todayIso();
     const pillWindow = this._pillWindow(today);
+    // The window is derived from the selection, so this is the one place that
+    // knows it changed; the fetch is a no-op while it stays the same.
+    void this._loadDayAggregates(pillWindow.start, pillWindow.end);
     const minDate = this._range?.minDate ?? null;
     const canGoBack = minDate === null || this._selectedDate > minDate;
     const canGoForward = this._selectedDate < today;
@@ -1156,7 +1163,7 @@ export class HelmanSolarInspector extends LitElement {
             .currentDate=${today}
             .startDate=${pillWindow.start}
             .endDate=${pillWindow.end}
-            .historyDay=${this._historyPillDay(payload)}
+            .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
             @forecast-health=${this._handleForecastHealth}
@@ -3274,30 +3281,46 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The pill for a day already lived through, rebuilt from what was measured.
+   * Fill the past days of a window with what was measured for them.
    *
-   * The schedule and the forecast only reach forward, so a past day would have
-   * no pill at all — yet the card is holding that day's actuals, which is
-   * exactly the same three numbers. The pill appears only while such a day is
-   * the shown one, and it appears the moment it is picked: until its data
-   * lands it renders empty rather than letting the row shift under the click.
+   * The schedule and the forecast only reach forward, so without this every
+   * pill of a past week would be a bare label — the row would be a picker and
+   * stop being a comparison. One backend read covers the whole window: asking
+   * for an inspector day per pill would be seven full days of actuals,
+   * forecast history and training to end up with three numbers each.
+   *
+   * Keyed by the window, so paging is one request and clicking a pill inside
+   * the week is none.
    */
-  private _historyPillDay(payload: InspectorPayload | null): SolarInspectorHistoryDay | null {
-    const date = this._selectedDate;
-    if (date === "" || date >= this._todayIso()) {
-      return null;
+  private async _loadDayAggregates(start: string, end: string) {
+    if (!this.hass || start >= this._todayIso()) {
+      this._historyDays = [];
+      this._historyDaysFor = null;
+      return;
     }
-
-    if (payload === null || payload.date !== date) {
-      return { dayKey: date, aggregate: null, availability: NO_PILL_AVAILABILITY };
+    const key = `${start}..${end}`;
+    if (this._historyDaysFor === key) {
+      return;
     }
-
-    const { aggregate, availability } = buildHistoryDayAggregate({
-      solarActualWh: payload.totals.actualWh,
-      socActualPct: payload.series.batterySocActual.map((point) => point.pct),
-      gridActualWh: payload.series.gridActual.map((point) => point.valueWh),
-    });
-    return { dayKey: date, aggregate, availability };
+    this._historyDaysFor = key;
+    try {
+      const result = await this.hass.callWS<{ days: SolarInspectorDayAggregateRow[] }>({
+        type: "helman/solar_bias/day_aggregates",
+        start_date: start,
+        end_date: end,
+      });
+      if (this._historyDaysFor !== key) {
+        return;
+      }
+      this._historyDays = buildHistoryDaysFromAggregates(result?.days ?? []);
+    } catch (err) {
+      if (this._historyDaysFor === key) {
+        // A window with no measurements reads exactly like one that failed to
+        // load: bare pills. Not worth a banner over the day picker.
+        this._historyDays = [];
+      }
+    }
+    this.requestUpdate();
   }
 
   private _handleForecastHealth = (event: CustomEvent<DayPillForecastHealthDetail>) => {

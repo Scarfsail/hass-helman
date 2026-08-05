@@ -229,6 +229,9 @@ async function mountInspector(page: Page, minDaysBack = 30): Promise<void> {
 
         const requestedDates: string[] = [];
         (window as unknown as Record<string, unknown>).__requestedDates = requestedDates;
+        /** Every `start..end` the day-aggregate read was asked for, in order. */
+        const requestedRanges: string[] = [];
+        (window as unknown as Record<string, unknown>).__requestedRanges = requestedRanges;
 
         const el = document.createElement("helman-solar-inspector") as HTMLElement & Record<string, unknown>;
         el.hass = {
@@ -240,13 +243,45 @@ async function mountInspector(page: Page, minDaysBack = 30): Promise<void> {
                     msg.type === "helman/get_forecast" ? forecast : {},
             },
             states: {},
-            callWS: async (msg: { type: string; date?: string }) => {
+            callWS: async (msg: {
+                type: string;
+                date?: string;
+                start_date?: string;
+                end_date?: string;
+            }) => {
                 if (msg.type === "helman/get_schedule") {
                     return schedule;
                 }
                 if (msg.type === "helman/solar_bias/inspector") {
                     requestedDates.push(msg.date ?? "");
                     return inspectorPayload(msg.date ?? "");
+                }
+                // The whole-day figures behind a past week's pills: one read for
+                // the window, and the meters have nothing beyond today.
+                if (msg.type === "helman/solar_bias/day_aggregates") {
+                    const start = msg.start_date ?? "";
+                    const end = msg.end_date ?? "";
+                    requestedRanges.push(`${start}..${end}`);
+                    const days: unknown[] = [];
+                    for (
+                        let cursor = Date.parse(`${start}T00:00:00Z`);
+                        cursor <= Date.parse(`${end}T00:00:00Z`);
+                        cursor += dayMs
+                    ) {
+                        const day = new Date(cursor).toISOString().slice(0, 10);
+                        if (!isPast(day)) {
+                            continue;
+                        }
+                        days.push({
+                            date: day,
+                            solarWh: 6000,
+                            gridImportKwh: 3.2,
+                            gridExportKwh: 1.4,
+                            batteryMinSocPct: 30,
+                            batteryMaxSocPct: 84,
+                        });
+                    }
+                    return { days };
                 }
                 return {};
             },
@@ -318,6 +353,19 @@ async function readWeekArrows(page: Page): Promise<boolean[]> {
 function dayAt(offset: number): string {
     const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
     return new Date(todayMs + offset * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Wait until this many pills are drawn from measurements rather than forecast. */
+async function waitForHistoryPills(page: Page, count: number): Promise<void> {
+    await page.waitForFunction((expected) => {
+        const root = document.querySelector("helman-solar-inspector")
+            ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
+        return (root?.querySelectorAll('.pill[data-history="true"]').length ?? 0) === expected;
+    }, count);
+}
+
+async function readRequestedRanges(page: Page): Promise<string[]> {
+    return page.evaluate(() => [...((window as any).__requestedRanges as string[])]);
 }
 
 /** Wait until the row shows exactly these days, so a click has settled. */
@@ -538,34 +586,49 @@ test.describe("solar inspector history pill", () => {
         expect(await readWeekArrows(page)).toEqual([false, true]);
     });
 
-    test("the day being shown is built from its actuals wherever it sits", async ({ page }) => {
+    /**
+     * A past week has to be a comparison, not just a picker: every day of it
+     * draws what was measured, so the sunny one is visible before it is picked.
+     */
+    test("every day of a past week carries its measured bars", async ({ page }) => {
         await stepWeek(page, -1);
-        await page.waitForFunction(() => {
-            const root = document.querySelector("helman-solar-inspector")
-                ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
-            const history = root?.querySelector('.pill[data-history="true"] .day-aggregate-gauge.solar');
-            return !!history && !history.classList.contains("unavailable");
-        });
+        await waitForHistoryPills(page, 7);
 
         const pills = await readPills(page);
-        const history = pills.filter((pill) => pill.isHistory);
-        // Only ever one: the measurements belong to the day being shown, and
-        // the six days around it are labels alone.
-        expect(history).toHaveLength(1);
-        // It sits at its own place in the week, not prepended to it.
-        expect(pills[0]).toBe(history[0]);
-        expect(history[0].day).toBe(dayAt(-7));
-        expect(history[0].selected).toBe(true);
-        // A week back is far enough that the day carries its date.
-        expect(history[0].label).toMatch(/\d/);
+        expect(pills.filter((pill) => pill.isHistory)).toHaveLength(7);
+        for (const pill of pills) {
+            const gauges = new Map(pill.gauges.map((gauge) => [gauge.kind, gauge]));
+            expect(gauges.get("solar")!.text).not.toBe("");
+            expect(gauges.get("battery")!.unavailable).toBe(false);
+            expect(gauges.get("grid")!.unavailable).toBe(false);
+        }
+        // A week back is far enough that the landing day carries its date.
+        expect(pills[0].day).toBe(dayAt(-7));
+        expect(pills[0].selected).toBe(true);
+        expect(pills[0].label).toMatch(/\d/);
+    });
 
-        const gauges = new Map(history[0].gauges.map((gauge) => [gauge.kind, gauge]));
-        expect(gauges.get("solar")!.text).not.toBe("");
-        expect(gauges.get("battery")!.unavailable).toBe(false);
-        expect(gauges.get("grid")!.unavailable).toBe(false);
+    test("the week's figures are one read, and picking a day inside it is none", async ({ page }) => {
+        await stepWeek(page, -1);
+        await waitForHistoryPills(page, 7);
 
-        // The days it shares the week with have nothing measured for them.
-        expect(pills.slice(1).every((pill) => pill.gauges.every((gauge) => gauge.unavailable))).toBe(true);
+        const afterPaging = await readRequestedRanges(page);
+        expect(afterPaging).toEqual([`${dayAt(-7)}..${dayAt(-1)}`]);
+
+        await clickPill(page, 3);
+        await page.waitForFunction(
+            (day) => ((window as any).__requestedDates as string[]).includes(day),
+            dayAt(-4),
+        );
+        expect(await readRequestedRanges(page)).toEqual(afterPaging);
+
+        await stepWeek(page, -1);
+        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-14 + i)));
+        await waitForHistoryPills(page, 7);
+        expect(await readRequestedRanges(page)).toEqual([
+            `${dayAt(-7)}..${dayAt(-1)}`,
+            `${dayAt(-14)}..${dayAt(-8)}`,
+        ]);
     });
 
     /**

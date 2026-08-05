@@ -59,12 +59,6 @@ export interface SolarInspectorDayPillModel {
     scale: ScheduleTableDayAggregateScale;
 }
 
-export const NO_PILL_AVAILABILITY: SolarInspectorDayPillAvailability = {
-    battery: false,
-    solar: false,
-    grid: false,
-};
-
 export const EMPTY_DAY_PILL_MODEL: SolarInspectorDayPillModel = {
     pills: [],
     scale: { solarMaxWh: 0, gridMaxKwh: 0, priceMaxAbs: 0 },
@@ -90,7 +84,7 @@ export function buildSolarInspectorDayPills({
     dayKeys,
     slots,
     slotForecastMap,
-    historyDay,
+    historyDays,
     currentDayKey,
     locale,
     timeZone,
@@ -101,8 +95,8 @@ export function buildSolarInspectorDayPills({
     dayKeys: readonly string[];
     slots: readonly ScheduleDisplaySlot[];
     slotForecastMap: SlotForecastMap;
-    /** The past day being shown, if any; it leads the row. */
-    historyDay: SolarInspectorHistoryDay | null;
+    /** Past days measured for this row; one before it leads the row. */
+    historyDays: readonly SolarInspectorHistoryDay[];
     currentDayKey: string | null;
     locale: string;
     timeZone: string;
@@ -163,88 +157,89 @@ export function buildSolarInspectorDayPills({
         isHistory: false,
     }));
 
-    // A past day is only ever measured one at a time — the one being shown. It
-    // may already have a pill, when the row is paged onto a past week; then the
-    // measurements simply land on it. When it does not, it leads the row rather
-    // than opening a second history strip of days nobody asked for.
-    if (historyDay !== null) {
-        const existing = pills.findIndex((pill) => pill.dayKey === historyDay.dayKey);
-        const measured = {
+    // The schedule and the forecast only reach forward, so a past day's pill
+    // can only come from what was measured. A day inside the row takes its
+    // measurements in place; one that sits before the row — the single past day
+    // shown while the row still looks forward — leads it instead.
+    // The schedule and the forecast only reach forward, so a past day's pill can
+    // only say what was measured. Those days take their measurements in place;
+    // a measured day the row does not offer is simply not drawn.
+    let scale = forecast.dayAggregateScale;
+    const pillIndexByDayKey = new Map(pills.map((pill, index) => [pill.dayKey, index]));
+    for (const historyDay of historyDays) {
+        const index = pillIndexByDayKey.get(historyDay.dayKey);
+        if (index === undefined) {
+            continue;
+        }
+        pills[index] = {
             dayKey: historyDay.dayKey,
-            label: label(historyDay.dayKey),
+            label: pills[index].label,
             aggregate: historyDay.aggregate,
             availability: historyDay.availability,
             isHistory: true,
         };
-        if (existing >= 0) {
-            pills[existing] = measured;
-        } else if (dayKeys.length === 0 || historyDay.dayKey < dayKeys[0]) {
-            pills.unshift(measured);
-        }
-    }
-
-    return {
-        pills,
         // What was measured belongs on the same scale as what is forecast:
         // yesterday's sun is only worth showing next to tomorrow's if the two
         // bars mean the same thing.
-        scale: _extendScaleWithAggregate(forecast.dayAggregateScale, historyDay?.aggregate ?? null),
-    };
+        scale = _extendScaleWithAggregate(scale, historyDay.aggregate);
+    }
+
+    return { pills, scale };
+}
+
+/** One day of `helman/solar_bias/day_aggregates`. */
+export interface SolarInspectorDayAggregateRow {
+    date: string;
+    solarWh: number | null;
+    gridImportKwh: number | null;
+    gridExportKwh: number | null;
+    batteryMinSocPct: number | null;
+    batteryMaxSocPct: number | null;
 }
 
 /**
- * A day's whole-day numbers rebuilt from what actually happened.
+ * The measured days the backend read in one go, as pills can carry them.
  *
- * The payload counts energy leaving the house's demand as positive, so a grid
- * sample splits by sign: exports positive, imports negative. Surplus has no
- * measured counterpart — it is a property of a plan, not of a day that has
- * already happened — so it stays null and the gauge simply reads import/export.
+ * A day the meters have nothing for is dropped rather than returned empty: its
+ * pill then falls back to whatever the forecast says, which for a past day is
+ * nothing, and the gauges read unavailable — the honest answer either way, but
+ * without claiming a measured zero.
+ *
+ * Surplus has no measured counterpart — it is a property of a plan, not of a
+ * day that has already happened — so it stays null and the gauge reads
+ * import/export.
  */
-export function buildHistoryDayAggregate({
-    solarActualWh,
-    socActualPct,
-    gridActualWh,
-}: {
-    solarActualWh: number | null;
-    socActualPct: readonly number[];
-    gridActualWh: readonly number[];
-}): { aggregate: ScheduleTableDayAggregateModel | null; availability: SolarInspectorDayPillAvailability } {
-    const hasSolar = solarActualWh !== null && Number.isFinite(solarActualWh);
-    const hasBattery = socActualPct.length > 0;
-    const hasGrid = gridActualWh.length > 0;
-    if (!hasSolar && !hasBattery && !hasGrid) {
-        return { aggregate: null, availability: NO_PILL_AVAILABILITY };
-    }
-
-    let gridImportKwh = 0;
-    let gridExportKwh = 0;
-    for (const valueWh of gridActualWh) {
-        if (!Number.isFinite(valueWh)) {
+export function buildHistoryDaysFromAggregates(
+    rows: readonly SolarInspectorDayAggregateRow[],
+): SolarInspectorHistoryDay[] {
+    const days: SolarInspectorHistoryDay[] = [];
+    for (const row of rows) {
+        const hasSolar = row.solarWh !== null && Number.isFinite(row.solarWh);
+        const hasBattery = row.batteryMinSocPct !== null && row.batteryMaxSocPct !== null;
+        const hasGrid = row.gridImportKwh !== null || row.gridExportKwh !== null;
+        if (!hasSolar && !hasBattery && !hasGrid) {
             continue;
         }
-        if (valueWh >= 0) {
-            gridExportKwh += valueWh / 1000;
-        } else {
-            gridImportKwh += -valueWh / 1000;
-        }
-    }
 
-    return {
-        aggregate: {
-            batteryMinSocPct: hasBattery ? Math.min(...socActualPct) : null,
-            batteryMaxSocPct: hasBattery ? Math.max(...socActualPct) : null,
-            solarWh: hasSolar ? solarActualWh : null,
-            gridImportKwh: hasGrid ? gridImportKwh : null,
-            gridExportKwh: hasGrid ? gridExportKwh : null,
-            availableSurplusKwh: null,
-            priceHasData: false,
-            pricePositiveMin: null,
-            pricePositiveMax: null,
-            priceNegativeMin: null,
-            priceNegativeMax: null,
-        },
-        availability: { battery: hasBattery, solar: hasSolar, grid: hasGrid },
-    };
+        days.push({
+            dayKey: row.date,
+            aggregate: {
+                batteryMinSocPct: hasBattery ? row.batteryMinSocPct : null,
+                batteryMaxSocPct: hasBattery ? row.batteryMaxSocPct : null,
+                solarWh: hasSolar ? row.solarWh : null,
+                gridImportKwh: hasGrid ? row.gridImportKwh ?? 0 : null,
+                gridExportKwh: hasGrid ? row.gridExportKwh ?? 0 : null,
+                availableSurplusKwh: null,
+                priceHasData: false,
+                pricePositiveMin: null,
+                pricePositiveMax: null,
+                priceNegativeMin: null,
+                priceNegativeMax: null,
+            },
+            availability: { battery: hasBattery, solar: hasSolar, grid: hasGrid },
+        });
+    }
+    return days;
 }
 
 function _extendScaleWithAggregate(
