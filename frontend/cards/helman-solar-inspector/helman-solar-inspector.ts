@@ -515,31 +515,26 @@ export class HelmanSolarInspector extends LitElement {
       min-width: 0;
     }
 
-    /* Only as wide as the days it holds, so the forward arrow stays against the
-       last pill rather than drifting to the far edge. Shrinking is still
-       allowed — the row scrolls inside itself. */
+    /* Only as wide as the days it holds, so the toolbar stays against the last
+       pill rather than drifting to the far edge. Shrinking is still allowed —
+       the row scrolls inside itself. */
     .day-pills {
       flex: 0 1 auto;
       min-width: 0;
     }
 
-    /* The two week buttons share the height of what they step through, one
-       above the other — the row they page is horizontal, so stacking them is
-       what keeps the pair beside it rather than eating its width twice. */
+    /* Side by side at the head of the toolbar, back then forward — the pair
+       reads as one control, and both are as tall as the buttons they sit
+       among. */
     .week-nav {
       display: flex;
       flex: 0 0 auto;
-      flex-direction: column;
-      align-self: stretch;
-      gap: 2px;
+      align-items: stretch;
+      gap: 4px;
     }
 
-    /* Specific enough to beat the .icon-button tap-target floor further down:
-       the pair as a whole keeps that height, so each half is under it. */
-    .week-nav .week-arrow {
-      flex: 1 1 0;
-      min-height: 0;
-      height: auto;
+    .week-arrow {
+      min-width: 34px;
       padding: 0 6px;
       line-height: 1;
     }
@@ -1146,16 +1141,7 @@ export class HelmanSolarInspector extends LitElement {
     // same thing and say it about every day at once, so the words went.
     return html`
       <div class="nav">
-        <!-- Buttons and pills are one control: a button that wrapped away from
-             the row it pages would be an orphan. -->
         <div class="day-nav">
-          <!-- One week per click rather than one day: the row already offers
-               every day of the week it shows, so what the buttons are for is
-               reaching a *different* week — then the pill picks the day. -->
-          <div class="week-nav">
-            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.previous_week")} ?disabled=${!canGoBack || this._loading} @click=${() => this._moveWeek(-1)}>&lsaquo;&lsaquo;</button>
-            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.next_week")} ?disabled=${!canGoForward || this._loading} @click=${() => this._moveWeek(1)}>&rsaquo;&rsaquo;</button>
-          </div>
           <helman-solar-day-pills
             class="day-pills"
             .hass=${this.hass}
@@ -1170,6 +1156,17 @@ export class HelmanSolarInspector extends LitElement {
           ></helman-solar-day-pills>
         </div>
         <div class="nav-actions">
+          <!-- One week per click rather than one day: the row already offers
+               every day of the week it shows, so what the buttons are for is
+               reaching a *different* week — then the pill picks the day.
+
+               They lead the toolbar rather than standing beside the pills, so
+               that when the header runs out of width the row keeps a line to
+               itself and every control drops to the next one together. -->
+          <div class="week-nav">
+            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.previous_week")} ?disabled=${!canGoBack || this._loading} @click=${() => this._moveWeek(-1)}>&lsaquo;&lsaquo;</button>
+            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.next_week")} ?disabled=${!canGoForward || this._loading} @click=${() => this._moveWeek(1)}>&rsaquo;&rsaquo;</button>
+          </div>
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
             ${SLOT_SIZE_OPTIONS.map((minutes) => html`
               <button

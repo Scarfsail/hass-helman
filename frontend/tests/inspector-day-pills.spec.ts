@@ -698,36 +698,38 @@ test.describe("solar inspector header layout", () => {
         });
 
         expect(rows.actions).toBeGreaterThan(rows.dayNav);
-        // The week buttons never leave the row they page.
-        expect(rows.arrow).toBe(rows.dayNav);
+        // Everything that is not a day goes with the toolbar, so the narrow
+        // header is one line of days and one line of controls.
+        expect(rows.arrow).toBe(rows.actions);
     });
 
     /**
-     * Both week buttons in one column beside the row: side by side they would
-     * take width off the pills twice over, and the row is the part that cannot
-     * spare it.
+     * The week buttons lead the toolbar, back then forward, and are the same
+     * height as the controls beside them — they are read as part of that row,
+     * not as an appendage of the pills.
      */
-    test("the two week buttons stack, sharing the height of the row", async ({ page }) => {
+    test("the week buttons sit side by side at the head of the toolbar", async ({ page }) => {
         await page.setViewportSize({ width: 360, height: 900 });
         await mountInspector(page);
 
         const geometry = await page.evaluate(() => {
             const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
-            const buttons = Array.from(root.querySelectorAll(".week-arrow")) as HTMLElement[];
-            const row = (root.querySelector("helman-solar-day-pills") as HTMLElement)
-                .shadowRoot!.querySelector(".pill-row") as HTMLElement;
+            const box = (element: Element) => element.getBoundingClientRect();
+            const buttons = Array.from(root.querySelectorAll(".week-arrow"));
             return {
                 count: buttons.length,
-                boxes: buttons.map((button) => button.getBoundingClientRect()),
-                rowHeight: row.getBoundingClientRect().height,
+                boxes: buttons.map(box),
+                slotToggle: box(root.querySelector(".slot-size-toggle")!),
             };
         });
 
         expect(geometry.count).toBe(2);
-        expect(Math.round(geometry.boxes[0].left)).toBe(Math.round(geometry.boxes[1].left));
-        expect(geometry.boxes[1].top).toBeGreaterThanOrEqual(geometry.boxes[0].bottom);
-        expect(geometry.boxes[1].bottom - geometry.boxes[0].top)
-            .toBeGreaterThanOrEqual(geometry.rowHeight - 1);
+        // Side by side on one line, back to the left of forward.
+        expect(Math.round(geometry.boxes[0].top)).toBe(Math.round(geometry.boxes[1].top));
+        expect(geometry.boxes[0].right).toBeLessThanOrEqual(geometry.boxes[1].left);
+        // And ahead of the rest of the toolbar.
+        expect(geometry.boxes[1].right).toBeLessThanOrEqual(geometry.slotToggle.left);
+        expect(Math.round(geometry.boxes[0].height)).toBe(Math.round(geometry.slotToggle.height));
     });
 
     /**
@@ -801,18 +803,29 @@ test.describe("solar inspector header layout", () => {
         }
     });
 
-    test("the week buttons stand exactly as tall as the pills", async ({ page }) => {
+    /**
+     * Wide enough for one line: the days lead it and every control follows,
+     * with the week buttons first among them.
+     */
+    test("a header that fits keeps the days and the controls on one line", async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await mountInspector(page);
 
-        const heights = await page.evaluate(() => {
+        const layout = await page.evaluate(() => {
             const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
-            const arrow = (root.querySelector(".week-nav") as HTMLElement).getBoundingClientRect().height;
-            const pill = (root.querySelector("helman-solar-day-pills") as HTMLElement)
-                .shadowRoot!.querySelector(".pill")!.getBoundingClientRect().height;
-            return { arrow, pill };
+            const box = (selector: string) =>
+                (root.querySelector(selector) as HTMLElement).getBoundingClientRect();
+            return {
+                dayNav: box(".day-nav"),
+                weekNav: box(".week-nav"),
+                actions: box(".nav-actions"),
+            };
         });
 
-        expect(heights.arrow).toBeCloseTo(heights.pill, 1);
+        // One line: the toolbar is centred against the taller day row rather
+        // than sitting below it.
+        expect(layout.actions.top).toBeLessThan(layout.dayNav.bottom);
+        expect(layout.weekNav.left).toBeGreaterThanOrEqual(layout.dayNav.right - 1);
+        expect(Math.round(layout.weekNav.left)).toBe(Math.round(layout.actions.left));
     });
 });
