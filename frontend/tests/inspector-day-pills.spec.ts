@@ -819,16 +819,23 @@ test.describe("solar inspector header layout", () => {
                 dayNav: box(".day-nav"),
                 weekNav: box(".week-nav"),
                 actions: box(".nav-actions"),
+                slotToggle: box(".slot-size-toggle"),
+                // Direct child: `››` is the last `.icon-button` of its own
+                // group, so a descendant match would find it instead.
+                refresh: box(".nav-actions > .icon-button:last-child"),
+                nav: box(".nav"),
             };
         });
 
         // One line: the toolbar is centred against the taller day row rather
         // than sitting below it.
         expect(layout.actions.top).toBeLessThan(layout.dayNav.bottom);
+        // The week buttons follow the last pill rather than the card's far
+        // edge — they page the row, so they belong where the hand already is.
         expect(layout.weekNav.left).toBeGreaterThanOrEqual(layout.dayNav.right - 1);
-        expect(Math.round(layout.weekNav.left)).toBe(Math.round(layout.actions.left));
-        // Against the last pill rather than out at the card's far edge: a wide
-        // card must not leave the controls a screen away from the days.
         expect(layout.weekNav.left - layout.dayNav.right).toBeLessThanOrEqual(12);
+        // The settings take the other end.
+        expect(layout.slotToggle.left).toBeGreaterThan(layout.weekNav.right);
+        expect(layout.nav.right - layout.refresh.right).toBeLessThanOrEqual(2);
     });
 });

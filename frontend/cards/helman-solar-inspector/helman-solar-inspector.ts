@@ -542,12 +542,15 @@ export class HelmanSolarInspector extends LitElement {
       line-height: 1;
     }
 
-    /* Left-packed, on either line: beside the pills when the header fits, and
-       under their left edge when it wraps. */
+    /* Takes the rest of the line, so what is inside it can split: the week
+       buttons stay against the days they page, and the settings ride the far
+       edge. On a line with no slack to give they simply sit together. */
     .nav-actions {
       display: flex;
+      flex: 1 1 auto;
       align-items: center;
       gap: 6px;
+      min-width: 0;
     }
 
     .icon-button.active {
@@ -556,7 +559,10 @@ export class HelmanSolarInspector extends LitElement {
       color: var(--primary-color, #2563eb);
     }
 
+    /* Everything from here on is a setting rather than a way through the days,
+       so it goes to the opposite end of the header. */
     .slot-size-toggle {
+      margin-inline-start: auto;
       display: inline-flex;
       align-items: stretch;
       border: 1px solid var(--divider-color);
