@@ -47,6 +47,10 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# A pill row never offers more than a month of days, and the span is what sizes
+# the recorder read.
+_MAX_AGGREGATE_DAYS = 31
+
 
 class TrainingInProgressError(RuntimeError):
     pass
@@ -292,6 +296,148 @@ class SolarBiasCorrectionService:
             "factors": deepcopy(self._profile.factors),
             "omittedSlots": list(self._profile.omitted_slots),
         }
+
+    async def async_get_day_aggregates(
+        self, raw_start_date: str, raw_end_date: str
+    ) -> dict[str, Any]:
+        """Whole-day measured figures for a span of days, in one read each.
+
+        This is what the inspector's day pills need to be a comparison rather
+        than a picker: the same three numbers the pills already draw, for every
+        day on offer. Asking `async_get_inspector_day` once per pill would be a
+        week of full inspector days — actuals, forecast history and training —
+        to end up with three numbers apiece, so the meters are read once across
+        the whole span instead and bucketed into local days here.
+        """
+        start_date = date.fromisoformat(raw_start_date)
+        end_date = date.fromisoformat(raw_end_date)
+        local_tz = ZoneInfo(str(self._hass.config.time_zone))
+        local_now = dt_util.as_local(dt_util.now())
+        # Nothing is measured beyond now, and a span that reached past today
+        # would only widen the recorder read.
+        end_date = min(end_date, local_now.date())
+        if end_date < start_date:
+            return {"days": []}
+        start_date = max(start_date, end_date - timedelta(days=_MAX_AGGREGATE_DAYS - 1))
+
+        local_start = datetime.combine(start_date, time(0, 0), tzinfo=local_tz)
+        local_end = datetime.combine(
+            end_date + timedelta(days=1), time(0, 0), tzinfo=local_tz
+        )
+
+        def _entity_id(provider) -> str | None:
+            return provider() if provider is not None else None
+
+        raw_solar_entity = self._cfg.total_energy_entity_id
+        solar_entity = (
+            raw_solar_entity.strip() if isinstance(raw_solar_entity, str) else None
+        )
+        import_entity = _entity_id(self._grid_import_energy_entity_id_provider)
+        export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
+        soc_entity = _entity_id(self._battery_soc_entity_id_provider)
+
+        solar_kwh, imported_kwh, exported_kwh, soc_by_day = await asyncio.gather(
+            self._sum_meter_by_day(solar_entity, local_start, local_end, local_tz),
+            self._sum_meter_by_day(import_entity, local_start, local_end, local_tz),
+            self._sum_meter_by_day(export_entity, local_start, local_end, local_tz),
+            self._soc_bounds_by_day(soc_entity, local_start, local_end),
+        )
+
+        days: list[dict[str, Any]] = []
+        cursor = start_date
+        while cursor <= end_date:
+            day_key = cursor.isoformat()
+            solar = solar_kwh.get(day_key)
+            imported = imported_kwh.get(day_key)
+            exported = exported_kwh.get(day_key)
+            min_pct, max_pct = soc_by_day.get(day_key, (None, None))
+            days.append(
+                {
+                    "date": day_key,
+                    "solarWh": None if solar is None else round(solar * 1000.0, 1),
+                    "gridImportKwh": None if imported is None else round(imported, 3),
+                    "gridExportKwh": None if exported is None else round(exported, 3),
+                    "batteryMinSocPct": min_pct,
+                    "batteryMaxSocPct": max_pct,
+                }
+            )
+            cursor += timedelta(days=1)
+
+        return {"days": days}
+
+    async def _sum_meter_by_day(
+        self,
+        entity_id: str | None,
+        local_start: datetime,
+        local_end: datetime,
+        local_tz: ZoneInfo,
+    ) -> dict[str, float]:
+        """A cumulative meter's energy, summed into the local days it fell in.
+
+        One recorder read for the whole span. The slot deltas already unwrap
+        counter resets, so a daily-resetting meter survives the span crossing
+        its midnights.
+        """
+        if not entity_id:
+            return {}
+        from ..recorder_hourly_series import query_cumulative_slot_energy_changes
+
+        try:
+            by_slot = await query_cumulative_slot_energy_changes(
+                self._hass,
+                entity_id,
+                local_start=local_start,
+                local_end=local_end,
+                interval_minutes=15,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to load %s for day aggregates", entity_id)
+            return {}
+
+        totals: dict[str, float] = {}
+        for slot_start, value_kwh in by_slot.items():
+            day_key = slot_start.astimezone(local_tz).date().isoformat()
+            totals[day_key] = totals.get(day_key, 0.0) + value_kwh
+        return totals
+
+    async def _soc_bounds_by_day(
+        self,
+        entity_id: str | None,
+        local_start: datetime,
+        local_end: datetime,
+    ) -> dict[str, tuple[float | None, float | None]]:
+        """The lowest and highest SoC each local day reached, in one read."""
+        if not entity_id:
+            return {}
+        try:
+            states_by_entity = await _get_significant_states_safe(
+                self._hass,
+                dt_util.as_utc(local_start),
+                dt_util.as_utc(local_end),
+                [entity_id],
+            )
+        except Exception:
+            _LOGGER.exception("Failed to load battery SoC for day aggregates")
+            return {}
+
+        bounds: dict[str, tuple[float | None, float | None]] = {}
+        for state in (states_by_entity or {}).get(entity_id) or []:
+            try:
+                value = float(getattr(state, "state", None))
+            except (TypeError, ValueError):
+                continue
+            ts = getattr(state, "last_changed", None) or getattr(
+                state, "last_updated", None
+            )
+            if ts is None:
+                continue
+            day_key = dt_util.as_local(ts).date().isoformat()
+            low, high = bounds.get(day_key, (None, None))
+            bounds[day_key] = (
+                value if low is None else min(low, value),
+                value if high is None else max(high, value),
+            )
+        return bounds
 
     async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
         target_date = date.fromisoformat(raw_date)

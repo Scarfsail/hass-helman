@@ -42,8 +42,8 @@ import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import type { ForecastPayload } from "../helman-api";
 import {
-  buildHistoryDayAggregate,
-  NO_PILL_AVAILABILITY,
+  buildHistoryDaysFromAggregates,
+  type SolarInspectorDayAggregateRow,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
 import "./helman-solar-export-price-strip";
@@ -400,6 +400,10 @@ export class HelmanSolarInspector extends LitElement {
    * reflow the whole card under the pointer.
    */
   @state() private _range: InspectorPayload["range"] | null = null;
+  /** Whole-day measurements for the past days the pill row is showing. */
+  @state() private _historyDays: readonly SolarInspectorHistoryDay[] = [];
+  /** The `start..end` those measurements were read for; null while forward. */
+  private _historyDaysFor: string | null = null;
   @state() private _loading = false;
   /**
    * A reload the user did not ask for, running under the drawn day.
@@ -505,32 +509,48 @@ export class HelmanSolarInspector extends LitElement {
        and take every chart under it along. */
     .day-nav {
       display: flex;
-      flex: 1 1 auto;
+      /* Only as wide as the days, never growing to fill the line: the controls
+         belong against the last pill, where the hand already is, rather than
+         out at the card's far edge. */
+      flex: 0 1 auto;
       align-items: stretch;
       gap: 8px;
       min-width: 0;
     }
 
-    /* Only as wide as the days it holds, so the forward arrow stays against the
-       last pill rather than drifting to the far edge. Shrinking is still
-       allowed — the row scrolls inside itself. */
+    /* Only as wide as the days it holds, so the toolbar stays against the last
+       pill rather than drifting to the far edge. Shrinking is still allowed —
+       the row scrolls inside itself. */
     .day-pills {
       flex: 0 1 auto;
       min-width: 0;
     }
 
-    /* Arrows stand as tall as what they step through. */
-    .day-arrow {
+    /* Side by side at the head of the toolbar, back then forward — the pair
+       reads as one control, and both are as tall as the buttons they sit
+       among. */
+    .week-nav {
+      display: flex;
       flex: 0 0 auto;
-      align-self: stretch;
-      height: auto;
+      align-items: stretch;
+      gap: 4px;
     }
 
+    .week-arrow {
+      min-width: 34px;
+      padding: 0 6px;
+      line-height: 1;
+    }
+
+    /* Takes the rest of the line, so what is inside it can split: the week
+       buttons stay against the days they page, and the settings ride the far
+       edge. On a line with no slack to give they simply sit together. */
     .nav-actions {
       display: flex;
+      flex: 1 1 auto;
       align-items: center;
       gap: 6px;
-      margin-inline-start: auto;
+      min-width: 0;
     }
 
     .icon-button.active {
@@ -539,7 +559,10 @@ export class HelmanSolarInspector extends LitElement {
       color: var(--primary-color, #2563eb);
     }
 
+    /* Everything from here on is a setting rather than a way through the days,
+       so it goes to the opposite end of the header. */
     .slot-size-toggle {
+      margin-inline-start: auto;
       display: inline-flex;
       align-items: stretch;
       border: 1px solid var(--divider-color);
@@ -1100,7 +1123,7 @@ export class HelmanSolarInspector extends LitElement {
     const payload = this._payload?.date === this._selectedDate ? this._payload : null;
     return html`
       <div class="body">
-        ${this._renderNavigation(payload)}
+        ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
              forecast, but the warning is about the card's data as a whole, so
              it is drawn here rather than inside either strip. -->
@@ -1115,31 +1138,45 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  private _renderNavigation(payload: InspectorPayload | null) {
-    const canGoPrevious = payload?.range.canGoPrevious ?? true;
-    const canGoNext = payload?.range.canGoNext ?? true;
+  private _renderNavigation() {
+    const today = this._todayIso();
+    const pillWindow = this._pillWindow(today);
+    // The window is derived from the selection, so this is the one place that
+    // knows it changed; the fetch is a no-op while it stays the same.
+    void this._loadDayAggregates(pillWindow.start, pillWindow.end);
+    const minDate = this._range?.minDate ?? null;
+    const canGoBack = minDate === null || this._selectedDate > minDate;
+    const canGoForward = this._selectedDate < today;
     // The day and its offset used to head the card in words. The pills say the
     // same thing and say it about every day at once, so the words went.
     return html`
       <div class="nav">
-        <!-- Arrows and pills are one control: an arrow that wrapped away from
-             the row it steps would be an orphan. -->
         <div class="day-nav">
-          <button class="icon-button day-arrow" title=${this._t("bias_correction.inspector.previous_day")} ?disabled=${!canGoPrevious || this._loading} @click=${() => this._moveDay(-1)}>&lt;</button>
           <helman-solar-day-pills
             class="day-pills"
             .hass=${this.hass}
             .selectedDate=${this._selectedDate}
-            .startDate=${this._todayIso()}
-            .endDate=${this._range?.maxDate ?? this._todayIso()}
-            .historyDay=${this._historyPillDay(payload)}
+            .currentDate=${today}
+            .startDate=${pillWindow.start}
+            .endDate=${pillWindow.end}
+            .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
             @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>
-          <button class="icon-button day-arrow" title=${this._t("bias_correction.inspector.next_day")} ?disabled=${!canGoNext || this._loading} @click=${() => this._moveDay(1)}>&gt;</button>
         </div>
         <div class="nav-actions">
+          <!-- One week per click rather than one day: the row already offers
+               every day of the week it shows, so what the buttons are for is
+               reaching a *different* week — then the pill picks the day.
+
+               They lead the toolbar rather than standing beside the pills, so
+               that when the header runs out of width the row keeps a line to
+               itself and every control drops to the next one together. -->
+          <div class="week-nav">
+            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.previous_week")} ?disabled=${!canGoBack || this._loading} @click=${() => this._moveWeek(-1)}>&lsaquo;&lsaquo;</button>
+            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.next_week")} ?disabled=${!canGoForward || this._loading} @click=${() => this._moveWeek(1)}>&rsaquo;&rsaquo;</button>
+          </div>
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
             ${SLOT_SIZE_OPTIONS.map((minutes) => html`
               <button
@@ -3195,42 +3232,102 @@ export class HelmanSolarInspector extends LitElement {
     }
   }
 
-  private _moveDay(delta: number) {
-    const current = this._parseIsoDate(this._selectedDate || this._todayIso());
-    const next = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
-    this._selectedDate = this._formatDateParts(
-      next.getUTCFullYear(),
-      next.getUTCMonth() + 1,
-      next.getUTCDate(),
-    );
+  /**
+   * Travel a week at a time, and let the pill row follow.
+   *
+   * Forward stops at today rather than at `maxDate`: today is where the row
+   * turns back into the forward-looking one, and the days beyond it are already
+   * on screen there, so stepping past would only skip over them.
+   */
+  private _moveWeek(delta: number) {
+    const today = this._todayIso();
+    const target = this._addDays(this._selectedDate || today, delta * 7);
+    const minDate = this._range?.minDate ?? null;
+    const clamped = delta < 0
+      ? (minDate !== null && target < minDate ? minDate : target)
+      : (target > today ? today : target);
+    if (clamped === this._selectedDate) {
+      return;
+    }
+    this._selectedDate = clamped;
     this._load();
   }
 
   /**
-   * The pill for a day already lived through, rebuilt from what was measured.
+   * The days the pill row offers, derived from the selected one.
    *
-   * The schedule and the forecast only reach forward, so a past day would have
-   * no pill at all — yet the card is holding that day's actuals, which is
-   * exactly the same three numbers. The pill appears only while such a day is
-   * the shown one, and it appears the moment it is picked: until its data
-   * lands it renders empty rather than letting the row shift under the click.
+   * Forward, the row is what it has always been: today to the end of the
+   * forecast. Backward it becomes a fixed seven-day block, so every day of a
+   * week is one click away and paging lands on whole weeks. The block is a
+   * function of the selection alone — no offset to keep in step with it — and
+   * every day inside one block maps back to that same block, so clicking a pill
+   * never moves the row out from under the click.
    */
-  private _historyPillDay(payload: InspectorPayload | null): SolarInspectorHistoryDay | null {
-    const date = this._selectedDate;
-    if (date === "" || date >= this._todayIso()) {
-      return null;
+  private _pillWindow(today: string): { start: string; end: string } {
+    const selected = this._selectedDate || today;
+    if (selected >= today) {
+      return { start: today, end: this._range?.maxDate ?? today };
     }
 
-    if (payload === null || payload.date !== date) {
-      return { dayKey: date, aggregate: null, availability: NO_PILL_AVAILABILITY };
-    }
+    const daysBack = Math.round(
+      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${selected}T00:00:00Z`)) / 86_400_000,
+    );
+    const weeksBack = Math.ceil(daysBack / 7);
+    const start = this._addDays(today, -7 * weeksBack);
+    return { start, end: this._addDays(start, 6) };
+  }
 
-    const { aggregate, availability } = buildHistoryDayAggregate({
-      solarActualWh: payload.totals.actualWh,
-      socActualPct: payload.series.batterySocActual.map((point) => point.pct),
-      gridActualWh: payload.series.gridActual.map((point) => point.valueWh),
-    });
-    return { dayKey: date, aggregate, availability };
+  private _addDays(dayKey: string, delta: number): string {
+    const current = this._parseIsoDate(dayKey);
+    const moved = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
+    return this._formatDateParts(
+      moved.getUTCFullYear(),
+      moved.getUTCMonth() + 1,
+      moved.getUTCDate(),
+    );
+  }
+
+  /**
+   * Fill the past days of a window with what was measured for them.
+   *
+   * The schedule and the forecast only reach forward, so without this every
+   * pill of a past week would be a bare label — the row would be a picker and
+   * stop being a comparison. One backend read covers the whole window: asking
+   * for an inspector day per pill would be seven full days of actuals,
+   * forecast history and training to end up with three numbers each.
+   *
+   * Keyed by the window, so paging is one request and clicking a pill inside
+   * the week is none.
+   */
+  private async _loadDayAggregates(start: string, end: string) {
+    if (!this.hass || start >= this._todayIso()) {
+      this._historyDays = [];
+      this._historyDaysFor = null;
+      return;
+    }
+    const key = `${start}..${end}`;
+    if (this._historyDaysFor === key) {
+      return;
+    }
+    this._historyDaysFor = key;
+    try {
+      const result = await this.hass.callWS<{ days: SolarInspectorDayAggregateRow[] }>({
+        type: "helman/solar_bias/day_aggregates",
+        start_date: start,
+        end_date: end,
+      });
+      if (this._historyDaysFor !== key) {
+        return;
+      }
+      this._historyDays = buildHistoryDaysFromAggregates(result?.days ?? []);
+    } catch (err) {
+      if (this._historyDaysFor === key) {
+        // A window with no measurements reads exactly like one that failed to
+        // load: bare pills. Not worth a banner over the day picker.
+        this._historyDays = [];
+      }
+    }
+    this.requestUpdate();
   }
 
   private _handleForecastHealth = (event: CustomEvent<DayPillForecastHealthDetail>) => {

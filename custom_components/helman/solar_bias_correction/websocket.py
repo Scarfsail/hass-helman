@@ -145,6 +145,58 @@ async def ws_get_solar_bias_inspector(
     connection.send_result(msg["id"], payload)
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "helman/solar_bias/day_aggregates",
+        vol.Required("start_date"): str,
+        vol.Required("end_date"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_get_solar_bias_day_aggregates(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Whole-day measured figures for a span, for the inspector's day pills."""
+    raw_start = msg.get("start_date")
+    raw_end = msg.get("end_date")
+    if not _is_dashed_date(raw_start) or not _is_dashed_date(raw_end):
+        connection.send_error(
+            msg["id"],
+            "invalid_date",
+            "Dates must use YYYY-MM-DD format",
+        )
+        return
+
+    service = _get_solar_bias_service(hass, connection, msg)
+    if service is None:
+        return
+
+    try:
+        payload = await service.async_get_day_aggregates(raw_start, raw_end)
+    except Exception:
+        _LOGGER.exception("Unexpected solar bias day aggregates failure")
+        connection.send_error(
+            msg["id"],
+            "internal_error",
+            "Unexpected solar bias day aggregates failure",
+        )
+        return
+
+    connection.send_result(msg["id"], payload)
+
+
+def _is_dashed_date(raw_value) -> bool:
+    if not isinstance(raw_value, str) or _DASHED_DATE_RE.fullmatch(raw_value) is None:
+        return False
+    try:
+        date.fromisoformat(raw_value)
+    except ValueError:
+        return False
+    return True
+
+
 def _get_solar_bias_service(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,

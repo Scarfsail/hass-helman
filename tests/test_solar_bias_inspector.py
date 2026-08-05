@@ -1331,3 +1331,133 @@ def test_service_saves_training_explainability_after_training():
     saved = service._store.saved
     assert saved["trainingExplainability"]["aggregationMethod"] == "ratio_of_sums"
     assert saved["trainingExplainability"]["slots"]["12:00"]["rows"][0]["status"] == "included"
+
+
+def _install_fake_meter_reader(reads, by_entity):
+    """Stand in for the recorder read the day aggregates make.
+
+    Records every call so the test can assert what the span cost: the point of
+    the endpoint is one read per meter for the whole window, not one per day.
+    """
+    module_name = "custom_components.helman.recorder_hourly_series"
+    original = sys.modules.get(module_name)
+    fake = types.ModuleType(module_name)
+
+    async def query_cumulative_slot_energy_changes(
+        hass, entity_id, *, local_start, local_end, interval_minutes
+    ):
+        reads.append((entity_id, local_start, local_end))
+        return by_entity.get(entity_id, {})
+
+    fake.query_cumulative_slot_energy_changes = query_cumulative_slot_energy_changes
+    sys.modules[module_name] = fake
+    return module_name, original
+
+
+def test_day_aggregates_sum_each_meter_into_local_days_in_one_read():
+    service = _make_service()
+    service._grid_import_energy_entity_id_provider = lambda: "sensor.grid_import"
+    service._grid_export_energy_entity_id_provider = lambda: "sensor.grid_export"
+    service._battery_soc_entity_id_provider = lambda: "sensor.battery_soc"
+
+    def _slot(raw: str) -> datetime:
+        return datetime.fromisoformat(raw)
+
+    reads: list[tuple] = []
+    module_name, original_module = _install_fake_meter_reader(
+        reads,
+        {
+            "sensor.solar_total": {
+                _slot("2026-04-23T08:00:00+02:00"): 1.5,
+                _slot("2026-04-23T09:00:00+02:00"): 2.5,
+                _slot("2026-04-24T10:00:00+02:00"): 3.0,
+            },
+            "sensor.grid_import": {_slot("2026-04-23T20:00:00+02:00"): 1.25},
+            "sensor.grid_export": {_slot("2026-04-24T12:00:00+02:00"): 0.75},
+        },
+    )
+
+    soc_states = [
+        SimpleNamespace(state="41.0", last_changed=_slot("2026-04-23T06:00:00+02:00")),
+        SimpleNamespace(state="88.0", last_changed=_slot("2026-04-23T14:00:00+02:00")),
+        SimpleNamespace(state="not a number", last_changed=_slot("2026-04-23T15:00:00+02:00")),
+        SimpleNamespace(state="30.0", last_changed=_slot("2026-04-24T05:00:00+02:00")),
+    ]
+
+    async def fake_significant_states(hass, start_utc, end_utc, entity_ids):
+        return {"sensor.battery_soc": soc_states}
+
+    old_states = service_mod._get_significant_states_safe
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod._get_significant_states_safe = fake_significant_states
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(
+            service.async_get_day_aggregates("2026-04-23", "2026-04-24")
+        )
+    finally:
+        service_mod._get_significant_states_safe = old_states
+        service_mod.dt_util.now = old_now
+        if original_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = original_module
+
+    # One read per meter for the whole span, not one per day.
+    assert len(reads) == 3
+    assert {entity_id for entity_id, _start, _end in reads} == {
+        "sensor.solar_total",
+        "sensor.grid_import",
+        "sensor.grid_export",
+    }
+    for _entity_id, local_start, local_end in reads:
+        assert local_start.date() == date.fromisoformat("2026-04-23")
+        assert local_end.date() == date.fromisoformat("2026-04-25")
+
+    assert payload["days"] == [
+        {
+            "date": "2026-04-23",
+            "solarWh": 4000.0,
+            "gridImportKwh": 1.25,
+            "gridExportKwh": None,
+            "batteryMinSocPct": 41.0,
+            "batteryMaxSocPct": 88.0,
+        },
+        {
+            "date": "2026-04-24",
+            "solarWh": 3000.0,
+            "gridImportKwh": None,
+            "gridExportKwh": 0.75,
+            "batteryMinSocPct": 30.0,
+            "batteryMaxSocPct": 30.0,
+        },
+    ]
+
+
+def test_day_aggregates_stop_at_today_and_cap_the_span():
+    service = _make_service()
+    reads: list[tuple] = []
+    module_name, original_module = _install_fake_meter_reader(reads, {})
+
+    old_now = service_mod.dt_util.now
+    try:
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        # A span reaching into the future is cut at today, and one reaching far
+        # back keeps only the last _MAX_AGGREGATE_DAYS of it.
+        payload = asyncio.run(
+            service.async_get_day_aggregates("2025-01-01", "2026-05-30")
+        )
+        future_only = asyncio.run(
+            service.async_get_day_aggregates("2026-04-26", "2026-04-30")
+        )
+    finally:
+        service_mod.dt_util.now = old_now
+        if original_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = original_module
+
+    days = [day["date"] for day in payload["days"]]
+    assert len(days) == service_mod._MAX_AGGREGATE_DAYS
+    assert days[-1] == "2026-04-25"
+    assert future_only == {"days": []}

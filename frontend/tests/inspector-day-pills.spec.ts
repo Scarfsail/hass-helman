@@ -38,8 +38,8 @@ async function loadCardBundle(page: Page): Promise<void> {
  * two-day hourly schedule, and a forecast whose solar total falls day by day so
  * the pills' shared scale is visible in the bar widths.
  */
-async function mountInspector(page: Page): Promise<void> {
-    await page.evaluate(({ pillDays, forecastDays, scheduledDays }) => {
+async function mountInspector(page: Page, minDaysBack = 30): Promise<void> {
+    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack }) => {
         const dayMs = 86_400_000;
         const hourMs = 3_600_000;
         const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
@@ -172,7 +172,7 @@ async function mountInspector(page: Page): Promise<void> {
             effectiveVariant: null,
             trainedAt: null,
             range: {
-                minDate: isoDay(-7),
+                minDate: isoDay(-minDaysBack),
                 maxDate: isoDay(pillDays - 1),
                 canGoPrevious: true,
                 canGoNext: date < isoDay(pillDays - 1),
@@ -229,6 +229,9 @@ async function mountInspector(page: Page): Promise<void> {
 
         const requestedDates: string[] = [];
         (window as unknown as Record<string, unknown>).__requestedDates = requestedDates;
+        /** Every `start..end` the day-aggregate read was asked for, in order. */
+        const requestedRanges: string[] = [];
+        (window as unknown as Record<string, unknown>).__requestedRanges = requestedRanges;
 
         const el = document.createElement("helman-solar-inspector") as HTMLElement & Record<string, unknown>;
         el.hass = {
@@ -240,7 +243,12 @@ async function mountInspector(page: Page): Promise<void> {
                     msg.type === "helman/get_forecast" ? forecast : {},
             },
             states: {},
-            callWS: async (msg: { type: string; date?: string }) => {
+            callWS: async (msg: {
+                type: string;
+                date?: string;
+                start_date?: string;
+                end_date?: string;
+            }) => {
                 if (msg.type === "helman/get_schedule") {
                     return schedule;
                 }
@@ -248,11 +256,43 @@ async function mountInspector(page: Page): Promise<void> {
                     requestedDates.push(msg.date ?? "");
                     return inspectorPayload(msg.date ?? "");
                 }
+                // The whole-day figures behind a past week's pills: one read for
+                // the window, and the meters have nothing beyond today.
+                if (msg.type === "helman/solar_bias/day_aggregates") {
+                    const start = msg.start_date ?? "";
+                    const end = msg.end_date ?? "";
+                    requestedRanges.push(`${start}..${end}`);
+                    const days: unknown[] = [];
+                    for (
+                        let cursor = Date.parse(`${start}T00:00:00Z`);
+                        cursor <= Date.parse(`${end}T00:00:00Z`);
+                        cursor += dayMs
+                    ) {
+                        const day = new Date(cursor).toISOString().slice(0, 10);
+                        if (!isPast(day)) {
+                            continue;
+                        }
+                        days.push({
+                            date: day,
+                            solarWh: 6000,
+                            gridImportKwh: 3.2,
+                            gridExportKwh: 1.4,
+                            batteryMinSocPct: 30,
+                            batteryMaxSocPct: 84,
+                        });
+                    }
+                    return { days };
+                }
                 return {};
             },
         };
         document.body.appendChild(el);
-    }, { pillDays: PILL_DAYS, forecastDays: FORECAST_DAYS, scheduledDays: SCHEDULED_DAYS });
+    }, {
+        pillDays: PILL_DAYS,
+        forecastDays: FORECAST_DAYS,
+        scheduledDays: SCHEDULED_DAYS,
+        minDaysBack,
+    });
 
     await page.waitForFunction((expected) => {
         const el = document.querySelector("helman-solar-inspector");
@@ -291,14 +331,52 @@ async function readPills(page: Page): Promise<PillReadout[]> {
     });
 }
 
-/** Step the inspector's own day arrows: negative goes back in time. */
-async function stepDay(page: Page, delta: number): Promise<void> {
+/** Page the row a week with the inspector's own buttons: negative goes back. */
+async function stepWeek(page: Page, delta: number): Promise<void> {
     await page.evaluate((step) => {
         const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
-        const arrows = Array.from(root?.querySelectorAll(".day-arrow") ?? []);
-        const arrow = step < 0 ? arrows[0] : arrows[arrows.length - 1];
-        (arrow as HTMLElement | undefined)?.click();
+        const arrows = Array.from(root?.querySelectorAll(".week-arrow") ?? []);
+        (arrows[step < 0 ? 0 : 1] as HTMLElement | undefined)?.click();
     }, delta);
+}
+
+/** Whether each week button is takeable, back first. */
+async function readWeekArrows(page: Page): Promise<boolean[]> {
+    return page.evaluate(() => {
+        const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
+        return Array.from(root?.querySelectorAll(".week-arrow") ?? [])
+            .map((button) => !(button as HTMLButtonElement).disabled);
+    });
+}
+
+/** The day `offset` days from today, as the fixture writes its dates. */
+function dayAt(offset: number): string {
+    const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+    return new Date(todayMs + offset * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Wait until this many pills are drawn from measurements rather than forecast. */
+async function waitForHistoryPills(page: Page, count: number): Promise<void> {
+    await page.waitForFunction((expected) => {
+        const root = document.querySelector("helman-solar-inspector")
+            ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
+        return (root?.querySelectorAll('.pill[data-history="true"]').length ?? 0) === expected;
+    }, count);
+}
+
+async function readRequestedRanges(page: Page): Promise<string[]> {
+    return page.evaluate(() => [...((window as any).__requestedRanges as string[])]);
+}
+
+/** Wait until the row shows exactly these days, so a click has settled. */
+async function waitForDays(page: Page, days: string[]): Promise<void> {
+    await page.waitForFunction((expected) => {
+        const root = document.querySelector("helman-solar-inspector")
+            ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
+        const shown = Array.from(root?.querySelectorAll(".pill") ?? [])
+            .map((pill) => pill.getAttribute("data-day"));
+        return shown.length === expected.length && shown.every((day, i) => day === expected[i]);
+    }, days);
 }
 
 async function clickPill(page: Page, index: number): Promise<void> {
@@ -438,58 +516,135 @@ test.describe("solar inspector history pill", () => {
         expect(pills.some((pill) => pill.isHistory)).toBe(false);
     });
 
-    test("stepping back adds the day as a pill, selected, built from its actuals", async ({ page }) => {
-        await stepDay(page, -1);
-        await page.waitForFunction(() => {
-            const root = document.querySelector("helman-solar-inspector")
-                ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
-            const history = root?.querySelector('.pill[data-history="true"] .day-aggregate-gauge.solar');
-            return !!history && !history.classList.contains("unavailable");
-        });
+    test("paging back shows that whole week, landing on its first day", async ({ page }) => {
+        await stepWeek(page, -1);
+
+        const week = Array.from({ length: 7 }, (_, i) => dayAt(-7 + i));
+        await waitForDays(page, week);
 
         const pills = await readPills(page);
-        const history = pills.filter((pill) => pill.isHistory);
-        expect(history).toHaveLength(1);
-        // It leads the row: a day behind today reads to the left of it.
-        expect(pills[0]).toBe(history[0]);
-        expect(history[0].selected).toBe(true);
-        // Yesterday names itself, exactly as tomorrow does.
-        expect(history[0].label).not.toMatch(/\d/);
-
-        const gauges = new Map(history[0].gauges.map((gauge) => [gauge.kind, gauge]));
-        expect(gauges.get("solar")!.text).not.toBe("");
-        expect(gauges.get("battery")!.unavailable).toBe(false);
-        expect(gauges.get("grid")!.unavailable).toBe(false);
+        expect(pills.map((pill) => pill.day)).toEqual(week);
+        // The landing day is the one the button stepped to, a week back.
+        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(-7)]);
     });
 
-    test("only ever one past day, and older ones carry their date", async ({ page }) => {
-        await stepDay(page, -1);
-        await stepDay(page, -1);
-        await page.waitForFunction(() => {
-            const dates = (window as any).__requestedDates as string[];
-            return dates.length >= 3;
-        });
+    test("a second page back moves a whole week, not a day", async ({ page }) => {
+        await stepWeek(page, -1);
+        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-7 + i)));
+
+        await stepWeek(page, -1);
+        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-14 + i)));
 
         const pills = await readPills(page);
-        const history = pills.filter((pill) => pill.isHistory);
-        expect(history).toHaveLength(1);
-        expect(history[0].label).toMatch(/\d/);
+        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(-14)]);
     });
 
-    test("stepping back to today drops the pill again", async ({ page }) => {
-        await stepDay(page, -1);
-        await page.waitForFunction(() => {
-            const root = document.querySelector("helman-solar-inspector")
-                ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
-            return !!root?.querySelector('.pill[data-history="true"]');
-        });
+    /**
+     * The whole point of paging by weeks: travel to the week, then pick the day
+     * out of it. If picking a day re-derived a different week the row would slide
+     * out from under the click.
+     */
+    test("picking a day inside the week leaves the week where it is", async ({ page }) => {
+        await stepWeek(page, -1);
+        const week = Array.from({ length: 7 }, (_, i) => dayAt(-7 + i));
+        await waitForDays(page, week);
 
-        await stepDay(page, 1);
-        await page.waitForFunction(() => {
-            const root = document.querySelector("helman-solar-inspector")
-                ?.shadowRoot?.querySelector("helman-solar-day-pills")?.shadowRoot;
-            return !root?.querySelector('.pill[data-history="true"]');
-        });
+        await clickPill(page, 4);
+        await page.waitForFunction(
+            (day) => ((window as any).__requestedDates as string[]).includes(day),
+            week[4],
+        );
+
+        const pills = await readPills(page);
+        expect(pills.map((pill) => pill.day)).toEqual(week);
+        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([week[4]]);
+    });
+
+    test("paging forward from a past week comes back to today", async ({ page }) => {
+        await stepWeek(page, -1);
+        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-7 + i)));
+
+        await stepWeek(page, 1);
+        await waitForDays(page, Array.from({ length: PILL_DAYS }, (_, i) => dayAt(i)));
+
+        const pills = await readPills(page);
+        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(0)]);
+        expect(pills.some((pill) => pill.isHistory)).toBe(false);
+    });
+
+    test("forward is closed on today, and back closes where the data stops", async ({ page }) => {
+        expect(await readWeekArrows(page)).toEqual([true, false]);
+
+        // minDate is four weeks back, so the fifth page lands on it exactly.
+        for (let week = 1; week <= 5; week += 1) {
+            await stepWeek(page, -1);
+            await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-7 * week + i)));
+        }
+
+        const pills = await readPills(page);
+        expect(pills.filter((pill) => pill.selected).map((pill) => pill.day)).toEqual([dayAt(-30)]);
+        expect(await readWeekArrows(page)).toEqual([false, true]);
+    });
+
+    /**
+     * A past week has to be a comparison, not just a picker: every day of it
+     * draws what was measured, so the sunny one is visible before it is picked.
+     */
+    test("every day of a past week carries its measured bars", async ({ page }) => {
+        await stepWeek(page, -1);
+        await waitForHistoryPills(page, 7);
+
+        const pills = await readPills(page);
+        expect(pills.filter((pill) => pill.isHistory)).toHaveLength(7);
+        for (const pill of pills) {
+            const gauges = new Map(pill.gauges.map((gauge) => [gauge.kind, gauge]));
+            expect(gauges.get("solar")!.text).not.toBe("");
+            expect(gauges.get("battery")!.unavailable).toBe(false);
+            expect(gauges.get("grid")!.unavailable).toBe(false);
+        }
+        // A week back is far enough that the landing day carries its date.
+        expect(pills[0].day).toBe(dayAt(-7));
+        expect(pills[0].selected).toBe(true);
+        expect(pills[0].label).toMatch(/\d/);
+    });
+
+    test("the week's figures are one read, and picking a day inside it is none", async ({ page }) => {
+        await stepWeek(page, -1);
+        await waitForHistoryPills(page, 7);
+
+        const afterPaging = await readRequestedRanges(page);
+        expect(afterPaging).toEqual([`${dayAt(-7)}..${dayAt(-1)}`]);
+
+        await clickPill(page, 3);
+        await page.waitForFunction(
+            (day) => ((window as any).__requestedDates as string[]).includes(day),
+            dayAt(-4),
+        );
+        expect(await readRequestedRanges(page)).toEqual(afterPaging);
+
+        await stepWeek(page, -1);
+        await waitForDays(page, Array.from({ length: 7 }, (_, i) => dayAt(-14 + i)));
+        await waitForHistoryPills(page, 7);
+        expect(await readRequestedRanges(page)).toEqual([
+            `${dayAt(-7)}..${dayAt(-1)}`,
+            `${dayAt(-14)}..${dayAt(-8)}`,
+        ]);
+    });
+
+    /**
+     * Yesterday is the one past day that still names itself, and it is reached
+     * by paging back a week and clicking the last pill — so the label has to
+     * come from today, not from where the row happens to start.
+     */
+    test("the pill for yesterday still names itself inside a past week", async ({ page }) => {
+        await stepWeek(page, -1);
+        const week = Array.from({ length: 7 }, (_, i) => dayAt(-7 + i));
+        await waitForDays(page, week);
+
+        const pills = await readPills(page);
+        expect(pills[0].label).toMatch(/\d/);
+        expect(pills[6].day).toBe(dayAt(-1));
+        expect(pills[6].label).not.toMatch(/\d/);
     });
 
     test("the header no longer repeats the day in words", async ({ page }) => {
@@ -539,12 +694,42 @@ test.describe("solar inspector header layout", () => {
             const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
             const top = (selector: string) =>
                 Math.round((root.querySelector(selector) as HTMLElement).getBoundingClientRect().top);
-            return { dayNav: top(".day-nav"), actions: top(".nav-actions"), arrow: top(".day-arrow") };
+            return { dayNav: top(".day-nav"), actions: top(".nav-actions"), arrow: top(".week-nav") };
         });
 
         expect(rows.actions).toBeGreaterThan(rows.dayNav);
-        // The arrows never leave the row they step.
-        expect(rows.arrow).toBe(rows.dayNav);
+        // Everything that is not a day goes with the toolbar, so the narrow
+        // header is one line of days and one line of controls.
+        expect(rows.arrow).toBe(rows.actions);
+    });
+
+    /**
+     * The week buttons lead the toolbar, back then forward, and are the same
+     * height as the controls beside them — they are read as part of that row,
+     * not as an appendage of the pills.
+     */
+    test("the week buttons sit side by side at the head of the toolbar", async ({ page }) => {
+        await page.setViewportSize({ width: 360, height: 900 });
+        await mountInspector(page);
+
+        const geometry = await page.evaluate(() => {
+            const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
+            const box = (element: Element) => element.getBoundingClientRect();
+            const buttons = Array.from(root.querySelectorAll(".week-arrow"));
+            return {
+                count: buttons.length,
+                boxes: buttons.map(box),
+                slotToggle: box(root.querySelector(".slot-size-toggle")!),
+            };
+        });
+
+        expect(geometry.count).toBe(2);
+        // Side by side on one line, back to the left of forward.
+        expect(Math.round(geometry.boxes[0].top)).toBe(Math.round(geometry.boxes[1].top));
+        expect(geometry.boxes[0].right).toBeLessThanOrEqual(geometry.boxes[1].left);
+        // And ahead of the rest of the toolbar.
+        expect(geometry.boxes[1].right).toBeLessThanOrEqual(geometry.slotToggle.left);
+        expect(Math.round(geometry.boxes[0].height)).toBe(Math.round(geometry.slotToggle.height));
     });
 
     /**
@@ -618,18 +803,39 @@ test.describe("solar inspector header layout", () => {
         }
     });
 
-    test("the arrows stand exactly as tall as the pills", async ({ page }) => {
+    /**
+     * Wide enough for one line: the days lead it and every control follows,
+     * with the week buttons first among them.
+     */
+    test("a header that fits keeps the days and the controls on one line", async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await mountInspector(page);
 
-        const heights = await page.evaluate(() => {
+        const layout = await page.evaluate(() => {
             const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
-            const arrow = (root.querySelector(".day-arrow") as HTMLElement).getBoundingClientRect().height;
-            const pill = (root.querySelector("helman-solar-day-pills") as HTMLElement)
-                .shadowRoot!.querySelector(".pill")!.getBoundingClientRect().height;
-            return { arrow, pill };
+            const box = (selector: string) =>
+                (root.querySelector(selector) as HTMLElement).getBoundingClientRect();
+            return {
+                dayNav: box(".day-nav"),
+                weekNav: box(".week-nav"),
+                actions: box(".nav-actions"),
+                slotToggle: box(".slot-size-toggle"),
+                // Direct child: `››` is the last `.icon-button` of its own
+                // group, so a descendant match would find it instead.
+                refresh: box(".nav-actions > .icon-button:last-child"),
+                nav: box(".nav"),
+            };
         });
 
-        expect(heights.arrow).toBeCloseTo(heights.pill, 1);
+        // One line: the toolbar is centred against the taller day row rather
+        // than sitting below it.
+        expect(layout.actions.top).toBeLessThan(layout.dayNav.bottom);
+        // The week buttons follow the last pill rather than the card's far
+        // edge — they page the row, so they belong where the hand already is.
+        expect(layout.weekNav.left).toBeGreaterThanOrEqual(layout.dayNav.right - 1);
+        expect(layout.weekNav.left - layout.dayNav.right).toBeLessThanOrEqual(12);
+        // The settings take the other end.
+        expect(layout.slotToggle.left).toBeGreaterThan(layout.weekNav.right);
+        expect(layout.nav.right - layout.refresh.right).toBeLessThanOrEqual(2);
     });
 });
