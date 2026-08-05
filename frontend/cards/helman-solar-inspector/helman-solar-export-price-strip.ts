@@ -12,6 +12,7 @@ import {
     stripWindow,
     type ScheduleStripGeometry,
 } from "./strip-geometry";
+import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { helmanColorVars } from "../color-vars";
 
 const MINUTES_PER_DAY = 1440;
@@ -89,6 +90,11 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     @property({ attribute: false }) public hoverMinutes: number | null = null;
     /** The chart's active slot width, so the seam lands on the same grid it does. */
     @property({ type: Number }) public slotMinutes = 15;
+    /**
+     * The inspector's clock, so the seam and the "now" line here move with the
+     * ones on the charts above rather than on this component's own reads.
+     */
+    @property({ type: Number }) public nowMs = Date.now();
 
     @state() private _forecast: ForecastPayload | null = null;
 
@@ -196,7 +202,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
      * draws that slot as a projection.
      */
     private _seamMinutes(): number {
-        const now = getScheduleLocalTimeParts(Date.now(), this.timeZone);
+        const now = getScheduleLocalTimeParts(this.nowMs, this.timeZone);
         if (now === null) {
             return MINUTES_PER_DAY;
         }
@@ -258,10 +264,6 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                         const right = xForMinutes(column.endMinutes);
                         const width = Math.max(1, right - left - 0.5);
                         const future = column.startMinutes >= seam;
-                        const cx = left + width / 2;
-                        // The label sits outside the bar, on the far side from zero,
-                        // so it never has to fight the bar's own fill for contrast.
-                        const labelY = positive ? Math.max(top - 3, 9) : Math.min(top + barHeight + 9, height - 2);
                         return svg`
                             <rect
                                 x=${left + 0.25} y=${top}
@@ -271,12 +273,29 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                                 stroke-width=${future ? 0.9 : 0}
                                 stroke-dasharray=${future ? "2 2" : ""}
                             ></rect>
-                            ${width >= 18
-                                ? svg`
-                                    <text x=${cx} y=${labelY} text-anchor="middle" font-size="9"
-                                          fill="var(--secondary-text-color)">${column.value.toFixed(1)}</text>
-                                  `
-                                : ""}
+                        `;
+                    })}
+                    </g>
+                    ${this._renderNowMarker(xForMinutes, windowStart, windowEnd, height)}
+                    <!-- The prices come after the marker so the line passes
+                         behind the figure it crosses instead of through it. -->
+                    <g clip-path="url(#export-price-plot-clip)">
+                    ${columns.map((column) => {
+                        const left = xForMinutes(column.startMinutes);
+                        const width = Math.max(1, xForMinutes(column.endMinutes) - left - 0.5);
+                        if (width < 18) {
+                            return "";
+                        }
+                        const valueY = yForValue(column.value);
+                        const top = Math.min(zeroY, valueY);
+                        // The label sits outside the bar, on the far side from zero,
+                        // so it never has to fight the bar's own fill for contrast.
+                        const labelY = column.value >= 0
+                            ? Math.max(top - 3, 9)
+                            : Math.min(top + Math.max(1, Math.abs(valueY - zeroY)) + 9, height - 2);
+                        return svg`
+                            <text x=${left + width / 2} y=${labelY} text-anchor="middle" font-size="9"
+                                  fill="var(--secondary-text-color)">${column.value.toFixed(1)}</text>
                         `;
                     })}
                     </g>
@@ -284,6 +303,24 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             `}
             </div>
         `;
+    }
+
+    /**
+     * The same vertical "now" line the charts above and the schedule band below
+     * draw, so the whole inspector marks the moment in one continuous stroke.
+     * Only today gets one, and only while it falls inside the drawn window.
+     */
+    private _renderNowMarker(
+        xForMinutes: (minutes: number) => number,
+        windowStart: number,
+        windowEnd: number,
+        height: number,
+    ) {
+        const minutes = nowMinutesOnDay(this.date, this.timeZone, this.nowMs);
+        if (minutes === null || minutes < windowStart || minutes > windowEnd) {
+            return nothing;
+        }
+        return renderNowMarker(xForMinutes(minutes), 0, height, this._t("scheduling.badge.now"));
     }
 
     private _renderGuides(

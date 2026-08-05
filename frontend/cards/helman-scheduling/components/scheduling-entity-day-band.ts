@@ -464,10 +464,16 @@ export class SchedulingEntityDayBand extends LitElement {
 
             /* Slimmer where the host is stacking rows between charts, taller
                where the track is the control surface and has to be grabbable. */
+            /* Framed with an outline rather than a border, because everything
+               on the track is placed as a percentage of it: a border would take
+               its pixel out of that span on each side, so a run -- and the now
+               marker -- would drift from the same minute on a host's chart by
+               up to a pixel and a half towards the end of the day. */
             .track {
                 position: relative;
                 height: var(--entity-day-band-track-height, 30px);
-                border: 1px solid var(--divider-color);
+                outline: 1px solid var(--divider-color);
+                outline-offset: -1px;
                 border-radius: 6px;
                 background: var(--card-background-color);
                 overflow: hidden;
@@ -811,11 +817,15 @@ export class SchedulingEntityDayBand extends LitElement {
                 background: color-mix(in srgb, var(--secondary-background-color) 62%, transparent);
             }
 
+            /* Centred on the moment, not started at it: left alone put the
+               whole 2px body to the right of the time it marks, which is a
+               visible drift against a host's charts drawing the same minute. */
             .now-marker {
                 position: absolute;
                 top: -2px;
                 bottom: -2px;
                 width: 2px;
+                transform: translateX(-50%);
                 background: var(--primary-color);
                 pointer-events: none;
             }

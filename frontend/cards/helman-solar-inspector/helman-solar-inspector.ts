@@ -91,6 +91,7 @@ import {
   type SlotSelectionMode,
   type SlotSelectionState,
 } from "./slot-selection.js";
+import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../helman-scheduling/styles/scheduling-shared-styles";
 import { getSharedDataChangedFeed } from "../helman/data-changed";
@@ -100,6 +101,9 @@ import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-s
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
+
+/** How far the clock has to move before the "now" line is worth redrawing. */
+const NOW_RESOLUTION_MS = 30_000;
 
 /** Below this page width the chart opens at the coarser default. */
 const NARROW_VIEWPORT_PX = 768;
@@ -392,6 +396,12 @@ export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) slotMinutesDefault?: number;
 
   @state() private _selectedDate = "";
+  /**
+   * The clock behind the "now" line on every chart. Coarse on purpose: it is
+   * advanced off `hass` updates, which land on every state change in the house,
+   * and each move of it redraws the whole stack.
+   */
+  @state() private _nowMs = Date.now();
   @state() private _payload: InspectorPayload | null = null;
   /**
    * The day range the last successful load reported. Kept apart from the
@@ -802,7 +812,12 @@ export class HelmanSolarInspector extends LitElement {
     }
 
     .chart-wrap {
-      border: 1px solid var(--divider-color);
+      /* An outline rather than a border: a border would inset the svg by a
+         pixel and narrow it by two, so every hour on this chart would sit a
+         fraction off the same hour on the strips and the band below, which
+         share the card's full width. */
+      outline: 1px solid var(--divider-color);
+      outline-offset: -1px;
       border-radius: 6px;
       overflow-x: auto;
       overflow-y: hidden;
@@ -1104,6 +1119,12 @@ export class HelmanSolarInspector extends LitElement {
     if (changed.has("hass") && this.hass) {
       if (!this._selectedDate) {
         this._selectedDate = this._todayIso();
+      }
+      // Same rule the schedule band below follows, so the two lines never
+      // disagree about where "now" is.
+      const now = Date.now();
+      if (now - this._nowMs >= NOW_RESOLUTION_MS) {
+        this._nowMs = now;
       }
       if (this._loadedConnection !== this.hass.connection) {
         this._loadedConnection = this.hass.connection;
@@ -1827,6 +1848,7 @@ export class HelmanSolarInspector extends LitElement {
                 }}
                 .hoverMinutes=${this._hoveredMinutes}
                 .slotMinutes=${this._slotMinutes}
+                .nowMs=${this._nowMs}
                 @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
                   this._handleStripSlotPick(event, payload)}
                 @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
@@ -1909,6 +1931,7 @@ export class HelmanSolarInspector extends LitElement {
           ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
           ${this._renderSolarLayer(payload, layout)}
         </g>
+        ${this._renderNowMarker(layout, layout.margin.top, layout.plotHeight)}
       </svg>
     `;
   }
@@ -2200,7 +2223,6 @@ export class HelmanSolarInspector extends LitElement {
             ? SOC_COLUMN_OPACITY.forecast
             : SOC_COLUMN_OPACITY.measured;
           const x = layout.xForMinutes(bar.minutes) + 0.5;
-          const cx = x + Math.max(2, barWidth - 1) / 2;
           return svg`
             <rect
               x=${x} y=${top}
@@ -2210,16 +2232,20 @@ export class HelmanSolarInspector extends LitElement {
               stroke-width=${bar.forecast ? 0.9 : 0}
               stroke-dasharray=${bar.forecast ? "2 2" : ""}
             ></rect>
-            ${barWidth >= 18
-              ? svg`
-                  <text x=${cx} y=${Math.max(top - 3, 9)} text-anchor="middle" font-size="9"
-                        fill="var(--secondary-text-color)">${Math.round(bar.pct)}%</text>
-                `
-              : ""}
           `;
         })}
         ${this._renderSocForecastLine(payload, bars, layout, yForPct)}
         ${this._renderSocUnusableZones(payload, layout, yForPct)}
+        </g>
+        ${this._renderNowMarker(layout, 0, height)}
+        <!-- The percentages come after the marker so the line runs behind the
+             two digits it crosses rather than through them. -->
+        <g clip-path="url(#plot-clip-soc)">
+        ${barWidth < 18 ? "" : bars.map((bar) => svg`
+          <text x=${layout.xForMinutes(bar.minutes) + 0.5 + Math.max(2, barWidth - 1) / 2}
+                y=${Math.max(yForPct(bar.pct) - 3, 9)} text-anchor="middle" font-size="9"
+                fill="var(--secondary-text-color)">${Math.round(bar.pct)}%</text>
+        `)}
         </g>
       </svg>
     `;
@@ -2489,6 +2515,7 @@ export class HelmanSolarInspector extends LitElement {
           `;
         })}
         </g>
+        ${this._renderNowMarker(layout, 0, stripHeight)}
         <defs>
           <pattern id="impact-interpolated-positive" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
             <rect width="4" height="4" fill=${CHART_COLORS.impactPositive} fill-opacity="0.12"></rect>
@@ -3580,6 +3607,24 @@ export class HelmanSolarInspector extends LitElement {
     } else {
       this._deselectSlot();
     }
+  }
+
+  /**
+   * The vertical "now" line, on whichever chart of the stack asks for it.
+   *
+   * Only today gets one, and only while the moment falls inside the drawn
+   * window — the daylight crop can put it off the axis entirely, and a line
+   * pinned to the edge would claim a time the chart is not showing.
+   */
+  private _renderNowMarker(layout: ChartLayout, y: number, height: number) {
+    const minutes = nowMinutesOnDay(
+      this._selectedDate,
+      this._haTimeZone() ?? "UTC",
+      this._nowMs,
+    );
+    if (minutes === null) return "";
+    if (minutes < layout.dayStartMinutes || minutes > layout.dayEndMinutes) return "";
+    return renderNowMarker(layout.xForMinutes(minutes), y, y + height, this._t("scheduling.badge.now"));
   }
 
   /** One highlight band per selected slot. */
