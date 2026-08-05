@@ -6,26 +6,26 @@ import type { ControllableEntityDTO, EntityActualHistorySlotDTO, ForecastPayload
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { getSharedScheduleOwner, type SharedScheduleOwner } from "../helman-scheduling/schedule-owner";
-import "../helman-scheduling/components/scheduling-entity-day-band";
-import "../helman-scheduling/dialogs/scheduling-entity-day-editor";
+import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import "../shared/schedule/components/scheduling-entity-day-band";
+import "../shared/schedule/dialogs/scheduling-entity-day-editor";
 import type {
     EntityDayBandBlockSelectDetail,
     EntityDayBandHighlight,
     EntityDayBandLaneSelectDetail,
     EntityDayBandPointerMoveDetail,
     EntityDayBandTimeHoverDetail,
-} from "../helman-scheduling/components/scheduling-entity-day-band";
-import type { EntityScheduleSaveDetail } from "../helman-scheduling/dialogs/scheduling-entity-day-editor";
+} from "../shared/schedule/components/scheduling-entity-day-band";
+import type { EntityScheduleSaveDetail } from "../shared/schedule/dialogs/scheduling-entity-day-editor";
 import {
     buildControllableEntityStatuses,
     type ControllableEntityStatus,
-} from "../helman-scheduling/model/controllable-entity-status";
+} from "../shared/schedule/model/controllable-entity-status";
 import {
     buildEntityScheduleDays,
     type EntityScheduleDay,
     type EntityScheduleLane,
-} from "../helman-scheduling/model/entity-day-schedule-model";
+} from "../shared/schedule/model/entity-day-schedule-model";
 import {
     buildEntityDayBandLanes,
     buildEntityScheduleDayView,
@@ -34,31 +34,31 @@ import {
     resolveLaneRunPresentation,
     type EntityDayBandLane,
     type EntityScheduleDayView,
-} from "../helman-scheduling/model/entity-lane-source";
+} from "../shared/schedule/model/entity-lane-source";
 import {
     normalizeScheduleApplianceMetadata,
     type ScheduleApplianceMetadata,
-} from "../helman-scheduling/model/schedule-appliance-metadata";
+} from "../shared/schedule/model/schedule-appliance-metadata";
 import {
     buildScheduleApplianceProjectionIndex,
     EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
     type ScheduleApplianceProjectionIndex,
-} from "../helman-scheduling/model/schedule-appliance-projection";
+} from "../shared/schedule/model/schedule-appliance-projection";
 import {
     applyNormalizedScheduleCurrentState,
     buildNormalizedScheduleStructure,
-} from "../helman-scheduling/model/schedule-normalizer";
-import { formatScheduleTime } from "../helman-scheduling/model/schedule-time";
+} from "../shared/schedule/model/schedule-normalizer";
+import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import {
     buildSlotForecastMap,
     deriveScheduleForecastParams,
     EMPTY_SLOT_FORECAST_MAP,
     type SlotForecastMap,
-} from "../helman-scheduling/model/slot-forecast-model";
+} from "../shared/schedule/model/slot-forecast-model";
 import type {
     NormalizedScheduleModel,
     ScheduleOwnerSnapshot,
-} from "../helman-scheduling/schedule-types";
+} from "../shared/schedule/schedule-types";
 import { stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
 import { SLOT_MINUTES } from "./chart-stack";
 import { helmanColorVars } from "../color-vars";

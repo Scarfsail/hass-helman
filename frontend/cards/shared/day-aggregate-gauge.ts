@@ -1,11 +1,11 @@
 import { css, html } from "lit-element";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../localize/localize";
-import { getScheduleGridPositiveDisplay } from "../helman-scheduling/model/grid-surplus-display";
+import { getScheduleGridPositiveDisplay } from "./schedule/model/grid-surplus-display";
 import type {
     ScheduleTableDayAggregateModel,
     ScheduleTableDayAggregateScale,
-} from "../helman-scheduling/schedule-table-types";
+} from "./schedule/schedule-table-types";
 import {
     formatKwhValue,
     formatGridEnergy,
