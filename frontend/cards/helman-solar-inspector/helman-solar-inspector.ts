@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { symmetricPowerAxis } from "./chart-axis";
+import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "./slot-gridlines";
 import {
   SLOT_MINUTES,
   accumulateBands,
@@ -2102,30 +2103,27 @@ export class HelmanSolarInspector extends LitElement {
 
   private _renderXAxis(layout: ChartLayout) {
     const { margin, height, xForMinutes } = layout;
-    return this._xAxisHours(layout).map((hour) => {
-      const x = xForMinutes(hour * 60);
-      return svg`
-        <line x1=${x} y1=${margin.top} x2=${x} y2=${height - margin.bottom} stroke="var(--divider-color)" stroke-width="1" opacity="0.55"></line>
-        <text x=${x} y=${height - 10} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(hour).padStart(2, "0")}</text>
-      `;
+    return renderSlotGridlines({
+      ticks: this._slotGridTicks(layout),
+      xForMinutes,
+      top: margin.top,
+      bottom: height - margin.bottom,
+      labelY: height - 10,
     });
   }
 
   /**
-   * The whole hours to label on the x axis, spaced so a cropped window still
-   * gets a readable handful of ticks. The window edges are always whole hours,
-   * so a stride that divides the span lands ticks on them.
+   * The time grid for this layout: a line per slot, hours labelled as densely
+   * as the plot's width allows. Every row under the chart draws the same ticks,
+   * so the whole inspector is ruled by one grid.
    */
-  private _xAxisHours(layout: ChartLayout): number[] {
-    const startHour = Math.round(layout.dayStartMinutes / 60);
-    const endHour = Math.round(layout.dayEndMinutes / 60);
-    const span = endHour - startHour;
-    const stride = span > 12 ? 3 : span > 6 ? 2 : 1;
-    const hours: number[] = [];
-    for (let hour = startHour; hour <= endHour; hour += stride) {
-      hours.push(hour);
-    }
-    return hours;
+  private _slotGridTicks(layout: ChartLayout): SlotGridTick[] {
+    return slotGridTicks({
+      startMinutes: layout.dayStartMinutes,
+      endMinutes: layout.dayEndMinutes,
+      slotMinutes: this._slotMinutes,
+      plotWidth: layout.plotWidth,
+    });
   }
 
   /**
@@ -2207,6 +2205,12 @@ export class HelmanSolarInspector extends LitElement {
         </defs>
         ${this._plotClipDef("plot-clip-soc", layout, height)}
         ${this._renderSocGridlines(layout, yForPct)}
+        ${renderSlotGridlines({
+          ticks: this._slotGridTicks(layout),
+          xForMinutes: layout.xForMinutes,
+          top: 0,
+          bottom: height,
+        })}
         ${this._renderHoverHighlight(layout, 0, height)}
         ${this._renderSlotHighlights(layout, 0, height)}
         <g clip-path="url(#plot-clip-soc)">

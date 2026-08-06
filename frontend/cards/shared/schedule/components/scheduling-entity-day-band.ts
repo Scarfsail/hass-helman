@@ -100,6 +100,12 @@ export interface EntityDayBandHighlight {
     kind: "selected" | "hover";
 }
 
+/** One line of a host-supplied time grid; `major` lines are the labelled ones. */
+export interface EntityDayBandGridTick {
+    atMs: number;
+    major: boolean;
+}
+
 export interface EntityDayBandTimeHoverDetail {
     /** Where the pointer is on the time axis, or null when it has left. */
     atMs: number | null;
@@ -541,6 +547,24 @@ export class SchedulingEntityDayBand extends LitElement {
                 );
             }
 
+            /* One line of the host's own time grid, so the rows here are ruled
+               by the same slots as the charts above them. The labelled lines of
+               that grid carry the hour, so they are drawn stronger here too --
+               otherwise the coarse scale disappears the moment the band starts. */
+            .time-grid-line {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                width: 0;
+                border-left: 1px solid var(--divider-color);
+                opacity: 0.22;
+                pointer-events: none;
+            }
+
+            .time-grid-line.major {
+                opacity: 0.55;
+            }
+
             /* A stretch of time the host is asking about, in the colours the
                rest of the surface uses for the same two questions. */
             .time-highlight {
@@ -943,6 +967,16 @@ export class SchedulingEntityDayBand extends LitElement {
      * under the pointer in the list beside it.
      */
     @property({ attribute: false }) public highlightRanges: readonly EntityDayBandHighlight[] = [];
+    /**
+     * The host's time grid, as instants to rule the tracks at.
+     *
+     * Passed in rather than derived, because the grid belongs to whatever the
+     * band is stacked under: a host with charts above has already chosen which
+     * lines carry an hour, and a band that picked its own would rule the same
+     * day twice, differently. Empty is the standalone case -- the band has its
+     * own slot hairlines and axis for that.
+     */
+    @property({ attribute: false }) public timeGridTicks: readonly EntityDayBandGridTick[] = [];
 
     @state() private _drag: DragSession | null = null;
     /**
@@ -1935,7 +1969,30 @@ export class SchedulingEntityDayBand extends LitElement {
      * gets to decide.
      */
     private _renderRowOverlays() {
-        return html`${this._renderHighlights()}${this._renderPastOverlay()}${this._renderNowMarker()}`;
+        return html`${this._renderTimeGrid()}${this._renderHighlights()}${this._renderPastOverlay()}${this._renderNowMarker()}`;
+    }
+
+    /**
+     * The host's grid, ruled across this row.
+     *
+     * Under the highlights and the runs: the grid is the ruler the row is read
+     * against, not something drawn on top of what it measures. Lines outside
+     * the drawn window are dropped rather than clamped, so a cropped day is not
+     * ruled by a pile of ticks stacked on its edge.
+     */
+    private _renderTimeGrid() {
+        return this.timeGridTicks.map((tick) => {
+            if (tick.atMs < this._windowStartMs || tick.atMs > this._windowEndMs) {
+                return nothing;
+            }
+            const percent = this._toPercent(tick.atMs);
+            return html`
+                <span
+                    class=${`time-grid-line ${tick.major ? "major" : ""}`}
+                    style=${`left: ${percent}%`}
+                ></span>
+            `;
+        });
     }
 
     /**

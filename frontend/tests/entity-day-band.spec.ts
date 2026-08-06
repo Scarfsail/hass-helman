@@ -41,6 +41,11 @@ interface MountOptions {
     slotPicks?: boolean;
     /** A second lane, for the marks that are meant to be per lane. */
     twoLanes?: boolean;
+    /**
+     * A host's own time grid, as hours-of-day; whole multiples of three are the
+     * ones it numbers, so they come through as the stronger lines.
+     */
+    gridTicks?: number[];
     /** The hour whose slot the host is showing an answer for. */
     selectedSlot?: number;
     /**
@@ -57,7 +62,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, gridTicks }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const stepMs = halfHourly ? hourMs / 2 : hourMs;
         const slots = Array.from({ length: halfHourly ? 48 : 24 }, (_, index) => ({
@@ -150,6 +155,10 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
                 { socPct: 50, solarWh: 600, price: 1.5 },
             ]));
         }
+        band.timeGridTicks = gridTicks.map((hour) => ({
+            atMs: dayStartMs + hour * hourMs,
+            major: hour % 3 === 0,
+        }));
         if (windowed) {
             band.windowStartMs = windowStartMs;
             band.windowEndMs = windowEndMs;
@@ -193,6 +202,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         twoLanes: options.twoLanes ?? false,
         selectedSlot: options.selectedSlot,
         halfHourly: options.halfHourly ?? false,
+        gridTicks: options.gridTicks ?? [],
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -496,6 +506,43 @@ test.describe("entity day band, slot grid", () => {
         await expect(
             band.locator('.lane[data-lane="appliance:boiler"] .slot-pick.selected'),
         ).toHaveCount(1);
+    });
+});
+
+/**
+ * The band takes its time grid from whoever it is stacked under, rather than
+ * ruling the day itself. That is the only way the lanes and the charts above
+ * them can be read as one diagram: the host has already decided which lines are
+ * drawn and which of them carry an hour, and a band that decided again would
+ * rule the same day twice, differently.
+ */
+test.describe("entity day band, host time grid", () => {
+    test("nothing is ruled until a host asks for it", async ({ page }) => {
+        await mountBand(page);
+        await expect(page.locator("scheduling-entity-day-band")).toBeAttached();
+        const band = page.locator("scheduling-entity-day-band");
+        await expect(band.locator(".time-grid-line")).toHaveCount(0);
+    });
+
+    test("the host's lines are drawn on every lane, at the host's own weights", async ({ page }) => {
+        await mountBand(page, { twoLanes: true, gridTicks: [6, 8, 12] });
+
+        const band = page.locator("scheduling-entity-day-band");
+        // Three lines per track, on both tracks.
+        await expect(band.locator(".time-grid-line")).toHaveCount(6);
+        // 06:00 and 12:00 are the numbered hours the host chose; 08:00 is not.
+        await expect(band.locator(".time-grid-line.major")).toHaveCount(4);
+
+        const first = await readGeometry(page, ".time-grid-line");
+        expect(first.left).toBeCloseTo(25, 1);
+    });
+
+    test("a line outside the host's crop is dropped, not stacked on the edge", async ({ page }) => {
+        // The crop is 06:00-18:00, so 03:00 and 21:00 have nowhere to go.
+        await mountBand(page, { windowed: true, gridTicks: [3, 6, 12, 21] });
+
+        const band = page.locator("scheduling-entity-day-band");
+        await expect(band.locator(".time-grid-line")).toHaveCount(2);
     });
 });
 

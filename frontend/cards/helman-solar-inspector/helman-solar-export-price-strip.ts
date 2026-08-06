@@ -13,6 +13,7 @@ import {
     type ScheduleStripGeometry,
 } from "./strip-geometry";
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
+import { renderSlotGridlines, slotGridTicks } from "./slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 
 const MINUTES_PER_DAY = 1440;
@@ -248,6 +249,17 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                         </clipPath>
                     </defs>
                     ${this._renderGuides(geometry, zeroY, yForValue, maxAbs, hasNegative)}
+                    ${renderSlotGridlines({
+                        ticks: slotGridTicks({
+                            startMinutes: windowStart,
+                            endMinutes: windowEnd,
+                            slotMinutes: this.slotMinutes,
+                            plotWidth: geometry.plotWidth,
+                        }),
+                        xForMinutes,
+                        top: 0,
+                        bottom: height,
+                    })}
                     ${this._renderBand(columns, this.hoverMinutes, "hover", height, xForMinutes)}
                     ${this.selectedMinutes.map((minutes) =>
                         this._renderBand(columns, minutes, "selected", height, xForMinutes))}

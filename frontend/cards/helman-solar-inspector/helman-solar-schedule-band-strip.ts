@@ -11,6 +11,7 @@ import "../shared/schedule/components/scheduling-entity-day-band";
 import "../shared/schedule/dialogs/scheduling-entity-day-editor";
 import type {
     EntityDayBandBlockSelectDetail,
+    EntityDayBandGridTick,
     EntityDayBandHighlight,
     EntityDayBandLaneSelectDetail,
     EntityDayBandPointerMoveDetail,
@@ -60,6 +61,7 @@ import type {
     ScheduleOwnerSnapshot,
 } from "../shared/schedule/schedule-types";
 import { stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
+import { slotGridTicks } from "./slot-gridlines";
 import { SLOT_MINUTES } from "./chart-stack";
 import { helmanColorVars } from "../color-vars";
 
@@ -266,6 +268,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                     .windowStartMs=${day.startMs + start * MINUTE_MS}
                     .windowEndMs=${day.startMs + end * MINUTE_MS}
                     .highlightRanges=${this._buildHighlights(day)}
+                    .timeGridTicks=${this._buildGridTicks(day, start, end)}
                     .laneLabels=${"track"}
                     .readonly=${true}
                     .showForecastRows=${false}
@@ -318,6 +321,26 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 @entity-schedule-save=${this._handleEditorSave}
             ></scheduling-entity-day-editor>
         `;
+    }
+
+    /**
+     * The inspector's time grid, handed down as instants.
+     *
+     * Computed from the same geometry and slot size the charts above use, so
+     * the lanes are ruled by the very lines the chart is: the band is a row of
+     * the inspector, not a diagram that happens to sit under one.
+     */
+    private _buildGridTicks(
+        day: EntityScheduleDay,
+        startMinutes: number,
+        endMinutes: number,
+    ): EntityDayBandGridTick[] {
+        const plotWidth = this.geometry?.plotWidth ?? 0;
+        return slotGridTicks({ startMinutes, endMinutes, slotMinutes: this.slotMinutes, plotWidth })
+            .map((tick) => ({
+                atMs: day.startMs + tick.minutes * MINUTE_MS,
+                major: tick.hour !== null,
+            }));
     }
 
     /**
