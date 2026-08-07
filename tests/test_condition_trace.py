@@ -26,7 +26,8 @@ from custom_components.helman.const import DOMAIN  # noqa: E402
 from custom_components.helman.automation.condition_trace import (  # noqa: E402
     evaluate_traced,
     extract_entity_ids,
-    read_entity_states,
+    read_entity_params,
+    stamp_params,
 )
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman.websockets import ws_get_condition_trace  # noqa: E402
@@ -337,7 +338,7 @@ class ExtractEntityIdsTests(unittest.TestCase):
         self.assertEqual(extract_entity_ids({"not": "a condition"}), ())
 
 
-class ReadEntityStatesTests(unittest.TestCase):
+class ReadEntityParamsTests(unittest.TestCase):
     """What the reading carries -- and that a missing entity still carries."""
 
     def test_a_reading_carries_its_unit_and_name(self) -> None:
@@ -347,29 +348,59 @@ class ReadEntityStatesTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            read_entity_states(hass, ["sensor.pool"]),
-            [{
-                "entityId": "sensor.pool",
-                "state": "28.4",
-                "unit": "°C",
-                "name": "Bazén",
-            }],
+            read_entity_params(hass, ["sensor.pool"]),
+            {"sensor.pool (Bazén)": "28.4 °C"},
         )
 
     def test_an_entity_without_those_attributes_still_reads(self) -> None:
         hass = FakeHass({"sensor.soc": "42.0"})
 
         self.assertEqual(
-            read_entity_states(hass, ["sensor.soc"]),
-            [{"entityId": "sensor.soc", "state": "42.0", "unit": None, "name": None}],
+            read_entity_params(hass, ["sensor.soc"]), {"sensor.soc": "42.0"}
         )
 
     def test_a_missing_entity_is_kept_rather_than_dropped(self) -> None:
         """That a condition reads something absent is the reader's answer."""
         self.assertEqual(
-            read_entity_states(FakeHass(), ["sensor.gone"]),
-            [{"entityId": "sensor.gone", "state": None, "unit": None, "name": None}],
+            read_entity_params(FakeHass(), ["sensor.gone"]), {"sensor.gone": None}
         )
+
+
+class StampParamsTests(unittest.TestCase):
+    """The readings hang off the entry's own step, or off nothing at all."""
+
+    def test_the_readings_land_on_the_entry_root_step(self) -> None:
+        trace = {"condition/1": [{"path": "condition/1", "result": {"result": True}}]}
+
+        stamp_params(trace, entry_index=1, params={"sensor.pool": "28.4 °C"})
+
+        self.assertEqual(
+            trace["condition/1"],
+            [{
+                "path": "condition/1",
+                "result": {"result": True},
+                "params": {"sensor.pool": "28.4 °C"},
+            }],
+        )
+
+    def test_a_nested_step_is_left_alone(self) -> None:
+        """One entry reads its entities once; the root is where that belongs."""
+        trace = {
+            "condition/0": [{"path": "condition/0"}],
+            "condition/0/conditions/0": [{"path": "condition/0/conditions/0"}],
+        }
+
+        stamp_params(trace, entry_index=0, params={"sensor.pool": "28.4 °C"})
+
+        self.assertNotIn("params", trace["condition/0/conditions/0"][0])
+
+    def test_an_entry_that_left_no_step_invents_none(self) -> None:
+        """A fabricated step would draw a node HA never evaluated."""
+        trace: dict = {}
+
+        stamp_params(trace, entry_index=0, params={"sensor.pool": "28.4 °C"})
+
+        self.assertEqual(trace, {})
 
 
 class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
@@ -426,27 +457,17 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
         await coordinator._async_evaluate_optimizer_conditions()
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
+        trace = payload["trace"]
         self.assertEqual(
-            payload["entityStates"],
-            {
-                "condition/0": [{
-                    "entityId": "sensor.soc",
-                    "state": "42.0",
-                    "unit": None,
-                    "name": None,
-                }],
-                "condition/1": [{
-                    "entityId": "sensor.pool",
-                    "state": "28.4",
-                    "unit": "°C",
-                    "name": "Bazén",
-                }],
-            },
+            trace["condition/0"][0]["params"], {"sensor.soc": "42.0"}
+        )
+        self.assertEqual(
+            trace["condition/1"][0]["params"], {"sensor.pool (Bazén)": "28.4 °C"}
         )
         json.dumps(payload)
 
-    async def test_an_entry_reading_no_entity_gets_no_key(self) -> None:
-        """Nothing to show is an absent key, not an empty list to render."""
+    async def test_an_entry_reading_no_entity_gets_no_params(self) -> None:
+        """Nothing to show is an absent key, not an empty map to render."""
         hass = FakeHass()
         coordinator = _coordinator(
             hass,
@@ -459,7 +480,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
         await coordinator._async_evaluate_optimizer_conditions()
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
-        self.assertEqual(payload["entityStates"], {})
+        self.assertNotIn("params", payload["trace"]["condition/0"][0])
 
     async def test_a_missing_entity_is_recorded_as_missing(self) -> None:
         hass = FakeHass()
@@ -477,8 +498,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
         self.assertEqual(
-            payload["entityStates"]["condition/0"],
-            [{"entityId": "sensor.gone", "state": None, "unit": None, "name": None}],
+            payload["trace"]["condition/0"][0]["params"], {"sensor.gone": None}
         )
 
     async def test_the_reading_follows_the_entity_between_runs(self) -> None:
@@ -504,7 +524,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
         self.assertEqual(
-            payload["entityStates"]["condition/0"][0]["state"], "11.0"
+            payload["trace"]["condition/0"][0]["params"], {"sensor.soc": "11.0"}
         )
 
     async def test_a_group_without_custom_conditions_records_nothing(self) -> None:

@@ -43,12 +43,11 @@ from .automation.compute_inputs import (
     CustomConditionResult,
 )
 from .automation.condition_trace import (
-    ConditionEntityStates,
     ConditionTrace,
-    entry_root,
     evaluate_traced,
     extract_entity_ids,
-    read_entity_states,
+    read_entity_params,
+    stamp_params,
 )
 from .automation.config import (
     AutomationConfig,
@@ -2744,9 +2743,10 @@ class HelmanCoordinator:
                 )
                 trace: ConditionTrace = {}
                 # Read before evaluating, so the reading is the one the condition
-                # went on to judge rather than a state that moved in between.
-                entity_states: ConditionEntityStates = {
-                    entry_root(entry_index): read_entity_states(self._hass, ids)
+                # went on to judge rather than a state that moved in between;
+                # stamped after, onto the step the evaluation left behind.
+                params_by_entry = {
+                    entry_index: read_entity_params(self._hass, ids)
                     for entry_index, ids in enumerate(entity_ids)
                     if ids
                 }
@@ -2756,6 +2756,8 @@ class HelmanCoordinator:
                     )
                     for entry_index, checker in enumerate(checkers)
                 )
+                for entry_index, params in params_by_entry.items():
+                    stamp_params(trace, entry_index=entry_index, params=params)
                 traces[key] = {
                     "optimizerId": optimizer.id,
                     "groupIndex": group.index,
@@ -2764,9 +2766,6 @@ class HelmanCoordinator:
                     # trace paths point into rather than a config read later.
                     "config": [dict(entry) for entry in group.custom],
                     "trace": trace,
-                    # What HA's own trace has no place for: the readings behind
-                    # an entity platform condition. See `condition_trace`.
-                    "entityStates": entity_states,
                 }
                 group_results.append(
                     CustomConditionGroupResult(

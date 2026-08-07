@@ -18,27 +18,15 @@ interface ConditionTracePayload {
     runAt: string;
     /** The group's `custom` list, exactly as it was evaluated. */
     config: unknown[];
-    /** HA trace path -> the steps recorded at it. */
-    trace: Record<string, unknown[]>;
     /**
-     * Entry root path (`condition/<i>`) -> what that entry's entities read.
+     * HA trace path -> the steps recorded at it.
      *
-     * The part HA's trace has no place for. `condition_trace_set_result` -- the
-     * call that puts a reading beside a bound -- is made only by HA's legacy
-     * function conditions; the entity-condition base classes make no trace calls
-     * at all, so a `temperature.is_value` step carries its verdict and nothing
-     * else. The backend reads the entities the entry references and sends them
-     * along; this is where they are drawn.
+     * A step may carry a `params` key the backend put there: the entities the
+     * entry read, which HA's own trace has no place for. Nothing here has to
+     * draw it -- `ha-trace-path-details` dumps every step key it does not
+     * recognise into the block at the top of its pane.
      */
-    entityStates?: Record<string, ConditionEntityState[]>;
-}
-
-interface ConditionEntityState {
-    entityId: string;
-    /** Null where the entity has no state at all -- itself worth showing. */
-    state: string | null;
-    unit: string | null;
-    name: string | null;
+    trace: Record<string, unknown[]>;
 }
 
 /** What the dialog is doing, which is all the render needs to branch on. */
@@ -159,53 +147,10 @@ export class SchedulingConditionTraceDialog extends LitElement {
                 padding-right: 12px;
             }
 
-            .trace-detail {
-                flex: 1 1 auto;
-                min-width: 0;
-            }
-
             ha-trace-path-details {
                 display: block;
-            }
-
-            /* The readings sit under the detail pane rather than beside it: they
-               belong to the same node the pane is describing, and a reader who
-               got there by pressing that node should not have to look away. */
-            .entity-states {
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-                margin-top: 8px;
-                padding: 8px;
-                border: 1px solid var(--divider-color);
-                border-radius: 8px;
-                background: var(--secondary-background-color);
-                font-size: 0.8rem;
-            }
-
-            .entity-states-head {
-                color: var(--secondary-text-color);
-                font-size: 0.72rem;
-                text-transform: uppercase;
-                letter-spacing: 0.04em;
-            }
-
-            .entity-state {
-                display: flex;
-                justify-content: space-between;
-                gap: 12px;
-            }
-
-            .entity-name {
-                color: var(--secondary-text-color);
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-
-            .entity-value {
-                flex: 0 0 auto;
-                font-weight: 600;
+                flex: 1 1 auto;
+                min-width: 0;
             }
 
             .placeholder {
@@ -331,58 +276,14 @@ export class SchedulingConditionTraceDialog extends LitElement {
                     .selected=${this._selected?.path}
                     @graph-node-selected=${this._handleNodeSelected}
                 ></hat-script-graph>
-                <div class="trace-detail">
-                    <ha-trace-path-details
-                        .hass=${hass}
-                        .trace=${trace}
-                        .logbookEntries=${[]}
-                        .selected=${this._selected}
-                        .renderedNodes=${graph?.renderedNodes ?? {}}
-                        .trackedNodes=${graph?.trackedNodes ?? {}}
-                    ></ha-trace-path-details>
-                    ${this._renderEntityStates(payload)}
-                </div>
-            </div>
-        `;
-    }
-
-    /**
-     * The entities the selected node's entry read, as they read at the time.
-     *
-     * Beside `ha-trace-path-details` rather than inside it: that is Home
-     * Assistant's component and takes no slot, and this is the one thing the
-     * trace it draws cannot carry (see `entityStates`).
-     *
-     * Keyed by *entry*, not by node -- the backend reads an entry's entities
-     * once, and every node inside `condition/<i>` was judging those same
-     * readings. A selected path is therefore matched by its entry root, which
-     * is its first two segments.
-     */
-    private _renderEntityStates(payload: ConditionTracePayload) {
-        const path = this._selected?.path;
-        if (path === undefined) {
-            return nothing;
-        }
-        const readings = payload.entityStates?.[path.split("/").slice(0, 2).join("/")];
-        if (readings === undefined || readings.length === 0) {
-            return nothing;
-        }
-
-        return html`
-            <div class="entity-states">
-                <div class="entity-states-head">${this._text("entity_states")}</div>
-                ${readings.map((reading) => html`
-                    <div class="entity-state" data-entity=${reading.entityId}>
-                        <span class="entity-name">
-                            ${reading.name ?? reading.entityId}
-                        </span>
-                        <span class="entity-value">
-                            ${reading.state === null
-                                ? this._text("entity_missing")
-                                : [reading.state, reading.unit].filter(Boolean).join(" ")}
-                        </span>
-                    </div>
-                `)}
+                <ha-trace-path-details
+                    .hass=${hass}
+                    .trace=${trace}
+                    .logbookEntries=${[]}
+                    .selected=${this._selected}
+                    .renderedNodes=${graph?.renderedNodes ?? {}}
+                    .trackedNodes=${graph?.trackedNodes ?? {}}
+                ></ha-trace-path-details>
             </div>
         `;
     }

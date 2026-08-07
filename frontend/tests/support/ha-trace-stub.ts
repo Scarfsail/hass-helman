@@ -64,12 +64,42 @@ class HelmanTestScriptGraph extends HTMLElement {
     get trace() { return this._trace; }
 }
 
+// The real pane destructures a step into the keys it knows and YAML-dumps
+// whatever is left into the block at the top (\`_renderSelectedTraceInfo\`), which
+// is the whole mechanism by which the backend's \`params\` reach the reader. The
+// stub reproduces that split -- the same key list, the same "render the rest"
+// rule -- so a spec can pin the contract without owning HA's layout.
+const HA_STEP_KEYS = [
+    "path", "timestamp", "result", "error", "template_errors", "changed_variables",
+];
+
 class HelmanTestTracePathDetails extends HTMLElement {
+    set trace(value) { this._trace = value; this._paint(); }
+    get trace() { return this._trace; }
     set selected(value) {
         this._selected = value;
         this.setAttribute("data-selected", (value && value.path) || "");
+        this._paint();
     }
     get selected() { return this._selected; }
+    _paint() {
+        const path = this._selected && this._selected.path;
+        const steps = (this._trace && this._trace.trace && this._trace.trace[path]) || [];
+        this.innerHTML = "";
+        steps.forEach((step) => {
+            const rest = {};
+            Object.keys(step)
+                .filter((key) => HA_STEP_KEYS.indexOf(key) === -1)
+                .forEach((key) => { rest[key] = step[key]; });
+            if (Object.keys(rest).length === 0) {
+                return;
+            }
+            const dump = document.createElement("pre");
+            dump.className = "rest";
+            dump.textContent = JSON.stringify(rest);
+            this.appendChild(dump);
+        });
+    }
 }
 
 if (!customElements.get("hat-script-graph")) {

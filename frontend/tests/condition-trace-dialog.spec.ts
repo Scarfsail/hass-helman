@@ -113,6 +113,9 @@ const TRACE_PAYLOAD = {
             path: "condition/0",
             timestamp: CELL_RUN_AT,
             result: { result: true },
+            // The backend hangs the entry's readings here; HA's pane dumps
+            // every step key it does not recognise into its top block.
+            params: { "sensor.pool_temp (Teplota bazénu)": "26.5 °C" },
         }],
         "condition/0/entity_id/0": [{
             path: "condition/0/entity_id/0",
@@ -123,38 +126,15 @@ const TRACE_PAYLOAD = {
             path: "condition/1",
             timestamp: CELL_RUN_AT,
             result: { result: false },
+            // An entity that no longer exists is kept, valued null -- that a
+            // condition reads something absent is the reader's answer.
+            params: { "binary_sensor.cover": "on", "sensor.gone": null },
         }],
         "condition/1/conditions/0": [{
             path: "condition/1/conditions/0",
             timestamp: CELL_RUN_AT,
             result: { result: false, state: "on", wanted_state: "off" },
         }],
-    },
-    // Keyed by entry root, because that is what the backend reads: one set of
-    // readings per `custom` entry, judged by every node inside it. The second
-    // entry names an entity that no longer exists, which is a thing the reader
-    // most wants to see rather than a row to drop.
-    entityStates: {
-        "condition/0": [{
-            entityId: "sensor.pool_temp",
-            state: "26.5",
-            unit: "°C",
-            name: "Teplota bazénu",
-        }],
-        "condition/1": [
-            {
-                entityId: "binary_sensor.cover",
-                state: "on",
-                unit: null,
-                name: null,
-            },
-            {
-                entityId: "sensor.gone",
-                state: null,
-                unit: null,
-                name: null,
-            },
-        ],
     },
 };
 
@@ -415,58 +395,36 @@ test.describe("the readings behind the selected condition", () => {
         }, path);
     }
 
-    function readings(page: Page) {
-        return dialog(page).locator(".entity-states .entity-state");
+    /** What the pane was handed for the selected node, beyond HA's own keys. */
+    function restDump(page: Page) {
+        return dialog(page).locator("ha-trace-path-details pre.rest");
     }
 
-    test("the selected entry's entities are shown with their unit", async ({ page }) => {
+    test("the selected entry's readings reach the detail pane", async ({ page }) => {
         await mountPanel(page, { trace: TRACE_PAYLOAD });
         await customBlock(page).click();
 
-        await expect(readings(page)).toHaveCount(1);
-        await expect(readings(page).first().locator(".entity-name"))
-            .toHaveText("Teplota bazénu");
-        await expect(readings(page).first().locator(".entity-value"))
-            .toHaveText("26.5 °C");
+        // Not drawn by us: `params` is an unrecognised step key, and that is
+        // exactly why HA's pane renders it in the block above the tabs.
+        await expect(restDump(page)).toHaveCount(1);
+        await expect(restDump(page)).toContainText("sensor.pool_temp (Teplota bazénu)");
+        await expect(restDump(page)).toContainText("26.5 °C");
     });
 
-    test("a node nested inside an entry still finds that entry's readings", async ({ page }) => {
-        await mountPanel(page, { trace: TRACE_PAYLOAD });
-        await customBlock(page).click();
-        await selectPath(page, "condition/1/conditions/0");
-
-        await expect(readings(page)).toHaveCount(2);
-        // No friendly name recorded, so the id is what there is to show.
-        await expect(readings(page).first().locator(".entity-name"))
-            .toHaveText("binary_sensor.cover");
-    });
-
-    test("an entity that no longer exists says so, rather than reading blank", async ({ page }) => {
+    test("an entity that no longer exists still reaches it, valued null", async ({ page }) => {
         await mountPanel(page, { trace: TRACE_PAYLOAD });
         await customBlock(page).click();
         await selectPath(page, "condition/1");
 
-        // The harness's localize is the identity, so the key is what a
-        // resolved string looks like here -- and the point is the *branch*: a
-        // missing entity must not fall through to an empty value.
-        await expect(readings(page).nth(1).locator(".entity-value"))
-            .toContainText("entity_missing");
+        await expect(restDump(page)).toContainText("binary_sensor.cover");
+        await expect(restDump(page)).toContainText('"sensor.gone":null');
     });
 
-    test("an entry that reads no entity draws no box at all", async ({ page }) => {
+    test("a node whose step carries no readings adds nothing", async ({ page }) => {
         await mountPanel(page, { trace: TRACE_PAYLOAD });
         await customBlock(page).click();
-        await selectPath(page, "condition/7");
+        await selectPath(page, "condition/1/conditions/0");
 
-        await expect(dialog(page).locator(".entity-states")).toHaveCount(0);
-    });
-
-    test("a record from before the readings existed renders without them", async ({ page }) => {
-        const { entityStates: _dropped, ...withoutReadings } = TRACE_PAYLOAD;
-        await mountPanel(page, { trace: withoutReadings });
-        await customBlock(page).click();
-
-        await expect(dialog(page).locator("hat-script-graph")).toHaveCount(1);
-        await expect(dialog(page).locator(".entity-states")).toHaveCount(0);
+        await expect(restDump(page)).toHaveCount(0);
     });
 });

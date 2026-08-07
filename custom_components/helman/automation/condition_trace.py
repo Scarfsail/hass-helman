@@ -25,10 +25,20 @@ classes ``EntityConditionBase``, ``EntityStateConditionBase``,
 ``EntityNumericalConditionBase`` and ``EntityNumericalConditionWithUnitBase``
 make no trace calls at all, so a ``temperature.is_value`` entry records its
 verdict and nothing else -- in HA's own automation trace just as much as here.
-The reading is therefore captured beside the trace instead: whatever entities the
-entry references, read at the moment it was evaluated. ``async_extract_entities``
+The reading is therefore captured here instead: whatever entities the entry
+references, read at the moment it was evaluated. ``async_extract_entities``
 finds them, so this stays generic -- no per-platform semantics are restated here,
 and a condition shape HA grows later is followed for free.
+
+Those readings are stamped onto the entry's own trace step under ``params``
+rather than travelling beside it. ``ha-trace-path-details`` destructures a step
+into the keys it knows and YAML-dumps *whatever is left* into the block at the
+top of the pane, beneath the result (see ``_renderSelectedTraceInfo`` in
+``frontend/hass-frontend/src/components/trace/ha-trace-path-details.ts``). So a
+key HA has no name for is not ignored -- it is rendered, in the one place the
+reader is already looking. ``params`` is safe to use: a trace element only ever
+carries ``path``, ``timestamp``, ``child_id``, ``changed_variables``, ``error``,
+``template_errors`` and ``result``.
 
 Nothing here may cost a run its plan: the plan is worth more than the record of
 why it exists, so a collection that breaks is logged and dropped.
@@ -49,8 +59,8 @@ _LOGGER = logging.getLogger(__name__)
 #: One group's trace: HA trace path -> the steps recorded at it.
 ConditionTrace = dict[str, list[dict[str, Any]]]
 
-#: One group's readings: entry root path -> the entities that entry referenced.
-ConditionEntityStates = dict[str, list[dict[str, Any]]]
+#: One entry's readings, as the pane renders them: label -> value.
+ConditionParams = dict[str, str | None]
 
 #: Where a single-entry ``ConditionsChecker`` roots its trace, always.
 _ENTRY_ROOT = "condition/0"
@@ -107,28 +117,50 @@ def extract_entity_ids(validated_config: Any) -> tuple[str, ...]:
         return ()
 
 
-def read_entity_states(
+def read_entity_params(
     hass: "HomeAssistant", entity_ids: Iterable[str]
-) -> list[dict[str, Any]]:
-    """The live state of each entity, in the order given.
+) -> ConditionParams:
+    """The live state of each entity, as the one line each will be dumped to.
 
-    An entity with no state is kept with ``state: None`` rather than dropped --
-    that a condition reads something that does not exist is exactly the kind of
-    thing the reader is looking for. ``unit`` and ``name`` come along where the
-    entity has them, because a bare ``28.4`` next to a threshold in degrees is
-    a number the reader has to take on trust.
+    Flat text, because that is all the pane does with it: a YAML dump of a map.
+    The unit rides along with the value -- a bare ``28.4`` beside a threshold in
+    degrees is a number the reader has to take on trust -- and the friendly name
+    rides along with the id, which stays in the label because it is the only
+    unambiguous half of it.
+
+    An entity with no state is kept, valued ``None`` and so dumped as ``null``,
+    rather than dropped: that a condition reads something that does not exist is
+    exactly what the reader is hunting for.
     """
-    readings: list[dict[str, Any]] = []
+    params: ConditionParams = {}
     for entity_id in entity_ids:
         state = hass.states.get(entity_id)
         attributes = getattr(state, "attributes", None) or {}
-        readings.append({
-            "entityId": entity_id,
-            "state": None if state is None else state.state,
-            "unit": _json_safe(attributes.get("unit_of_measurement")),
-            "name": _json_safe(attributes.get("friendly_name")),
-        })
-    return readings
+        name = attributes.get("friendly_name")
+        unit = attributes.get("unit_of_measurement")
+        label = f"{entity_id} ({name})" if name else entity_id
+        if state is None:
+            params[label] = None
+        else:
+            params[label] = f"{state.state} {unit}" if unit else str(state.state)
+    return params
+
+
+def stamp_params(
+    trace: ConditionTrace, *, entry_index: int, params: ConditionParams
+) -> None:
+    """Hang one entry's readings off its own trace step.
+
+    Only where the entry left a step to hang them on. A step is not invented for
+    an entry that recorded none, because a fabricated one would draw a node in
+    the graph that HA never evaluated -- and an entry that got far enough to read
+    its entities almost always left one, since ``ConditionChecker.async_check``
+    opens its trace element before doing anything else.
+    """
+    root = entry_root(entry_index)
+    if not params or root not in trace:
+        return
+    trace[root] = [{**element, "params": params} for element in trace[root]]
 
 
 def _merge(
