@@ -17,6 +17,18 @@ const KEY_PREFIX = "scheduling.explanation";
 /** How a slot ended up, as the diagram's terminal block. */
 export type LogicTerminal = "execute" | "candidate" | "not_eligible" | "blocked";
 
+/**
+ * Which condition group's last evaluation the reader asked to see.
+ *
+ * The two coordinates `helman/get_condition_trace` is keyed by, and the whole
+ * of what the diagram knows about the trace: it reports the press and leaves
+ * fetching and drawing to whoever mounted it.
+ */
+export interface ConditionTraceRequestDetail {
+    optimizerId: string;
+    groupIndex: number;
+}
+
 /** A block's own result. `n/a` is a block with nothing to report. */
 export type LogicState = ExplanationNodeState | "errored" | "n/a";
 
@@ -1556,6 +1568,28 @@ export class SchedulingLogicDiagram extends LitElement {
                 fill: var(--warning-color, #ef6c00);
             }
 
+            /* The one block on the drawing that leads somewhere: its recorded
+               evaluation, node by node. Marked on the *label*, as a link is,
+               because every property of the rect is already carrying state --
+               its stroke colour says true/false, and its dash pattern is the
+               only thing separating "threw" from "said no". Borrowing either
+               would make the affordance and the reading fight over the same
+               pixels. */
+            g.block[data-traceable="true"] {
+                cursor: pointer;
+            }
+
+            g.block[data-traceable="true"] text.label {
+                text-decoration: underline;
+                text-decoration-style: dotted;
+                text-underline-offset: 2px;
+            }
+
+            g.block[data-traceable="true"]:focus-visible {
+                outline: 2px solid var(--helman-selection, var(--primary-color));
+                outline-offset: 2px;
+            }
+
             /* The group the diagram opened on, so a diagram nobody clicked
                into still says which branch it is about. */
             g.block[data-focus-group="true"] rect.body {
@@ -2082,6 +2116,7 @@ export class SchedulingLogicDiagram extends LitElement {
         const focus = block.kind === "input"
             && block.key === this.focusConditionKey
             && (this.focusGroupIndex === null || block.groupIndex === this.focusGroupIndex);
+        const traceRequest = this._traceCoordinates(block);
         const isOperator = block.kind === "and"
             || block.kind === "or"
             || block.kind === "final"
@@ -2140,6 +2175,7 @@ export class SchedulingLogicDiagram extends LitElement {
                 ? ""
                 : `${this._text("matrix.actual")}: ${fullValue}`,
             this._paramsText(block.params),
+            traceRequest === null ? "" : this._text("diagram.trace.open_hint"),
         ].filter((part) => part.length > 0).join(" · ");
 
         return svg`
@@ -2155,6 +2191,15 @@ export class SchedulingLogicDiagram extends LitElement {
                     ? "true"
                     : "false"}
                 data-group=${block.groupIndex ?? nothing}
+                data-traceable=${traceRequest === null ? nothing : "true"}
+                role=${traceRequest === null ? nothing : "button"}
+                tabindex=${traceRequest === null ? nothing : "0"}
+                @click=${traceRequest === null
+                    ? undefined
+                    : () => this._requestTrace(traceRequest)}
+                @keydown=${traceRequest === null
+                    ? undefined
+                    : (event: KeyboardEvent) => this._handleTraceKeydown(event, traceRequest)}
             >
                 <title>${title}</title>
                 <rect
@@ -2191,6 +2236,57 @@ export class SchedulingLogicDiagram extends LitElement {
                 `}
             </g>
         `;
+    }
+
+    /**
+     * Which condition group's trace this block can be pressed for, if any.
+     *
+     * Only the custom-conditions block, and only where an evaluation actually
+     * happened: `n/a` is the block saying the matched group configured none, so
+     * there is nothing recorded to open and the `custom_none` hint beneath it
+     * already explains the empty stage. The state is the diagram's own reading
+     * of `customResults`, so this cannot offer a trace the backend does not have.
+     */
+    private _traceCoordinates(
+        block: LogicBlock,
+    ): ConditionTraceRequestDetail | null {
+        const optimizerId = this.cell?.optimizerId;
+        if (
+            block.kind !== "custom"
+            || block.state === "n/a"
+            || block.groupIndex === null
+            || optimizerId === undefined
+        ) {
+            return null;
+        }
+
+        return { optimizerId, groupIndex: block.groupIndex };
+    }
+
+    /**
+     * The block is a control, so it answers to the keyboard as one.
+     *
+     * An SVG `<g>` gets no default activation behaviour from `role="button"` --
+     * the role is a promise to the reader that the element has to keep itself.
+     */
+    private _handleTraceKeydown(
+        event: KeyboardEvent,
+        detail: ConditionTraceRequestDetail,
+    ): void {
+        if (event.key !== "Enter" && event.key !== " ") {
+            return;
+        }
+
+        // Space scrolls the panel otherwise, which is the opposite of activating.
+        event.preventDefault();
+        this._requestTrace(detail);
+    }
+
+    private _requestTrace(detail: ConditionTraceRequestDetail): void {
+        this.dispatchEvent(new CustomEvent<ConditionTraceRequestDetail>(
+            "condition-trace-requested",
+            { detail, bubbles: true, composed: true },
+        ));
     }
 
     /** Everything recorded that did not gate the slot, said so plainly. */
