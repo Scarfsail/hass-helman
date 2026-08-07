@@ -671,6 +671,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         return html`
             <div class="panel">
                 <scheduling-explanation-panel
+                    .hass=${this.hass}
                     .localize=${this.localize}
                     .payload=${this._explanations.get(key) ?? null}
                     .slotId=${selection.slotId}

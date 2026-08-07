@@ -90,6 +90,20 @@ def _validate_target_key(value: object) -> str:
     return value
 
 
+def _validate_optimizer_id(value: object) -> str:
+    """An optimizer instance id, as authored in the automation config."""
+    if not isinstance(value, str) or not value:
+        raise vol.Invalid("optimizer_id must be a non-empty string")
+    return value
+
+
+def _validate_group_index(value: object) -> int:
+    """A condition group's position within its optimizer's ``conditions``."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise vol.Invalid("group_index must be a non-negative integer")
+    return value
+
+
 def _validate_forecast_days(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise vol.Invalid("forecast_days must be an integer")
@@ -122,6 +136,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_history)
     async_register_command(hass, ws_run_automation)
     async_register_command(hass, ws_get_schedule_explanation)
+    async_register_command(hass, ws_get_condition_trace)
 
 
 @websocket_api.websocket_command({
@@ -158,6 +173,46 @@ def ws_get_schedule_explanation(
         coordinator.get_schedule_explanation(
             target_key=msg["target_key"],
             date=msg["date"],
+        ),
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_condition_trace",
+    vol.Required("optimizer_id"): _validate_optimizer_id,
+    vol.Required("group_index"): _validate_group_index,
+})
+@callback
+def ws_get_condition_trace(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """The last evaluation of one condition group's ``custom`` conditions.
+
+    Home Assistant's own condition trace, over the group's ``custom`` list and
+    carrying the config it ran, so the caller can draw it with HA's trace
+    components instead of a second way to render a condition tree.
+
+    Only the newest evaluation is kept while the explanation record accumulates
+    across runs, so the payload's ``runAt`` can be later than the plan row the
+    reader clicked — which is why it travels with the trace.
+
+    ``None`` before the first run, for a group with no ``custom`` conditions,
+    and for a group that no longer exists.
+    """
+    if not _require_admin(connection, msg):
+        return
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+        return
+
+    connection.send_result(
+        msg["id"],
+        coordinator.get_condition_trace(
+            optimizer_id=msg["optimizer_id"],
+            group_index=msg["group_index"],
         ),
     )
 

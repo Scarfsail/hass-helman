@@ -1651,16 +1651,17 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
 
         async def _build(*, key, entry_index, condition_config):
             built.append((key, entry_index))
-            outcome = outcome_by_entity[condition_config[0]["entity_id"]]
+            entity_id = condition_config[0]["entity_id"]
+            outcome = outcome_by_entity[entity_id]
             if outcome is None:
-                return None
+                return None, ()
 
             def _check():
                 if isinstance(outcome, Exception):
                     raise outcome
                 return outcome
 
-            return Mock(async_check=_check, async_unload=Mock())
+            return Mock(async_check=_check, async_unload=Mock()), (entity_id,)
 
         coordinator._build_optimizer_condition_checker = _build
         return built

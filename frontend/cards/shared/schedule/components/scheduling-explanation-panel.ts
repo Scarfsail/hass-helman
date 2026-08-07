@@ -1,8 +1,11 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
+import type { HomeAssistant } from "../../../../hass-frontend/src/types";
 import type { LocalizeFunction } from "../../../localize/localize";
 import "./scheduling-logic-diagram";
+import "../dialogs/scheduling-condition-trace-dialog";
+import type { ConditionTraceRequestDetail } from "./scheduling-logic-diagram";
 import {
     getWinningExplanationCell,
     parseScheduleExplanation,
@@ -128,6 +131,8 @@ export class SchedulingExplanationPanel extends LitElement {
     ];
 
     @property({ attribute: false }) public localize!: LocalizeFunction;
+    /** Only for the condition-trace dialog, which asks the backend itself. */
+    @property({ attribute: false }) public hass?: HomeAssistant;
     /** The raw `helman/get_schedule_explanation` payload, or null for none. */
     @property({ attribute: false }) public payload: unknown = null;
     /** Which slot of it is being asked about, or null for none. */
@@ -147,6 +152,14 @@ export class SchedulingExplanationPanel extends LitElement {
     @state() private _pickedOptimizerId: string | null = null;
     /** The parsed payload, rebuilt only when the payload itself changes. */
     @state() private _model: ScheduleExplanationModel | null = null;
+    /**
+     * The condition group whose trace is open, or null for none.
+     *
+     * Held here rather than in the diagram because the dialog needs the cell's
+     * run time to say whether the trace it got is that run's, and the cell is
+     * what this panel is built around.
+     */
+    @state() private _traceRequest: ConditionTraceRequestDetail | null = null;
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
@@ -155,6 +168,9 @@ export class SchedulingExplanationPanel extends LitElement {
         }
         if (changedProperties.has("payload") || changedProperties.has("slotId")) {
             this._pickedOptimizerId = null;
+            // A trace is about the slot it was opened from; a new question
+            // leaves a dialog answering the old one.
+            this._traceRequest = null;
         }
     }
 
@@ -191,10 +207,44 @@ export class SchedulingExplanationPanel extends LitElement {
                         .slotLabel=${this._slotLabel()}
                         .planLabel=${this._planLabel(active.cell)}
                         .plannedBeforeHours=${this._plannedBeforeHours(active)}
+                        @condition-trace-requested=${this._handleTraceRequested}
                     ></scheduling-logic-diagram>
+                    ${this._renderTraceDialog()}
                 `}
             </div>
         `;
+    }
+
+    /**
+     * The custom conditions' last evaluation, node by node.
+     *
+     * Mounted only once asked for: the dialog fetches on open, and an element
+     * that is never pressed should never ask the backend anything.
+     */
+    private _renderTraceDialog() {
+        const request = this._traceRequest;
+        if (request === null) {
+            return nothing;
+        }
+
+        return html`
+            <scheduling-condition-trace-dialog
+                .hass=${this.hass}
+                .localize=${this.localize}
+                .open=${true}
+                .optimizerId=${request.optimizerId}
+                .groupIndex=${request.groupIndex}
+                .groupLabel=${request.groupLabel}
+                .locale=${this.locale}
+                .timeZone=${this.timeZone}
+                @closed=${() => { this._traceRequest = null; }}
+            ></scheduling-condition-trace-dialog>
+        `;
+    }
+
+    private _handleTraceRequested(event: CustomEvent<ConditionTraceRequestDetail>): void {
+        event.stopPropagation();
+        this._traceRequest = event.detail;
     }
 
     private _renderTabStrip(

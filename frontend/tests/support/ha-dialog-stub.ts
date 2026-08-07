@@ -13,6 +13,11 @@
  * now finds nothing rather than finding everything. It does **not** emulate
  * `<dialog>`/top-layer semantics, so it still cannot prove that a dialog opened
  * from inside another dialog presents (#17) — only real HA can.
+ *
+ * `close()` emits `closed` the way the real component does: **bubbling and
+ * composed**. That detail is not decoration either — it is the whole mechanism
+ * behind a nested dialog closing the one it opened from, and a stub that stayed
+ * silent here let exactly that ship.
  */
 export const HA_DIALOG_STUB = `
 class HelmanTestHaDialog extends HTMLElement {
@@ -25,6 +30,11 @@ class HelmanTestHaDialog extends HTMLElement {
     attributeChangedCallback() { this._open = this.hasAttribute("open"); this._sync(); }
     get open() { return this._open; }
     set open(value) { this._open = !!value; this._sync(); }
+    close() {
+        this._open = false;
+        this._sync();
+        this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
+    }
     _sync() {
         this.style.display = this._open ? "block" : "none";
     }

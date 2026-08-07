@@ -358,6 +358,16 @@
           "custom_other_group": "má je jiná skupina, tento slot pod ni nespadl",
           "result": "Výsledek"
         },
+        "trace": {
+          "title": "Vlastní podmínky",
+          "open_hint": "kliknutím zobrazíte poslední vyhodnocení",
+          "run_at": "Vyhodnoceno",
+          "loading": "Načítám vyhodnocení…",
+          "empty": "Pro tuto skupinu zatím není žádné vyhodnocení zaznamenáno.",
+          "error": "Vyhodnocení se nepodařilo načíst",
+          "unrendered": "Komponenty Home Assistantu pro zobrazení trace se nepodařilo načíst; níže je surový záznam.",
+          "close": "Zavřít"
+        },
         "plan_decided_when": "rozhodnuto při plánování",
         "plan_when": "vyhodnoceno při plánování",
         "verdict": {
