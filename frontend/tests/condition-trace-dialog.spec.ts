@@ -162,6 +162,10 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
     await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
 
     await page.evaluate(({ fixture, trace, reject, slotId }) => {
+        const loaded: string[] = [];
+        (globalThis as Record<string, unknown>).__helmanTranslationsLoaded = loaded;
+        const record = (kind: string, name: string) => loaded.push(`${kind}:${name}`);
+
         const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
             & Record<string, unknown>;
         panel.localize = (key: string) => key;
@@ -175,6 +179,19 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
                     throw new Error(reject);
                 }
                 return trace ?? null;
+            },
+            // Not decoration: `ha-trace-path-details` writes its tab names, its
+            // step heading and its "executed at" line through the `config`
+            // translation fragment, and the condition's own name through the
+            // `conditions` backend category. A dashboard loads neither, and
+            // omitting them from the stub is what let a pane rendering nothing
+            // but a raw `result:` block pass every spec here.
+            loadFragmentTranslation: async (fragment: string) => {
+                record("fragment", fragment);
+            },
+            loadBackendTranslation: async (category: string) => {
+                record("backend", category);
+                return (key: string) => key;
             },
         };
         panel.locale = "cs";
@@ -276,19 +293,56 @@ test.describe("the custom-conditions trace dialog", () => {
         await expect(error).toContainText("not_loaded");
     });
 
-    test("a trace from a later run than the row says so", async ({ page }) => {
-        await mountPanel(page, { trace: { ...TRACE_PAYLOAD, runAt: LATER_RUN_AT } });
+    /*
+     * A stub cannot prove what HA's real pane *looks* like, so this pins the
+     * inputs it needs instead. Measured in a live dashboard: before these load,
+     * `trace.tabs.step_config` is `""` and `describeCondition` answers "unknown
+     * condition", leaving a pane whose only visible text is the raw `result:`
+     * block; after, the tabs, the heading, the executed-at line and the
+     * condition's name all render. The chunk walk brings neither.
+     */
+    test("opening the trace loads the translations its renderer writes through", async ({ page }) => {
+        await mountPanel(page, { trace: TRACE_PAYLOAD });
         await customBlock(page).click();
+        await expect(dialog(page).locator("hat-script-graph")).toHaveCount(1);
 
-        await expect(dialog(page).locator(".stale-banner")).toHaveCount(1);
+        const loaded = await page.evaluate(
+            () => (globalThis as Record<string, unknown>).__helmanTranslationsLoaded ?? [],
+        );
+        expect(loaded).toContain("fragment:config");
+        expect(loaded).toContain("backend:conditions");
     });
 
-    test("a trace from the row's own run claims nothing", async ({ page }) => {
+    /*
+     * Loading translations replaces the `hass` on `<home-assistant>`, so the
+     * reference a card is holding keeps a localize that answers "" forever.
+     * The pane must get the refreshed one, not the element's own property.
+     */
+    test("the pane is given the localize that saw the translations land", async ({ page }) => {
         await mountPanel(page, { trace: TRACE_PAYLOAD });
         await customBlock(page).click();
 
+        const usesRefreshed = await page.evaluate(() => {
+            const dlg = document
+                .querySelector("scheduling-explanation-panel")!
+                .shadowRoot!.querySelector("scheduling-condition-trace-dialog")!;
+            const details = dlg.shadowRoot!.querySelector("ha-trace-path-details") as
+                HTMLElement & { hass?: { localize?: unknown } };
+            const own = (dlg as HTMLElement & { hass?: { localize?: unknown } }).hass;
+            return details?.hass?.localize !== undefined
+                && details?.hass?.localize !== own?.localize;
+        });
+        expect(usesRefreshed).toBe(true);
+    });
+
+    // The evaluation is dated and never compared against the row's own run: the
+    // reality check re-evaluates on every execution cycle, so a "newer than the
+    // row" warning fired on every slot and said nothing.
+    test("the evaluation is dated, whichever run it came from", async ({ page }) => {
+        await mountPanel(page, { trace: { ...TRACE_PAYLOAD, runAt: LATER_RUN_AT } });
+        await customBlock(page).click();
+
         await expect(dialog(page).locator(".run-at")).toHaveCount(1);
-        await expect(dialog(page).locator(".stale-banner")).toHaveCount(0);
     });
 
     test("HA's renderer missing falls back to the record, not to a blank box", async ({ page }) => {

@@ -209,7 +209,7 @@ export class SchedulingExplanationPanel extends LitElement {
                         .plannedBeforeHours=${this._plannedBeforeHours(active)}
                         @condition-trace-requested=${this._handleTraceRequested}
                     ></scheduling-logic-diagram>
-                    ${this._renderTraceDialog(active.cell)}
+                    ${this._renderTraceDialog()}
                 `}
             </div>
         `;
@@ -221,7 +221,7 @@ export class SchedulingExplanationPanel extends LitElement {
      * Mounted only once asked for: the dialog fetches on open, and an element
      * that is never pressed should never ask the backend anything.
      */
-    private _renderTraceDialog(cell: ExplanationCell) {
+    private _renderTraceDialog() {
         const request = this._traceRequest;
         if (request === null) {
             return nothing;
@@ -234,7 +234,6 @@ export class SchedulingExplanationPanel extends LitElement {
                 .open=${true}
                 .optimizerId=${request.optimizerId}
                 .groupIndex=${request.groupIndex}
-                .cellRunAt=${cell.runAt}
                 .locale=${this.locale}
                 .timeZone=${this.timeZone}
                 @closed=${() => { this._traceRequest = null; }}

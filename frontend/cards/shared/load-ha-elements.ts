@@ -14,6 +14,9 @@
  * directory both vite entry points compile.
  */
 
+import type { LocalizeFunc } from "../../hass-frontend/src/common/translations/localize";
+import type { HomeAssistant } from "../../hass-frontend/src/types";
+
 const REQUIRED_ELEMENTS = ["ha-entity-picker", "ha-form", "ha-formfield", "ha-switch"] as const;
 const YAML_EDITOR_TAG = "ha-yaml-editor";
 const TRACE_ELEMENTS = ["hat-script-graph", "ha-trace-path-details"] as const;
@@ -89,14 +92,7 @@ async function loadAutomationPanel(): Promise<void> {
 
 export const loadHaForm = loadOnce(REQUIRED_ELEMENTS, loadAutomationPanel);
 
-/**
- * The trace renderer: `hat-script-graph` and `ha-trace-path-details`.
- *
- * One router deeper than the form elements. `ha-config-automation` is the
- * automation panel's own router, and its `trace` route loads
- * `ha-automation-trace`, which imports both components as a side effect.
- */
-export const loadHaTrace = loadOnce(TRACE_ELEMENTS, async () => {
+const loadTraceChunk = loadOnce(TRACE_ELEMENTS, async () => {
   await loadAutomationPanel();
   await customElements.whenDefined("ha-config-automation");
 
@@ -105,6 +101,43 @@ export const loadHaTrace = loadOnce(TRACE_ELEMENTS, async () => {
   };
   await automationRouter.routerOptions.routes.trace.load();
 });
+
+/**
+ * The trace renderer: `hat-script-graph` and `ha-trace-path-details`.
+ *
+ * One router deeper than the form elements. `ha-config-automation` is the
+ * automation panel's own router, and its `trace` route loads
+ * `ha-automation-trace`, which imports both components as a side effect.
+ *
+ * The chunk is only half of it. `ha-trace-path-details` writes almost every
+ * visible string through the translations, and a dashboard has loaded none of
+ * them because a dashboard is not that panel:
+ *
+ * - the tab names, the step heading and the "executed at" line come from the
+ *   `config` *fragment*;
+ * - the condition's own name comes from the `conditions` *backend* category,
+ *   without which `describeCondition` falls through to "unknown condition" for
+ *   every platform condition.
+ *
+ * Loading the chunk brings neither. Measured in a live Lovelace view, the pane
+ * rendered exactly one piece of visible text -- the raw `result:` block -- until
+ * both were loaded; HA's own trace panel loads them for the same reason
+ * (`ha-automation-trace.ts:323`). Both are cached, so asking on every open
+ * costs nothing.
+ *
+ * Returns the *refreshed* localize, which the caller must hand to the trace
+ * components rather than reusing the one on its own `hass`. Loading resources
+ * replaces the `hass` object on `<home-assistant>`; a reference captured before
+ * that -- which is what a card holds while a dialog is open -- keeps the old
+ * localize and goes on resolving every one of those keys to `""`. Measured:
+ * after the load, `<home-assistant>.hass` localizes `trace.tabs.step_config` to
+ * "Krok nastavení" while the captured one still answers "". Awaited in sequence
+ * so the returned localize is the one that saw both loads land.
+ */
+export async function loadHaTrace(hass: HomeAssistant): Promise<LocalizeFunc> {
+  await Promise.all([loadTraceChunk(), hass.loadFragmentTranslation("config")]);
+  return hass.loadBackendTranslation("conditions");
+}
 
 /**
  * `ha-yaml-editor`, which lives in developer tools rather than in config.

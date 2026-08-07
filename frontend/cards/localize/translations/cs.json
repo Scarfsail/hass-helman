@@ -362,7 +362,6 @@
           "title": "Vlastní podmínky – poslední vyhodnocení",
           "open_hint": "kliknutím zobrazíte poslední vyhodnocení",
           "run_at": "Vyhodnoceno",
-          "stale": "Toto vyhodnocení je z pozdějšího běhu než tento slot. Od doby, kdy se slot naplánoval, se podmínky vyhodnocovaly znovu.",
           "loading": "Načítám vyhodnocení…",
           "empty": "Pro tuto skupinu zatím není žádné vyhodnocení zaznamenáno.",
           "error": "Vyhodnocení se nepodařilo načíst",

@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../hass-frontend/src/types";
 import type { NodeInfo } from "../../../../hass-frontend/src/components/trace/hat-script-graph";
+import type { LocalizeFunc } from "../../../../hass-frontend/src/common/translations/localize";
 import type { LocalizeFunction } from "../../../localize/localize";
 import { loadHaTrace } from "../../load-ha-elements";
 import { formatScheduleTime } from "../model/schedule-time";
@@ -36,8 +37,17 @@ type TraceViewState =
      * property *identity* changes and re-announces its first tracked node when
      * it does. A fresh object literal each render therefore feeds the selection
      * it emits straight back into the render that emits it.
+     *
+     * `hass` is built once for the same reason, and carries the localize that
+     * came back from loading the `config` fragment rather than the stale one on
+     * this element's own property.
      */
-    | { kind: "ready"; payload: ConditionTracePayload; trace: SyntheticTrace }
+    | {
+        kind: "ready";
+        payload: ConditionTracePayload;
+        trace: SyntheticTrace;
+        hass: HomeAssistant;
+    }
     /**
      * The payload arrived and HA's renderer did not. The trace is the answer
      * either way, so it is shown raw rather than thrown away.
@@ -91,12 +101,13 @@ function buildSyntheticTrace(payload: ConditionTracePayload): SyntheticTrace {
  * own components, so the tree the user built in the condition builder is the
  * tree they get back rather than a second visual language for the same thing.
  *
- * **Only the newest evaluation is kept.** The explanation record accumulates
- * across runs while the coordinator holds one trace per group, so the trace can
- * be from a later run than the diagram row that opened it. That is the one
- * thing the dialog must not let pass silently, hence the header time and the
- * banner: a reader comparing a 14:00 row against an 18:30 evaluation and told
- * neither would be reading a coincidence as an explanation.
+ * **Only the newest evaluation is kept**, and it is usually newer than the row
+ * that opened it: the explanation record accumulates across runs while the
+ * coordinator holds one trace per group, and the pre-execution reality check
+ * re-evaluates every group on every execution cycle once the plan leaves its
+ * freshness window. So the heading names this the *last* evaluation and the
+ * line under it dates it, rather than warning about a gap that is the normal
+ * case rather than the exception.
  */
 @customElement("scheduling-condition-trace-dialog")
 export class SchedulingConditionTraceDialog extends LitElement {
@@ -113,19 +124,6 @@ export class SchedulingConditionTraceDialog extends LitElement {
             .run-at {
                 color: var(--secondary-text-color);
                 font-size: 0.8rem;
-            }
-
-            /* The same shape the day editor uses to say the schedule moved
-               under you: a warning about provenance, not about a failure. */
-            .stale-banner {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                padding: 8px 10px;
-                border-radius: 8px;
-                background: color-mix(in srgb, var(--warning-color, #ef6c00) 14%, transparent);
-                color: var(--primary-text-color);
-                font-size: 0.82rem;
             }
 
             /* Graph left, the selected node's detail right -- the automation
@@ -172,13 +170,6 @@ export class SchedulingConditionTraceDialog extends LitElement {
     @property({ type: Boolean }) public open = false;
     @property({ type: String }) public optimizerId: string | null = null;
     @property({ type: Number }) public groupIndex: number | null = null;
-    /**
-     * When the run that wrote the diagram row happened, for comparison.
-     *
-     * Null where the record carries no run time, in which case the dialog says
-     * when the *trace* was taken and claims nothing about the row.
-     */
-    @property({ type: String }) public cellRunAt: string | null = null;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
 
@@ -245,7 +236,7 @@ export class SchedulingConditionTraceDialog extends LitElement {
                     <pre class="raw">${JSON.stringify(this._view.payload.trace, null, 2)}</pre>
                 `;
             case "ready":
-                return this._renderTrace(this._view.payload, this._view.trace);
+                return this._renderTrace(this._view.payload, this._view.trace, this._view.hass);
         }
     }
 
@@ -261,7 +252,11 @@ export class SchedulingConditionTraceDialog extends LitElement {
      * announces its first tracked node, which is a state change, which is the
      * render where the index is there.
      */
-    private _renderTrace(payload: ConditionTracePayload, trace: SyntheticTrace) {
+    private _renderTrace(
+        payload: ConditionTracePayload,
+        trace: SyntheticTrace,
+        hass: HomeAssistant,
+    ) {
         const graph = this.shadowRoot?.querySelector("hat-script-graph") as
             (HTMLElement & { renderedNodes: unknown; trackedNodes: unknown }) | null;
 
@@ -274,7 +269,7 @@ export class SchedulingConditionTraceDialog extends LitElement {
                     @graph-node-selected=${this._handleNodeSelected}
                 ></hat-script-graph>
                 <ha-trace-path-details
-                    .hass=${this.hass}
+                    .hass=${hass}
                     .trace=${trace}
                     .logbookEntries=${[]}
                     .selected=${this._selected}
@@ -286,16 +281,19 @@ export class SchedulingConditionTraceDialog extends LitElement {
     }
 
     /**
-     * When this evaluation happened, and whether that is the row's own run.
+     * When this evaluation happened.
      *
-     * Compared as instants rather than as strings: the two timestamps come from
-     * different serializers and an offset written differently would read as a
-     * different run.
+     * The timestamp alone, with no comparison against the row that opened the
+     * dialog. Warning about the difference was the obvious thing to do and the
+     * wrong one: the pre-execution reality check re-evaluates every group on
+     * every execution cycle once the plan leaves its freshness window, so the
+     * trace is newer than the row essentially always and a banner saying so
+     * fired on every slot. The heading already calls this the *last*
+     * evaluation, and this line dates it; a reader who needs to know whether it
+     * is the row's own run can read the two times.
      */
     private _renderProvenance(payload: ConditionTracePayload) {
         const traceMs = Date.parse(payload.runAt);
-        const cellMs = this.cellRunAt === null ? Number.NaN : Date.parse(this.cellRunAt);
-        const stale = Number.isFinite(traceMs) && Number.isFinite(cellMs) && traceMs > cellMs;
         return html`
             <div class="run-at">
                 ${this._text("run_at")}:
@@ -303,12 +301,6 @@ export class SchedulingConditionTraceDialog extends LitElement {
                     ? formatScheduleTime(traceMs, this.locale, this.timeZone)
                     : payload.runAt}
             </div>
-            ${stale ? html`
-                <div class="stale-banner">
-                    <ha-icon icon="mdi:alert-outline"></ha-icon>
-                    <span>${this._text("stale")}</span>
-                </div>
-            ` : nothing}
         `;
     }
 
@@ -348,8 +340,9 @@ export class SchedulingConditionTraceDialog extends LitElement {
             return;
         }
 
+        let localize: LocalizeFunc;
         try {
-            await loadHaTrace();
+            localize = await loadHaTrace(hass);
         } catch {
             // HA moved its chunks. The trace is still the answer, so it is
             // shown raw rather than as an empty box.
@@ -357,7 +350,17 @@ export class SchedulingConditionTraceDialog extends LitElement {
             return;
         }
 
-        this._view = { kind: "ready", payload, trace: buildSyntheticTrace(payload) };
+        this._view = {
+            kind: "ready",
+            payload,
+            trace: buildSyntheticTrace(payload),
+            // Loading translations replaces the `hass` on `<home-assistant>`;
+            // the one this element was handed still answers "" for every key
+            // the pane writes through. Splice the refreshed localize onto it so
+            // the pane reads the same either way, rather than waiting on the
+            // card above to push a new `hass` down into an open dialog.
+            hass: { ...hass, localize },
+        };
     }
 
     private _handleNodeSelected(event: CustomEvent<NodeInfo>): void {
