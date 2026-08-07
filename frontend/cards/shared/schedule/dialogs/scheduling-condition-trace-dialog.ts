@@ -381,8 +381,22 @@ export class SchedulingConditionTraceDialog extends LitElement {
         this._handleClosed();
     }
 
-    private _handleClosed(): void {
-        this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
+    /**
+     * Closing this dialog must not close the day editor behind it.
+     *
+     * This dialog is mounted *inside* the day editor's own `ha-dialog`, and
+     * `closed` is the event name both of them use. Left alone, one press of ✕
+     * shuts both: the inner dialog's `closed` bubbles straight past us into the
+     * outer dialog's `@closed`, and the notification we send the panel -- which
+     * used to bubble and cross shadow roots -- arrives there as a second one.
+     *
+     * So the incoming event stops here, and ours does not travel: the panel
+     * listens on this element directly (`scheduling-explanation-panel.ts`), so
+     * a bubbling event bought nothing and cost the editor.
+     */
+    private _handleClosed(event?: Event): void {
+        event?.stopPropagation();
+        this.dispatchEvent(new CustomEvent("closed"));
     }
 
     private _text(suffix: string): string {

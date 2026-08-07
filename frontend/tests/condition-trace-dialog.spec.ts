@@ -351,6 +351,52 @@ test.describe("the custom-conditions trace dialog", () => {
         await expect(dialog(page).locator(".run-at")).toHaveCount(1);
     });
 
+    // This dialog is mounted inside the day editor's own `ha-dialog`, and both
+    // use the name `closed`. Left to travel, one press shut both of them.
+    test.describe("closing it leaves the editor behind it open", () => {
+        const countAncestorClosed = async (page: Page) => page.evaluate(() => {
+            const panel = document.querySelector("scheduling-explanation-panel")!;
+            const outer = panel.parentElement as HTMLElement & { seen?: number };
+            return outer.seen ?? 0;
+        });
+
+        const watchAncestor = async (page: Page) => page.evaluate(() => {
+            const panel = document.querySelector("scheduling-explanation-panel")!;
+            const outer = panel.parentElement as HTMLElement & { seen?: number };
+            outer.seen = 0;
+            outer.addEventListener("closed", () => { outer.seen! += 1; });
+        });
+
+        test("the footer button's notification does not travel", async ({ page }) => {
+            await mountPanel(page, { trace: TRACE_PAYLOAD });
+            await customBlock(page).click();
+            await watchAncestor(page);
+
+            await dialog(page).locator("ha-dialog-footer ha-button").click();
+
+            await expect(dialog(page)).toHaveCount(0);
+            expect(await countAncestorClosed(page)).toBe(0);
+        });
+
+        test("the inner dialog's own closed event stops here", async ({ page }) => {
+            await mountPanel(page, { trace: TRACE_PAYLOAD });
+            await customBlock(page).click();
+            await watchAncestor(page);
+
+            // What a scrim click or Esc does in the real component. The dialog
+            // sits in the panel's shadow root, so getting to it is a walk.
+            await page.evaluate(() => {
+                document
+                    .querySelector("scheduling-explanation-panel")!
+                    .shadowRoot!.querySelector("scheduling-condition-trace-dialog")!
+                    .shadowRoot!.querySelector<HTMLElement & { close: () => void }>("ha-dialog")!
+                    .close();
+            });
+
+            expect(await countAncestorClosed(page)).toBe(0);
+        });
+    });
+
     test("HA's renderer missing falls back to the record, not to a blank box", async ({ page }) => {
         await mountPanel(page, { trace: TRACE_PAYLOAD, withoutTraceElements: true });
         await customBlock(page).click();
