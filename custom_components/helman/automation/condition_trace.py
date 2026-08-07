@@ -17,6 +17,19 @@ Each entry is therefore collected on its own and re-rooted at
 list of conditions -- so the frontend can hand it to Home Assistant's own
 renderer untouched.
 
+What the trace does *not* carry is the reading behind an entity platform
+condition. ``condition_trace_set_result`` -- the call that stamps ``state``
+beside ``wanted_state_above`` -- is made only by HA's legacy function conditions
+(``numeric_state``, ``state``, ``template``, ``time``). The entity-condition base
+classes ``EntityConditionBase``, ``EntityStateConditionBase``,
+``EntityNumericalConditionBase`` and ``EntityNumericalConditionWithUnitBase``
+make no trace calls at all, so a ``temperature.is_value`` entry records its
+verdict and nothing else -- in HA's own automation trace just as much as here.
+The reading is therefore captured beside the trace instead: whatever entities the
+entry references, read at the moment it was evaluated. ``async_extract_entities``
+finds them, so this stays generic -- no per-platform semantics are restated here,
+and a condition shape HA grows later is followed for free.
+
 Nothing here may cost a run its plan: the plan is worth more than the record of
 why it exists, so a collection that breaks is logged and dropped.
 """
@@ -26,12 +39,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime, time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
 #: One group's trace: HA trace path -> the steps recorded at it.
 ConditionTrace = dict[str, list[dict[str, Any]]]
+
+#: One group's readings: entry root path -> the entities that entry referenced.
+ConditionEntityStates = dict[str, list[dict[str, Any]]]
 
 #: Where a single-entry ``ConditionsChecker`` roots its trace, always.
 _ENTRY_ROOT = "condition/0"
@@ -65,6 +84,53 @@ def evaluate_traced(
             )
 
 
+def entry_root(entry_index: int) -> str:
+    """The trace path one ``custom`` entry is rooted at."""
+    return f"condition/{entry_index}"
+
+
+def extract_entity_ids(validated_config: Any) -> tuple[str, ...]:
+    """Which entities one validated ``custom`` entry reads, sorted.
+
+    Taken from the *validated* config, which is where a ``device`` condition has
+    had its entity resolved. A config HA cannot walk yields nothing rather than
+    raising: a missing reading is worth less than the plan it would cost.
+    """
+    from homeassistant.helpers import condition as ha_condition
+
+    try:
+        return tuple(sorted(ha_condition.async_extract_entities(validated_config)))
+    except Exception:  # noqa: BLE001 - observability must never fail a run
+        _LOGGER.debug(
+            "Could not extract entities from a custom condition", exc_info=True
+        )
+        return ()
+
+
+def read_entity_states(
+    hass: "HomeAssistant", entity_ids: Iterable[str]
+) -> list[dict[str, Any]]:
+    """The live state of each entity, in the order given.
+
+    An entity with no state is kept with ``state: None`` rather than dropped --
+    that a condition reads something that does not exist is exactly the kind of
+    thing the reader is looking for. ``unit`` and ``name`` come along where the
+    entity has them, because a bare ``28.4`` next to a threshold in degrees is
+    a number the reader has to take on trust.
+    """
+    readings: list[dict[str, Any]] = []
+    for entity_id in entity_ids:
+        state = hass.states.get(entity_id)
+        attributes = getattr(state, "attributes", None) or {}
+        readings.append({
+            "entityId": entity_id,
+            "state": None if state is None else state.state,
+            "unit": _json_safe(attributes.get("unit_of_measurement")),
+            "name": _json_safe(attributes.get("friendly_name")),
+        })
+    return readings
+
+
 def _merge(
     trace: Mapping[str, Iterable[Any]], entry_index: int, into: ConditionTrace
 ) -> None:
@@ -74,7 +140,7 @@ def _merge(
             # After the clear nothing else can be here; dropping rather than
             # passing through is what keeps two entries off the same path.
             continue
-        rooted = f"condition/{entry_index}{path[len(_ENTRY_ROOT):]}"
+        rooted = f"{entry_root(entry_index)}{path[len(_ENTRY_ROOT):]}"
         # The element repeats its own path; re-root that too, so a reader that
         # trusts the step over the key it arrived under is not misled.
         into[rooted] = [

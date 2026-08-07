@@ -42,7 +42,14 @@ from .automation.compute_inputs import (
     CustomConditionGroupResult,
     CustomConditionResult,
 )
-from .automation.condition_trace import ConditionTrace, evaluate_traced
+from .automation.condition_trace import (
+    ConditionEntityStates,
+    ConditionTrace,
+    entry_root,
+    evaluate_traced,
+    extract_entity_ids,
+    read_entity_states,
+)
 from .automation.config import (
     AutomationConfig,
     ConditionGroup,
@@ -491,9 +498,12 @@ class HelmanCoordinator:
         # Cached across runs; rebuilt when a group's `custom` changes and
         # unloaded when it is removed or on shutdown.
         # Value: (the group's `custom` config it was built from, one checker per
-        # entry in that config — per-entry so each result stands on its own).
+        # entry in that config — per-entry so each result stands on its own —
+        # and the entities each entry reads). The entity ids are a pure function
+        # of the config, so they are extracted once here beside the checker;
+        # only their *states* are re-read per run.
         self._optimizer_condition_checkers: dict[
-            tuple[str, int], tuple[Any, tuple[Any, ...]]
+            tuple[str, int], tuple[Any, tuple[Any, ...], tuple[tuple[str, ...], ...]]
         ] = {}
         # (optimizer_id, group_index) -> the newest evaluation of that group's
         # `custom` conditions: when it ran, the config it ran, and the HA
@@ -594,7 +604,9 @@ class HelmanCoordinator:
         Home Assistant's own condition trace, over the group's ``custom`` list
         and carrying the config it ran, so the caller can render it with HA's
         trace components rather than inventing a second way to draw a condition
-        tree.
+        tree. Beside it, keyed by the same entry root paths, the entities each
+        entry read and what they said -- the part an entity platform condition
+        leaves out of the trace entirely.
 
         ``None`` where nothing is recorded: before the first run, for a group
         with no ``custom`` conditions (nothing is evaluated, so nothing is
@@ -2727,8 +2739,17 @@ class HelmanCoordinator:
                     continue
                 key = (optimizer.id, group.index)
                 active_keys.add(key)
-                checkers = await self._ensure_optimizer_condition_checkers(key, group)
+                checkers, entity_ids = await self._ensure_optimizer_condition_checkers(
+                    key, group
+                )
                 trace: ConditionTrace = {}
+                # Read before evaluating, so the reading is the one the condition
+                # went on to judge rather than a state that moved in between.
+                entity_states: ConditionEntityStates = {
+                    entry_root(entry_index): read_entity_states(self._hass, ids)
+                    for entry_index, ids in enumerate(entity_ids)
+                    if ids
+                }
                 entries = tuple(
                     self._evaluate_optimizer_condition(
                         checker, key, entry_index, trace
@@ -2743,6 +2764,9 @@ class HelmanCoordinator:
                     # trace paths point into rather than a config read later.
                     "config": [dict(entry) for entry in group.custom],
                     "trace": trace,
+                    # What HA's own trace has no place for: the readings behind
+                    # an entity platform condition. See `condition_trace`.
+                    "entityStates": entity_states,
                 }
                 group_results.append(
                     CustomConditionGroupResult(
@@ -2761,25 +2785,31 @@ class HelmanCoordinator:
 
     async def _ensure_optimizer_condition_checkers(
         self, key: tuple[str, int], group: "ConditionGroup"
-    ) -> tuple[Any, ...]:
-        """One checker per ``custom`` entry, cached until the group's config changes."""
+    ) -> tuple[tuple[Any, ...], tuple[tuple[str, ...], ...]]:
+        """One checker per ``custom`` entry, and the entities each entry reads.
+
+        Both are cached until the group's ``custom`` config changes: the entity
+        ids follow from the config alone, so re-extracting them every run would
+        buy nothing. Their states are what moves, and those are read at
+        evaluation time.
+        """
         cached = self._optimizer_condition_checkers.get(key)
         if cached is not None and cached[0] == group.custom:
-            return cached[1]
+            return cached[1], cached[2]
         if cached is not None:
             self._unload_optimizer_condition_checkers(cached[1])
-        checkers = tuple(
-            [
-                await self._build_optimizer_condition_checker(
-                    key=key,
-                    entry_index=entry_index,
-                    condition_config=[entry],
-                )
-                for entry_index, entry in enumerate(group.custom)
-            ]
-        )
-        self._optimizer_condition_checkers[key] = (group.custom, checkers)
-        return checkers
+        built = [
+            await self._build_optimizer_condition_checker(
+                key=key,
+                entry_index=entry_index,
+                condition_config=[entry],
+            )
+            for entry_index, entry in enumerate(group.custom)
+        ]
+        checkers = tuple(checker for checker, _entity_ids in built)
+        entity_ids = tuple(ids for _checker, ids in built)
+        self._optimizer_condition_checkers[key] = (group.custom, checkers, entity_ids)
+        return checkers, entity_ids
 
     async def _build_optimizer_condition_checker(
         self,
@@ -2787,7 +2817,13 @@ class HelmanCoordinator:
         key: tuple[str, int],
         entry_index: int,
         condition_config: list[dict[str, Any]],
-    ) -> Any:
+    ) -> tuple[Any, tuple[str, ...]]:
+        """The entry's checker, and the entities its validated config reads.
+
+        The entity ids come from the validated config rather than the raw one:
+        validation is where a ``device`` condition's entity is resolved, and
+        where a platform condition's ``target`` has been normalised.
+        """
         from homeassistant.helpers import condition as ha_condition
         from homeassistant.helpers import config_validation as cv
 
@@ -2807,15 +2843,21 @@ class HelmanCoordinator:
                         self._hass, coerced
                     )
                 )
-            return await ha_condition.async_conditions_from_config(
+            checker = await ha_condition.async_conditions_from_config(
                 self._hass, validated, _LOGGER, label
             )
+            entity_ids = tuple(
+                entity_id
+                for entry in validated
+                for entity_id in extract_entity_ids(entry)
+            )
+            return checker, entity_ids
         except Exception:
             _LOGGER.exception(
                 "Failed to build custom conditions for %s; treating as not met",
                 label,
             )
-            return None
+            return None, ()
 
     def _evaluate_optimizer_condition(
         self,
@@ -2857,7 +2899,7 @@ class HelmanCoordinator:
         for key in list(self._optimizer_condition_checkers):
             if key in active_keys:
                 continue
-            _config, checkers = self._optimizer_condition_checkers.pop(key)
+            _config, checkers, _entity_ids = self._optimizer_condition_checkers.pop(key)
             self._unload_optimizer_condition_checkers(checkers)
 
     @classmethod

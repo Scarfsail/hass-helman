@@ -25,6 +25,8 @@ from homeassistant.core import State  # noqa: E402
 from custom_components.helman.const import DOMAIN  # noqa: E402
 from custom_components.helman.automation.condition_trace import (  # noqa: E402
     evaluate_traced,
+    extract_entity_ids,
+    read_entity_states,
 )
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman.websockets import ws_get_condition_trace  # noqa: E402
@@ -49,11 +51,15 @@ class FakeStates:
 
 
 class FakeHass:
-    def __init__(self, states: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        states: dict[str, str] | None = None,
+        attributes: dict[str, dict] | None = None,
+    ) -> None:
         self.bus = FakeBus()
         self.states = FakeStates(
             {
-                entity_id: State(entity_id, value)
+                entity_id: State(entity_id, value, (attributes or {}).get(entity_id))
                 for entity_id, value in (states or {}).items()
             }
         )
@@ -95,6 +101,12 @@ def _coordinator(hass: FakeHass, *optimizers: dict) -> HelmanCoordinator:
 
 async def _build_checker(hass: FakeHass, entry: dict):
     """One entry's checker, built exactly as the coordinator builds it."""
+    checker, _entity_ids = await _build_checker_and_entities(hass, entry)
+    return checker
+
+
+async def _build_checker_and_entities(hass: FakeHass, entry: dict):
+    """The checker and the entities the entry reads, as the coordinator gets them."""
     coordinator = _coordinator(hass, _optimizer({"custom": [entry]}))
     return await coordinator._build_optimizer_condition_checker(
         key=("export", 0), entry_index=0, condition_config=[entry]
@@ -271,6 +283,95 @@ class EvaluateTracedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["before"], "23:59:59")
 
 
+class ExtractEntityIdsTests(unittest.TestCase):
+    """Which entities an entry reads, across the condition shapes HA accepts.
+
+    The ``target`` shape is the one that matters most: it is what the condition
+    builder writes for an entity platform condition, and it is exactly what a
+    hand-rolled walk over ``entity_id`` would miss.
+    """
+
+    def test_a_platform_condition_is_read_through_its_target(self) -> None:
+        self.assertEqual(
+            extract_entity_ids({
+                "condition": "temperature.is_value",
+                "target": {"entity_id": "sensor.pool"},
+                "options": {"threshold": {"type": "below", "value": 30.5}},
+            }),
+            ("sensor.pool",),
+        )
+
+    def test_a_legacy_condition_is_read_through_its_entity_id(self) -> None:
+        self.assertEqual(
+            extract_entity_ids(
+                {"condition": "numeric_state", "entity_id": "sensor.soc", "above": 20}
+            ),
+            ("sensor.soc",),
+        )
+
+    def test_a_list_of_entities_is_kept_whole(self) -> None:
+        self.assertEqual(
+            extract_entity_ids(
+                {"condition": "state", "entity_id": ["b.two", "a.one"], "state": "on"}
+            ),
+            ("a.one", "b.two"),
+        )
+
+    def test_a_nest_reaches_both_shapes(self) -> None:
+        self.assertEqual(
+            extract_entity_ids({
+                "condition": "and",
+                "conditions": [
+                    {"condition": "state", "entity_id": "x.one", "state": "on"},
+                    {
+                        "condition": "temperature.is_value",
+                        "target": {"entity_id": "z.two"},
+                    },
+                ],
+            }),
+            ("x.one", "z.two"),
+        )
+
+    def test_a_config_ha_cannot_walk_yields_nothing(self) -> None:
+        """A reading is worth less than the run it would otherwise cost."""
+        self.assertEqual(extract_entity_ids({"not": "a condition"}), ())
+
+
+class ReadEntityStatesTests(unittest.TestCase):
+    """What the reading carries -- and that a missing entity still carries."""
+
+    def test_a_reading_carries_its_unit_and_name(self) -> None:
+        hass = FakeHass(
+            {"sensor.pool": "28.4"},
+            {"sensor.pool": {"unit_of_measurement": "°C", "friendly_name": "Bazén"}},
+        )
+
+        self.assertEqual(
+            read_entity_states(hass, ["sensor.pool"]),
+            [{
+                "entityId": "sensor.pool",
+                "state": "28.4",
+                "unit": "°C",
+                "name": "Bazén",
+            }],
+        )
+
+    def test_an_entity_without_those_attributes_still_reads(self) -> None:
+        hass = FakeHass({"sensor.soc": "42.0"})
+
+        self.assertEqual(
+            read_entity_states(hass, ["sensor.soc"]),
+            [{"entityId": "sensor.soc", "state": "42.0", "unit": None, "name": None}],
+        )
+
+    def test_a_missing_entity_is_kept_rather_than_dropped(self) -> None:
+        """That a condition reads something absent is the reader's answer."""
+        self.assertEqual(
+            read_entity_states(FakeHass(), ["sensor.gone"]),
+            [{"entityId": "sensor.gone", "state": None, "unit": None, "name": None}],
+        )
+
+
 class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
     """What one run leaves behind for ``get_condition_trace``."""
 
@@ -296,6 +397,115 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
         # row they clicked.
         self.assertIsInstance(payload["runAt"], str)
         json.dumps(payload)
+
+    async def test_each_entry_records_the_entities_it_read(self) -> None:
+        """Keyed by entry root, so a reading sits under the node that used it."""
+        hass = FakeHass(
+            {"sensor.soc": "42.0", "sensor.pool": "28.4"},
+            {"sensor.pool": {"unit_of_measurement": "°C", "friendly_name": "Bazén"}},
+        )
+        coordinator = _coordinator(
+            hass,
+            _optimizer({
+                "when_price_below": 1.0,
+                "custom": [
+                    {
+                        "condition": "numeric_state",
+                        "entity_id": "sensor.soc",
+                        "above": 10,
+                    },
+                    {
+                        "condition": "numeric_state",
+                        "entity_id": "sensor.pool",
+                        "below": 30.5,
+                    },
+                ],
+            }),
+        )
+
+        await coordinator._async_evaluate_optimizer_conditions()
+
+        payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
+        self.assertEqual(
+            payload["entityStates"],
+            {
+                "condition/0": [{
+                    "entityId": "sensor.soc",
+                    "state": "42.0",
+                    "unit": None,
+                    "name": None,
+                }],
+                "condition/1": [{
+                    "entityId": "sensor.pool",
+                    "state": "28.4",
+                    "unit": "°C",
+                    "name": "Bazén",
+                }],
+            },
+        )
+        json.dumps(payload)
+
+    async def test_an_entry_reading_no_entity_gets_no_key(self) -> None:
+        """Nothing to show is an absent key, not an empty list to render."""
+        hass = FakeHass()
+        coordinator = _coordinator(
+            hass,
+            _optimizer({
+                "when_price_below": 1.0,
+                "custom": [{"condition": "time", "after": "06:00:00"}],
+            }),
+        )
+
+        await coordinator._async_evaluate_optimizer_conditions()
+
+        payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
+        self.assertEqual(payload["entityStates"], {})
+
+    async def test_a_missing_entity_is_recorded_as_missing(self) -> None:
+        hass = FakeHass()
+        coordinator = _coordinator(
+            hass,
+            _optimizer({
+                "when_price_below": 1.0,
+                "custom": [
+                    {"condition": "state", "entity_id": "sensor.gone", "state": "on"}
+                ],
+            }),
+        )
+
+        await coordinator._async_evaluate_optimizer_conditions()
+
+        payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
+        self.assertEqual(
+            payload["entityStates"]["condition/0"],
+            [{"entityId": "sensor.gone", "state": None, "unit": None, "name": None}],
+        )
+
+    async def test_the_reading_follows_the_entity_between_runs(self) -> None:
+        """The entity ids are cached with the checker; their states are not."""
+        hass = FakeHass({"sensor.soc": "42.0"})
+        coordinator = _coordinator(
+            hass,
+            _optimizer({
+                "when_price_below": 1.0,
+                "custom": [
+                    {
+                        "condition": "numeric_state",
+                        "entity_id": "sensor.soc",
+                        "above": 10,
+                    }
+                ],
+            }),
+        )
+
+        await coordinator._async_evaluate_optimizer_conditions()
+        hass.states._states["sensor.soc"] = State("sensor.soc", "11.0")
+        await coordinator._async_evaluate_optimizer_conditions()
+
+        payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
+        self.assertEqual(
+            payload["entityStates"]["condition/0"][0]["state"], "11.0"
+        )
 
     async def test_a_group_without_custom_conditions_records_nothing(self) -> None:
         coordinator = _coordinator(
@@ -389,7 +599,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
                 return Mock(
                     async_check=Mock(side_effect=RuntimeError("nope")),
                     async_unload=Mock(),
-                )
+                ), ()
             return await real_build(
                 key=key, entry_index=entry_index, condition_config=condition_config
             )

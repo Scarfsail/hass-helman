@@ -366,6 +366,8 @@
           "empty": "Pro tuto skupinu zatím není žádné vyhodnocení zaznamenáno.",
           "error": "Vyhodnocení se nepodařilo načíst",
           "unrendered": "Komponenty Home Assistantu pro zobrazení trace se nepodařilo načíst; níže je surový záznam.",
+          "entity_states": "Hodnoty entit při vyhodnocení",
+          "entity_missing": "entita neexistuje",
           "close": "Zavřít"
         },
         "plan_decided_when": "rozhodnuto při plánování",

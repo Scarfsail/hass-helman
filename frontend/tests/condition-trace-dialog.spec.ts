@@ -130,6 +130,32 @@ const TRACE_PAYLOAD = {
             result: { result: false, state: "on", wanted_state: "off" },
         }],
     },
+    // Keyed by entry root, because that is what the backend reads: one set of
+    // readings per `custom` entry, judged by every node inside it. The second
+    // entry names an entity that no longer exists, which is a thing the reader
+    // most wants to see rather than a row to drop.
+    entityStates: {
+        "condition/0": [{
+            entityId: "sensor.pool_temp",
+            state: "26.5",
+            unit: "°C",
+            name: "Teplota bazénu",
+        }],
+        "condition/1": [
+            {
+                entityId: "binary_sensor.cover",
+                state: "on",
+                unit: null,
+                name: null,
+            },
+            {
+                entityId: "sensor.gone",
+                state: null,
+                unit: null,
+                name: null,
+            },
+        ],
+    },
 };
 
 interface MountOptions {
@@ -354,5 +380,93 @@ test.describe("the custom-conditions trace dialog", () => {
         // The values are the point of the fallback: a reader who cannot get the
         // tree can still see what each node compared.
         await expect(raw).toContainText("wanted_state_above");
+    });
+});
+
+/**
+ * The readings an entity platform condition leaves out of the trace.
+ *
+ * HA records `state` beside `wanted_state_above` only for its legacy function
+ * conditions; the entity-condition base classes make no trace calls at all, so a
+ * `temperature.is_value` step carries its verdict and nothing else. These pin
+ * the block that fills that gap -- and, more importantly, that it is keyed by
+ * *entry* rather than by node, so a nested selection still finds it.
+ */
+test.describe("the readings behind the selected condition", () => {
+    /**
+     * Move the detail pane onto a node the stub graph does not draw itself.
+     *
+     * Announced through the graph, as the real one would, so the dialog's own
+     * listener is what moves the selection. The dialog sits in the panel's
+     * shadow root, which `document.querySelector` does not reach.
+     */
+    async function selectPath(page: Page, path: string): Promise<void> {
+        await expect(dialog(page).locator("hat-script-graph")).toHaveCount(1);
+        await page.evaluate((target) => {
+            const graph = document
+                .querySelector("scheduling-explanation-panel")!
+                .shadowRoot!.querySelector("scheduling-condition-trace-dialog")!
+                .shadowRoot!.querySelector("hat-script-graph")!;
+            graph.dispatchEvent(new CustomEvent("graph-node-selected", {
+                detail: { path: target, config: {}, type: "condition" },
+                bubbles: true,
+                composed: true,
+            }));
+        }, path);
+    }
+
+    function readings(page: Page) {
+        return dialog(page).locator(".entity-states .entity-state");
+    }
+
+    test("the selected entry's entities are shown with their unit", async ({ page }) => {
+        await mountPanel(page, { trace: TRACE_PAYLOAD });
+        await customBlock(page).click();
+
+        await expect(readings(page)).toHaveCount(1);
+        await expect(readings(page).first().locator(".entity-name"))
+            .toHaveText("Teplota bazénu");
+        await expect(readings(page).first().locator(".entity-value"))
+            .toHaveText("26.5 °C");
+    });
+
+    test("a node nested inside an entry still finds that entry's readings", async ({ page }) => {
+        await mountPanel(page, { trace: TRACE_PAYLOAD });
+        await customBlock(page).click();
+        await selectPath(page, "condition/1/conditions/0");
+
+        await expect(readings(page)).toHaveCount(2);
+        // No friendly name recorded, so the id is what there is to show.
+        await expect(readings(page).first().locator(".entity-name"))
+            .toHaveText("binary_sensor.cover");
+    });
+
+    test("an entity that no longer exists says so, rather than reading blank", async ({ page }) => {
+        await mountPanel(page, { trace: TRACE_PAYLOAD });
+        await customBlock(page).click();
+        await selectPath(page, "condition/1");
+
+        // The harness's localize is the identity, so the key is what a
+        // resolved string looks like here -- and the point is the *branch*: a
+        // missing entity must not fall through to an empty value.
+        await expect(readings(page).nth(1).locator(".entity-value"))
+            .toContainText("entity_missing");
+    });
+
+    test("an entry that reads no entity draws no box at all", async ({ page }) => {
+        await mountPanel(page, { trace: TRACE_PAYLOAD });
+        await customBlock(page).click();
+        await selectPath(page, "condition/7");
+
+        await expect(dialog(page).locator(".entity-states")).toHaveCount(0);
+    });
+
+    test("a record from before the readings existed renders without them", async ({ page }) => {
+        const { entityStates: _dropped, ...withoutReadings } = TRACE_PAYLOAD;
+        await mountPanel(page, { trace: withoutReadings });
+        await customBlock(page).click();
+
+        await expect(dialog(page).locator("hat-script-graph")).toHaveCount(1);
+        await expect(dialog(page).locator(".entity-states")).toHaveCount(0);
     });
 });
