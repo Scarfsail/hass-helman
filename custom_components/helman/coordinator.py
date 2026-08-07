@@ -42,6 +42,7 @@ from .automation.compute_inputs import (
     CustomConditionGroupResult,
     CustomConditionResult,
 )
+from .automation.condition_trace import ConditionTrace, evaluate_traced
 from .automation.config import (
     AutomationConfig,
     ConditionGroup,
@@ -494,6 +495,15 @@ class HelmanCoordinator:
         self._optimizer_condition_checkers: dict[
             tuple[str, int], tuple[Any, tuple[Any, ...]]
         ] = {}
+        # (optimizer_id, group_index) -> the newest evaluation of that group's
+        # `custom` conditions: when it ran, the config it ran, and the HA
+        # condition trace it produced. Rebuilt wholesale each run, so a group
+        # dropped from config leaves nothing behind.
+        # Only the newest is kept, while the explanation book accumulates rows
+        # across runs — a trace can therefore be newer than the row a reader
+        # clicked, which is why `runAt` travels with it. Not persisted, for the
+        # same reasons as the book above.
+        self._condition_traces: dict[tuple[str, int], dict[str, Any]] = {}
         # Plan-freshness bookkeeping for the pre-execution reality check:
         # the condition map the current plan was built from, and when.
         self._last_automation_plan_at: datetime | None = None
@@ -575,6 +585,22 @@ class HelmanCoordinator:
         optimizer kinds, so a lane click has no single optimizer to ask.
         """
         return self._explanation_book.get(target_key=target_key, date=date)
+
+    def get_condition_trace(
+        self, *, optimizer_id: str, group_index: int
+    ) -> dict[str, Any] | None:
+        """The last evaluation of one condition group's ``custom`` conditions.
+
+        Home Assistant's own condition trace, over the group's ``custom`` list
+        and carrying the config it ran, so the caller can render it with HA's
+        trace components rather than inventing a second way to draw a condition
+        tree.
+
+        ``None`` where nothing is recorded: before the first run, for a group
+        with no ``custom`` conditions (nothing is evaluated, so nothing is
+        traced), and for a group that has since left the config.
+        """
+        return self._condition_traces.get((optimizer_id, group_index))
 
     def _record_automation_run(self, result: AutomationRunResult) -> None:
         # Record the condition map + time this plan was built from, so the
@@ -2673,13 +2699,21 @@ class HelmanCoordinator:
         raised while evaluating is ``met=False, errored=True``, so it still drags
         the group aggregate false while staying distinguishable from a condition
         that plainly evaluated to false.
+
+        Every evaluated group also leaves its HA condition trace behind for
+        :meth:`get_condition_trace`. The record is rebuilt wholesale here rather
+        than pruned, so a group that has left the config simply stops being
+        recorded.
         """
         automation_config = read_automation_config(self._active_config)
         if automation_config is None:
             self._prune_optimizer_condition_checkers(active_keys=set())
+            self._condition_traces = {}
             return {}
 
         results: dict[str, tuple[CustomConditionGroupResult, ...]] = {}
+        traces: dict[tuple[str, int], dict[str, Any]] = {}
+        run_at = dt_util.now().isoformat()
         active_keys: set[tuple[str, int]] = set()
         for optimizer in automation_config.optimizers:
             group_results: list[CustomConditionGroupResult] = []
@@ -2694,10 +2728,22 @@ class HelmanCoordinator:
                 key = (optimizer.id, group.index)
                 active_keys.add(key)
                 checkers = await self._ensure_optimizer_condition_checkers(key, group)
+                trace: ConditionTrace = {}
                 entries = tuple(
-                    self._evaluate_optimizer_condition(checker, key, entry_index)
+                    self._evaluate_optimizer_condition(
+                        checker, key, entry_index, trace
+                    )
                     for entry_index, checker in enumerate(checkers)
                 )
+                traces[key] = {
+                    "optimizerId": optimizer.id,
+                    "groupIndex": group.index,
+                    "runAt": run_at,
+                    # The config as evaluated, so the renderer draws the tree the
+                    # trace paths point into rather than a config read later.
+                    "config": [dict(entry) for entry in group.custom],
+                    "trace": trace,
+                }
                 group_results.append(
                     CustomConditionGroupResult(
                         index=group.index,
@@ -2710,6 +2756,7 @@ class HelmanCoordinator:
                 )
             results[optimizer.id] = tuple(group_results)
         self._prune_optimizer_condition_checkers(active_keys=active_keys)
+        self._condition_traces = traces
         return results
 
     async def _ensure_optimizer_condition_checkers(
@@ -2771,13 +2818,28 @@ class HelmanCoordinator:
             return None
 
     def _evaluate_optimizer_condition(
-        self, checker: Any, key: tuple[str, int], entry_index: int
+        self,
+        checker: Any,
+        key: tuple[str, int],
+        entry_index: int,
+        trace: ConditionTrace,
     ) -> CustomConditionResult:
-        """Evaluate one ``custom`` entry. Build/eval failure is met=False + errored."""
+        """Evaluate one ``custom`` entry. Build/eval failure is met=False + errored.
+
+        What HA recorded while evaluating lands in ``trace``, the raising path
+        included: whatever the entry reached before blowing up is kept, which is
+        what makes an errored entry readable rather than merely flagged.
+        """
         if checker is None:
             return CustomConditionResult(met=False, errored=True)
         try:
-            return CustomConditionResult(met=bool(checker.async_check()))
+            return CustomConditionResult(
+                met=bool(
+                    evaluate_traced(
+                        checker.async_check, entry_index=entry_index, into=trace
+                    )
+                )
+            )
         except Exception:
             _LOGGER.debug(
                 "Custom condition %d for optimizer %s group %d could not be "
@@ -4259,6 +4321,7 @@ class HelmanCoordinator:
         self._removing_entity_ids.clear()
         self._power_history.clear()
         self._explanation_book.clear()
+        self._condition_traces.clear()
 
         for unsub in self._unsub_listeners:
             unsub()
