@@ -27,6 +27,14 @@ export type LogicTerminal = "execute" | "candidate" | "not_eligible" | "blocked"
 export interface ConditionTraceRequestDetail {
     optimizerId: string;
     groupIndex: number;
+    /**
+     * What to call the group in the dialog's title.
+     *
+     * Resolved here rather than there because `_groupLabel` already owns the
+     * question, including the "Skupina N" it falls back to when the user never
+     * named the group.
+     */
+    groupLabel: string;
 }
 
 /** A block's own result. `n/a` is a block with nothing to report. */
@@ -2260,7 +2268,11 @@ export class SchedulingLogicDiagram extends LitElement {
             return null;
         }
 
-        return { optimizerId, groupIndex: block.groupIndex };
+        return {
+            optimizerId,
+            groupIndex: block.groupIndex,
+            groupLabel: this._groupLabel(block.groupIndex),
+        };
     }
 
     /**

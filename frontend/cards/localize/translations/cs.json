@@ -359,7 +359,7 @@
           "result": "Výsledek"
         },
         "trace": {
-          "title": "Vlastní podmínky – poslední vyhodnocení",
+          "title": "Vlastní podmínky",
           "open_hint": "kliknutím zobrazíte poslední vyhodnocení",
           "run_at": "Vyhodnoceno",
           "loading": "Načítám vyhodnocení…",

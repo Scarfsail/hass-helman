@@ -234,6 +234,7 @@ export class SchedulingExplanationPanel extends LitElement {
                 .open=${true}
                 .optimizerId=${request.optimizerId}
                 .groupIndex=${request.groupIndex}
+                .groupLabel=${request.groupLabel}
                 .locale=${this.locale}
                 .timeZone=${this.timeZone}
                 @closed=${() => { this._traceRequest = null; }}

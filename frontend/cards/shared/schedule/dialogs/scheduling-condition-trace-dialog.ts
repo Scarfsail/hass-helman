@@ -178,6 +178,8 @@ export class SchedulingConditionTraceDialog extends LitElement {
     @property({ type: Boolean }) public open = false;
     @property({ type: String }) public optimizerId: string | null = null;
     @property({ type: Number }) public groupIndex: number | null = null;
+    /** The group's own name, already resolved by the diagram that sent us here. */
+    @property({ type: String }) public groupLabel = "";
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
 
@@ -206,7 +208,12 @@ export class SchedulingConditionTraceDialog extends LitElement {
             return nothing;
         }
 
-        const heading = this._text("title");
+        // The group first, because that is what the reader pressed; the group
+        // may be unnamed, in which case the diagram has already fallen back to
+        // "Skupina N" and there is still something to lead with.
+        const heading = this.groupLabel.length > 0
+            ? `${this.groupLabel} – ${this._text("title")}`
+            : this._text("title");
         return html`
             <ha-dialog
                 .open=${this.open}

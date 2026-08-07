@@ -75,6 +75,15 @@ const CANDIDATE_PAYLOAD = {
     }],
 };
 
+/** The same slot with the matched group renamed -- or left unnamed. */
+const withGroupLabel = (payload: typeof CANDIDATE_PAYLOAD, label: string) => ({
+    ...payload,
+    optimizers: [{
+        ...payload.optimizers[0],
+        groups: [{ ...payload.optimizers[0].groups[0], label }],
+    }],
+});
+
 /** The same slot, whose matched group configures no custom conditions at all. */
 const NO_CUSTOM_PAYLOAD = {
     ...CANDIDATE_PAYLOAD,
@@ -349,6 +358,32 @@ test.describe("the custom-conditions trace dialog", () => {
         await customBlock(page).click();
 
         await expect(dialog(page).locator(".run-at")).toHaveCount(1);
+    });
+
+    // The heading goes to `ha-dialog` as a property, so it is read off the
+    // element rather than off the rendered text: the stub draws no chrome.
+    const heading = (page: Page) => page.evaluate(() => document
+        .querySelector("scheduling-explanation-panel")!
+        .shadowRoot!.querySelector("scheduling-condition-trace-dialog")!
+        .shadowRoot!.querySelector<HTMLElement & { heading: string }>("ha-dialog")!
+        .heading);
+
+    test("the title leads with the group the reader pressed", async ({ page }) => {
+        await mountPanel(page, { trace: TRACE_PAYLOAD });
+        await customBlock(page).click();
+
+        expect(await heading(page)).toBe("Studený bazén – scheduling.explanation.diagram.trace.title");
+    });
+
+    test("an unnamed group still leads with something", async ({ page }) => {
+        await mountPanel(page, {
+            trace: TRACE_PAYLOAD,
+            fixture: withGroupLabel(CANDIDATE_PAYLOAD, ""),
+        });
+        await customBlock(page).click();
+
+        // `_groupLabel` falls back to "Skupina N"; localize is the identity here.
+        expect(await heading(page)).toContain("scheduling.explanation.matrix.group 1");
     });
 
     // This dialog is mounted inside the day editor's own `ha-dialog`, and both
