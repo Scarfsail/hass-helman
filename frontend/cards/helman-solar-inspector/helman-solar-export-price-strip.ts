@@ -13,7 +13,7 @@ import {
     type ScheduleStripGeometry,
 } from "./strip-geometry";
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
-import { renderSlotGridlines, slotGridTicks } from "./slot-gridlines";
+import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 
 const MINUTES_PER_DAY = 1440;

@@ -55,6 +55,10 @@ interface MountOptions {
      * on an hourly day the two are the same number.
      */
     halfHourly?: boolean;
+    /** The band's own hour axis, which the editing hosts keep and a stacked host drops. */
+    axis?: boolean;
+    /** How much room the tracks get, which is what decides how dense the grid can be. */
+    widthPx?: number;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
@@ -62,7 +66,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("scheduling-entity-day-band"));
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, gridTicks }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, gridTicks, axis, widthPx }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const stepMs = halfHourly ? hourMs / 2 : hourMs;
         const slots = Array.from({ length: halfHourly ? 48 : 24 }, (_, index) => ({
@@ -80,7 +84,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         }));
 
         const band = document.createElement("scheduling-entity-day-band") as HTMLElement & Record<string, unknown>;
-        band.style.width = "1000px";
+        band.style.width = `${widthPx}px`;
         band.localize = (key: string) => key;
         band.day = {
             dayKey: "2026-07-24",
@@ -147,7 +151,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             ? null
             : { laneKey: "appliance:boiler", slotId: new Date(at(selectedSlot)).toISOString() };
         band.showForecastRows = halfHourly;
-        band.showAxis = false;
+        band.showAxis = axis;
         if (halfHourly) {
             // 600 Wh in a half hour is 1.2 kWh over the hour it sits in.
             band.forecastPoints = new Map(slots.map((slot) => [
@@ -203,6 +207,8 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         selectedSlot: options.selectedSlot,
         halfHourly: options.halfHourly ?? false,
         gridTicks: options.gridTicks ?? [],
+        axis: options.axis ?? false,
+        widthPx: options.widthPx ?? 1000,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -510,18 +516,30 @@ test.describe("entity day band, slot grid", () => {
 });
 
 /**
- * The band takes its time grid from whoever it is stacked under, rather than
- * ruling the day itself. That is the only way the lanes and the charts above
- * them can be read as one diagram: the host has already decided which lines are
- * drawn and which of them carry an hour, and a band that decided again would
- * rule the same day twice, differently.
+ * Where the band's lines come from.
+ *
+ * Stacked under somebody's charts it takes theirs, because that is the only way
+ * the lanes and the charts can be read as one diagram: the host has already
+ * decided which lines are drawn and which of them carry an hour, and a band
+ * that decided again would rule the same day twice, differently. Standing on
+ * its own -- the day editor -- it is that host, and derives the same ticks from
+ * the same module the inspector's charts do.
  */
 test.describe("entity day band, host time grid", () => {
-    test("nothing is ruled until a host asks for it", async ({ page }) => {
+    test("nothing is ruled until somebody asks for it", async ({ page }) => {
         await mountBand(page);
         await expect(page.locator("scheduling-entity-day-band")).toBeAttached();
         const band = page.locator("scheduling-entity-day-band");
         await expect(band.locator(".time-grid-line")).toHaveCount(0);
+    });
+
+    test("the host's grid wins over the day's own", async ({ page }) => {
+        // Both on: the band is drawing its slots *and* is being handed a grid.
+        // Ruling the day twice is the one outcome that cannot be allowed.
+        await mountBand(page, { slotGrid: true, gridTicks: [6, 8, 12] });
+
+        await expect(page.locator("scheduling-entity-day-band").locator(".time-grid-line"))
+            .toHaveCount(3);
     });
 
     test("the host's lines are drawn on every lane, at the host's own weights", async ({ page }) => {
@@ -538,11 +556,15 @@ test.describe("entity day band, host time grid", () => {
     });
 
     test("a line outside the host's crop is dropped, not stacked on the edge", async ({ page }) => {
-        // The crop is 06:00-18:00, so 03:00 and 21:00 have nowhere to go.
+        // The crop is 06:00-18:00, so 03:00 and 21:00 have nowhere to go -- and
+        // 06:00 is the crop's own edge, where a line would be drawn on the
+        // track's border rather than inside it. 12:00 is the only one left.
         await mountBand(page, { windowed: true, gridTicks: [3, 6, 12, 21] });
 
         const band = page.locator("scheduling-entity-day-band");
-        await expect(band.locator(".time-grid-line")).toHaveCount(2);
+        await expect(band.locator(".time-grid-line")).toHaveCount(1);
+        const only = await readGeometry(page, ".time-grid-line");
+        expect(only.left).toBeCloseTo(50, 1);
     });
 });
 
@@ -567,10 +589,67 @@ test.describe("entity day band, forecast rows", () => {
     test("the grid runs through the charts too", async ({ page }) => {
         await mountBand(page, { halfHourly: true, slotGrid: true });
 
-        // Three rows of 48 slots: the charts are ruled in the same unit the
-        // tracks under them are, or a column is at "about noon" rather than at
-        // a slot.
-        await expect(page.locator("scheduling-entity-day-band").locator(".slot-hit.grid"))
+        // Three rows ruled by the day's own half hours -- the charts are ruled
+        // in the same unit the tracks under them are, or a column is at "about
+        // noon" rather than at a slot. 47 lines, not 48: the one on midnight
+        // would be drawn over the row's own left edge.
+        await expect(page.locator("scheduling-entity-day-band").locator(".context-row .time-grid-line"))
             .toHaveCount(3 * 48);
+    });
+});
+
+/**
+ * The day editor's grid, which the band rules for itself.
+ *
+ * The same answer the inspector's charts give, because it is the same module
+ * giving it: a line per slot, and the hours numbered as densely as the width
+ * allows -- every hour where there is room, thinning as the dialog narrows,
+ * with the numbered lines drawn stronger so the coarse scale survives a line
+ * every half hour.
+ */
+test.describe("entity day band, its own slot grid", () => {
+    test("a line per slot of the day, and the hours drawn stronger", async ({ page }) => {
+        await mountBand(page, { halfHourly: true, slotGrid: true, axis: true });
+
+        const band = page.locator("scheduling-entity-day-band");
+        const track = band.locator(".track");
+        // 48 half-hour slots, less the one on the track's own edge.
+        await expect(track.locator(".time-grid-line")).toHaveCount(48);
+        // 1000px of day leaves room to number every hour: 24 of those lines.
+        await expect(track.locator(".time-grid-line.major")).toHaveCount(24);
+    });
+
+    test("every hour is numbered when there is room for it", async ({ page }) => {
+        await mountBand(page, { slotGrid: true, axis: true });
+
+        // 00 through 24 inclusive: the axis is a scale, and the day's last
+        // boundary is as much a part of it as its first.
+        await expect(page.locator("scheduling-entity-day-band").locator(".axis-tick"))
+            .toHaveCount(25);
+    });
+
+    test("the numbers thin out rather than collide as the band narrows", async ({ page }) => {
+        await mountBand(page, { slotGrid: true, axis: true, widthPx: 300 });
+
+        const band = page.locator("scheduling-entity-day-band");
+        // 300px cannot hold 25 two-digit numbers, so the stride widens to three
+        // hours -- and the lines that carry them are still one per slot.
+        await expect(band.locator(".axis-tick")).toHaveCount(9);
+        await expect(band.locator(".axis-tick").first()).toHaveText("00");
+        await expect(band.locator(".axis-tick").nth(1)).toHaveText("03");
+        await expect(band.locator(".track .time-grid-line")).toHaveCount(24);
+        await expect(band.locator(".track .time-grid-line.major")).toHaveCount(8);
+    });
+
+    test("a cropped day is ruled and numbered inside its crop", async ({ page }) => {
+        await mountBand(page, { slotGrid: true, axis: true, windowed: true });
+
+        const band = page.locator("scheduling-entity-day-band");
+        // 06:00-18:00, so 07 through 18 carry numbers and 06 is the edge the
+        // track starts on.
+        await expect(band.locator(".axis-tick")).toHaveCount(13);
+        await expect(band.locator(".axis-tick").first()).toHaveText("06");
+        await expect(band.locator(".axis-tick").last()).toHaveText("18");
+        await expect(band.locator(".track .time-grid-line")).toHaveCount(12);
     });
 });

@@ -3,7 +3,7 @@ import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { symmetricPowerAxis } from "./chart-axis";
-import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "./slot-gridlines";
+import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "../shared/slot-gridlines";
 import {
   SLOT_MINUTES,
   accumulateBands,

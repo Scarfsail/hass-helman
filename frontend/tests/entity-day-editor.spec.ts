@@ -831,7 +831,7 @@ test.describe("entity day editor", () => {
         const band = () => page.locator("scheduling-entity-day-band");
         await expect(band().locator(".slot-pick")).not.toHaveCount(0);
         await expect(band().locator(".slot-pick.pickable")).toHaveCount(0);
-        await expect(band().locator(".context-row .slot-hit.grid")).not.toHaveCount(0);
+        await expect(band().locator(".context-row .time-grid-line")).not.toHaveCount(0);
 
         // The block underneath still opens for editing, through the grid.
         await band().locator(".segment").first().click();
