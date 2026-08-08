@@ -61,7 +61,7 @@ import type {
     ScheduleOwnerSnapshot,
 } from "../shared/schedule/schedule-types";
 import { stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
-import { slotGridTicks } from "./slot-gridlines";
+import { slotGridTicks } from "../shared/slot-gridlines";
 import { SLOT_MINUTES } from "./chart-stack";
 import { helmanColorVars } from "../color-vars";
 

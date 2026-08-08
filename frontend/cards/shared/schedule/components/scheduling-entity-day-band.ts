@@ -29,8 +29,13 @@ import {
 import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
+import { SLOT_GRID_LINE_OPACITY, slotGridTicks, type SlotGridTick } from "../../slot-gridlines";
 
-const AXIS_HOURS = [0, 3, 6, 9, 12, 15, 18, 21];
+const MINUTE_MS = 60_000;
+/** An hour label this close to an edge is pulled inside it rather than centred. */
+const AXIS_EDGE_PERCENT = 0.5;
+/** Half the room the drag readout needs, so it can be kept inside the track. */
+const DRAG_READOUT_HALF_WIDTH_PX = 58;
 /** A bar this short still has to be visible, or a small value reads as none. */
 const MIN_BAR_PCT = 8;
 /** Segments narrower than this are move-only: two edge handles would not fit. */
@@ -378,23 +383,14 @@ export class SchedulingEntityDayBand extends LitElement {
                 background: color-mix(in srgb, var(--helman-price-negative) 78%, transparent);
             }
 
-            /* One slot of the chart: the same hairline grid the lanes carry, and
-               the same target. The grid is what ties a column to the run under
-               it -- without it a bar is at "about noon" rather than at a slot. */
+            /* One slot of the chart, as a target and nothing else: the hairlines
+               that tie a column to the run under it are the time grid, drawn on
+               this row and on every other by the same ticks. */
             .slot-hit {
                 position: absolute;
                 top: 0;
                 bottom: 0;
                 z-index: 1;
-            }
-
-            .slot-hit.grid {
-                border-left: 1px solid color-mix(in srgb, var(--divider-color) 45%, transparent);
-            }
-
-            /* The day's first hairline would draw over the row's own edge. */
-            .slot-hit.grid.day-start {
-                border-left-color: transparent;
             }
 
             /* Same wash as the lanes give the slot under the pointer: one slice
@@ -408,9 +404,11 @@ export class SchedulingEntityDayBand extends LitElement {
                 background: color-mix(in srgb, var(--primary-color) 22%, transparent);
             }
 
-            /* One slot of the grid: its own hairline at its start, and the whole
-               of it as a target. Over the runs, because where the slot is what a
-               press means, the run is what is being asked about. */
+            /* One slot of the day, as a target. The hairline that says where it
+               begins belongs to the time grid, which rules every row alike;
+               what is left here is the hit area and the marks on it. Over the
+               runs, because where the slot is what a press means, the run is
+               what is being asked about. */
             .slot-pick {
                 position: absolute;
                 top: 0;
@@ -419,7 +417,10 @@ export class SchedulingEntityDayBand extends LitElement {
                    which is the one thing here that is still worth pressing for
                    its own sake. */
                 z-index: 1;
-                border-left: 1px solid color-mix(in srgb, var(--divider-color) 60%, transparent);
+                /* Held open for the selected slot, which does draw its own edge:
+                   a border appearing only when a slot is picked would shift the
+                   wash beside it by a pixel. */
+                border-left: 1px solid transparent;
                 /* Nothing to press while the band is being authored: the track
                    is a drag surface there, and a layer of targets over every run
                    would swallow the grabs the blocks are drawn to invite. */
@@ -429,11 +430,6 @@ export class SchedulingEntityDayBand extends LitElement {
             .slot-pick.pickable {
                 pointer-events: auto;
                 cursor: pointer;
-            }
-
-            /* The day's first hairline would draw over the track's own edge. */
-            .slot-pick.day-start {
-                border-left-color: transparent;
             }
 
             /* The slot under the pointer, and the same slot in every other lane.
@@ -547,22 +543,20 @@ export class SchedulingEntityDayBand extends LitElement {
                 );
             }
 
-            /* One line of the host's own time grid, so the rows here are ruled
-               by the same slots as the charts above them. The labelled lines of
-               that grid carry the hour, so they are drawn stronger here too --
-               otherwise the coarse scale disappears the moment the band starts. */
+            /* One line of the time grid, ruled across every row alike: the
+               lanes, the forecast charts, and -- when a host is stacking the
+               band under charts of its own -- those. The lines that carry an
+               hour are drawn stronger, which is what keeps the coarse scale
+               readable once there is a line every quarter hour; the weights
+               come from the shared grid module, so a line means the same thing
+               here as on the inspector's charts. */
             .time-grid-line {
                 position: absolute;
                 top: 0;
                 bottom: 0;
                 width: 0;
                 border-left: 1px solid var(--divider-color);
-                opacity: 0.22;
                 pointer-events: none;
-            }
-
-            .time-grid-line.major {
-                opacity: 0.55;
             }
 
             /* A stretch of time the host is asking about, in the colours the
@@ -790,6 +784,39 @@ export class SchedulingEntityDayBand extends LitElement {
                 pointer-events: none;
             }
 
+            /* What the drag is currently set to, over the edge being pulled.
+               Above everything the track draws, including the block under it:
+               it is the answer to the question the drag is asking, and it lasts
+               only as long as the button is held. */
+            .drag-readout {
+                position: absolute;
+                top: 50%;
+                z-index: 4;
+                display: flex;
+                align-items: baseline;
+                gap: 4px;
+                padding: 1px 6px;
+                border-radius: 5px;
+                background: var(--card-background-color);
+                box-shadow:
+                    0 0 0 1px color-mix(in srgb, var(--primary-color) 45%, transparent),
+                    0 2px 6px rgba(0, 0, 0, 0.28);
+                color: var(--primary-text-color);
+                font-size: 0.66rem;
+                font-variant-numeric: tabular-nums;
+                line-height: 1.35;
+                white-space: nowrap;
+                transform: translate(-50%, -50%);
+                pointer-events: none;
+            }
+
+            /* The two times are what is being set; how long that leaves the run
+               is a consequence, and reads as one. */
+            .drag-readout-duration {
+                color: var(--secondary-text-color);
+                font-size: 0.6rem;
+            }
+
             .handle {
                 position: absolute;
                 top: 0;
@@ -867,8 +894,16 @@ export class SchedulingEntityDayBand extends LitElement {
                 transform: translateX(-50%);
             }
 
-            .axis-tick:first-child {
+            /* An hour sitting on an edge of the window is pulled inside it: a
+               label centred on the day's first minute would hang half off the
+               card, and one on its last would push the row wider than the
+               tracks it belongs to. */
+            .axis-tick.edge-start {
                 transform: none;
+            }
+
+            .axis-tick.edge-end {
+                transform: translateX(-100%);
             }
         `,
     ];
@@ -927,15 +962,17 @@ export class SchedulingEntityDayBand extends LitElement {
     /**
      * Draw the day's own slots on every lane and every forecast row.
      *
-     * The unit the schedule stores, made visible: hairlines between slots, and
-     * the slot under the pointer washed everywhere it is drawn. Reading a plan
-     * means asking what a run costs, and the answer is in a row three tracks
-     * away -- so the whole stack lights the same slice of time, which is the
-     * only reason it shares one axis.
+     * The unit the schedule stores, made visible: a hairline where a slot
+     * begins, and the slot under the pointer washed everywhere it is drawn.
+     * Reading a plan means asking what a run costs, and the answer is in a row
+     * three tracks away -- so the whole stack lights the same slice of time,
+     * which is the only reason it shares one axis.
      *
-     * The grid comes from `day.slots` rather than from a fixed half hour: the
-     * slot ids are what an answer is keyed by, so a cell that is not a slot is
-     * a cell nothing can be looked up for.
+     * The lines come from `day.slots` rather than from a fixed half hour, and
+     * thin out where a slot is too narrow to rule -- the same grid, and the same
+     * rules for it, that the inspector's charts are drawn on. The cells stay one
+     * per slot regardless: the slot ids are what an answer is keyed by, so a
+     * cell that is not a slot is a cell nothing can be looked up for.
      */
     @property({ type: Boolean }) public slotGrid = false;
     /**
@@ -970,11 +1007,12 @@ export class SchedulingEntityDayBand extends LitElement {
     /**
      * The host's time grid, as instants to rule the tracks at.
      *
-     * Passed in rather than derived, because the grid belongs to whatever the
-     * band is stacked under: a host with charts above has already chosen which
-     * lines carry an hour, and a band that picked its own would rule the same
-     * day twice, differently. Empty is the standalone case -- the band has its
-     * own slot hairlines and axis for that.
+     * A host stacking the band under charts of its own passes its grid down,
+     * because the grid belongs to whatever the band sits beneath: that host has
+     * already chosen which lines carry an hour, and a band that picked its own
+     * would rule the same day twice, differently. Empty is the standalone case,
+     * where the band is that host and derives the very same ticks from
+     * `day.slots` -- see `slotGrid`.
      */
     @property({ attribute: false }) public timeGridTicks: readonly EntityDayBandGridTick[] = [];
 
@@ -1002,6 +1040,13 @@ export class SchedulingEntityDayBand extends LitElement {
      * block of every lane, and during a drag that happens at pointer rate.
      */
     @state() private _trackWidthPx = 0;
+    /**
+     * The day's own grid, and the grid every row is actually ruled by --
+     * settled once at the head of each render and read from there by the rows,
+     * the axis and the tracks.
+     */
+    private _ownTicks: readonly SlotGridTick[] = [];
+    private _gridTicks: readonly EntityDayBandGridTick[] = [];
 
     private readonly _handlePointerMove = (event: PointerEvent): void => {
         const drag = this._drag;
@@ -1013,12 +1058,13 @@ export class SchedulingEntityDayBand extends LitElement {
         const pointerMs = this._snapMs(this._readPointerMs(event, drag.trackRect));
         const range = this._resolveDragRange(drag, pointerMs);
         // Ranges are snapped to whole slots, so most pointer moves land where
-        // the last one did. Announcing those rebuilds the draft for nothing.
-        if (range.startMs === this._lastDragRange?.startMs && range.endMs === this._lastDragRange.endMs) {
+        // the last one did. Announcing those rebuilds the draft for nothing --
+        // and the readout says the same two times either way.
+        if (range.startMs === this._dragRange?.startMs && range.endMs === this._dragRange.endMs) {
             return;
         }
 
-        this._lastDragRange = range;
+        this._dragRange = range;
         this.dispatchEvent(new CustomEvent<EntityDayBandRangeChangeDetail>("entity-day-band-range-change", {
             bubbles: true,
             composed: true,
@@ -1026,7 +1072,15 @@ export class SchedulingEntityDayBand extends LitElement {
         }));
     };
 
-    private _lastDragRange: EntityScheduleRange | null = null;
+    /**
+     * Where the drag has got to, held here rather than read back off the block.
+     *
+     * The block being dragged is redrawn from the draft the host rebuilds, which
+     * is a round trip; the readout has to say what the pointer is doing now.
+     * It doubles as the "did anything change" guard, so the two can never
+     * disagree about which range is current.
+     */
+    @state() private _dragRange: EntityScheduleRange | null = null;
     /** The last hover announced, so a pointer crossing rows says it once. */
     private _lastHoverMs: number | null = null;
 
@@ -1052,6 +1106,12 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
+        // Once per render, not once per row: every row is ruled by the same
+        // ticks, and deriving them per lane would be the same walk of the day
+        // repeated seven times on every pointer move.
+        const needsOwnTicks = this.showAxis || (this.slotGrid && this.timeGridTicks.length === 0);
+        this._ownTicks = needsOwnTicks ? this._ownGridTicks() : [];
+        this._gridTicks = this._resolveGridTicks();
         const hasSelection = this.lanes.some((lane) => lane.key === this.selectedLaneKey);
         const inTrackLabels = this.laneLabels === "track";
         const classes = [
@@ -1083,22 +1143,77 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * The hour ticks that fall inside the window.
+     * The day's own grid: a line per slot, hours labelled as densely as the
+     * width allows.
      *
-     * Cropping to daylight drops the ones that scrolled off rather than
-     * squeezing all eight into what is left -- a "00" at the left edge of a
-     * band that starts at 04:00 is worse than no tick at all.
+     * The slot length comes from the day rather than from a constant, because
+     * the slots are what the schedule is kept in -- a grid on a fixed half hour
+     * would rule a quarter-hourly day between its slots. Empty until the track
+     * has been measured: how many lines and how many numbers fit is the one
+     * thing that cannot be answered without a width.
+     */
+    private _ownGridTicks(): SlotGridTick[] {
+        const slots = this.day?.slots ?? [];
+        if (slots.length === 0 || this._trackWidthPx <= 0) {
+            return [];
+        }
+
+        const first = slots[0];
+        const slotMinutes = Math.round(((first.endMs ?? first.startMs) - first.startMs) / MINUTE_MS);
+        return slotGridTicks({
+            startMinutes: (this._windowStartMs - this.day.startMs) / MINUTE_MS,
+            endMinutes: (this._windowEndMs - this.day.startMs) / MINUTE_MS,
+            slotMinutes,
+            plotWidth: this._trackWidthPx,
+        });
+    }
+
+    /**
+     * Which lines this band is ruled by: the host's, when it is stacked under
+     * charts that already ruled the same day, and otherwise its own.
+     *
+     * A host's grid wins because a band under a chart has to be ruled by that
+     * chart -- two grids over one day is two answers to where a slot begins.
+     * Standing alone the band is the host, and derives the very same ticks.
+     */
+    private _resolveGridTicks(): readonly EntityDayBandGridTick[] {
+        if (this.timeGridTicks.length > 0) {
+            return this.timeGridTicks;
+        }
+
+        if (!this.slotGrid) {
+            return [];
+        }
+
+        return this._ownTicks.map((tick) => ({
+            atMs: this.day.startMs + tick.minutes * MINUTE_MS,
+            major: tick.hour !== null,
+        }));
+    }
+
+    /**
+     * The hour labels, on the lines that carry them.
+     *
+     * The same ticks the grid is drawn from, so every number sits on a line
+     * that is there -- and as many of them as the width has room for, which on
+     * a wide dialog is every hour and on a phone is every sixth. Cropping to
+     * daylight drops the hours that scrolled off rather than squeezing them
+     * into what is left: a "00" at the left edge of a band that starts at 04:00
+     * is worse than no tick at all.
      */
     private _renderAxisTicks() {
-        return AXIS_HOURS.flatMap((hour) => {
-            const atMs = this.day.startMs + hour * 3_600_000;
-            if (atMs < this._windowStartMs || atMs > this._windowEndMs) {
+        return this._ownTicks.flatMap((tick) => {
+            if (tick.hour === null) {
                 return [];
             }
 
+            const percent = this._toPercent(this.day.startMs + tick.minutes * MINUTE_MS);
+            const edge = percent <= AXIS_EDGE_PERCENT
+                ? " edge-start"
+                : percent >= 100 - AXIS_EDGE_PERCENT ? " edge-end" : "";
             return [html`
-                <span class="axis-tick" style=${`left: ${this._toPercent(atMs)}%`}>
-                    ${String(hour).padStart(2, "0")}
+                <span class=${`axis-tick${edge}`} style=${`left: ${percent}%`}>
+                    ${String(tick.hour).padStart(2, "0")}
                 </span>
             `];
         });
@@ -1324,6 +1439,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
                     ${this._renderRowOverlays()}
                     ${this._renderSlotPicks(lane)}
+                    ${this._renderDragReadout(lane)}
                 </div>
                 <!--
                     Outside the track, which clips: the name has to be free to
@@ -1337,11 +1453,11 @@ export class SchedulingEntityDayBand extends LitElement {
     /**
      * The day's slots, drawn on one lane.
      *
-     * Above the runs rather than behind them: the grid is what says where a run
-     * starts in the unit the schedule is actually kept in, and a hairline hidden
-     * under the one bar it is there to measure says nothing. Each slot carries
-     * its own hairline at its start, so the grid is the same object as the hit
-     * layer and the two can never disagree.
+     * A cell per slot, whatever the grid over it chose to rule: on a narrow
+     * dialog the lines thin out to stay readable, but the slot is still what a
+     * press means and what a hover is about, so every one of them keeps its
+     * target. Above the runs, because where the slot is what a press means, the
+     * run is what is being asked about.
      *
      * Every lane marks the same slot, and the lane the pointer is in marks it
      * harder. The question a hovered hour asks is what else is going on then,
@@ -1352,11 +1468,10 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
-        return this.day.slots.map((slot, index) => {
+        return this.day.slots.map((slot) => {
             const hovered = this._hoveredSlotId === slot.id;
             const classes = [
                 "slot-pick",
-                index === 0 ? "day-start" : "",
                 this.slotPicks ? "pickable" : "",
                 hovered ? (this._hoveredLaneKey === lane.key ? "hovered" : "co-hovered") : "",
                 this.selectedSlot?.laneKey === lane.key && this.selectedSlot.slotId === slot.id
@@ -1372,6 +1487,47 @@ export class SchedulingEntityDayBand extends LitElement {
                 ></span>
             `;
         });
+    }
+
+    /**
+     * The hours the drag is on right now, over the run being dragged.
+     *
+     * A drag is the one edit made with the pointer rather than with the fields
+     * below, and a bar sliding along a track says "about eight" at best -- the
+     * step is a whole slot, so the answer is exact and worth printing. Both
+     * ends of it, whichever end is being pulled: moving a run changes both, and
+     * resizing one changes where it now stops as much as how long it lasts.
+     *
+     * It rides the edge under the pointer, which is where the user is looking,
+     * and is held inside the track so a run dragged to midnight still has its
+     * hours legible. Inert -- the pointer is captured by the drag anyway.
+     */
+    private _renderDragReadout(lane: EntityDayBandLane) {
+        const drag = this._drag;
+        const range = this._dragRange;
+        if (drag === null || range === null || drag.laneKey !== lane.key) {
+            return nothing;
+        }
+
+        const anchorMs = drag.mode === "start"
+            ? range.startMs
+            : drag.mode === "end"
+                ? range.endMs
+                : (range.startMs + range.endMs) / 2;
+        const halfPct = this._trackWidthPx > 0
+            ? Math.min((DRAG_READOUT_HALF_WIDTH_PX / this._trackWidthPx) * 100, 50)
+            : 0;
+        const leftPct = Math.min(Math.max(this._toPercent(anchorMs), halfPct), 100 - halfPct);
+        return html`
+            <span class="drag-readout" style=${`left: ${leftPct}%`}>
+                <span class="drag-readout-range">${
+                    formatScheduleTime(range.startMs, this.locale, this.timeZone)
+                }–${
+                    formatScheduleTime(range.endMs, this.locale, this.timeZone)
+                }</span>
+                <span class="drag-readout-duration">${this._formatHours(range.endMs - range.startMs)}</span>
+            </span>
+        `;
     }
 
     /**
@@ -1796,26 +1952,23 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * One cell per slot on a forecast row: the grid, the hover mark, and the
-     * tooltip that says what the column is worth in full.
+     * One cell per slot on a forecast row: the hover mark, and the tooltip that
+     * says what the column is worth in full.
      *
      * A layer of its own rather than titles on the bars: a slot with no solar
      * draws no bar, and a slot with no reading at all draws nothing anywhere,
-     * so there is nothing per-hour to hang either a hairline or a tooltip on.
-     * Inert beyond that -- pressing still falls through to the row, which clears
-     * the lane selection.
+     * so there is nothing per-hour to hang a tooltip on. Inert beyond that --
+     * pressing still falls through to the row, which clears the lane selection.
      *
-     * Every slot gets a cell even when its reading is missing, because the grid
-     * is a ruler: skipping the hours the forecast has nothing to say about would
-     * leave gaps that read as wider slots.
+     * Every slot gets a cell even when its reading is missing, because the row
+     * is read across: skipping the hours the forecast has nothing to say about
+     * would leave stretches that answer nothing when pointed at.
      */
     private _renderSlotHits(kind: "battery" | "solar" | "price") {
-        return this.day.slots.map((slot, index) => {
+        return this.day.slots.map((slot) => {
             const title = this._buildSlotHitTitle(kind, slot);
             const classes = [
                 "slot-hit",
-                this.slotGrid ? "grid" : "",
-                this.slotGrid && index === 0 ? "day-start" : "",
                 this._hoveredSlotId === slot.id
                     ? (this._hoveredLaneKey === null ? "hovered" : "co-hovered")
                     : "",
@@ -1973,23 +2126,26 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * The host's grid, ruled across this row.
+     * The grid, ruled across this row.
      *
      * Under the highlights and the runs: the grid is the ruler the row is read
      * against, not something drawn on top of what it measures. Lines outside
      * the drawn window are dropped rather than clamped, so a cropped day is not
-     * ruled by a pile of ticks stacked on its edge.
+     * ruled by a pile of ticks stacked on its edge -- and a line exactly on the
+     * window's start is dropped too, since it would draw over the row's own
+     * edge rather than inside it.
      */
     private _renderTimeGrid() {
-        return this.timeGridTicks.map((tick) => {
-            if (tick.atMs < this._windowStartMs || tick.atMs > this._windowEndMs) {
+        return this._gridTicks.map((tick) => {
+            if (tick.atMs <= this._windowStartMs || tick.atMs > this._windowEndMs) {
                 return nothing;
             }
             const percent = this._toPercent(tick.atMs);
+            const opacity = tick.major ? SLOT_GRID_LINE_OPACITY.major : SLOT_GRID_LINE_OPACITY.minor;
             return html`
                 <span
                     class=${`time-grid-line ${tick.major ? "major" : ""}`}
-                    style=${`left: ${percent}%`}
+                    style=${`left: ${percent}%; opacity: ${opacity}`}
                 ></span>
             `;
         });
@@ -2119,6 +2275,10 @@ export class SchedulingEntityDayBand extends LitElement {
             trackRect,
             pointerId: event.pointerId,
         };
+        // The run's own hours, before the pointer has moved anywhere: the
+        // readout is what says where the drag started from, so it cannot wait
+        // for the first move to have something to show.
+        this._dragRange = { startMs: originStartMs, endMs: block.endMs };
         window.addEventListener("pointermove", this._handlePointerMove);
         window.addEventListener("pointerup", this._handlePointerUp);
         window.addEventListener("pointercancel", this._handlePointerUp);
@@ -2172,7 +2332,7 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         this._drag = null;
-        this._lastDragRange = null;
+        this._dragRange = null;
         window.removeEventListener("pointermove", this._handlePointerMove);
         window.removeEventListener("pointerup", this._handlePointerUp);
         window.removeEventListener("pointercancel", this._handlePointerUp);

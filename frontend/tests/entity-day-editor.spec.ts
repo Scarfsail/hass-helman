@@ -553,6 +553,35 @@ test.describe("entity day editor", () => {
         );
     });
 
+    /**
+     * A drag is the one edit made with the pointer instead of with the fields,
+     * and a bar sliding along a track cannot say more than "about eight" -- so
+     * it says both ends of what it is setting, from the moment it is grabbed.
+     */
+    test("a drag says which hours it is setting, at both ends", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const readout = page.locator("scheduling-entity-day-band .drag-readout");
+        await expect(readout).toHaveCount(0);
+
+        const from = await trackPoint(page, Date.parse(`${DAY_ONE}T18:00:00Z`));
+        const to = await trackPoint(page, Date.parse(`${DAY_ONE}T21:00:00Z`));
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        // Grabbed and not yet moved: it already says where the run stands, so
+        // the drag has something to be read against.
+        await expect(readout.locator(".drag-readout-range")).toHaveText("17:00–19:00");
+
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        await expect(readout.locator(".drag-readout-range")).toHaveText("20:00–22:00");
+        await expect(readout.locator(".drag-readout-duration")).toHaveText(/2/);
+
+        // It belongs to the drag, and goes with it.
+        await page.mouse.up();
+        await expect(readout).toHaveCount(0);
+    });
+
     test("dragging an edge stops at the neighbouring block", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { neighbour: true });
@@ -831,7 +860,7 @@ test.describe("entity day editor", () => {
         const band = () => page.locator("scheduling-entity-day-band");
         await expect(band().locator(".slot-pick")).not.toHaveCount(0);
         await expect(band().locator(".slot-pick.pickable")).toHaveCount(0);
-        await expect(band().locator(".context-row .slot-hit.grid")).not.toHaveCount(0);
+        await expect(band().locator(".context-row .time-grid-line")).not.toHaveCount(0);
 
         // The block underneath still opens for editing, through the grid.
         await band().locator(".segment").first().click();

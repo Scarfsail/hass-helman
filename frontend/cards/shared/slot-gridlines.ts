@@ -1,7 +1,9 @@
 import { svg } from "lit";
 
 /**
- * The vertical time grid every row of the inspector draws.
+ * The vertical time grid every surface that draws a day against a time axis
+ * rules itself by: the inspector's charts and strips, and the schedule band --
+ * standalone in the day editor as much as stacked under those charts.
  *
  * One hairline per slot, so the grid is in the same unit the charts are drawn
  * and selected in -- a 15-minute bar sits between two lines rather than
@@ -12,7 +14,10 @@ import { svg } from "lit";
  *
  * Its own module because the main chart, the SoC strip, the price strip and the
  * schedule band all have to answer this identically; a row computing its own
- * grid would be a row whose lines drift from the chart above it.
+ * grid would be a row whose lines drift from the chart above it. Shared rather
+ * than the inspector's, because the day editor rules the same day in the same
+ * unit -- a slot -- and two surfaces answering "which lines, and which of them
+ * carry an hour" differently is two surfaces that read as different diagrams.
  */
 export type SlotGridTick = {
   /** Minute-of-day the line sits at. */
@@ -20,6 +25,16 @@ export type SlotGridTick = {
   /** The whole hour to print under the line, or null for an unlabelled line. */
   hour: number | null;
 };
+
+/**
+ * How hard each kind of line is drawn.
+ *
+ * The labelled lines stay stronger than the rest, which is what keeps the
+ * coarse scale readable once there is a line every quarter hour. Exported
+ * because the grid is drawn as SVG on the charts and as elements on the band,
+ * and a grid that changed weight between the two would read as two grids.
+ */
+export const SLOT_GRID_LINE_OPACITY = { major: 0.55, minor: 0.22 } as const;
 
 /** Hour strides tried in order; the first one whose labels fit is used. */
 const LABEL_STRIDES = [1, 2, 3, 4, 6, 12] as const;
@@ -95,7 +110,7 @@ export function renderSlotGridlines(options: {
     return svg`
       <line x1=${x} y1=${top} x2=${x} y2=${bottom}
             stroke="var(--divider-color)" stroke-width="1"
-            opacity=${isLabelled ? "0.55" : "0.22"}></line>
+            opacity=${isLabelled ? SLOT_GRID_LINE_OPACITY.major : SLOT_GRID_LINE_OPACITY.minor}></line>
       ${isLabelled && labelY !== undefined
         ? svg`<text x=${x} y=${labelY} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(tick.hour).padStart(2, "0")}</text>`
         : ""}
