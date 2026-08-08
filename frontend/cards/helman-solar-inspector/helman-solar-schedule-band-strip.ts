@@ -7,6 +7,7 @@ import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import { dispatchWatchedEntities } from "../shared/hass-change";
 import "../shared/schedule/components/scheduling-entity-day-band";
 import "../shared/schedule/dialogs/scheduling-entity-day-editor";
 import type {
@@ -109,7 +110,7 @@ const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
  * The house's schedule as a stack of per-entity timelines, on the solar
  * inspector's own time axis.
  *
- * The same band the scheduling card's day editor is built around, read-only and
+ * The same band the day editor is built around, read-only and
  * cropped to whatever window the charts above are drawing. That is the point of
  * putting it here: a run is only interesting next to the solar it was placed to
  * catch, and two surfaces drawing the same day two different ways would be two
@@ -161,6 +162,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /** The schedule changed under the open draft; Save will overwrite what arrived. */
     @state() private _editorScheduleChanged = false;
 
+    private _nowTimer?: number;
     private _localizeFn?: LocalizeFunction;
     private _scheduleOwner?: SharedScheduleOwner;
     private _unsubscribeOwner?: () => void;
@@ -194,12 +196,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
 
     protected willUpdate(changed: PropertyValues<this>): void {
         if (changed.has("hass") && this.hass) {
-            // Coarse on purpose: hass updates land on every state change in the
-            // house, and every move of this clock rebuilds the day.
-            const now = Date.now();
-            if (now - this._nowMs >= NOW_RESOLUTION_MS) {
-                this._nowMs = now;
-            }
             this._localizeFn = getLocalizeFunction(this.hass);
             if (this._loadedConnection !== this.hass.connection) {
                 this._loadedConnection = this.hass.connection;
@@ -219,8 +215,27 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         this._rebuildDerivedIfNeeded();
     }
 
+    connectedCallback(): void {
+        super.connectedCallback();
+        // The wall clock owns a timer, because `hass` churn is not a clock: the
+        // card above filters `hass` down to the entities this strip actually
+        // reads, and `_nowMs` is the *only* `_derivedFor` key that moves on an
+        // idle installation. Advance it from `hass` and the whole derived model
+        // freezes the moment the house goes quiet — elapsed bands, entity
+        // statuses, day labels and the open editor's clock with it. Coarse on
+        // purpose: every move rebuilds the day.
+        this._nowMs = Date.now();
+        this._nowTimer = window.setInterval(() => {
+            this._nowMs = Date.now();
+        }, NOW_RESOLUTION_MS);
+    }
+
     disconnectedCallback(): void {
         super.disconnectedCallback();
+        if (this._nowTimer !== undefined) {
+            window.clearInterval(this._nowTimer);
+            this._nowTimer = undefined;
+        }
         this._emitHover(null);
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = undefined;
@@ -286,9 +301,9 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /**
      * The day editor, opened on whichever lane was pressed.
      *
-     * It is the same dialog the scheduling card opens, fed from the same
-     * builders -- so what the user gets from here is not an inspector-flavoured
-     * editor but *the* editor, already looking at the entity they pointed at.
+     * It is the shared day editor, fed from the same builders -- so what the
+     * user gets from here is not an inspector-flavoured editor but *the*
+     * editor, already looking at the entity they pointed at.
      */
     private _renderEditor() {
         const lane = this._editorTarget;
@@ -518,8 +533,8 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     };
 
     /**
-     * The day's draft, as one write, through the same owner the scheduling card
-     * writes through -- so a change made from here lands on that card too.
+     * The day's draft, as one write, through the shared schedule owner -- so a
+     * change made from here lands on every other view of the same day.
      *
      * The dialog stays open until the write settles, so a failure leaves the
      * draft on screen rather than closing over a change that never happened.
@@ -682,6 +697,34 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         }
     }
 
+    /**
+     * Every entity id this strip resolves out of `hass.states`, bubbled up so
+     * the card at the top can filter `hass` without repeating the fetch that
+     * found them (`getControllableEntities` does not cache, so a card-level call
+     * would be an extra round trip per dashboard load).
+     *
+     * Always the whole set, never a delta: the two loads that contribute land
+     * independently — the EV `useMode`/`ecoGear` selects come from the appliance
+     * metadata, the rest from the controllable entities — and either may be the
+     * one that arrives second. `controlEntityIds.primary` is already a
+     * controllable entity id, so including it costs nothing and stops the set
+     * depending on that invariant holding.
+     */
+    private _emitWatchedEntities(): void {
+        const ids = new Set<string>();
+        for (const entity of this._controllableEntities) {
+            ids.add(entity.entityId);
+        }
+        for (const appliance of this._appliances) {
+            const controls = appliance.controlEntityIds;
+            if (!controls) continue;
+            if (controls.primary) ids.add(controls.primary);
+            if (controls.useMode) ids.add(controls.useMode);
+            if (controls.ecoGear) ids.add(controls.ecoGear);
+        }
+        dispatchWatchedEntities(this, [...ids]);
+    }
+
     private async _loadAppliances(): Promise<void> {
         const hass = this.hass;
         if (!hass || this._appliancesRequested) {
@@ -695,6 +738,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 return;
             }
             this._appliances = normalizeScheduleApplianceMetadata(payload);
+            this._emitWatchedEntities();
         } catch (error) {
             if (this.hass?.connection !== hass.connection) {
                 return;
@@ -718,6 +762,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 return;
             }
             this._controllableEntities = payload.entities;
+            this._emitWatchedEntities();
             void this._loadActualHistory();
         } catch {
             if (this.hass?.connection !== hass.connection) {

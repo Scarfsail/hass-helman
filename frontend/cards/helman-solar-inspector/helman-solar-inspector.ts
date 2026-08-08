@@ -36,6 +36,7 @@ import {
 } from "../color-utils";
 import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
+import { dispatchWatchedEntities } from "../shared/hass-change";
 import "./helman-solar-schedule-band-strip";
 import "./helman-solar-day-pills";
 import type { DayPillForecastHealthDetail, DayPillSelectDetail } from "./helman-solar-day-pills";
@@ -410,8 +411,8 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _selectedDate = "";
   /**
    * The clock behind the "now" line on every chart. Coarse on purpose: it is
-   * advanced off `hass` updates, which land on every state change in the house,
-   * and each move of it redraws the whole stack.
+   * advanced by a timer owned by `connectedCallback`, and each move of it
+   * redraws the whole stack.
    */
   @state() private _nowMs = Date.now();
   @state() private _payload: InspectorPayload | null = null;
@@ -503,6 +504,7 @@ export class HelmanSolarInspector extends LitElement {
   private _activeRequestId = 0;
   private _activeRequestDate: string | null = null;
   private _loadedConnection: unknown = null;
+  private _nowTimer?: number;
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
   private _scheduleOwner?: SharedScheduleOwner;
@@ -1113,8 +1115,27 @@ export class HelmanSolarInspector extends LitElement {
     }
   `];
 
+  protected connectedCallback() {
+    super.connectedCallback();
+    // The wall clock owns a timer, because `hass` churn is not a clock. The card
+    // above filters `hass` down to the entities this subtree actually reads, so
+    // advancing "now" from the setter would freeze the now-marker on every chart
+    // and stop the card ever rolling over to the next day (`_todayIso()` is read
+    // at render time, and with no render there is no rollover). Coarse on
+    // purpose, and the same resolution the schedule band uses, so the two lines
+    // never disagree about where "now" is.
+    this._nowMs = Date.now();
+    this._nowTimer = window.setInterval(() => {
+      this._nowMs = Date.now();
+    }, NOW_RESOLUTION_MS);
+  }
+
   protected disconnectedCallback() {
     super.disconnectedCallback();
+    if (this._nowTimer !== undefined) {
+      window.clearInterval(this._nowTimer);
+      this._nowTimer = undefined;
+    }
     this._disconnectChartResizeObserver();
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
@@ -1166,12 +1187,6 @@ export class HelmanSolarInspector extends LitElement {
     if (changed.has("hass") && this.hass) {
       if (!this._selectedDate) {
         this._selectedDate = this._todayIso();
-      }
-      // Same rule the schedule band below follows, so the two lines never
-      // disagree about where "now" is.
-      const now = Date.now();
-      if (now - this._nowMs >= NOW_RESOLUTION_MS) {
-        this._nowMs = now;
       }
       if (this._loadedConnection !== this.hass.connection) {
         this._loadedConnection = this.hass.connection;
@@ -2833,6 +2848,29 @@ export class HelmanSolarInspector extends LitElement {
    * so both views name the concept identically; it falls back to this card's
    * localized string when the card leaves it unset.
    */
+  /**
+   * The switch entities the house-composition panel draws a live badge for,
+   * bubbled up so the card at the top can watch them. This is the inspector's
+   * own contribution to the watch set — the ids come from the payload, not from
+   * the schedule band — and without it, toggling one of these appliances
+   * anywhere else in Home Assistant would leave its badge stale indefinitely.
+   *
+   * Taken from the *unfiltered* breakdown, not from the `wh > 0` subset
+   * `_renderHouseBreakdown` draws: the backend's consumer roster is built from
+   * config and takes no date, so the unfiltered set is the same on every day,
+   * while the rendered subset is not. Dispatching the rendered subset would make
+   * the card's union grow as the user pages through days.
+   */
+  private _emitWatchedEntities(payload: InspectorPayload) {
+    const ids = new Set<string>();
+    for (const point of payload.series.houseActualBreakdown) {
+      for (const appliance of point.appliances) {
+        if (appliance.switchEntityId) ids.add(appliance.switchEntityId);
+      }
+    }
+    dispatchWatchedEntities(this, [...ids]);
+  }
+
   private _renderHouseBreakdown(
     breakdown: HouseBreakdownPoint | null,
     unmeasuredLabel: string | null,
@@ -3274,6 +3312,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
+        this._emitWatchedEntities(payload);
         this._range = payload.range;
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),

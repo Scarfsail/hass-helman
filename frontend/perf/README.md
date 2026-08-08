@@ -12,6 +12,10 @@ state change anywhere in the house), and real payload sizes.
 Nothing in here runs as part of `npm test` — it is a measuring instrument, not a
 gate.
 
+The rules these measurements exist to enforce are written down once, next to the
+code they govern: [`../cards/README.md`](../cards/README.md), "Card rendering
+discipline".
+
 ## Running it
 
 ```bash
