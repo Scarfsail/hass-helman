@@ -24,10 +24,40 @@ jobs:
         # single pytest process would cross-pollute.
         run: bash scripts/run_tests.sh
 
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: git submodule update --init frontend/hass-frontend
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm --prefix frontend ci
+      # The browser is ~380MB and dominates a cold run, so cache it on the
+      # resolved Playwright version rather than re-downloading every PR.
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('./frontend/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx --prefix frontend playwright install --with-deps chromium
+      # The system deps are outside the cached directory, so they are still
+      # needed on a cache hit.
+      - if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx --prefix frontend playwright install-deps chromium
+      # `globalSetup` builds both bundles before the suite runs.
+      - run: npm --prefix frontend test
+
   release:
     # Gate the release on a green test run, and only release on pushes to main
     # (not on pull requests).
-    needs: backend-tests
+    needs: [backend-tests, frontend-tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
