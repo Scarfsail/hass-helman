@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
+import { installFakeHass } from "./support/fake-hass";
 
 /**
  * The solar inspector refreshing under the user rather than at them.
@@ -32,225 +33,18 @@ const BUNDLE = resolve(
 /** Days the inspector offers, counting today as day 0. */
 const PILL_DAYS = 4;
 
-declare global {
-    interface Window {
-        /** Every date `helman/solar_bias/inspector` was asked for, in order. */
-        __requestedDates: string[];
-        /** Let the oldest still-pending inspector request return. */
-        __releaseInspector: () => void;
-        /** How many inspector requests are waiting to be released. */
-        __pendingInspector: () => number;
-        /** Change the solar total the next payload carries. */
-        __setActualWh: (value: number) => void;
-        __fireDataChanged: (kind: string) => void;
-    }
-}
-
 async function mountInspector(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await page.addScriptTag({ path: BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-solar-inspector"));
+    await installFakeHass(page, { pillDays: PILL_DAYS });
 
-    await page.evaluate(({ pillDays }) => {
-        const dayMs = 86_400_000;
-        const hourMs = 3_600_000;
-        const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
-        const isoDay = (offset: number) =>
-            new Date(todayMs + offset * dayMs).toISOString().slice(0, 10);
-
-        const schedule = { executionEnabled: true, slots: [] };
-
-        const forecast = {
-            solar: {
-                status: "available",
-                unit: "Wh",
-                resolution: "hour",
-                horizonHours: pillDays * 24,
-                actualHistory: [],
-                points: Array.from({ length: pillDays * 24 }, (_, index) => ({
-                    timestamp: new Date(todayMs + index * hourMs).toISOString(),
-                    value: index % 24 >= 8 && index % 24 < 16 ? 800 : 0,
-                })),
-            },
-            grid: {
-                status: "unavailable",
-                generatedAt: null,
-                unit: "kWh",
-                resolution: "hour",
-                horizonHours: 0,
-                startedAt: null,
-                partialReason: null,
-                coverageUntil: null,
-                currentImportPrice: null,
-                importPriceUnit: null,
-                importPricePoints: [],
-                currentExportPrice: null,
-                exportPriceUnit: null,
-                exportPricePoints: [],
-                series: [],
-            },
-            house_consumption: {
-                status: "unavailable",
-                generatedAt: null,
-                unit: "Wh",
-                resolution: "hour",
-                horizonHours: 0,
-                trainingWindowDays: 0,
-                historyDaysAvailable: 0,
-                requiredHistoryDays: 0,
-                model: null,
-                actualHistory: [],
-                series: [],
-            },
-            battery_capacity: {
-                status: "unavailable",
-                generatedAt: null,
-                startedAt: null,
-                unit: "kWh",
-                resolution: "hour",
-                horizonHours: 0,
-                model: null,
-                nominalCapacityKwh: 10,
-                currentRemainingEnergyKwh: 5,
-                currentSoc: 50,
-                minSoc: 10,
-                maxSoc: 100,
-                chargeEfficiency: 1,
-                dischargeEfficiency: 1,
-                maxChargePowerW: 5000,
-                maxDischargePowerW: 5000,
-                partialReason: null,
-                coverageUntil: null,
-                actualHistory: [],
-                series: [],
-            },
-        };
-
-        let actualWh = 6000;
-        window.__setActualWh = (value: number) => {
-            actualWh = value;
-        };
-
-        // A day with real series, so the card draws its chart and totals rather
-        // than the "no data" note — the note is indistinguishable from a blank.
-        const inspectorPayload = (date: string) => ({
-            date,
-            timezone: "UTC",
-            status: "ok",
-            effectiveVariant: "adjusted",
-            trainedAt: null,
-            range: {
-                minDate: isoDay(-7),
-                maxDate: isoDay(pillDays - 1),
-                canGoPrevious: true,
-                canGoNext: date < isoDay(pillDays - 1),
-                isToday: date === isoDay(0),
-                isFuture: date > isoDay(0),
-            },
-            series: {
-                raw: [],
-                corrected: Array.from({ length: 24 }, (_, hour) => ({
-                    slot: `${String(hour).padStart(2, "0")}:00`,
-                    valueWh: hour >= 8 && hour < 16 ? 500 : 0,
-                })),
-                actual: [],
-                invalidated: [],
-                factors: [],
-                impact: [],
-                houseForecast: [],
-                houseActual: [],
-                houseActualBreakdown: [],
-                batterySocForecast: [],
-                batterySocActual: [],
-                gridForecast: [],
-                gridActual: [],
-                batteryForecast: [],
-                batteryActual: [],
-            },
-            totals: {
-                rawWh: null,
-                correctedWh: 4000,
-                actualWh,
-                houseForecastWh: null,
-                houseActualWh: null,
-                gridForecastWh: null,
-                gridActualWh: null,
-                batteryForecastWh: null,
-                batteryActualWh: null,
-            },
-            availability: {
-                hasRawForecast: false,
-                hasCorrectedForecast: true,
-                hasActuals: false,
-                hasInvalidated: false,
-                hasProfile: true,
-                hasHouseForecast: false,
-                hasHouseActual: false,
-                hasBatterySocForecast: false,
-                hasBatterySocActual: false,
-                hasGridForecast: false,
-                hasGridActual: false,
-                hasBatteryForecast: false,
-                hasBatteryActual: false,
-            },
-            houseUnmeasuredLabel: null,
-            batterySocBounds: [],
-            trainingExplainability: null,
-        });
-
-        window.__requestedDates = [];
-        const pending: Array<() => void> = [];
-        window.__pendingInspector = () => pending.length;
-        window.__releaseInspector = () => {
-            pending.shift()?.();
-        };
-
-        const listeners: Array<(event: unknown) => void> = [];
-        window.__fireDataChanged = (kind: string) => {
-            for (const listener of listeners) {
-                listener({ event_type: "helman_data_changed", data: { kind } });
-            }
-        };
-
+    await page.evaluate(() => {
         const el = document.createElement("helman-solar-inspector") as HTMLElement &
             Record<string, unknown>;
-        el.hass = {
-            language: "en",
-            locale: { language: "en" },
-            config: { time_zone: "UTC" },
-            connection: {
-                sendMessagePromise: async (msg: { type: string }) =>
-                    msg.type === "helman/get_forecast" ? forecast : {},
-                subscribeEvents: async (
-                    listener: (event: unknown) => void,
-                    eventType: string,
-                ) => {
-                    if (eventType !== "helman_data_changed") {
-                        return () => undefined;
-                    }
-                    listeners.push(listener);
-                    return () => {
-                        listeners.splice(listeners.indexOf(listener), 1);
-                    };
-                },
-            },
-            states: {},
-            callWS: async (msg: { type: string; date?: string }) => {
-                if (msg.type === "helman/get_schedule") {
-                    return schedule;
-                }
-                if (msg.type === "helman/solar_bias/inspector") {
-                    const date = msg.date ?? "";
-                    window.__requestedDates.push(date);
-                    return new Promise((resolvePayload) => {
-                        pending.push(() => resolvePayload(inspectorPayload(date)));
-                    });
-                }
-                return {};
-            },
-        };
+        el.hass = window.__fakeHass;
         document.body.appendChild(el);
-    }, { pillDays: PILL_DAYS });
+    });
 
     // The first load is a navigation like any other: release it, then wait for
     // the chart it draws.
