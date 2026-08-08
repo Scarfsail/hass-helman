@@ -453,11 +453,12 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _refreshing = false;
   @state() private _error = "";
   /**
-   * The forecast payload the day pills fetched, kept only for its health
-   * blocks. The inspector's own data comes from a different endpoint, so this
-   * is the card's only view of how fresh the forecast behind the pills is.
+   * The forecast payload the day pills fetched. It backs the health banner —
+   * the card's only view of how fresh the forecast behind the pills is — and it
+   * is handed to the export-price strip, which draws its prices out of it rather
+   * than fetching the same payload a second time.
    */
-  @state() private _forecastHealth: ForecastPayload | null = null;
+  @state() private _forecast: ForecastPayload | null = null;
   /**
    * The one slot selection every surface shares: the charts highlight each selected
    * slot, and the schedule-actions strip both renders it and bulk-edits it.
@@ -1211,7 +1212,7 @@ export class HelmanSolarInspector extends LitElement {
              forecast, but the warning is about the card's data as a whole, so
              it is drawn here rather than inside either strip. -->
         <helman-forecast-health-banner
-          .items=${buildForecastHealthItems(this._forecastHealth, this._localize)}
+          .items=${buildForecastHealthItems(this._forecast, this._localize)}
           .localize=${this._localize}
         ></helman-forecast-health-banner>
         ${this._loading ? html`<div class="note">${this._t("bias_correction.inspector.loading")}</div>` : ""}
@@ -1889,6 +1890,7 @@ export class HelmanSolarInspector extends LitElement {
           ? html`
               <helman-solar-export-price-strip
                 .hass=${this.hass}
+                .forecast=${this._forecast}
                 .date=${payload.date}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
                 .selectedMinutes=${this._selectedMinutes(payload)}
@@ -3446,7 +3448,7 @@ export class HelmanSolarInspector extends LitElement {
 
   private _handleForecastHealth = (event: CustomEvent<DayPillForecastHealthDetail>) => {
     event.stopPropagation();
-    this._forecastHealth = event.detail.forecast;
+    this._forecast = event.detail.forecast;
   };
 
   private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
