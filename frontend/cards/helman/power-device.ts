@@ -177,6 +177,15 @@ export class PowerDevice extends LitElement {
         const currentPower = this.device.powerValue ?? 0;
         const isOff = currentPower === 0;
 
+        // Handed to the bars below as a copy (`[...historyToRender]`), and that copy
+        // is load-bearing rather than paranoia: `HistoryEngine._advanceTree` mutates
+        // `powerHistory` in place (push / shift / index assignment), and
+        // `helman-power-history-bars.willUpdate` early-returns unless one of its four
+        // properties is in `changedProperties`. Passed by reference the array's
+        // identity would never change and the bars would freeze permanently — the
+        // copy is the only change signal that reaches them. Its sibling
+        // `.sourceHistory` is passed by reference precisely because it rides on this
+        // one. See `frontend/cards/README.md`, "Card rendering discipline".
         const historyToRender = this.device.powerHistory;
         const maxHistoryPower = this.parentPowerHistory ? Math.max(...this.parentPowerHistory) : Math.max(...historyToRender);
         const childrenToRender = device.children;
