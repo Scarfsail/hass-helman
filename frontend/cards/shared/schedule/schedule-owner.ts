@@ -16,7 +16,11 @@ type ScheduleOwnerListener = (snapshot: ScheduleOwnerSnapshot) => void;
 
 const scheduleOwners = new WeakMap<ScheduleConnection, ScheduleOwnerImpl>();
 
-const EMPTY_SCHEDULE_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
+/**
+ * Frozen because it is shared: it is the starting snapshot of every owner, and
+ * the object every pre-first-emit `getSnapshot()` hands out.
+ */
+const EMPTY_SCHEDULE_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = Object.freeze({
     schedule: null,
     loading: false,
     refreshing: false,
@@ -25,7 +29,7 @@ const EMPTY_SCHEDULE_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
     error: null,
     updatedAt: null,
     stale: false,
-};
+});
 
 export interface SharedScheduleOwner {
     getSnapshot(): ScheduleOwnerSnapshot;
@@ -58,6 +62,7 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     private _error = EMPTY_SCHEDULE_OWNER_SNAPSHOT.error;
     private _updatedAt = EMPTY_SCHEDULE_OWNER_SNAPSHOT.updatedAt;
     private _stale = EMPTY_SCHEDULE_OWNER_SNAPSHOT.stale;
+    private _snapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
     private _request: Promise<void> | null = null;
     private _mutationRequest: Promise<void> | null = null;
     private _boundaryTimer: number | null = null;
@@ -81,17 +86,16 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         }
     }
 
+    /**
+     * The same object until something actually changes.
+     *
+     * Consumers assign this straight into a `@state`, so a fresh object literal
+     * per call would dirty every card on every update and re-render a picture
+     * that did not move. `_emit()` is the only place a new snapshot is built,
+     * and every mutation of a snapshot field goes through it.
+     */
     public getSnapshot(): ScheduleOwnerSnapshot {
-        return {
-            schedule: this._schedule,
-            loading: this._loading,
-            refreshing: this._refreshing,
-            writing: this._writing,
-            togglingExecution: this._togglingExecution,
-            error: this._error,
-            updatedAt: this._updatedAt,
-            stale: this._stale,
-        };
+        return this._snapshot;
     }
 
     public subscribe(listener: ScheduleOwnerListener): () => void {
@@ -253,14 +257,29 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         );
     }
 
+    /**
+     * Rebuild the snapshot, then hand it to whoever is listening.
+     *
+     * The rebuild is unconditional on purpose. Dropping the last listener while
+     * a refresh is in flight is possible -- that request's `finally` still
+     * writes the fields and emits -- and a no-listener early return here would
+     * leave the cached snapshot stale for good, for the next reader to pick up.
+     * One object literal per mutation event is a cheap price for that.
+     */
     private _emit(): void {
-        if (this._listeners.size === 0) {
-            return;
-        }
+        this._snapshot = {
+            schedule: this._schedule,
+            loading: this._loading,
+            refreshing: this._refreshing,
+            writing: this._writing,
+            togglingExecution: this._togglingExecution,
+            error: this._error,
+            updatedAt: this._updatedAt,
+            stale: this._stale,
+        };
 
-        const snapshot = this.getSnapshot();
         for (const listener of this._listeners) {
-            listener(snapshot);
+            listener(this._snapshot);
         }
     }
 
