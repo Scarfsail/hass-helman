@@ -47,8 +47,8 @@ import {
     type ScheduleApplianceProjectionIndex,
 } from "../shared/schedule/model/schedule-appliance-projection";
 import {
-    applyNormalizedScheduleCurrentState,
-    buildNormalizedScheduleStructure,
+    EMPTY_NORMALIZED_SCHEDULE,
+    NormalizedScheduleCache,
 } from "../shared/schedule/model/schedule-normalizer";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import {
@@ -97,13 +97,6 @@ const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
     error: null,
     updatedAt: null,
     stale: false,
-};
-
-const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
-    slots: [],
-    currentSlotId: null,
-    currentDayKey: null,
-    granularityMinutes: null,
 };
 
 /**
@@ -175,8 +168,8 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /** The schedule the open draft was seeded from, to notice a refresh under it. */
     private _editorScheduleAtOpen: unknown = null;
 
+    private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
-    private _normalizedFor: { schedule: unknown; timeZone: string } | null = null;
 
     private _dayView: EntityScheduleDayView = { slots: [], forecastPoints: new Map() };
     private _lanes: EntityScheduleLane[] = [];
@@ -834,34 +827,17 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /**
      * The schedule as slots, with the one the clock is inside marked.
      *
-     * The structure is rebuilt only when the schedule itself changes, but which
-     * slot is current is a fact about the clock, so it is re-applied on every
-     * pass -- cheaply, since the model is returned unchanged when the answer has
-     * not moved. Without it nothing is `isCurrent`, and the forecast's fallback
-     * to the battery's live SoC and the live price -- the only readings the
-     * in-progress slot has, since the projection starts at the next boundary --
-     * never fires, leaving that slot blank in every chart drawn from it. The
-     * day it belongs to goes unnamed too, which is what turns the editor's
-     * "today" chip back into a date.
+     * Read from the strip's own coarse `_nowMs` rather than the wall clock, so
+     * that `_normalized` moves in the same step as every other clock-derived
+     * key of `_derivedFor` -- and, critically, only when that timer ticks. Pass
+     * `new Date()` here instead and the model would gain a new identity on
+     * every render that crossed a slot boundary out of step with `_nowMs`.
      */
     private _rebuildNormalizedIfNeeded(): void {
-        const schedule = this._ownerSnapshot.schedule;
-        if (
-            this._normalizedFor === null
-            || this._normalizedFor.schedule !== schedule
-            || this._normalizedFor.timeZone !== this.timeZone
-        ) {
-            this._normalized = buildNormalizedScheduleStructure({
-                schedule,
-                timeZone: this.timeZone,
-                locale: this._locale,
-            });
-            this._normalizedFor = { schedule, timeZone: this.timeZone };
-        }
-
-        this._normalized = applyNormalizedScheduleCurrentState(
-            this._normalized,
+        this._normalized = this._normalizedCache.get(
+            this._ownerSnapshot.schedule,
             this.timeZone,
+            this._locale,
             new Date(this._nowMs),
         );
     }

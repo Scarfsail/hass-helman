@@ -7,8 +7,8 @@ import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import {
-    applyNormalizedScheduleCurrentState,
-    buildNormalizedScheduleStructure,
+    EMPTY_NORMALIZED_SCHEDULE,
+    NormalizedScheduleCache,
 } from "../shared/schedule/model/schedule-normalizer";
 import { buildScheduleTimelineModel } from "../shared/schedule/model/schedule-timeline-builder";
 import {
@@ -52,13 +52,6 @@ const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
     error: null,
     updatedAt: null,
     stale: false,
-};
-
-const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
-    slots: [],
-    currentSlotId: null,
-    currentDayKey: null,
-    granularityMinutes: null,
 };
 
 /** The day a pill was clicked for; the inspector loads it. */
@@ -187,8 +180,8 @@ export class HelmanSolarDayPills extends LitElement {
     private _forecastLoader: ForecastLoader | null = null;
     private _forecastLoaderKey: string | null = null;
 
+    private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
-    private _normalizedFor: { schedule: unknown; timeZone: string } | null = null;
     private _model: SolarInspectorDayPillModel = EMPTY_DAY_PILL_MODEL;
     private _modelFor: {
         normalized: unknown;
@@ -383,24 +376,16 @@ export class HelmanSolarDayPills extends LitElement {
         }
     }
 
+    /**
+     * The pills own no clock of their own, so they read the true wall clock:
+     * the row is rebuilt for other reasons often enough that a coarse "now"
+     * would only make the current-day pill lag without saving anything.
+     */
     private _rebuildNormalizedIfNeeded(): void {
-        const schedule = this._ownerSnapshot.schedule;
-        if (
-            this._normalizedFor === null
-            || this._normalizedFor.schedule !== schedule
-            || this._normalizedFor.timeZone !== this.timeZone
-        ) {
-            this._normalized = buildNormalizedScheduleStructure({
-                schedule,
-                timeZone: this.timeZone,
-                locale: this._locale,
-            });
-            this._normalizedFor = { schedule, timeZone: this.timeZone };
-        }
-
-        this._normalized = applyNormalizedScheduleCurrentState(
-            this._normalized,
+        this._normalized = this._normalizedCache.get(
+            this._ownerSnapshot.schedule,
             this.timeZone,
+            this._locale,
             new Date(),
         );
     }

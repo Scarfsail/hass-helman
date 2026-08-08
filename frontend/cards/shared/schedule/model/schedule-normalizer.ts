@@ -26,6 +26,64 @@ import {
     resolveScheduleSlotBoundaries,
 } from "./schedule-time";
 
+export const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
+    slots: [],
+    currentSlotId: null,
+    currentDayKey: null,
+    granularityMinutes: null,
+};
+
+/**
+ * `normalizeSchedulePayload` with the expensive half memoised: the schedule as
+ * slots, with the one the clock is inside marked.
+ *
+ * The structure is rebuilt only when the schedule itself changes, but which
+ * slot is current is a fact about the clock, so it is re-applied on every
+ * pass -- cheaply, since the model is returned unchanged when the answer has
+ * not moved. Without it nothing is `isCurrent`, and the forecast's fallback
+ * to the battery's live SoC and the live price -- the only readings the
+ * in-progress slot has, since the projection starts at the next boundary --
+ * never fires, leaving that slot blank in every chart drawn from it. The
+ * day it belongs to goes unnamed too, which is what turns the editor's
+ * "today" chip back into a date.
+ *
+ * **Load-bearing:** `get` returns the *same* `NormalizedScheduleModel` object
+ * across calls for as long as neither the schedule, the time zone, nor the
+ * current slot/day has moved -- `applyNormalizedScheduleCurrentState` returns
+ * its argument unchanged in that case, and this cache holds on to it. Callers
+ * key their own memos on that identity (the band strip's `_derivedFor.normalized`
+ * is the worked example), so a "harmless" copy here rebuilds their entire
+ * derived model on every render.
+ *
+ * `now` is a parameter, not `new Date()`, because the two callers legitimately
+ * disagree about what the clock is: the day pills read the true wall clock,
+ * while the band strip reads its own coarse 30 s `_nowMs` so that everything
+ * derived from the clock moves in one step.
+ */
+export class NormalizedScheduleCache {
+    private _model: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
+    private _for: { schedule: unknown; timeZone: string } | null = null;
+
+    get(
+        schedule: SchedulePayload | null,
+        timeZone: string,
+        locale: string,
+        now: Date,
+    ): NormalizedScheduleModel {
+        if (
+            this._for === null
+            || this._for.schedule !== schedule
+            || this._for.timeZone !== timeZone
+        ) {
+            this._model = buildNormalizedScheduleStructure({ schedule, timeZone, locale });
+            this._for = { schedule, timeZone };
+        }
+
+        this._model = applyNormalizedScheduleCurrentState(this._model, timeZone, now);
+        return this._model;
+    }
+}
+
 export function normalizeSchedulePayload({
     schedule,
     timeZone,
