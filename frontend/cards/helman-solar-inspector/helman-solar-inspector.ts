@@ -1,4 +1,4 @@
-import { LitElement, css, html, svg, unsafeCSS, type TemplateResult } from "lit";
+import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
@@ -192,6 +192,17 @@ const STACK_HATCH_COLORS = [
   CHART_COLORS.battery,
   CHART_COLORS.grid,
 ] as const;
+
+/**
+ * One array for every "no measured days" answer.
+ *
+ * `historyDays` crosses into `helman-solar-day-pills`, where the model memo is
+ * keyed on its identity. A fresh `[]` per assignment would make that memo
+ * structurally unable to hit and reproject the whole forecast horizon on every
+ * render, so the empty case is a single frozen value instead. Read-only at both
+ * consumers (`day-pill-model.ts` iterates it, the pills only read `.length`).
+ */
+const EMPTY_HISTORY_DAYS: readonly SolarInspectorHistoryDay[] = Object.freeze([]);
 
 const EMPTY_SCHEDULE_SNAPSHOT: ScheduleOwnerSnapshot = {
   schedule: null,
@@ -412,9 +423,24 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _range: InspectorPayload["range"] | null = null;
   /** Whole-day measurements for the past days the pill row is showing. */
-  @state() private _historyDays: readonly SolarInspectorHistoryDay[] = [];
-  /** The `start..end` those measurements were read for; null while forward. */
+  @state() private _historyDays: readonly SolarInspectorHistoryDay[] = EMPTY_HISTORY_DAYS;
+  /**
+   * The `start..end` those measurements were decided for.
+   *
+   * Every decided window stamps it, including a forward one that has no
+   * measurements — re-entering the same window is then a genuine no-op. Only
+   * "no connection yet" leaves it null, because that has decided nothing and
+   * the fetch must still happen when `hass` arrives.
+   */
   private _historyDaysFor: string | null = null;
+  /**
+   * Today, and the window the pill row is showing, derived once per update
+   * cycle in `willUpdate`. `render()` reads them; it never computes them, and
+   * never assigns to state.
+   */
+  private _todayKey = "";
+  private _pillWindowStart = "";
+  private _pillWindowEnd = "";
   @state() private _loading = false;
   /**
    * A reload the user did not ask for, running under the drawn day.
@@ -1097,6 +1123,26 @@ export class HelmanSolarInspector extends LitElement {
     this._unsubscribeDataChanged = undefined;
   }
 
+  /**
+   * Derive the pill window once per cycle, before anything renders.
+   *
+   * The window is a render *input* — the pills are handed it — so it cannot be
+   * computed in `updated()` without either showing a one-frame-stale row or
+   * spending a second update cycle to correct it. And it is a function of the
+   * selection, the loaded range and the wall clock at once, so driving it from
+   * the mutation sites would mean keeping six triggers in step with one derived
+   * value. Here Lit folds anything written into the current cycle, so the only
+   * extra update left is the one `_loadDayAggregates` asks for when data
+   * actually lands.
+   */
+  protected willUpdate(_changed: PropertyValues<this>) {
+    this._todayKey = this._todayIso();
+    const pillWindow = this._pillWindow(this._todayKey);
+    this._pillWindowStart = pillWindow.start;
+    this._pillWindowEnd = pillWindow.end;
+    void this._loadDayAggregates(pillWindow.start, pillWindow.end);
+  }
+
   protected updated(changed: Map<string, unknown>) {
     // Seed the view from the configured default. `changed` only carries this when
     // the config value actually changes, so the runtime toggle — which touches
@@ -1161,11 +1207,8 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderNavigation() {
-    const today = this._todayIso();
-    const pillWindow = this._pillWindow(today);
-    // The window is derived from the selection, so this is the one place that
-    // knows it changed; the fetch is a no-op while it stays the same.
-    void this._loadDayAggregates(pillWindow.start, pillWindow.end);
+    // Both computed in `willUpdate`; nothing is derived or assigned here.
+    const today = this._todayKey;
     const minDate = this._range?.minDate ?? null;
     const canGoBack = minDate === null || this._selectedDate > minDate;
     const canGoForward = this._selectedDate < today;
@@ -1179,8 +1222,8 @@ export class HelmanSolarInspector extends LitElement {
             .hass=${this.hass}
             .selectedDate=${this._selectedDate}
             .currentDate=${today}
-            .startDate=${pillWindow.start}
-            .endDate=${pillWindow.end}
+            .startDate=${this._pillWindowStart}
+            .endDate=${this._pillWindowEnd}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
@@ -3325,9 +3368,9 @@ export class HelmanSolarInspector extends LitElement {
    * the week is none.
    */
   private async _loadDayAggregates(start: string, end: string) {
-    if (!this.hass || start >= this._todayIso()) {
-      this._historyDays = [];
-      this._historyDaysFor = null;
+    // No connection yet: decide nothing, so the window is still fetched once
+    // `hass` arrives. This is the one branch that must not stamp the key.
+    if (!this.hass) {
       return;
     }
     const key = `${start}..${end}`;
@@ -3335,6 +3378,13 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._historyDaysFor = key;
+    if (start >= this._todayKey) {
+      // A forward window has no measured days. Clearing keeps a past week's
+      // measurements from lingering after paging forward again; Lit drops the
+      // assignment on `===` once the constant is already in place.
+      this._historyDays = EMPTY_HISTORY_DAYS;
+      return;
+    }
     try {
       const result = await this.hass.callWS<{ days: SolarInspectorDayAggregateRow[] }>({
         type: "helman/solar_bias/day_aggregates",
@@ -3349,7 +3399,7 @@ export class HelmanSolarInspector extends LitElement {
       if (this._historyDaysFor === key) {
         // A window with no measurements reads exactly like one that failed to
         // load: bare pills. Not worth a banner over the day picker.
-        this._historyDays = [];
+        this._historyDays = EMPTY_HISTORY_DAYS;
       }
     }
     this.requestUpdate();
