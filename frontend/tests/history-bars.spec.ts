@@ -14,6 +14,12 @@ import { resolve } from "node:path";
  * of solar yellow. This test pins the rendering contract that feeds off that data:
  * with correct per-bucket source attribution the bar is painted the source colour,
  * and only genuinely-empty buckets fall back.
+ *
+ * The bars are drawn as one `<svg>` with one `<path>` per distinct colour and one
+ * rectangle subpath per segment, so the segments are recovered from the path
+ * geometry: each subpath's `M x y` gives the column and the top of the segment,
+ * and sorting by column then by descending `y` puts them back in the order the
+ * old bottom-up flex columns laid them out in.
  */
 
 const BUNDLE = resolve(
@@ -52,10 +58,19 @@ async function renderSegmentColours(
         el.historyBarColor = o.historyBarColor;
         document.body.appendChild(el);
         await el.updateComplete;
-        const segments = el.shadowRoot!.querySelectorAll(".historyBarSegment");
-        return Array.from(segments).map(
-            (s) => getComputedStyle(s as HTMLElement).backgroundColor,
-        );
+
+        // Rebuild document order from the geometry: one entry per rectangle
+        // subpath, columns left to right, segments bottom to top within a column.
+        const segments: Array<{ x: number; y: number; colour: string }> = [];
+        for (const path of el.shadowRoot!.querySelectorAll("path")) {
+            const colour = getComputedStyle(path as SVGPathElement).fill;
+            const d = path.getAttribute("d") ?? "";
+            for (const m of d.matchAll(/M(-?[\d.]+) (-?[\d.]+)/g)) {
+                segments.push({ x: parseFloat(m[1]), y: parseFloat(m[2]), colour });
+            }
+        }
+        segments.sort((a, b) => a.x - b.x || b.y - a.y);
+        return segments.map((s) => s.colour);
     }, opts);
 }
 
