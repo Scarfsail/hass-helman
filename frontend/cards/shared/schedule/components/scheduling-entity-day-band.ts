@@ -34,6 +34,8 @@ import { SLOT_GRID_LINE_OPACITY, slotGridTicks, type SlotGridTick } from "../../
 const MINUTE_MS = 60_000;
 /** An hour label this close to an edge is pulled inside it rather than centred. */
 const AXIS_EDGE_PERCENT = 0.5;
+/** Half the room the drag readout needs, so it can be kept inside the track. */
+const DRAG_READOUT_HALF_WIDTH_PX = 58;
 /** A bar this short still has to be visible, or a small value reads as none. */
 const MIN_BAR_PCT = 8;
 /** Segments narrower than this are move-only: two edge handles would not fit. */
@@ -782,6 +784,39 @@ export class SchedulingEntityDayBand extends LitElement {
                 pointer-events: none;
             }
 
+            /* What the drag is currently set to, over the edge being pulled.
+               Above everything the track draws, including the block under it:
+               it is the answer to the question the drag is asking, and it lasts
+               only as long as the button is held. */
+            .drag-readout {
+                position: absolute;
+                top: 50%;
+                z-index: 4;
+                display: flex;
+                align-items: baseline;
+                gap: 4px;
+                padding: 1px 6px;
+                border-radius: 5px;
+                background: var(--card-background-color);
+                box-shadow:
+                    0 0 0 1px color-mix(in srgb, var(--primary-color) 45%, transparent),
+                    0 2px 6px rgba(0, 0, 0, 0.28);
+                color: var(--primary-text-color);
+                font-size: 0.66rem;
+                font-variant-numeric: tabular-nums;
+                line-height: 1.35;
+                white-space: nowrap;
+                transform: translate(-50%, -50%);
+                pointer-events: none;
+            }
+
+            /* The two times are what is being set; how long that leaves the run
+               is a consequence, and reads as one. */
+            .drag-readout-duration {
+                color: var(--secondary-text-color);
+                font-size: 0.6rem;
+            }
+
             .handle {
                 position: absolute;
                 top: 0;
@@ -1023,12 +1058,13 @@ export class SchedulingEntityDayBand extends LitElement {
         const pointerMs = this._snapMs(this._readPointerMs(event, drag.trackRect));
         const range = this._resolveDragRange(drag, pointerMs);
         // Ranges are snapped to whole slots, so most pointer moves land where
-        // the last one did. Announcing those rebuilds the draft for nothing.
-        if (range.startMs === this._lastDragRange?.startMs && range.endMs === this._lastDragRange.endMs) {
+        // the last one did. Announcing those rebuilds the draft for nothing --
+        // and the readout says the same two times either way.
+        if (range.startMs === this._dragRange?.startMs && range.endMs === this._dragRange.endMs) {
             return;
         }
 
-        this._lastDragRange = range;
+        this._dragRange = range;
         this.dispatchEvent(new CustomEvent<EntityDayBandRangeChangeDetail>("entity-day-band-range-change", {
             bubbles: true,
             composed: true,
@@ -1036,7 +1072,15 @@ export class SchedulingEntityDayBand extends LitElement {
         }));
     };
 
-    private _lastDragRange: EntityScheduleRange | null = null;
+    /**
+     * Where the drag has got to, held here rather than read back off the block.
+     *
+     * The block being dragged is redrawn from the draft the host rebuilds, which
+     * is a round trip; the readout has to say what the pointer is doing now.
+     * It doubles as the "did anything change" guard, so the two can never
+     * disagree about which range is current.
+     */
+    @state() private _dragRange: EntityScheduleRange | null = null;
     /** The last hover announced, so a pointer crossing rows says it once. */
     private _lastHoverMs: number | null = null;
 
@@ -1395,6 +1439,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
                     ${this._renderRowOverlays()}
                     ${this._renderSlotPicks(lane)}
+                    ${this._renderDragReadout(lane)}
                 </div>
                 <!--
                     Outside the track, which clips: the name has to be free to
@@ -1442,6 +1487,47 @@ export class SchedulingEntityDayBand extends LitElement {
                 ></span>
             `;
         });
+    }
+
+    /**
+     * The hours the drag is on right now, over the run being dragged.
+     *
+     * A drag is the one edit made with the pointer rather than with the fields
+     * below, and a bar sliding along a track says "about eight" at best -- the
+     * step is a whole slot, so the answer is exact and worth printing. Both
+     * ends of it, whichever end is being pulled: moving a run changes both, and
+     * resizing one changes where it now stops as much as how long it lasts.
+     *
+     * It rides the edge under the pointer, which is where the user is looking,
+     * and is held inside the track so a run dragged to midnight still has its
+     * hours legible. Inert -- the pointer is captured by the drag anyway.
+     */
+    private _renderDragReadout(lane: EntityDayBandLane) {
+        const drag = this._drag;
+        const range = this._dragRange;
+        if (drag === null || range === null || drag.laneKey !== lane.key) {
+            return nothing;
+        }
+
+        const anchorMs = drag.mode === "start"
+            ? range.startMs
+            : drag.mode === "end"
+                ? range.endMs
+                : (range.startMs + range.endMs) / 2;
+        const halfPct = this._trackWidthPx > 0
+            ? Math.min((DRAG_READOUT_HALF_WIDTH_PX / this._trackWidthPx) * 100, 50)
+            : 0;
+        const leftPct = Math.min(Math.max(this._toPercent(anchorMs), halfPct), 100 - halfPct);
+        return html`
+            <span class="drag-readout" style=${`left: ${leftPct}%`}>
+                <span class="drag-readout-range">${
+                    formatScheduleTime(range.startMs, this.locale, this.timeZone)
+                }–${
+                    formatScheduleTime(range.endMs, this.locale, this.timeZone)
+                }</span>
+                <span class="drag-readout-duration">${this._formatHours(range.endMs - range.startMs)}</span>
+            </span>
+        `;
     }
 
     /**
@@ -2189,6 +2275,10 @@ export class SchedulingEntityDayBand extends LitElement {
             trackRect,
             pointerId: event.pointerId,
         };
+        // The run's own hours, before the pointer has moved anywhere: the
+        // readout is what says where the drag started from, so it cannot wait
+        // for the first move to have something to show.
+        this._dragRange = { startMs: originStartMs, endMs: block.endMs };
         window.addEventListener("pointermove", this._handlePointerMove);
         window.addEventListener("pointerup", this._handlePointerUp);
         window.addEventListener("pointercancel", this._handlePointerUp);
@@ -2242,7 +2332,7 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         this._drag = null;
-        this._lastDragRange = null;
+        this._dragRange = null;
         window.removeEventListener("pointermove", this._handlePointerMove);
         window.removeEventListener("pointerup", this._handlePointerUp);
         window.removeEventListener("pointercancel", this._handlePointerUp);
