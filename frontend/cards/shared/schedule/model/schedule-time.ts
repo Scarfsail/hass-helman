@@ -2,6 +2,25 @@ import type { ForecastGranularity } from "../../../helman-api";
 import { getCachedLocalDateTimeDescriptor } from "../../../shared/local-date-time-descriptor-cache";
 
 const TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+const DAY_LABEL_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+/**
+ * `dayKey` + locale → the weekday-and-date label.
+ *
+ * Only the tail of `formatScheduleDayLabel` is cached: the today/tomorrow/
+ * yesterday answers stay live, recomputed from `currentDayKey` on every call,
+ * so midnight rolls over on its own and this map can never hold a stale
+ * "Today". One entry per calendar day per locale, and a pill row is at most a
+ * month, so the bound is never reached in practice.
+ */
+const DAY_LABELS = new Map<string, string>();
+const MAX_DAY_LABEL_CACHE_SIZE = 512;
+/**
+ * The one-day step either side of today, memoised on the day it steps from.
+ *
+ * `formatScheduleDayLabel` walks it up to twice per pill, and it is a pure
+ * function of the pair.
+ */
+let DAY_STEP_MEMO: { dayKey: string; next: string; previous: string } | null = null;
 const VALID_SCHEDULE_GRANULARITIES = new Set<number>([15, 30, 60]);
 
 export interface ScheduleSlotLabels {
@@ -178,21 +197,48 @@ export function formatScheduleDayLabel({
             return todayLabel;
         }
 
-        if (dayKey === _addDaysToDayKey(currentDayKey, 1)) {
+        const steps = _dayStepsFrom(currentDayKey);
+        if (dayKey === steps.next) {
             return tomorrowLabel;
         }
 
-        if (yesterdayLabel !== undefined && dayKey === _addDaysToDayKey(currentDayKey, -1)) {
+        if (yesterdayLabel !== undefined && dayKey === steps.previous) {
             return yesterdayLabel;
         }
     }
 
-    return new Date(`${dayKey}T00:00:00Z`).toLocaleDateString(locale, {
+    return _formatDayKeyLabel(dayKey, locale);
+}
+
+function _formatDayKeyLabel(dayKey: string, locale: string): string {
+    const cacheKey = `${locale}::${dayKey}`;
+    const cached = DAY_LABELS.get(cacheKey);
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const label = _getDayLabelFormatter(locale).format(new Date(`${dayKey}T00:00:00Z`));
+    if (DAY_LABELS.size >= MAX_DAY_LABEL_CACHE_SIZE) {
+        DAY_LABELS.clear();
+    }
+    DAY_LABELS.set(cacheKey, label);
+    return label;
+}
+
+function _getDayLabelFormatter(locale: string): Intl.DateTimeFormat {
+    const formatter = DAY_LABEL_FORMATTERS.get(locale);
+    if (formatter !== undefined) {
+        return formatter;
+    }
+
+    const nextFormatter = new Intl.DateTimeFormat(locale, {
         timeZone: "UTC",
         weekday: "short",
         day: "numeric",
         month: "numeric",
     });
+    DAY_LABEL_FORMATTERS.set(locale, nextFormatter);
+    return nextFormatter;
 }
 
 export function formatScheduleTime(
@@ -299,6 +345,19 @@ function _getTimeFormatter(locale: string, timeZone: string): Intl.DateTimeForma
     });
     TIME_FORMATTERS.set(cacheKey, nextFormatter);
     return nextFormatter;
+}
+
+function _dayStepsFrom(dayKey: string): { dayKey: string; next: string; previous: string } {
+    if (DAY_STEP_MEMO !== null && DAY_STEP_MEMO.dayKey === dayKey) {
+        return DAY_STEP_MEMO;
+    }
+
+    DAY_STEP_MEMO = {
+        dayKey,
+        next: _addDaysToDayKey(dayKey, 1),
+        previous: _addDaysToDayKey(dayKey, -1),
+    };
+    return DAY_STEP_MEMO;
 }
 
 function _addDaysToDayKey(dayKey: string, days: number): string {

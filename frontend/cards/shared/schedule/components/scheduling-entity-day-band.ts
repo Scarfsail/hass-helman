@@ -1092,13 +1092,68 @@ export class SchedulingEntityDayBand extends LitElement {
         this._endDrag();
     };
 
+    /** The track currently under observation, kept for identity comparison. */
+    private _observedTrack: Element | null = null;
+    private _trackResizeObserver: ResizeObserver | null = null;
+
+    connectedCallback(): void {
+        super.connectedCallback();
+        // Re-attaching does not schedule an update, so the observer the
+        // detach dropped has to be put back by hand.
+        if (this.hasUpdated) {
+            this._syncTrackResizeObserver();
+        }
+    }
+
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this._endDrag();
+        this._disconnectTrackResizeObserver();
     }
 
     updated(): void {
-        this._trackWidthPx = this._readTrackRect(this.lanes[0]?.key ?? "")?.width ?? 0;
+        // Only ever a tree walk. Measuring the track here instead -- straight
+        // after Lit has written the DOM -- is a read-after-write, and the band
+        // updates often enough that the forced reflow was the card's single
+        // largest layout cost. The width now arrives from the observer, which
+        // is delivered after layout has happened anyway.
+        this._syncTrackResizeObserver();
+    }
+
+    private _syncTrackResizeObserver(): void {
+        const laneKey = this.lanes[0]?.key ?? "";
+        const track = this.renderRoot.querySelector(`.lane[data-lane="${laneKey}"] .track`);
+        if (track === null) {
+            this._disconnectTrackResizeObserver();
+            this._trackWidthPx = 0;
+            return;
+        }
+
+        if (track === this._observedTrack) {
+            return;
+        }
+
+        this._disconnectTrackResizeObserver();
+        this._observedTrack = track;
+        this._trackResizeObserver = new ResizeObserver((entries) => {
+            const entry = entries[entries.length - 1];
+            if (entry === undefined) {
+                return;
+            }
+
+            // `borderBoxSize` rather than `contentRect`: the track has an
+            // outline today and so the two agree, but a border added later
+            // would silently shrink the content box under every segment.
+            const width = entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
+            this._trackWidthPx = width;
+        });
+        this._trackResizeObserver.observe(track);
+    }
+
+    private _disconnectTrackResizeObserver(): void {
+        this._trackResizeObserver?.disconnect();
+        this._trackResizeObserver = null;
+        this._observedTrack = null;
     }
 
     render() {

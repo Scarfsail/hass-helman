@@ -111,6 +111,31 @@ const NOW_RESOLUTION_MS = 30_000;
 const NARROW_VIEWPORT_PX = 768;
 
 /**
+ * One `Intl.DateTimeFormat` per time zone for the page's lifetime.
+ *
+ * `_todayIso()` is asked for the current day key several times per render, and
+ * building a formatter for each of those was the single most expensive thing
+ * the navigation did.
+ */
+const DAY_KEY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function _getDayKeyFormatter(timeZone: string): Intl.DateTimeFormat {
+  const formatter = DAY_KEY_FORMATTERS.get(timeZone);
+  if (formatter !== undefined) {
+    return formatter;
+  }
+
+  const nextFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  DAY_KEY_FORMATTERS.set(timeZone, nextFormatter);
+  return nextFormatter;
+}
+
+/**
  * The slot width to open at when the card configures no explicit default: a
  * phone-width page opens at 60 minutes, anything wider (laptop) at 30. 15 is
  * never auto-chosen — it stays a deliberate pick on the header toggle.
@@ -3520,8 +3545,28 @@ export class HelmanSolarInspector extends LitElement {
     );
   }
 
+  /**
+   * Today's day key, recomputed at most once a second.
+   *
+   * It is asked for several times per render and the answer only changes at
+   * midnight, so a second of staleness is invisible -- but only a second: this
+   * deliberately does not ride `NOW_RESOLUTION_MS`, because half a minute of
+   * lag at midnight is a visibly wrong answer. The time zone is part of the key
+   * because it really does change, when a payload lands carrying its own.
+   */
+  private _todayIsoMemo: { second: number; timeZone: string | undefined; value: string } | null = null;
+
   private _todayIso() {
-    return this._formatDateInTimeZone(new Date(), this._haTimeZone());
+    const timeZone = this._haTimeZone();
+    const second = Math.floor(Date.now() / 1000);
+    const memo = this._todayIsoMemo;
+    if (memo !== null && memo.second === second && memo.timeZone === timeZone) {
+      return memo.value;
+    }
+
+    const value = this._formatDateInTimeZone(new Date(), timeZone);
+    this._todayIsoMemo = { second, timeZone, value };
+    return value;
   }
 
   private _formatDateInTimeZone(value: Date, timeZone: string | undefined) {
@@ -3533,12 +3578,7 @@ export class HelmanSolarInspector extends LitElement {
       );
     }
 
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(value);
+    const parts = _getDayKeyFormatter(timeZone).formatToParts(value);
     const year = Number(parts.find((part) => part.type === "year")?.value);
     const month = Number(parts.find((part) => part.type === "month")?.value);
     const day = Number(parts.find((part) => part.type === "day")?.value);
