@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 
-import type { JsonObject, PathSegment } from "./types";
+import type { JsonObject, PathSegment } from "../config/types";
 import {
     fieldHelpKey,
     fieldLabelKey,

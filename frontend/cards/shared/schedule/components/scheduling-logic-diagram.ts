@@ -24,6 +24,18 @@ export type LogicTerminal = "execute" | "candidate" | "not_eligible" | "blocked"
  * of what the diagram knows about the trace: it reports the press and leaves
  * fetching and drawing to whoever mounted it.
  */
+/**
+ * Which optimizer the reader asked to edit.
+ *
+ * The id and nothing else: the diagram is drawing one optimizer's account of
+ * one slot, and the pipeline order it sits at is the *config's* to know. The
+ * editor resolves the id against the document it loads, which is the only copy
+ * that is authoritative at the moment of editing.
+ */
+export interface OptimizerEditRequestDetail {
+    optimizerId: string;
+}
+
 export interface ConditionTraceRequestDetail {
     optimizerId: string;
     groupIndex: number;
@@ -1454,6 +1466,35 @@ export class SchedulingLogicDiagram extends LitElement {
                 color: var(--secondary-text-color);
             }
 
+            /* Whose logic this is. The tab strip labels by *kind*, and vanishes
+               entirely when a slot has one optimizer -- so the id is both the
+               disambiguator when there are several of a kind and the only name
+               on screen when there is one. It is also what the edit button next
+               to it opens, which is reason enough to show it rather than a
+               prettier label the config does not use. */
+            .optimizer {
+                font-weight: 600;
+            }
+
+            /* Pushed to the far end of the head: it acts on the diagram rather
+               than describing it, so it must not read as one more caption. */
+            .edit-automation {
+                margin-left: auto;
+                border: 1px solid var(--divider-color);
+                border-radius: 999px;
+                padding: 3px 10px;
+                background: var(--card-background-color);
+                color: inherit;
+                font: inherit;
+                font-size: 0.74rem;
+                cursor: pointer;
+            }
+
+            .edit-automation:hover {
+                border-color: color-mix(in srgb, var(--primary-color) 44%, var(--divider-color));
+                background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+            }
+
             .scroll {
                 overflow-x: auto;
             }
@@ -1832,6 +1873,26 @@ export class SchedulingLogicDiagram extends LitElement {
      */
     @property({ type: Number }) public plannedBeforeHours: number | null = null;
 
+    /**
+     * Whether to offer editing the optimizer this diagram is drawing.
+     *
+     * A boolean rather than a `hass`, because the only question the diagram has
+     * about the user is "may they save a config?" -- `helman/save_config` is
+     * admin-gated, and a button whose save can only fail is worse than no
+     * button. Whoever mounts the diagram already holds the `hass` that answers
+     * it; see `scheduling-explanation-panel`.
+     */
+    @property({ type: Boolean }) public canEditAutomation = false;
+
+    /**
+     * What to call the optimizer in the head — the config editor's card title.
+     *
+     * Resolved by whoever mounts this, because the title of an appliance-target
+     * optimizer is its *appliance's* name and the diagram holds no config.
+     * Falls back to the id, which is always in the cell.
+     */
+    @property({ type: String }) public optimizerLabel = "";
+
     render() {
         const cell = this.cell;
         if (cell === null || !cell.present) {
@@ -1846,6 +1907,11 @@ export class SchedulingLogicDiagram extends LitElement {
             <div class="diagram">
                 <div class="head">
                     <span class="title">${this._text("diagram.title")}</span>
+                    ${this.optimizerLabel || cell.optimizerId
+                        ? html`<span class="optimizer">
+                              ${this.optimizerLabel || cell.optimizerId}
+                          </span>`
+                        : nothing}
                     <span class="slot">${this.slotLabel || cell.slotId}</span>
                     ${model.matchedGroupIndex === null ? nothing : html`
                         <span class="matched" data-group=${model.matchedGroupIndex}>
@@ -1853,6 +1919,7 @@ export class SchedulingLogicDiagram extends LitElement {
                             ${this._groupLabel(model.matchedGroupIndex)}
                         </span>
                     `}
+                    ${this._renderEditAutomation(cell)}
                 </div>
                 <div class="scroll">
                     <svg
@@ -1875,6 +1942,38 @@ export class SchedulingLogicDiagram extends LitElement {
                 ${this._renderLegend(model)}
             </div>
         `;
+    }
+
+    /**
+     * "Edit automation" — the diagram's one affordance to change what it shows.
+     *
+     * In the head rather than on the tab strip or on a row, because the head is
+     * the one place that names exactly one optimizer: the strip is a chooser
+     * and a row is a condition. Whatever diagram is on screen is what this
+     * edits, with nothing to misread.
+     */
+    private _renderEditAutomation(cell: ExplanationCell) {
+        if (!this.canEditAutomation || !cell.optimizerId) {
+            return nothing;
+        }
+        return html`
+            <button
+                type="button"
+                class="edit-automation"
+                title=${this._text("diagram.edit_automation")}
+                @click=${() => this._requestOptimizerEdit(cell.optimizerId)}
+            >
+                ${this._text("diagram.edit_automation")}
+            </button>
+        `;
+    }
+
+    private _requestOptimizerEdit(optimizerId: string): void {
+        this.dispatchEvent(
+            new CustomEvent<OptimizerEditRequestDetail>("optimizer-edit-requested", {
+                detail: { optimizerId },
+            }),
+        );
     }
 
     /**

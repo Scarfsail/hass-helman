@@ -1,6 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { property, state } from "lit/decorators.js";
-import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
+import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
 
 export class HelmanBiasCorrectionStatus extends LitElement {
   @property({ attribute: false }) hass: any;

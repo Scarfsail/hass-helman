@@ -5,7 +5,7 @@ import {
   type ScopeProjectionMember,
   type ScopeYamlAdapter,
 } from "./config-scope-adapters";
-import type { JsonArray, JsonObject } from "./types";
+import type { JsonArray, JsonObject } from "../cards/shared/config/types";
 
 export type EditorMode = "visual" | "yaml";
 export type TabId =

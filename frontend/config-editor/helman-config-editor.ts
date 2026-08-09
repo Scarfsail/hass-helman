@@ -29,14 +29,11 @@ import {
   renameObjectKey,
   setValueAtPath,
   unsetValueAtPath,
-} from "./config-document";
+} from "../cards/shared/config/config-document";
 import {
   buildApplianceSelectionState,
   buildClimateModeFieldState,
-  type ApplianceOptimizerOption,
-  type ApplianceSelectionState,
-  type SurplusClimateModeFieldState,
-} from "./appliance-optimizer-ui";
+} from "../cards/shared/optimizer/appliance-optimizer-ui";
 import {
   DOCUMENT_SCOPE_ID,
   SECTION_ICONS,
@@ -52,16 +49,33 @@ import {
   type TabId,
 } from "./config-editor-scopes";
 import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
-import { getLocalizeFunction, type LocalizeFunction } from "./localize/localize";
-import { renderOptimizerCard } from "./optimizer-card";
+import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
 import {
   fetchOptimizerSchema,
-  type GroupNameEdit,
-  type OptimizerEditorHost,
   type OptimizerSchema,
   type OptimizerSchemaDocument,
-} from "./optimizer-schema";
+} from "../cards/shared/optimizer/optimizer-schema";
 import { loadHaForm, loadHaYamlEditor } from "./load-ha-elements";
+import { configFormStyles } from "../cards/shared/config/form-styles";
+import {
+  booleanValue,
+  renderHelpDialog,
+  renderHelpIcon,
+  renderOptionalNumberField,
+  renderOptionalSelectField,
+  renderRequiredNumberField,
+  renderRequiredTextField,
+  renderSvgIcon,
+  setOptionalNumber,
+  setOptionalString,
+  setRequiredNumber,
+  setRequiredString,
+  stringValue,
+  type FormFieldHost,
+} from "../cards/shared/config/form-fields";
+import { optimizerCardStyles } from "../cards/shared/optimizer/optimizer-styles";
+import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/helman-optimizer-editor";
+import "../cards/shared/optimizer/helman-optimizer-editor";
 import "./bias-correction-status";
 import type {
   HomeAssistantLike,
@@ -73,7 +87,7 @@ import type {
   StatusMessage,
   ValidationIssue,
   ValidationReport,
-} from "./types";
+} from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
 import { normalizeYamlValue } from "./yaml-codec";
 
@@ -108,7 +122,7 @@ interface YamlEditorValueChangedDetail {
 
 export class HelmanConfigEditorPanel
   extends LitElement
-  implements OptimizerEditorHost
+  implements FormFieldHost
 {
   static properties = {
     hass: { attribute: false },
@@ -133,20 +147,18 @@ export class HelmanConfigEditorPanel
     _applianceYamlErrors: { state: true },
     _liveApplianceMetadata: { state: true },
     _optimizerSchema: { state: true },
-    _editingGroupName: { state: true },
     _helpDialog: { state: true },
   };
 
-  static styles = css`
+  static styles = [
+    configFormStyles,
+    optimizerCardStyles,
+    css`
     :host {
       display: block;
       min-height: 100%;
       background: var(--primary-background-color);
       color: var(--primary-text-color);
-    }
-
-    * {
-      box-sizing: border-box;
     }
 
     .page {
@@ -217,54 +229,6 @@ export class HelmanConfigEditorPanel
 
     .mode-toggle button.active:hover {
       background: rgba(3, 169, 244, 0.16);
-    }
-
-    .actions button,
-    .inline-actions button,
-    .list-actions button,
-    .add-button {
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color);
-      color: var(--primary-text-color);
-      padding: 10px 14px;
-      border-radius: 999px;
-      cursor: pointer;
-      font: inherit;
-      transition: background 0.2s ease, border-color 0.2s ease;
-    }
-
-    .actions button:hover,
-    .inline-actions button:hover,
-    .list-actions button:hover,
-    .add-button:hover {
-      background: rgba(127, 127, 127, 0.08);
-    }
-
-    .actions button.primary,
-    .add-button.primary {
-      background: var(--primary-color);
-      border-color: var(--primary-color);
-      color: var(--text-primary-color, white);
-    }
-
-    .actions button.primary:hover,
-    .add-button.primary:hover {
-      filter: brightness(1.03);
-    }
-
-    .actions button.danger,
-    .inline-actions button.danger,
-    .list-actions button.danger {
-      border-color: var(--error-color);
-      color: var(--error-color);
-    }
-
-    .actions button:disabled,
-    .inline-actions button:disabled,
-    .list-actions button:disabled,
-    .add-button:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
     }
 
     .status-row {
@@ -409,14 +373,6 @@ export class HelmanConfigEditorPanel
       gap: 12px;
     }
 
-    details.section-card,
-    .list-card,
-    .nested-card {
-      border: 1px solid var(--divider-color);
-      border-radius: 18px;
-      background: var(--card-background-color);
-    }
-
     details.section-card {
       padding: 0 18px 18px;
     }
@@ -485,233 +441,11 @@ export class HelmanConfigEditorPanel
       gap: 18px;
     }
 
-    /* Collapsible appliance cards */
-    details.list-card {
-      padding: 0;
-    }
-
-    details.list-card > summary {
-      list-style: none;
-      cursor: pointer;
-      padding: 14px 16px;
-      border-radius: 18px;
-      transition: border-radius 0.15s ease;
-      user-select: none;
-    }
-
-    details.list-card[open] > summary {
-      border-radius: 18px 18px 0 0;
-      border-bottom: 1px solid var(--divider-color);
-    }
-
-    details.list-card > summary::-webkit-details-marker {
-      display: none;
-    }
-
-    details.optimizer-card > summary {
-      border: 1px solid transparent;
-    }
-
-    details.optimizer-card.optimizer-card--enabled > summary {
-      background: rgba(46, 125, 50, 0.1);
-      border-color: rgba(46, 125, 50, 0.28);
-    }
-
-    details.optimizer-card.optimizer-card--disabled > summary {
-      background: rgba(127, 127, 127, 0.08);
-      border-color: rgba(127, 127, 127, 0.22);
-    }
-
-    .appliance-summary-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    .appliance-summary-left {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-    }
-
-    .appliance-chevron {
-      flex-shrink: 0;
-      width: 16px;
-      height: 16px;
-      fill: var(--secondary-text-color);
-      transition: transform 0.2s ease;
-      transform: rotate(0deg);
-      margin-left: 4px;
-    }
-
-    details.list-card[open] > summary .appliance-chevron {
-      transform: rotate(90deg);
-    }
-
-    .appliance-body {
-      padding: 16px;
-      display: grid;
-      gap: 14px;
-    }
-
-    details.condition-section {
-      border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
-      border-radius: 8px;
-      background: var(--secondary-background-color, rgba(255, 255, 255, 0.04));
-    }
-
-    details.condition-section > summary {
-      cursor: pointer;
-      padding: 12px 14px;
-      font-weight: var(--ha-font-weight-medium, 500);
-      list-style: revert;
-    }
-
-    details.condition-section > .condition-body {
-      padding: 0 14px 14px;
-      display: grid;
-      gap: 10px;
-    }
-
-    .condition-groups {
-      display: grid;
-      gap: 10px;
-      margin-top: 14px;
-    }
-
-    .condition-groups-head {
-      display: flex;
-      align-items: baseline;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    /* An optional param object: the toggle owns the block, and its fields only
-       exist while it is on, so the indent shows what turning it off removes. */
-    .optional-param-group {
-      grid-column: 1 / -1;
-      display: grid;
-      grid-template-columns: subgrid;
-      gap: 10px;
-      padding-left: 12px;
-      border-left: 2px solid var(--divider-color, rgba(255, 255, 255, 0.12));
-    }
-
-    .optional-param-group > .field-label-row {
-      grid-column: 1 / -1;
-    }
-
-    .optional-param-group label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    /* A group reads as one more card in the same visual family as the optimizer
-       card it sits in, so the OR list looks like a list and not like nesting. */
-    details.condition-group,
-    details.param-override {
-      border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
-      border-radius: 8px;
-      background: var(--secondary-background-color, rgba(255, 255, 255, 0.04));
-    }
-
-    details.condition-group > summary,
-    details.param-override > summary {
-      cursor: pointer;
-      padding: 10px 14px;
-      font-weight: var(--ha-font-weight-medium, 500);
-      list-style: revert;
-    }
-
-    /* The group's own chevron, so the marker and the name share one line — the
-       native ::marker sits outside the flex row and drops the name below it. */
-    details.condition-group > summary {
-      list-style: none;
-      user-select: none;
-    }
-
-    details.condition-group > summary::-webkit-details-marker {
-      display: none;
-    }
-
-    details.condition-group[open] > summary .appliance-chevron {
-      transform: rotate(90deg);
-    }
-
-    .condition-group-name {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .condition-group-name-input {
-      font: inherit;
-      font-weight: var(--ha-font-weight-medium, 500);
-      padding: 2px 6px;
-      min-width: 12ch;
-    }
-
-    /* A borderless glyph button, so renaming sits beside the name without
-       competing with the up/down/remove pills on the other end of the row. */
-    .icon-button {
-      border: none;
-      background: none;
-      padding: 2px;
-      display: inline-flex;
-      align-items: center;
-      cursor: pointer;
-      border-radius: 6px;
-      opacity: 0.6;
-      transition: opacity 0.15s ease, background 0.15s ease;
-    }
-
-    .icon-button:hover {
-      opacity: 1;
-      background: rgba(127, 127, 127, 0.12);
-    }
-
-    .icon-button-glyph {
-      width: 15px;
-      height: 15px;
-      fill: var(--secondary-text-color);
-    }
-
-    details.condition-group > .condition-group-body,
-    details.param-override > .condition-group-body {
-      padding: 0 14px 14px;
-      display: grid;
-      gap: 12px;
-    }
-
     .tab-icon {
       flex-shrink: 0;
       width: 16px;
       height: 16px;
       fill: currentColor;
-    }
-
-    .field-grid {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    }
-
-    .field-grid > * {
-      min-width: 0;
-    }
-
-    .field-grid--roomy {
-      grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
-    }
-
-    .field {
-      display: grid;
-      gap: 8px;
-      align-content: start;
-      min-width: 0;
     }
 
     .toggle-field {
@@ -726,53 +460,6 @@ export class HelmanConfigEditorPanel
       border: 1px solid var(--divider-color);
       background: var(--secondary-background-color);
       color: var(--primary-text-color);
-    }
-
-    .field label {
-      font-weight: 600;
-      font-size: 0.93rem;
-    }
-
-    .field input,
-    .field select,
-    .field textarea {
-      width: 100%;
-      border-radius: 12px;
-      border: 1px solid var(--divider-color);
-      background: var(--secondary-background-color);
-      color: var(--primary-text-color);
-      padding: 12px 14px;
-      font: inherit;
-    }
-
-    .number-input-wrap {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: stretch;
-    }
-
-    .number-input-wrap input {
-      border-top-right-radius: 0;
-      border-bottom-right-radius: 0;
-    }
-
-    .number-input-suffix {
-      display: inline-flex;
-      align-items: center;
-      padding: 0 12px;
-      border: 1px solid var(--divider-color);
-      border-left: 0;
-      border-top-right-radius: 12px;
-      border-bottom-right-radius: 12px;
-      background: var(--secondary-background-color);
-      color: var(--secondary-text-color);
-      font-size: 0.9rem;
-      white-space: nowrap;
-    }
-
-    .field textarea {
-      min-height: 120px;
-      resize: vertical;
     }
 
     .yaml-surface {
@@ -795,42 +482,9 @@ export class HelmanConfigEditorPanel
       margin: 0;
     }
 
-    .field ha-entity-picker,
-    .field ha-selector {
-      display: block;
-      width: 100%;
-      min-width: 0;
-      max-width: 100%;
-    }
-
-    .helper {
-      color: var(--secondary-text-color);
-      font-size: 0.86rem;
-      line-height: 1.4;
-    }
-
-    .checkbox-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 16px;
-      padding: 4px 0;
-    }
-
-    .checkbox-option {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 0.92rem;
-    }
-
     .list-stack {
       display: grid;
       gap: 14px;
-    }
-
-    .list-card,
-    .nested-card {
-      padding: 16px;
     }
 
     .card-header {
@@ -841,60 +495,9 @@ export class HelmanConfigEditorPanel
       margin-bottom: 14px;
     }
 
-    .card-title {
-      display: grid;
-      gap: 4px;
-    }
-
-    .card-title strong {
-      font-size: 1rem;
-    }
-
-    .card-subtitle {
-      color: var(--secondary-text-color);
-      font-size: 0.88rem;
-    }
-
-    .inline-actions,
-    .list-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .summary-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color);
-      color: var(--primary-text-color);
-      font-size: 0.82rem;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .summary-toggle ha-switch {
-      --mdc-theme-secondary: var(--primary-color);
-    }
-
     .inline-note {
       color: var(--secondary-text-color);
       font-size: 0.9rem;
-    }
-
-    pre.raw-preview {
-      margin: 0;
-      padding: 14px;
-      border-radius: 14px;
-      background: var(--secondary-background-color);
-      overflow: auto;
-      white-space: pre-wrap;
-      font-size: 0.84rem;
-      line-height: 1.45;
     }
 
     .section-footer {
@@ -913,104 +516,8 @@ export class HelmanConfigEditorPanel
         justify-content: flex-start;
       }
     }
-
-    .field-label-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .field-label-row label {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .help-btn {
-      flex-shrink: 0;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      border: 1px solid var(--secondary-text-color);
-      background: transparent;
-      color: var(--secondary-text-color);
-      cursor: pointer;
-      font: inherit;
-      font-size: 0.72rem;
-      font-weight: 700;
-      line-height: 1;
-      padding: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .help-btn:hover {
-      border-color: var(--primary-color);
-      color: var(--primary-color);
-      background: rgba(3, 169, 244, 0.08);
-    }
-
-    .help-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.45);
-      z-index: 9999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .help-dialog {
-      background: var(--card-background-color);
-      border-radius: 18px;
-      padding: 22px 24px;
-      max-width: 480px;
-      width: 100%;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
-    }
-
-    .help-dialog-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-
-    .help-dialog-header strong {
-      font-size: 1.05rem;
-      line-height: 1.3;
-    }
-
-    .help-dialog-close {
-      flex-shrink: 0;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color);
-      color: var(--primary-text-color);
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      cursor: pointer;
-      font: inherit;
-      font-size: 0.9rem;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-    }
-
-    .help-dialog-close:hover {
-      background: rgba(127, 127, 127, 0.08);
-    }
-
-    .help-dialog-body {
-      color: var(--secondary-text-color);
-      line-height: 1.55;
-      margin: 0;
-      font-size: 0.93rem;
-    }
-  `;
+  `,
+  ];
 
   declare narrow?: boolean;
   declare route?: unknown;
@@ -1056,7 +563,6 @@ export class HelmanConfigEditorPanel
   private _optimizerSchema: OptimizerSchemaDocument | null = null;
   // The condition group whose name is being renamed inline. One slot, not a
   // per-group flag: only one name can be under edit at a time.
-  private _editingGroupName: GroupNameEdit | null = null;
   private _helpDialog: { labelKey: string; contentKey: string } | null = null;
   private _configFragmentRequested = false;
 
@@ -1339,7 +845,7 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderSvgIcon(path: string, className: string): TemplateResult {
-    return html`<svg class=${className} viewBox="0 0 24 24" aria-hidden="true"><path d=${path}/></svg>`;
+    return renderSvgIcon(path, className);
   }
 
   private _renderSimpleSection(
@@ -2184,8 +1690,8 @@ export class HelmanConfigEditorPanel
             ${this._t("editor.notes.optimizer_pipeline")}
           </p>
           <div class="list-stack">
-            ${optimizers.map((optimizer, index) =>
-              this._renderAutomationOptimizerCard(optimizer, index, optimizers.length),
+            ${optimizers.map((_optimizer, index) =>
+              this._renderOptimizerEditor(index, optimizers.length),
             )}
           </div>
           ${optimizers.length === 0
@@ -2214,69 +1720,49 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderAutomationOptimizerCard(
-    optimizer: unknown,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const optimizerObject = asJsonObject(optimizer) ?? {};
-    const kind = this._stringValue(optimizerObject.kind);
-    const schema = this._optimizerSchema?.kinds.find((entry) => entry.kind === kind);
-    if (!schema) {
-      return this._renderUnsupportedAutomationOptimizerCard(optimizerObject, index, total);
-    }
-    return renderOptimizerCard({
-      host: this,
-      schema,
-      optimizer: optimizerObject,
-      index,
-      total,
-      enabled: this._booleanValue(
-        this._getValue(["automation", "optimizers", index, "enabled"]),
-        true,
-      ),
-      title: this._optimizerCardTitle(schema, optimizerObject, index),
-      renderSvgIcon: (path, className) => this._renderSvgIcon(path, className),
-      renderListActions: (basePath, cardIndex, cardTotal, enabled) =>
-        this._renderOptimizerListActions(basePath, cardIndex, cardTotal, enabled),
-      conditionGroups: {
-        addGroup: () => this._addConditionGroup(index, schema),
-        removeGroup: (groupIndex) => this._removeConditionGroup(index, groupIndex),
-        moveGroup: (groupIndex, targetIndex) =>
-          this._moveListItem(
-            ["automation", "optimizers", index, "conditions"],
-            groupIndex,
-            targetIndex,
-          ),
-      },
-    });
-  }
-
-  /** Appliance-target kinds show which appliance they act on, not their id. */
-  private _optimizerCardTitle(
-    schema: OptimizerSchema,
-    optimizer: JsonObject,
-    index: number,
-  ): string {
-    const fallback =
-      this._stringValue(optimizer.id) ||
-      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
-    if (!this._hasApplianceTarget(schema)) return fallback;
-    return this._getApplianceOptimizerTitle(
-      buildApplianceSelectionState(
-        this._config,
-        this._liveApplianceMetadata,
-        this._stringValue(
-          this._getValue(["automation", "optimizers", index, "target", "appliance_id"]),
-        ),
-      ),
-      fallback,
-    );
-  }
-
   private _hasApplianceTarget(schema: OptimizerSchema): boolean {
     return schema.target.some((field) => field.key === "appliance_id");
   }
+
+  /**
+   * One optimizer, drawn by the element the solar inspector also mounts.
+   *
+   * The panel keeps the pipeline: the list actions in the card's summary are
+   * *its* buttons, passed down, because moving and deleting change which
+   * optimizers exist and that is a document-level edit. Everything inside the
+   * card belongs to the element.
+   */
+  private _renderOptimizerEditor(index: number, total: number): TemplateResult {
+    return html`
+      <helman-optimizer-editor
+        .config=${this._config}
+        .index=${index}
+        .total=${total}
+        .schema=${this._optimizerSchema}
+        .applianceMetadata=${this._liveApplianceMetadata}
+        .hass=${this.hass}
+        .narrow=${this.narrow ?? false}
+        .localize=${(key: string) => this._t(key)}
+        .listActions=${(basePath: PathSegment[], enabled: boolean) =>
+          this._renderOptimizerListActions(basePath, index, total, enabled)}
+        @optimizer-config-changed=${this._handleOptimizerConfigChanged}
+      ></helman-optimizer-editor>
+    `;
+  }
+
+  private _handleOptimizerConfigChanged = (event: Event): void => {
+    const detail = (event as CustomEvent<OptimizerConfigChangedDetail>).detail;
+    if (!detail?.config) {
+      return;
+    }
+    // The same bookkeeping `_applyMutation` does for the panel's own fields —
+    // the edit came from a child element, but it is still an edit of this
+    // draft, and the validation report it invalidates is still ours.
+    this._config = detail.config;
+    this._dirty = true;
+    this._validation = null;
+    this._message = null;
+  };
 
   private _renderAutomationEnabledField(): TemplateResult {
     const checked = this._getAutomationEnabled();
@@ -2322,116 +1808,6 @@ export class HelmanConfigEditorPanel
           @click=${() => this._removeListItem(["automation", "optimizers"], index)}
         >${this._t("editor.actions.remove")}</button>
       </div>
-    `;
-  }
-
-  private _renderDayClassificationField(
-    path: PathSegment[],
-    labelKey: string,
-    helpKey: string,
-  ): TemplateResult {
-    const selected = (asJsonArray(this._getValue(path)) ?? []).map((value) =>
-      this._stringValue(value),
-    );
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${this._renderHelpIcon(labelKey, helpKey)}
-        </div>
-        <div class="checkbox-group">
-          ${DAY_CLASSIFICATIONS.map(
-            (classification) => html`
-              <label class="checkbox-option">
-                <input
-                  type="checkbox"
-                  .checked=${selected.includes(classification)}
-                  @change=${(event: Event) =>
-                    this._toggleDayClassification(
-                      path,
-                      classification,
-                      (event.currentTarget as HTMLInputElement).checked,
-                    )}
-                />
-                ${this._t(`editor.values.classification_${classification}`)}
-              </label>
-            `,
-          )}
-        </div>
-      </div>
-    `;
-  }
-
-  private _toggleDayClassification(
-    path: PathSegment[],
-    value: string,
-    checked: boolean,
-  ): void {
-    this._applyMutation((draft) => {
-      const current = (asJsonArray(getValueAtPath(draft, path)) ?? [])
-        .map((item) => this._stringValue(item))
-        .filter((item) => item.length > 0);
-      const next = checked
-        ? Array.from(new Set([...current, value]))
-        : current.filter((item) => item !== value);
-      setValueAtPath(
-        draft,
-        path,
-        DAY_CLASSIFICATIONS.filter((classification) => next.includes(classification)),
-      );
-    });
-  }
-
-  private _renderUnsupportedAutomationOptimizerCard(
-    optimizer: JsonObject,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const basePath: PathSegment[] = ["automation", "optimizers", index];
-    const enabled = this._booleanValue(this._getValue([...basePath, "enabled"]), true);
-    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const optimizerId =
-      this._stringValue(optimizer.id) ||
-      this._tFormat("editor.dynamic.optimizer", { index: index + 1 });
-    const subtitle = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
-      kind: this._stringValue(optimizer.kind) || this._t("editor.values.unknown"),
-    });
-
-    return html`
-      <details class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}>
-        <summary>
-          <div class="appliance-summary-row">
-            <div class="appliance-summary-left">
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
-              <div class="card-title">
-                <strong>${optimizerId}</strong>
-                <span class="card-subtitle">${subtitle}</span>
-              </div>
-            </div>
-            <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderOptimizerEnabledToggle([...basePath, "enabled"], enabled)}
-              <button
-                type="button"
-                ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["automation", "optimizers"], index, index - 1)}
-              >${this._t("editor.actions.up")}</button>
-              <button
-                type="button"
-                ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["automation", "optimizers"], index, index + 1)}
-              >${this._t("editor.actions.down")}</button>
-              <button
-                type="button"
-                class="danger"
-                @click=${() => this._removeListItem(["automation", "optimizers"], index)}
-              >${this._t("editor.actions.remove")}</button>
-            </div>
-          </div>
-        </summary>
-        <div class="appliance-body">
-          <pre class="raw-preview">${JSON.stringify(optimizer, null, 2)}</pre>
-        </div>
-      </details>
     `;
   }
 
@@ -3425,20 +2801,7 @@ export class HelmanConfigEditorPanel
     explicitValue?: unknown,
     helpKey?: string,
   ): TemplateResult {
-    const value = explicitValue === undefined ? this._getValue(path) : explicitValue;
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
-        </div>
-        <input
-          .value=${this._stringValue(value)}
-          @change=${(event: Event) =>
-            this._setRequiredString(path, (event.currentTarget as HTMLInputElement).value)}
-        />
-      </div>
-    `;
+    return renderRequiredTextField(this, path, labelKey, explicitValue, helpKey);
   }
 
   private _renderOptionalNumberField(
@@ -3448,29 +2811,7 @@ export class HelmanConfigEditorPanel
     helpKey?: string,
     options: { min?: number; max?: number; suffix?: string } = {},
   ): TemplateResult {
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
-        </div>
-        <div class="number-input-wrap">
-          <input
-            type="number"
-            step="any"
-            min=${options.min ?? nothing}
-            max=${options.max ?? nothing}
-            .value=${this._stringValue(this._getValue(path))}
-            @change=${(event: Event) =>
-              this._setOptionalNumber(path, (event.currentTarget as HTMLInputElement).value)}
-          />
-          ${options.suffix
-            ? html`<span class="number-input-suffix">${options.suffix}</span>`
-            : nothing}
-        </div>
-        ${helperKey ? html`<div class="helper">${this._t(helperKey)}</div>` : nothing}
-      </div>
-    `;
+    return renderOptionalNumberField(this, path, labelKey, helperKey, helpKey, options);
   }
 
   private _renderRequiredNumberField(
@@ -3480,22 +2821,7 @@ export class HelmanConfigEditorPanel
     step = "any",
     helpKey?: string,
   ): TemplateResult {
-    const value = explicitValue === undefined ? this._getValue(path) : explicitValue;
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
-        </div>
-        <input
-          type="number"
-          .step=${step}
-          .value=${this._stringValue(value)}
-          @change=${(event: Event) =>
-            this._setRequiredNumber(path, (event.currentTarget as HTMLInputElement).value)}
-        />
-      </div>
-    `;
+    return renderRequiredNumberField(this, path, labelKey, explicitValue, step, helpKey);
   }
 
   private _renderOptionalSelectField(
@@ -3504,27 +2830,7 @@ export class HelmanConfigEditorPanel
     options: { value: string; label: string }[],
     helpKey?: string,
   ): TemplateResult {
-    const value = this._stringValue(this._getValue(path));
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t(labelKey)}</label>
-          ${helpKey ? this._renderHelpIcon(labelKey, helpKey) : nothing}
-        </div>
-        <select
-          .value=${value}
-          @change=${(event: Event) =>
-            this._setOptionalString(path, (event.currentTarget as HTMLSelectElement).value)}
-        >
-          <option value=""></option>
-          ${options.map(
-            (option) => html`
-              <option value=${option.value} ?selected=${option.value === value}>${option.label}</option>
-            `,
-          )}
-        </select>
-      </div>
-    `;
+    return renderOptionalSelectField(this, path, labelKey, options, helpKey);
   }
 
   private _renderOptionalIconField(
@@ -3644,40 +2950,11 @@ export class HelmanConfigEditorPanel
   }
 
   private _renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
-    return html`
-      <button
-        type="button"
-        class="help-btn"
-        aria-label=${this._t("editor.help.aria_label")}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          this._helpDialog = { labelKey, contentKey };
-        }}
-      >?</button>
-    `;
+    return renderHelpIcon(this, labelKey, contentKey);
   }
 
   private _renderHelpDialog(): TemplateResult | typeof nothing {
-    if (!this._helpDialog) {
-      return nothing;
-    }
-    const { labelKey, contentKey } = this._helpDialog;
-    return html`
-      <div class="help-overlay" @click=${this._closeHelp}>
-        <div class="help-dialog" @click=${(e: Event) => e.stopPropagation()}>
-          <div class="help-dialog-header">
-            <strong>${this._t(labelKey)}</strong>
-            <button
-              type="button"
-              class="help-dialog-close"
-              aria-label=${this._t("editor.help.close")}
-              @click=${this._closeHelp}
-            >✕</button>
-          </div>
-          <p class="help-dialog-body">${this._t(contentKey)}</p>
-        </div>
-      </div>
-    `;
+    return renderHelpDialog(this, this._helpDialog, this._closeHelp);
   }
 
   private _closeHelp = (): void => {
@@ -4393,44 +3670,19 @@ export class HelmanConfigEditorPanel
   }
 
   private _setOptionalString(path: PathSegment[], rawValue: string): void {
-    const nextValue = rawValue.trim();
-    this._applyMutation((draft) => {
-      if (!nextValue) {
-        unsetValueAtPath(draft, path);
-        return;
-      }
-      setValueAtPath(draft, path, nextValue);
-    });
+    setOptionalString(this, path, rawValue);
   }
 
   private _setRequiredString(path: PathSegment[], rawValue: string): void {
-    this._applyMutation((draft) => {
-      setValueAtPath(draft, path, rawValue.trim());
-    });
+    setRequiredString(this, path, rawValue);
   }
 
   private _setOptionalNumber(path: PathSegment[], rawValue: string): void {
-    const normalized = rawValue.trim();
-    this._applyMutation((draft) => {
-      if (!normalized) {
-        unsetValueAtPath(draft, path);
-        return;
-      }
-      const numericValue = Number(normalized);
-      setValueAtPath(draft, path, Number.isFinite(numericValue) ? numericValue : normalized);
-    });
+    setOptionalNumber(this, path, rawValue);
   }
 
   private _setRequiredNumber(path: PathSegment[], rawValue: string): void {
-    const normalized = rawValue.trim();
-    this._applyMutation((draft) => {
-      if (!normalized) {
-        setValueAtPath(draft, path, null);
-        return;
-      }
-      const numericValue = Number(normalized);
-      setValueAtPath(draft, path, Number.isFinite(numericValue) ? numericValue : normalized);
-    });
+    setRequiredNumber(this, path, rawValue);
   }
 
   private _getAutomationEnabled(): boolean {
@@ -4524,34 +3776,14 @@ export class HelmanConfigEditorPanel
     this._message = null;
   }
 
-  private _getValue(path: PathSegment[]): unknown {
-    if (!this._config) {
-      return undefined;
-    }
-    return getValueAtPath(this._config, path);
-  }
-
-  private _stringValue(value: unknown): string {
-    if (typeof value === "string") {
-      return value;
-    }
-    if (typeof value === "number") {
-      return String(value);
-    }
-    return "";
-  }
-
-  // --- OptimizerEditorHost -------------------------------------------------
+  // --- FormFieldHost -------------------------------------------------------
   //
-  // Thin public wrappers over the form primitives, so the schema-driven
-  // renderers can stay plain functions instead of subclassing this element.
+  // What the shared form primitives in `cards/shared/config/form-fields` need.
+  // Public because they are the interface, not because anything else calls
+  // them: the private `_t` / `_getValue` remain the panel's own vocabulary.
 
   t(key: string): string {
     return this._t(key);
-  }
-
-  tFormat(key: string, values: Record<string, string | number>): string {
-    return this._tFormat(key, values);
   }
 
   getValue(path: PathSegment[]): unknown {
@@ -4565,278 +3797,19 @@ export class HelmanConfigEditorPanel
     });
   }
 
-  renderRequiredTextField(
-    path: PathSegment[],
-    labelKey: string,
-    explicitValue?: unknown,
-    helpKey?: string,
-  ): TemplateResult {
-    return this._renderRequiredTextField(path, labelKey, explicitValue, helpKey);
+  openHelp(labelKey: string, contentKey: string): void {
+    this._helpDialog = { labelKey, contentKey };
   }
 
-  renderRequiredNumberField(
-    path: PathSegment[],
-    labelKey: string,
-    explicitValue?: unknown,
-    step = "any",
-    helpKey?: string,
-  ): TemplateResult {
-    return this._renderRequiredNumberField(path, labelKey, explicitValue, step, helpKey);
-  }
-
-  renderOptionalNumberField(
-    path: PathSegment[],
-    labelKey: string,
-    helperKey?: string,
-    helpKey?: string,
-    options: { min?: number; max?: number; suffix?: string } = {},
-  ): TemplateResult {
-    return this._renderOptionalNumberField(path, labelKey, helperKey, helpKey, options);
-  }
-
-  renderOptionalSelectField(
-    path: PathSegment[],
-    labelKey: string,
-    options: { value: string; label: string }[],
-    helpKey?: string,
-  ): TemplateResult {
-    return this._renderOptionalSelectField(path, labelKey, options, helpKey);
-  }
-
-  renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
-    return this._renderHelpIcon(labelKey, contentKey);
-  }
-
-  renderSvgIcon(path: string, className: string): TemplateResult {
-    return this._renderSvgIcon(path, className);
-  }
-
-  get editingGroupName(): GroupNameEdit | null {
-    return this._editingGroupName;
-  }
-
-  setEditingGroupName(target: GroupNameEdit | null): void {
-    this._editingGroupName = target;
-    this.requestUpdate();
-  }
-
-  renderDayClassificationField(
-    path: PathSegment[],
-    labelKey: string,
-    helpKey: string,
-  ): TemplateResult {
-    return this._renderDayClassificationField(path, labelKey, helpKey);
-  }
-
-  /**
-   * The appliance picker and its climate mode.
-   *
-   * Not schema-driven: the options come from the live appliance registry and
-   * the authorable modes of the selected device, neither of which a static
-   * schema can carry.
-   */
-  renderApplianceTargetFields(
-    optimizerIndex: number,
-    kind: string,
-  ): TemplateResult | typeof nothing {
-    const schema = this._optimizerSchema?.kinds.find((entry) => entry.kind === kind);
-    if (!schema || !this._hasApplianceTarget(schema)) return nothing;
-    const targetPath: PathSegment[] = [
-      "automation",
-      "optimizers",
-      optimizerIndex,
-      "target",
-    ];
-    const selectionState = buildApplianceSelectionState(
-      this._config,
-      this._liveApplianceMetadata,
-      this._stringValue(this._getValue([...targetPath, "appliance_id"])),
-    );
-    const climateModeFieldState = buildClimateModeFieldState(
-      selectionState,
-      this._stringValue(this._getValue([...targetPath, "climate_mode"])),
-    );
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t("editor.fields.appliance_id")}</label>
-          ${this._renderHelpIcon("editor.fields.appliance_id", "editor.help.appliance_id")}
-        </div>
-        <select
-          @change=${(event: Event) =>
-            this._applyApplianceIdChange(
-              optimizerIndex,
-              (event.currentTarget as HTMLSelectElement).value,
-            )}
-        >
-          <option value="" ?selected=${selectionState.selectedId.length === 0}>
-            ${this._t("editor.values.select_appliance")}
-          </option>
-          ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
-            ? html`
-                <option value=${selectionState.selectedId} ?selected=${true}>
-                  ${this._tFormat("editor.dynamic.stale_appliance", {
-                    id: selectionState.selectedId,
-                  })}
-                </option>
-              `
-            : nothing}
-          ${selectionState.options.map(
-            (option) => html`
-              <option
-                value=${option.id}
-                ?disabled=${option.selectionDisabled}
-                ?selected=${option.id === selectionState.selectedId}
-              >
-                ${this._formatApplianceOptimizerOptionLabel(option)}
-              </option>
-            `,
-          )}
-        </select>
-        <div class="helper">${this._renderApplianceIdHelper(selectionState)}</div>
-      </div>
-      ${climateModeFieldState.visible
-        ? this._renderSurplusClimateModeField(targetPath, climateModeFieldState)
-        : nothing}
-    `;
-  }
-
-  /**
-   * Home Assistant's own condition builder, backed by a group's `custom` list.
-   *
-   * The list is ANDed at execution time; groups are ORed around it.
-   */
-  renderCustomConditions(path: PathSegment[]): TemplateResult {
-    const conditions = asJsonArray(this._getValue(path)) ?? [];
-    return html`
-      <ha-selector
-        .hass=${this.hass}
-        .narrow=${this.narrow ?? false}
-        .selector=${OPTIMIZER_CONDITION_SELECTOR}
-        .value=${conditions}
-        @value-changed=${(event: Event) => {
-          const value = (event as CustomEvent<{ value?: unknown }>).detail?.value;
-          this.setValue(
-            path,
-            Array.isArray(value) && value.length ? (value as JsonValue) : undefined,
-          );
-        }}
-      ></ha-selector>
-    `;
-  }
-
-  private _renderSurplusClimateModeField(
-    paramsPath: PathSegment[],
-    climateModeFieldState: SurplusClimateModeFieldState,
-  ): TemplateResult {
-    const selectedValue =
-      climateModeFieldState.value.length > 0
-        ? climateModeFieldState.value
-        : "__live_modes_unavailable__";
-    return html`
-      <div class="field">
-        <div class="field-label-row">
-          <label>${this._t("editor.fields.climate_mode")}</label>
-          ${this._renderHelpIcon(
-            "editor.fields.climate_mode",
-            "editor.help.appliance_runtime_climate_mode",
-          )}
-        </div>
-        <select
-          ?disabled=${climateModeFieldState.disabled}
-          @change=${(event: Event) =>
-            this._setRequiredString(
-              [...paramsPath, "climate_mode"],
-              (event.currentTarget as HTMLSelectElement).value,
-            )}
-        >
-          ${climateModeFieldState.options.length > 0
-            ? climateModeFieldState.options.map(
-                (option) => html`
-                  <option
-                    value=${option.value}
-                    ?selected=${option.value === selectedValue}
-                  >
-                    ${this._formatSurplusClimateModeLabel(option.value, option.isUnknown)}
-                  </option>
-                `,
-              )
-            : html`
-                <option value="__live_modes_unavailable__" ?selected=${true}>
-                  ${this._t("editor.values.live_modes_unavailable")}
-                </option>
-              `}
-        </select>
-        <div class="helper">
-          ${this._renderSurplusClimateModeHelper(climateModeFieldState)}
-        </div>
-      </div>
-    `;
-  }
-
-  private _renderApplianceIdHelper(
-    selectionState: ApplianceSelectionState,
-  ): string {
-    if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
-      return this._t("editor.helpers.appliance_runtime_id_missing_from_draft");
+  private _getValue(path: PathSegment[]): unknown {
+    if (!this._config) {
+      return undefined;
     }
-    if (selectionState.options.some((option) => option.selectionDisabled)) {
-      return this._t("editor.helpers.appliance_runtime_id_pending_reload");
-    }
-    return this._t("editor.helpers.appliance_runtime_id");
+    return getValueAtPath(this._config, path);
   }
 
-  private _getApplianceOptimizerTitle(
-    selectionState: ApplianceSelectionState,
-    fallbackTitle: string,
-  ): string {
-    if (selectionState.selectedOption) {
-      return selectionState.selectedOption.name;
-    }
-    if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
-      return this._tFormat("editor.dynamic.stale_appliance", {
-        id: selectionState.selectedId,
-      });
-    }
-    return fallbackTitle;
-  }
-
-  private _renderSurplusClimateModeHelper(
-    climateModeFieldState: SurplusClimateModeFieldState,
-  ): string {
-    if (climateModeFieldState.unavailable) {
-      return this._t("editor.helpers.appliance_runtime_climate_mode_unavailable");
-    }
-    if (climateModeFieldState.options.some((option) => option.isUnknown)) {
-      return this._t("editor.helpers.appliance_runtime_climate_mode_unknown");
-    }
-    if (climateModeFieldState.disabled) {
-      return this._t("editor.helpers.appliance_runtime_climate_mode_single");
-    }
-    return this._t("editor.helpers.appliance_runtime_climate_mode");
-  }
-
-  private _formatApplianceOptimizerOptionLabel(option: ApplianceOptimizerOption): string {
-    const baseLabel =
-      option.name === option.id
-        ? option.id
-        : this._tFormat("editor.dynamic.appliance_option", {
-            name: option.name,
-            id: option.id,
-          });
-    if (!option.selectionDisabled) {
-      return baseLabel;
-    }
-    return this._tFormat("editor.dynamic.appliance_option_pending_reload", {
-      label: baseLabel,
-    });
-  }
-
-  private _formatSurplusClimateModeLabel(mode: string, isUnknown: boolean): string {
-    if (isUnknown) {
-      return this._tFormat("editor.dynamic.stale_climate_mode", { mode });
-    }
-    return this._t(`editor.values.${mode}`);
+  private _stringValue(value: unknown): string {
+    return stringValue(value);
   }
 
   private async _loadLiveApplianceMetadata(): Promise<ApplianceMetadataResponse | null> {
@@ -4854,7 +3827,7 @@ export class HelmanConfigEditorPanel
   }
 
   private _booleanValue(value: unknown, fallback: boolean): boolean {
-    return typeof value === "boolean" ? value : fallback;
+    return booleanValue(value, fallback);
   }
 
   private _t(key: string): string {

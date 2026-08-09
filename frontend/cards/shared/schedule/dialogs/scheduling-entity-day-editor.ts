@@ -7,6 +7,7 @@ import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";
 import "../components/scheduling-entity-day-band";
 import "../components/scheduling-explanation-panel";
+import { getSharedDataChangedFeed } from "../../../helman/data-changed";
 import "./scheduling-entity-action-editor";
 import type {
     EntityDayBandBlockSelectDetail,
@@ -407,6 +408,7 @@ export class SchedulingEntityDayEditor extends LitElement {
      * Reset per opening along with the records themselves.
      */
     private _explanationsRequested = new Set<string>();
+    private _unsubscribeDataChanged?: () => void;
 
     private _draftBeforeEdit: EntityScheduleDraft = {};
     /** Bumped per edit session, so the action editor knows a new one began. */
@@ -444,12 +446,38 @@ export class SchedulingEntityDayEditor extends LitElement {
         if (typeof window !== "undefined") {
             window.removeEventListener("popstate", this._handlePopState);
         }
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
         this._clearHistoryEntry();
         this._ignoreNextPopstate = false;
     }
 
+    /**
+     * Drop the cached explanations whenever the backend says something changed.
+     *
+     * They are fetched once per (lane, day) and kept for the life of an opening
+     * -- which was right while the only thing that could invalidate them was
+     * closing and reopening the dialog. Editing an optimizer from the diagram
+     * broke that: the save reloads the entry, re-runs the automation, and fires
+     * `helman_data_changed`, and a cache that survived it would leave the
+     * reader looking at the rule they just changed, unchanged. Clearing is
+     * enough -- the panel refetches whatever it is still showing.
+     */
+    private _ensureDataChangedSubscription(): void {
+        const hass = this.hass;
+        if (!hass || this._unsubscribeDataChanged) {
+            return;
+        }
+        this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
+            this._explanations = new Map();
+            this._explanationFailures = new Set();
+            this._explanationsRequested = new Set();
+        });
+    }
+
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
+        this._ensureDataChangedSubscription();
         // Seed once per opening: later slot updates are the refresh case, which
         // the stale banner reports instead of applying.
         if (this.open && (changedProperties.has("open") || changedProperties.has("target"))) {
@@ -668,11 +696,17 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         const key = this._explanationKey(selection.laneKey, day.dayKey);
+        // An appliance lane's optimizers are titled by the appliance in the
+        // config editor, and the lane already knows its name -- so the
+        // explanation can name them the same way without asking the backend
+        // for the config it would otherwise need.
+        const lane = this._lanes.find((entry) => entry.key === selection.laneKey);
         return html`
             <div class="panel">
                 <scheduling-explanation-panel
                     .hass=${this.hass}
                     .localize=${this.localize}
+                    .applianceName=${lane?.appliance?.name ?? null}
                     .payload=${this._explanations.get(key) ?? null}
                     .slotId=${selection.slotId}
                     .loading=${!this._explanations.has(key) && !this._explanationFailures.has(key)}

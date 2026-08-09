@@ -2,10 +2,15 @@ import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../hass-frontend/src/types";
+import type { HomeAssistantLike } from "../../config/types";
 import type { LocalizeFunction } from "../../../localize/localize";
 import "./scheduling-logic-diagram";
 import "../dialogs/scheduling-condition-trace-dialog";
-import type { ConditionTraceRequestDetail } from "./scheduling-logic-diagram";
+import "../../optimizer/helman-optimizer-edit-dialog";
+import type {
+    ConditionTraceRequestDetail,
+    OptimizerEditRequestDetail,
+} from "./scheduling-logic-diagram";
 import {
     getWinningExplanationCell,
     parseScheduleExplanation,
@@ -141,6 +146,17 @@ export class SchedulingExplanationPanel extends LitElement {
     @property({ type: Boolean }) public failed = false;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
+    /**
+     * The name of the appliance this lane drives, when it drives one.
+     *
+     * Only for titling. The config editor titles an appliance-target optimizer
+     * by its appliance rather than by its id, and an explanation that named the
+     * same rule differently would leave the reader matching `surplus-appliance-4`
+     * against "Žebřík koupelna" by hand. Passed in rather than looked up: the
+     * lane above already holds it, and fetching the config to title a heading
+     * would cost a round trip on every slot press.
+     */
+    @property({ attribute: false }) public applianceName: string | null = null;
 
     /**
      * The tab the user picked, if they picked one.
@@ -160,6 +176,13 @@ export class SchedulingExplanationPanel extends LitElement {
      * what this panel is built around.
      */
     @state() private _traceRequest: ConditionTraceRequestDetail | null = null;
+    /**
+     * The optimizer whose config is open for editing, or null for none.
+     *
+     * Mounted lazily for the same reason the trace dialog is: an element that
+     * is never pressed should never ask the backend for the whole config.
+     */
+    @state() private _editRequest: OptimizerEditRequestDetail | null = null;
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
@@ -171,6 +194,7 @@ export class SchedulingExplanationPanel extends LitElement {
             // A trace is about the slot it was opened from; a new question
             // leaves a dialog answering the old one.
             this._traceRequest = null;
+            this._editRequest = null;
         }
     }
 
@@ -207,9 +231,13 @@ export class SchedulingExplanationPanel extends LitElement {
                         .slotLabel=${this._slotLabel()}
                         .planLabel=${this._planLabel(active.cell)}
                         .plannedBeforeHours=${this._plannedBeforeHours(active)}
+                        .optimizerLabel=${this._optimizerTitle(active.column)}
+                        .canEditAutomation=${this._canEditAutomation()}
                         @condition-trace-requested=${this._handleTraceRequested}
+                        @optimizer-edit-requested=${this._handleEditRequested}
                     ></scheduling-logic-diagram>
                     ${this._renderTraceDialog()}
+                    ${this._renderEditDialog()}
                 `}
             </div>
         `;
@@ -245,6 +273,46 @@ export class SchedulingExplanationPanel extends LitElement {
     private _handleTraceRequested(event: CustomEvent<ConditionTraceRequestDetail>): void {
         event.stopPropagation();
         this._traceRequest = event.detail;
+    }
+
+    /**
+     * Whether to offer the edit button at all.
+     *
+     * `helman/save_config` is admin-gated on the backend, so a non-admin who
+     * pressed this could only ever be told no. Answered here because this is
+     * the level that holds a `hass`; the diagram is handed the answer.
+     */
+    private _canEditAutomation(): boolean {
+        return this.hass?.user?.is_admin === true;
+    }
+
+    /**
+     * The optimizer's own config, in the same UI the config editor uses.
+     *
+     * Mounted only once asked for, and remounted per request: the dialog loads
+     * the config when it connects, and a fresh element per optimizer is what
+     * makes that a load rather than a reload path nobody would exercise.
+     */
+    private _renderEditDialog() {
+        const request = this._editRequest;
+        if (request === null) {
+            return nothing;
+        }
+
+        return html`
+            <helman-optimizer-edit-dialog
+                .hass=${this.hass as unknown as HomeAssistantLike}
+                .localize=${this.localize}
+                .open=${true}
+                .optimizerId=${request.optimizerId}
+                @closed=${() => { this._editRequest = null; }}
+            ></helman-optimizer-edit-dialog>
+        `;
+    }
+
+    private _handleEditRequested(event: CustomEvent<OptimizerEditRequestDetail>): void {
+        event.stopPropagation();
+        this._editRequest = event.detail;
     }
 
     private _renderTabStrip(
@@ -468,6 +536,23 @@ export class SchedulingExplanationPanel extends LitElement {
         const full = `${KEY_PREFIX}.${group}.${key}`;
         const translated = this.localize(full);
         return translated === full || translated === undefined ? key : translated;
+    }
+
+    /**
+     * What the config editor calls this optimizer.
+     *
+     * `target_key` is `appliance:<id>` exactly when the optimizer has an
+     * appliance target, which is exactly when the editor's card is titled by
+     * the appliance instead of by the id — so this reads the same fact off the
+     * lane rather than re-deriving it from a list of kinds that would go stale
+     * the next time a kind is added.
+     */
+    private _optimizerTitle(column: ExplanationColumn): string {
+        const drivesAnAppliance = column.targetKey.startsWith("appliance:");
+        if (drivesAnAppliance && this.applianceName) {
+            return this.applianceName;
+        }
+        return column.optimizerId;
     }
 
     private _optimizerLabel(kind: string | null): string {
