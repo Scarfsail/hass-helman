@@ -1,5 +1,5 @@
-import { asJsonArray, asJsonObject } from "./config-document";
-import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } from "./types";
+import { asJsonArray, asJsonObject } from "../config/config-document";
+import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } from "../config/types";
 
 export type ApplianceOptimizerKind = "generic" | "climate";
 

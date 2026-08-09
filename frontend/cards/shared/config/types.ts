@@ -1,4 +1,4 @@
-import type { DataChangedConnection } from "../cards/helman/data-changed";
+import type { DataChangedConnection } from "../../helman/data-changed";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;

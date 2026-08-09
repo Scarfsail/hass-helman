@@ -4,8 +4,8 @@ import {
   isJsonObject,
   setValueAtPath,
   unsetValueAtPath,
-} from "./config-document";
-import type { JsonObject, JsonValue, PathSegment } from "./types";
+} from "../cards/shared/config/config-document";
+import type { JsonObject, JsonValue, PathSegment } from "../cards/shared/config/types";
 
 export type ScopeRootKind = "object" | "array";
 

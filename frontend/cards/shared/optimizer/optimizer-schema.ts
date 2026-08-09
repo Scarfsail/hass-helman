@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
-import type { JsonObject, JsonValue, PathSegment } from "./types";
-import { MISSING_TRANSLATION_PREFIX } from "./localize/localize";
+import type { JsonObject, JsonValue, PathSegment } from "../config/types";
+import { MISSING_TRANSLATION_PREFIX } from "../config/localize/localize";
 
 /**
  * The optimizer config schema, served by the backend over

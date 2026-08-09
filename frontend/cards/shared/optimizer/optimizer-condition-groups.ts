@@ -1,8 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 
-import { asJsonArray, asJsonObject } from "./config-document";
-import type { PathSegment } from "./types";
+import { asJsonArray, asJsonObject } from "../config/config-document";
+import type { PathSegment } from "../config/types";
 import {
     renderInheritedNote,
     renderSchemaFields,
