@@ -276,6 +276,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                         .total=${1}
                         .schema=${view.schema}
                         .applianceMetadata=${view.applianceMetadata}
+                        .expanded=${true}
                         .hass=${this.hass}
                         .localize=${(key: string) => this._editorText(key)}
                         @optimizer-config-changed=${this._handleConfigChanged}

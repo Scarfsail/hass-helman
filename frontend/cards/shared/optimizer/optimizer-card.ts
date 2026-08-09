@@ -28,6 +28,15 @@ export interface OptimizerCardOptions {
     enabled: boolean;
     /** Card heading — kinds with an appliance target show the appliance's name. */
     title: string;
+    /**
+     * Whether the card starts open.
+     *
+     * Collapsed in a list, where the summary line is how you find the one you
+     * want. Open where the card *is* the screen -- the edit dialog opens on one
+     * optimizer the reader has already chosen, and asking them to click it open
+     * would be asking twice.
+     */
+    open?: boolean;
     renderSvgIcon(path: string, className: string): TemplateResult;
     renderListActions(
         basePath: PathSegment[],
@@ -46,6 +55,7 @@ export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResu
         <details
             class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}
             data-kind=${schema.kind}
+            ?open=${options.open ?? false}
         >
             <summary>
                 <div class="appliance-summary-row">

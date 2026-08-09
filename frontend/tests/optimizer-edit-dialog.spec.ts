@@ -249,6 +249,14 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await expect(editButton(page)).toHaveCount(0);
     });
 
+    test("the diagram head names the optimizer whose logic it is drawing", async ({ page }) => {
+        await mountPanel(page);
+        // The tab strip labels by kind and disappears when a slot has one
+        // optimizer, so without this the head names no optimizer at all.
+        await expect(page.locator("scheduling-explanation-panel .optimizer"))
+            .toHaveText("export_price");
+    });
+
     test("pressing it opens the config editor's card for that optimizer", async ({ page }) => {
         await mountPanel(page);
         await openDialog(page);
@@ -257,8 +265,10 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // the id field it renders is this optimizer's — not the first in the
         // pipeline, which is the bug an index-based lookup would have.
         await expect(dialog(page).locator("helman-optimizer-editor")).toHaveCount(1);
+        // Open already: the reader chose this optimizer to get here, so making
+        // them click the card open would be asking the same question twice.
         const card = dialog(page).locator(".optimizer-card");
-        await card.locator("summary").first().click();
+        await expect(card).toHaveAttribute("open", "");
         await expect(card.locator(".appliance-body > .field-grid input").first())
             .toHaveValue("export_price");
     });
@@ -278,7 +288,6 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await openDialog(page);
 
         const card = dialog(page).locator(".optimizer-card");
-        await card.locator("summary").first().click();
         const threshold = card.locator(".condition-group input[type=number]").first();
         await threshold.fill("2.5");
         await threshold.blur();

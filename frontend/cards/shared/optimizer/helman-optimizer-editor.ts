@@ -116,6 +116,9 @@ export class HelmanOptimizerEditor
 
     @property({ type: Boolean }) narrow = false;
 
+    /** Start with the card open. See `OptimizerCardOptions.open`. */
+    @property({ type: Boolean }) expanded = false;
+
     @property({ attribute: false }) localize: (key: string) => string = (key) => key;
 
     /**
@@ -161,6 +164,7 @@ export class HelmanOptimizerEditor
             total: this.total,
             enabled,
             title: this._cardTitle(schema, optimizer),
+            open: this.expanded,
             renderSvgIcon,
             renderListActions: (basePath) =>
                 this.listActions?.(basePath, enabled) ?? html``,

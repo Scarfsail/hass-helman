@@ -1466,6 +1466,16 @@ export class SchedulingLogicDiagram extends LitElement {
                 color: var(--secondary-text-color);
             }
 
+            /* Whose logic this is. The tab strip labels by *kind*, and vanishes
+               entirely when a slot has one optimizer -- so the id is both the
+               disambiguator when there are several of a kind and the only name
+               on screen when there is one. It is also what the edit button next
+               to it opens, which is reason enough to show it rather than a
+               prettier label the config does not use. */
+            .optimizer {
+                font-weight: 600;
+            }
+
             /* Pushed to the far end of the head: it acts on the diagram rather
                than describing it, so it must not read as one more caption. */
             .edit-automation {
@@ -1888,6 +1898,9 @@ export class SchedulingLogicDiagram extends LitElement {
             <div class="diagram">
                 <div class="head">
                     <span class="title">${this._text("diagram.title")}</span>
+                    ${cell.optimizerId
+                        ? html`<span class="optimizer">${cell.optimizerId}</span>`
+                        : nothing}
                     <span class="slot">${this.slotLabel || cell.slotId}</span>
                     ${model.matchedGroupIndex === null ? nothing : html`
                         <span class="matched" data-group=${model.matchedGroupIndex}>
