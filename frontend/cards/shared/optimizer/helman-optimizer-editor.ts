@@ -1,5 +1,5 @@
 import { LitElement, html, nothing, type TemplateResult } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 
 import {
     asJsonArray,
@@ -12,6 +12,7 @@ import {
     setValueAtPath,
     unsetValueAtPath,
 } from "../config/config-document";
+import { defineOnce } from "../define-once";
 import { configFormStyles } from "../config/form-styles";
 import {
     booleanValue,
@@ -91,7 +92,6 @@ export interface OptimizerConfigChangedDetail {
  * dialog holds the draft until "Save and restart". Neither belongs here, and an
  * element that saved would be unusable in the other place.
  */
-@customElement("helman-optimizer-editor")
 export class HelmanOptimizerEditor
     extends LitElement
     implements FormFieldHost, OptimizerEditorHost
@@ -611,6 +611,8 @@ export class HelmanOptimizerEditor
         return this.t(`editor.values.${mode}`);
     }
 }
+
+defineOnce("helman-optimizer-editor", HelmanOptimizerEditor);
 
 declare global {
     interface HTMLElementTagNameMap {

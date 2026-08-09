@@ -1,7 +1,8 @@
 import { LitElement, css, html, nothing } from "lit-element";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 
 import type { LocalizeFunction } from "../../localize/localize";
+import { defineOnce } from "../define-once";
 import { loadHaForm } from "../load-ha-elements";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { asJsonArray, asJsonObject, cloneJson } from "../config/config-document";
@@ -64,7 +65,6 @@ interface SaveMessage {
  * button calls: the backend validates, writes, and reloads the config entry.
  * That reload is the restart, which is why the button says so.
  */
-@customElement("helman-optimizer-edit-dialog")
 export class HelmanOptimizerEditDialog extends LitElement {
     static styles = css`
         .dialog-content {
@@ -549,6 +549,8 @@ function describeError(error: unknown): string {
     }
     return String(error);
 }
+
+defineOnce("helman-optimizer-edit-dialog", HelmanOptimizerEditDialog);
 
 declare global {
     interface HTMLElementTagNameMap {
