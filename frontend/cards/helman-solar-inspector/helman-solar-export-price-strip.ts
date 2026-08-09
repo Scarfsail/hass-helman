@@ -1,9 +1,8 @@
 import { LitElement, css, html, svg, type PropertyValues, type TemplateResult } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { ForecastPayload } from "../helman-api";
-import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
@@ -58,6 +57,11 @@ export interface PriceTooltipContent {
  * The export price comes straight from the live forecast payload, whose sell-price
  * entity exposes the whole day (already-elapsed hours included), so navigating to
  * today shows the day in full. Other days carry no live price data and render empty.
+ *
+ * The payload is handed down by the inspector, which already holds the one the day
+ * pills loaded; this element fetches nothing of its own and reacts to nothing but
+ * `forecast` and `date`. `hass` is held only to read through — it is a conduit for
+ * localization, never a change signal (see `../README.md`).
  */
 @customElement("helman-solar-export-price-strip")
 export class HelmanSolarExportPriceStrip extends LitElement {
@@ -97,27 +101,17 @@ export class HelmanSolarExportPriceStrip extends LitElement {
      */
     @property({ type: Number }) public nowMs = Date.now();
 
-    @state() private _forecast: ForecastPayload | null = null;
-
-    private _loader: ForecastLoader | null = null;
-    private _loadedConnection: unknown = null;
-
-    protected willUpdate(changed: PropertyValues<this>): void {
-        if (changed.has("hass") && this.hass) {
-            if (this._loadedConnection !== this.hass.connection) {
-                this._loadedConnection = this.hass.connection;
-                this._loader = new ForecastLoader(60);
-                this._forecast = null;
-            }
-            void this._load();
-        }
-    }
+    /**
+     * The forecast the inspector already loaded for the day pills. Its
+     * `grid.exportPricePoints` are the only thing this element draws.
+     */
+    @property({ attribute: false }) public forecast: ForecastPayload | null = null;
 
     protected updated(changed: PropertyValues<this>): void {
-        // The inspector's own selected-slot panel has no other way to reach this
-        // component's day of prices -- it lives only here, behind the loader --
-        // so every change that could move a value at a given minute is echoed up.
-        if (changed.has("_forecast") || changed.has("date")) {
+        // The inspector's own selected-slot panel wants this day's prices already
+        // laid out on the 0..1440 timeline, which only happens here, so every
+        // change that could move a value at a given minute is echoed up.
+        if (changed.has("forecast") || changed.has("date")) {
             this._emitColumns();
         }
     }
@@ -126,7 +120,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     private _emitColumns(): void {
         this.dispatchEvent(
             new CustomEvent<PriceColumnsDetail>("price-columns", {
-                detail: { columns: this._buildColumns(), unit: this._forecast?.grid.exportPriceUnit ?? "" },
+                detail: { columns: this._buildColumns(), unit: this.forecast?.grid.exportPriceUnit ?? "" },
                 bubbles: true,
                 composed: true,
             }),
@@ -144,29 +138,18 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         return this._renderStrip(columns, this.geometry);
     }
 
-    private async _load(): Promise<void> {
-        const hass = this.hass;
-        const loader = this._loader;
-        if (!hass || !loader) {
-            return;
-        }
-        try {
-            const payload = await loader.load(hass);
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._forecast = payload;
-        } catch (error) {
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            console.error("helman-solar-inspector: failed to load export price forecast", error);
-        }
-    }
-
-    /** Export-price samples that fall on the selected day, on its 0..1440 timeline. */
+    /**
+     * Export-price samples that fall on the selected day, on its 0..1440 timeline.
+     *
+     * Consecutive samples of equal value collapse into one column. The payload's
+     * granularity is the schedule's, which can be finer than the price's own
+     * resolution — an hourly price delivered on a 15-minute grid arrives as four
+     * equal repeats, and would otherwise draw as four hairline-seamed rects too
+     * narrow to carry their value label. Coalescing restores the hourly cell while
+     * still showing genuine within-the-hour variation as separate columns.
+     */
     private _buildColumns(): PriceColumn[] {
-        const points = this._forecast?.grid.exportPricePoints ?? [];
+        const points = this.forecast?.grid.exportPricePoints ?? [];
         const raw: { minutes: number; value: number }[] = [];
         for (const point of points) {
             const value = Number(point.value);
@@ -180,15 +163,18 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             raw.push({ minutes: parts.hour * 60 + parts.minute, value });
         }
         raw.sort((a, b) => a.minutes - b.minutes);
-        return raw.map((entry, index) => {
+        const columns: PriceColumn[] = [];
+        raw.forEach((entry, index) => {
             const next = raw[index + 1];
-            const endMinutes = next ? next.minutes : MINUTES_PER_DAY;
-            return {
-                startMinutes: entry.minutes,
-                endMinutes: endMinutes > entry.minutes ? endMinutes : MINUTES_PER_DAY,
-                value: entry.value,
-            };
+            const end = next && next.minutes > entry.minutes ? next.minutes : MINUTES_PER_DAY;
+            const previous = columns[columns.length - 1];
+            if (previous && previous.value === entry.value && previous.endMinutes === entry.minutes) {
+                previous.endMinutes = end;
+                return;
+            }
+            columns.push({ startMinutes: entry.minutes, endMinutes: end, value: entry.value });
         });
+        return columns;
     }
 
     /**
@@ -224,7 +210,7 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         const scale = hasNegative ? innerHeight / 2 / maxAbs : innerHeight / maxAbs;
         const yForValue = (value: number) => zeroY - value * scale;
         const seam = this._seamMinutes();
-        const unit = this._forecast?.grid.exportPriceUnit ?? "";
+        const unit = this.forecast?.grid.exportPriceUnit ?? "";
         const { start: windowStart, end: windowEnd } = stripWindow(geometry);
         const windowSpan = windowEnd - windowStart;
         const xForMinutes = (minutes: number) =>

@@ -327,11 +327,21 @@ async function barSegmentColours(page: Page): Promise<string[]> {
         const bars = device.shadowRoot
             .querySelector(".deviceContent")
             .querySelector("helman-power-history-bars");
-        const segments = bars?.shadowRoot?.querySelectorAll(".historyBarSegment") ?? [];
+        // One path per distinct colour, one rectangle subpath per segment. Walk the
+        // subpaths in document order — columns left to right, then bottom to top —
+        // so the colours come out in the order they are first painted, as before.
+        const segments: Array<{ x: number; y: number; colour: string }> = [];
+        for (const path of bars?.shadowRoot?.querySelectorAll("path") ?? []) {
+            const colour = getComputedStyle(path as SVGPathElement).fill;
+            const d = path.getAttribute("d") ?? "";
+            for (const m of d.matchAll(/M(-?[\d.]+) (-?[\d.]+)/g)) {
+                segments.push({ x: parseFloat(m[1]), y: parseFloat(m[2]), colour });
+            }
+        }
+        segments.sort((a, b) => a.x - b.x || b.y - a.y);
         const seen: string[] = [];
         for (const s of segments) {
-            const colour = getComputedStyle(s as HTMLElement).backgroundColor;
-            if (!seen.includes(colour)) seen.push(colour);
+            if (!seen.includes(s.colour)) seen.push(s.colour);
         }
         return seen;
     });

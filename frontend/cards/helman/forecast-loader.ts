@@ -1,8 +1,15 @@
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { ForecastGranularity, ForecastPayload, GetForecastRequest } from "../helman-api";
 
-export const FORECAST_REFRESH_MS = 5 * 60 * 1000;
-
+/**
+ * A burst-coalescing fuse, not a polling policy. Nothing calls `load()` on a
+ * clock: the triggers are a mount, a schedule-boundary refresh and an announced
+ * `helman_data_changed`. This window exists so two of those landing within a
+ * couple of seconds of each other cost one round trip instead of two — the hour
+ * key alone would not stop it, since `_inFlight` is already cleared by then.
+ * Widening it would trade a request nobody is making for seconds of staleness
+ * after an announced change.
+ */
 const FORECAST_REQUEST_CACHE_MS = 2000;
 
 function getLocalHourRequestKey(now: Date): string {

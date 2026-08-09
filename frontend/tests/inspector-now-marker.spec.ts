@@ -215,7 +215,16 @@ async function expectedNowX(page: Page): Promise<number> {
     });
 }
 
-/** On-page geometry of each marker, with both clocks pinned to one whole hour. */
+/**
+ * On-page geometry of each marker, with both clocks pinned to one whole hour.
+ *
+ * Note the coupling: since the filter landed, `helman-solar-inspector` advances
+ * `_nowMs` from a 30 s `setInterval` it starts in `connectedCallback` rather than
+ * from `hass` churn. Pinning `_nowMs` here therefore holds only until that timer
+ * next fires — fine while each measurement completes well inside 30 s of mount,
+ * as they all do today, but a test that idles longer between pinning and asserting
+ * would see the clock move back under it.
+ */
 async function markerRects(page: Page, hour: number) {
     return page.evaluate(async (h: number) => {
         const inspector = document.querySelector("helman-solar-inspector") as any;

@@ -1,4 +1,4 @@
-import { LitElement, css, html, svg, unsafeCSS, type TemplateResult } from "lit";
+import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
@@ -36,6 +36,7 @@ import {
 } from "../color-utils";
 import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
+import { dispatchWatchedEntities } from "../shared/hass-change";
 import "./helman-solar-schedule-band-strip";
 import "./helman-solar-day-pills";
 import type { DayPillForecastHealthDetail, DayPillSelectDetail } from "./helman-solar-day-pills";
@@ -108,6 +109,31 @@ const NOW_RESOLUTION_MS = 30_000;
 
 /** Below this page width the chart opens at the coarser default. */
 const NARROW_VIEWPORT_PX = 768;
+
+/**
+ * One `Intl.DateTimeFormat` per time zone for the page's lifetime.
+ *
+ * `_todayIso()` is asked for the current day key several times per render, and
+ * building a formatter for each of those was the single most expensive thing
+ * the navigation did.
+ */
+const DAY_KEY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function _getDayKeyFormatter(timeZone: string): Intl.DateTimeFormat {
+  const formatter = DAY_KEY_FORMATTERS.get(timeZone);
+  if (formatter !== undefined) {
+    return formatter;
+  }
+
+  const nextFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  DAY_KEY_FORMATTERS.set(timeZone, nextFormatter);
+  return nextFormatter;
+}
 
 /**
  * The slot width to open at when the card configures no explicit default: a
@@ -192,6 +218,17 @@ const STACK_HATCH_COLORS = [
   CHART_COLORS.battery,
   CHART_COLORS.grid,
 ] as const;
+
+/**
+ * One array for every "no measured days" answer.
+ *
+ * `historyDays` crosses into `helman-solar-day-pills`, where the model memo is
+ * keyed on its identity. A fresh `[]` per assignment would make that memo
+ * structurally unable to hit and reproject the whole forecast horizon on every
+ * render, so the empty case is a single frozen value instead. Read-only at both
+ * consumers (`day-pill-model.ts` iterates it, the pills only read `.length`).
+ */
+const EMPTY_HISTORY_DAYS: readonly SolarInspectorHistoryDay[] = Object.freeze([]);
 
 const EMPTY_SCHEDULE_SNAPSHOT: ScheduleOwnerSnapshot = {
   schedule: null,
@@ -399,8 +436,8 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _selectedDate = "";
   /**
    * The clock behind the "now" line on every chart. Coarse on purpose: it is
-   * advanced off `hass` updates, which land on every state change in the house,
-   * and each move of it redraws the whole stack.
+   * advanced by a timer owned by `connectedCallback`, and each move of it
+   * redraws the whole stack.
    */
   @state() private _nowMs = Date.now();
   @state() private _payload: InspectorPayload | null = null;
@@ -412,9 +449,24 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _range: InspectorPayload["range"] | null = null;
   /** Whole-day measurements for the past days the pill row is showing. */
-  @state() private _historyDays: readonly SolarInspectorHistoryDay[] = [];
-  /** The `start..end` those measurements were read for; null while forward. */
+  @state() private _historyDays: readonly SolarInspectorHistoryDay[] = EMPTY_HISTORY_DAYS;
+  /**
+   * The `start..end` those measurements were decided for.
+   *
+   * Every decided window stamps it, including a forward one that has no
+   * measurements — re-entering the same window is then a genuine no-op. Only
+   * "no connection yet" leaves it null, because that has decided nothing and
+   * the fetch must still happen when `hass` arrives.
+   */
   private _historyDaysFor: string | null = null;
+  /**
+   * Today, and the window the pill row is showing, derived once per update
+   * cycle in `willUpdate`. `render()` reads them; it never computes them, and
+   * never assigns to state.
+   */
+  private _todayKey = "";
+  private _pillWindowStart = "";
+  private _pillWindowEnd = "";
   @state() private _loading = false;
   /**
    * A reload the user did not ask for, running under the drawn day.
@@ -426,11 +478,12 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _refreshing = false;
   @state() private _error = "";
   /**
-   * The forecast payload the day pills fetched, kept only for its health
-   * blocks. The inspector's own data comes from a different endpoint, so this
-   * is the card's only view of how fresh the forecast behind the pills is.
+   * The forecast payload the day pills fetched. It backs the health banner —
+   * the card's only view of how fresh the forecast behind the pills is — and it
+   * is handed to the export-price strip, which draws its prices out of it rather
+   * than fetching the same payload a second time.
    */
-  @state() private _forecastHealth: ForecastPayload | null = null;
+  @state() private _forecast: ForecastPayload | null = null;
   /**
    * The one slot selection every surface shares: the charts highlight each selected
    * slot, and the schedule-actions strip both renders it and bulk-edits it.
@@ -477,6 +530,7 @@ export class HelmanSolarInspector extends LitElement {
   private _activeRequestId = 0;
   private _activeRequestDate: string | null = null;
   private _loadedConnection: unknown = null;
+  private _nowTimer?: number;
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
   private _scheduleOwner?: SharedScheduleOwner;
@@ -1087,14 +1141,53 @@ export class HelmanSolarInspector extends LitElement {
     }
   `];
 
+  protected connectedCallback() {
+    super.connectedCallback();
+    // The wall clock owns a timer, because `hass` churn is not a clock. The card
+    // above filters `hass` down to the entities this subtree actually reads, so
+    // advancing "now" from the setter would freeze the now-marker on every chart
+    // and stop the card ever rolling over to the next day (`_todayIso()` is read
+    // at render time, and with no render there is no rollover). Coarse on
+    // purpose, and the same resolution the schedule band uses, so the two lines
+    // never disagree about where "now" is.
+    this._nowMs = Date.now();
+    this._nowTimer = window.setInterval(() => {
+      this._nowMs = Date.now();
+    }, NOW_RESOLUTION_MS);
+  }
+
   protected disconnectedCallback() {
     super.disconnectedCallback();
+    if (this._nowTimer !== undefined) {
+      window.clearInterval(this._nowTimer);
+      this._nowTimer = undefined;
+    }
     this._disconnectChartResizeObserver();
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
     this._scheduleOwner = undefined;
     this._unsubscribeDataChanged?.();
     this._unsubscribeDataChanged = undefined;
+  }
+
+  /**
+   * Derive the pill window once per cycle, before anything renders.
+   *
+   * The window is a render *input* — the pills are handed it — so it cannot be
+   * computed in `updated()` without either showing a one-frame-stale row or
+   * spending a second update cycle to correct it. And it is a function of the
+   * selection, the loaded range and the wall clock at once, so driving it from
+   * the mutation sites would mean keeping six triggers in step with one derived
+   * value. Here Lit folds anything written into the current cycle, so the only
+   * extra update left is the one `_loadDayAggregates` asks for when data
+   * actually lands.
+   */
+  protected willUpdate(_changed: PropertyValues<this>) {
+    this._todayKey = this._todayIso();
+    const pillWindow = this._pillWindow(this._todayKey);
+    this._pillWindowStart = pillWindow.start;
+    this._pillWindowEnd = pillWindow.end;
+    void this._loadDayAggregates(pillWindow.start, pillWindow.end);
   }
 
   protected updated(changed: Map<string, unknown>) {
@@ -1121,12 +1214,6 @@ export class HelmanSolarInspector extends LitElement {
       if (!this._selectedDate) {
         this._selectedDate = this._todayIso();
       }
-      // Same rule the schedule band below follows, so the two lines never
-      // disagree about where "now" is.
-      const now = Date.now();
-      if (now - this._nowMs >= NOW_RESOLUTION_MS) {
-        this._nowMs = now;
-      }
       if (this._loadedConnection !== this.hass.connection) {
         this._loadedConnection = this.hass.connection;
         this._load();
@@ -1150,7 +1237,7 @@ export class HelmanSolarInspector extends LitElement {
              forecast, but the warning is about the card's data as a whole, so
              it is drawn here rather than inside either strip. -->
         <helman-forecast-health-banner
-          .items=${buildForecastHealthItems(this._forecastHealth, this._localize)}
+          .items=${buildForecastHealthItems(this._forecast, this._localize)}
           .localize=${this._localize}
         ></helman-forecast-health-banner>
         ${this._loading ? html`<div class="note">${this._t("bias_correction.inspector.loading")}</div>` : ""}
@@ -1161,11 +1248,8 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderNavigation() {
-    const today = this._todayIso();
-    const pillWindow = this._pillWindow(today);
-    // The window is derived from the selection, so this is the one place that
-    // knows it changed; the fetch is a no-op while it stays the same.
-    void this._loadDayAggregates(pillWindow.start, pillWindow.end);
+    // Both computed in `willUpdate`; nothing is derived or assigned here.
+    const today = this._todayKey;
     const minDate = this._range?.minDate ?? null;
     const canGoBack = minDate === null || this._selectedDate > minDate;
     const canGoForward = this._selectedDate < today;
@@ -1179,8 +1263,8 @@ export class HelmanSolarInspector extends LitElement {
             .hass=${this.hass}
             .selectedDate=${this._selectedDate}
             .currentDate=${today}
-            .startDate=${pillWindow.start}
-            .endDate=${pillWindow.end}
+            .startDate=${this._pillWindowStart}
+            .endDate=${this._pillWindowEnd}
             .historyDays=${this._historyDays}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
@@ -1831,6 +1915,7 @@ export class HelmanSolarInspector extends LitElement {
           ? html`
               <helman-solar-export-price-strip
                 .hass=${this.hass}
+                .forecast=${this._forecast}
                 .date=${payload.date}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
                 .selectedMinutes=${this._selectedMinutes(payload)}
@@ -2790,6 +2875,29 @@ export class HelmanSolarInspector extends LitElement {
    * so both views name the concept identically; it falls back to this card's
    * localized string when the card leaves it unset.
    */
+  /**
+   * The switch entities the house-composition panel draws a live badge for,
+   * bubbled up so the card at the top can watch them. This is the inspector's
+   * own contribution to the watch set — the ids come from the payload, not from
+   * the schedule band — and without it, toggling one of these appliances
+   * anywhere else in Home Assistant would leave its badge stale indefinitely.
+   *
+   * Taken from the *unfiltered* breakdown, not from the `wh > 0` subset
+   * `_renderHouseBreakdown` draws: the backend's consumer roster is built from
+   * config and takes no date, so the unfiltered set is the same on every day,
+   * while the rendered subset is not. Dispatching the rendered subset would make
+   * the card's union grow as the user pages through days.
+   */
+  private _emitWatchedEntities(payload: InspectorPayload) {
+    const ids = new Set<string>();
+    for (const point of payload.series.houseActualBreakdown) {
+      for (const appliance of point.appliances) {
+        if (appliance.switchEntityId) ids.add(appliance.switchEntityId);
+      }
+    }
+    dispatchWatchedEntities(this, [...ids]);
+  }
+
   private _renderHouseBreakdown(
     breakdown: HouseBreakdownPoint | null,
     unmeasuredLabel: string | null,
@@ -3231,6 +3339,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.batterySocBounds ??= [];
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
+        this._emitWatchedEntities(payload);
         this._range = payload.range;
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),
@@ -3325,9 +3434,9 @@ export class HelmanSolarInspector extends LitElement {
    * the week is none.
    */
   private async _loadDayAggregates(start: string, end: string) {
-    if (!this.hass || start >= this._todayIso()) {
-      this._historyDays = [];
-      this._historyDaysFor = null;
+    // No connection yet: decide nothing, so the window is still fetched once
+    // `hass` arrives. This is the one branch that must not stamp the key.
+    if (!this.hass) {
       return;
     }
     const key = `${start}..${end}`;
@@ -3335,6 +3444,13 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._historyDaysFor = key;
+    if (start >= this._todayKey) {
+      // A forward window has no measured days. Clearing keeps a past week's
+      // measurements from lingering after paging forward again; Lit drops the
+      // assignment on `===` once the constant is already in place.
+      this._historyDays = EMPTY_HISTORY_DAYS;
+      return;
+    }
     try {
       const result = await this.hass.callWS<{ days: SolarInspectorDayAggregateRow[] }>({
         type: "helman/solar_bias/day_aggregates",
@@ -3349,7 +3465,7 @@ export class HelmanSolarInspector extends LitElement {
       if (this._historyDaysFor === key) {
         // A window with no measurements reads exactly like one that failed to
         // load: bare pills. Not worth a banner over the day picker.
-        this._historyDays = [];
+        this._historyDays = EMPTY_HISTORY_DAYS;
       }
     }
     this.requestUpdate();
@@ -3357,7 +3473,7 @@ export class HelmanSolarInspector extends LitElement {
 
   private _handleForecastHealth = (event: CustomEvent<DayPillForecastHealthDetail>) => {
     event.stopPropagation();
-    this._forecastHealth = event.detail.forecast;
+    this._forecast = event.detail.forecast;
   };
 
   private _handleDayPillSelect = (event: CustomEvent<DayPillSelectDetail>) => {
@@ -3429,8 +3545,28 @@ export class HelmanSolarInspector extends LitElement {
     );
   }
 
+  /**
+   * Today's day key, recomputed at most once a second.
+   *
+   * It is asked for several times per render and the answer only changes at
+   * midnight, so a second of staleness is invisible -- but only a second: this
+   * deliberately does not ride `NOW_RESOLUTION_MS`, because half a minute of
+   * lag at midnight is a visibly wrong answer. The time zone is part of the key
+   * because it really does change, when a payload lands carrying its own.
+   */
+  private _todayIsoMemo: { second: number; timeZone: string | undefined; value: string } | null = null;
+
   private _todayIso() {
-    return this._formatDateInTimeZone(new Date(), this._haTimeZone());
+    const timeZone = this._haTimeZone();
+    const second = Math.floor(Date.now() / 1000);
+    const memo = this._todayIsoMemo;
+    if (memo !== null && memo.second === second && memo.timeZone === timeZone) {
+      return memo.value;
+    }
+
+    const value = this._formatDateInTimeZone(new Date(), timeZone);
+    this._todayIsoMemo = { second, timeZone, value };
+    return value;
   }
 
   private _formatDateInTimeZone(value: Date, timeZone: string | undefined) {
@@ -3442,12 +3578,7 @@ export class HelmanSolarInspector extends LitElement {
       );
     }
 
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(value);
+    const parts = _getDayKeyFormatter(timeZone).formatToParts(value);
     const year = Number(parts.find((part) => part.type === "year")?.value);
     const month = Number(parts.find((part) => part.type === "month")?.value);
     const day = Number(parts.find((part) => part.type === "day")?.value);

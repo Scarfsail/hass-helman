@@ -7,6 +7,7 @@ import { ForecastLoader } from "../helman/forecast-loader";
 import { getSharedHelmanStore } from "../helman/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import { dispatchWatchedEntities } from "../shared/hass-change";
 import "../shared/schedule/components/scheduling-entity-day-band";
 import "../shared/schedule/dialogs/scheduling-entity-day-editor";
 import type {
@@ -46,8 +47,8 @@ import {
     type ScheduleApplianceProjectionIndex,
 } from "../shared/schedule/model/schedule-appliance-projection";
 import {
-    applyNormalizedScheduleCurrentState,
-    buildNormalizedScheduleStructure,
+    EMPTY_NORMALIZED_SCHEDULE,
+    NormalizedScheduleCache,
 } from "../shared/schedule/model/schedule-normalizer";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import {
@@ -98,18 +99,11 @@ const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
     stale: false,
 };
 
-const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
-    slots: [],
-    currentSlotId: null,
-    currentDayKey: null,
-    granularityMinutes: null,
-};
-
 /**
  * The house's schedule as a stack of per-entity timelines, on the solar
  * inspector's own time axis.
  *
- * The same band the scheduling card's day editor is built around, read-only and
+ * The same band the day editor is built around, read-only and
  * cropped to whatever window the charts above are drawing. That is the point of
  * putting it here: a run is only interesting next to the solar it was placed to
  * catch, and two surfaces drawing the same day two different ways would be two
@@ -161,6 +155,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /** The schedule changed under the open draft; Save will overwrite what arrived. */
     @state() private _editorScheduleChanged = false;
 
+    private _nowTimer?: number;
     private _localizeFn?: LocalizeFunction;
     private _scheduleOwner?: SharedScheduleOwner;
     private _unsubscribeOwner?: () => void;
@@ -173,8 +168,8 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /** The schedule the open draft was seeded from, to notice a refresh under it. */
     private _editorScheduleAtOpen: unknown = null;
 
+    private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
-    private _normalizedFor: { schedule: unknown; timeZone: string } | null = null;
 
     private _dayView: EntityScheduleDayView = { slots: [], forecastPoints: new Map() };
     private _lanes: EntityScheduleLane[] = [];
@@ -194,12 +189,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
 
     protected willUpdate(changed: PropertyValues<this>): void {
         if (changed.has("hass") && this.hass) {
-            // Coarse on purpose: hass updates land on every state change in the
-            // house, and every move of this clock rebuilds the day.
-            const now = Date.now();
-            if (now - this._nowMs >= NOW_RESOLUTION_MS) {
-                this._nowMs = now;
-            }
             this._localizeFn = getLocalizeFunction(this.hass);
             if (this._loadedConnection !== this.hass.connection) {
                 this._loadedConnection = this.hass.connection;
@@ -219,8 +208,27 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         this._rebuildDerivedIfNeeded();
     }
 
+    connectedCallback(): void {
+        super.connectedCallback();
+        // The wall clock owns a timer, because `hass` churn is not a clock: the
+        // card above filters `hass` down to the entities this strip actually
+        // reads, and `_nowMs` is the *only* `_derivedFor` key that moves on an
+        // idle installation. Advance it from `hass` and the whole derived model
+        // freezes the moment the house goes quiet — elapsed bands, entity
+        // statuses, day labels and the open editor's clock with it. Coarse on
+        // purpose: every move rebuilds the day.
+        this._nowMs = Date.now();
+        this._nowTimer = window.setInterval(() => {
+            this._nowMs = Date.now();
+        }, NOW_RESOLUTION_MS);
+    }
+
     disconnectedCallback(): void {
         super.disconnectedCallback();
+        if (this._nowTimer !== undefined) {
+            window.clearInterval(this._nowTimer);
+            this._nowTimer = undefined;
+        }
         this._emitHover(null);
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = undefined;
@@ -286,9 +294,9 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /**
      * The day editor, opened on whichever lane was pressed.
      *
-     * It is the same dialog the scheduling card opens, fed from the same
-     * builders -- so what the user gets from here is not an inspector-flavoured
-     * editor but *the* editor, already looking at the entity they pointed at.
+     * It is the shared day editor, fed from the same builders -- so what the
+     * user gets from here is not an inspector-flavoured editor but *the*
+     * editor, already looking at the entity they pointed at.
      */
     private _renderEditor() {
         const lane = this._editorTarget;
@@ -518,8 +526,8 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     };
 
     /**
-     * The day's draft, as one write, through the same owner the scheduling card
-     * writes through -- so a change made from here lands on that card too.
+     * The day's draft, as one write, through the shared schedule owner -- so a
+     * change made from here lands on every other view of the same day.
      *
      * The dialog stays open until the write settles, so a failure leaves the
      * draft on screen rather than closing over a change that never happened.
@@ -682,6 +690,34 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         }
     }
 
+    /**
+     * Every entity id this strip resolves out of `hass.states`, bubbled up so
+     * the card at the top can filter `hass` without repeating the fetch that
+     * found them (`getControllableEntities` does not cache, so a card-level call
+     * would be an extra round trip per dashboard load).
+     *
+     * Always the whole set, never a delta: the two loads that contribute land
+     * independently — the EV `useMode`/`ecoGear` selects come from the appliance
+     * metadata, the rest from the controllable entities — and either may be the
+     * one that arrives second. `controlEntityIds.primary` is already a
+     * controllable entity id, so including it costs nothing and stops the set
+     * depending on that invariant holding.
+     */
+    private _emitWatchedEntities(): void {
+        const ids = new Set<string>();
+        for (const entity of this._controllableEntities) {
+            ids.add(entity.entityId);
+        }
+        for (const appliance of this._appliances) {
+            const controls = appliance.controlEntityIds;
+            if (!controls) continue;
+            if (controls.primary) ids.add(controls.primary);
+            if (controls.useMode) ids.add(controls.useMode);
+            if (controls.ecoGear) ids.add(controls.ecoGear);
+        }
+        dispatchWatchedEntities(this, [...ids]);
+    }
+
     private async _loadAppliances(): Promise<void> {
         const hass = this.hass;
         if (!hass || this._appliancesRequested) {
@@ -695,6 +731,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 return;
             }
             this._appliances = normalizeScheduleApplianceMetadata(payload);
+            this._emitWatchedEntities();
         } catch (error) {
             if (this.hass?.connection !== hass.connection) {
                 return;
@@ -718,6 +755,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 return;
             }
             this._controllableEntities = payload.entities;
+            this._emitWatchedEntities();
             void this._loadActualHistory();
         } catch {
             if (this.hass?.connection !== hass.connection) {
@@ -789,34 +827,17 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     /**
      * The schedule as slots, with the one the clock is inside marked.
      *
-     * The structure is rebuilt only when the schedule itself changes, but which
-     * slot is current is a fact about the clock, so it is re-applied on every
-     * pass -- cheaply, since the model is returned unchanged when the answer has
-     * not moved. Without it nothing is `isCurrent`, and the forecast's fallback
-     * to the battery's live SoC and the live price -- the only readings the
-     * in-progress slot has, since the projection starts at the next boundary --
-     * never fires, leaving that slot blank in every chart drawn from it. The
-     * day it belongs to goes unnamed too, which is what turns the editor's
-     * "today" chip back into a date.
+     * Read from the strip's own coarse `_nowMs` rather than the wall clock, so
+     * that `_normalized` moves in the same step as every other clock-derived
+     * key of `_derivedFor` -- and, critically, only when that timer ticks. Pass
+     * `new Date()` here instead and the model would gain a new identity on
+     * every render that crossed a slot boundary out of step with `_nowMs`.
      */
     private _rebuildNormalizedIfNeeded(): void {
-        const schedule = this._ownerSnapshot.schedule;
-        if (
-            this._normalizedFor === null
-            || this._normalizedFor.schedule !== schedule
-            || this._normalizedFor.timeZone !== this.timeZone
-        ) {
-            this._normalized = buildNormalizedScheduleStructure({
-                schedule,
-                timeZone: this.timeZone,
-                locale: this._locale,
-            });
-            this._normalizedFor = { schedule, timeZone: this.timeZone };
-        }
-
-        this._normalized = applyNormalizedScheduleCurrentState(
-            this._normalized,
+        this._normalized = this._normalizedCache.get(
+            this._ownerSnapshot.schedule,
             this.timeZone,
+            this._locale,
             new Date(this._nowMs),
         );
     }

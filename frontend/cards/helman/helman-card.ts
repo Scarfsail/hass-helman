@@ -71,6 +71,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     };
 
     // 7. HA-specific setters
+    /**
+     * The worked example of "a new `hass` is not a change signal" — see
+     * `frontend/cards/README.md`, "Card rendering discipline".
+     */
     public set hass(hass: HomeAssistant) {
         const previous = this._latestHass;
         this._latestHass = hass;
