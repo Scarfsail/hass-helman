@@ -112,8 +112,6 @@ const STRINGS: Record<string, string> = {
     "scheduling.explanation.diagram.edit.load_failed": "Could not load the config",
     "scheduling.explanation.diagram.edit.not_found":
         "Optimizer \u201c{id}\u201d is not in the stored config.",
-    "scheduling.explanation.diagram.edit.save": "Save and restart",
-    "scheduling.explanation.diagram.edit.saving": "Saving…",
     "scheduling.explanation.diagram.edit.close": "Close",
     "scheduling.explanation.diagram.edit.cancel": "Cancel",
     "scheduling.explanation.diagram.edit.discard": "Discard unsaved changes?",
@@ -122,6 +120,14 @@ const STRINGS: Record<string, string> = {
 interface MountOptions {
     isAdmin?: boolean;
     config?: unknown;
+    /**
+     * Successive `helman/get_config` answers, for the collision tests.
+     *
+     * The dialog reads once on open and once more before saving; handing those
+     * two reads different documents is how "someone else wrote it in between"
+     * is expressed here. The last entry repeats.
+     */
+    configSequence?: unknown[];
     saveResponse?: unknown;
 }
 
@@ -129,6 +135,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
     const {
         isAdmin = true,
         config = CONFIG,
+        configSequence = [config],
         saveResponse = { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true },
     } = options;
 
@@ -137,9 +144,21 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
     await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
 
     await page.evaluate(
-        ({ fixture, slotId, admin, schema, initialConfig, save, strings }) => {
+        ({ fixture, slotId, admin, schema, configs, save, strings }) => {
             const calls: { type: string; config?: unknown }[] = [];
-            (window as unknown as Record<string, unknown>).__calls = calls;
+            const globals = window as unknown as Record<string, unknown>;
+            globals.__calls = calls;
+
+            // The shared data-changed feed subscribes through `connection`;
+            // holding the listener lets a test play the backend's announcement.
+            const listeners: ((event: unknown) => void)[] = [];
+            globals.__fireDataChanged = (kind: string) => {
+                for (const listener of listeners) {
+                    listener({ data: { kind } });
+                }
+            };
+
+            let reads = 0;
 
             const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
                 & Record<string, unknown>;
@@ -148,9 +167,24 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: admin },
+                connection: {
+                    subscribeEvents: async (
+                        callback: (event: unknown) => void,
+                        _eventType: string,
+                    ) => {
+                        listeners.push(callback);
+                        return () => {
+                            listeners.splice(listeners.indexOf(callback), 1);
+                        };
+                    },
+                },
                 callWS: async (request: { type: string; config?: unknown }) => {
                     calls.push({ type: request.type, config: request.config });
-                    if (request.type === "helman/get_config") return initialConfig;
+                    if (request.type === "helman/get_config") {
+                        const answer = configs[Math.min(reads, configs.length - 1)];
+                        reads += 1;
+                        return answer;
+                    }
                     if (request.type === "helman/get_optimizer_schema") return schema;
                     if (request.type === "helman/get_appliances") return { appliances: [] };
                     if (request.type === "helman/save_config") return save;
@@ -168,7 +202,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             slotId: SLOT_IDS[0],
             admin: isAdmin,
             schema: SCHEMA,
-            initialConfig: config,
+            configs: configSequence,
             save: saveResponse,
             strings: STRINGS,
         },
@@ -188,6 +222,15 @@ function dialog(page: Page) {
 async function openDialog(page: Page): Promise<void> {
     await editButton(page).click();
     await expect(dialog(page)).toHaveCount(1);
+}
+
+/** Play the backend's `helman_data_changed` announcement. */
+async function fireDataChanged(page: Page, kind = "config"): Promise<void> {
+    await page.evaluate((k) => {
+        (window as unknown as Record<string, (kind: string) => void>).__fireDataChanged(k);
+    }, kind);
+    // The shared feed collapses a burst before telling listeners.
+    await page.waitForTimeout(600);
 }
 
 /** Every websocket request the panel and the dialog made, in order. */
@@ -240,7 +283,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await threshold.fill("2.5");
         await threshold.blur();
 
-        await dialog(page).getByText("Save and restart").click();
+        await dialog(page).getByText("Save and reload").click();
 
         const saved = (await calls(page)).filter((call) => call.type === "helman/save_config");
         expect(saved).toHaveLength(1);
@@ -262,7 +305,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             },
         });
         await openDialog(page);
-        await dialog(page).getByText("Save and restart").click();
+        await dialog(page).getByText("Save and reload").click();
 
         await expect(dialog(page).locator(".message.error")).toHaveCount(1);
         await expect(dialog(page).locator("helman-optimizer-editor")).toHaveCount(1);
@@ -293,5 +336,121 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
     test("nothing is asked of the backend until the button is pressed", async ({ page }) => {
         await mountPanel(page);
         expect(await calls(page)).toEqual([]);
+    });
+});
+
+/**
+ * `helman/save_config` replaces the whole document, so a dialog that edits one
+ * optimizer can silently revert whatever else was written while it was open.
+ * The window is small; the loss is total and silent, which is what makes it
+ * worth a guard rather than a note.
+ */
+test.describe("the dialog refuses to overwrite a config that moved under it", () => {
+    /** The same document, plus an edit nobody in this dialog made. */
+    const CHANGED_ELSEWHERE = {
+        ...CONFIG,
+        power_devices: { house: { base_load_w: 900 } },
+    };
+
+    test("a config that changed between open and save blocks the save", async ({ page }) => {
+        await mountPanel(page, { configSequence: [CONFIG, CHANGED_ELSEWHERE] });
+        await openDialog(page);
+
+        await dialog(page).getByText("Save and reload").click();
+
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
+        // Not "saved and then complained" — never sent at all.
+        expect((await calls(page)).filter((call) => call.type === "helman/save_config"))
+            .toHaveLength(0);
+    });
+
+    test("an unchanged config lets the save through, so the guard is not always-on", async ({ page }) => {
+        await mountPanel(page, { configSequence: [CONFIG, CONFIG] });
+        await openDialog(page);
+
+        await dialog(page).getByText("Save and reload").click();
+
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+        expect((await calls(page)).filter((call) => call.type === "helman/save_config"))
+            .toHaveLength(1);
+    });
+
+    test("key order alone is not a change", async ({ page }) => {
+        // Two reads of one stored document need not agree on insertion order;
+        // a comparison that called that a collision would block every save.
+        const REORDERED = {
+            automation: CONFIG.automation,
+            appliances: CONFIG.appliances,
+            power_devices: CONFIG.power_devices,
+            config_version: CONFIG.config_version,
+        };
+        await mountPanel(page, { configSequence: [CONFIG, REORDERED] });
+        await openDialog(page);
+
+        await dialog(page).getByText("Save and reload").click();
+
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+        expect((await calls(page)).filter((call) => call.type === "helman/save_config"))
+            .toHaveLength(1);
+    });
+
+    test("the notice arrives while the dialog is open, not only at save", async ({ page }) => {
+        await mountPanel(page);
+        await openDialog(page);
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+
+        await fireDataChanged(page);
+
+        // Learned before typing another twenty seconds of edits.
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
+    });
+
+    test("the dialog's own save does not raise its own notice", async ({ page }) => {
+        await mountPanel(page);
+        await openDialog(page);
+        await dialog(page).getByText("Save and reload").click();
+        await expect(dialog(page).locator(".message.success")).toHaveCount(1);
+
+        // The backend fires the event *because of* this save; it is not news.
+        await fireDataChanged(page);
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+    });
+
+    test("a second save is not blocked by the first one's own write", async ({ page }) => {
+        // Every read after the save returns what the save produced, which is
+        // the sequence's last entry repeating.
+        const SAVED = {
+            ...CONFIG,
+            automation: {
+                ...CONFIG.automation,
+                optimizers: [
+                    CONFIG.automation.optimizers[0],
+                    { ...CONFIG.automation.optimizers[1], conditions: [{ when_price_below: 2.5 }] },
+                ],
+            },
+        };
+        await mountPanel(page, { configSequence: [CONFIG, CONFIG, SAVED] });
+        await openDialog(page);
+
+        await dialog(page).getByText("Save and reload").click();
+        await expect(dialog(page).locator(".message.success")).toHaveCount(1);
+
+        await dialog(page).getByText("Save and reload").click();
+
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+        expect((await calls(page)).filter((call) => call.type === "helman/save_config"))
+            .toHaveLength(2);
+    });
+
+    test("reloading after a collision reads the config that won", async ({ page }) => {
+        await mountPanel(page, { configSequence: [CONFIG, CHANGED_ELSEWHERE] });
+        await openDialog(page);
+        await dialog(page).getByText("Save and reload").click();
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
+
+        await dialog(page).getByText("Reload stored config").click();
+
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+        await expect(dialog(page).locator("helman-optimizer-editor")).toHaveCount(1);
     });
 });

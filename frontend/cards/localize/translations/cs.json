@@ -397,8 +397,6 @@
           "loading": "Načítám konfiguraci…",
           "load_failed": "Konfiguraci se nepodařilo načíst",
           "not_found": "Optimalizátor „{id}“ v uložené konfiguraci není. Mohl být přejmenován nebo smazán od doby, kdy byl tento plán sestaven.",
-          "save": "Uložit a restartovat",
-          "saving": "Ukládám…",
           "close": "Zavřít",
           "cancel": "Zrušit",
           "discard": "Zahodit neuložené změny?"

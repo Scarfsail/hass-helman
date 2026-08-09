@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 
 import type { LocalizeFunction } from "../../localize/localize";
 import { loadHaForm } from "../load-ha-elements";
+import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { asJsonArray, asJsonObject, cloneJson } from "../config/config-document";
 import {
     getLocalizeFunction,
@@ -98,6 +99,25 @@ export class HelmanOptimizerEditDialog extends LitElement {
             border-color: var(--error-color, #c62828);
             background: color-mix(in srgb, var(--error-color, #c62828) 10%, transparent);
         }
+
+        .message.stale {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .message.stale button {
+            border: 1px solid var(--divider-color);
+            border-radius: 999px;
+            padding: 4px 12px;
+            background: var(--card-background-color);
+            color: inherit;
+            font: inherit;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
     `;
 
     @property({ attribute: false }) public hass?: HomeAssistantLike;
@@ -119,6 +139,36 @@ export class HelmanOptimizerEditDialog extends LitElement {
     @state() private _message: SaveMessage | null = null;
 
     /**
+     * The config changed under us, and the draft must not be written over it.
+     *
+     * Raised by the live `helman_data_changed` feed and, as a backstop, by the
+     * re-read at save time -- a page that missed the event still cannot
+     * clobber. See `_handleSave`.
+     */
+    @state() private _stale = false;
+
+    /**
+     * The document exactly as it was read, before any edit.
+     *
+     * Kept apart from the draft the editor mutates, because it is the *only*
+     * thing a re-read can be compared against: the draft has diverged on
+     * purpose, so comparing the re-read to it would call every own edit a
+     * collision.
+     */
+    private _baseline: string | null = null;
+
+    private _unsubscribeDataChanged?: () => void;
+
+    /**
+     * Our own save is about to fire `helman_data_changed`. Ignore that one.
+     *
+     * Same flag, and the same reason, as `helman-config-editor`'s
+     * `_expectOwnDataChange`: the announcement of a write we performed is not
+     * news that someone else wrote.
+     */
+    private _expectOwnDataChange = false;
+
+    /**
      * The `editor.*` strings, which live in the config editor's own table.
      *
      * Built from `hass` rather than taken as a property: those keys are not in
@@ -132,6 +182,22 @@ export class HelmanOptimizerEditDialog extends LitElement {
         super.connectedCallback();
         void loadHaForm().then(() => this.requestUpdate());
         void this._load();
+        const hass = this.hass;
+        if (hass) {
+            this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
+                if (this._expectOwnDataChange) {
+                    this._expectOwnDataChange = false;
+                    return;
+                }
+                this._stale = true;
+            });
+        }
+    }
+
+    disconnectedCallback(): void {
+        super.disconnectedCallback();
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
     }
 
     render() {
@@ -146,6 +212,16 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 @closed=${this._handleClosed}
             >
                 <div class="dialog-content">
+                    ${this._stale
+                        ? html`
+                              <div class="message error stale">
+                                  <span>${this._editorText("editor.status.changed_elsewhere")}</span>
+                                  <button type="button" @click=${this._handleReload}>
+                                      ${this._editorText("editor.actions.reload_config")}
+                                  </button>
+                              </div>
+                          `
+                        : nothing}
                     ${this._message
                         ? html`<div class="message ${this._message.kind}">${this._message.text}</div>`
                         : nothing}
@@ -154,8 +230,16 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 <ha-dialog-footer slot="footer">
                     ${this._view.kind === "ready"
                         ? html`
-                              <ha-button slot="primaryAction" @click=${this._handleSave}>
-                                  ${this._saving ? this._text("saving") : this._text("save")}
+                              <ha-button
+                                  slot="primaryAction"
+                                  .disabled=${this._stale || this._saving}
+                                  @click=${this._handleSave}
+                              >
+                                  ${this._editorText(
+                                      this._saving
+                                          ? "editor.actions.saving"
+                                          : "editor.actions.save_and_reload",
+                                  )}
                               </ha-button>
                           `
                         : nothing}
@@ -214,6 +298,9 @@ export class HelmanOptimizerEditDialog extends LitElement {
         if (!hass) {
             return;
         }
+        this._view = { kind: "loading" };
+        this._dirty = false;
+        this._stale = false;
         this._editorLocalize = getLocalizeFunction(hass);
         try {
             const [config, schema, appliances] = await Promise.all([
@@ -228,6 +315,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 this._view = { kind: "not_found" };
                 return;
             }
+            this._baseline = canonicalJson(document);
             const index = findOptimizerIndex(document, this.optimizerId);
             this._view =
                 index === null
@@ -271,11 +359,30 @@ export class HelmanOptimizerEditDialog extends LitElement {
         this._saving = true;
         this._message = null;
         try {
+            // Re-read and compare before writing. The event feed above catches
+            // this in the common case, but a page that was backgrounded, or a
+            // connection that dropped and came back, may never have seen it --
+            // and the cost of missing it is one silent whole-document clobber.
+            if (await this._configChangedElsewhere()) {
+                this._stale = true;
+                this._message = {
+                    kind: "error",
+                    text: this._editorText("editor.status.changed_elsewhere"),
+                };
+                return;
+            }
+            this._expectOwnDataChange = true;
             const response = await this.hass.callWS<SaveConfigResponse>({
                 type: "helman/save_config",
                 config: view.config,
             });
             if (response.success) {
+                // The document we just wrote is the new baseline. Without this
+                // a second save would compare against the pre-save read, find
+                // our own write, and refuse. Re-read rather than reuse the
+                // draft: the backend stamps `config_version` on write, and the
+                // baseline has to be what a later read will actually return.
+                await this._rebaseline();
                 this._dirty = false;
                 this._message = {
                     kind: "success",
@@ -298,6 +405,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                     ),
             };
         } catch (error) {
+            this._expectOwnDataChange = false;
             this._message = {
                 kind: "error",
                 text: `${this._editorText("editor.messages.save_failed")} ${describeError(error)}`,
@@ -305,6 +413,55 @@ export class HelmanOptimizerEditDialog extends LitElement {
         } finally {
             this._saving = false;
         }
+    };
+
+    /**
+     * Whether the stored config moved since this dialog read it.
+     *
+     * Compares the *whole* document, not just the edited optimizer: a
+     * whole-document save is exactly what destroys an unrelated change, so an
+     * unrelated change is exactly what has to stop it. Both sides are reads of
+     * the same endpoint, so `save_config`'s `config_version` stamping cannot
+     * show up here as a difference on its own.
+     *
+     * A failed re-read is treated as "changed": refusing to save costs the user
+     * a retry, and saving anyway could cost them someone else's work.
+     */
+    private async _configChangedElsewhere(): Promise<boolean> {
+        if (!this.hass || this._baseline === null) {
+            return false;
+        }
+        try {
+            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            return current === null || canonicalJson(current) !== this._baseline;
+        } catch {
+            return true;
+        }
+    }
+
+    /** Adopt the stored config as the baseline, without touching the draft. */
+    private async _rebaseline(): Promise<void> {
+        if (!this.hass) {
+            return;
+        }
+        try {
+            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            if (current !== null) {
+                this._baseline = canonicalJson(current);
+            }
+        } catch {
+            // Leaving the old baseline in place is the safe failure: the next
+            // save re-reads anyway and will refuse rather than clobber.
+        }
+    }
+
+    /** Throw the draft away and read the config again. */
+    private _handleReload = (): void => {
+        if (this._dirty && !window.confirm(this._editorText("editor.confirm.discard_changes"))) {
+            return;
+        }
+        this._message = null;
+        void this._load();
     };
 
     /** Closing on an unsaved draft asks first; the draft is the user's work. */
@@ -361,6 +518,28 @@ function findOptimizerIndex(config: JsonObject, optimizerId: string): number | n
         (entry) => asJsonObject(entry)?.id === optimizerId,
     );
     return index === -1 ? null : index;
+}
+
+/**
+ * A document as one string, with object keys in a stable order.
+ *
+ * `JSON.stringify` preserves insertion order, and two reads of the same stored
+ * config need not agree on it -- the backend rebuilds the dict on every load
+ * and a migration may reinsert a key. Sorting makes the comparison about the
+ * content, which is the only thing a collision check should be about.
+ */
+function canonicalJson(value: unknown): string {
+    return JSON.stringify(value, (_key, nested) => {
+        if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
+            return nested;
+        }
+        const entry = nested as Record<string, unknown>;
+        const sorted: Record<string, unknown> = {};
+        for (const key of Object.keys(entry).sort()) {
+            sorted[key] = entry[key];
+        }
+        return sorted;
+    });
 }
 
 function describeError(error: unknown): string {
