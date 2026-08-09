@@ -1884,6 +1884,15 @@ export class SchedulingLogicDiagram extends LitElement {
      */
     @property({ type: Boolean }) public canEditAutomation = false;
 
+    /**
+     * What to call the optimizer in the head — the config editor's card title.
+     *
+     * Resolved by whoever mounts this, because the title of an appliance-target
+     * optimizer is its *appliance's* name and the diagram holds no config.
+     * Falls back to the id, which is always in the cell.
+     */
+    @property({ type: String }) public optimizerLabel = "";
+
     render() {
         const cell = this.cell;
         if (cell === null || !cell.present) {
@@ -1898,8 +1907,10 @@ export class SchedulingLogicDiagram extends LitElement {
             <div class="diagram">
                 <div class="head">
                     <span class="title">${this._text("diagram.title")}</span>
-                    ${cell.optimizerId
-                        ? html`<span class="optimizer">${cell.optimizerId}</span>`
+                    ${this.optimizerLabel || cell.optimizerId
+                        ? html`<span class="optimizer">
+                              ${this.optimizerLabel || cell.optimizerId}
+                          </span>`
                         : nothing}
                     <span class="slot">${this.slotLabel || cell.slotId}</span>
                     ${model.matchedGroupIndex === null ? nothing : html`

@@ -696,11 +696,17 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         const key = this._explanationKey(selection.laneKey, day.dayKey);
+        // An appliance lane's optimizers are titled by the appliance in the
+        // config editor, and the lane already knows its name -- so the
+        // explanation can name them the same way without asking the backend
+        // for the config it would otherwise need.
+        const lane = this._lanes.find((entry) => entry.key === selection.laneKey);
         return html`
             <div class="panel">
                 <scheduling-explanation-panel
                     .hass=${this.hass}
                     .localize=${this.localize}
+                    .applianceName=${lane?.appliance?.name ?? null}
                     .payload=${this._explanations.get(key) ?? null}
                     .slotId=${selection.slotId}
                     .loading=${!this._explanations.has(key) && !this._explanationFailures.has(key)}

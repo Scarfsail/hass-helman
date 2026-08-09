@@ -146,6 +146,17 @@ export class SchedulingExplanationPanel extends LitElement {
     @property({ type: Boolean }) public failed = false;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
+    /**
+     * The name of the appliance this lane drives, when it drives one.
+     *
+     * Only for titling. The config editor titles an appliance-target optimizer
+     * by its appliance rather than by its id, and an explanation that named the
+     * same rule differently would leave the reader matching `surplus-appliance-4`
+     * against "Žebřík koupelna" by hand. Passed in rather than looked up: the
+     * lane above already holds it, and fetching the config to title a heading
+     * would cost a round trip on every slot press.
+     */
+    @property({ attribute: false }) public applianceName: string | null = null;
 
     /**
      * The tab the user picked, if they picked one.
@@ -220,6 +231,7 @@ export class SchedulingExplanationPanel extends LitElement {
                         .slotLabel=${this._slotLabel()}
                         .planLabel=${this._planLabel(active.cell)}
                         .plannedBeforeHours=${this._plannedBeforeHours(active)}
+                        .optimizerLabel=${this._optimizerTitle(active.column)}
                         .canEditAutomation=${this._canEditAutomation()}
                         @condition-trace-requested=${this._handleTraceRequested}
                         @optimizer-edit-requested=${this._handleEditRequested}
@@ -524,6 +536,23 @@ export class SchedulingExplanationPanel extends LitElement {
         const full = `${KEY_PREFIX}.${group}.${key}`;
         const translated = this.localize(full);
         return translated === full || translated === undefined ? key : translated;
+    }
+
+    /**
+     * What the config editor calls this optimizer.
+     *
+     * `target_key` is `appliance:<id>` exactly when the optimizer has an
+     * appliance target, which is exactly when the editor's card is titled by
+     * the appliance instead of by the id — so this reads the same fact off the
+     * lane rather than re-deriving it from a list of kinds that would go stale
+     * the next time a kind is added.
+     */
+    private _optimizerTitle(column: ExplanationColumn): string {
+        const drivesAnAppliance = column.targetKey.startsWith("appliance:");
+        if (drivesAnAppliance && this.applianceName) {
+            return this.applianceName;
+        }
+        return column.optimizerId;
     }
 
     private _optimizerLabel(kind: string | null): string {

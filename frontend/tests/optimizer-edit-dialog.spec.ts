@@ -129,6 +129,8 @@ interface MountOptions {
      */
     configSequence?: unknown[];
     saveResponse?: unknown;
+    payload?: unknown;
+    applianceName?: string | null;
 }
 
 async function mountPanel(page: Page, options: MountOptions = {}): Promise<void> {
@@ -137,6 +139,8 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
         config = CONFIG,
         configSequence = [config],
         saveResponse = { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true },
+        payload = PAYLOAD,
+        applianceName = null,
     } = options;
 
     await page.setContent("<!doctype html><html><body></body></html>");
@@ -144,7 +148,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
     await page.waitForFunction(() => !!customElements.get("scheduling-explanation-panel"));
 
     await page.evaluate(
-        ({ fixture, slotId, admin, schema, configs, save, strings }) => {
+        ({ fixture, slotId, admin, schema, configs, save, strings, appliance }) => {
             const calls: { type: string; config?: unknown }[] = [];
             const globals = window as unknown as Record<string, unknown>;
             globals.__calls = calls;
@@ -191,6 +195,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
                     return {};
                 },
             };
+            panel.applianceName = appliance;
             panel.payload = fixture;
             panel.slotId = slotId;
             panel.locale = "cs";
@@ -198,13 +203,14 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             document.body.appendChild(panel);
         },
         {
-            fixture: PAYLOAD,
+            fixture: payload,
             slotId: SLOT_IDS[0],
             admin: isAdmin,
             schema: SCHEMA,
             configs: configSequence,
             save: saveResponse,
             strings: STRINGS,
+            appliance: applianceName,
         },
     );
 
@@ -253,6 +259,38 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await mountPanel(page);
         // The tab strip labels by kind and disappears when a slot has one
         // optimizer, so without this the head names no optimizer at all.
+        await expect(page.locator("scheduling-explanation-panel .optimizer"))
+            .toHaveText("export_price");
+    });
+
+    test("an appliance-driving optimizer is named the way its card is", async ({ page }) => {
+        // The config editor titles these by the appliance, not the id — an id
+        // like `surplus-appliance-4` names nothing a reader recognises, and
+        // showing it here would leave them matching it against "Bathroom
+        // radiator" by hand.
+        await mountPanel(page, {
+            payload: {
+                ...PAYLOAD,
+                targetKey: "appliance:heater-shower",
+                optimizers: [{
+                    ...PAYLOAD.optimizers[0],
+                    optimizerId: "surplus-appliance-4",
+                    kind: "appliance_runtime",
+                    targetKey: "appliance:heater-shower",
+                }],
+            },
+            applianceName: "Bathroom radiator",
+        });
+
+        await expect(page.locator("scheduling-explanation-panel .optimizer"))
+            .toHaveText("Bathroom radiator");
+    });
+
+    test("an optimizer that drives no appliance keeps its id", async ({ page }) => {
+        // The inverter lane's optimizers are titled by id in the config editor
+        // too, so a lane name must not leak onto them.
+        await mountPanel(page, { applianceName: "Bathroom radiator" });
+
         await expect(page.locator("scheduling-explanation-panel .optimizer"))
             .toHaveText("export_price");
     });
