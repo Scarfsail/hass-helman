@@ -18,6 +18,7 @@ from ..appliances.execution import (
 from ..appliances.schedule import ApplianceScheduleActionDict
 from ..appliances.state import AppliancesRuntimeRegistry
 from ..battery_state import BatteryLiveState
+from ..controllables.controllers import SelectEntityController
 from ..const import (
     SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
@@ -29,7 +30,7 @@ from ..const import (
     SCHEDULE_EXECUTOR_INTERVAL_SECONDS,
 )
 from .action_resolution import resolve_executed_schedule_action
-from .actuation import ScheduleActuator, ScheduleExecutionDisabledError
+from .actuation import ScheduleActuator
 from .runtime_status import (
     ActiveSlotRuntimeStatus,
     InverterRuntimeStatus,
@@ -43,7 +44,6 @@ from .schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
     ScheduleError,
-    ScheduleExecutionUnavailableError,
     ScheduleNotConfiguredError,
     build_horizon_start,
     find_active_slot,
@@ -54,7 +54,9 @@ from .schedule import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}
+# Names the inverter's mode entity in every diagnostic the shared select
+# controller raises, so a failure still says which select failed.
+_INVERTER_MODE_DESCRIPTION = "Schedule mode"
 
 
 @dataclass(frozen=True)
@@ -96,95 +98,6 @@ class InverterExecutionResult:
     error: ScheduleError | None = None
 
 
-@dataclass(frozen=True)
-class ModeEntityController:
-    entity_id: str
-    service_domain: str
-
-    @classmethod
-    def from_entity_id(cls, entity_id: str) -> ModeEntityController:
-        domain, separator, object_id = entity_id.partition(".")
-        if (
-            not separator
-            or not object_id
-            or domain not in {"input_select", "select"}
-        ):
-            raise ScheduleExecutionUnavailableError(
-                "Schedule mode entity must use the input_select or select domain"
-            )
-        return cls(entity_id=entity_id, service_domain=domain)
-
-    def read_state(self, actuator: ScheduleActuator) -> Any:
-        state = actuator.read_state(self.entity_id)
-        if state is None:
-            raise ScheduleExecutionUnavailableError(
-                f"Schedule mode entity '{self.entity_id}' is not available"
-            )
-
-        raw_state = getattr(state, "state", None)
-        if (
-            not isinstance(raw_state, str)
-            or not raw_state.strip()
-            or raw_state.strip().lower() in _UNAVAILABLE_STATES
-        ):
-            raise ScheduleExecutionUnavailableError(
-                f"Schedule mode entity '{self.entity_id}' is unavailable"
-            )
-        return state
-
-    @staticmethod
-    def read_available_options(state: Any) -> list[str]:
-        raw_attributes = getattr(state, "attributes", {})
-        if not isinstance(raw_attributes, Mapping):
-            raise ScheduleExecutionUnavailableError(
-                "Schedule mode entity options are unavailable"
-            )
-
-        raw_options = raw_attributes.get("options")
-        if not isinstance(raw_options, (list, tuple)) or not raw_options:
-            raise ScheduleExecutionUnavailableError(
-                "Schedule mode entity options are unavailable"
-            )
-
-        options = [
-            option
-            for option in raw_options
-            if isinstance(option, str) and option.strip()
-        ]
-        if len(options) != len(raw_options):
-            raise ScheduleExecutionUnavailableError(
-                "Schedule mode entity options must be non-empty strings"
-            )
-        return options
-
-    def validate_option(self, state: Any, option: str) -> None:
-        if option not in self.read_available_options(state):
-            raise ScheduleExecutionUnavailableError(
-                f"Schedule mode option '{option}' is not available on "
-                f"'{self.entity_id}'"
-            )
-
-    async def async_select_option(
-        self,
-        actuator: ScheduleActuator,
-        *,
-        option: str,
-    ) -> None:
-        try:
-            await actuator.async_call(
-                self.service_domain,
-                "select_option",
-                {"entity_id": self.entity_id, "option": option},
-            )
-        except ScheduleExecutionDisabledError:
-            raise
-        except Exception as err:
-            raise ScheduleExecutionUnavailableError(
-                f"Failed to apply schedule mode option '{option}' to "
-                f"'{self.entity_id}'"
-            ) from err
-
-
 class InverterExecutor:
     def __init__(
         self, actuator: ScheduleActuator, runtime: ScheduleExecutionRuntime
@@ -196,8 +109,11 @@ class InverterExecutor:
         self,
         *,
         control_config: ScheduleControlConfig,
-    ) -> tuple[ModeEntityController, Any]:
-        controller = ModeEntityController.from_entity_id(control_config.mode_entity_id)
+    ) -> tuple[SelectEntityController, Any]:
+        controller = SelectEntityController(
+            control_config.mode_entity_id,
+            description=_INVERTER_MODE_DESCRIPTION,
+        )
         state = controller.read_state(self._actuator)
         controller.validate_option(state, control_config.normal_option)
         controller.validate_option(state, control_config.stop_charging_option)
@@ -396,7 +312,7 @@ class InverterExecutor:
     async def _async_apply_action(
         self,
         *,
-        controller: ModeEntityController,
+        controller: SelectEntityController,
         state: Any,
         control_config: ScheduleControlConfig,
         action: ScheduleAction,

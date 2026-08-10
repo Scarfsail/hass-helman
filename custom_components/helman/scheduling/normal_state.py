@@ -3,26 +3,27 @@
 "Normal" is uniformly the resting state: the configured normal mode for the
 inverter, and off for every appliance regardless of kind. The inspector reads
 this list to name its lanes and to tell a running entity from an idle one.
+
+The uniformity is not asserted here any more — it is read off
+:data:`..controllables.spec.CONTROLLABLE_SPECS`, which declares per kind where
+the control entity lives and what its rest looks like. What is left in this
+module is the roster's *shape*: which entities exist, in what order, and how they
+are serialised for the card.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
-from ..const import (
-    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-    SCHEDULE_ACTION_NORMAL,
-    SCHEDULE_ACTION_STOP_CHARGING,
-    SCHEDULE_ACTION_STOP_DISCHARGING,
-    SCHEDULE_ACTION_STOP_EXPORT,
+from ..controllables.spec import (
+    CONTROLLABLE_KIND_INVERTER,
+    CONTROLLABLE_SPECS,
+    ControllableSpec,
 )
 from .schedule import ScheduleControlConfig
 
 if TYPE_CHECKING:
     from ..appliances.state import AppliancesRuntimeRegistry
-
-_DEFAULT_CLIMATE_OFF_MODE = "off"
 
 
 class ControllableEntityDict(TypedDict):
@@ -38,7 +39,8 @@ class ControllableEntityDict(TypedDict):
     each one selects. The card needs it in both directions: to label the live
     inverter mode with the same chip the slot editor uses, and to project a
     scheduled action onto the entity state it will produce. Only the inverter
-    carries it -- appliance states follow from their action shape.
+    carries it -- appliance states follow from their action shape, which is why
+    only the inverter's spec declares ``action_option_attrs``.
     """
 
     kind: str
@@ -48,77 +50,67 @@ class ControllableEntityDict(TypedDict):
     actionOptions: NotRequired[dict[str, str]]
 
 
-def _climate_off_mode(appliance: Any) -> str:
-    return getattr(appliance, "stop_hvac_mode", None) or _DEFAULT_CLIMATE_OFF_MODE
-
-
 def build_controllable_entities(
     *,
     control_config: ScheduleControlConfig | None,
     registry: "AppliancesRuntimeRegistry",
 ) -> list[ControllableEntityDict]:
-    """List everything Helman can drive, with the state that counts as at rest."""
-    entities: list[ControllableEntityDict] = []
+    """List everything Helman can drive, with the state that counts as at rest.
 
+    The two arguments are two config readers, not two species: the inverter is
+    emitted by exactly the same walk as every appliance, from its own spec.
+    Pairing each source with its spec is all that is left of the split, and it
+    disappears once the inverter is configured in the same list as the rest.
+
+    Appliances are emitted in registry order rather than grouped by kind,
+    because that is the order the user wrote them in and the order the card's
+    lanes appear in.
+    """
+    sources: list[tuple[ControllableSpec, Any]] = []
     if control_config is not None:
-        entities.append(
-            ControllableEntityDict(
-                kind="inverter",
-                name="Inverter",
-                entityId=control_config.mode_entity_id,
-                normalState=control_config.normal_option,
-                actionOptions=_build_inverter_action_options(control_config),
-            )
+        sources.append(
+            (CONTROLLABLE_SPECS[CONTROLLABLE_KIND_INVERTER], control_config)
         )
-
     for appliance in registry.appliances:
-        entity_id = _appliance_entity_id(appliance)
-        if entity_id is None:
-            continue
-        entities.append(
-            ControllableEntityDict(
-                kind=appliance.kind,
-                name=appliance.name,
-                entityId=entity_id,
-                normalState=(
-                    _climate_off_mode(appliance)
-                    if getattr(appliance, "climate_entity_id", None)
-                    else "off"
-                ),
-            )
-        )
+        spec = CONTROLLABLE_SPECS.get(appliance.kind)
+        # A kind no spec knows cannot be driven, named or given a resting
+        # state, so it cannot be listed. The config readers already reject
+        # unknown kinds, so this is a guard, not a path.
+        if spec is not None:
+            sources.append((spec, appliance))
 
+    entities: list[ControllableEntityDict] = []
+    for spec, source in sources:
+        entity = _build_controllable_entity(spec, source)
+        if entity is not None:
+            entities.append(entity)
     return entities
 
 
-def _build_inverter_action_options(
-    control_config: ScheduleControlConfig,
-) -> dict[str, str]:
-    """The inverter mode option each schedule action kind selects.
+def _build_controllable_entity(
+    spec: ControllableSpec,
+    source: Any,
+) -> ControllableEntityDict | None:
+    """One roster entry, or nothing when the instance cannot be placed on it.
 
-    Actions the installation has no option configured for are left out rather
-    than mapped to a placeholder, so the card can tell "not available here"
-    apart from "selects this option".
+    An entry needs all three of a control entity, a name and a resting state:
+    without the entity there is nothing to watch, and without a resting state
+    the card cannot tell running from idle. Any of them missing means a partly
+    configured instance, which is skipped rather than half-listed.
     """
-    options = {
-        SCHEDULE_ACTION_NORMAL: control_config.normal_option,
-        SCHEDULE_ACTION_STOP_CHARGING: control_config.stop_charging_option,
-        SCHEDULE_ACTION_STOP_DISCHARGING: control_config.stop_discharging_option,
-        SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: (
-            control_config.charge_to_target_soc_option
-        ),
-        SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: (
-            control_config.discharge_to_target_soc_option
-        ),
-        SCHEDULE_ACTION_STOP_EXPORT: control_config.stop_export_option,
-    }
-    return {kind: option for kind, option in options.items() if option}
+    entity_id = spec.control_entity_id(source)
+    name = spec.name(source)
+    normal_state = spec.resting_state(source)
+    if entity_id is None or name is None or normal_state is None:
+        return None
 
-
-def _appliance_entity_id(appliance: Any) -> str | None:
-    """The entity that decides whether the appliance is running."""
-    for attribute in ("climate_entity_id", "charge_entity_id", "switch_entity_id"):
-        entity_id = getattr(appliance, attribute, None)
-        if isinstance(entity_id, str) and entity_id:
-            return entity_id
-    return None
+    entity = ControllableEntityDict(
+        kind=spec.kind,
+        name=name,
+        entityId=entity_id,
+        normalState=normal_state,
+    )
+    action_options = spec.action_options(source)
+    if action_options:
+        entity["actionOptions"] = action_options
+    return entity
