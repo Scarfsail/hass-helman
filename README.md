@@ -29,6 +29,17 @@ If you previously installed the card separately:
 3. Install/update this integration as described above. The card element name
    (`custom:helman-card`) is unchanged, so existing dashboard YAML keeps working.
 
+## Supporting entities
+
+Helman reads and writes plain Home Assistant entities; it never talks to hardware itself. Your
+inverter integration supplies most of them, but a working setup also needs a few helpers you build
+yourself — house load and its energy integral, battery SOC bounds, the mode selector used to execute
+the battery schedule — plus entities from other integrations (solar forecast, prices, sub-meters,
+appliance controls).
+
+See [docs/supporting-entities.md](docs/supporting-entities.md) for what each one is for, how it works,
+and where in the config and code it is consumed, written against a real Solax deployment.
+
 ## Cards
 
 ### `custom:helman-card`
@@ -148,6 +159,9 @@ power_devices:
   the main driver of the nightly training cost — see [Scheduled work](#scheduled-work).
 - `deferrable_consumers`: optional per-consumer sub-meters, each a non-overlapping sub-meter already
   included in the house total. Baseline is derived as `house total - sum(deferrables)`.
+
+For how the house-load chain feeding `total_energy_entity_id` is built, see
+[Supporting entities](docs/supporting-entities.md#1-the-house-load-chain).
 
 ### `custom:helman-solar-inspector-card`
 Solar bias correction inspector, using the `helman/solar_bias/inspector` WebSocket API.
