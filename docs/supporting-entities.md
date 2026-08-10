@@ -1,24 +1,40 @@
-# Supporting entities — what helman needs beyond the inverter integration
+# Supporting entities — the helpers you have to build yourself
 
 Helman consumes plain Home Assistant entities; it does not talk to hardware itself. On a Solax
 install the `solax_modbus` integration provides most of what the config asks for, but **not all of
-it** — a working setup also needs a handful of hand-built helpers and entities from other
-integrations.
+it**. This document covers the gap: the handful of entities *you* have to create, because no
+integration provides them.
 
-This document describes those non-inverter entities: what each is for, how it works, and where in
-helman it is consumed. It is written against a real production deployment (Solax hybrid inverter +
-battery + EV charger, HA 2026.8.1, snapshot 2026-08-10), so the examples are concrete entity ids
-rather than placeholders. Adapt the ids; the roles are what matter.
+Each section gives the purpose, how it works, where helman consumes it, and a **Solax-specific
+example** you can adapt.
 
-Beware of a naming trap in this setup: several entities are *named* like inverter entities —
-`sensor.solax_grid`, `sensor.solax_battery_min_soc`, `sensor.solax_today_house_load`, and
-`sensor.house_load` whose friendly name is even "SolaX Inverter House load" — but are **template /
-utility_meter / integration helpers**. If the helper YAML is lost, they vanish and helman degrades in
-ways that are not obviously inverter-related.
+Scope: only user-created helpers are documented here. Entities that other integrations provide —
+solar forecast, spot prices, per-circuit sub-meters, appliance switches and climates, vehicle
+telemetry — are out of scope; install the integration and point the config at whatever it produces.
 
-> Not covered here: `switch.solax_export_enabled` (solar bias-correction curtailment detection).
-> That entity is missing on production and the mechanism is being reworked to remove the dependency
-> entirely — see [issue #71](https://github.com/Scarfsail/hass-helman/issues/71).
+> Also not covered: `switch.solax_export_enabled` (solar bias-correction curtailment detection). That
+> mechanism is being reworked to remove the dependency entirely — see
+> [issue #71](https://github.com/Scarfsail/hass-helman/issues/71).
+
+## About the examples
+
+The examples are written as YAML (`configuration.yaml`), which is the clearest way to show what a
+helper *is*. Every one of them can equally be created through **Settings → Devices & Services →
+Helpers**, which is how the reference deployment actually does it — the UI stores the same definition
+as a config entry instead of in YAML. Either route produces an identical entity.
+
+The formulas were verified by rendering them against a live production instance (Solax hybrid
+inverter + battery + EV charger) and comparing to the real entity values, so the sign conventions
+below are measured, not assumed:
+
+- `sensor.solax_grid` — **positive = export, negative = import**
+- `sensor.solax_battery_power_charge` — **positive = charging, negative = discharging**
+
+One cross-cutting warning: Modbus polling drops out regularly, and every source entity below spends
+part of its life in `unknown`/`unavailable`. Templates that do not handle that will propagate garbage
+into helman's training data. Each example handles it explicitly — pay attention to the `availability`
+blocks and the `float()` defaults, they are the difference between a helper that works and one that
+quietly poisons a forecast.
 
 ---
 
@@ -26,37 +42,58 @@ ways that are not obviously inverter-related.
 
 Three chained helpers, and the single most load-bearing thing in this list: every demand forecast,
 every surplus decision, and every optimizer feasibility check ultimately rests on them. The inverter
-reports PV, battery and grid — it never reports *what the house is drawing*.
+reports PV, battery and grid — it never reports *what the house is drawing*. You have to derive it.
 
-### `sensor.house_load` — instantaneous house consumption (W)
+Build them in order; each one consumes the previous.
+
+### 1.1 `sensor.house_load` — instantaneous house consumption (W)
 
 **Purpose.** Real-time house draw, in watts.
 
-**How it works.** A template sensor applying the power balance to native inverter sensors:
+**How it works.** The power balance: whatever the panels make, minus what the battery absorbs, minus
+what leaves through the meter, is what the house is using.
 
 ```
 house_load = pv_power_total − battery_charge_power − grid_power
 ```
 
-with the sign conventions confirmed against a day of production history:
-
-- `sensor.solax_grid` — **positive = export, negative = import** (day range −8 800 … +6 656 W).
-- `sensor.solax_battery_power_charge` — **positive = charging, negative = discharging**.
-
-Worked example from a live sample: `8994 − 6 − 6380 = 2608 W`, matching `sensor.house_load` exactly at
-that instant. The sensor never goes negative (day range 265 … 18 263 W), as expected for a load.
+Verified on a live sample: `8994 − 6 − 6380 = 2608 W`, matching the real sensor exactly. The result
+never goes negative in practice (a day's range: 265 … 18 263 W), as expected for a load.
 
 **Used in helman at** `power_devices.house.entities.power` — the House node on `custom:helman-card`,
-its live power figure and history bars, and the real-time surplus arithmetic that decides whether the
-current moment is "surplus" or "tight".
+its live figure and history bars, and the real-time surplus arithmetic behind "surplus" vs "tight".
 
-### `sensor.house_load_total` — cumulative house energy (kWh)
+```yaml
+template:
+  - sensor:
+      - name: House load
+        unique_id: house_load
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >
+          {{ ['sensor.solax_pv_power_total',
+              'sensor.solax_battery_power_charge',
+              'sensor.solax_grid']
+             | map('states') | reject('in', ['unknown', 'unavailable'])
+             | list | count == 3 }}
+        state: >
+          {{ states('sensor.solax_pv_power_total')   | float(0)
+           - states('sensor.solax_battery_power_charge') | float(0)
+           - states('sensor.solax_grid')             | float(0) }}
+```
 
-**Purpose.** The **history source for the house consumption forecast**.
+The `availability` block is the important part: if one Modbus register is stale, the sensor must go
+unavailable rather than compute a balance from two-thirds of the inputs. A momentarily missing
+`grid` term would otherwise look like a genuine multi-kW consumption spike, and — through the
+integral below — get permanently written into the forecast's training history.
 
-**How it works.** A Riemann-sum integration (`integration` platform) over `sensor.house_load`,
-producing a monotonically rising lifetime total. Helman needs a cumulative counter, not a power
-trace, because it reads per-slot deltas from Recorder's hourly statistics.
+### 1.2 `sensor.house_load_total` — cumulative house energy (kWh)
+
+**Purpose.** The **history source for the house consumption forecast**. Helman needs a cumulative
+counter, not a power trace, because it reads per-slot deltas from Recorder's hourly statistics.
+
+**How it works.** A Riemann-sum integration over `sensor.house_load`.
 
 **Used in helman at** `power_devices.house.forecast.total_energy_entity_id` →
 `consumption_forecast_builder.py:91`. Per slot, the builder computes
@@ -65,23 +102,47 @@ trace, because it reads per-slot deltas from Recorder's hourly statistics.
 non_deferrable = house_total − Σ(deferrable consumer energies)
 ```
 
-(`consumption_forecast_builder.py:334`) and trains the demand profile on that baseline. If any
+(`consumption_forecast_builder.py:334`) and trains the demand profile on that baseline. If a
 deferrable sub-meter fails to answer for a slot, the whole slot is skipped rather than trained on a
 half-subtracted total.
 
-**Why it matters.** This is the only entity in the config whose *history depth* determines whether
-forecasting works at all — `training_window_days` reads back through it, so replacing or renaming it
-resets the forecast's memory.
+```yaml
+sensor:
+  - platform: integration
+    source: sensor.house_load
+    name: Celková spotřeba domu
+    unique_id: house_load_total
+    unit_prefix: k          # → kWh
+    unit_time: h
+    method: left
+    max_sub_interval: "00:01:00"
+```
 
-### `sensor.solax_today_house_load` — today's house consumption (kWh)
+`max_sub_interval` matters: without it the integration only advances when the source *changes*, so a
+constant load that reports no new value contributes nothing. `method: left` suits a sensor that
+updates frequently on change.
 
-**Purpose.** The "consumed today" figure on the House node.
+**Why this one deserves care.** It is the only entity whose *history depth* determines whether
+forecasting works at all — `training_window_days` reads back through it. Renaming or recreating it
+resets the forecast's memory, and there is no way to backfill.
 
-**How it works.** A `utility_meter` with a daily cycle over the integration sensor above, resetting at
-local midnight.
+### 1.3 `sensor.solax_today_house_load` — today's house consumption (kWh)
 
-**Used in helman at** `power_devices.house.entities.today_energy` — display only
-(`forecast_builder.py:255` also falls back to it); it does not feed training.
+**Purpose.** The "consumed today" figure on the House node. Display only
+(`forecast_builder.py:255`); it does not feed training.
+
+**How it works.** A daily-cycle utility meter over the integration sensor, resetting at local
+midnight.
+
+**Used in helman at** `power_devices.house.entities.today_energy`.
+
+```yaml
+utility_meter:
+  solax_today_house_load:
+    source: sensor.house_load_total
+    name: Dnešní spotřeba domu
+    cycle: daily
+```
 
 ---
 
@@ -89,217 +150,248 @@ local midnight.
 
 ### `sensor.solax_battery_min_soc` and `sensor.solax_battery_max_soc`
 
-**Purpose.** The usable SOC window of the battery, in percent (production: 10 % / 100 %). The inverter
-exposes current SOC but not the reserve floor and charge ceiling that its own firmware settings
-enforce, so helman would otherwise plan into capacity that can never be used.
-
-**How it works.** Template sensors mirroring the configured inverter limits.
+**Purpose.** The usable SOC window of the battery, in percent (reference deployment: 10 % / 100 %).
+The inverter exposes current SOC, but the reserve floor and charge ceiling live in *mode-specific*
+registers. Without them helman would plan into capacity the firmware will never release.
 
 **Used in helman at** `power_devices.battery.entities.min_soc` / `max_soc` → `battery_state.py:115`.
-They are converted into an energy window against nominal capacity
-(`min_energy_kwh = capacity × min_soc/100`, `battery_state.py:243`) which bounds battery-capacity
-forecasting, charge/empty ETAs, and the `min_soc_pct` headroom checks that optimizers apply before
-committing a load.
+They become an energy window against nominal capacity
+(`min_energy_kwh = capacity × min_soc/100`, `battery_state.py:243`), bounding battery forecasting,
+charge/empty ETAs, and the `min_soc_pct` headroom checks optimizers apply before committing a load.
 
-**Validation.** Both are required together — `battery_state.py:89-92` reports them as missing config;
-values outside 0–100, or `min > max`, are rejected (`battery_state.py:288-298`).
+**How it works.** Solax keeps a *separate* discharge floor per charger use mode — 
+`number.solax_selfuse_discharge_min_soc` for Self Use, `number.solax_feedin_discharge_min_soc` for
+Feedin Priority — so the template follows the active mode. The ceiling is single-valued:
+`number.solax_battery_charge_upper_soc`.
+
+```yaml
+template:
+  - sensor:
+      - name: Solax Battery Min SOC
+        unique_id: solax_battery_min_soc
+        unit_of_measurement: "%"
+        state: >
+          {% if states('select.solax_charger_use_mode') == 'Feedin Priority' %}
+            {{ states('number.solax_feedin_discharge_min_soc') | float(10) }}
+          {% else %}
+            {{ states('number.solax_selfuse_discharge_min_soc') | float(10) }}
+          {% endif %}
+
+      - name: Solax Battery Max SOC
+        unique_id: solax_battery_max_soc
+        unit_of_measurement: "%"
+        state: >
+          {{ states('number.solax_battery_charge_upper_soc') | float(100) }}
+```
+
+On the reference install both mode floors read 10 and have never diverged, so a single-source
+template would work there today — the mode-aware form is the one that stays correct if you ever set
+them differently.
+
+Note the deliberate choice here, opposite to §1.1: these fall back to a **safe constant** rather than
+going unavailable. `battery_state.py:274-298` rejects non-numeric values and refuses `min > max` or
+anything outside 0–100, which would disable battery forecasting entirely during a Modbus blip. A
+conservative floor is better than no forecast. Pick defaults that match your firmware settings — a
+default that is *lower* than reality would let helman plan a discharge the inverter then refuses.
 
 ---
 
-## 3. Grid power and price
+## 3. Signed grid power
 
-### `sensor.solax_grid` — signed grid power (W)
+### `sensor.solax_grid`
 
 **Purpose.** One bidirectional grid sensor: positive exporting, negative importing.
 
-**How it works.** A template sensor normalising the raw Solax import/export registers
-(`sensor.solax_grid_import` / `sensor.solax_grid_export`, both unsigned) into a single signed value.
+**How it works.** `solax_modbus` reports import and export as two separate unsigned sensors; helman
+wants a single signed value. Verified against the live sensor: `5518 − 0 = 5518 W`, exact match.
 
 **Used in helman at** `power_devices.grid.entities.power` — grid flow direction and magnitude on the
 card, and the import/export term of the live balance. The daily counters beside it
 (`today_import` / `today_export`) are inverter-native and need no helper.
 
-### `sensor.current_sell_electricity_price` — spot sell price (Kč/kWh)
+```yaml
+template:
+  - sensor:
+      - name: Solax Grid
+        unique_id: solax_grid
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        icon: mdi:transmission-tower
+        availability: >
+          {{ ['sensor.solax_grid_export', 'sensor.solax_grid_import']
+             | map('states') | reject('in', ['unknown', 'unavailable'])
+             | list | count == 2 }}
+        state: >
+          {{ states('sensor.solax_grid_export') | float(0)
+           - states('sensor.solax_grid_import') | float(0) }}
+```
 
-**Purpose.** What exported energy is currently worth.
-
-**How it works.** Provided by the `cz_energy_spot_prices` integration (Czech OTE spot market) — not
-hand-built, but not from the inverter either.
-
-**Used in helman at** `power_devices.grid.forecast.sell_price_entity_id` →
-`grid_price_forecast_builder.py:51`. It drives export-value decisions, most visibly the
-`export-price` optimizer, which on production runs when the price drops **below 0** — during negative
-prices exporting costs money, so it is better to dump the energy into loads.
-
-**Note the asymmetry:** the *import* price is not an entity. It is the fixed two-window tariff in
-config (`import_price_windows`: 5.03 at 22:00–06:00, 7.33 at 06:00–22:00). Only the sell side is
-market-linked here.
-
----
-
-## 4. Solar production forecast
-
-### `sensor.energy_production_today_remaining`, `_today`, `_tomorrow`, `_d2` … `_d7`
-
-**Purpose.** The weather-model production forecast, 8 days ahead.
-
-**How it works.** Provided by `open_meteo_solar_forecast` from panel geometry and the Open-Meteo
-irradiance model. These are the **raw, uncorrected** predictions.
-
-**Used in helman at** `power_devices.solar.forecast.remaining_today_entity_id` and
-`daily_energy_entity_ids[0..7]`. The daily series is what multi-day planning schedules against; the
-remaining-today value is the input the solar bias correction learns to correct.
-
-### `sensor.helman_energy_production_today_remaining` — bias-corrected remaining production
-
-**Purpose.** What the card actually displays for "remaining production today".
-
-**How it works.** Produced by helman itself, not by the user: the bias-correction trainer learns
-per-slot correction factors from historical forecast-vs-actual pairs and applies them to the raw
-Open-Meteo value. On a sample morning it read **57.38 kWh** against Open-Meteo's raw **53.44 kWh** —
-the model had learned this site systematically outproduces the generic forecast.
-
-**Used in helman at** `power_devices.solar.entities.remaining_today_energy_forecast` →
-`forecast_builder.py:82`. Listed here only to make the distinction explicit: the Open-Meteo sensor is
-the model *input*, this one is the model *output*, and they are deliberately different numbers.
+Check your inverter first: some `solax_modbus` models already expose a signed grid/measured-power
+sensor, in which case skip this helper and point the config straight at it. Whatever you use, confirm
+the sign convention — an inverted grid sensor makes §1.1 report import as consumption and silently
+doubles the error.
 
 ---
 
-## 5. Battery scheduling control
+## 4. Battery scheduling control
 
 ### `input_select.rezim_fv` — inverter mode selector
 
-**Purpose.** The **single write-point** through which helman executes its battery schedule. Everything
-the optimizer decides about the battery is ultimately expressed by selecting an option here.
+**Purpose.** The **single write-point** through which helman executes its battery schedule.
+Everything the optimizer decides about the battery is expressed by selecting an option here.
 
-**How it works.** An `input_select` helper whose options are translated to inverter register writes by
-your own HA automations — helman writes the option, your automation applies it. Helman never talks to
-the inverter directly.
+**How it works.** An `input_select` helper, plus your own automation translating each option into
+inverter register writes. Helman writes the option; your automation applies it. This indirection is
+deliberate — it keeps helman independent of any particular inverter integration, and lets you
+intervene by hand on the same entity.
 
 **Used in helman at** `scheduler.control.mode_entity_id` → parsed in `scheduling/schedule.py:415`,
-written by `scheduling/schedule_executor.py:200` via `ModeEntityController`. The mapping is explicit
-config (`action_option_map`):
+written by `scheduling/schedule_executor.py:200` via `ModeEntityController`. Options are mapped
+explicitly through `scheduler.control.action_option_map`, so they can be named in any language:
 
-| Helman action | Option written |
-|---|---|
-| `normal` | Standardní |
-| `charge_to_target_soc` | Nucené nabíjení |
-| `discharge_to_target_soc` | Nucené vybíjení |
-| `stop_charging` | Zákaz nabíjení |
-| `stop_discharging` | Zákaz vybíjení |
-| `stop_export` | Zákaz exportu |
+```yaml
+input_select:
+  rezim_fv:
+    name: Režim FV
+    options:
+      - Standardní
+      - Nucené nabíjení
+      - Nucené vybíjení
+      - Zákaz nabíjení
+      - Zákaz vybíjení
+      - Zákaz exportu
+    initial: Standardní
+    icon: mdi:solar-power
+```
 
-`stop_export` is additionally owned by the `export-price` optimizer
-(`automation/optimizers/export_price.py:34`), which logs and stands down if that option is not mapped.
+The matching helman config:
 
-**Consequence worth knowing.** Because this is an `input_select` rather than a direct inverter write,
-helman's view of "what mode we are in" is only as truthful as the automations behind it. It also means
-mode changes made by hand, outside helman, are visible to helman on the same entity.
+```yaml
+scheduler:
+  control:
+    mode_entity_id: input_select.rezim_fv
+    action_option_map:
+      normal: Standardní
+      charge_to_target_soc: Nucené nabíjení
+      discharge_to_target_soc: Nucené vybíjení
+      stop_charging: Zákaz nabíjení
+      stop_discharging: Zákaz vybíjení
+      stop_export: Zákaz exportu
+```
 
----
+Every action you map must be handled by your automation, or helman will select an option that does
+nothing. `stop_export` is additionally owned by the `export-price` optimizer
+(`automation/optimizers/export_price.py:34`), which logs and stands down if that option is missing
+from the map.
 
-## 6. Per-circuit energy meters (deferrable consumers)
+A sketch of the automation behind it — the Self Use / Feedin Priority split is where the actual
+inverter behaviour comes from:
 
-### `sensor.jistic_bazen_filtrace_energy`, `sensor.jistic_klimatizace_energy`, `sensor.jistic_bazen_tepelne_cerpadlo_energy`, `sensor.zasuvka_zebrik_koupelna_energy`
+```yaml
+automation:
+  - alias: Režim FV → střídač
+    triggers:
+      - trigger: state
+        entity_id: input_select.rezim_fv
+    actions:
+      - choose:
+          - conditions: "{{ trigger.to_state.state == 'Standardní' }}"
+            sequence:
+              - action: select.select_option
+                target: { entity_id: select.solax_charger_use_mode }
+                data: { option: Self Use Mode }
+          - conditions: "{{ trigger.to_state.state == 'Zákaz exportu' }}"
+            sequence:
+              - action: number.set_value
+                target: { entity_id: number.solax_export_control_user_limit }
+                data: { value: 0 }
+          # … remaining options: forced charge/discharge via Manual Mode,
+          #    charge/discharge inhibits via the mode-specific SOC limits
+```
 
-**Purpose.** Keep schedulable loads out of the *base* demand profile.
-
-**How it works.** MQTT-published cumulative energy counters (kWh) from per-circuit meters in the
-breaker panels — pool filtration, home AC, pool heat pump, bathroom towel heater. The EV charger's
-counter (`sensor.solax_ev_charger_charge_added_total`) is inverter-native and completes the set.
-
-**Used in helman at** `power_devices.house.forecast.deferrable_consumers[]`, each with a display
-`label`. As described in §1, each slot's baseline is `house total − Σ(deferrables)`.
-
-**Why this matters.** Without the subtraction, the demand forecast would learn "the house uses 3 kW
-every sunny afternoon" — when in truth that was helman itself running the pool pump on surplus. The
-forecast would then predict its own past decisions as future demand, and compound the error. Each
-sub-meter must be **non-overlapping and genuinely included in the house total**, or the baseline goes
-wrong in the other direction. Slots where a sub-meter has no reading are dropped rather than guessed.
-
----
-
-## 7. Appliance controls
-
-Each entry under `appliances[]` names the entity helman actually actuates. None of these are inverter
-entities except the EV charger's mode selects.
-
-| Appliance | Control entity | Integration | Notes |
-|---|---|---|---|
-| Nabíječka EV | `switch.ev_nabijeni` | `template` | Start/stop EV charging. A template switch wrapping the wallbox commands; `use_mode` / `eco_gear` selects beside it are inverter-native (`select.solax_ev_charger_*`), mapping Fast → `fixed_max_power` and ECO → `surplus_aware`. |
-| Bazén filtrace | `switch.jistic_bazen_filtrace` | `mqtt` | Pool filtration circuit; optimizer runs it on surplus **and** tight. |
-| Ohřev bazénu | `climate.inverter_pool_heat_pump` | `tuya` | Pool heat pump; two conditions — negative price (`max_run_price: 0.5`), or pool below 30.5 °C. |
-| Přímotop TČ bazén | `switch.bazen_primotop_tc` | `mqtt` | Direct-heat element. **Currently `unavailable` on production** — the appliance cannot be actuated. |
-| Klimatizace doma | `climate.klimatizace_doma` | `climate_group_helper` | A *group* entity fronting several AC units, so helman schedules them as one load. Runs when outdoor > 24 °C, min SOC 30 %. |
-| Žebřík koupelna | `switch.zasuvka_zebrik_koupelna` | `mqtt` | Bathroom towel heater socket, surplus-only. |
-
-Note the pattern: helman is deliberately indifferent to *how* a load is switched. A template switch, an
-MQTT relay, a Tuya climate entity and a group helper are all equally valid — the appliance layer only
-needs an entity it can turn on and off, plus (for climate) a setpoint.
-
----
-
-## 8. Optimizer condition inputs
-
-### `sensor.rsc_temperature_outdoor_street`, `sensor.rsc_temperature_pool`
-
-**Purpose.** Physical state that decides whether running a load is *useful*, as opposed to merely
-affordable.
-
-**How it works.** Temperature sensors from a custom `rsc` integration.
-
-**Used in helman at** optimizer `conditions[].custom[]` entries of kind `temperature.is_value`:
-
-- `home-ac` — outdoor temperature **above 24 °C**; below that, cooling the house on surplus is waste.
-- `pool-heatpump`, condition "Studený bazén" — pool water **below 30.5 °C**; once warm enough, free
-  energy is no longer a reason to keep heating.
-
-These are the clearest example of the conditions system doing what price and surplus alone cannot:
-surplus says *you can*, the temperature condition says *you should*.
-
-### EV telemetry — `sensor.kona_ev_battery_level`, `number.kona_ac_charging_limit`
-
-**Purpose.** How much energy the car still needs — the demand side of EV charge planning.
-
-**How it works.** Provided by the `kia_uvo` integration from the vehicle's cloud API: current SOC
-(85 %) and the user's charge target (90 %).
-
-**Used in helman at** `appliances[garage-ev].vehicles[0].telemetry.soc_entity_id` and
-`charge_limit_entity_id` → `appliances/ev_charger.py:364`. The gap between the two, against battery
-capacity, is the energy the charging plan must place into the cheapest or sunniest slots.
-
-**Caveat.** Cloud telemetry updates on the vehicle's schedule, not Home Assistant's, and can be stale
-or briefly unavailable after the car sleeps — unlike every other entity here, which is local.
+Keep the automation's writes idempotent. Helman re-applies the current action on its own cadence, so
+an automation that toggles rather than sets will drift out of step with what helman believes is
+active.
 
 ---
 
-## Inverter-native entities, for contrast
+## 5. EV charging control
 
-These come from `solax_modbus` and need no setup beyond the integration itself:
+### `switch.ev_nabijeni`
 
-`sensor.solax_pv_power_total`, `sensor.solax_today_s_solar_energy`, `sensor.solax_total_solar_energy`,
-`sensor.solax_today_s_import_energy`, `sensor.solax_today_s_export_energy`,
-`sensor.solax_battery_power_charge`, `sensor.solax_battery_capacity`,
-`sensor.solax_remaining_battery_capacity`, `sensor.solax_battery_input_energy_today`,
-`sensor.solax_battery_output_energy_today`, `sensor.solax_ev_charger_charge_added_total`,
-`select.solax_ev_charger_charger_use_mode`, `select.solax_ev_charger_eco_gear`.
+**Purpose.** The on/off control helman actuates to start and stop EV charging. The appliance layer
+only needs something switchable — Solax exposes charging as a *mode select*, not a switch, so the
+switch has to be built.
 
-## Setting this up on a different install
+**Used in helman at** `appliances[garage-ev].controls.charge.entity_id`. The mode selects beside it
+are inverter-native and used directly:
 
-Roughly in dependency order:
+```yaml
+appliances:
+  - id: garage-ev
+    controls:
+      charge:
+        entity_id: switch.ev_nabijeni          # this helper
+      use_mode:
+        entity_id: select.solax_ev_charger_charger_use_mode   # native
+        values:
+          Fast: { behavior: fixed_max_power }
+          ECO:  { behavior: surplus_aware }
+```
 
-1. **House load** — a template power sensor from the balance equation, then a Riemann integration over
-   it, then (optionally) a daily utility_meter. Nothing else works properly without this.
-2. **Battery SOC bounds** — two template sensors, or `input_number` helpers if your inverter does not
-   expose its own limits.
-3. **Signed grid power** — only if your integration reports import and export separately.
-4. **A mode selector** — an `input_select` plus the automations that translate its options into
-   inverter writes, mapped through `scheduler.control.action_option_map`.
-5. **A solar forecast integration** — Open-Meteo or Forecast.Solar.
-6. **Per-circuit sub-meters** — one per schedulable load, before enabling deferrable-consumer
-   subtraction.
+**How it works.** `select.solax_ev_charger_charger_use_mode` offers `Stop`, `Fast`, `ECO`, `Green`.
+Anything other than `Stop` means charging is enabled, which gives the switch its state; turning off
+selects `Stop`.
 
-A useful audit on any install: fetch the config via the `helman/get_config` WebSocket command, collect
-every entity id in it, and join against `config/entity_registry/list` to see each entity's real
-`platform`. Anything not from your inverter integration is something you own, and something that can
-silently disappear.
+```yaml
+template:
+  - switch:
+      - name: EV Nabíjení
+        unique_id: ev_nabijeni
+        icon: mdi:ev-station
+        availability: >
+          {{ states('select.solax_ev_charger_charger_use_mode')
+             not in ['unknown', 'unavailable'] }}
+        state: >
+          {{ states('select.solax_ev_charger_charger_use_mode') != 'Stop' }}
+        turn_on:
+          - action: select.select_option
+            target: { entity_id: select.solax_ev_charger_charger_use_mode }
+            data: { option: ECO }
+        turn_off:
+          - action: select.select_option
+            target: { entity_id: select.solax_ev_charger_charger_use_mode }
+            data: { option: Stop }
+```
+
+**The interaction to watch.** Helman drives *both* this switch and the `use_mode` select — the switch
+to start charging, the select to choose `Fast` (charge at full power) or `ECO` (follow surplus). A
+`turn_on` that hard-codes `ECO`, as above, will overwrite a `Fast` decision if the switch is flipped
+last. Two ways out: have `turn_on` restore the last non-`Stop` mode from an `input_text`, or rely on
+helman applying `use_mode` after the switch. If EV sessions occasionally run in the wrong mode, this
+is the first place to look.
+
+This example reproduces the observable behaviour of the reference deployment's switch rather than
+copying its internals — that helper toggles somewhat more often than the mode select changes, so it
+likely drives an additional wallbox command. Treat it as a working starting point, not a transcript.
+
+---
+
+## Checklist for a new install
+
+In dependency order:
+
+1. `sensor.house_load` — template, the power balance. Nothing else works properly without it.
+2. `sensor.house_load_total` — Riemann integration over it. Start this early; forecast quality is
+   bounded by how much history it has.
+3. `sensor.solax_today_house_load` — daily utility meter (optional, display only).
+4. `sensor.solax_battery_min_soc` / `max_soc` — templates over the mode-specific inverter limits.
+5. `sensor.solax_grid` — template, only if your integration reports import and export separately.
+6. `input_select.rezim_fv` + the automation behind it — required before scheduling can execute.
+7. `switch.ev_nabijeni` — only if you have an EV charger to schedule.
+
+To audit an existing install, fetch the config with the `helman/get_config` WebSocket command,
+collect every entity id in it, and join against `config/entity_registry/list` to see each entity's
+real `platform`. Anything whose platform is `template`, `integration`, `utility_meter` or `input_*`
+is a helper you own — and one that can silently disappear.

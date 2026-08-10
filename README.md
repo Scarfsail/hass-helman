@@ -32,13 +32,12 @@ If you previously installed the card separately:
 ## Supporting entities
 
 Helman reads and writes plain Home Assistant entities; it never talks to hardware itself. Your
-inverter integration supplies most of them, but a working setup also needs a few helpers you build
-yourself — house load and its energy integral, battery SOC bounds, the mode selector used to execute
-the battery schedule — plus entities from other integrations (solar forecast, prices, sub-meters,
-appliance controls).
+inverter integration supplies most of them, but a few have to be built by hand — house load and its
+energy integral, battery SOC bounds, signed grid power, the mode selector the battery schedule is
+executed through, and an EV charging switch.
 
-See [docs/supporting-entities.md](docs/supporting-entities.md) for what each one is for, how it works,
-and where in the config and code it is consumed, written against a real Solax deployment.
+See [docs/supporting-entities.md](docs/supporting-entities.md) for what each one is for, where in the
+config and code it is consumed, and a ready-to-adapt Solax example.
 
 ## Cards
 
