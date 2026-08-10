@@ -306,7 +306,7 @@ def _min_soc_mask(inputs: MaskInputs) -> MaskResult:
     authorised the slot. Same limitation the surplus buffer had.
     """
     snapshot = inputs.snapshot
-    appliance_id = str(inputs.target.get("appliance_id"))
+    appliance_id = str(inputs.target.get("controllable_id"))
     soc_by_bucket = read_soc_by_bucket_covering_horizon(snapshot)
     if soc_by_bucket is None:
         raise ConditionRailsUnavailable(
@@ -367,7 +367,7 @@ def _min_solar_coverage_mask(inputs: MaskInputs) -> MaskResult:
     strict-only condition would mean "never runs".
     """
     snapshot = inputs.snapshot
-    appliance_id = str(inputs.target.get("appliance_id"))
+    appliance_id = str(inputs.target.get("controllable_id"))
     # This condition gates placement, so an unavailable rail must void the run.
     # Yielding an empty mask instead would be indistinguishable from the
     # condition correctly saying "no sun anywhere", and would silently clear the

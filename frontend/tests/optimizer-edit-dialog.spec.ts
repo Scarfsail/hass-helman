@@ -131,6 +131,7 @@ interface MountOptions {
     saveResponse?: unknown;
     payload?: unknown;
     applianceName?: string | null;
+    schema?: unknown;
 }
 
 async function mountPanel(page: Page, options: MountOptions = {}): Promise<void> {
@@ -141,6 +142,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
         saveResponse = { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true },
         payload = PAYLOAD,
         applianceName = null,
+        schema = SCHEMA,
     } = options;
 
     await page.setContent("<!doctype html><html><body></body></html>");
@@ -206,7 +208,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             fixture: payload,
             slotId: SLOT_IDS[0],
             admin: isAdmin,
-            schema: SCHEMA,
+            schema,
             configs: configSequence,
             save: saveResponse,
             strings: STRINGS,
@@ -319,6 +321,58 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // editing the document — it passes no list actions.
         await expect(dialog(page).locator(".optimizer-card > summary .list-actions"))
             .toHaveCount(0);
+    });
+
+    test("the target picker offers only controllables the kind can drive", async ({
+        page,
+    }) => {
+        // The rule lives in one place — `CONTROLLABLE_SPECS.optimizer_kinds`,
+        // served to the editor as `controllableKinds` — so the picker cannot
+        // offer a target config validation would then reject. A `charge_hold`
+        // drives the inverter and nothing else, so the boiler sitting right
+        // beside it in the same `controllables` list must not be on offer.
+        await mountPanel(page, {
+            payload: {
+                ...PAYLOAD,
+                optimizers: [{
+                    ...PAYLOAD.optimizers[0],
+                    optimizerId: "charge_hold",
+                    kind: "charge_hold",
+                }],
+            },
+            schema: {
+                version: 2,
+                kinds: [{
+                    kind: "charge_hold",
+                    target: [{
+                        key: "controllable_id",
+                        type: "string",
+                        default: "inverter",
+                    }],
+                    params: [],
+                    conditionTypes: [],
+                    controllableKinds: ["inverter"],
+                    newDraft: { conditions: [{}] },
+                }],
+            },
+            config: {
+                ...CONFIG,
+                controllables: [
+                    { kind: "inverter", id: "inverter", name: "Inverter" },
+                    { kind: "generic", id: "boiler", name: "Boiler" },
+                ],
+            },
+        });
+        await openDialog(page);
+
+        const picker = dialog(page).locator("helman-optimizer-editor select").first();
+        await expect(picker.locator("option")).toHaveText([
+            /Select controllable/,
+            /Inverter \(inverter\)/,
+        ]);
+        // And the id the schema defaults to is the one shown as chosen, so a
+        // config written before the field existed does not read as unset.
+        await expect(picker).toHaveValue("inverter");
     });
 
     test("save sends the whole document, changed only in that optimizer", async ({ page }) => {

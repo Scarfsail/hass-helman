@@ -55,9 +55,11 @@ from custom_components.helman.automation.migration import (  # noqa: E402
 )
 from custom_components.helman.automation.spec import (  # noqa: E402
     KNOWN_OPTIMIZER_KINDS,
+    OPTIMIZER_SPECS,
 )
 from custom_components.helman.controllables.spec import (  # noqa: E402
     CONTROLLABLE_SPECS,
+    controllable_kinds_for_optimizer_kind,
 )
 from custom_components.helman.scheduling.normal_state import (  # noqa: E402
     build_controllable_entities,
@@ -248,6 +250,30 @@ class ControllableSpecRegistryTests(unittest.TestCase):
         target a charger. Pinned so the day that changes, the spec is updated
         with it rather than silently lying."""
         self.assertEqual(CONTROLLABLE_SPECS["ev_charger"].optimizer_kinds, ())
+        self.assertEqual(controllable_kinds_for_optimizer_kind("appliance_runtime"),
+                         ("climate", "generic"))
+
+    def test_the_two_directions_of_the_table_agree(self) -> None:
+        """The inverse index is computed, so it cannot drift — pinned anyway,
+        because the editor's target picker and the config validator both read
+        it and a silent disagreement would be invisible until a user hit it."""
+        for optimizer_kind in KNOWN_OPTIMIZER_KINDS:
+            with self.subTest(optimizer_kind):
+                for controllable_kind in controllable_kinds_for_optimizer_kind(
+                    optimizer_kind
+                ):
+                    self.assertIn(
+                        optimizer_kind,
+                        CONTROLLABLE_SPECS[controllable_kind].optimizer_kinds,
+                    )
+
+    def test_every_optimizer_kind_targets_a_controllable_by_id(self) -> None:
+        """No kind may infer its target from its own kind any more."""
+        for kind, spec in OPTIMIZER_SPECS.items():
+            with self.subTest(kind):
+                self.assertIn(
+                    "controllable_id", {field.key for field in spec.target}
+                )
 
 
 class ControllableEntitiesPayloadTests(unittest.TestCase):

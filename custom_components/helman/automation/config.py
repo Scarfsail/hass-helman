@@ -8,6 +8,7 @@ from ..const import (
     DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO,
     DAY_CONTEXT_DEFAULT_SURPLUS_ABOVE_RATIO,
 )
+from ..controllables.config import CONTROLLABLE_ID_INVERTER
 from .fields import (
     MISSING,
     AutomationConfigError,
@@ -39,7 +40,7 @@ RELOCATED_OPTIMIZER_KEYS: dict[str, str] = {
     "reserve_floor_soc": "conditions[].reserve_floor_soc",
     "min_hours_per_day": "params.daily_minimum.min_hours_per_day",
     "max_consecutive_skips": "params.daily_minimum.max_consecutive_skips",
-    "appliance_id": "target.appliance_id",
+    "appliance_id": "target.controllable_id",
     "climate_mode": "target.climate_mode",
     "skip": "params.daily_minimum.max_consecutive_skips and conditions[].run_when",
     "action": "nothing — the optimizer kind implies its action",
@@ -98,16 +99,39 @@ class OptimizerInstanceConfig:
         return OPTIMIZER_SPECS[self.kind]
 
     @property
-    def target_key(self) -> str:
-        """The schedule lane this optimizer writes.
+    def controllable_id(self) -> str:
+        """What this optimizer acts on, as a plain controllable id.
 
-        ``"inverter"`` or ``"appliance:<id>"`` — the same identity as
-        ``TraceWrite.domain`` and the frontend's ``getEntityScheduleTargetKey``,
-        so the explanation record can be queried by the lane the user clicked
-        rather than by optimizer (the inverter lane has three of those).
+        Every kind names it the same way now: ``target.controllable_id``, with
+        the reserved ``inverter`` id defaulted in by the spec for the kinds that
+        used to imply their target from their own ``kind``. This is the identity
+        validation resolves and the editor picks — one lookup, no by-kind
+        fallback.
         """
-        appliance_id = self.target.get("appliance_id")
-        return f"appliance:{appliance_id}" if appliance_id else "inverter"
+        return str(self.target.get("controllable_id", ""))
+
+    @property
+    def target_key(self) -> str:
+        """The schedule *lane* this optimizer writes — a transport format.
+
+        ``"inverter"`` or ``"appliance:<id>"``. Deliberately still spelled that
+        way, and deliberately no longer the same thing as
+        :attr:`controllable_id`: the key is the identity of a schedule lane, and
+        the schedule still keeps two domains (``domains.inverter`` /
+        ``domains.appliances``). It is the same string as ``TraceWrite.domain``
+        and the frontend's ``getEntityScheduleTargetKey``, which is what lets
+        the explanation book be queried by the lane the user clicked rather than
+        by optimizer (the inverter lane has three of those).
+
+        So it derives from the controllable id rather than being one. Flattening
+        the schedule domains to a single id-keyed map is what retires the
+        prefix, on the wire and here at once; doing it now would break the
+        lookup for a phase.
+        """
+        controllable_id = self.controllable_id
+        if not controllable_id or controllable_id == CONTROLLABLE_ID_INVERTER:
+            return CONTROLLABLE_ID_INVERTER
+        return f"appliance:{controllable_id}"
 
 
 @dataclass(frozen=True)

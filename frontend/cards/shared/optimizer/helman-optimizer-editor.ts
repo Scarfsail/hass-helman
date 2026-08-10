@@ -36,12 +36,12 @@ import type {
 } from "../config/types";
 import type { ApplianceMetadataResponse } from "../config/types";
 import {
-    buildApplianceSelectionState,
+    buildControllableSelectionState,
     buildClimateModeFieldState,
-    type ApplianceOptimizerOption,
-    type ApplianceSelectionState,
+    type ControllableSelectionState,
+    type ControllableTargetOption,
     type SurplusClimateModeFieldState,
-} from "./appliance-optimizer-ui";
+} from "./controllable-target-ui";
 import { renderOptimizerCard } from "./optimizer-card";
 import { optimizerCardStyles } from "./optimizer-styles";
 import type {
@@ -78,7 +78,7 @@ export interface OptimizerConfigChangedDetail {
  * Every path the renderers build is absolute -- `optimizer-card.ts` roots its
  * card at `automation.optimizers[index]`, `optimizer-condition-groups.ts` roots
  * the group list at the same place. More than tidiness keeps it that way: the
- * appliance picker reads the document's `appliances` list to name its options,
+ * target picker reads the document's `controllables` list to name its options,
  * and a group's param override renders the *master* params as its placeholders.
  * An element handed one optimizer in isolation would have to be handed those
  * too, under different names, and every path in the renderers would have to be
@@ -222,17 +222,27 @@ export class HelmanOptimizerEditor
         `;
     }
 
-    /** Appliance-target kinds show which appliance they act on, not their id. */
+    /**
+     * An appliance-driving card is titled by the appliance it drives.
+     *
+     * Every kind carries a `controllable_id` now, so "has a target" no longer
+     * separates them — the inverter does. Its three optimizers share one lane
+     * and one name, so titling them "Inverter" three times would tell the
+     * reader nothing and lose the ids that tell them apart; they keep their id,
+     * exactly as before.
+     */
     private _cardTitle(schema: OptimizerSchema, optimizer: JsonObject): string {
         const fallback =
             stringValue(optimizer.id) ||
             this._tFormat("editor.dynamic.optimizer", { index: this.index + 1 });
-        if (!this._hasApplianceTarget(schema)) {
+        if (!this._targetsControllable(schema)) {
             return fallback;
         }
-        const selectionState = this._applianceSelectionState();
+        const selectionState = this._selectionState(schema);
         if (selectionState.selectedOption) {
-            return selectionState.selectedOption.name;
+            return selectionState.selectedOption.kind === "inverter"
+                ? fallback
+                : selectionState.selectedOption.name;
         }
         if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
             return this._tFormat("editor.dynamic.stale_appliance", {
@@ -242,8 +252,8 @@ export class HelmanOptimizerEditor
         return fallback;
     }
 
-    private _hasApplianceTarget(schema: OptimizerSchema): boolean {
-        return schema.target.some((field) => field.key === "appliance_id");
+    private _targetsControllable(schema: OptimizerSchema): boolean {
+        return schema.target.some((field) => field.key === "controllable_id");
     }
 
     private get _basePath(): PathSegment[] {
@@ -373,22 +383,23 @@ export class HelmanOptimizerEditor
     }
 
     /**
-     * The appliance picker and its climate mode.
+     * The target picker and, for a climate target, its mode.
      *
-     * Not schema-driven: the options come from the live appliance registry and
-     * the authorable modes of the selected device, neither of which a static
-     * schema can carry.
+     * Half schema-driven: which controllable *kinds* may be offered comes from
+     * the schema, but which instances exist, and the authorable modes of the
+     * selected one, come from the draft document and the live registry, neither
+     * of which a static schema can carry.
      */
-    renderApplianceTargetFields(
+    renderControllableTargetFields(
         _optimizerIndex: number,
         kind: string,
     ): TemplateResult | typeof nothing {
         const schema = this.schema?.kinds.find((entry) => entry.kind === kind);
-        if (!schema || !this._hasApplianceTarget(schema)) {
+        if (!schema || !this._targetsControllable(schema)) {
             return nothing;
         }
         const targetPath: PathSegment[] = [...this._basePath, "target"];
-        const selectionState = this._applianceSelectionState();
+        const selectionState = this._selectionState(schema);
         const climateModeFieldState = buildClimateModeFieldState(
             selectionState,
             stringValue(this.getValue([...targetPath, "climate_mode"])),
@@ -396,17 +407,18 @@ export class HelmanOptimizerEditor
         return html`
             <div class="field">
                 <div class="field-label-row">
-                    <label>${this.t("editor.fields.appliance_id")}</label>
-                    ${this.renderHelpIcon("editor.fields.appliance_id", "editor.help.appliance_id")}
+                    <label>${this.t("editor.fields.optimizer_target")}</label>
+                    ${this.renderHelpIcon("editor.fields.optimizer_target", "editor.help.optimizer_target")}
                 </div>
                 <select
                     @change=${(event: Event) =>
-                        this._applyApplianceIdChange(
+                        this._applyControllableIdChange(
+                            schema,
                             (event.currentTarget as HTMLSelectElement).value,
                         )}
                 >
                     <option value="" ?selected=${selectionState.selectedId.length === 0}>
-                        ${this.t("editor.values.select_appliance")}
+                        ${this.t("editor.values.select_controllable")}
                     </option>
                     ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
                         ? html`
@@ -424,12 +436,12 @@ export class HelmanOptimizerEditor
                                 ?disabled=${option.selectionDisabled}
                                 ?selected=${option.id === selectionState.selectedId}
                             >
-                                ${this._applianceOptionLabel(option)}
+                                ${this._targetOptionLabel(option)}
                             </option>
                         `,
                     )}
                 </select>
-                <div class="helper">${this._applianceIdHelper(selectionState)}</div>
+                <div class="helper">${this._targetHelper(selectionState)}</div>
             </div>
             ${climateModeFieldState.visible
                 ? this._renderClimateModeField(targetPath, climateModeFieldState)
@@ -483,17 +495,18 @@ export class HelmanOptimizerEditor
         this._mutate((draft) => removeListItem(draft, path, groupIndex));
     }
 
-    private _applyApplianceIdChange(rawValue: string): void {
-        const applianceId = rawValue.trim();
-        // The appliance and its climate mode are `target` — the optimizer's
+    private _applyControllableIdChange(schema: OptimizerSchema, rawValue: string): void {
+        const controllableId = rawValue.trim();
+        // The controllable and its climate mode are `target` — the optimizer's
         // identity — not params, so they are never overridable by a group.
         const targetPath: PathSegment[] = [...this._basePath, "target"];
         this._mutate((draft) => {
-            setValueAtPath(draft, [...targetPath, "appliance_id"], applianceId);
-            const selectionState = buildApplianceSelectionState(
+            setValueAtPath(draft, [...targetPath, "controllable_id"], controllableId);
+            const selectionState = buildControllableSelectionState(
                 draft,
                 this.applianceMetadata,
-                applianceId,
+                controllableId,
+                schema.controllableKinds ?? [],
             );
             const climateModeFieldState = buildClimateModeFieldState(
                 selectionState,
@@ -507,13 +520,26 @@ export class HelmanOptimizerEditor
         });
     }
 
-    // --- Appliance target helpers -------------------------------------------
+    // --- Controllable target helpers ----------------------------------------
 
-    private _applianceSelectionState(): ApplianceSelectionState {
-        return buildApplianceSelectionState(
+    /**
+     * Falls back to the schema field's default when the document is silent.
+     *
+     * The three inverter kinds default `controllable_id` to the reserved
+     * `inverter` id, and a config written before the field existed simply omits
+     * it — the reader fills it in, and the picker has to show the same answer
+     * rather than an empty "select…".
+     */
+    private _selectionState(schema: OptimizerSchema): ControllableSelectionState {
+        const field = schema.target.find((entry) => entry.key === "controllable_id");
+        const stored = stringValue(
+            this.getValue([...this._basePath, "target", "controllable_id"]),
+        );
+        return buildControllableSelectionState(
             this.config,
             this.applianceMetadata,
-            stringValue(this.getValue([...this._basePath, "target", "appliance_id"])),
+            stored || stringValue(field?.default),
+            schema.controllableKinds ?? [],
         );
     }
 
@@ -565,14 +591,14 @@ export class HelmanOptimizerEditor
         `;
     }
 
-    private _applianceIdHelper(selectionState: ApplianceSelectionState): string {
+    private _targetHelper(selectionState: ControllableSelectionState): string {
         if (selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0) {
-            return this.t("editor.helpers.appliance_runtime_id_missing_from_draft");
+            return this.t("editor.helpers.optimizer_target_missing_from_draft");
         }
         if (selectionState.options.some((option) => option.selectionDisabled)) {
-            return this.t("editor.helpers.appliance_runtime_id_pending_reload");
+            return this.t("editor.helpers.optimizer_target_pending_reload");
         }
-        return this.t("editor.helpers.appliance_runtime_id");
+        return this.t("editor.helpers.optimizer_target");
     }
 
     private _climateModeHelper(state: SurplusClimateModeFieldState): string {
@@ -588,7 +614,7 @@ export class HelmanOptimizerEditor
         return this.t("editor.helpers.appliance_runtime_climate_mode");
     }
 
-    private _applianceOptionLabel(option: ApplianceOptimizerOption): string {
+    private _targetOptionLabel(option: ControllableTargetOption): string {
         const baseLabel =
             option.name === option.id
                 ? option.id

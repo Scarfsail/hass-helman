@@ -32,9 +32,9 @@ import {
   unsetValueAtPath,
 } from "../cards/shared/config/config-document";
 import {
-  buildApplianceSelectionState,
+  buildControllableSelectionState,
   buildClimateModeFieldState,
-} from "../cards/shared/optimizer/appliance-optimizer-ui";
+} from "../cards/shared/optimizer/controllable-target-ui";
 import {
   DOCUMENT_SCOPE_ID,
   SECTION_ICONS,
@@ -1679,10 +1679,6 @@ export class HelmanConfigEditorPanel
         `,
       )}
     `;
-  }
-
-  private _hasApplianceTarget(schema: OptimizerSchema): boolean {
-    return schema.target.some((field) => field.key === "appliance_id");
   }
 
   /**
@@ -3509,30 +3505,6 @@ export class HelmanConfigEditorPanel
     });
   };
 
-  private _applyApplianceIdChange(index: number, rawValue: string): void {
-    const applianceId = rawValue.trim();
-    // The appliance and its climate mode are `target` — the optimizer's
-    // identity — not params, so they are never overridable by a group.
-    const targetPath: PathSegment[] = ["automation", "optimizers", index, "target"];
-    this._applyMutation((draft) => {
-      setValueAtPath(draft, [...targetPath, "appliance_id"], applianceId);
-      const selectionState = buildApplianceSelectionState(
-        draft,
-        this._liveApplianceMetadata,
-        applianceId,
-      );
-      const climateModeFieldState = buildClimateModeFieldState(
-        selectionState,
-        this._stringValue(getValueAtPath(draft, [...targetPath, "climate_mode"])),
-      );
-      if (!climateModeFieldState.visible || climateModeFieldState.unavailable) {
-        unsetValueAtPath(draft, [...targetPath, "climate_mode"]);
-        return;
-      }
-      setValueAtPath(draft, [...targetPath, "climate_mode"], climateModeFieldState.value);
-    });
-  }
-
   private _addOptimizer(schema: OptimizerSchema): void {
     const existingIds = (asJsonArray(this._getValue(["automation", "optimizers"])) ?? [])
       .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
@@ -3810,6 +3782,12 @@ export class HelmanConfigEditorPanel
     });
   }
 
+  /**
+   * Keep `target.climate_mode` consistent with the controllable it names.
+   *
+   * Only `appliance_runtime` has a climate mode to keep, so only it is walked —
+   * the other kinds drive the inverter, which has no modes of this sort.
+   */
   private _normalizeApplianceOptimizerTargets(config: JsonObject): boolean {
     const optimizers = asJsonArray(getValueAtPath(config, ["automation", "optimizers"])) ?? [];
     let changed = false;
@@ -3821,14 +3799,19 @@ export class HelmanConfigEditorPanel
       }
 
       const targetPath: PathSegment[] = ["automation", "optimizers", index, "target"];
-      const applianceId = this._stringValue(getValueAtPath(config, [...targetPath, "appliance_id"]));
+      const applianceId = this._stringValue(
+        getValueAtPath(config, [...targetPath, "controllable_id"]),
+      );
       const currentClimateMode = this._stringValue(
         getValueAtPath(config, [...targetPath, "climate_mode"]),
       );
-      const selectionState = buildApplianceSelectionState(
+      const selectionState = buildControllableSelectionState(
         config,
         this._liveApplianceMetadata,
         applianceId,
+        this._optimizerSchema?.kinds.find(
+          (entry) => entry.kind === APPLIANCE_RUNTIME_OPTIMIZER_KIND,
+        )?.controllableKinds ?? [],
       );
       const climateModeFieldState = buildClimateModeFieldState(
         selectionState,

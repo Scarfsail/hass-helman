@@ -1379,7 +1379,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",
                         kind="appliance_runtime",
-                        target={"appliance_id": "boiler"},
+                        target={"controllable_id": "boiler"},
                         params={},
                     )
                 ),
@@ -1810,7 +1810,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                         optimizer_id="run-boiler",
                         kind="appliance_runtime",
                         params={"appliance_id": "boiler", "action": "on"},
-                        target={"appliance_id": "boiler"},
+                        target={"controllable_id": "boiler"},
                     ),
                 ),
             ).run(reference_time=REFERENCE_TIME)
@@ -1905,7 +1905,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",
                         kind="appliance_runtime",
-                        target={"appliance_id": "boiler"},
+                        target={"controllable_id": "boiler"},
                         params={},
                     )
                 ),

@@ -289,7 +289,7 @@ class MaxRunPriceConditionTests(unittest.TestCase):
         return make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 1,
@@ -451,7 +451,7 @@ class MinSocConditionTests(unittest.TestCase):
         return make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 1,
@@ -635,7 +635,7 @@ class GroupExplanationTests(unittest.TestCase):
         config = make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[{"run_when": ["tight"]}],
         )
@@ -653,7 +653,7 @@ class GroupExplanationTests(unittest.TestCase):
         config = make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[
                 {"run_when": ["tight"], "max_run_price": 2.0},
@@ -672,7 +672,7 @@ class GroupExplanationTests(unittest.TestCase):
         config = make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
         )
@@ -692,7 +692,7 @@ class GroupExplanationTests(unittest.TestCase):
         config = make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[{"run_when": ["tight"], "max_run_price": 2.0}],
         )
@@ -754,7 +754,7 @@ class GroupExplanationTests(unittest.TestCase):
         config = make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=[
                 {"name": "Cheap", "run_when": ["tight"]},

@@ -553,7 +553,7 @@ class ConditionMatrixTests(unittest.TestCase):
         return make_optimizer_config(
             id="runtime",
             kind="appliance_runtime",
-            target={"appliance_id": "pool"},
+            target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
             conditions=list(groups),
         )

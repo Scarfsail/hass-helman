@@ -7,6 +7,7 @@ from typing import Any
 
 from .automation.config import AutomationConfigError, read_automation_config
 from .automation.optimizer import build_optimizer
+from .automation.spec import OPTIMIZER_SPECS
 from .appliances.config import build_appliances_runtime_registry
 from .appliances.climate_appliance import (
     ClimateApplianceConfigError,
@@ -22,7 +23,10 @@ from .grid_price_forecast_builder import (
     GridImportPriceConfigError,
     read_grid_import_price_config,
 )
-from .controllables.config import CONTROLLABLE_ID_INVERTER
+from .controllables.config import (
+    CONTROLLABLE_ID_INVERTER,
+    read_controllable_kinds_by_id,
+)
 from .controllables.spec import (
     CONTROLLABLE_KIND_INVERTER,
     CONTROLLABLE_SPECS,
@@ -955,12 +959,32 @@ def _validate_controllable_id(
 ) -> bool:
     """Uniqueness plus the one reserved id. ``False`` stops further checks.
 
-    An id absent on the inverter is allowed — it is the singleton, so
-    :data:`CONTROLLABLE_ID_INVERTER` is what it means. Every other kind must
-    name itself, and the appliance readers already say so.
+    The inverter must carry ``id: inverter`` — not merely may. Optimizers name
+    what they act on by controllable id, including the three that drive the
+    inverter, so an inverter entry with some other id (or none) would leave
+    ``target.controllable_id`` with nothing to resolve against. The alternative
+    was to resolve the inverter by *kind* at targeting time, which would make
+    ``controllable_id`` mean "an id, except sometimes a kind". The migration and
+    the "Add inverter" draft both always write it, so this only bites a
+    hand-authored document.
+
+    Every other kind must name itself, and the appliance readers already say so.
     """
     section = "controllables"
     raw_id = raw_controllable.get("id")
+    if kind == CONTROLLABLE_KIND_INVERTER and (
+        not _is_non_empty_string(raw_id) or raw_id.strip() != CONTROLLABLE_ID_INVERTER
+    ):
+        report.add_error(
+            section=section,
+            path=f"{path}.id",
+            code="required_controllable_id",
+            message=(
+                f"the inverter controllable must have id "
+                f"{CONTROLLABLE_ID_INVERTER!r}; optimizers target it by that id"
+            ),
+        )
+        return False
     if not _is_non_empty_string(raw_id):
         return True
 
@@ -1068,6 +1092,7 @@ def _validate_automation_config(
 
     appliance_registry = build_appliances_runtime_registry(config)
     battery_issue = describe_battery_entity_config_issue(config)
+    controllable_kinds_by_id = read_controllable_kinds_by_id(config)
     seen_export_price = False
     # Enabled optimizers only, deliberately: a disabled optimizer with a broken
     # group is a config the user parked, not an error to surface.
@@ -1083,6 +1108,13 @@ def _validate_automation_config(
                     f"configured battery: {battery_issue}"
                 ),
             )
+        if not _validate_optimizer_target(
+            optimizer, controllable_kinds_by_id, path=path, report=report
+        ):
+            # Building would fail again on the same id, in the appliance
+            # registry's words this time. One finding per fault.
+            continue
+
         # Building is the validation: the generic reader has already checked the
         # declared schema, so what is left is the runtime resolution (appliance
         # lookups, authorable modes) that only a builder can do.
@@ -1116,6 +1148,69 @@ def _validate_automation_config(
             )
 
 
+def _validate_optimizer_target(
+    optimizer: Any,
+    controllable_kinds_by_id: Mapping[str, str],
+    *,
+    path: str,
+    report: ValidationReport,
+) -> bool:
+    """Does this optimizer name a controllable its kind can actually drive?
+
+    Two findings, both of which used to be silence. An id naming nothing was
+    caught only for appliance targets, and only when the builder ran; an
+    optimizer pointed at a controllable of the wrong kind was caught for no
+    target at all — a ``charge_hold`` aimed at a boiler was accepted and then
+    did nothing useful, because the kinds decide which schedule domain gets
+    written and a boiler's domain takes no inverter action.
+
+    The compatible kinds come from ``CONTROLLABLE_SPECS``' ``optimizer_kinds``
+    via :attr:`OptimizerSpec.controllable_kinds`, so this is the enforcement of
+    a declaration rather than a second list to keep in step. ``ev_charger``
+    declares no optimizer kind, so an ``appliance_runtime`` aimed at a charger
+    lands here as ``incompatible_target`` — the same rejection
+    ``resolve_appliance_target`` already made at build time, moved to where the
+    user can see it against the field they typed.
+    """
+    controllable_id = optimizer.controllable_id
+    kind = controllable_kinds_by_id.get(controllable_id)
+    if kind is None:
+        report.add_error(
+            section="automation",
+            path=f"{path}.target.controllable_id",
+            code="unknown_controllable",
+            message=(
+                f"optimizer {optimizer.id!r} targets controllable "
+                f"{controllable_id!r}, which is not configured"
+            ),
+        )
+        return False
+
+    allowed = OPTIMIZER_SPECS[optimizer.kind].controllable_kinds
+    if kind not in allowed:
+        report.add_error(
+            section="automation",
+            path=f"{path}.target.controllable_id",
+            code="incompatible_target",
+            message=(
+                f"{optimizer.kind} optimizer {optimizer.id!r} cannot drive "
+                f"controllable {controllable_id!r} of kind {kind!r}; "
+                + (
+                    f"it drives: {', '.join(allowed)}"
+                    if allowed
+                    else "no controllable kind accepts this optimizer kind"
+                )
+            ),
+        )
+        return False
+    return True
+
+
+#: Kinds that need a *battery entity* configured. Deliberately not folded into
+#: the capability gate above: that one asks which controllable a kind may drive,
+#: and all three inverter kinds may drive the inverter. This asks something else
+#: — whether the battery these two reason about is wired up at all — and
+#: ``export_price``, which drives the same inverter, does not need it.
 _BATTERY_DEPENDENT_KINDS = frozenset({"charge_hold", "charge_from_grid"})
 
 

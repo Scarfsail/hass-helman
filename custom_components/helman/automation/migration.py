@@ -359,6 +359,48 @@ def _inverter_controllable(scheduler: Any) -> dict[str, Any] | None:
     }
 
 
+#: The three kinds that hit the inverter implicitly, by virtue of being
+#: themselves, up to version 7. Spelled out rather than read from
+#: ``OPTIMIZER_SPECS``: a migration describes a moment in history, and must keep
+#: describing it when the registry gains a fourth inverter-driving kind — that
+#: kind will arrive with ``controllable_id`` already written.
+_V7_INVERTER_OPTIMIZER_KINDS = ("charge_hold", "export_price", "charge_from_grid")
+
+
+def _migrate_v7_to_v8(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    return _migrate_optimizers(document, _target_controllable_id)
+
+
+def _target_controllable_id(optimizer: dict[str, Any]) -> dict[str, Any]:
+    """Every optimizer names its target by controllable id, uniformly.
+
+    Two halves of one move. ``appliance_runtime`` had the field already, under
+    the narrower name ``appliance_id`` — the list it indexes into is called
+    ``controllables`` since version 7, and an id that can name the inverter is
+    not an appliance id. The three inverter kinds had no target at all and were
+    resolved from their own ``kind``; they get the reserved ``inverter`` id
+    written out, so what they always meant is now said.
+
+    Reads what version 2 wrote: ``_PARAM_TO_TARGET`` moved ``appliance_id`` from
+    ``params`` to ``target`` back then, so by the time a version-1 document
+    reaches this step the key is where this step looks for it. That ordering is
+    the composition rule ``migrate_config_document`` documents.
+
+    An explicit ``controllable_id`` always wins — on the inverter kinds it is
+    what the user authored, and on ``appliance_runtime`` a document carrying
+    both keys is already half-migrated by hand.
+    """
+    target = dict(optimizer.get("target") or {})
+    appliance_id = target.pop("appliance_id", None)
+    if appliance_id is not None:
+        target.setdefault("controllable_id", appliance_id)
+    if optimizer.get("kind") in _V7_INVERTER_OPTIMIZER_KINDS:
+        target.setdefault("controllable_id", "inverter")
+    if not target:
+        return optimizer
+    return {**optimizer, "target": target}
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -366,6 +408,7 @@ _MIGRATIONS = {
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
     6: _migrate_v6_to_v7,
+    7: _migrate_v7_to_v8,
 }
 
 

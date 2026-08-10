@@ -57,20 +57,26 @@ def resolve_appliance_target(
     appliance_registry: "AppliancesRuntimeRegistry",
     path: str,
 ) -> ApplianceTarget:
-    """Turn ``target.appliance_id`` + ``target.climate_mode`` into a live target.
+    """Turn ``target.controllable_id`` + ``target.climate_mode`` into a live target.
 
     Shared by every kind that writes into an appliance domain — those whose
     target is an appliance. The field *shapes* come from the spec; only the
     registry lookup and the generic/climate split live here, because only they
     need runtime state the schema cannot express.
+
+    Reaching the final ``must be generic or climate`` raise now means the config
+    validator was bypassed: it resolves the same id against the controllables
+    list and rejects a kind this optimizer cannot drive (an ``ev_charger``, say)
+    before anything is built. The raise stays as the backstop for the paths that
+    build without validating — a hand-edited document loaded at startup.
     """
-    appliance_id = str(config.target.get("appliance_id"))
+    appliance_id = str(config.target.get("controllable_id"))
     appliance = appliance_registry.get_appliance(appliance_id)
     if appliance is None:
         raise OptimizerConfigError(
-            path=f"{path}.target.appliance_id",
+            path=f"{path}.target.controllable_id",
             code="invalid_value",
-            message=f"unknown appliance_id {appliance_id!r}",
+            message=f"unknown controllable_id {appliance_id!r}",
         )
 
     climate_mode = config.target.get("climate_mode")
@@ -107,9 +113,9 @@ def resolve_appliance_target(
             appliance=appliance, authored_action={"mode": climate_mode}
         )
     raise OptimizerConfigError(
-        path=f"{path}.target.appliance_id",
+        path=f"{path}.target.controllable_id",
         code="invalid_value",
-        message=f"appliance {appliance_id!r} must be generic or climate",
+        message=f"controllable {appliance_id!r} must be generic or climate",
     )
 
 

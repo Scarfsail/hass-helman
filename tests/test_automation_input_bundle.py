@@ -432,6 +432,9 @@ try:
         "custom_components.helman.automation.input_bundle"
     )
     config_module = importlib.import_module("custom_components.helman.appliances.config")
+    automation_config_module = importlib.import_module(
+        "custom_components.helman.automation.config"
+    )
 finally:
     _restore_modules(_previous_modules)
     for module_name in list(sys.modules):
@@ -445,6 +448,7 @@ finally:
             sys.modules.pop(module_name, None)
 
 HelmanCoordinator = coordinator_module.HelmanCoordinator
+OptimizerInstanceConfig = automation_config_module.OptimizerInstanceConfig
 AutomationInputBundle = input_bundle_module.AutomationInputBundle
 build_appliances_runtime_registry = config_module.build_appliances_runtime_registry
 
@@ -841,9 +845,14 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         config = SimpleNamespace(
             enabled=True,
             execution_optimizers=[
-                SimpleNamespace(
+                # The real config object, not a stand-in: the coordinator reads
+                # the target through `controllable_id`, and a namespace that
+                # answered `target` alone would pass while the property it
+                # actually calls went untested.
+                OptimizerInstanceConfig(
+                    id="pool",
                     kind="appliance_runtime",
-                    target={"appliance_id": "pool-filtration"},
+                    target={"controllable_id": "pool-filtration"},
                     params={"skip": {"max_consecutive_skips": 2}},
                 ),
             ],
@@ -862,7 +871,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         config = SimpleNamespace(
             enabled=True,
             execution_optimizers=[
-                SimpleNamespace(kind="charge_hold", target={}, params={}),
+                OptimizerInstanceConfig(id="hold", kind="charge_hold"),
             ],
         )
 

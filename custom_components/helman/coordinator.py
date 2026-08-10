@@ -3723,8 +3723,8 @@ class HelmanCoordinator:
 
         **The appliance lives on ``target``, not on ``params``.** It is identity,
         which a condition group may never override, and every other reader takes
-        it from there (``config.target_key``, ``base.py:67``,
-        ``conditions/types.py:309``). Reading ``params`` found nothing, so this
+        it from there (``config.controllable_id``, ``base.py``,
+        ``conditions/types.py``). Reading ``params`` found nothing, so this
         returned ``None``, the runtime map came back empty, and every appliance's
         ``delivered_hours`` was 0 for every day — a daily minimum that never
         counted what had already run, and a consecutive-skip guard walking back
@@ -3738,8 +3738,8 @@ class HelmanCoordinator:
         for optimizer in automation_config.execution_optimizers:
             if optimizer.kind != "appliance_runtime":
                 continue
-            appliance_id = optimizer.target.get("appliance_id")
-            if isinstance(appliance_id, str) and appliance_id:
+            appliance_id = optimizer.controllable_id
+            if appliance_id:
                 appliance_ids.add(appliance_id)
             skip = optimizer.params.get("skip")
             if isinstance(skip, Mapping):

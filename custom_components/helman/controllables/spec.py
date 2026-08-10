@@ -37,12 +37,15 @@ The capability flags are not decoration; they record real, verified asymmetries:
     averaging) it needs. The inverter has no demand of its own to project.
 
 ``optimizer_kinds``
-    Which optimizer kinds may target this controllable kind. Declared here one
-    phase before anything enforces it; the check that rejects an optimizer aimed
-    at a kind it cannot drive is a later phase. Note ``ev_charger`` accepts
-    nothing: ``resolve_appliance_target`` (``automation/base.py``) authors an
-    action only for generic and climate appliances and rejects everything else,
-    so no optimizer can currently target a charger.
+    Which optimizer kinds may target this controllable kind. Enforced by
+    ``_validate_automation_config``, which reads it through
+    :func:`controllable_kinds_for_optimizer_kind` — so "what the editor offers"
+    and "what validation accepts" come from this one table. Note ``ev_charger``
+    accepts nothing: ``resolve_appliance_target`` (``automation/base.py``)
+    authors an action only for generic and climate appliances and rejects
+    everything else, so no optimizer can target a charger. Enforcing the flag
+    turns that build-time failure into a config finding, which is the point;
+    making chargers automatable is a feature, not a flag flip.
 """
 
 from __future__ import annotations
@@ -189,3 +192,22 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
 }
 
 KNOWN_CONTROLLABLE_KINDS: frozenset[str] = frozenset(CONTROLLABLE_SPECS)
+
+
+def controllable_kinds_for_optimizer_kind(optimizer_kind: str) -> tuple[str, ...]:
+    """Which controllable kinds an optimizer kind may drive, in registry order.
+
+    The inverse of :attr:`ControllableSpec.optimizer_kinds`, computed rather
+    than declared a second time: the two directions cannot disagree, and adding
+    a kind stays one edit. Registry order rather than sorted, so the editor's
+    target picker offers kinds in the order the registry lists them.
+
+    An optimizer kind no controllable accepts gets an empty tuple — which reads
+    as "nothing may be targeted" everywhere it is used, and is the honest answer
+    rather than a lookup error.
+    """
+    return tuple(
+        spec.kind
+        for spec in CONTROLLABLE_SPECS.values()
+        if optimizer_kind in spec.optimizer_kinds
+    )

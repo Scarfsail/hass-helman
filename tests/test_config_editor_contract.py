@@ -595,7 +595,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                         "id": "preheat-living-room",
                         "kind": "appliance_runtime",
                         "enabled": True,
-                        "target": {"appliance_id": "dishwasher"},
+                        "target": {"controllable_id": "dishwasher"},
                         "conditions": [{"min_soc_pct": 80}],
                     }
                 ],

@@ -449,7 +449,7 @@ def _config(
     max_consecutive_skips: int = 0,
     groups: list[dict] | None = None,
 ) -> OptimizerInstanceConfig:
-    target: dict[str, object] = {"appliance_id": appliance_id}
+    target: dict[str, object] = {"controllable_id": appliance_id}
     if climate_mode is not None:
         target["climate_mode"] = climate_mode
     group: dict[str, object] = {}
@@ -1272,7 +1272,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         return make_optimizer_config(
             id="daily",
             kind="appliance_runtime",
-            target={"appliance_id": appliance.id},
+            target={"controllable_id": appliance.id},
             params=params,
             conditions=kwargs.pop("groups", None) or [group],
         )
@@ -1755,7 +1755,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         return make_optimizer_config(
             id="daily",
             kind="appliance_runtime",
-            target={"appliance_id": appliance.id},
+            target={"controllable_id": appliance.id},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 0.5,
@@ -1917,7 +1917,7 @@ class SelfSustainabilityConfigTests(unittest.TestCase):
         return make_optimizer_config(
             id="daily",
             kind="appliance_runtime",
-            target={"appliance_id": "pool-pump"},
+            target={"controllable_id": "pool-pump"},
             params={
                 "daily_minimum": {
                     "min_hours_per_day": 1,
@@ -2207,7 +2207,7 @@ def _uncapped_config(
     return make_optimizer_config(
         id="soak",
         kind="appliance_runtime",
-        target={"appliance_id": appliance_id},
+        target={"controllable_id": appliance_id},
         params=params,
         conditions=groups or [{"run_when": ["tight"]}],
     )
@@ -2446,7 +2446,7 @@ class UncappedValidationTests(unittest.TestCase):
             make_optimizer_config(
                 id="soak",
                 kind="appliance_runtime",
-                target={"appliance_id": "pool-pump"},
+                target={"controllable_id": "pool-pump"},
                 params={"daily_minimum": {"max_consecutive_skips": 2}},
                 conditions=[{"run_when": ["surplus"]}],
             )
