@@ -29,7 +29,7 @@ DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
 
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
-CONFIG_DOCUMENT_VERSION = 6
+CONFIG_DOCUMENT_VERSION = 7
 
 DAY_CLASSIFICATIONS = (
     DAY_CLASSIFICATION_SURPLUS,

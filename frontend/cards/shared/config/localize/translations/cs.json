@@ -5,9 +5,8 @@
     "tabs": {
       "general": "Obecné",
       "power_devices": "Výkonová zařízení",
-      "scheduler": "Plánování",
       "automation": "Automatizace",
-      "appliances": "Spotřebiče"
+      "controllables": "Ovládané prvky"
     },
     "actions": {
       "reload_config": "Načíst uloženou konfiguraci znovu",
@@ -20,6 +19,7 @@
       "add_deferrable_consumer": "Přidat odložitelný spotřebič",
       "add_daily_energy_entity": "Přidat entitu denní energie",
       "add_import_price_window": "Přidat okno ceny importu",
+      "add_inverter": "Přidat střídač",
       "add_ev_charger": "Přidat EV nabíječku",
       "add_climate_appliance": "Přidat topení/klimatizaci",
       "add_generic_appliance": "Přidat obecný spotřebič",
@@ -58,10 +58,11 @@
       "bias_correction": "Korekce zkreslení",
       "battery": "Baterie",
       "grid": "Síť",
-      "schedule_control_mapping": "Mapování ovládání plánování",
       "automation_settings": "Nastavení automatizace",
       "optimizer_pipeline": "Pipeline optimalizátorů",
-      "configured_appliances": "Nakonfigurované spotřebiče",
+      "configured_controllables": "Nakonfigurované ovládané prvky",
+      "identity": "Identita",
+      "action_options": "Volby akcí",
       "identity_and_limits": "Identita a limity",
       "controls": "Ovládání",
       "projection": "Projekce",
@@ -82,13 +83,13 @@
       "grid_import_windows": "Okna cen importu musí pokrývat celý den bez mezer nebo překryvů.",
       "automation": "Vizuální režim podporuje hlavní přepínač automatizace i optimalizátory export_price a appliance_runtime. Když větev automation v konfiguraci chybí, panel ji zobrazuje jako vypnutou, dokud ji nezapnete.",
       "optimizer_pipeline": "Tady nastavíte seřazený seznam optimalizátorů. Optimalizátory běží v pořadí, runtime mezi kroky znovu sestavuje snapshot a neznámé budoucí klíče i druhy optimalizátorů se zachovají přesně tak, jak jsou uložené, takže je pořád můžete upravit v YAML.",
-      "appliances": "Editace EV nabíječky, topení/klimatizace a obecného spotřebiče je podporovaná přímo. Nepodporované budoucí typy spotřebičů se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
+      "controllables": "Všechno, co Helman ovládá, je v jednom seznamu: střídač a EV nabíječka, topení/klimatizace i obecný spotřebič. Všechny čtyři typy se editují přímo tady. Nepodporované budoucí typy se zachovají a zobrazí jen pro čtení, dokud je neodstraníte.",
       "generic_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během zapnutého přepínače a při nedostatečné historii použije pevnou hodnotu.",
       "climate_appliance_projection": "Nastavte pevnou průměrnou hodinovou energii v kWh. Když je vybraná historická průměrná hodnota, Helman odhadne průměrnou hodinovou energii během aktivního vytápění nebo chlazení a při nedostatečné historii použije pevnou hodnotu."
     },
     "empty": {
       "no_automation_optimizers": "Zatím nejsou nakonfigurovány žádné optimalizátory.",
-      "no_appliances": "Zatím nejsou nakonfigurovány žádné spotřebiče.",
+      "no_controllables": "Zatím nejsou nakonfigurovány žádné ovládané prvky.",
       "no_device_label_categories": "Nejsou nakonfigurovány žádné kategorie textů štítků."
     },
     "card": {
@@ -155,6 +156,8 @@
       "when_price_below": "Když je cena pod",
       "max_run_price": "Max. cena pro běh",
       "appliance_id": "Spotřebič",
+      "controllable_id": "ID ovládaného prvku",
+      "controllable_name": "Název ovládaného prvku",
       "climate_mode": "Režim topení/klimatizace",
       "min_surplus_buffer_pct": "Min. buffer přebytku %",
       "min_soc_pct": "Min. nabití baterie %",
@@ -334,7 +337,8 @@
       "stale_appliance": "{id} (už není v aktuální konfiguraci)",
       "stale_climate_mode": "{mode} (už není podporovaný)",
       "unsupported_optimizer_kind": "Nepodporovaný typ optimalizátoru: {kind}",
-      "unsupported_appliance_kind": "Nepodporovaný typ spotřebiče: {kind}",
+      "unsupported_appliance_kind": "Nepodporovaný typ ovládaného prvku: {kind}",
+      "inverter": "Střídač",
       "condition_group": "Skupina {index}"
     },
     "choices": {
@@ -372,8 +376,10 @@
       "import_window_start": "Čas začátku tohoto cenového okna importu v místním čase (HH:MM). Cenová okna importu musí dohromady pokrývat celých 24 hodin bez mezer ani překryvů.",
       "import_window_end": "Čas konce tohoto cenového okna importu v místním čase (HH:MM). Pro půlnoc na konci dne použijte 00:00.",
       "import_window_price": "Cena elektřiny při importu v průběhu tohoto časového okna, v jednotce nakonfigurované výše. Optimalizátor baterie ji používá k nalezení nejlevnějších čas pro nabíjení.",
-      "scheduler_mode_entity": "Entita input_select nebo select, do které Helman zapisuje příkazy akcí plánování. Helman nastaví hodnotu volby odpovídající požadovanému režimu baterie (nabíjení, vybíjení, normální atd.). Vyžadováno pro skutečné řízení baterie plánovačem.",
-      "scheduler_action_option": "Hodnota volby, kterou Helman zapíše do entity režimu při naplánování této akce. Musí přesně odpovídat jedné z voleb v entitě select. Nechte prázdné, pokud vaše střídač tuto akci nepodporuje.",
+      "inverter_mode_entity": "Entita input_select nebo select, do které Helman zapisuje příkazy akcí plánování. Helman nastaví hodnotu volby odpovídající požadovanému režimu baterie (nabíjení, vybíjení, normální atd.). Vyžadováno pro skutečné řízení baterie plánem.",
+      "inverter_action_option": "Hodnota volby, kterou Helman zapíše do entity režimu při naplánování této akce. Musí přesně odpovídat jedné z voleb v entitě select. Nechte prázdné, pokud váš střídač tuto akci nepodporuje.",
+      "controllable_id": "Jedinečný interní identifikátor tohoto ovládaného prvku. Používá se v odkazech automatizací a sledování plánování. Neměňte ho po nakonfigurování, mohlo by to rozbít existující automatizace.",
+      "controllable_name": "Zobrazovaný název tohoto ovládaného prvku v dashboardu Helman a v pruzích plánu.",
       "automation_optimizer_id": "Jedinečný identifikátor optimalizátoru uložený v automation.optimizers[].id. Držte ho stabilní, aby budoucí reference, logy a ladění zůstaly čitelné.",
       "export_price_when_price_below": "Prahová hodnota ve stejné jednotce jako předpověď exportní ceny. Když předpovězená exportní cena klesne pod tuto hodnotu, optimalizátor vytvoří sloty stop_export tam, kde je očekávaný export.",
       "appliance_runtime_id": "ID nakonfigurovaného spotřebiče, které tento optimalizátor smí zapisovat. Výběr je řízen aktuálním seznamem appliances v editoru, takže draft přidání i smazání se projeví hned.",

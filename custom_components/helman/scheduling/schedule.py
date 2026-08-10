@@ -18,6 +18,10 @@ from ..schedule_action_metadata import (
     read_optional_schedule_action_set_by,
 )
 from ..appliances.state import AppliancesRuntimeRegistry
+from ..controllables.config import (
+    CONTROLLABLE_ID_INVERTER,
+    find_inverter_controllable,
+)
 from ..const import (
     SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
@@ -50,6 +54,12 @@ TARGET_ACTION_KINDS = {
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
 }
 SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
+#: How the inverter's control block is named when reporting a config problem.
+#: Not an index: the inverter is a singleton found by kind, so its position in
+#: the list is not stable and would only mislead.
+_INVERTER_CONTROL_PATH = (
+    f"controllables[{CONTROLLABLE_ID_INVERTER}].controls.mode"
+)
 SCHEDULE_SLOT_KEYS = {"id", "domains"}
 
 if SCHEDULE_SLOT_MINUTES <= 0 or 60 % SCHEDULE_SLOT_MINUTES != 0:
@@ -407,14 +417,27 @@ def schedule_document_to_dict(doc: ScheduleDocument) -> dict[str, Any]:
     }
 
 
+def _read_inverter_mode_control(
+    config: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """``controls.mode`` and its ``options`` for the inverter controllable.
+
+    Since config version 7 the inverter is one entry in ``controllables:``
+    rather than a section of its own, so this is where the old
+    ``scheduler.control`` / ``action_option_map`` pair is now read from. The
+    returned dataclass is unchanged — only its source moved.
+    """
+    inverter = find_inverter_controllable(config)
+    mode_config = _read_mapping(_read_mapping(inverter.get("controls")).get("mode"))
+    return (mode_config, _read_mapping(mode_config.get("options")))
+
+
 def read_schedule_control_config(
     config: Mapping[str, Any],
 ) -> ScheduleControlConfig | None:
-    scheduler_config = _read_mapping(config.get("scheduler"))
-    control_config = _read_mapping(scheduler_config.get("control"))
-    action_option_map = _read_mapping(control_config.get("action_option_map"))
+    control_config, action_option_map = _read_inverter_mode_control(config)
 
-    mode_entity_id = _read_non_empty_string(control_config.get("mode_entity_id"))
+    mode_entity_id = _read_non_empty_string(control_config.get("entity_id"))
     normal_option = _read_non_empty_string(
         action_option_map.get(SCHEDULE_ACTION_NORMAL)
     )
@@ -456,26 +479,22 @@ def read_schedule_control_config(
 def describe_schedule_control_config_issue(
     config: Mapping[str, Any],
 ) -> str | None:
-    scheduler_config = _read_mapping(config.get("scheduler"))
-    control_config = _read_mapping(scheduler_config.get("control"))
-    action_option_map = _read_mapping(control_config.get("action_option_map"))
+    control_config, action_option_map = _read_inverter_mode_control(config)
 
     missing_fields: list[str] = []
-    if _read_non_empty_string(control_config.get("mode_entity_id")) is None:
-        missing_fields.append("scheduler.control.mode_entity_id")
+    if _read_non_empty_string(control_config.get("entity_id")) is None:
+        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.entity_id")
     if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_NORMAL)) is None:
-        missing_fields.append("scheduler.control.action_option_map.normal")
+        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.normal")
     if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_CHARGING)) is None:
-        missing_fields.append("scheduler.control.action_option_map.stop_charging")
+        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.stop_charging")
     if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)) is None:
-        missing_fields.append(
-            "scheduler.control.action_option_map.stop_discharging"
-        )
+        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.stop_discharging")
 
     if not missing_fields:
         return None
 
-    return "missing required scheduler control config values: " + ", ".join(
+    return "missing required inverter control config values: " + ", ".join(
         missing_fields
     )
 

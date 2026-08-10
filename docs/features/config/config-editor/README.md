@@ -14,8 +14,7 @@ The goal is to give the user one admin-oriented place to edit Helman's persisted
 For Helman, that split is even more important because the config model is much richer than a normal options flow:
 
 - nested `power_devices`
-- scheduler control mapping
-- appliance list
+- the controllables list: the inverter and every appliance
 - EV charger controls, modes, eco gears, and vehicles
 
 That shape is a poor fit for a native config flow wizard, but it is a good fit for a custom editor.
@@ -112,23 +111,24 @@ Current solar bias correction behavior to document in the UI/help text:
 - slot invalidation is applied only to historical training data; `today` is not included in the training window
 - the visual inspector shows invalidated actual production in gray only for past days; `today` is shown as normal actual production even if invalidation conditions are currently met
 
-### 3. `scheduler`
-
-The editor should expose schedule-control config such as:
-
-- `scheduler.control.mode_entity_id`
-- `scheduler.control.action_option_map`
-- default execution behavior where relevant
-
-This is backend control mapping, not authored schedule content.
-
-### 4. `appliances`
+### 3. `controllables`
 
 This is the most important reason to build a custom editor.
 
-The editor should support add/edit/remove for appliances, starting with `ev_charger`, including:
+Everything Helman can drive lives in one list, with `kind` as the discriminator:
+`inverter`, `climate`, `ev_charger`, `generic`. Config version 7 replaced the
+separate `appliances:` list and `scheduler.control` section with it, and there is
+no Scheduler tab any more — the section it held carried no scheduling policy,
+only the inverter's control mapping.
 
-- appliance identity (`id`, `name`, `kind`)
+For the inverter (a singleton, id `inverter`), that mapping is:
+
+- `controls.mode.entity_id`
+- `controls.mode.options` — one entry per schedule action kind
+
+The editor should support add/edit/remove for every kind, including:
+
+- controllable identity (`id`, `name`, `kind`)
 - appliance limits
 - charge switch entity
 - use-mode select entity and mode definitions
@@ -221,17 +221,20 @@ power_devices:
       max_soc: sensor.battery_max_soc
       remaining_energy: sensor.battery_remaining_energy
 
-scheduler:
-  control:
-    mode_entity_id: input_select.rezim_fv
-    action_option_map:
-      normal: Standardni
-      charge_to_target_soc: Nucene nabijeni
-      discharge_to_target_soc: Nucene vybijeni
-      stop_charging: Zakaz nabijeni
-      stop_discharging: Zakaz vybijeni
+controllables:
+  - kind: inverter
+    id: inverter
+    name: Inverter
+    controls:
+      mode:
+        entity_id: input_select.rezim_fv
+        options:
+          normal: Standardni
+          charge_to_target_soc: Nucene nabijeni
+          discharge_to_target_soc: Nucene vybijeni
+          stop_charging: Zakaz nabijeni
+          stop_discharging: Zakaz vybijeni
 
-appliances:
   - kind: ev_charger
     id: garage-ev
     name: Charger EV in Garage

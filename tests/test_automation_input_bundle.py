@@ -496,7 +496,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._appliances_registry = build_appliances_runtime_registry(
-            {"appliances": []}
+            {"controllables": []}
         )
         coordinator._automation_input_bundle = None
         house_forecast = _make_house_forecast()
@@ -571,7 +571,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "appliances": [
+                "controllables": [
                     {
                         "kind": "generic",
                         "id": "dishwasher",
@@ -658,7 +658,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = object.__new__(HelmanCoordinator)
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
-                "appliances": [
+                "controllables": [
                     {
                         "kind": "generic",
                         "id": "dishwasher",
@@ -881,7 +881,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             appliance_energy=section
         )
         coordinator._appliances_registry = build_appliances_runtime_registry(
-            {"appliances": appliances if appliances is not None else [
+            {"controllables": appliances if appliances is not None else [
                 {
                     "kind": "generic",
                     "id": "dishwasher",

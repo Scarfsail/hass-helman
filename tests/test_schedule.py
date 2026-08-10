@@ -508,16 +508,22 @@ class ScheduleHelperTests(unittest.TestCase):
     ) -> None:
         control_config = read_schedule_control_config(
             {
-                "scheduler": {
-                    "control": {
-                        "mode_entity_id": "input_select.rezim_fv",
-                        "action_option_map": {
-                            "normal": "Standardní",
-                            "stop_charging": "Zákaz nabíjení",
-                            "stop_discharging": "Zákaz vybíjení",
+                "controllables": [
+                    {
+                        "kind": "inverter",
+                        "id": "inverter",
+                        "controls": {
+                            "mode": {
+                                "entity_id": "input_select.rezim_fv",
+                                "options": {
+                                    "normal": "Standardní",
+                                    "stop_charging": "Zákaz nabíjení",
+                                    "stop_discharging": "Zákaz vybíjení",
+                                },
+                            }
                         },
                     }
-                }
+                ]
             }
         )
 
@@ -537,17 +543,23 @@ class ScheduleHelperTests(unittest.TestCase):
     def test_read_schedule_control_config_reads_stop_export_option(self) -> None:
         control_config = read_schedule_control_config(
             {
-                "scheduler": {
-                    "control": {
-                        "mode_entity_id": "input_select.rezim_fv",
-                        "action_option_map": {
-                            "normal": "Standardní",
-                            "stop_charging": "Zákaz nabíjení",
-                            "stop_discharging": "Zákaz vybíjení",
-                            "stop_export": "Zákaz exportu",
+                "controllables": [
+                    {
+                        "kind": "inverter",
+                        "id": "inverter",
+                        "controls": {
+                            "mode": {
+                                "entity_id": "input_select.rezim_fv",
+                                "options": {
+                                    "normal": "Standardní",
+                                    "stop_charging": "Zákaz nabíjení",
+                                    "stop_discharging": "Zákaz vybíjení",
+                                    "stop_export": "Zákaz exportu",
+                                },
+                            }
                         },
                     }
-                }
+                ]
             }
         )
 

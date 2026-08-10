@@ -384,6 +384,128 @@ class TrainingTimePromotionTests(unittest.TestCase):
         self.assertEqual(ids, ["e"])
 
 
+class ControllablesUnificationTests(unittest.TestCase):
+    """v6->v7: ``appliances`` + ``scheduler.control`` -> ``controllables``.
+
+    The step every existing installation runs, and the only one that reshapes
+    what the user sees in the editor. Table-driven over the four shapes a v6
+    document can actually have — both keys, one, the other, neither — because
+    the runtime that reads the result treats an absent list and an empty one
+    differently.
+    """
+
+    _CONTROL = {
+        "mode_entity_id": "select.fv_mode",
+        "action_option_map": {
+            "normal": "Self Use",
+            "stop_charging": "Manual",
+            "stop_discharging": "Manual",
+        },
+    }
+    _APPLIANCE = {
+        "kind": "generic",
+        "id": "dishwasher",
+        "name": "Dishwasher",
+        "controls": {"switch": {"entity_id": "switch.dishwasher"}},
+        "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
+    }
+
+    @classmethod
+    def _migrate_from_v6(cls, document):
+        migrated, ids = migrate_config_document({**document, "config_version": 6})
+        return migrated, ids
+
+    def test_the_inverter_becomes_the_first_controllable(self) -> None:
+        migrated, ids = self._migrate_from_v6(
+            {"scheduler": {"control": self._CONTROL}, "appliances": [self._APPLIANCE]}
+        )
+
+        self.assertNotIn("scheduler", migrated)
+        self.assertNotIn("appliances", migrated)
+        self.assertEqual(
+            migrated["controllables"],
+            [
+                {
+                    "kind": "inverter",
+                    "id": "inverter",
+                    "name": "Inverter",
+                    "controls": {
+                        "mode": {
+                            "entity_id": "select.fv_mode",
+                            "options": {
+                                "normal": "Self Use",
+                                "stop_charging": "Manual",
+                                "stop_discharging": "Manual",
+                            },
+                        }
+                    },
+                },
+                self._APPLIANCE,
+            ],
+        )
+        self.assertEqual(ids, [])
+
+    def test_appliance_entries_move_verbatim_and_keep_their_order(self) -> None:
+        second = {**self._APPLIANCE, "id": "boiler", "name": "Boiler"}
+
+        migrated, _ids = self._migrate_from_v6(
+            {"appliances": [self._APPLIANCE, second]}
+        )
+
+        self.assertEqual(migrated["controllables"], [self._APPLIANCE, second])
+
+    def test_an_installation_without_a_wired_inverter_gets_no_entry(self) -> None:
+        migrated, _ids = self._migrate_from_v6({"scheduler": {}, "appliances": []})
+
+        self.assertEqual(migrated["controllables"], [])
+
+    def test_a_document_with_neither_key_grows_no_controllables(self) -> None:
+        migrated, _ids = self._migrate_from_v6({"history_buckets": 60})
+
+        self.assertNotIn("controllables", migrated)
+
+    def test_unknown_control_keys_ride_along_on_the_inverter_entry(self) -> None:
+        migrated, _ids = self._migrate_from_v6(
+            {"scheduler": {"control": {**self._CONTROL, "future_key": "keep-me"}}}
+        )
+
+        self.assertEqual(migrated["controllables"][0]["future_key"], "keep-me")
+
+    def test_an_appliances_value_that_is_not_a_list_is_moved_not_dropped(self) -> None:
+        migrated, _ids = self._migrate_from_v6({"appliances": {"oops": True}})
+
+        self.assertEqual(migrated["controllables"], {"oops": True})
+        self.assertNotIn("appliances", migrated)
+
+    def test_a_v1_document_reaches_the_new_shape_through_every_step(self) -> None:
+        document = {
+            **_document({"id": "e", "kind": "export_price"}),
+            "scheduler": {"control": self._CONTROL},
+            "appliances": [self._APPLIANCE],
+        }
+
+        migrated, ids = migrate_config_document(document)
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(
+            [entry["kind"] for entry in migrated["controllables"]],
+            ["inverter", "generic"],
+        )
+        self.assertEqual(ids, ["e"])
+
+    def test_a_v7_document_is_left_exactly_as_it_is(self) -> None:
+        document = {
+            "config_version": CONFIG_DOCUMENT_VERSION,
+            "controllables": [self._APPLIANCE],
+        }
+        self.assertFalse(needs_migration(document))
+
+        migrated, ids = migrate_config_document(document)
+
+        self.assertEqual(migrated, document)
+        self.assertEqual(ids, [])
+
+
 class RunWhenInversionTests(unittest.TestCase):
     """``skip.on_days`` -> ``run_when`` is not a plain complement.
 

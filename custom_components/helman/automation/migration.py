@@ -275,12 +275,97 @@ def _migrate_v5_to_v6(document: dict[str, Any]) -> tuple[dict[str, Any], list[st
     return (document, [])
 
 
+def _migrate_v6_to_v7(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``appliances`` + ``scheduler.control`` -> one ``controllables`` list.
+
+    The two keys held the same category of information — which entity Helman
+    drives, and how — split only by the accident that the inverter arrived
+    first and got a section of its own. ``scheduler`` held nothing else: no
+    horizon, no slot grid, no policy, just that one control block.
+
+    Mechanical in both halves. Appliance entries move verbatim: same ``kind``,
+    same per-kind fields, same ``controls`` sub-shape. The inverter becomes a
+    ``kind: inverter`` entry with the reserved id ``inverter``, where
+    ``mode_entity_id`` and ``action_option_map`` become
+    ``controls.mode.entity_id`` and ``controls.mode.options`` — which is what
+    makes it visibly the same category as an appliance's
+    ``controls.switch.entity_id``.
+
+    The inverter goes first because it is the singleton every installation has
+    and the one the schedule lanes lead with; appliance order is preserved
+    after it. Any key ``scheduler.control`` carried beyond those two is copied
+    onto the inverter entry rather than dropped, so a config written against a
+    later shape survives the move. ``scheduler`` itself is then dropped: after
+    this step nothing reads it, and the save path rejects it.
+
+    An ``appliances`` value that is not a list is moved across unchanged rather
+    than discarded — the information survives, and the reader and validator
+    report the type error in the new vocabulary.
+    """
+    if "appliances" not in document and "scheduler" not in document:
+        return (document, [])
+
+    appliances = document.pop("appliances", None)
+    scheduler = document.pop("scheduler", None)
+
+    if appliances is not None and not isinstance(appliances, list):
+        document["controllables"] = appliances
+        return (document, [])
+
+    controllables: list[Any] = []
+    inverter = _inverter_controllable(scheduler)
+    if inverter is not None:
+        controllables.append(inverter)
+    existing = document.get("controllables")
+    if isinstance(existing, list):
+        controllables.extend(existing)
+    controllables.extend(appliances or [])
+    document["controllables"] = controllables
+    return (document, [])
+
+
+def _inverter_controllable(scheduler: Any) -> dict[str, Any] | None:
+    """The ``kind: inverter`` entry ``scheduler.control`` becomes, if any.
+
+    An installation that never wired the inverter up has no control block, and
+    gets no entry — an empty inverter card would only invite the user to fill
+    in a device they do not have.
+    """
+    if not isinstance(scheduler, Mapping):
+        return None
+    control = scheduler.get("control")
+    if not isinstance(control, Mapping) or not control:
+        return None
+
+    mode: dict[str, Any] = {}
+    entity_id = control.get("mode_entity_id")
+    if entity_id is not None:
+        mode["entity_id"] = entity_id
+    options = control.get("action_option_map")
+    if options is not None:
+        mode["options"] = deepcopy(options)
+
+    extra = {
+        key: deepcopy(value)
+        for key, value in control.items()
+        if key not in ("mode_entity_id", "action_option_map")
+    }
+    return {
+        "kind": "inverter",
+        "id": "inverter",
+        "name": "Inverter",
+        "controls": {"mode": mode},
+        **extra,
+    }
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
+    6: _migrate_v6_to_v7,
 }
 
 

@@ -9,6 +9,7 @@ import {
   cloneJson,
   createApplianceDraft,
   createClimateApplianceDraft,
+  createInverterControllableDraft,
   createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
@@ -102,6 +103,24 @@ const GENERIC_PROJECTION_STRATEGIES = [
 ];
 
 const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
+const INVERTER_CONTROLLABLE_KIND = "inverter";
+
+/**
+ * The schedule actions an inverter's `controls.mode.options` maps, in the order
+ * the card lays them out. Mirrors `CONTROLLABLE_SPECS["inverter"]` in Python:
+ * the backend owns the list, this is the editor's copy of it.
+ */
+const INVERTER_ACTION_OPTIONS = [
+  { key: "normal", labelKey: "editor.fields.normal_option" },
+  { key: "charge_to_target_soc", labelKey: "editor.fields.charge_to_target_soc_option" },
+  {
+    key: "discharge_to_target_soc",
+    labelKey: "editor.fields.discharge_to_target_soc_option",
+  },
+  { key: "stop_charging", labelKey: "editor.fields.stop_charging_option" },
+  { key: "stop_discharging", labelKey: "editor.fields.stop_discharging_option" },
+  { key: "stop_export", labelKey: "editor.fields.stop_export_option" },
+] as const;
 const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 
 const APPLIANCE_ICON_SELECTOR = {
@@ -142,9 +161,9 @@ export class HelmanConfigEditorPanel
     _scopeModes: { state: true },
     _scopeYamlValues: { state: true },
     _scopeYamlErrors: { state: true },
-    _applianceModes: { state: true },
-    _applianceYamlValues: { state: true },
-    _applianceYamlErrors: { state: true },
+    _controllableModes: { state: true },
+    _controllableYamlValues: { state: true },
+    _controllableYamlErrors: { state: true },
     _liveApplianceMetadata: { state: true },
     _optimizerSchema: { state: true },
     _helpDialog: { state: true },
@@ -554,9 +573,9 @@ export class HelmanConfigEditorPanel
   private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
   private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
   private _scopeYamlErrors: Partial<Record<ScopeId, string>> = {};
-  private _applianceModes: Partial<Record<number, EditorMode>> = {};
-  private _applianceYamlValues: Partial<Record<number, JsonValue>> = {};
-  private _applianceYamlErrors: Partial<Record<number, string>> = {};
+  private _controllableModes: Partial<Record<number, EditorMode>> = {};
+  private _controllableYamlValues: Partial<Record<number, JsonValue>> = {};
+  private _controllableYamlErrors: Partial<Record<number, string>> = {};
   private _liveApplianceMetadata: ApplianceMetadataResponse | null = null;
   // Optimizer schema, served by the backend. Fetched alongside the config
   // the editor already awaits on open, so it costs no extra latency.
@@ -781,17 +800,15 @@ export class HelmanConfigEditorPanel
           TAB_SCOPE_IDS.power_devices,
           this._renderPowerDevicesTab(),
         );
-      case "scheduler":
-        return this._renderTabScope(TAB_SCOPE_IDS.scheduler, this._renderSchedulerTab());
       case "automation":
         return this._renderTabScope(
           TAB_SCOPE_IDS.automation,
           this._renderAutomationTab(),
         );
-      case "appliances":
+      case "controllables":
         return this._renderTabScope(
-          TAB_SCOPE_IDS.appliances,
-          this._renderAppliancesTab(),
+          TAB_SCOPE_IDS.controllables,
+          this._renderControllablesTab(),
         );
       default:
         return html``;
@@ -870,19 +887,19 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _getApplianceMode(index: number): EditorMode {
-    return this._applianceModes[index] ?? "visual";
+  private _getControllableMode(index: number): EditorMode {
+    return this._controllableModes[index] ?? "visual";
   }
 
-  private _renderApplianceModeToggle(index: number): TemplateResult {
-    const mode = this._getApplianceMode(index);
+  private _renderControllableModeToggle(index: number): TemplateResult {
+    const mode = this._getControllableMode(index);
     return html`
       <div class="mode-toggle">
         <button
           type="button"
           class=${mode === "visual" ? "active" : ""}
           aria-pressed=${mode === "visual"}
-          @click=${(event: Event) => this._handleApplianceModeChange(index, "visual", event)}
+          @click=${(event: Event) => this._handleControllableModeChange(index, "visual", event)}
         >
           ${this._t("editor.mode.visual")}
         </button>
@@ -890,7 +907,7 @@ export class HelmanConfigEditorPanel
           type="button"
           class=${mode === "yaml" ? "active" : ""}
           aria-pressed=${mode === "yaml"}
-          @click=${(event: Event) => this._handleApplianceModeChange(index, "yaml", event)}
+          @click=${(event: Event) => this._handleControllableModeChange(index, "yaml", event)}
         >
           ${this._t("editor.mode.yaml")}
         </button>
@@ -898,27 +915,27 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _handleApplianceModeChange(index: number, mode: EditorMode, event: Event): void {
+  private _handleControllableModeChange(index: number, mode: EditorMode, event: Event): void {
     event.preventDefault();
     event.stopPropagation();
     if (mode === "yaml") {
-      void this._enterApplianceYamlMode(index);
+      void this._enterControllableYamlMode(index);
     } else {
-      this._exitApplianceYamlMode(index);
+      this._exitControllableYamlMode(index);
     }
   }
 
-  private async _enterApplianceYamlMode(index: number): Promise<void> {
-    if (this._getApplianceMode(index) === "yaml") return;
+  private async _enterControllableYamlMode(index: number): Promise<void> {
+    if (this._getControllableMode(index) === "yaml") return;
     try {
       await loadHaYamlEditor();
       if (!this._config) return;
-      const value = this._getValue(["appliances", index]) as JsonValue;
-      this._applianceModes = { ...this._applianceModes, [index]: "yaml" };
-      this._applianceYamlValues = { ...this._applianceYamlValues, [index]: value };
-      const nextErrors = { ...this._applianceYamlErrors };
+      const value = this._getValue(["controllables", index]) as JsonValue;
+      this._controllableModes = { ...this._controllableModes, [index]: "yaml" };
+      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: value };
+      const nextErrors = { ...this._controllableYamlErrors };
       delete nextErrors[index];
-      this._applianceYamlErrors = nextErrors;
+      this._controllableYamlErrors = nextErrors;
       this._message = null;
     } catch (error) {
       this._message = {
@@ -928,72 +945,72 @@ export class HelmanConfigEditorPanel
     }
   }
 
-  private _exitApplianceYamlMode(index: number): void {
-    if (this._getApplianceMode(index) !== "yaml" || this._applianceYamlErrors[index]) return;
-    const nextModes = { ...this._applianceModes };
+  private _exitControllableYamlMode(index: number): void {
+    if (this._getControllableMode(index) !== "yaml" || this._controllableYamlErrors[index]) return;
+    const nextModes = { ...this._controllableModes };
     delete nextModes[index];
-    const nextValues = { ...this._applianceYamlValues };
+    const nextValues = { ...this._controllableYamlValues };
     delete nextValues[index];
-    const nextErrors = { ...this._applianceYamlErrors };
+    const nextErrors = { ...this._controllableYamlErrors };
     delete nextErrors[index];
-    this._applianceModes = nextModes;
-    this._applianceYamlValues = nextValues;
-    this._applianceYamlErrors = nextErrors;
+    this._controllableModes = nextModes;
+    this._controllableYamlValues = nextValues;
+    this._controllableYamlErrors = nextErrors;
   }
 
-  private _handleApplianceYamlChanged(
+  private _handleControllableYamlChanged(
     index: number,
     event: CustomEvent<YamlEditorValueChangedDetail>,
   ): void {
     event.stopPropagation();
     if (!event.detail.isValid) {
-      this._applianceYamlErrors = {
-        ...this._applianceYamlErrors,
+      this._controllableYamlErrors = {
+        ...this._controllableYamlErrors,
         [index]: event.detail.errorMsg ?? this._t("editor.yaml.errors.parse_failed"),
       };
       return;
     }
     const normalizedValue = normalizeYamlValue(event.detail.value);
     if (!normalizedValue.ok) {
-      this._applianceYamlErrors = {
-        ...this._applianceYamlErrors,
+      this._controllableYamlErrors = {
+        ...this._controllableYamlErrors,
         [index]: this._t("editor.yaml.errors.non_json_value"),
       };
       return;
     }
     if (!Array.isArray(normalizedValue.value) && typeof normalizedValue.value !== "object") {
-      this._applianceYamlErrors = {
-        ...this._applianceYamlErrors,
+      this._controllableYamlErrors = {
+        ...this._controllableYamlErrors,
         [index]: this._t("editor.yaml.errors.non_json_value"),
       };
       return;
     }
     try {
       const nextConfig = cloneJson(this._config ?? {});
-      setValueAtPath(nextConfig, ["appliances", index], cloneJson(normalizedValue.value));
+      setValueAtPath(nextConfig, ["controllables", index], cloneJson(normalizedValue.value));
       this._config = nextConfig as JsonObject;
       this._dirty = true;
       this._validation = null;
       this._message = null;
-      this._applianceYamlValues = { ...this._applianceYamlValues, [index]: normalizedValue.value };
-      const nextErrors = { ...this._applianceYamlErrors };
+      this._controllableYamlValues = { ...this._controllableYamlValues, [index]: normalizedValue.value };
+      const nextErrors = { ...this._controllableYamlErrors };
       delete nextErrors[index];
-      this._applianceYamlErrors = nextErrors;
+      this._controllableYamlErrors = nextErrors;
     } catch (error) {
-      this._applianceYamlErrors = {
-        ...this._applianceYamlErrors,
+      this._controllableYamlErrors = {
+        ...this._controllableYamlErrors,
         [index]: this._formatError(error, this._t("editor.yaml.errors.apply_failed")),
       };
     }
   }
 
-  private _renderApplianceYamlEditor(index: number): TemplateResult {
-    const error = this._applianceYamlErrors[index];
-    const editorId = `appliance-${index}`;
+  private _renderControllableYamlEditor(index: number): TemplateResult {
+    const error = this._controllableYamlErrors[index];
+    const editorId = `controllable-${index}`;
     const helperId = `${editorId}-yaml-helper`;
     const errorId = `${editorId}-yaml-error`;
     const describedBy = error ? `${helperId} ${errorId}` : helperId;
-    const editorValue = this._applianceYamlValues[index] ?? this._getValue(["appliances", index]);
+    const editorValue = this._controllableYamlValues[index] ?? this._getValue(["controllables", index]);
     return html`
       <div class="yaml-surface">
         <div class="field yaml-field">
@@ -1005,7 +1022,7 @@ export class HelmanConfigEditorPanel
             .showErrors=${false}
             aria-describedby=${describedBy}
             @value-changed=${(event: CustomEvent<YamlEditorValueChangedDetail>) =>
-              this._handleApplianceYamlChanged(index, event)}
+              this._handleControllableYamlChanged(index, event)}
           ></ha-yaml-editor>
         </div>
         ${error ? html`<div id=${errorId} class="message error">${error}</div>` : nothing}
@@ -1597,62 +1614,6 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderSchedulerTab(): TemplateResult {
-    return html`
-      ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.scheduler.schedule_control_mapping,
-        html`
-          <div class="field-grid">
-            ${this._renderRequiredEntityField(
-              ["scheduler", "control", "mode_entity_id"],
-              "editor.fields.mode_entity",
-              ["input_select", "select"],
-              "editor.helpers.mode_entity",
-              undefined,
-              "editor.help.scheduler_mode_entity",
-            )}
-            ${this._renderOptionalTextField(
-              ["scheduler", "control", "action_option_map", "normal"],
-              "editor.fields.normal_option",
-              undefined,
-              "editor.help.scheduler_action_option",
-            )}
-            ${this._renderOptionalTextField(
-              ["scheduler", "control", "action_option_map", "charge_to_target_soc"],
-              "editor.fields.charge_to_target_soc_option",
-              undefined,
-              "editor.help.scheduler_action_option",
-            )}
-            ${this._renderOptionalTextField(
-              ["scheduler", "control", "action_option_map", "discharge_to_target_soc"],
-              "editor.fields.discharge_to_target_soc_option",
-              undefined,
-              "editor.help.scheduler_action_option",
-            )}
-            ${this._renderOptionalTextField(
-              ["scheduler", "control", "action_option_map", "stop_charging"],
-              "editor.fields.stop_charging_option",
-              undefined,
-              "editor.help.scheduler_action_option",
-            )}
-            ${this._renderOptionalTextField(
-              ["scheduler", "control", "action_option_map", "stop_discharging"],
-              "editor.fields.stop_discharging_option",
-              undefined,
-              "editor.help.scheduler_action_option",
-            )}
-            ${this._renderOptionalTextField(
-              ["scheduler", "control", "action_option_map", "stop_export"],
-              "editor.fields.stop_export_option",
-              undefined,
-              "editor.help.scheduler_action_option",
-            )}
-          </div>
-        `,
-      )}
-    `;
-  }
-
   private _renderAutomationTab(): TemplateResult {
     const optimizers = asJsonArray(this._getValue(["automation", "optimizers"])) ?? [];
 
@@ -1830,24 +1791,41 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderAppliancesTab(): TemplateResult {
-    const appliances = asJsonArray(this._getValue(["appliances"])) ?? [];
+  private _renderControllablesTab(): TemplateResult {
+    const controllables = asJsonArray(this._getValue(["controllables"])) ?? [];
+    // The inverter is a singleton: config validation rejects a second one, so
+    // the button that would author it is not offered once one exists.
+    const hasInverter = controllables.some(
+      (controllable) =>
+        this._stringValue(asJsonObject(controllable)?.kind) === INVERTER_CONTROLLABLE_KIND,
+    );
 
     return html`
       ${this._renderSectionScope(
-        SECTION_SCOPE_IDS.appliances.configured_appliances,
+        SECTION_SCOPE_IDS.controllables.configured_controllables,
         html`
           <p class="inline-note">
-            ${this._t("editor.notes.appliances")}
+            ${this._t("editor.notes.controllables")}
           </p>
           <div class="list-stack">
-            ${appliances.length === 0
-              ? html`<div class="message info">${this._t("editor.empty.no_appliances")}</div>`
-              : appliances.map((appliance, index) =>
-                  this._renderApplianceCard(appliance, index, appliances.length),
+            ${controllables.length === 0
+              ? html`<div class="message info">${this._t("editor.empty.no_controllables")}</div>`
+              : controllables.map((controllable, index) =>
+                  this._renderControllableCard(controllable, index, controllables.length),
                 )}
           </div>
           <div class="section-footer">
+            ${hasInverter
+              ? nothing
+              : html`
+                  <button
+                    type="button"
+                    class="add-button"
+                    @click=${this._handleAddInverter}
+                  >
+                    ${this._t("editor.actions.add_inverter")}
+                  </button>
+                `}
             <button type="button" class="add-button primary" @click=${this._handleAddEvCharger}>
               ${this._t("editor.actions.add_ev_charger")}
             </button>
@@ -2205,13 +2183,16 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderApplianceCard(
-    appliance: unknown,
+  private _renderControllableCard(
+    controllable: unknown,
     index: number,
     total: number,
   ): TemplateResult {
-    const applianceObject = asJsonObject(appliance) ?? {};
+    const applianceObject = asJsonObject(controllable) ?? {};
     const kind = this._stringValue(applianceObject.kind);
+    if (kind === INVERTER_CONTROLLABLE_KIND) {
+      return this._renderInverterControllable(applianceObject, index, total);
+    }
     if (kind === "ev_charger") {
       return this._renderEvChargerAppliance(applianceObject, index, total);
     }
@@ -2221,10 +2202,106 @@ export class HelmanConfigEditorPanel
     if (kind === "generic") {
       return this._renderGenericAppliance(applianceObject, index, total);
     }
-    return this._renderUnsupportedAppliance(applianceObject, index, total);
+    return this._renderUnsupportedControllable(applianceObject, index, total);
   }
 
-  private _renderUnsupportedAppliance(
+  /**
+   * The inverter, as a card in the same list as the appliances.
+   *
+   * These are the six fields the retired Scheduler tab held, moved verbatim
+   * apart from where they are written: `controls.mode.entity_id` and
+   * `controls.mode.options.*` instead of `scheduler.control.mode_entity_id`
+   * and `scheduler.control.action_option_map.*`. Nothing about the inverter
+   * asked to be edited on a tab of its own — the tab existed because the
+   * config did.
+   *
+   * No projection section: the inverter has no demand of its own, which is the
+   * one capability that genuinely separates it from the appliance kinds.
+   */
+  private _renderInverterControllable(
+    controllable: JsonObject,
+    index: number,
+    total: number,
+  ): TemplateResult {
+    const basePath: PathSegment[] = ["controllables", index];
+    const modePath: PathSegment[] = [...basePath, "controls", "mode"];
+    const controllableName =
+      this._stringValue(controllable.name) || this._t("editor.dynamic.inverter");
+    const controllableId =
+      this._stringValue(controllable.id) || this._t("editor.values.missing_id");
+    const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
+    const isYaml = this._getControllableMode(index) === "yaml";
+
+    return html`
+      <details class="list-card">
+        <summary>
+          <div class="appliance-summary-row">
+            <div class="appliance-summary-left">
+              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              <div class="card-title">
+                <strong>${controllableName}</strong>
+                <span class="card-subtitle">${controllableId}</span>
+              </div>
+            </div>
+            <div class="list-actions" @click=${this._preventSummaryToggle}>
+              ${this._renderControllableModeToggle(index)}
+              <button type="button" ?disabled=${index === 0}
+                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
+              >${this._t("editor.actions.up")}</button>
+              <button type="button" ?disabled=${index === total - 1}
+                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
+              >${this._t("editor.actions.down")}</button>
+              <button type="button" class="danger"
+                @click=${() => this._removeListItem(["controllables"], index)}
+              >${this._t("editor.actions.remove")}</button>
+            </div>
+          </div>
+        </summary>
+        <div class="appliance-body">
+          ${isYaml
+            ? this._renderControllableYamlEditor(index)
+            : html`
+              ${this._renderSimpleSection(
+                this._t("editor.sections.identity"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredTextField([...basePath, "id"], "editor.fields.controllable_id", undefined, "editor.help.controllable_id")}
+                  ${this._renderRequiredTextField([...basePath, "name"], "editor.fields.controllable_name", undefined, "editor.help.controllable_name")}
+                  <div class="field"><label>${this._t("editor.fields.kind")}</label><input value="inverter" disabled /></div>
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.controls"),
+                html`<div class="field-grid">
+                  ${this._renderRequiredEntityField(
+                    [...modePath, "entity_id"],
+                    "editor.fields.mode_entity",
+                    ["input_select", "select"],
+                    "editor.helpers.mode_entity",
+                    undefined,
+                    "editor.help.inverter_mode_entity",
+                  )}
+                </div>`,
+              )}
+              ${this._renderSimpleSection(
+                this._t("editor.sections.action_options"),
+                html`<div class="field-grid">
+                  ${INVERTER_ACTION_OPTIONS.map((option) =>
+                    this._renderOptionalTextField(
+                      [...modePath, "options", option.key],
+                      option.labelKey,
+                      undefined,
+                      "editor.help.inverter_action_option",
+                    ),
+                  )}
+                </div>`,
+              )}
+            `}
+        </div>
+      </details>
+    `;
+  }
+
+  private _renderUnsupportedControllable(
     appliance: JsonObject,
     index: number,
     total: number,
@@ -2249,17 +2326,17 @@ export class HelmanConfigEditorPanel
               <button
                 type="button"
                 ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
               >${this._t("editor.actions.up")}</button>
               <button
                 type="button"
                 ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
               >${this._t("editor.actions.down")}</button>
               <button
                 type="button"
                 class="danger"
-                @click=${() => this._removeListItem(["appliances"], index)}
+                @click=${() => this._removeListItem(["controllables"], index)}
               >${this._t("editor.actions.remove")}</button>
             </div>
           </div>
@@ -2276,7 +2353,7 @@ export class HelmanConfigEditorPanel
     index: number,
     total: number,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["appliances", index];
+    const basePath: PathSegment[] = ["controllables", index];
     const useModes = objectEntries(
       this._getValue([...basePath, "controls", "use_mode", "values"]),
     );
@@ -2288,7 +2365,7 @@ export class HelmanConfigEditorPanel
       this._stringValue(appliance.name) || this._tFormat("editor.dynamic.ev_charger", { index: index + 1 });
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getApplianceMode(index) === "yaml";
+    const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
       <details class="list-card">
@@ -2302,22 +2379,22 @@ export class HelmanConfigEditorPanel
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderApplianceModeToggle(index)}
+              ${this._renderControllableModeToggle(index)}
               <button type="button" ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
               >${this._t("editor.actions.up")}</button>
               <button type="button" ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
               >${this._t("editor.actions.down")}</button>
               <button type="button" class="danger"
-                @click=${() => this._removeListItem(["appliances"], index)}
+                @click=${() => this._removeListItem(["controllables"], index)}
               >${this._t("editor.actions.remove")}</button>
             </div>
           </div>
         </summary>
         <div class="appliance-body">
           ${isYaml
-            ? this._renderApplianceYamlEditor(index)
+            ? this._renderControllableYamlEditor(index)
             : html`
               ${this._renderSimpleSection(
                 this._t("editor.sections.identity_and_limits"),
@@ -2375,7 +2452,7 @@ export class HelmanConfigEditorPanel
     index: number,
     total: number,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["appliances", index];
+    const basePath: PathSegment[] = ["controllables", index];
     const historyAveragePath: PathSegment[] = [...basePath, "projection", "history_average"];
     const projectionStrategy =
       this._stringValue(this._getValue([...basePath, "projection", "strategy"])) || "fixed";
@@ -2384,7 +2461,7 @@ export class HelmanConfigEditorPanel
       this._tFormat("editor.dynamic.generic_appliance", { index: index + 1 });
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getApplianceMode(index) === "yaml";
+    const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
       <details class="list-card">
@@ -2398,22 +2475,22 @@ export class HelmanConfigEditorPanel
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderApplianceModeToggle(index)}
+              ${this._renderControllableModeToggle(index)}
               <button type="button" ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
               >${this._t("editor.actions.up")}</button>
               <button type="button" ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
               >${this._t("editor.actions.down")}</button>
               <button type="button" class="danger"
-                @click=${() => this._removeListItem(["appliances"], index)}
+                @click=${() => this._removeListItem(["controllables"], index)}
               >${this._t("editor.actions.remove")}</button>
             </div>
           </div>
         </summary>
         <div class="appliance-body">
           ${isYaml
-            ? this._renderApplianceYamlEditor(index)
+            ? this._renderControllableYamlEditor(index)
             : html`
               ${this._renderSimpleSection(
                 this._t("editor.sections.identity_and_limits"),
@@ -2449,7 +2526,7 @@ export class HelmanConfigEditorPanel
     index: number,
     total: number,
   ): TemplateResult {
-    const basePath: PathSegment[] = ["appliances", index];
+    const basePath: PathSegment[] = ["controllables", index];
     const historyAveragePath: PathSegment[] = [...basePath, "projection", "history_average"];
     const projectionStrategy =
       this._stringValue(this._getValue([...basePath, "projection", "strategy"])) || "fixed";
@@ -2458,7 +2535,7 @@ export class HelmanConfigEditorPanel
       this._tFormat("editor.dynamic.climate_appliance", { index: index + 1 });
     const applianceId = this._stringValue(appliance.id) || this._t("editor.values.missing_id");
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const isYaml = this._getApplianceMode(index) === "yaml";
+    const isYaml = this._getControllableMode(index) === "yaml";
 
     return html`
       <details class="list-card">
@@ -2472,22 +2549,22 @@ export class HelmanConfigEditorPanel
               </div>
             </div>
             <div class="list-actions" @click=${this._preventSummaryToggle}>
-              ${this._renderApplianceModeToggle(index)}
+              ${this._renderControllableModeToggle(index)}
               <button type="button" ?disabled=${index === 0}
-                @click=${() => this._moveListItem(["appliances"], index, index - 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index - 1)}
               >${this._t("editor.actions.up")}</button>
               <button type="button" ?disabled=${index === total - 1}
-                @click=${() => this._moveListItem(["appliances"], index, index + 1)}
+                @click=${() => this._moveListItem(["controllables"], index, index + 1)}
               >${this._t("editor.actions.down")}</button>
               <button type="button" class="danger"
-                @click=${() => this._removeListItem(["appliances"], index)}
+                @click=${() => this._removeListItem(["controllables"], index)}
               >${this._t("editor.actions.remove")}</button>
             </div>
           </div>
         </summary>
         <div class="appliance-body">
           ${isYaml
-            ? this._renderApplianceYamlEditor(index)
+            ? this._renderControllableYamlEditor(index)
             : html`
               ${this._renderSimpleSection(
                 this._t("editor.sections.identity_and_limits"),
@@ -3002,9 +3079,8 @@ export class HelmanConfigEditorPanel
     const counts: Record<TabId, { errors: number; warnings: number }> = {
       general: { errors: 0, warnings: 0 },
       power_devices: { errors: 0, warnings: 0 },
-      scheduler: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
-      appliances: { errors: 0, warnings: 0 },
+      controllables: { errors: 0, warnings: 0 },
     };
 
     if (this._validation) {
@@ -3330,7 +3406,7 @@ export class HelmanConfigEditorPanel
       Object.values(this._scopeYamlErrors).some(
         (error) => typeof error === "string" && error.length > 0,
       ) ||
-      Object.values(this._applianceYamlErrors).some(
+      Object.values(this._controllableYamlErrors).some(
         (error) => typeof error === "string" && error.length > 0,
       )
     );
@@ -3349,9 +3425,9 @@ export class HelmanConfigEditorPanel
     this._scopeModes = {};
     this._scopeYamlValues = {};
     this._scopeYamlErrors = {};
-    this._applianceModes = {};
-    this._applianceYamlValues = {};
-    this._applianceYamlErrors = {};
+    this._controllableModes = {};
+    this._controllableYamlValues = {};
+    this._controllableYamlErrors = {};
   }
 
   private _omitScopeIds<T>(
@@ -3501,14 +3577,24 @@ export class HelmanConfigEditorPanel
 
 
 
+  private _handleAddInverter = (): void => {
+    this._applyMutation((draft) => {
+      appendListItem(
+        draft,
+        ["controllables"],
+        createInverterControllableDraft(this._t("editor.dynamic.inverter")),
+      );
+    });
+  };
+
   private _handleAddEvCharger = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
+    const existingIds = (asJsonArray(this._getValue(["controllables"])) ?? [])
       .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
       .filter((value) => value.length > 0);
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["appliances"],
+        ["controllables"],
         createApplianceDraft(
           existingIds,
           this._tFormat("editor.dynamic.ev_charger", { index: existingIds.length + 1 }),
@@ -3519,13 +3605,13 @@ export class HelmanConfigEditorPanel
   };
 
   private _handleAddClimateAppliance = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
+    const existingIds = (asJsonArray(this._getValue(["controllables"])) ?? [])
       .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
       .filter((value) => value.length > 0);
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["appliances"],
+        ["controllables"],
         createClimateApplianceDraft(
           existingIds,
           this._tFormat("editor.dynamic.climate_appliance", {
@@ -3537,13 +3623,13 @@ export class HelmanConfigEditorPanel
   };
 
   private _handleAddGenericAppliance = (): void => {
-    const existingIds = (asJsonArray(this._getValue(["appliances"])) ?? [])
+    const existingIds = (asJsonArray(this._getValue(["controllables"])) ?? [])
       .map((appliance) => this._stringValue(asJsonObject(appliance)?.id))
       .filter((value) => value.length > 0);
     this._applyMutation((draft) => {
       appendListItem(
         draft,
-        ["appliances"],
+        ["controllables"],
         createGenericApplianceDraft(
           existingIds,
           this._tFormat("editor.dynamic.generic_appliance", {
@@ -3555,7 +3641,7 @@ export class HelmanConfigEditorPanel
   };
 
   private _handleAddVehicle(applianceIndex: number): void {
-    const vehiclePath: PathSegment[] = ["appliances", applianceIndex, "vehicles"];
+    const vehiclePath: PathSegment[] = ["controllables", applianceIndex, "vehicles"];
     const existingIds = (asJsonArray(this._getValue(vehiclePath)) ?? [])
       .map((vehicle) => this._stringValue(asJsonObject(vehicle)?.id))
       .filter((value) => value.length > 0);
@@ -3608,7 +3694,7 @@ export class HelmanConfigEditorPanel
     }
 
     this._applyMutation((draft) => {
-      const basePath: PathSegment[] = ["appliances", applianceIndex, "projection"];
+      const basePath: PathSegment[] = ["controllables", applianceIndex, "projection"];
       setValueAtPath(draft, [...basePath, "strategy"], strategy);
       if (strategy !== "history_average") {
         return;

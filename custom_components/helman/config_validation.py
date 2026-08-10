@@ -22,10 +22,27 @@ from .grid_price_forecast_builder import (
     GridImportPriceConfigError,
     read_grid_import_price_config,
 )
+from .controllables.config import CONTROLLABLE_ID_INVERTER
+from .controllables.spec import (
+    CONTROLLABLE_KIND_INVERTER,
+    CONTROLLABLE_SPECS,
+    KNOWN_CONTROLLABLE_KINDS,
+)
 from .scheduling.schedule import describe_schedule_control_config_issue
 from .const import SOLAR_BIAS_AGGREGATION_METHODS
 
-SUPPORTED_EDITABLE_APPLIANCE_KINDS = ("climate", "ev_charger", "generic")
+#: The config keys config version 7 retired. Named here so the save path can
+#: refuse them by name instead of silently ignoring a user's hand-edited YAML:
+#: migration runs on load only, and rewriting someone's document under them is
+#: worse than telling them what it is called now.
+_RETIRED_CONFIG_KEYS = ("appliances", "scheduler")
+
+#: The action options an inverter's ``controls.mode.options`` may carry, in the
+#: order the editor lays them out. Read off the registry so a kind's declared
+#: actions and the fields validated for it cannot drift.
+_INVERTER_ACTION_OPTIONS = tuple(
+    CONTROLLABLE_SPECS[CONTROLLABLE_KIND_INVERTER].action_option_attrs
+)
 
 
 @dataclass(frozen=True)
@@ -86,9 +103,8 @@ def validate_config_document(config: Mapping[str, Any] | None) -> ValidationRepo
 
     _validate_general_config(config, report)
     _validate_power_devices_config(config, report)
-    _validate_scheduler_control_config(config, report)
+    _validate_controllables_config(config, report)
     _validate_automation_config(config, report)
-    _validate_appliances_config(config, report)
     return report
 
 
@@ -811,89 +827,53 @@ def _validate_grid_config(
             )
 
 
-def _validate_scheduler_control_config(
+def _validate_controllables_config(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    section = "scheduler_control"
-    raw_scheduler = config.get("scheduler")
-    if raw_scheduler is None:
-        return
-    scheduler = _require_mapping(raw_scheduler, "scheduler", section, report)
-    if scheduler is None:
-        return
+    """One walk over ``controllables:``, covering all four kinds.
 
-    raw_control = scheduler.get("control")
-    if raw_control is None:
-        return
-    control = _require_mapping(raw_control, "scheduler.control", section, report)
-    if control is None:
-        return
+    Replaces the pair of validators that grew from the old split — one for
+    ``appliances``, one for ``scheduler.control``. They enforced the same
+    rules with different words; the only genuinely kind-specific part left is
+    which reader turns an entry into a runtime object, and that is a dispatch
+    on ``kind``.
 
-    action_option_map = control.get("action_option_map")
-    if action_option_map is not None:
-        option_map = _require_mapping(
-            action_option_map,
-            "scheduler.control.action_option_map",
-            section,
-            report,
-        )
-        if option_map is not None:
-            for key in (
-                "normal",
-                "stop_charging",
-                "stop_discharging",
-                "charge_to_target_soc",
-                "discharge_to_target_soc",
-                "stop_export",
-            ):
-                _validate_optional_string(
-                    report,
-                    section,
-                    f"scheduler.control.action_option_map.{key}",
-                    option_map.get(key),
-                )
+    Three rules exist only because the list is now shared: the inverter is a
+    singleton, its id is reserved, and ids are unique across every kind, not
+    just among appliances. All three are what makes ``controllable_id`` usable
+    as an optimizer target.
+    """
+    section = "controllables"
+    for retired_key in _RETIRED_CONFIG_KEYS:
+        if retired_key in config:
+            report.add_error(
+                section=section,
+                path=retired_key,
+                code="retired_config_key",
+                message=(
+                    f"{retired_key!r} is no longer a config key; the inverter and "
+                    "the appliances are configured together under 'controllables'"
+                ),
+            )
 
-    issue = describe_schedule_control_config_issue(config)
-    if issue is not None:
+    raw_controllables = config.get("controllables")
+    if raw_controllables is None:
+        return
+    if not isinstance(raw_controllables, list):
         report.add_error(
             section=section,
-            path="scheduler.control",
-            code="invalid_scheduler_control",
-            message=issue,
-        )
-
-    mode_entity_id = control.get("mode_entity_id")
-    _validate_optional_entity_id(
-        report,
-        section,
-        "scheduler.control.mode_entity_id",
-        mode_entity_id,
-        allowed_domains=("input_select", "select"),
-    )
-
-
-def _validate_appliances_config(
-    config: Mapping[str, Any],
-    report: ValidationReport,
-) -> None:
-    section = "appliances"
-    raw_appliances = config.get("appliances")
-    if raw_appliances is None:
-        return
-    if not isinstance(raw_appliances, list):
-        report.add_error(
-            section=section,
-            path="appliances",
+            path="controllables",
             code="invalid_type",
-            message="appliances must be a list",
+            message="controllables must be a list",
         )
         return
 
-    seen_appliance_ids: set[str] = set()
-    for index, raw_appliance in enumerate(raw_appliances):
-        path = f"appliances[{index}]"
-        if not isinstance(raw_appliance, Mapping):
+    seen_ids: set[str] = set()
+    seen_inverter = False
+    for index, raw_controllable in enumerate(raw_controllables):
+        path = f"controllables[{index}]"
+        if not isinstance(raw_controllable, Mapping):
             report.add_error(
                 section=section,
                 path=path,
@@ -902,7 +882,7 @@ def _validate_appliances_config(
             )
             continue
 
-        raw_kind = raw_appliance.get("kind")
+        raw_kind = raw_controllable.get("kind")
         if not _is_non_empty_string(raw_kind):
             report.add_error(
                 section=section,
@@ -913,20 +893,45 @@ def _validate_appliances_config(
             continue
 
         kind = raw_kind.strip()
-        if kind not in SUPPORTED_EDITABLE_APPLIANCE_KINDS:
+        if kind not in KNOWN_CONTROLLABLE_KINDS:
             report.add_warning(
                 section=section,
                 path=path,
                 code="unsupported_kind",
                 message=(
-                    f"Appliance kind {kind!r} is preserved but not editable in this "
-                    "version"
+                    f"Controllable kind {kind!r} is preserved but not editable in "
+                    "this version"
                 ),
             )
             continue
 
+        # Before the id check, deliberately: a second inverter almost always
+        # also reuses the reserved id, and "you have two inverters" is the
+        # finding, not "this id is taken".
+        if kind == CONTROLLABLE_KIND_INVERTER and seen_inverter:
+            report.add_error(
+                section=section,
+                path=path,
+                code="duplicate_inverter",
+                message=(
+                    "only one controllable may be the inverter; Helman drives a "
+                    "single battery inverter"
+                ),
+            )
+            continue
+
+        if not _validate_controllable_id(
+            raw_controllable, path=path, kind=kind, seen_ids=seen_ids, report=report
+        ):
+            continue
+
+        if kind == CONTROLLABLE_KIND_INVERTER:
+            seen_inverter = True
+            _validate_inverter_controllable(config, raw_controllable, path, report)
+            continue
+
         try:
-            appliance = _read_supported_appliance(raw_appliance, path=path, kind=kind)
+            _read_supported_appliance(raw_controllable, path=path, kind=kind)
         except (
             ClimateApplianceConfigError,
             EvChargerConfigError,
@@ -938,18 +943,109 @@ def _validate_appliances_config(
                 code="invalid_appliance",
                 message=str(err),
             )
-            continue
 
-        if appliance.id in seen_appliance_ids:
-            report.add_error(
-                section=section,
-                path=f"{path}.id",
-                code="duplicate_appliance_id",
-                message=f"duplicate appliance id {appliance.id!r}",
-            )
-            continue
 
-        seen_appliance_ids.add(appliance.id)
+def _validate_controllable_id(
+    raw_controllable: Mapping[str, Any],
+    *,
+    path: str,
+    kind: str,
+    seen_ids: set[str],
+    report: ValidationReport,
+) -> bool:
+    """Uniqueness plus the one reserved id. ``False`` stops further checks.
+
+    An id absent on the inverter is allowed — it is the singleton, so
+    :data:`CONTROLLABLE_ID_INVERTER` is what it means. Every other kind must
+    name itself, and the appliance readers already say so.
+    """
+    section = "controllables"
+    raw_id = raw_controllable.get("id")
+    if not _is_non_empty_string(raw_id):
+        return True
+
+    controllable_id = raw_id.strip()
+    if (
+        controllable_id == CONTROLLABLE_ID_INVERTER
+        and kind != CONTROLLABLE_KIND_INVERTER
+    ):
+        report.add_error(
+            section=section,
+            path=f"{path}.id",
+            code="reserved_controllable_id",
+            message=(
+                f"controllable id {CONTROLLABLE_ID_INVERTER!r} is reserved for the "
+                "inverter"
+            ),
+        )
+        return False
+
+    if controllable_id in seen_ids:
+        report.add_error(
+            section=section,
+            path=f"{path}.id",
+            code="duplicate_controllable_id",
+            message=f"duplicate controllable id {controllable_id!r}",
+        )
+        return False
+
+    seen_ids.add(controllable_id)
+    return True
+
+
+def _validate_inverter_controllable(
+    config: Mapping[str, Any],
+    raw_controllable: Mapping[str, Any],
+    path: str,
+    report: ValidationReport,
+) -> None:
+    section = "controllables"
+    raw_controls = raw_controllable.get("controls")
+    if raw_controls is None:
+        return
+    controls = _require_mapping(raw_controls, f"{path}.controls", section, report)
+    if controls is None:
+        return
+
+    raw_mode = controls.get("mode")
+    if raw_mode is None:
+        return
+    mode = _require_mapping(raw_mode, f"{path}.controls.mode", section, report)
+    if mode is None:
+        return
+
+    raw_options = mode.get("options")
+    if raw_options is not None:
+        options = _require_mapping(
+            raw_options, f"{path}.controls.mode.options", section, report
+        )
+        if options is not None:
+            for key in _INVERTER_ACTION_OPTIONS:
+                _validate_optional_string(
+                    report,
+                    section,
+                    f"{path}.controls.mode.options.{key}",
+                    options.get(key),
+                )
+
+    # Reads the document rather than this entry: the runtime resolves the
+    # inverter by kind, so what must be complete is whichever entry it picks.
+    issue = describe_schedule_control_config_issue(config)
+    if issue is not None:
+        report.add_error(
+            section=section,
+            path=f"{path}.controls.mode",
+            code="invalid_inverter_control",
+            message=issue,
+        )
+
+    _validate_optional_entity_id(
+        report,
+        section,
+        f"{path}.controls.mode.entity_id",
+        mode.get("entity_id"),
+        allowed_domains=("input_select", "select"),
+    )
 
 
 def _validate_automation_config(

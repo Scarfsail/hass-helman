@@ -112,7 +112,7 @@ ScheduleDomains = schedule_module.ScheduleDomains
 
 def _valid_config() -> dict:
     return {
-        "appliances": [
+        "controllables": [
             {
                 "kind": "ev_charger",
                 "id": "garage-ev",
@@ -278,7 +278,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
     def test_fixed_max_power_behavior_does_not_depend_on_mode_name(self) -> None:
         config = _valid_config()
-        config["appliances"][0]["controls"]["use_mode"]["values"] = {
+        config["controllables"][0]["controls"]["use_mode"]["values"] = {
             "Boost": {"behavior": "fixed_max_power"},
             "Solar": {"behavior": "surplus_aware"},
         }
@@ -358,7 +358,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         # A generic appliance scheduled in the same slot consumes part of the
         # solar surplus, so the ECO charger should only chase what is left.
         config = _valid_config()
-        config["appliances"].append(_generic_appliance())
+        config["controllables"].append(_generic_appliance())
         registry = build_appliances_runtime_registry(config)
         inputs = build_projection_input_bundle(
             solar_forecast=_make_solar_forecast(),
@@ -424,7 +424,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         config = _valid_config()
         big_load = _generic_appliance()
         big_load["projection"]["hourly_energy_kwh"] = 9.0
-        config["appliances"].append(big_load)
+        config["controllables"].append(big_load)
         registry = build_appliances_runtime_registry(config)
         inputs = build_projection_input_bundle(
             solar_forecast=_make_solar_forecast(),
@@ -536,7 +536,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
     def test_generic_fixed_projection_prorates_slot_duration(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"appliances": [_generic_appliance()]}
+            {"controllables": [_generic_appliance()]}
         )
 
         plan = build_appliance_projection_plan(
@@ -568,7 +568,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
     def test_generic_history_projection_prefers_estimate(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"appliances": [_generic_appliance(strategy="history_average")]}
+            {"controllables": [_generic_appliance(strategy="history_average")]}
         )
 
         plan = build_appliance_projection_plan(
@@ -594,7 +594,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
     def test_resolved_input_demand_profile_matches_projection_plan_demand_points(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"appliances": [_generic_appliance(strategy="history_average")]}
+            {"controllables": [_generic_appliance(strategy="history_average")]}
         )
         appliance = registry.appliances[0]
 
@@ -637,7 +637,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
     def test_generic_history_projection_falls_back_without_estimate(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"appliances": [_generic_appliance(strategy="history_average")]}
+            {"controllables": [_generic_appliance(strategy="history_average")]}
         )
 
         plan = build_appliance_projection_plan(
@@ -662,7 +662,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         self.assertEqual(series[0].projection_method, "fixed_fallback")
 
     def test_climate_fixed_projection_prorates_slot_duration_and_emits_mode(self) -> None:
-        registry = build_appliances_runtime_registry({"appliances": [_climate_appliance()]})
+        registry = build_appliances_runtime_registry({"controllables": [_climate_appliance()]})
 
         plan = build_appliance_projection_plan(
             generated_at=REFERENCE_TIME.isoformat(),
@@ -693,7 +693,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         )
 
     def test_climate_off_produces_no_projection(self) -> None:
-        registry = build_appliances_runtime_registry({"appliances": [_climate_appliance()]})
+        registry = build_appliances_runtime_registry({"controllables": [_climate_appliance()]})
 
         plan = build_appliance_projection_plan(
             generated_at=REFERENCE_TIME.isoformat(),
@@ -715,7 +715,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
     def test_climate_history_projection_prefers_estimate(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"appliances": [_climate_appliance(strategy="history_average")]}
+            {"controllables": [_climate_appliance(strategy="history_average")]}
         )
 
         plan = build_appliance_projection_plan(
@@ -742,7 +742,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
     def test_climate_history_projection_falls_back_without_estimate(self) -> None:
         registry = build_appliances_runtime_registry(
-            {"appliances": [_climate_appliance(strategy="history_average")]}
+            {"controllables": [_climate_appliance(strategy="history_average")]}
         )
 
         plan = build_appliance_projection_plan(

@@ -50,6 +50,9 @@ from custom_components.helman.appliances.ev_charger import (  # noqa: E402
 from custom_components.helman.appliances.generic_appliance import (  # noqa: E402
     GenericApplianceRuntime,
 )
+from custom_components.helman.automation.migration import (  # noqa: E402
+    migrate_config_document,
+)
 from custom_components.helman.automation.spec import (  # noqa: E402
     KNOWN_OPTIMIZER_KINDS,
 )
@@ -76,20 +79,25 @@ _RUNTIME_TYPE_BY_KIND = {
 def _config() -> dict:
     """One installation with an inverter and one appliance of every kind."""
     return {
-        "scheduler": {
-            "control": {
-                "mode_entity_id": "select.solax_charger_use_mode",
-                "action_option_map": {
-                    "normal": "Self Use",
-                    "stop_charging": "Manual",
-                    "stop_discharging": "Manual",
-                    "charge_to_target_soc": "Manual",
-                    "discharge_to_target_soc": "Manual",
-                    "stop_export": "Feedin Priority",
+        "controllables": [
+            {
+                "kind": "inverter",
+                "id": "inverter",
+                "name": "Inverter",
+                "controls": {
+                    "mode": {
+                        "entity_id": "select.solax_charger_use_mode",
+                        "options": {
+                            "normal": "Self Use",
+                            "stop_charging": "Manual",
+                            "stop_discharging": "Manual",
+                            "charge_to_target_soc": "Manual",
+                            "discharge_to_target_soc": "Manual",
+                            "stop_export": "Feedin Priority",
+                        },
+                    }
                 },
-            }
-        },
-        "appliances": [
+            },
             {
                 "kind": "climate",
                 "id": "living-room-hvac",
@@ -296,7 +304,7 @@ class ControllableEntitiesPayloadTests(unittest.TestCase):
     def test_appliances_keep_the_order_they_were_configured_in(self) -> None:
         """Grouping by kind would reorder the card's lanes."""
         config = _config()
-        config["appliances"].reverse()
+        config["controllables"][1:] = list(reversed(config["controllables"][1:]))
         payload = build_controllable_entities(
             control_config=read_schedule_control_config(config),
             registry=build_appliances_runtime_registry(config),
@@ -305,6 +313,67 @@ class ControllableEntitiesPayloadTests(unittest.TestCase):
         self.assertEqual(
             [entity["kind"] for entity in payload],
             ["inverter", "generic", "ev_charger", "climate"],
+        )
+
+
+class MigratedRuntimeEquivalenceTests(unittest.TestCase):
+    """A v6 document must produce the runtime its v7 rewrite does.
+
+    The acceptance criterion for the config unification, checked where the
+    runtime objects actually live rather than on the migrated dict alone: a
+    faithful-looking dict that the readers then interpret differently would
+    pass a shape comparison and still break an installation on upgrade.
+    """
+
+    @staticmethod
+    def _v6_config() -> dict:
+        """The same installation as :func:`_config`, in the pre-v7 shape."""
+        controllables = _config()["controllables"]
+        inverter, *appliances = controllables
+        mode = inverter["controls"]["mode"]
+        return {
+            "config_version": 6,
+            "scheduler": {
+                "control": {
+                    "mode_entity_id": mode["entity_id"],
+                    "action_option_map": dict(mode["options"]),
+                }
+            },
+            "appliances": appliances,
+        }
+
+    def test_the_migrated_document_matches_the_v7_authored_one(self) -> None:
+        migrated, _ids = migrate_config_document(self._v6_config())
+
+        self.assertEqual(migrated["controllables"], _config()["controllables"])
+
+    def test_the_inverter_runtime_survives_the_migration(self) -> None:
+        migrated, _ids = migrate_config_document(self._v6_config())
+
+        self.assertEqual(
+            read_schedule_control_config(migrated),
+            read_schedule_control_config(_config()),
+        )
+
+    def test_the_appliance_registry_survives_the_migration(self) -> None:
+        migrated, _ids = migrate_config_document(self._v6_config())
+
+        self.assertEqual(
+            build_appliances_runtime_registry(migrated).appliances,
+            build_appliances_runtime_registry(_config()).appliances,
+        )
+
+    def test_the_controllable_roster_survives_the_migration(self) -> None:
+        migrated, _ids = migrate_config_document(self._v6_config())
+
+        def roster(config: dict) -> list:
+            return build_controllable_entities(
+                control_config=read_schedule_control_config(config),
+                registry=build_appliances_runtime_registry(config),
+            )
+
+        self.assertEqual(
+            json.dumps(roster(migrated)), json.dumps(roster(_config()))
         )
 
 
