@@ -58,10 +58,7 @@ async function mountEditor(
                 timeLabel: label(startMs),
                 endLabel: label(endMs),
                 rangeLabel: `${label(startMs)}–${label(endMs)}`,
-                assignments: {
-                    inverter: { action: { kind: "empty" }, setBy: null },
-                    appliances: {} as Record<string, unknown>,
-                },
+                assignments: {} as Record<string, unknown>,
                 runtime: null,
                 isCurrent: startMs <= nowMs && endMs > nowMs,
             };
@@ -77,13 +74,13 @@ async function mountEditor(
             }
             const hour = slot.index;
             if (hour === 5 || hour === 6) {
-                slot.assignments.appliances.boiler = { action: { on: true }, setBy: "automation" };
+                slot.assignments.boiler = { action: { on: true }, setBy: "automation" };
             }
             if (hour === 17 || hour === 18) {
-                slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
+                slot.assignments.boiler = { action: { on: true }, setBy: "user" };
             }
             if (straddling && hour >= 8 && hour <= 11) {
-                slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
+                slot.assignments.boiler = { action: { on: true }, setBy: "user" };
             }
             if (multiLane && hour === 20) {
                 slot.assignments.inverter = { action: { kind: "stop_charging" }, setBy: "automation" };
@@ -94,7 +91,7 @@ async function mountEditor(
                 slot.assignments.inverter = { action: { kind: "stop_export" }, setBy: "automation" };
             }
             if (neighbour && hour === 21) {
-                slot.assignments.appliances.boiler = { action: { on: true }, setBy: "user" };
+                slot.assignments.boiler = { action: { on: true }, setBy: "user" };
             }
         }
 
@@ -118,13 +115,13 @@ async function mountEditor(
 
         const el = document.createElement("scheduling-entity-day-editor") as any;
         el.localize = (key: string) => key;
-        el.target = { kind: "appliance", applianceId: "boiler" };
+        el.target = "boiler";
         el.appliance = boiler;
         if (multiLane) {
             el.lanes = [
                 {
                     key: "inverter",
-                    target: { kind: "inverter" },
+                    target: "inverter",
                     name: "Inverter",
                     icon: "mdi:solar-power",
                     appliance: null,
@@ -132,8 +129,8 @@ async function mountEditor(
                     actualSlots: [],
                 },
                 {
-                    key: "appliance:boiler",
-                    target: { kind: "appliance", applianceId: "boiler" },
+                    key: "boiler",
+                    target: "boiler",
                     name: "Boiler",
                     icon: "mdi:water-boiler",
                     appliance: boiler,
@@ -141,8 +138,8 @@ async function mountEditor(
                     actualSlots: [],
                 },
                 {
-                    key: "appliance:pump",
-                    target: { kind: "appliance", applianceId: "pump" },
+                    key: "pump",
+                    target: "pump",
                     name: "Pump",
                     icon: "mdi:pump",
                     appliance: pump,
@@ -169,10 +166,7 @@ async function mountEditor(
             const elapsed = slots.filter((slot) => slot.dayKey === dayOne && slot.endMs <= nowMs);
             for (const slot of elapsed) {
                 slot.id = `elapsed:${new Date(slot.startMs).toISOString()}`;
-                slot.assignments = {
-                    inverter: { action: { kind: "empty" }, setBy: null },
-                    appliances: {},
-                };
+                slot.assignments = {};
             }
             el.forecastPoints = new Map(slots.map((slot) => [
                 slot.id,
@@ -192,7 +186,7 @@ async function mountEditor(
             const optimizer = (id: string, kind: string, verdict: string, state: string) => ({
                 optimizerId: id,
                 kind,
-                targetKey: "",
+                controllableId: "",
                 status: "ok",
                 runAt: runs(`${dayOne}T20:15:00Z`),
                 verdict: runs(verdict),
@@ -211,8 +205,8 @@ async function mountEditor(
                 gates: [],
             });
             const payloads: Record<string, unknown> = {
-                "appliance:boiler": {
-                    targetKey: "appliance:boiler",
+                "boiler": {
+                    controllableId: "boiler",
                     date: dayOne,
                     slotIds,
                     optimizers: [
@@ -221,19 +215,19 @@ async function mountEditor(
                     ],
                 },
                 inverter: {
-                    targetKey: "inverter",
+                    controllableId: "inverter",
                     date: dayOne,
                     slotIds,
                     optimizers: [optimizer("export_price", "export_price", "execute", "true")],
                 },
                 // Nothing recorded: no automation ever touched this lane.
-                "appliance:pump": null,
+                "pump": null,
             };
             el.hass = {
                 config: { time_zone: "UTC" },
                 states: {},
-                callWS: async ({ target_key }: { target_key: string }) =>
-                    payloads[target_key] ?? null,
+                callWS: async ({ controllable_id }: { controllable_id: string }) =>
+                    payloads[controllable_id] ?? null,
             };
         }
 
@@ -364,7 +358,7 @@ test.describe("entity day editor", () => {
             `${DAY_ONE}T19:00:00.000Z`,
             `${DAY_ONE}T20:00:00.000Z`,
         ]);
-        expect(patches[0].domains.appliances.boiler).toEqual({ on: true });
+        expect(patches[0].controllables.boiler).toEqual({ on: true });
     });
 
     test("removing a block clears its slots and leaves the rest alone", async ({ page }) => {
@@ -381,7 +375,7 @@ test.describe("entity day editor", () => {
             `${DAY_ONE}T17:00:00.000Z`,
             `${DAY_ONE}T18:00:00.000Z`,
         ]);
-        expect(patches[0].domains.appliances).toEqual({});
+        expect(patches[0].controllables).toEqual({});
     });
 
     test("adding a block on the next day writes that day's slots", async ({ page }) => {
@@ -408,7 +402,7 @@ test.describe("entity day editor", () => {
             `${DAY_TWO}T09:00:00.000Z`,
             `${DAY_TWO}T10:00:00.000Z`,
         ]);
-        expect(patches[0].domains.appliances.boiler).toEqual({ on: true });
+        expect(patches[0].controllables.boiler).toEqual({ on: true });
     });
 
     test("clicking another block switches the edit session straight over", async ({ page }) => {
@@ -826,7 +820,7 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page, { multiLane: true, pruned: true });
 
-        const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:30:00Z`), "appliance:boiler");
+        const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:30:00Z`), "boiler");
         await page.mouse.move(point.x, point.y);
 
         const marked = await page.evaluate(() => {
@@ -906,8 +900,8 @@ test.describe("entity day editor", () => {
             const state = await laneState(page);
             expect(state.lanes).toEqual([
                 { key: "inverter", selected: false },
-                { key: "appliance:boiler", selected: true },
-                { key: "appliance:pump", selected: false },
+                { key: "boiler", selected: true },
+                { key: "pump", selected: false },
             ]);
             expect(state.blockListLabel).toContain("Boiler");
         });
@@ -938,7 +932,7 @@ test.describe("entity day editor", () => {
 
             const inverterPoint = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
             await page.mouse.click(inverterPoint.x, inverterPoint.y);
-            const boilerPoint = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:boiler");
+            const boilerPoint = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "boiler");
             await page.mouse.click(boilerPoint.x, boilerPoint.y);
 
             await page.locator("ha-button[slot=primaryAction]").click();
@@ -947,8 +941,8 @@ test.describe("entity day editor", () => {
             // 13:00 slot -- and it is patched once, carrying both lanes.
             expect(patches).toHaveLength(1);
             expect(patches[0].id).toBe(`${DAY_ONE}T13:00:00.000Z`);
-            expect(patches[0].domains.inverter.kind).toBe("charge_to_target_soc");
-            expect(patches[0].domains.appliances.boiler).toEqual({ on: true });
+            expect(patches[0].controllables.inverter.kind).toBe("charge_to_target_soc");
+            expect(patches[0].controllables.boiler).toEqual({ on: true });
         });
 
         test("pressing a lane's elapsed stretch selects it, like its name does", async ({ page }) => {
@@ -1015,7 +1009,7 @@ test.describe("entity day editor", () => {
                 }));
             });
 
-            const boiler = lanes.find((lane) => lane.key === "appliance:boiler")!;
+            const boiler = lanes.find((lane) => lane.key === "boiler")!;
             // 07:00-09:00 is one run of two hours, starting seven twenty-fourths in.
             expect(boiler.actual).toHaveLength(1);
             expect(boiler.actual[0].left).toBe(29);
@@ -1023,7 +1017,7 @@ test.describe("entity day editor", () => {
 
             // Pointing at it is allowed; editing it is not -- there is nothing
             // left to change about an hour that has gone.
-            await page.locator('.lane[data-lane="appliance:boiler"] .segment.actual').click();
+            await page.locator('.lane[data-lane="boiler"] .segment.actual').click();
             expect(await editingRange(page)).toBeNull();
             // Two hours really run, plus the four this fixture still holds in
             // the schedule (the morning block as well as the evening one --
@@ -1057,7 +1051,7 @@ test.describe("entity day editor", () => {
                         left: Math.round(parseFloat((segment as HTMLElement).style.left)),
                         changed: segment.classList.contains("changed"),
                     }));
-                return { inverter: read("inverter"), boiler: read("appliance:boiler") };
+                return { inverter: read("inverter"), boiler: read("boiler") };
             });
 
             // The 09:00 charge it really ran and the 20:00 block both follow a
@@ -1081,7 +1075,7 @@ test.describe("entity day editor", () => {
             await loadCardBundle(page);
             await mountEditor(page, { multiLane: true });
 
-            const segment = page.locator('.lane[data-lane="appliance:boiler"] .segment.actual');
+            const segment = page.locator('.lane[data-lane="boiler"] .segment.actual');
             await expect(segment).toHaveAttribute(
                 "title",
                 // Two whole hours really run, said in the same words the
@@ -1095,18 +1089,18 @@ test.describe("entity day editor", () => {
                 const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
                 return band.shadowRoot.querySelector(".lane.selected")?.getAttribute("data-lane");
             });
-            expect(selected).toBe("appliance:boiler");
+            expect(selected).toBe("boiler");
         });
 
         test("an entity that cannot be reached is still a lane", async ({ page }) => {
             await loadCardBundle(page);
             await mountEditor(page, { multiLane: true });
 
-            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:pump");
+            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "pump");
             await page.mouse.click(point.x, point.y);
 
             const state = await laneState(page);
-            expect(state.lanes.find((lane) => lane.selected)?.key).toBe("appliance:pump");
+            expect(state.lanes.find((lane) => lane.selected)?.key).toBe("pump");
             expect(state.blockListLabel).toContain("Pump");
         });
     });
@@ -1174,7 +1168,7 @@ test.describe("entity day editor, explain mode", () => {
             return [...band.shadowRoot.querySelectorAll(".lane")]
                 .map((lane: Element) => lane.getAttribute("data-lane"));
         });
-        expect(lanes).toEqual(["inverter", "appliance:boiler"]);
+        expect(lanes).toEqual(["inverter", "boiler"]);
     });
 
     test("the lanes are split into the day's slots, and nothing is preselected", async ({ page }) => {
@@ -1217,7 +1211,7 @@ test.describe("entity day editor, explain mode", () => {
         await mountEditor(page, { multiLane: true, explainable: true });
         await enterExplain(page);
 
-        await pressSlot(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:boiler");
+        await pressSlot(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "boiler");
 
         const tabs = editor(page).locator("scheduling-explanation-panel").locator(".tab");
         await expect(tabs).toHaveCount(2);
@@ -1232,7 +1226,7 @@ test.describe("entity day editor, explain mode", () => {
         await loadCardBundle(page);
         await mountEditor(page, { multiLane: true, explainable: true });
         await enterExplain(page);
-        await pressSlot(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "appliance:boiler");
+        await pressSlot(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "boiler");
 
         const marked = await page.evaluate(() => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
@@ -1245,7 +1239,7 @@ test.describe("entity day editor, explain mode", () => {
         });
         // The lane that was pressed, and no other: the diagram below is about
         // one appliance at one hour.
-        expect(marked).toEqual([["appliance:boiler", `${DAY_ONE}T13:00:00.000Z`]]);
+        expect(marked).toEqual([["boiler", `${DAY_ONE}T13:00:00.000Z`]]);
 
         await editor(page).locator('.mode-button[data-mode="edit"]').click();
         await expect(editor(page).locator(".block-list")).toHaveCount(1);

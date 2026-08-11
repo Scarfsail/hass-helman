@@ -11,9 +11,11 @@ import type {
     ScheduleSlot,
 } from "../schedule-types";
 import {
+    INVERTER_CONTROLLABLE_ID,
     isScheduleClimateApplianceAction,
     isScheduleEvChargerAction,
     isScheduleGenericApplianceAction,
+    isScheduleInverterAction,
 } from "../schedule-types";
 
 const UNAVAILABLE_STATES = new Set(["unknown", "unavailable", ""]);
@@ -205,12 +207,10 @@ function _resolveScheduleTarget(
     appliance: ScheduleApplianceMetadata | null,
 ): EntityScheduleTarget | null {
     if (entity.kind === "inverter") {
-        return { kind: "inverter" };
+        return INVERTER_CONTROLLABLE_ID;
     }
 
-    return appliance !== null && appliance.supportsAuthoring
-        ? { kind: "appliance", applianceId: appliance.id }
-        : null;
+    return appliance !== null && appliance.supportsAuthoring ? appliance.id : null;
 }
 
 function _buildLiveStateView({
@@ -268,8 +268,10 @@ function _readCommittedApplianceAction(
         return null;
     }
 
-    const action = activeSlot.assignments.appliances[applianceId]?.action ?? null;
-    return action === null || action.conditionMet === false ? null : action;
+    const action = activeSlot.assignments[applianceId]?.action ?? null;
+    return action === null || action.conditionMet === false
+        ? null
+        : (action as ScheduleApplianceAction);
 }
 
 /**
@@ -294,7 +296,9 @@ function _buildLiveInverterAction({
         return { kind: "empty" };
     }
 
-    const scheduledAction = activeSlot?.assignments.inverter.action ?? null;
+    const scheduled = activeSlot?.assignments[INVERTER_CONTROLLABLE_ID]?.action ?? null;
+    const scheduledAction =
+        scheduled !== null && isScheduleInverterAction(scheduled) ? scheduled : null;
     if (scheduledAction !== null && scheduledAction.kind === kind && scheduledAction.targetSoc !== undefined) {
         return { kind, targetSoc: scheduledAction.targetSoc };
     }
@@ -467,12 +471,12 @@ function _readAssignmentSetBy({
     }
 
     if (entity.kind === "inverter") {
-        return slot.assignments.inverter.setBy;
+        return slot.assignments[INVERTER_CONTROLLABLE_ID]?.setBy ?? null;
     }
 
     return applianceId === null
         ? null
-        : slot.assignments.appliances[applianceId]?.setBy ?? null;
+        : slot.assignments[applianceId]?.setBy ?? null;
 }
 
 function _readScheduledAction({
@@ -485,12 +489,12 @@ function _readScheduledAction({
     slot: ScheduleSlot;
 }): ScheduleInverterAction | ScheduleApplianceAction | null {
     if (entity.kind === "inverter") {
-        return slot.assignments.inverter.action;
+        return slot.assignments[INVERTER_CONTROLLABLE_ID]?.action ?? null;
     }
 
     return applianceId === null
         ? null
-        : slot.assignments.appliances[applianceId]?.action ?? null;
+        : slot.assignments[applianceId]?.action ?? null;
 }
 
 /**

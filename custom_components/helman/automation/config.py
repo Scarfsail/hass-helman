@@ -39,7 +39,7 @@ RELOCATED_OPTIMIZER_KEYS: dict[str, str] = {
     "reserve_floor_soc": "conditions[].reserve_floor_soc",
     "min_hours_per_day": "params.daily_minimum.min_hours_per_day",
     "max_consecutive_skips": "params.daily_minimum.max_consecutive_skips",
-    "appliance_id": "target.appliance_id",
+    "appliance_id": "target.controllable_id",
     "climate_mode": "target.climate_mode",
     "skip": "params.daily_minimum.max_consecutive_skips and conditions[].run_when",
     "action": "nothing — the optimizer kind implies its action",
@@ -98,16 +98,24 @@ class OptimizerInstanceConfig:
         return OPTIMIZER_SPECS[self.kind]
 
     @property
-    def target_key(self) -> str:
-        """The schedule lane this optimizer writes.
+    def controllable_id(self) -> str:
+        """What this optimizer acts on, as a plain controllable id.
 
-        ``"inverter"`` or ``"appliance:<id>"`` — the same identity as
-        ``TraceWrite.domain`` and the frontend's ``getEntityScheduleTargetKey``,
-        so the explanation record can be queried by the lane the user clicked
-        rather than by optimizer (the inverter lane has three of those).
+        Every kind names it the same way now: ``target.controllable_id``, with
+        the reserved ``inverter`` id defaulted in by the spec for the kinds that
+        used to imply their target from their own ``kind``. This is the identity
+        validation resolves and the editor picks — one lookup, no by-kind
+        fallback.
+
+        It is also the identity of the *schedule lane* this optimizer writes,
+        which is why the trace, the explanation book and the frontend's lane key
+        are all the same string. They were not, until the schedule flattened to
+        one id-keyed map: a separate ``target_key`` derived ``"appliance:<id>"``
+        from this id, because the schedule had two domains to tell apart. With
+        one map there is nothing left to disambiguate, so the derived key is
+        gone and the id is the whole identity.
         """
-        appliance_id = self.target.get("appliance_id")
-        return f"appliance:{appliance_id}" if appliance_id else "inverter"
+        return str(self.target.get("controllable_id", ""))
 
 
 @dataclass(frozen=True)

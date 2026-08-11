@@ -1,20 +1,35 @@
 import { asJsonArray, asJsonObject } from "../config/config-document";
 import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } from "../config/types";
 
-export type ApplianceOptimizerKind = "generic" | "climate";
+/**
+ * The optimizer target picker's state, over the draft `controllables` list.
+ *
+ * Every optimizer kind names what it drives the same way now — by controllable
+ * id — so this reads one list and filters it by the kinds the optimizer's spec
+ * says it may drive (`OptimizerSchema.controllableKinds`, which the backend
+ * derives from `CONTROLLABLE_SPECS`). Filtering here rather than in the
+ * renderer is what makes "the picker cannot offer an incompatible target" the
+ * same rule as "validation rejects an incompatible target": both read the one
+ * declaration.
+ *
+ * The *draft* list, deliberately: an appliance the user just added must be
+ * targetable before they save. Live metadata only supplies what a draft cannot
+ * — a climate entity's authorable modes.
+ */
 
-export interface ApplianceOptimizerOption {
+/** One option in the target picker. `kind` is the controllable kind. */
+export interface ControllableTargetOption {
   id: string;
   name: string;
-  kind: ApplianceOptimizerKind;
+  kind: string;
   liveClimateModes: string[] | null;
   selectionDisabled: boolean;
 }
 
-export interface ApplianceSelectionState {
-  options: ApplianceOptimizerOption[];
+export interface ControllableSelectionState {
+  options: ControllableTargetOption[];
   selectedId: string;
-  selectedOption: ApplianceOptimizerOption | null;
+  selectedOption: ControllableTargetOption | null;
   selectedMissingFromDraft: boolean;
 }
 
@@ -31,14 +46,15 @@ export interface SurplusClimateModeFieldState {
   options: SurplusClimateModeOption[];
 }
 
-export function buildApplianceSelectionState(
+export function buildControllableSelectionState(
   config: JsonObject | null | undefined,
   liveMetadata: ApplianceMetadataResponse | null | undefined,
   selectedIdRaw: string,
-): ApplianceSelectionState {
+  allowedKinds: readonly string[],
+): ControllableSelectionState {
   const selectedId = selectedIdRaw.trim();
   const liveAppliancesById = _indexLiveAppliances(liveMetadata);
-  const options = _readDraftApplianceOptions(config, liveAppliancesById);
+  const options = _readDraftControllableOptions(config, liveAppliancesById, allowedKinds);
   const selectedOption =
     selectedId.length === 0 ? null : options.find((option) => option.id === selectedId) ?? null;
 
@@ -51,7 +67,7 @@ export function buildApplianceSelectionState(
 }
 
 export function buildClimateModeFieldState(
-  selectionState: ApplianceSelectionState,
+  selectionState: ControllableSelectionState,
   currentClimateModeRaw: string,
 ): SurplusClimateModeFieldState {
   const currentClimateMode = currentClimateModeRaw.trim();
@@ -99,41 +115,38 @@ export function buildClimateModeFieldState(
   };
 }
 
-function _readDraftApplianceOptions(
+function _readDraftControllableOptions(
   config: JsonObject | null | undefined,
   liveAppliancesById: Record<string, ApplianceMetadataEntry>,
-): ApplianceOptimizerOption[] {
+  allowedKinds: readonly string[],
+): ControllableTargetOption[] {
   if (!config) {
     return [];
   }
 
-  const appliances = asJsonArray(config.appliances) ?? [];
-  const options: ApplianceOptimizerOption[] = [];
-  for (const appliance of appliances) {
-    const applianceObject = asJsonObject(appliance);
-    if (!applianceObject) {
+  const controllables = asJsonArray(config.controllables) ?? [];
+  const options: ControllableTargetOption[] = [];
+  for (const controllable of controllables) {
+    const controllableObject = asJsonObject(controllable);
+    if (!controllableObject) {
       continue;
     }
 
-    const applianceId = _readNonEmptyString(applianceObject.id);
-    const applianceKind = _readSupportedApplianceKind(applianceObject.kind);
-    if (!applianceId || !applianceKind) {
+    const controllableId = _readNonEmptyString(controllableObject.id);
+    const kind = _readNonEmptyString(controllableObject.kind);
+    if (!controllableId || !allowedKinds.includes(kind)) {
       continue;
     }
 
-    const liveAppliance = liveAppliancesById[applianceId];
+    const liveAppliance = liveAppliancesById[controllableId];
     options.push({
-      id: applianceId,
-      name: _readNonEmptyString(applianceObject.name) || applianceId,
-      kind: applianceKind,
+      id: controllableId,
+      name: _readNonEmptyString(controllableObject.name) || controllableId,
+      kind,
       liveClimateModes:
-        applianceKind === "climate"
-          ? _readLiveClimateModes(liveAppliance, applianceKind)
-          : null,
+        kind === "climate" ? _readLiveClimateModes(liveAppliance, kind) : null,
       selectionDisabled:
-        applianceKind === "climate"
-          ? !_hasLiveClimateModes(liveAppliance, applianceKind)
-          : false,
+        kind === "climate" ? !_hasLiveClimateModes(liveAppliance, kind) : false,
     });
   }
 
@@ -156,7 +169,7 @@ function _indexLiveAppliances(
 
 function _readLiveClimateModes(
   liveAppliance: ApplianceMetadataEntry | undefined,
-  expectedKind: ApplianceOptimizerKind,
+  expectedKind: string,
 ): string[] | null {
   if (!liveAppliance || liveAppliance.kind !== expectedKind) {
     return null;
@@ -172,17 +185,13 @@ function _readLiveClimateModes(
 
 function _hasLiveClimateModes(
   liveAppliance: ApplianceMetadataEntry | undefined,
-  expectedKind: ApplianceOptimizerKind,
+  expectedKind: string,
 ): boolean {
   return (_readLiveClimateModes(liveAppliance, expectedKind) ?? []).length > 0;
 }
 
 function _readNonEmptyString(value: unknown): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : "";
-}
-
-function _readSupportedApplianceKind(value: unknown): ApplianceOptimizerKind | null {
-  return value === "generic" || value === "climate" ? value : null;
 }
 
 function _isApplianceMetadataEntry(value: unknown): value is ApplianceMetadataEntry {

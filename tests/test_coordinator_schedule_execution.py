@@ -247,8 +247,10 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleActionError,
     ScheduleDocument,
-    ScheduleDomains,
     ScheduleExecutionUnavailableError,
+    appliance_actions,
+    build_controllable_actions,
+    inverter_action,
     ScheduleSlot,
 )
 from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
@@ -263,7 +265,6 @@ def _domains_payload(kind: str, target_soc: int | None = None) -> dict:
         inverter["targetSoc"] = target_soc
     return {
         "inverter": inverter,
-        "appliances": {},
     }
 
 
@@ -284,7 +285,7 @@ def _battery_forecast_schedule_signature(coordinator):
 
 def _valid_appliances_config() -> dict:
     return {
-        "appliances": [
+        "controllables": [
             {
                 "kind": "ev_charger",
                 "id": "garage-ev",
@@ -328,7 +329,7 @@ def _valid_appliances_config() -> dict:
 
 def _valid_climate_config() -> dict:
     return {
-        "appliances": [
+        "controllables": [
             {
                 "kind": "climate",
                 "id": "living-room-hvac",
@@ -654,9 +655,8 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 slots=[
                     ScheduleSlot(
                         id=CURRENT_SLOT_ID,
-                        domains={
-                            "inverter": {"kind": "empty"},
-                            "appliances": {"living-room-hvac": {"mode": "cool"}},
+                        controllables={
+                            "living-room-hvac": {"mode": "cool"},
                         },
                     )
                 ],
@@ -718,14 +718,11 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {
-                            "missing-ev": {
+                        "missing-ev": {
                                 "charge": True,
                                 "vehicleId": "ghost",
                                 "useMode": "Fast",
-                            }
-                        },
+                            },
                     }
                 },
             }
@@ -1021,9 +1018,11 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(coordinator._read_schedule_executor_control_config())
 
         self.assertEqual(len(captured.output), 1)
-        self.assertIn("scheduler.control.mode_entity_id", captured.output[0])
         self.assertIn(
-            "scheduler.control.action_option_map.normal",
+            "controllables[inverter].controls.mode.entity_id", captured.output[0]
+        )
+        self.assertIn(
+            "controllables[inverter].controls.mode.options.normal",
             captured.output[0],
         )
 
@@ -1119,7 +1118,6 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     slots={
                         CURRENT_SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
-                            "appliances": {},
                         },
                     },
                 ),
@@ -1142,7 +1140,6 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
-                        "appliances": {},
                     }
                 },
             }
@@ -1151,7 +1148,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         async with coordinator._schedule_lock:
             with self.assertRaisesRegex(
                 Exception,
-                "Automation cannot overwrite user-owned inverter action",
+                "Automation cannot overwrite user-owned action for controllable 'inverter'",
             ):
                 await coordinator._persist_automation_result_locked(
                     automation_result=ScheduleDocument(
@@ -1159,7 +1156,6 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                         slots={
                             CURRENT_SLOT_ID: {
                                 "inverter": {"kind": "normal"},
-                                "appliances": {},
                             },
                         },
                     ),
@@ -1178,8 +1174,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                         execution_enabled=False,
                         slots={
                             CURRENT_SLOT_ID: {
-                                "inverter": {"kind": "empty"},
-                                "appliances": {"unknown-appliance": {"on": True}},
+                                "unknown-appliance": {"on": True},
                             },
                         },
                     ),
@@ -1208,7 +1203,6 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     slots={
                         CURRENT_SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
-                            "appliances": {},
                         },
                     },
                 ),
@@ -1238,16 +1232,13 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             slots=[
                 ScheduleSlot(
                     id=CURRENT_SLOT_ID,
-                    domains={
-                        "inverter": {"kind": "empty"},
-                        "appliances": {
-                            "garage-ev": {
+                    controllables={
+                        "garage-ev": {
                                 "charge": True,
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
                                 "ecoGear": "6A",
-                            }
-                        },
+                            },
                     },
                 )
             ],
@@ -1261,14 +1252,11 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "charge": True,
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
-                            }
-                        },
+                            },
                     }
                 },
             },
@@ -1287,15 +1275,12 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 slots=[
                     ScheduleSlot(
                         id=CURRENT_SLOT_ID,
-                        domains={
-                            "inverter": {"kind": "empty"},
-                            "appliances": {
-                                "garage-ev": {
+                        controllables={
+                            "garage-ev": {
                                     "charge": True,
                                     "vehicleId": "ghost",
                                     "useMode": "Fast",
-                                }
-                            },
+                                },
                         },
                     )
                 ],
@@ -1309,14 +1294,11 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {
-                            "missing-ev": {
+                        "missing-ev": {
                                 "charge": True,
                                 "vehicleId": "ghost",
                                 "useMode": "Fast",
-                            }
-                        },
+                            },
                     }
                 },
             }
@@ -1330,7 +1312,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
 
-        self.assertEqual(current_slot["domains"]["appliances"], {})
+        self.assertEqual(current_slot["controllables"], {})
         self.assertEqual(
             storage.schedule_document,
             {
@@ -1367,20 +1349,21 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         next_slot = schedule["slots"][1]
 
-        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "charge_to_target_soc")
-        self.assertEqual(current_slot["domains"]["inverter"]["targetSoc"], 80)
+        self.assertEqual(current_slot["controllables"]["inverter"]["kind"], "charge_to_target_soc")
+        self.assertEqual(current_slot["controllables"]["inverter"]["targetSoc"], 80)
         self.assertEqual(
             schedule["runtime"],
             {
                 "activeSlotId": CURRENT_SLOT_ID,
                 "reconciledAt": CURRENT_SLOT_ID,
-                "inverter": {
-                    "actionKind": "apply",
-                    "outcome": "success",
-                    "executedAction": {"kind": "stop_discharging"},
-                    "reason": "target_soc_reached",
+                "controllables": {
+                    "inverter": {
+                        "actionKind": "apply",
+                        "outcome": "success",
+                        "executedAction": {"kind": "stop_discharging"},
+                        "reason": "target_soc_reached",
+                    },
                 },
-                "appliances": {},
             },
         )
         self.assertNotEqual(next_slot["id"], CURRENT_SLOT_ID)
@@ -1409,19 +1392,22 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         current_slot = next(
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
-        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "empty")
+        # Nothing is scheduled for the slot, so its map is empty -- the runtime
+        # still attaches, because the executor acted (a slot stop).
+        self.assertEqual(current_slot["controllables"], {})
         self.assertEqual(
             schedule["runtime"],
             {
                 "activeSlotId": CURRENT_SLOT_ID,
                 "reconciledAt": CURRENT_SLOT_ID,
-                "inverter": {
-                    "actionKind": "slot_stop",
-                    "outcome": "success",
-                    "executedAction": {"kind": "normal"},
-                    "reason": "scheduled",
+                "controllables": {
+                    "inverter": {
+                        "actionKind": "slot_stop",
+                        "outcome": "success",
+                        "executedAction": {"kind": "normal"},
+                        "reason": "scheduled",
+                    },
                 },
-                "appliances": {},
             },
         )
 
@@ -1473,18 +1459,19 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         current_slot = next(
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
-        self.assertEqual(current_slot["domains"]["inverter"]["kind"], "charge_to_target_soc")
+        self.assertEqual(current_slot["controllables"]["inverter"]["kind"], "charge_to_target_soc")
         self.assertEqual(
             schedule["runtime"],
             {
                 "activeSlotId": CURRENT_SLOT_ID,
                 "reconciledAt": CURRENT_SLOT_ID,
-                "inverter": {
-                    "actionKind": "apply",
-                    "outcome": "failed",
-                    "errorCode": "execution_unavailable",
+                "controllables": {
+                    "inverter": {
+                        "actionKind": "apply",
+                        "outcome": "failed",
+                        "errorCode": "execution_unavailable",
+                    },
                 },
-                "appliances": {},
             },
         )
 
@@ -1500,7 +1487,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             slots=[
                 ScheduleSlot(
                     id=CURRENT_SLOT_ID,
-                    domains=ScheduleDomains(
+                    controllables=build_controllable_actions(
                         inverter=ScheduleAction(kind="normal"),
                         appliances={
                             "garage-ev": {
@@ -1524,14 +1511,12 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "inverter": {"kind": "normal", "setBy": "user"},
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "charge": True,
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
                                 "setBy": "user",
-                            }
-                        },
+                            },
                     }
                 },
             },
@@ -1549,7 +1534,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             slots=[
                 ScheduleSlot(
                     id=CURRENT_SLOT_ID,
-                    domains=ScheduleDomains(
+                    controllables=build_controllable_actions(
                         inverter=ScheduleAction(kind="normal", set_by="automation"),
                         appliances={
                             "garage-ev": {
@@ -1574,14 +1559,12 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "inverter": {"kind": "normal", "setBy": "automation"},
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "charge": True,
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
                                 "setBy": "automation",
-                            }
-                        },
+                            },
                     }
                 },
             },
@@ -1593,17 +1576,15 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            current_slot["domains"],
+            current_slot["controllables"],
             {
                 "inverter": {"kind": "normal", "setBy": "automation"},
-                "appliances": {
-                    "garage-ev": {
+                "garage-ev": {
                         "charge": True,
                         "vehicleId": "kona",
                         "useMode": "Fast",
                         "setBy": "automation",
-                    }
-                },
+                    },
             },
         )
 

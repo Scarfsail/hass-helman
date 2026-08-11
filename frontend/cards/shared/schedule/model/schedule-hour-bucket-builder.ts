@@ -34,13 +34,16 @@ import type {
     ScheduleTableSlotRowModel,
 } from "../schedule-table-types";
 import {
+    INVERTER_CONTROLLABLE_ID,
     getScheduleActionIdentityKey,
     getScheduleApplianceActionIdentityKey,
+    isScheduleInverterAction,
     isScheduleClimateApplianceAction,
     isScheduleBackedDisplaySlot,
     isScheduleEvChargerAction,
     isScheduleGenericApplianceAction,
     type ScheduleApplianceAction,
+    type ScheduleInverterAction,
     type ScheduleDisplaySlot,
     type ScheduleSlot,
 } from "../schedule-types";
@@ -422,12 +425,20 @@ function _buildDistinctInverterItems(
             continue;
         }
 
-        const key = getScheduleActionIdentityKey(slot.scheduleSlot.assignments.inverter.action);
+        // A slot with no inverter action has no entry at all now, and reads
+        // as the empty action the table already knew how to draw.
+        const assignment = slot.scheduleSlot.assignments[INVERTER_CONTROLLABLE_ID];
+        const action: ScheduleInverterAction =
+            assignment !== undefined && isScheduleInverterAction(assignment.action)
+                ? assignment.action
+                : { kind: "empty" };
+        const setBy = assignment?.setBy ?? null;
+        const key = getScheduleActionIdentityKey(action);
         const existing = itemsByKey.get(key);
         if (existing) {
             existing.authorship = mergeScheduleAuthorshipSummaries([
                 existing.authorship,
-                summarizeScheduleAuthorship([slot.scheduleSlot.assignments.inverter.setBy]),
+                summarizeScheduleAuthorship([setBy]),
             ]);
             continue;
         }
@@ -435,9 +446,9 @@ function _buildDistinctInverterItems(
         const item = {
             kind: "inverter",
             key,
-            action: slot.scheduleSlot.assignments.inverter.action,
+            action,
             firstSlotId: slot.scheduleSlot.id,
-            authorship: summarizeScheduleAuthorship([slot.scheduleSlot.assignments.inverter.setBy]),
+            authorship: summarizeScheduleAuthorship([setBy]),
         } satisfies ScheduleTableActionItemModel;
         itemsByKey.set(key, item);
         actionItems.push(item);
@@ -459,13 +470,19 @@ function _buildDistinctApplianceItems(
             return [];
         }
 
-        return Object.entries(slot.scheduleSlot.assignments.appliances).flatMap(([applianceId, assignment]) => {
+        return Object.entries(slot.scheduleSlot.assignments).flatMap(([applianceId, assignment]) => {
+            if (applianceId === INVERTER_CONTROLLABLE_ID
+                || isScheduleInverterAction(assignment.action)) {
+                return [];
+            }
+
+            const action = assignment.action;
             const appliance = getScheduleApplianceById(appliances, applianceId);
-            const applianceKind = _resolveApplianceKind(appliance, assignment.action);
+            const applianceKind = _resolveApplianceKind(appliance, action);
             return [{
                 slotId: slot.scheduleSlot.id,
                 applianceId,
-                action: assignment.action,
+                action,
                 authorship: assignment.setBy,
                 appliance,
                 applianceKind,

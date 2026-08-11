@@ -224,6 +224,29 @@ export function createLabelKey(existingKeys: string[]): string {
   return createUniqueKey(existingKeys, "label");
 }
 
+/**
+ * Seed the inverter controllable.
+ *
+ * The id is fixed rather than uniquified: `inverter` is reserved for this kind
+ * and config validation refuses it to every other, so there can only ever be
+ * one. The action options are left empty — they are the exact strings of the
+ * user's own select entity, and inventing plausible ones would produce a
+ * config that looks configured and silently drives nothing.
+ */
+export function createInverterControllableDraft(inverterName: string): JsonObject {
+  return {
+    kind: "inverter",
+    id: "inverter",
+    name: inverterName,
+    controls: {
+      mode: {
+        entity_id: "",
+        options: {},
+      },
+    },
+  };
+}
+
 export function createApplianceDraft(
   existingIds: string[],
   applianceName: string,

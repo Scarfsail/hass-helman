@@ -172,7 +172,7 @@ class OptimizerTraceCoverageTests(unittest.TestCase):
         # cover everything but only out_of_scope, not applied
         trace.decision(slot_ids=slots, outcome="out_of_scope")
         trace.record_writes(
-            [TraceWrite(slot_id=slots[0], domain="inverter", before=None, after={"kind": "stop_export"})]
+            [TraceWrite(slot_id=slots[0], controllable_id="inverter", before=None, after={"kind": "stop_export"})]
         )
         trace.end_step(status="ok")
         self.assertFalse(trace.to_dict()["steps"][0]["complete"])
@@ -184,7 +184,7 @@ class OptimizerTraceCoverageTests(unittest.TestCase):
         trace.decision(slot_ids=[slots[0]], outcome="applied")
         trace.decision(slot_ids=[slots[1]], outcome="out_of_scope")
         trace.record_writes(
-            [TraceWrite(slot_id=slots[0], domain="inverter", before=None, after={"kind": "stop_export"})]
+            [TraceWrite(slot_id=slots[0], controllable_id="inverter", before=None, after={"kind": "stop_export"})]
         )
         trace.end_step(status="ok")
         self.assertTrue(trace.to_dict()["steps"][0]["complete"])
@@ -638,14 +638,14 @@ class TraceWinnerAttributionTests(unittest.TestCase):
     def _two_step_trace(self, slots: list[str]) -> OptimizerTrace:
         trace = OptimizerTrace(slot_ids=slots)
         for optimizer_id in ("early", "late"):
-            trace.begin_step(optimizer_id, "export_price", target_key="inverter")
+            trace.begin_step(optimizer_id, "export_price", controllable_id="inverter")
             trace.set_verdict(slot_ids=[slots[0]], verdict=VERDICT_EXECUTE)
             trace.set_verdict(slot_ids=slots[1:], verdict=VERDICT_SKIP)
             trace.record_writes(
                 [
                     TraceWrite(
                         slot_id=slots[0],
-                        domain="inverter",
+                        controllable_id="inverter",
                         before=None,
                         after={"kind": "stop_export"},
                     )
@@ -677,13 +677,13 @@ class TraceWinnerAttributionTests(unittest.TestCase):
     def test_winners_do_not_leak_across_lanes(self) -> None:
         slots = _slot_ids(1)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("inverter-opt", "export_price", target_key="inverter")
+        trace.begin_step("inverter-opt", "export_price", controllable_id="inverter")
         trace.set_verdict(slot_ids=slots, verdict=VERDICT_EXECUTE)
         trace.record_writes(
             [
                 TraceWrite(
                     slot_id=slots[0],
-                    domain="inverter",
+                    controllable_id="inverter",
                     before=None,
                     after={"kind": "stop_export"},
                 )
@@ -691,14 +691,14 @@ class TraceWinnerAttributionTests(unittest.TestCase):
         )
         trace.end_step(status="ok")
         trace.begin_step(
-            "boiler-opt", "appliance_runtime", target_key="appliance:boiler"
+            "boiler-opt", "appliance_runtime", controllable_id="boiler"
         )
         trace.set_verdict(slot_ids=slots, verdict=VERDICT_EXECUTE)
         trace.record_writes(
             [
                 TraceWrite(
                     slot_id=slots[0],
-                    domain="appliance:boiler",
+                    controllable_id="boiler",
                     before=None,
                     after={"on": True},
                 )
@@ -711,17 +711,17 @@ class TraceWinnerAttributionTests(unittest.TestCase):
         self.assertEqual(inverter.slots[0].winning_optimizer, "inverter-opt")
         self.assertEqual(boiler.slots[0].winning_optimizer, "boiler-opt")
 
-    def test_the_target_key_is_carried_on_the_explanation(self) -> None:
+    def test_the_controllable_id_is_carried_on_the_explanation(self) -> None:
         slots = _slot_ids(1)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_hold", target_key="inverter")
+        trace.begin_step("opt", "charge_hold", controllable_id="inverter")
         trace.set_verdict(slot_ids=slots, verdict=VERDICT_SKIP)
         trace.end_step(status="ok")
 
         payload = trace.to_dict()["steps"][0]["explanation"]
 
-        self.assertEqual(payload["targetKey"], "inverter")
-        self.assertEqual(trace.optimizer_explanations()[0].target_key, "inverter")
+        self.assertEqual(payload["controllableId"], "inverter")
+        self.assertEqual(trace.optimizer_explanations()[0].controllable_id, "inverter")
 
 
 if __name__ == "__main__":

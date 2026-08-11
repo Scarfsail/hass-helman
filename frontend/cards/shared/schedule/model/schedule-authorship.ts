@@ -1,4 +1,8 @@
-import type { ScheduleActionDTO, ScheduleApplianceActionDTO, ScheduleDomainsDTO } from "../../../helman-api";
+import type {
+    ScheduleActionDTO,
+    ScheduleApplianceActionDTO,
+    ScheduleControllableActionsDTO,
+} from "../../../helman-api";
 import type {
     ScheduleAction,
     ScheduleActionAuthorshipSummary,
@@ -9,32 +13,32 @@ import type {
 
 export class InvalidScheduleAuthorshipError extends Error {}
 
+/**
+ * The slot's stored actions as authored assignments, one entry per lane.
+ *
+ * `setBy` is required on every action that is present -- an entry with no
+ * author is a payload bug, and always was; what changed is that the inverter
+ * can now simply be absent instead of present-but-empty, so it needs no
+ * "empty actions may have no author" exemption any more.
+ */
 export function extractScheduleSlotAssignments(
-    domains: ScheduleDomainsDTO,
+    controllables: ScheduleControllableActionsDTO,
     slotId: string,
 ): ScheduleAssignments {
-    return {
-        inverter: {
-            action: stripScheduleInverterSetBy(domains.inverter),
-            setBy: _readSetBy(
-                domains.inverter.setBy,
-                `slot "${slotId}" inverter action`,
-                domains.inverter.kind === "empty",
-            ),
-        },
-        appliances: Object.fromEntries(
-            Object.entries(domains.appliances).map(([applianceId, action]) => [
-                applianceId,
-                {
-                    action: stripScheduleApplianceSetBy(action),
-                    setBy: _readSetBy(
-                        action.setBy,
-                        `slot "${slotId}" appliance "${applianceId}" action`,
-                    ),
-                },
-            ]),
-        ),
-    };
+    return Object.fromEntries(
+        Object.entries(controllables).map(([controllableId, action]) => [
+            controllableId,
+            {
+                action: "kind" in action
+                    ? stripScheduleInverterSetBy(action)
+                    : stripScheduleApplianceSetBy(action),
+                setBy: _readSetBy(
+                    action.setBy,
+                    `slot "${slotId}" controllable "${controllableId}" action`,
+                ),
+            },
+        ]),
+    );
 }
 
 export function stripScheduleInverterSetBy(action: ScheduleActionDTO): ScheduleAction {
@@ -90,12 +94,7 @@ export function mergeScheduleAuthorshipSummaries(
 function _readSetBy(
     value: unknown,
     context: string,
-    allowMissing = false,
 ): ScheduleSetBy | null {
-    if (allowMissing) {
-        return null;
-    }
-
     if (value === "user" || value === "automation") {
         return value;
     }

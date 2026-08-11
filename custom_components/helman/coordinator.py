@@ -131,10 +131,12 @@ from .scheduling.schedule import (
     ScheduleError,
     ScheduleResponseDict,
     ScheduleSlot,
+    appliance_actions,
     apply_slot_patches,
     build_horizon_start,
     describe_schedule_control_config_issue,
     format_slot_id,
+    inverter_action,
     materialize_schedule_slots,
     prune_expired_slots,
     normalize_schedule_document_for_registry,
@@ -584,16 +586,18 @@ class HelmanCoordinator:
         self._explanation_book.record(explanation)
 
     def get_schedule_explanation(
-        self, *, target_key: str, date: str
+        self, *, controllable_id: str, date: str
     ) -> dict[str, Any] | None:
         """The condition record for one schedule lane on one date.
 
-        ``target_key`` is the lane's identity (``"inverter"`` /
-        ``"appliance:<id>"``), and the result carries **every** optimizer that
+        ``controllable_id`` is the lane's identity — the controllable's own id,
+        ``inverter`` included — and the result carries **every** optimizer that
         touched it, in pipeline order: the inverter lane is written by three
         optimizer kinds, so a lane click has no single optimizer to ask.
         """
-        return self._explanation_book.get(target_key=target_key, date=date)
+        return self._explanation_book.get(
+            controllable_id=controllable_id, date=date
+        )
 
     def get_condition_trace(
         self, *, optimizer_id: str, group_index: int
@@ -1764,8 +1768,8 @@ class HelmanCoordinator:
 
         normalized_slots = normalize_slot_patch_request(
             slots=[
-                ScheduleSlot(id=slot_id, domains=domains)
-                for slot_id, domains in schedule_document.slots.items()
+                ScheduleSlot(id=slot_id, controllables=actions)
+                for slot_id, actions in schedule_document.slots.items()
             ],
             reference_time=reference_time,
             battery_soc_bounds=self._read_battery_soc_bounds(),
@@ -3372,10 +3376,10 @@ class HelmanCoordinator:
         return tuple(
             (
                 slot_id,
-                domains.inverter.kind,
-                domains.inverter.target_soc,
+                inverter_action(actions).kind,
+                inverter_action(actions).target_soc,
             )
-            for slot_id, domains in sorted(schedule_document.slots.items())
+            for slot_id, actions in sorted(schedule_document.slots.items())
         )
 
     def _build_battery_forecast_schedule_document(
@@ -3388,14 +3392,14 @@ class HelmanCoordinator:
             return schedule_document
 
         forecast_slots = {
-            slot_id: domains
-            for slot_id, domains in schedule_document.slots.items()
+            slot_id: actions
+            for slot_id, actions in schedule_document.slots.items()
             if not (
-                domains.inverter.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
+                inverter_action(actions).kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
                 and control_config.charge_to_target_soc_option is None
             )
             and not (
-                domains.inverter.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
+                inverter_action(actions).kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
                 and control_config.discharge_to_target_soc_option is None
             )
         }
@@ -3412,8 +3416,10 @@ class HelmanCoordinator:
         live_state: Any = _LIVE_STATE_UNSET,
     ) -> tuple[str, str, int | None, str, str] | None:
         active_slot_id = format_slot_id(build_horizon_start(reference_time))
-        active_domains = schedule_document.slots.get(active_slot_id)
-        active_action = None if active_domains is None else active_domains.inverter
+        active_actions = schedule_document.slots.get(active_slot_id)
+        active_action = (
+            None if active_actions is None else inverter_action(active_actions)
+        )
         if active_action is None or active_action.kind not in {
             SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
             SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -3597,10 +3603,12 @@ class HelmanCoordinator:
                         appliance_id,
                         tuple(sorted(action.items())),
                     )
-                    for appliance_id, action in sorted(domains.appliances.items())
+                    for appliance_id, action in sorted(
+                        appliance_actions(actions).items()
+                    )
                 ),
             )
-            for slot_id, domains in sorted(schedule_document.slots.items())
+            for slot_id, actions in sorted(schedule_document.slots.items())
         )
 
     def _build_history_projection_hourly_energy_by_appliance_id(
@@ -3723,8 +3731,8 @@ class HelmanCoordinator:
 
         **The appliance lives on ``target``, not on ``params``.** It is identity,
         which a condition group may never override, and every other reader takes
-        it from there (``config.target_key``, ``base.py:67``,
-        ``conditions/types.py:309``). Reading ``params`` found nothing, so this
+        it from there (``config.controllable_id``, ``base.py``,
+        ``conditions/types.py``). Reading ``params`` found nothing, so this
         returned ``None``, the runtime map came back empty, and every appliance's
         ``delivered_hours`` was 0 for every day — a daily minimum that never
         counted what had already run, and a consecutive-skip guard walking back
@@ -3738,8 +3746,8 @@ class HelmanCoordinator:
         for optimizer in automation_config.execution_optimizers:
             if optimizer.kind != "appliance_runtime":
                 continue
-            appliance_id = optimizer.target.get("appliance_id")
-            if isinstance(appliance_id, str) and appliance_id:
+            appliance_id = optimizer.controllable_id
+            if appliance_id:
                 appliance_ids.add(appliance_id)
             skip = optimizer.params.get("skip")
             if isinstance(skip, Mapping):
@@ -3767,8 +3775,8 @@ class HelmanCoordinator:
         projected: list[GenericApplianceRuntime | ClimateApplianceRuntime] = []
         seen_appliance_ids: set[str] = set()
 
-        for domains in schedule_document.slots.values():
-            for appliance_id, action in domains.appliances.items():
+        for slot_actions in schedule_document.slots.values():
+            for appliance_id, action in appliance_actions(slot_actions).items():
                 if appliance_id in seen_appliance_ids:
                     continue
 

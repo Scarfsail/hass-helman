@@ -149,6 +149,12 @@ def _install_import_stubs() -> None:
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
     schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
+    schedule_mod.appliance_actions = lambda actions: {
+        controllable_id: action
+        for controllable_id, action in actions.items()
+        if controllable_id != "inverter"
+    }
+    schedule_mod.inverter_action = lambda actions: actions.get("inverter")
     schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
     schedule_mod.build_horizon_start = lambda reference_time: reference_time.replace(
         minute=(reference_time.minute // 30) * 30,
@@ -183,9 +189,7 @@ def _install_import_stubs() -> None:
         lambda slots, reference_time, battery_soc_bounds: None
     )
     schedule_mod.ScheduleAction = type("ScheduleAction", (), {})
-    schedule_mod.ScheduleDomains = type("ScheduleDomains", (), {})
     schedule_mod.EMPTY_SCHEDULE_ACTION = None
-    schedule_mod.is_default_domains = lambda domains: True
     schedule_mod.iter_horizon_slot_ids = lambda reference_time: iter([])
     schedule_mod.build_horizon_end = lambda reference_time: reference_time
     sys.modules[schedule_mod.__name__] = schedule_mod
@@ -483,11 +487,9 @@ def _make_projection_plan() -> SimpleNamespace:
     )
 
 
-def _make_schedule_action(kind: str, target_soc: int | None = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        inverter=SimpleNamespace(kind=kind, target_soc=target_soc),
-        appliances={},
-    )
+def _make_schedule_action(kind: str, target_soc: int | None = None) -> dict:
+    """One slot's flat, id-keyed action map holding just the inverter's."""
+    return {"inverter": SimpleNamespace(kind=kind, target_soc=target_soc)}
 
 
 def _make_schedule_document(
@@ -876,7 +878,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             return_value=_make_control_config()
         )
         slot = _make_schedule_action("stop_charging")
-        slot.appliances = {"boiler": {"kind": "run"}}
+        slot["boiler"] = {"kind": "run"}
         schedule_document = _make_schedule_document(
             execution_enabled=False,
             slots={"2026-03-20T21:00:00+01:00": slot},

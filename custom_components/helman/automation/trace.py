@@ -57,14 +57,18 @@ class TraceWrite:
     """A committed schedule write recorded by the framework diff (layer 1)."""
 
     slot_id: str
-    domain: str  # "inverter" | "appliance:<id>"
+    #: The lane this write landed on: the controllable's own id, ``inverter``
+    #: for the inverter. A plain id since the schedule flattened to one
+    #: id-keyed map; it used to be prefixed ``appliance:<id>`` because the
+    #: schedule had two domains to tell apart.
+    controllable_id: str
     before: dict[str, Any] | None
     after: dict[str, Any] | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "slotId": self.slot_id,
-            "domain": self.domain,
+            "domain": self.controllable_id,
             "before": self.before,
             "after": self.after,
         }
@@ -101,10 +105,10 @@ class TraceNote:
 class _MutableStep:
     optimizer_id: str
     kind: str
-    # The lane this step writes ("inverter" | "appliance:<id>"), matching
-    # `TraceWrite.domain`. Set at `begin_step`; empty for callers that do not
-    # supply it (unit tests), which simply forgoes winner attribution.
-    target_key: str = ""
+    # The lane this step writes: the controllable's own id, matching
+    # `TraceWrite.controllable_id`. Set at `begin_step`; empty for callers that
+    # do not supply it (unit tests), which simply forgoes winner attribution.
+    controllable_id: str = ""
     status: str = "ok"
     complete: bool = True
     # False when this optimizer carries an execution condition that is NOT met:
@@ -164,14 +168,14 @@ class _MutableStep:
                     gates=tuple(gates.values()),
                     verdict=verdict or VERDICT_SKIP,
                     winning_optimizer=(winners or {}).get(
-                        (self.target_key, slot_id)
+                        (self.controllable_id, slot_id)
                     ),
                 )
             )
         return OptimizerExplanation(
             optimizer_id=self.optimizer_id,
             kind=self.kind,
-            target_key=self.target_key,
+            controllable_id=self.controllable_id,
             status=self.explain_status or STATUS_OK,
             status_reason=self.explain_status_reason,
             slots=tuple(slots),
@@ -266,16 +270,17 @@ class OptimizerTrace:
     # --- step lifecycle ------------------------------------------------------
 
     def begin_step(
-        self, optimizer_id: str, kind: str, *, target_key: str = ""
+        self, optimizer_id: str, kind: str, *, controllable_id: str = ""
     ) -> None:
-        """Open a step. ``target_key`` is the lane it writes.
+        """Open a step. ``controllable_id`` is the lane it writes.
 
-        ``"inverter"`` / ``"appliance:<id>"`` — the same identity as
-        :attr:`TraceWrite.domain`, which is what lets winner attribution match a
-        step's explanation rows against the writes that landed on its lane.
+        The controllable's own id — the same identity as
+        :attr:`TraceWrite.controllable_id`, which is what lets winner
+        attribution match a step's explanation rows against the writes that
+        landed on its lane.
         """
         self._current = _MutableStep(
-            optimizer_id=optimizer_id, kind=kind, target_key=target_key
+            optimizer_id=optimizer_id, kind=kind, controllable_id=controllable_id
         )
 
     def set_condition_met(self, condition_met: bool) -> None:
@@ -595,7 +600,7 @@ class OptimizerTrace:
         winners: dict[tuple[str, str], str] = {}
         for step in self._steps:
             for write in step.writes:
-                winners[(write.domain, write.slot_id)] = step.optimizer_id
+                winners[(write.controllable_id, write.slot_id)] = step.optimizer_id
         return winners
 
     def optimizer_explanations(self) -> tuple[OptimizerExplanation, ...]:

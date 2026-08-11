@@ -79,7 +79,7 @@ export function renderOptimizerCard(options: OptimizerCardOptions): TemplateResu
                         undefined,
                         "editor.help.automation_optimizer_id",
                     )}
-                    ${host.renderApplianceTargetFields(index, schema.kind)}
+                    ${host.renderControllableTargetFields(index, schema.kind)}
                     ${renderSchemaFields(host, schema.params, {
                         basePath: [...basePath, "params"],
                         kind: schema.kind,

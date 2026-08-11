@@ -171,7 +171,7 @@ class PerKindMoveTests(unittest.TestCase):
         # A disabled rule stays disabled, and its target survives verbatim.
         self.assertFalse(migrated["enabled"])
         self.assertEqual(
-            migrated["target"], {"appliance_id": "dhw", "climate_mode": "heat"}
+            migrated["target"], {"controllable_id": "dhw", "climate_mode": "heat"}
         )
         # No `daily_minimum` — uncapped, which is what the old kind did.
         self.assertEqual(migrated["params"], {})
@@ -243,7 +243,7 @@ class PerKindMoveTests(unittest.TestCase):
                 "params": {"appliance_id": "dhw", "min_hours_per_day": 3},
             }
         )
-        self.assertEqual(migrated["target"], {"appliance_id": "dhw"})
+        self.assertEqual(migrated["target"], {"controllable_id": "dhw"})
         self.assertEqual(
             migrated["params"]["daily_minimum"]["min_hours_per_day"], 3
         )
@@ -274,7 +274,7 @@ class PriceConditionSplitTests(unittest.TestCase):
             {
                 "id": "runtime",
                 "kind": "appliance_runtime",
-                "target": {"appliance_id": "dhw"},
+                "target": {"controllable_id": "dhw"},
                 "conditions": [{"run_when": ALL_DAYS, "when_price_below": 2.0}],
             }
         )
@@ -299,7 +299,7 @@ class PriceConditionSplitTests(unittest.TestCase):
             {
                 "id": "runtime",
                 "kind": "appliance_runtime",
-                "target": {"appliance_id": "dhw"},
+                "target": {"controllable_id": "dhw"},
                 "conditions": [{"run_when": ALL_DAYS}],
             }
         )
@@ -382,6 +382,206 @@ class TrainingTimePromotionTests(unittest.TestCase):
         self.assertEqual(migrated["training_time"], "04:30")
         # The optimizer ids from the v1 step survive a later step that moves none.
         self.assertEqual(ids, ["e"])
+
+
+class ControllablesUnificationTests(unittest.TestCase):
+    """v6->v7: ``appliances`` + ``scheduler.control`` -> ``controllables``.
+
+    The step every existing installation runs, and the only one that reshapes
+    what the user sees in the editor. Table-driven over the four shapes a v6
+    document can actually have — both keys, one, the other, neither — because
+    the runtime that reads the result treats an absent list and an empty one
+    differently.
+    """
+
+    _CONTROL = {
+        "mode_entity_id": "select.fv_mode",
+        "action_option_map": {
+            "normal": "Self Use",
+            "stop_charging": "Manual",
+            "stop_discharging": "Manual",
+        },
+    }
+    _APPLIANCE = {
+        "kind": "generic",
+        "id": "dishwasher",
+        "name": "Dishwasher",
+        "controls": {"switch": {"entity_id": "switch.dishwasher"}},
+        "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
+    }
+
+    @classmethod
+    def _migrate_from_v6(cls, document):
+        migrated, ids = migrate_config_document({**document, "config_version": 6})
+        return migrated, ids
+
+    def test_the_inverter_becomes_the_first_controllable(self) -> None:
+        migrated, ids = self._migrate_from_v6(
+            {"scheduler": {"control": self._CONTROL}, "appliances": [self._APPLIANCE]}
+        )
+
+        self.assertNotIn("scheduler", migrated)
+        self.assertNotIn("appliances", migrated)
+        self.assertEqual(
+            migrated["controllables"],
+            [
+                {
+                    "kind": "inverter",
+                    "id": "inverter",
+                    "name": "Inverter",
+                    "controls": {
+                        "mode": {
+                            "entity_id": "select.fv_mode",
+                            "options": {
+                                "normal": "Self Use",
+                                "stop_charging": "Manual",
+                                "stop_discharging": "Manual",
+                            },
+                        }
+                    },
+                },
+                self._APPLIANCE,
+            ],
+        )
+        self.assertEqual(ids, [])
+
+    def test_appliance_entries_move_verbatim_and_keep_their_order(self) -> None:
+        second = {**self._APPLIANCE, "id": "boiler", "name": "Boiler"}
+
+        migrated, _ids = self._migrate_from_v6(
+            {"appliances": [self._APPLIANCE, second]}
+        )
+
+        self.assertEqual(migrated["controllables"], [self._APPLIANCE, second])
+
+    def test_an_installation_without_a_wired_inverter_gets_no_entry(self) -> None:
+        migrated, _ids = self._migrate_from_v6({"scheduler": {}, "appliances": []})
+
+        self.assertEqual(migrated["controllables"], [])
+
+    def test_a_document_with_neither_key_grows_no_controllables(self) -> None:
+        migrated, _ids = self._migrate_from_v6({"history_buckets": 60})
+
+        self.assertNotIn("controllables", migrated)
+
+    def test_unknown_control_keys_ride_along_on_the_inverter_entry(self) -> None:
+        migrated, _ids = self._migrate_from_v6(
+            {"scheduler": {"control": {**self._CONTROL, "future_key": "keep-me"}}}
+        )
+
+        self.assertEqual(migrated["controllables"][0]["future_key"], "keep-me")
+
+    def test_an_appliances_value_that_is_not_a_list_is_moved_not_dropped(self) -> None:
+        migrated, _ids = self._migrate_from_v6({"appliances": {"oops": True}})
+
+        self.assertEqual(migrated["controllables"], {"oops": True})
+        self.assertNotIn("appliances", migrated)
+
+    def test_a_v1_document_reaches_the_new_shape_through_every_step(self) -> None:
+        document = {
+            **_document({"id": "e", "kind": "export_price"}),
+            "scheduler": {"control": self._CONTROL},
+            "appliances": [self._APPLIANCE],
+        }
+
+        migrated, ids = migrate_config_document(document)
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertEqual(
+            [entry["kind"] for entry in migrated["controllables"]],
+            ["inverter", "generic"],
+        )
+        self.assertEqual(ids, ["e"])
+
+    def test_a_current_version_document_is_left_exactly_as_it_is(self) -> None:
+        document = {
+            "config_version": CONFIG_DOCUMENT_VERSION,
+            "controllables": [self._APPLIANCE],
+        }
+        self.assertFalse(needs_migration(document))
+
+        migrated, ids = migrate_config_document(document)
+
+        self.assertEqual(migrated, document)
+        self.assertEqual(ids, [])
+
+
+class ControllableTargetTests(unittest.TestCase):
+    """v7->v8: every optimizer names its target by controllable id.
+
+    Table-driven over the two shapes that exist: a kind that had the field
+    under its old name, and the three that had no target at all because their
+    own ``kind`` was the target.
+    """
+
+    @staticmethod
+    def _migrate_from_v7(*optimizers):
+        migrated, ids = migrate_config_document(
+            {**_document(*optimizers), "config_version": 7}
+        )
+        return migrated["automation"]["optimizers"], ids
+
+    def test_appliance_id_becomes_controllable_id(self) -> None:
+        (optimizer,), ids = self._migrate_from_v7(
+            {
+                "id": "dhw",
+                "kind": "appliance_runtime",
+                "target": {"appliance_id": "boiler", "climate_mode": "heat"},
+                "params": {"window": {"start": "08:00", "end": "18:00"}},
+                "conditions": [{"run_when": ["surplus"]}],
+            }
+        )
+
+        # `climate_mode` stays put: it is the second target field, not a name
+        # the unification touched.
+        self.assertEqual(
+            optimizer["target"], {"controllable_id": "boiler", "climate_mode": "heat"}
+        )
+        self.assertEqual(ids, ["dhw"])
+
+    def test_the_inverter_kinds_get_the_reserved_id_written_out(self) -> None:
+        for kind in ("charge_hold", "export_price", "charge_from_grid"):
+            with self.subTest(kind):
+                (optimizer,), _ids = self._migrate_from_v7(
+                    {"id": kind, "kind": kind, "conditions": [{}]}
+                )
+
+                self.assertEqual(optimizer["target"], {"controllable_id": "inverter"})
+
+    def test_an_authored_controllable_id_wins(self) -> None:
+        """Half-migrated by hand is still the user's word on the subject."""
+        (optimizer,), _ids = self._migrate_from_v7(
+            {
+                "id": "dhw",
+                "kind": "appliance_runtime",
+                "target": {"appliance_id": "boiler", "controllable_id": "pool"},
+            }
+        )
+
+        self.assertEqual(optimizer["target"], {"controllable_id": "pool"})
+
+    def test_an_unknown_kind_is_left_targetless(self) -> None:
+        """No target invented for a kind this step never knew about."""
+        (optimizer,), _ids = self._migrate_from_v7({"id": "x", "kind": "mystery"})
+
+        self.assertNotIn("target", optimizer)
+
+    def test_a_v1_appliance_target_survives_every_step_into_the_new_name(self) -> None:
+        """Composition: v2 moved it out of ``params``, v8 renames what it wrote."""
+        migrated, _ids = migrate_config_document(
+            _document(
+                {
+                    "id": "dhw",
+                    "kind": "daily_runtime",
+                    "params": {"appliance_id": "boiler", "min_hours_per_day": 3},
+                }
+            )
+        )
+
+        self.assertEqual(
+            migrated["automation"]["optimizers"][0]["target"],
+            {"controllable_id": "boiler"},
+        )
 
 
 class RunWhenInversionTests(unittest.TestCase):

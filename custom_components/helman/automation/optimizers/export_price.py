@@ -31,7 +31,7 @@ from ..explain import (
 )
 from ..trace import NULL_TRACE
 
-#: The one gate this kind owns: `scheduler.control.action_option_map.stop_export`
+#: The one gate this kind owns: the inverter's `controls.mode.options.stop_export`
 #: is a per-inverter capability, so a whole run can be unactionable for reasons
 #: no condition can express.
 GATE_STOP_EXPORT_SUPPORTED = "stop_export_supported"
@@ -74,7 +74,7 @@ class ExportPriceOptimizer:
         if not self.stop_export_supported:
             _LOGGER.warning(
                 "Automation export_price optimizer %s cannot write stop_export because "
-                "scheduler.control.action_option_map.stop_export is unavailable; "
+                "the inverter's controls.mode.options.stop_export is unavailable; "
                 "skipping %d slot(s)",
                 self.id,
                 len(eligible),

@@ -341,10 +341,17 @@ export type ScheduleRuntimeReason = "scheduled" | "target_soc_reached";
 export type RuntimeActionKind = "apply" | "slot_stop" | "noop";
 export type RuntimeOutcome = "success" | "failed" | "skipped";
 
-export interface ScheduleDomainsDTO {
-    inverter: ScheduleActionDTO;
-    appliances: Record<string, ScheduleApplianceActionDTO>;
-}
+/**
+ * One slot's actions, keyed by controllable id.
+ *
+ * The inverter sits under its reserved `inverter` id as a peer of the
+ * appliances rather than in a member of its own. Its action has a different
+ * shape from theirs -- as theirs already differ from each other -- so the map
+ * is a union discriminated by each controllable's configured kind. An id that
+ * is absent has nothing scheduled; there is no "empty" action to write.
+ */
+export type ScheduleControllableActionDTO = ScheduleActionDTO | ScheduleApplianceActionDTO;
+export type ScheduleControllableActionsDTO = Record<string, ScheduleControllableActionDTO>;
 
 export interface InverterRuntimeDTO {
     actionKind: RuntimeActionKind;
@@ -363,16 +370,17 @@ export interface ApplianceRuntimeDTO {
     updatedAt?: string;
 }
 
+export type ControllableRuntimeDTO = InverterRuntimeDTO | ApplianceRuntimeDTO;
+
 export interface ScheduleRuntimeDTO {
     activeSlotId: string;
-    appliances: Record<string, ApplianceRuntimeDTO>;
-    inverter?: InverterRuntimeDTO;
+    controllables: Record<string, ControllableRuntimeDTO>;
     reconciledAt?: string;
 }
 
 export interface ScheduleSlotDTO {
     id: string;
-    domains: ScheduleDomainsDTO;
+    controllables: ScheduleControllableActionsDTO;
 }
 
 export interface SchedulePayload {

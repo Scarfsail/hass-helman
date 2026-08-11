@@ -81,7 +81,9 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleActionError,
     ScheduleDocument,
-    ScheduleDomains,
+    appliance_actions,
+    build_controllable_actions,
+    inverter_action,
     action_from_dict,
     action_to_dict,
     schedule_document_to_dict,
@@ -105,17 +107,13 @@ class StripAutomationOwnedActionsTests(unittest.TestCase):
             slots={
                 SLOT_ID: {
                     "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING, "setBy": "automation"},
-                    "appliances": {
-                        "boiler": {"on": True, "setBy": "user"},
-                    },
+                    "boiler": {"on": True, "setBy": "user"},
                 },
                 NEXT_SLOT_ID: {
                     "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
-                    "appliances": {},
                 },
                 THIRD_SLOT_ID: {
                     "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
-                    "appliances": {},
                 },
             },
         )
@@ -129,16 +127,13 @@ class StripAutomationOwnedActionsTests(unittest.TestCase):
                 "slotMinutes": 30,
                 "slots": {
                     SLOT_ID: {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {"boiler": {"on": True, "setBy": "user"}},
+                        "boiler": {"on": True, "setBy": "user"},
                     },
                     NEXT_SLOT_ID: {
                         "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
-                        "appliances": {},
                     },
                     THIRD_SLOT_ID: {
                         "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
-                        "appliances": {},
                     },
                 },
             },
@@ -149,10 +144,8 @@ class StripAutomationOwnedActionsTests(unittest.TestCase):
             slots={
                 SLOT_ID: {
                     "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
-                    "appliances": {
-                        "dishwasher": {"on": True, "setBy": "automation"},
+                    "dishwasher": {"on": True, "setBy": "automation"},
                         "boiler": {"on": False, "setBy": "user"},
-                    },
                 },
             }
         )
@@ -160,19 +153,17 @@ class StripAutomationOwnedActionsTests(unittest.TestCase):
         stripped = strip_automation_owned_actions(document)
 
         self.assertEqual(
-            stripped.slots[SLOT_ID].appliances,
+            appliance_actions(stripped.slots[SLOT_ID]),
             {"boiler": {"on": False, "setBy": "user"}},
         )
-        self.assertEqual(stripped.slots[SLOT_ID].inverter.set_by, "user")
+        self.assertEqual(inverter_action(stripped.slots[SLOT_ID]).set_by, "user")
 
     def test_strip_drops_slot_when_everything_becomes_default(self) -> None:
         document = _doc(
             slots={
                 SLOT_ID: {
                     "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING, "setBy": "automation"},
-                    "appliances": {
-                        "dishwasher": {"on": True, "setBy": "automation"},
-                    },
+                    "dishwasher": {"on": True, "setBy": "automation"},
                 },
             }
         )
@@ -196,15 +187,14 @@ class MergeAutomationResultTests(unittest.TestCase):
                             "kind": SCHEDULE_ACTION_STOP_CHARGING,
                             "setBy": "user",
                         },
-                        "appliances": {},
                     }
                 },
             ),
         )
 
         self.assertFalse(merged.execution_enabled)
-        self.assertEqual(merged.slots[SLOT_ID].inverter.kind, SCHEDULE_ACTION_STOP_CHARGING)
-        self.assertEqual(merged.slots[SLOT_ID].inverter.set_by, "automation")
+        self.assertEqual(inverter_action(merged.slots[SLOT_ID]).kind, SCHEDULE_ACTION_STOP_CHARGING)
+        self.assertEqual(inverter_action(merged.slots[SLOT_ID]).set_by, "automation")
 
     def test_merge_preserves_candidate_inverter_condition_met(self) -> None:
         # Regression: merge rebuilt the ScheduleAction and dropped condition_met,
@@ -214,7 +204,7 @@ class MergeAutomationResultTests(unittest.TestCase):
             automation_result=_doc(
                 execution_enabled=True,
                 slots={
-                    SLOT_ID: ScheduleDomains(
+                    SLOT_ID: build_controllable_actions(
                         inverter=ScheduleAction(
                             kind=SCHEDULE_ACTION_STOP_CHARGING,
                             set_by="automation",
@@ -225,7 +215,7 @@ class MergeAutomationResultTests(unittest.TestCase):
             ),
         )
 
-        self.assertFalse(merged.slots[SLOT_ID].inverter.condition_met)
+        self.assertFalse(inverter_action(merged.slots[SLOT_ID]).condition_met)
 
     def test_merge_writes_new_automation_owned_appliance_action_beside_user_inverter(
         self,
@@ -234,7 +224,6 @@ class MergeAutomationResultTests(unittest.TestCase):
             slots={
                 SLOT_ID: {
                     "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
-                    "appliances": {},
                 },
             }
         )
@@ -245,29 +234,29 @@ class MergeAutomationResultTests(unittest.TestCase):
                 slots={
                     SLOT_ID: {
                         "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
-                        "appliances": {"boiler": {"on": True, "setBy": "user"}},
+                        "boiler": {"on": True, "setBy": "user"},
                     }
                 }
             ),
         )
 
-        self.assertEqual(merged.slots[SLOT_ID].inverter.set_by, "user")
+        self.assertEqual(inverter_action(merged.slots[SLOT_ID]).set_by, "user")
         self.assertEqual(
-            merged.slots[SLOT_ID].appliances["boiler"],
+            appliance_actions(merged.slots[SLOT_ID])["boiler"],
             {"on": True, "setBy": "automation"},
         )
 
     def test_merge_refuses_to_overwrite_user_owned_inverter_action(self) -> None:
         with self.assertRaisesRegex(
             Exception,
-            "Automation cannot overwrite user-owned inverter action",
+            "Automation cannot overwrite user-owned action for controllable "
+            "'inverter'",
         ):
             merge_automation_result(
                 baseline=_doc(
                     slots={
                         SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
-                            "appliances": {},
                         },
                     }
                 ),
@@ -275,7 +264,6 @@ class MergeAutomationResultTests(unittest.TestCase):
                     slots={
                         SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
-                            "appliances": {},
                         }
                     }
                 ),
@@ -284,14 +272,15 @@ class MergeAutomationResultTests(unittest.TestCase):
     def test_merge_refuses_to_overwrite_user_owned_appliance_action(self) -> None:
         with self.assertRaisesRegex(
             Exception,
-            "Automation cannot overwrite user-owned appliance action",
+            "Automation cannot overwrite user-owned action for controllable "
+            "'boiler'",
         ):
             merge_automation_result(
                 baseline=_doc(
                     slots={
                         SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
-                            "appliances": {"boiler": {"on": False, "setBy": "user"}},
+                            "boiler": {"on": False, "setBy": "user"},
                         },
                     }
                 ),
@@ -299,25 +288,94 @@ class MergeAutomationResultTests(unittest.TestCase):
                     slots={
                         SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
-                            "appliances": {"boiler": {"on": True}},
+                            "boiler": {"on": True},
                         }
                     }
                 ),
             )
+
+    def test_merge_refuses_an_inverter_result_differing_only_in_condition_met(
+        self,
+    ) -> None:
+        # The decision the two merge arms disagreed on. The inverter's arm
+        # compared kind/target_soc/set_by only, so re-stamping the user's own
+        # action as a candidate passed silently; the appliance's compared the
+        # whole action. The appliance's rule is the one that survived: nothing
+        # should reach this comparison with a user-owned baseline at all, since
+        # ScheduleWriter vetoes such slots, so a difference of any size is worth
+        # hearing about.
+        with self.assertRaisesRegex(
+            Exception,
+            "Automation cannot overwrite user-owned action for controllable "
+            "'inverter'",
+        ):
+            merge_automation_result(
+                baseline=_doc(
+                    slots={
+                        SLOT_ID: build_controllable_actions(
+                            inverter=ScheduleAction(
+                                kind=SCHEDULE_ACTION_NORMAL, set_by="user"
+                            ),
+                        ),
+                    }
+                ),
+                automation_result=_doc(
+                    slots={
+                        SLOT_ID: build_controllable_actions(
+                            inverter=ScheduleAction(
+                                kind=SCHEDULE_ACTION_NORMAL,
+                                set_by="user",
+                                condition_met=False,
+                            ),
+                        )
+                    }
+                ),
+            )
+
+    def test_merge_keeps_a_user_owned_action_the_automation_reproduced(
+        self,
+    ) -> None:
+        # The other half of the same rule: an untouched user action arrives
+        # byte-identical (the result document is a deep copy of the snapshot),
+        # so the common case still merges silently and keeps the baseline.
+        merged = merge_automation_result(
+            baseline=_doc(
+                slots={
+                    SLOT_ID: {
+                        "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
+                        "boiler": {"on": True, "setBy": "user"},
+                    },
+                }
+            ),
+            automation_result=_doc(
+                slots={
+                    SLOT_ID: {
+                        "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
+                        "boiler": {"on": True, "setBy": "user"},
+                    }
+                }
+            ),
+        )
+
+        self.assertEqual(inverter_action(merged.slots[SLOT_ID]).set_by, "user")
+        self.assertEqual(
+            appliance_actions(merged.slots[SLOT_ID])["boiler"],
+            {"on": True, "setBy": "user"},
+        )
 
     def test_merge_refuses_to_overwrite_explicit_authored_action_without_set_by(
         self,
     ) -> None:
         with self.assertRaisesRegex(
             Exception,
-            "Automation cannot overwrite user-owned inverter action",
+            "Automation cannot overwrite user-owned action for controllable "
+            "'inverter'",
         ):
             merge_automation_result(
                 baseline=_doc(
                     slots={
                         SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
-                            "appliances": {},
                         },
                     }
                 ),
@@ -325,7 +383,6 @@ class MergeAutomationResultTests(unittest.TestCase):
                     slots={
                         SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
-                            "appliances": {},
                         }
                     }
                 ),
@@ -353,7 +410,7 @@ class StripCandidateActionsTests(unittest.TestCase):
     def test_strips_candidate_inverter_and_appliance_keeps_committed(self) -> None:
         document = _doc(
             slots={
-                SLOT_ID: ScheduleDomains(
+                SLOT_ID: build_controllable_actions(
                     inverter=ScheduleAction(
                         kind=SCHEDULE_ACTION_STOP_CHARGING,
                         set_by="automation",
@@ -364,7 +421,7 @@ class StripCandidateActionsTests(unittest.TestCase):
                         "pump": {"on": True, "setBy": "automation"},
                     },
                 ),
-                NEXT_SLOT_ID: ScheduleDomains(
+                NEXT_SLOT_ID: build_controllable_actions(
                     inverter=ScheduleAction(
                         kind=SCHEDULE_ACTION_STOP_CHARGING,
                         set_by="automation",
@@ -376,18 +433,18 @@ class StripCandidateActionsTests(unittest.TestCase):
         stripped = strip_candidate_actions(document)
 
         # candidate inverter -> empty, committed inverter preserved
-        self.assertEqual(stripped.slots[SLOT_ID].inverter.kind, "empty")
+        self.assertEqual(inverter_action(stripped.slots[SLOT_ID]).kind, "empty")
         self.assertEqual(
-            stripped.slots[NEXT_SLOT_ID].inverter.kind, SCHEDULE_ACTION_STOP_CHARGING
+            inverter_action(stripped.slots[NEXT_SLOT_ID]).kind, SCHEDULE_ACTION_STOP_CHARGING
         )
         # candidate appliance dropped, committed appliance kept
-        self.assertNotIn("ac", stripped.slots[SLOT_ID].appliances)
-        self.assertIn("pump", stripped.slots[SLOT_ID].appliances)
+        self.assertNotIn("ac", appliance_actions(stripped.slots[SLOT_ID]))
+        self.assertIn("pump", appliance_actions(stripped.slots[SLOT_ID]))
 
     def test_drops_slot_when_only_candidates(self) -> None:
         document = _doc(
             slots={
-                SLOT_ID: ScheduleDomains(
+                SLOT_ID: build_controllable_actions(
                     inverter=ScheduleAction(
                         kind=SCHEDULE_ACTION_STOP_CHARGING,
                         set_by="automation",

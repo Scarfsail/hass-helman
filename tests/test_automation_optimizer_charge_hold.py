@@ -66,7 +66,10 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
     OptimizationSnapshot,
 )
-from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
+from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleDocument,
+    inverter_action,
+)
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.automation.explain import (  # noqa: E402
     OptimizerExplanation,
@@ -194,9 +197,9 @@ def _make_config(
 def _held_slot_ids(result: ScheduleDocument) -> set[str]:
     return {
         slot_id
-        for slot_id, domains in result.slots.items()
-        if domains.inverter.kind == "stop_charging"
-        and domains.inverter.set_by == "automation"
+        for slot_id, actions in result.slots.items()
+        if inverter_action(actions).kind == "stop_charging"
+        and inverter_action(actions).set_by == "automation"
     }
 
 
@@ -314,7 +317,6 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
             slots={
                 _slot_id(6, 0): {
                     "inverter": {"kind": "normal", "setBy": "user"},
-                    "appliances": {},
                 }
             },
         )
@@ -330,7 +332,7 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
             ),
             _make_config(),
         )
-        self.assertEqual(result.slots[_slot_id(6, 0)].inverter.kind, "normal")
+        self.assertEqual(inverter_action(result.slots[_slot_id(6, 0)]).kind, "normal")
         self.assertNotIn(_slot_id(6, 0), _held_slot_ids(result))
 
     def test_no_battery_state_writes_nothing(self) -> None:

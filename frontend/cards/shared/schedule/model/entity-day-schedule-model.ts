@@ -1,7 +1,8 @@
 import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
 import type {
     ScheduleApplianceAction,
-    ScheduleApplianceEditIntent,
+    ScheduleControllableAction,
+    ScheduleEditIntent,
     ScheduleInverterAction,
     ScheduleRangeEditIntent,
     ScheduleSetBy,
@@ -9,6 +10,7 @@ import type {
     ScheduleSlotPatch,
 } from "../schedule-types";
 import {
+    INVERTER_CONTROLLABLE_ID,
     cloneScheduleApplianceAction,
     cloneScheduleInverterAction,
     getScheduleActionIdentityKey,
@@ -24,15 +26,17 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_SLOT_DURATION_MS = 60 * 60 * 1000;
 
-/** Which single entity's lane of the schedule a view or edit is about. */
-export type EntityScheduleTarget =
-    | { kind: "inverter" }
-    | { kind: "appliance"; applianceId: string };
-
-/** A stable identity for a target, usable as an object key and a DOM id. */
-export function getEntityScheduleTargetKey(target: EntityScheduleTarget): string {
-    return target.kind === "inverter" ? "inverter" : `appliance:${target.applianceId}`;
-}
+/**
+ * Which single entity's lane of the schedule a view or edit is about: the
+ * controllable's own id, `inverter` included.
+ *
+ * It used to be a two-arm union whose key function produced `"inverter"` or
+ * `"appliance:<id>"`, because the schedule had two domains to tell apart. With
+ * one id-keyed map there is nothing to disambiguate, so the target *is* the
+ * key -- the same string the backend files its explanation records under and
+ * the same one the lane's DOM node carries.
+ */
+export type EntityScheduleTarget = string;
 
 /**
  * One controllable entity as a row of the editor: its lane in the schedule plus
@@ -133,13 +137,24 @@ export function isEntityInverterAction(
     return action !== null && "kind" in action;
 }
 
+/** Whether a lane is the inverter's, which is now a question about its id. */
+export function isInverterScheduleTarget(target: EntityScheduleTarget): boolean {
+    return target === INVERTER_CONTROLLABLE_ID;
+}
+
 export function isEntityScheduleActionEmpty(action: EntityScheduleAction): boolean {
     return action === null || (isEntityInverterAction(action) && action.kind === "empty");
 }
 
-/** The "nothing scheduled" value for a lane, which differs between the two. */
-export function getEmptyEntityScheduleAction(target: EntityScheduleTarget): EntityScheduleAction {
-    return target.kind === "inverter" ? { kind: "empty" } : null;
+/**
+ * The "nothing scheduled" value for a lane -- `null` for every lane alike.
+ *
+ * The inverter used to spell it `{ kind: "empty" }` because its domain always
+ * held an action; since the flattening it says it the way an appliance always
+ * has, by not being in the slot's map at all.
+ */
+export function getEmptyEntityScheduleAction(_target: EntityScheduleTarget): EntityScheduleAction {
+    return null;
 }
 
 export function getEntityScheduleActionKey(action: EntityScheduleAction): string {
@@ -148,8 +163,13 @@ export function getEntityScheduleActionKey(action: EntityScheduleAction): string
     }
 
     return isEntityInverterAction(action)
-        ? `inverter:${getScheduleActionIdentityKey(action)}`
-        : `appliance:${getScheduleApplianceActionIdentityKey(action)}`;
+        // Prefixed by the action's *shape*, not by a lane: two lanes never
+        // compare their keys, but an inverter action and an appliance action
+        // must never collide on one. Deliberately not the bare word
+        // "appliance", which used to prefix a lane key and no longer prefixes
+        // anything.
+        ? `inverter-action:${getScheduleActionIdentityKey(action)}`
+        : `appliance-action:${getScheduleApplianceActionIdentityKey(action)}`;
 }
 
 export function areEntityScheduleActionsEqual(
@@ -189,22 +209,14 @@ export function readEntityScheduleAction(
     slot: ScheduleSlot,
     target: EntityScheduleTarget,
 ): EntityScheduleAction {
-    if (target.kind === "inverter") {
-        return slot.assignments.inverter.action;
-    }
-
-    return slot.assignments.appliances[target.applianceId]?.action ?? null;
+    return slot.assignments[target]?.action ?? null;
 }
 
 export function readEntityScheduleSetBy(
     slot: ScheduleSlot,
     target: EntityScheduleTarget,
 ): ScheduleSetBy | null {
-    if (target.kind === "inverter") {
-        return slot.assignments.inverter.setBy;
-    }
-
-    return slot.assignments.appliances[target.applianceId]?.setBy ?? null;
+    return slot.assignments[target]?.setBy ?? null;
 }
 
 /** The draft value for a slot, falling back to what the schedule holds. */
@@ -261,7 +273,7 @@ export function buildElapsedScheduleSlots({
             timeLabel: labels.timeLabel,
             endLabel: labels.endLabel,
             rangeLabel: labels.rangeLabel,
-            assignments: { inverter: { action: { kind: "empty" }, setBy: null }, appliances: {} },
+            assignments: {},
             runtime: null,
             isCurrent: false,
         });
@@ -642,56 +654,38 @@ function _buildCombinedEditIntent(
     slot: ScheduleSlot,
     lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[],
 ): ScheduleRangeEditIntent {
-    let inverter: ScheduleRangeEditIntent["inverter"] = { kind: "keep" };
-    const appliances: Record<string, ScheduleApplianceEditIntent> = {};
+    const intent: ScheduleRangeEditIntent = {};
     for (const lane of lanes) {
-        const laneIntent = _buildEntityEditIntent(
-            lane.target,
+        intent[lane.target] = _buildEntityEditIntent(
             readEntityScheduleDraftAction(slot, lane.target, lane.draft),
         );
-        if (laneIntent.inverter.kind !== "keep") {
-            inverter = laneIntent.inverter;
-        }
-
-        Object.assign(appliances, laneIntent.appliances);
     }
 
-    return { inverter, appliances };
+    return intent;
 }
 
 /** Two slots share a patch group only when they are being written identically. */
 function _getEditIntentKey(intent: ScheduleRangeEditIntent): string {
-    const appliances = Object.keys(intent.appliances)
+    return Object.keys(intent)
         .sort()
-        .map((applianceId) => `${applianceId}=${JSON.stringify(intent.appliances[applianceId])}`)
+        .map((controllableId) => `${controllableId}=${JSON.stringify(intent[controllableId])}`)
         .join(",");
-    return `${JSON.stringify(intent.inverter)}|${appliances}`;
 }
 
-function _buildEntityEditIntent(
-    target: EntityScheduleTarget,
-    action: EntityScheduleAction,
-): ScheduleRangeEditIntent {
-    if (target.kind === "inverter") {
-        return {
-            // "empty" is how the inverter lane says "no user action", so a
-            // removed block and a never-set one write the same thing.
-            inverter: {
-                kind: "set_user",
-                action: isEntityInverterAction(action) ? action : { kind: "empty" },
-            },
-            appliances: {},
-        };
+/**
+ * One lane's drafted action as an edit intent -- the same rule for every lane.
+ *
+ * "Nothing here" is `unset_user` whichever lane it came from. The inverter used
+ * to need `set_user` with an `empty` action instead, because its domain always
+ * carried one; with the flat map an absent entry says it, so a cleared inverter
+ * block and a cleared boiler block write the same thing.
+ */
+function _buildEntityEditIntent(action: EntityScheduleAction): ScheduleEditIntent {
+    if (action === null || (isEntityInverterAction(action) && action.kind === "empty")) {
+        return { kind: "unset_user" };
     }
 
-    return {
-        inverter: { kind: "keep" },
-        appliances: {
-            [target.applianceId]: action === null || isEntityInverterAction(action)
-                ? { kind: "unset_user" }
-                : { kind: "set_user", action },
-        },
-    };
+    return { kind: "set_user", action: action as ScheduleControllableAction };
 }
 
 function _isSlotDirty(

@@ -49,7 +49,7 @@ const SLOT_IDS = [
  * export_price said nothing at all. charge_from_grid never ran.
  */
 const INVERTER_PAYLOAD = {
-    targetKey: "inverter",
+    controllableId: "inverter",
     date: DATE,
     slotIds: SLOT_IDS,
     runAt: RUN_AT,
@@ -57,7 +57,7 @@ const INVERTER_PAYLOAD = {
         {
             optimizerId: "export_price",
             kind: "export_price",
-            targetKey: "inverter",
+            controllableId: "inverter",
             status: "ok",
             runAt: [[RUN_AT, 5]],
             verdict: [["skip", 2], ["execute", 1], ["skip", 1], [null, 1]],
@@ -80,7 +80,7 @@ const INVERTER_PAYLOAD = {
         {
             optimizerId: "charge_hold",
             kind: "charge_hold",
-            targetKey: "inverter",
+            controllableId: "inverter",
             status: "ok",
             runAt: [[RUN_AT, 5]],
             verdict: [["execute", 3], ["skip", 2]],
@@ -150,7 +150,7 @@ const INVERTER_PAYLOAD = {
         {
             optimizerId: "charge_from_grid",
             kind: "charge_from_grid",
-            targetKey: "inverter",
+            controllableId: "inverter",
             status: "skipped",
             statusReason: "battery_params_missing",
             runAt: [[RUN_AT, 5]],
@@ -161,14 +161,14 @@ const INVERTER_PAYLOAD = {
 
 /** One appliance, one optimizer: the same table, one column narrower. */
 const APPLIANCE_PAYLOAD = {
-    targetKey: "appliance:boiler",
+    controllableId: "boiler",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 2),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime:boiler",
         kind: "appliance_runtime",
-        targetKey: "appliance:boiler",
+        controllableId: "boiler",
         status: "ok",
         runAt: [[RUN_AT, 2]],
         verdict: [["execute", 1], ["skip", 1]],
@@ -197,7 +197,7 @@ const APPLIANCE_PAYLOAD = {
  * action there would promise a run that will not happen.
  */
 const CANDIDATE_PAYLOAD = {
-    targetKey: "appliance:pool",
+    controllableId: "pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 2),
     runAt: RUN_AT,
@@ -205,7 +205,7 @@ const CANDIDATE_PAYLOAD = {
         {
             optimizerId: "appliance_runtime:pool",
             kind: "appliance_runtime",
-            targetKey: "appliance:pool",
+            controllableId: "pool",
             status: "ok",
             runAt: [[RUN_AT, 2]],
             verdict: [["candidate", 1], ["execute", 1]],
@@ -227,7 +227,7 @@ const CANDIDATE_PAYLOAD = {
         {
             optimizerId: "charge_hold",
             kind: "charge_hold",
-            targetKey: "appliance:pool",
+            controllableId: "pool",
             status: "ok",
             runAt: [[RUN_AT, 2]],
             verdict: [["skip", 2]],

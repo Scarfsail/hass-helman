@@ -387,7 +387,6 @@ def _domains_payload(
         inverter["setBy"] = set_by
     return {
         "inverter": inverter,
-        "appliances": {},
     }
 
 
@@ -868,7 +867,6 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                     slots={
                         CURRENT_SLOT_ID: {
                             "inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING},
-                            "appliances": {},
                         }
                     },
                 ),

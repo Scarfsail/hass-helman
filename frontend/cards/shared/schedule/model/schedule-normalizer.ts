@@ -11,6 +11,7 @@ import type {
     ScheduleSlot,
 } from "../schedule-types";
 import {
+    INVERTER_CONTROLLABLE_ID,
     cloneScheduleInverterAction,
     cloneScheduleRuntime,
 } from "../schedule-types";
@@ -252,7 +253,7 @@ function _normalizeSlot({
         timeLabel: labels.timeLabel,
         endLabel: labels.endLabel,
         rangeLabel: labels.rangeLabel,
-        assignments: extractScheduleSlotAssignments(slot.domains, slot.id),
+        assignments: extractScheduleSlotAssignments(slot.controllables, slot.id),
         runtime: null,
     };
 }
@@ -267,13 +268,12 @@ function _normalizeScheduleRuntime(
     return {
         slotId: runtime.activeSlotId,
         runtime: {
-            inverter: runtime.inverter
-                ? _normalizeInverterRuntime(runtime.inverter)
-                : null,
-            appliances: Object.fromEntries(
-                Object.entries(runtime.appliances).map(([applianceId, applianceRuntime]) => [
-                    applianceId,
-                    _normalizeApplianceRuntime(applianceRuntime),
+            controllables: Object.fromEntries(
+                Object.entries(runtime.controllables).map(([controllableId, entry]) => [
+                    controllableId,
+                    controllableId === INVERTER_CONTROLLABLE_ID
+                        ? _normalizeInverterRuntime(entry as InverterRuntimeDTO)
+                        : _normalizeApplianceRuntime(entry as ApplianceRuntimeDTO),
                 ]),
             ),
             reconciledAt: runtime.reconciledAt,

@@ -234,14 +234,35 @@ from custom_components.helman.websockets import (
 
 def _invalid_config() -> dict:
     return {
-        "scheduler": {
-            "control": {
-                "mode_entity_id": "sensor.invalid",
-                "action_option_map": {
-                    "normal": "Normal",
+        "controllables": [
+            {
+                "kind": "inverter",
+                "id": "inverter",
+                "controls": {
+                    "mode": {
+                        "entity_id": "sensor.invalid",
+                        "options": {"normal": "Normal"},
+                    }
                 },
             }
-        }
+        ]
+    }
+
+
+def _v6_shaped_config() -> dict:
+    """What a hand-edited pre-version-7 document still looks like."""
+    return {
+        "scheduler": {
+            "control": {
+                "mode_entity_id": "select.fv_mode",
+                "action_option_map": {
+                    "normal": "Normal",
+                    "stop_charging": "Stop charging",
+                    "stop_discharging": "Stop discharging",
+                },
+            }
+        },
+        "appliances": [],
     }
 
 
@@ -553,7 +574,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
         config = {
-            "appliances": [
+            "controllables": [
                 {
                     "kind": "generic",
                     "id": "dishwasher",
@@ -574,7 +595,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                         "id": "preheat-living-room",
                         "kind": "appliance_runtime",
                         "enabled": True,
-                        "target": {"appliance_id": "dishwasher"},
+                        "target": {"controllable_id": "dishwasher"},
                         "conditions": [{"min_soc_pct": 80}],
                     }
                 ],
@@ -590,6 +611,27 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.saved_payloads, [self._stamped(config)])
         self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
         self.assertTrue(connection.results[0][1]["success"])
+
+    async def test_save_config_rejects_the_retired_appliances_shape(self) -> None:
+        # Migration is load-only by contract, so the save path must refuse an
+        # old-shape document rather than quietly rewriting the user's YAML.
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+
+        await ws_save_config(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": _v6_shaped_config()},
+        )
+
+        self.assertEqual(storage.saved_payloads, [])
+        self.assertFalse(connection.results[0][1]["success"])
+        errors = connection.results[0][1]["validation"]["errors"]
+        retired = [error for error in errors if error["code"] == "retired_config_key"]
+        self.assertEqual({error["path"] for error in retired}, {"appliances", "scheduler"})
+        for error in retired:
+            self.assertIn("controllables", error["message"])
 
     async def test_save_config_reports_reload_failure_after_persisting_document(self) -> None:
         storage = FakeStorage()

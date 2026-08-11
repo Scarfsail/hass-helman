@@ -66,7 +66,10 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationContext,
     OptimizationSnapshot,
 )
-from custom_components.helman.scheduling.schedule import ScheduleDocument  # noqa: E402
+from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleDocument,
+    inverter_action,
+)
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.automation.explain import (  # noqa: E402
     OptimizerExplanation,
@@ -202,10 +205,10 @@ def _make_config(
 
 def _charge_slots(result: ScheduleDocument) -> dict[str, int]:
     return {
-        slot_id: domains.inverter.target_soc
-        for slot_id, domains in result.slots.items()
-        if domains.inverter.kind == "charge_to_target_soc"
-        and domains.inverter.set_by == "automation"
+        slot_id: inverter_action(actions).target_soc
+        for slot_id, actions in result.slots.items()
+        if inverter_action(actions).kind == "charge_to_target_soc"
+        and inverter_action(actions).set_by == "automation"
     }
 
 

@@ -259,7 +259,12 @@ SET_SCHEDULE_REQUEST_SCHEMA = websockets_module.SET_SCHEDULE_REQUEST_SCHEMA
 ws_get_appliance_projections = websockets_module.ws_get_appliance_projections
 ws_get_appliances = websockets_module.ws_get_appliances
 ws_set_schedule = websockets_module.ws_set_schedule
-from custom_components.helman.scheduling.schedule import ScheduleActionError  # noqa: E402
+from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleActionError,
+    appliance_actions,
+    build_controllable_actions,
+    inverter_action,
+)
 
 
 class FakeCoordinator:
@@ -269,8 +274,7 @@ class FakeCoordinator:
         self.appliances_response = {"appliances": []}
         self.projections_response = {
             "generatedAt": CURRENT_SLOT_ID,
-            "appliances": {
-                "garage-ev": {
+            "garage-ev": {
                     "series": [
                         {
                             "slotId": CURRENT_SLOT_ID,
@@ -280,8 +284,7 @@ class FakeCoordinator:
                             "vehicleSoc": 58,
                         }
                     ]
-                }
-            },
+                },
         }
 
     async def set_schedule(self, *, slots, set_by=None) -> None:
@@ -321,12 +324,11 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                 "slots": [
                     {
                         "id": CURRENT_SLOT_ID,
-                        "domains": {
+                        "controllables": {
                             "inverter": {
                                 "kind": "charge_to_target_soc",
                                 "targetSoc": 80,
                             },
-                            "appliances": {},
                         },
                     }
                 ],
@@ -340,12 +342,11 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                 "slots": [
                     {
                         "id": CURRENT_SLOT_ID,
-                        "domains": {
+                        "controllables": {
                             "inverter": {
                                 "kind": "charge_to_target_soc",
                                 "targetSoc": 80,
                             },
-                            "appliances": {},
                         },
                     }
                 ],
@@ -359,9 +360,8 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                 "slots": [
                     {
                         "id": CURRENT_SLOT_ID,
-                        "domains": {
+                        "controllables": {
                             "inverter": {"kind": "stop_export"},
-                            "appliances": {},
                         },
                     }
                 ],
@@ -369,32 +369,29 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            payload["slots"][0]["domains"]["inverter"]["kind"],
+            payload["slots"][0]["controllables"]["inverter"]["kind"],
             "stop_export",
         )
 
-    def test_set_schedule_schema_accepts_empty_action(self) -> None:
+    def test_set_schedule_schema_accepts_a_slot_with_nothing_scheduled(self) -> None:
+        # "Nothing scheduled" is an empty map now, for every controllable
+        # alike, rather than an explicit empty inverter action beside an empty
+        # appliance map.
         payload = SET_SCHEDULE_REQUEST_SCHEMA(
             {
                 "type": "helman/set_schedule",
                 "slots": [
                     {
                         "id": CURRENT_SLOT_ID,
-                        "domains": {
-                            "inverter": {"kind": "empty"},
-                            "appliances": {},
-                        },
+                        "controllables": {},
                     }
                 ],
             }
         )
 
-        self.assertEqual(
-            payload["slots"][0]["domains"]["inverter"]["kind"],
-            "empty",
-        )
+        self.assertEqual(payload["slots"][0]["controllables"], {})
 
-    async def test_set_schedule_forwards_domains_slots(self) -> None:
+    async def test_set_schedule_forwards_controllables_slots(self) -> None:
         coordinator = FakeCoordinator()
         connection = FakeConnection()
         msg = {
@@ -405,12 +402,11 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     "slots": [
                         {
                             "id": CURRENT_SLOT_ID,
-                            "domains": {
+                            "controllables": {
                                 "inverter": {
                                     "kind": "charge_to_target_soc",
                                     "targetSoc": 80,
                                 },
-                                "appliances": {},
                             },
                         }
                     ],
@@ -425,9 +421,9 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
         slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(slot.id, CURRENT_SLOT_ID)
-        self.assertEqual(slot.domains.inverter.kind, "charge_to_target_soc")
-        self.assertEqual(slot.domains.inverter.target_soc, 80)
-        self.assertEqual(slot.domains.appliances, {})
+        self.assertEqual(inverter_action(slot.controllables).kind, "charge_to_target_soc")
+        self.assertEqual(inverter_action(slot.controllables).target_soc, 80)
+        self.assertEqual(appliance_actions(slot.controllables), {})
         self.assertEqual(connection.results, [(1, {"success": True})])
         self.assertEqual(connection.errors, [])
 
@@ -474,16 +470,13 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     "slots": [
                         {
                             "id": CURRENT_SLOT_ID,
-                            "domains": {
-                                "inverter": {"kind": "empty"},
-                                "appliances": {
-                                    "garage-ev": {
+                            "controllables": {
+                                "garage-ev": {
                                         "charge": True,
                                         "vehicleId": "kona",
                                         "useMode": "Fast",
                                         "ecoGear": "6A",
-                                    }
-                                },
+                                    },
                             },
                         }
                     ],
@@ -495,7 +488,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
 
         slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(
-            slot.domains.appliances,
+            appliance_actions(slot.controllables),
             {
                 "garage-ev": {
                     "charge": True,
@@ -520,13 +513,10 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     "slots": [
                         {
                             "id": CURRENT_SLOT_ID,
-                            "domains": {
-                                "inverter": {"kind": "empty"},
-                                "appliances": {
-                                    "living-room-hvac": {
+                            "controllables": {
+                                "living-room-hvac": {
                                         "mode": "heat",
-                                    }
-                                },
+                                    },
                             },
                         }
                     ],
@@ -538,7 +528,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
 
         slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(
-            slot.domains.appliances,
+            appliance_actions(slot.controllables),
             {
                 "living-room-hvac": {
                     "mode": "heat",
@@ -560,13 +550,10 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     "slots": [
                         {
                             "id": CURRENT_SLOT_ID,
-                            "domains": {
-                                "inverter": {"kind": "empty"},
-                                "appliances": {
-                                    "living-room-hvac": {
+                            "controllables": {
+                                "living-room-hvac": {
                                         "mode": "off",
-                                    }
-                                },
+                                    },
                             },
                         }
                     ],
@@ -578,7 +565,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
 
         slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(
-            slot.domains.appliances,
+            appliance_actions(slot.controllables),
             {
                 "living-room-hvac": {
                     "mode": "off",
@@ -602,19 +589,17 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     "slots": [
                         {
                             "id": CURRENT_SLOT_ID,
-                            "domains": {
+                            "controllables": {
                                 "inverter": {
                                     "kind": "normal",
                                     "setBy": "automation",
                                 },
-                                "appliances": {
-                                    "garage-ev": {
+                                "garage-ev": {
                                         "charge": True,
                                         "vehicleId": "kona",
                                         "useMode": "Fast",
                                         "setBy": "automation",
-                                    }
-                                },
+                                    },
                             },
                         }
                     ],
@@ -626,8 +611,8 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
 
         slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
-        self.assertEqual(slot.domains.inverter.set_by, "automation")
-        self.assertEqual(slot.domains.appliances["garage-ev"]["setBy"], "automation")
+        self.assertEqual(inverter_action(slot.controllables).set_by, "automation")
+        self.assertEqual(appliance_actions(slot.controllables)["garage-ev"]["setBy"], "automation")
         self.assertEqual(connection.results, [(1, {"success": True})])
         self.assertEqual(connection.errors, [])
 
@@ -643,13 +628,10 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     "slots": [
                         {
                             "id": CURRENT_SLOT_ID,
-                            "domains": {
-                                "inverter": {"kind": "empty"},
-                                "appliances": {
-                                    "garage-ev": {
+                            "controllables": {
+                                "garage-ev": {
                                         "charge": True,
-                                    }
-                                },
+                                    },
                             },
                         }
                     ],
@@ -694,8 +676,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                     1,
                     {
                         "generatedAt": CURRENT_SLOT_ID,
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "series": [
                                     {
                                         "slotId": CURRENT_SLOT_ID,
@@ -705,8 +686,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
                                         "vehicleSoc": 58,
                                     }
                                 ]
-                            }
-                        },
+                            },
                     },
                 )
             ],

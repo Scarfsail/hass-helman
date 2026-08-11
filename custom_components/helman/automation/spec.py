@@ -18,6 +18,8 @@ from typing import Any
 
 from ..appliances.climate_appliance import SUPPORTED_CLIMATE_MODES
 from ..const import DAY_CLASSIFICATIONS
+from ..controllables.config import CONTROLLABLE_ID_INVERTER
+from ..controllables.spec import controllable_kinds_for_optimizer_kind
 from . import fields as F
 from .conditions.types import CONDITION_TYPES, ConditionType, Scope
 from .fields import Field, OptimizerConfigError
@@ -61,6 +63,16 @@ class OptimizerSpec:
             tuple(CONDITION_TYPES[key] for key in self.condition_types),
         )
 
+    @property
+    def controllable_kinds(self) -> tuple[str, ...]:
+        """Controllable kinds this optimizer may target, from the other registry.
+
+        Derived, never declared here: :data:`..controllables.spec.CONTROLLABLE_SPECS`
+        owns "what may drive me" per kind, and stating the inverse a second time
+        is how the editor's picker and the validator would come to disagree.
+        """
+        return controllable_kinds_for_optimizer_kind(self.kind)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialise for ``helman/get_optimizer_schema``."""
         return {
@@ -75,6 +87,7 @@ class OptimizerSpec:
                 }
                 for condition in self.condition_type_list
             ],
+            "controllableKinds": list(self.controllable_kinds),
             "newDraft": self.new_draft,
         }
 
@@ -147,8 +160,16 @@ def _minutes(hhmm: object) -> int:
     return int(hour) * 60 + int(minute)
 
 
+#: Every kind names what it acts on the same way: by controllable id. The three
+#: inverter kinds used to imply their target from their own ``kind``, which made
+#: "which optimizers act on this thing" unanswerable without knowing the
+#: kind-to-domain mapping by heart. They now carry the field with the reserved
+#: inverter id as its default, so an existing config that omits it keeps meaning
+#: what it meant and nothing infers a target from a kind.
+_INVERTER_TARGET = (F.string("controllable_id", default=CONTROLLABLE_ID_INVERTER),)
+
 _APPLIANCE_TARGET = (
-    F.string("appliance_id"),
+    F.string("controllable_id"),
     F.string("climate_mode", required=False, choices=SUPPORTED_CLIMATE_MODES),
 )
 
@@ -158,6 +179,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
     for spec in (
         OptimizerSpec(
             kind="charge_hold",
+            target=_INVERTER_TARGET,
             params=(
                 F.obj("window", F.time_hhmm("start"), F.time_hhmm("end")),
                 F.obj(
@@ -170,6 +192,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             param_scope=Scope.DAY,
             validate=_validate_window,
             new_draft={
+                "target": {"controllable_id": CONTROLLABLE_ID_INVERTER},
                 "params": {
                     "window": {"start": "06:00", "end": "14:00"},
                     "battery_first": {"target_soc": 100, "margin_pct": 20},
@@ -179,8 +202,12 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
         ),
         OptimizerSpec(
             kind="export_price",
+            target=_INVERTER_TARGET,
             condition_types=("when_price_below",),
-            new_draft={"conditions": [{"when_price_below": 0}]},
+            new_draft={
+                "target": {"controllable_id": CONTROLLABLE_ID_INVERTER},
+                "conditions": [{"when_price_below": 0}],
+            },
         ),
         OptimizerSpec(
             kind="appliance_runtime",
@@ -238,7 +265,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             param_scope=Scope.DAY,
             validate=_validate_appliance_runtime,
             new_draft={
-                "target": {"appliance_id": ""},
+                "target": {"controllable_id": ""},
                 "params": {
                     "daily_minimum": {
                         "min_hours_per_day": 8,
@@ -251,6 +278,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
         ),
         OptimizerSpec(
             kind="charge_from_grid",
+            target=_INVERTER_TARGET,
             params=(
                 F.margin_pct("margin_pct"),
                 F.soc("max_target_soc", default=100.0),
@@ -258,6 +286,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             condition_types=("reserve_floor_soc",),
             param_scope=Scope.RUN,
             new_draft={
+                "target": {"controllable_id": CONTROLLABLE_ID_INVERTER},
                 "params": {"margin_pct": 10, "max_target_soc": 100},
                 "conditions": [{"reserve_floor_soc": 30}],
             },

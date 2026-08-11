@@ -12,7 +12,7 @@ import type {
     EntityScheduleBlockAuthorship,
     EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
-import { isEntityInverterAction } from "../model/entity-day-schedule-model";
+import { isEntityInverterAction, isInverterScheduleTarget } from "../model/entity-day-schedule-model";
 import { summarizeScheduleAuthorship } from "../model/schedule-authorship";
 import type {
     ScheduleApplianceMetadata,
@@ -108,7 +108,7 @@ export class SchedulingEntityActionEditor extends LitElement {
             return;
         }
 
-        if (this.target?.kind !== "inverter") {
+        if (this.target === null || !isInverterScheduleTarget(this.target)) {
             return;
         }
 
@@ -122,7 +122,7 @@ export class SchedulingEntityActionEditor extends LitElement {
             return nothing;
         }
 
-        return this.target.kind === "inverter"
+        return isInverterScheduleTarget(this.target)
             ? this._renderInverterEditor()
             : this._renderApplianceEditor();
     }

@@ -73,8 +73,10 @@ from custom_components.helman.appliances import (
 from custom_components.helman.scheduling.schedule import (
     ScheduleActionError,
     ScheduleDocument,
-    ScheduleDomains,
     ScheduleSlot,
+    appliance_actions,
+    build_controllable_actions,
+    inverter_action,
     normalize_schedule_document_for_registry,
     normalize_slot_patch_request,
     schedule_document_from_dict,
@@ -186,7 +188,7 @@ def _valid_config(
                 },
             }
         )
-    return {"appliances": appliances}
+    return {"controllables": appliances}
 
 
 def _registry(
@@ -204,10 +206,7 @@ def _registry(
 def _slot_payload(*, appliances: dict | None = None) -> dict:
     return {
         "id": CURRENT_SLOT_ID,
-        "domains": {
-            "inverter": {"kind": "empty"},
-            "appliances": {} if appliances is None else appliances,
-        },
+        "controllables": {} if appliances is None else appliances,
     }
 
 
@@ -234,7 +233,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {
                 "garage-ev": {
                     "charge": True,
@@ -246,7 +245,7 @@ class ScheduleApplianceTests(unittest.TestCase):
 
     def test_fixed_max_power_behavior_drops_eco_gear_for_custom_mode_name(self) -> None:
         config = _valid_config()
-        config["appliances"][0]["controls"]["use_mode"]["values"] = {
+        config["controllables"][0]["controls"]["use_mode"]["values"] = {
             "Boost": {"behavior": "fixed_max_power"},
             "Solar": {"behavior": "surplus_aware"},
         }
@@ -271,7 +270,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {
                 "garage-ev": {
                     "charge": True,
@@ -294,7 +293,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {"garage-ev": {"charge": False}},
         )
 
@@ -350,7 +349,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {"dishwasher": {"on": True}},
         )
 
@@ -378,7 +377,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {"dishwasher": {"on": True, "setBy": "automation", "conditionMet": False}},
         )
 
@@ -414,7 +413,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {
                 "garage-ev": {
                     "charge": True,
@@ -459,7 +458,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {"living-room-hvac": {"mode": "heat"}},
         )
 
@@ -476,7 +475,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized[0].domains.appliances,
+            appliance_actions(normalized[0].controllables),
             {"living-room-hvac": {"mode": "off"}},
         )
 
@@ -576,16 +575,13 @@ class ScheduleApplianceTests(unittest.TestCase):
                 "slotMinutes": 30,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "charge": True,
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
                                 "ecoGear": "6A",
                                 "setBy": "user",
-                            }
-                        },
+                            },
                     }
                 },
             }
@@ -598,16 +594,13 @@ class ScheduleApplianceTests(unittest.TestCase):
                 "slotMinutes": 30,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "charge": True,
                                 "vehicleId": "kona",
                                 "useMode": "Fast",
                                 "ecoGear": "6A",
                                 "setBy": "user",
-                            }
-                        },
+                            },
                     }
                 },
             },
@@ -617,7 +610,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         doc = ScheduleDocument(
             execution_enabled=False,
             slots={
-                CURRENT_SLOT_ID: ScheduleDomains(
+                CURRENT_SLOT_ID: build_controllable_actions(
                     appliances={
                         "garage-ev": {
                             "charge": True,
@@ -640,7 +633,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            normalized.slots[CURRENT_SLOT_ID].appliances,
+            appliance_actions(normalized.slots[CURRENT_SLOT_ID]),
             {
                 "garage-ev": {
                     "charge": True,
@@ -654,7 +647,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         doc = ScheduleDocument(
             execution_enabled=False,
             slots={
-                CURRENT_SLOT_ID: ScheduleDomains(
+                CURRENT_SLOT_ID: build_controllable_actions(
                     appliances={
                         "missing-ev": {
                             "charge": True,

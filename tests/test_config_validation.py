@@ -131,20 +131,8 @@ def _valid_config() -> dict:
                 },
             },
         },
-        "scheduler": {
-            "control": {
-                "mode_entity_id": "input_select.fv_mode",
-                "action_option_map": {
-                    "normal": "Normal",
-                    "charge_to_target_soc": "Charge",
-                    "discharge_to_target_soc": "Discharge",
-                    "stop_charging": "Stop charging",
-                    "stop_discharging": "Stop discharging",
-                    "stop_export": "Stop export",
-                },
-            }
-        },
-        "appliances": [
+        "controllables": [
+            _inverter_controllable(),
             {
                 "kind": "ev_charger",
                 "id": "garage-ev",
@@ -187,6 +175,27 @@ def _valid_config() -> dict:
                 ],
             }
         ],
+    }
+
+
+def _inverter_controllable() -> dict:
+    return {
+        "kind": "inverter",
+        "id": "inverter",
+        "name": "Inverter",
+        "controls": {
+            "mode": {
+                "entity_id": "input_select.fv_mode",
+                "options": {
+                    "normal": "Normal",
+                    "charge_to_target_soc": "Charge",
+                    "discharge_to_target_soc": "Discharge",
+                    "stop_charging": "Stop charging",
+                    "stop_discharging": "Stop discharging",
+                    "stop_export": "Stop export",
+                },
+            }
+        },
     }
 
 
@@ -242,9 +251,9 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.errors, [])
         self.assertEqual(report.warnings, [])
 
-    def test_unknown_appliance_kind_is_warning_only(self) -> None:
+    def test_unknown_controllable_kind_is_warning_only(self) -> None:
         config = _valid_config()
-        config["appliances"] = [{"kind": "heat_pump"}]
+        config["controllables"] = [{"kind": "heat_pump"}]
 
         report = validate_config_document(config)
 
@@ -253,11 +262,11 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(len(report.warnings), 1)
         self.assertEqual(report.warnings[0].code, "unsupported_kind")
 
-    def test_invalid_scheduler_control_is_error(self) -> None:
+    def test_invalid_inverter_control_is_error(self) -> None:
         config = _valid_config()
-        config["scheduler"]["control"] = {
-            "mode_entity_id": "sensor.bad_domain",
-            "action_option_map": {
+        config["controllables"][0]["controls"]["mode"] = {
+            "entity_id": "sensor.bad_domain",
+            "options": {
                 "normal": "Normal",
             },
         }
@@ -266,21 +275,82 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertFalse(report.valid)
         self.assertTrue(
-            any(issue.code == "invalid_scheduler_control" for issue in report.errors)
+            any(issue.code == "invalid_inverter_control" for issue in report.errors)
         )
         self.assertTrue(any(issue.code == "invalid_domain" for issue in report.errors))
 
     def test_invalid_stop_export_option_type_is_error(self) -> None:
         config = _valid_config()
-        config["scheduler"]["control"]["action_option_map"]["stop_export"] = 42
+        config["controllables"][0]["controls"]["mode"]["options"]["stop_export"] = 42
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "scheduler.control.action_option_map.stop_export"
+                issue.path
+                == "controllables[0].controls.mode.options.stop_export"
                 and issue.code == "invalid_type"
+                for issue in report.errors
+            )
+        )
+
+    def test_retired_config_keys_are_rejected_by_name(self) -> None:
+        # Migration runs on load only, so a hand-edited old-shape document
+        # reaching the save path must be refused with the new key named.
+        for retired_key, value in (("appliances", []), ("scheduler", {})):
+            with self.subTest(retired_key=retired_key):
+                config = _valid_config()
+                config[retired_key] = value
+
+                report = validate_config_document(config)
+
+                self.assertFalse(report.valid)
+                issue = next(
+                    issue
+                    for issue in report.errors
+                    if issue.code == "retired_config_key"
+                )
+                self.assertEqual(issue.path, retired_key)
+                self.assertIn("controllables", issue.message)
+
+    def test_second_inverter_is_rejected(self) -> None:
+        config = _valid_config()
+        config["controllables"].append(_inverter_controllable())
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(issue.code == "duplicate_inverter" for issue in report.errors)
+        )
+
+    def test_reserved_inverter_id_is_rejected_for_other_kinds(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance()
+        appliance["id"] = "inverter"
+        config["controllables"].append(appliance)
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(issue.code == "reserved_controllable_id" for issue in report.errors)
+        )
+
+    def test_duplicate_ids_across_kinds_are_rejected(self) -> None:
+        config = _valid_config()
+        climate = _climate_appliance()
+        generic = _generic_appliance()
+        generic["id"] = climate["id"]
+        config["controllables"].extend([climate, generic])
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.code == "duplicate_controllable_id"
                 for issue in report.errors
             )
         )
@@ -322,14 +392,14 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_appliance_runtime_optimizer_passes_for_configured_generic_appliance(self) -> None:
         config = _valid_config()
-        config["appliances"].append(_generic_appliance())
+        config["controllables"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
             "optimizers": [
                 {
                     "id": "run-dishwasher-on-surplus",
                     "kind": "appliance_runtime",
-                    "target": {"appliance_id": "dishwasher"},
+                    "target": {"controllable_id": "dishwasher"},
                     "conditions": [{"min_soc_pct": 80}],
                 }
             ],
@@ -349,7 +419,7 @@ class ConfigValidationTests(unittest.TestCase):
                     "id": "run-unknown-on-surplus",
                     "kind": "appliance_runtime",
                     "params": {"window": {"start": "08:00", "end": "18:00"}},
-                    "target": {"appliance_id": "missing-appliance"},
+                    "target": {"controllable_id": "missing-appliance"},
                     "conditions": [{}],
                 }
             ],
@@ -360,7 +430,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "automation.optimizers[0].target.appliance_id"
+                issue.path == "automation.optimizers[0].target.controllable_id"
                 for issue in report.errors
             )
         )
@@ -369,7 +439,7 @@ class ConfigValidationTests(unittest.TestCase):
         self,
     ) -> None:
         config = _valid_config()
-        config["appliances"].append(_generic_appliance())
+        config["controllables"].append(_generic_appliance())
         config["automation"] = {
             "enabled": True,
             "optimizers": [
@@ -378,7 +448,7 @@ class ConfigValidationTests(unittest.TestCase):
                     "kind": "appliance_runtime",
                     "params": {"window": {"start": "08:00", "end": "18:00"}},
                     "target": {
-                        "appliance_id": "dishwasher",
+                        "controllable_id": "dishwasher",
                         "climate_mode": "heat",
                     },
                     "conditions": [{}],
@@ -396,6 +466,160 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_charge_hold_targets_the_inverter_without_saying_so(self) -> None:
+        """An existing config omits ``target`` entirely and must keep working.
+
+        The three inverter kinds gained ``controllable_id`` with the reserved
+        id as its default, so a document written before the field existed keeps
+        meaning exactly what it meant.
+        """
+        config = _valid_config()
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": [
+                {
+                    "id": "hold",
+                    "kind": "charge_hold",
+                    "params": {
+                        "window": {"start": "06:00", "end": "14:00"},
+                        "battery_first": {"target_soc": 100, "margin_pct": 20},
+                    },
+                    "conditions": [{"run_when": ["surplus"]}],
+                }
+            ],
+        }
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid, msg=report.to_dict())
+
+    def test_an_optimizer_aimed_at_a_kind_it_cannot_drive_is_rejected(self) -> None:
+        """A ``charge_hold`` on a boiler used to be accepted and do nothing.
+
+        The pairing is incoherent — the inverter's actions and an appliance's
+        are different vocabularies — and nothing said so, because the kind
+        implied its own target.
+        """
+        config = _valid_config()
+        config["controllables"].append(_generic_appliance())
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": [
+                {
+                    "id": "hold",
+                    "kind": "charge_hold",
+                    "target": {"controllable_id": "dishwasher"},
+                    "params": {
+                        "window": {"start": "06:00", "end": "14:00"},
+                        "battery_first": {"target_soc": 100, "margin_pct": 20},
+                    },
+                    "conditions": [{"run_when": ["surplus"]}],
+                }
+            ],
+        }
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        incompatible = [
+            issue for issue in report.errors if issue.code == "incompatible_target"
+        ]
+        self.assertEqual(len(incompatible), 1)
+        self.assertEqual(
+            incompatible[0].path, "automation.optimizers[0].target.controllable_id"
+        )
+        # The kind that cannot be driven is named, not just the id.
+        self.assertIn("'generic'", incompatible[0].message)
+        self.assertIn("inverter", incompatible[0].message)
+
+    def test_an_appliance_runtime_aimed_at_an_ev_charger_is_rejected(self) -> None:
+        """``ev_charger`` declares no optimizer kind, so nothing may target it.
+
+        This used to fail only when the optimizer was *built* — the registry
+        authors an action for generic and climate appliances and rejects
+        everything else — which meant the config editor accepted it happily.
+        Making chargers automatable is a feature; this only moves the existing
+        refusal to where the user typed the id.
+        """
+        config = _valid_config()
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": [
+                {
+                    "id": "charge-the-car",
+                    "kind": "appliance_runtime",
+                    "target": {"controllable_id": "garage-ev"},
+                    "params": {"window": {"start": "08:00", "end": "18:00"}},
+                    "conditions": [{}],
+                }
+            ],
+        }
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        incompatible = [
+            issue for issue in report.errors if issue.code == "incompatible_target"
+        ]
+        self.assertEqual(len(incompatible), 1)
+        self.assertIn("'ev_charger'", incompatible[0].message)
+        # And says what it *can* drive, so the fix is in the message.
+        self.assertIn("climate, generic", incompatible[0].message)
+
+    def test_an_optimizer_naming_no_configured_controllable_is_rejected_once(
+        self,
+    ) -> None:
+        config = _valid_config()
+        config["automation"] = {
+            "enabled": True,
+            "optimizers": [
+                {
+                    "id": "ghost",
+                    "kind": "appliance_runtime",
+                    "target": {"controllable_id": "nobody"},
+                    "params": {"window": {"start": "08:00", "end": "18:00"}},
+                    "conditions": [{}],
+                }
+            ],
+        }
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        # One finding: the builder would say the same thing in the appliance
+        # registry's words, and two errors for one typo is noise.
+        self.assertEqual(len(report.errors), 1)
+        self.assertEqual(report.errors[0].code, "unknown_controllable")
+
+    def test_the_inverter_must_carry_the_reserved_id(self) -> None:
+        """Targeting by id is only total if the inverter has the id to target.
+
+        Nothing resolves the inverter by *kind* at targeting time on purpose —
+        that would make ``controllable_id`` mean "an id, except sometimes a
+        kind".
+        """
+        for raw_id, label in ((None, "absent"), ("fv", "renamed")):
+            with self.subTest(label):
+                config = _valid_config()
+                inverter = config["controllables"][0]
+                if raw_id is None:
+                    inverter.pop("id")
+                else:
+                    inverter["id"] = raw_id
+
+                report = validate_config_document(config)
+
+                self.assertFalse(report.valid)
+                self.assertTrue(
+                    any(
+                        issue.code == "required_controllable_id"
+                        and issue.path == "controllables[0].id"
+                        and "'inverter'" in issue.message
+                        for issue in report.errors
+                    ),
+                    msg=report.to_dict(),
+                )
+
     def test_input_select_ev_controls_are_accepted(self) -> None:
         report = validate_config_document(_valid_config())
 
@@ -403,7 +627,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_valid_generic_appliance_passes(self) -> None:
         config = _valid_config()
-        config["appliances"] = [_generic_appliance(strategy="history_average")]
+        config["controllables"] = [_inverter_controllable(), _generic_appliance(strategy="history_average")]
 
         report = validate_config_document(config)
 
@@ -412,7 +636,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_valid_climate_appliance_passes(self) -> None:
         config = _valid_config()
-        config["appliances"] = [_climate_appliance(strategy="history_average")]
+        config["controllables"] = [_inverter_controllable(), _climate_appliance(strategy="history_average")]
 
         report = validate_config_document(config)
 
@@ -421,7 +645,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_appliance_icon_accepts_non_mdi_value(self) -> None:
         config = _valid_config()
-        config["appliances"][0]["icon"] = "hass:car-electric"
+        config["controllables"][1]["icon"] = "hass:car-electric"
 
         report = validate_config_document(config)
 
@@ -432,14 +656,14 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _generic_appliance(strategy="history_average")
         del appliance["projection"]["history_average"]
-        config["appliances"] = [appliance]
+        config["controllables"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "appliances[0]"
+                issue.path == "controllables[1]"
                 and "history_average is required" in issue.message
                 for issue in report.errors
             )
@@ -449,14 +673,14 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _climate_appliance()
         appliance["controls"]["climate"]["entity_id"] = "switch.not_a_climate"
-        config["appliances"] = [appliance]
+        config["controllables"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "appliances[0]"
+                issue.path == "controllables[1]"
                 and "controls.climate.entity_id" in issue.message
                 for issue in report.errors
             )
@@ -466,14 +690,14 @@ class ConfigValidationTests(unittest.TestCase):
         config = _valid_config()
         appliance = _generic_appliance()
         appliance["icon"] = "   "
-        config["appliances"] = [appliance]
+        config["controllables"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "appliances[0]"
+                issue.path == "controllables[1]"
                 and ".icon must be a non-empty string" in issue.message
                 for issue in report.errors
             )

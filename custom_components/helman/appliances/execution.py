@@ -17,6 +17,7 @@ from ..scheduling.actuation import (
     ScheduleActuator,
     ScheduleExecutionDisabledError,
 )
+from ..controllables.controllers import SelectEntityController
 from ..scheduling.schedule import ScheduleError, ScheduleExecutionUnavailableError
 from .climate_appliance import ClimateApplianceRuntime
 from .climate_schedule import ClimateApplianceScheduleActionDict
@@ -104,89 +105,6 @@ class SwitchEntityController:
         except Exception as err:
             raise ScheduleExecutionUnavailableError(
                 f"Failed to turn off {self._description.lower()} '{self.entity_id}'"
-            ) from err
-
-
-class SelectEntityController:
-    def __init__(self, entity_id: str) -> None:
-        domain, separator, object_id = entity_id.partition(".")
-        if (
-            not separator
-            or not object_id
-            or domain not in {"input_select", "select"}
-        ):
-            raise ScheduleExecutionUnavailableError(
-                "EV select entity must use the input_select or select domain"
-            )
-        self.entity_id = entity_id
-        self.service_domain = domain
-
-    def read_state(self, actuator: ScheduleActuator) -> Any:
-        state = actuator.read_state(self.entity_id)
-        if state is None:
-            raise ScheduleExecutionUnavailableError(
-                f"EV select entity '{self.entity_id}' is not available"
-            )
-
-        raw_state = getattr(state, "state", None)
-        if (
-            not isinstance(raw_state, str)
-            or not raw_state.strip()
-            or raw_state.strip().lower() in _UNAVAILABLE_STATES
-        ):
-            raise ScheduleExecutionUnavailableError(
-                f"EV select entity '{self.entity_id}' is unavailable"
-            )
-        return state
-
-    @staticmethod
-    def read_available_options(state: Any) -> list[str]:
-        raw_attributes = getattr(state, "attributes", {})
-        if not isinstance(raw_attributes, Mapping):
-            raise ScheduleExecutionUnavailableError(
-                "EV select entity options are unavailable"
-            )
-
-        raw_options = raw_attributes.get("options")
-        if not isinstance(raw_options, (list, tuple)) or not raw_options:
-            raise ScheduleExecutionUnavailableError(
-                "EV select entity options are unavailable"
-            )
-
-        options = [
-            option
-            for option in raw_options
-            if isinstance(option, str) and option.strip()
-        ]
-        if len(options) != len(raw_options):
-            raise ScheduleExecutionUnavailableError(
-                "EV select entity options must be non-empty strings"
-            )
-        return options
-
-    def validate_option(self, state: Any, option: str) -> None:
-        if option not in self.read_available_options(state):
-            raise ScheduleExecutionUnavailableError(
-                f"EV select option '{option}' is not available on '{self.entity_id}'"
-            )
-
-    async def async_select_option(
-        self,
-        actuator: ScheduleActuator,
-        *,
-        option: str,
-    ) -> None:
-        try:
-            await actuator.async_call(
-                self.service_domain,
-                "select_option",
-                {"entity_id": self.entity_id, "option": option},
-            )
-        except ScheduleExecutionDisabledError:
-            raise
-        except Exception as err:
-            raise ScheduleExecutionUnavailableError(
-                f"Failed to apply EV select option '{option}' to '{self.entity_id}'"
             ) from err
 
 
@@ -399,7 +317,10 @@ class EvChargerExecutor:
 
             use_mode = action.get("useMode")
             if use_mode is not None:
-                mode_controller = SelectEntityController(appliance.use_mode_entity_id)
+                mode_controller = SelectEntityController(
+                    appliance.use_mode_entity_id,
+                    description="EV select",
+                )
                 mode_state = mode_controller.read_state(self._actuator)
                 mode_controller.validate_option(mode_state, use_mode)
                 if getattr(mode_state, "state", None) != use_mode:
@@ -410,7 +331,10 @@ class EvChargerExecutor:
 
             eco_gear = action.get("ecoGear")
             if eco_gear is not None:
-                eco_controller = SelectEntityController(appliance.eco_gear_entity_id)
+                eco_controller = SelectEntityController(
+                    appliance.eco_gear_entity_id,
+                    description="EV select",
+                )
                 eco_state = eco_controller.read_state(self._actuator)
                 eco_controller.validate_option(eco_state, eco_gear)
                 if getattr(eco_state, "state", None) != eco_gear:

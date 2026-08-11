@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 import functools
 import logging
@@ -33,7 +34,6 @@ from ..const import SCHEDULE_ACTION_EMPTY
 from ..scheduling.schedule import (
     ScheduleAction,
     ScheduleDocument,
-    ScheduleDomains,
     action_to_dict,
     iter_horizon_slot_ids,
     schedule_document_to_dict,
@@ -569,10 +569,11 @@ def run_optimizer_loop_pure(
         trace.begin_step(
             optimizer_config.id,
             optimizer_config.kind,
-            # The lane this step writes, so the explanation record can be
-            # queried by the lane the user clicked and winner attribution can
-            # match writes against the step that made them.
-            target_key=optimizer_config.target_key,
+            # The lane this step writes — the controllable's own id, so the
+            # explanation record can be queried by the lane the user clicked
+            # and winner attribution can match writes against the step that
+            # made them.
+            controllable_id=optimizer_config.controllable_id,
         )
         # Stamp the step with its execution-condition state so the run
         # explanation can present this optimizer's placements as candidates
@@ -844,41 +845,38 @@ def _collect_changed_writable_action_records(
     optimizer actually changed, excluding user-owned positions."""
     records: list[TraceWrite] = []
     for slot_id in sorted(set(before_document.slots) | set(after_document.slots)):
-        before_domains = before_document.slots.get(slot_id, ScheduleDomains())
-        after_domains = after_document.slots.get(slot_id, ScheduleDomains())
-        if (
-            before_domains.inverter != after_domains.inverter
-            and not is_user_owned_inverter_action(before_domains.inverter)
-            and not is_user_owned_inverter_action(after_domains.inverter)
-        ):
-            records.append(
-                TraceWrite(
-                    slot_id=slot_id,
-                    domain="inverter",
-                    before=_write_action_to_dict(before_domains.inverter),
-                    after=_write_action_to_dict(after_domains.inverter),
-                )
-            )
-        for appliance_id in sorted(
-            set(before_domains.appliances) | set(after_domains.appliances)
-        ):
-            before_action = before_domains.appliances.get(appliance_id)
-            after_action = after_domains.appliances.get(appliance_id)
+        before_actions = before_document.slots.get(slot_id, {})
+        after_actions = after_document.slots.get(slot_id, {})
+        for controllable_id in sorted(set(before_actions) | set(after_actions)):
+            before_action = before_actions.get(controllable_id)
+            after_action = after_actions.get(controllable_id)
             if before_action == after_action:
                 continue
-            if is_user_owned_appliance_action(
-                before_action
-            ) or is_user_owned_appliance_action(after_action):
+            if _is_user_owned(before_action) or _is_user_owned(after_action):
                 continue
             records.append(
                 TraceWrite(
                     slot_id=slot_id,
-                    domain=f"appliance:{appliance_id}",
+                    controllable_id=controllable_id,
                     before=_write_action_to_dict(before_action),
                     after=_write_action_to_dict(after_action),
                 )
             )
     return records
+
+
+def _is_user_owned(action: Any) -> bool:
+    """Whether a position in the slot's action map is the user's.
+
+    One question, two shapes: the inverter's action is a ``ScheduleAction`` and
+    an appliance's is the dict its own kind owns, and an absent entry means
+    "nothing scheduled" for both — which is nobody's.
+    """
+    if action is None:
+        return False
+    if isinstance(action, Mapping):
+        return is_user_owned_appliance_action(action)
+    return is_user_owned_inverter_action(action)
 
 
 def _build_optimizer_summary(

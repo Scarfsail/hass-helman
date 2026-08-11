@@ -249,8 +249,8 @@ def _build_ev_charger_projection_series(
     vehicle_remaining_kwh: dict[str, float | None] = {}
     concurrent_demand_kwh = concurrent_demand_kwh_by_slot_id or {}
 
-    for slot_id, domains in sorted(schedule_document.slots.items()):
-        action = domains.appliances.get(appliance.id)
+    for slot_id, actions in sorted(schedule_document.slots.items()):
+        action = actions.get(appliance.id)
         if not action or action.get("charge") is not True:
             continue
 
@@ -473,8 +473,8 @@ def _build_constant_hourly_projection_series(
     points: list[ApplianceProjectionPlanPoint] = []
     demand_points: list[ApplianceDemandPoint] = []
 
-    for slot_id, domains in sorted(schedule_document.slots.items()):
-        action = domains.appliances.get(appliance_id)
+    for slot_id, actions in sorted(schedule_document.slots.items()):
+        action = actions.get(appliance_id)
         if not isinstance(action, Mapping):
             continue
 

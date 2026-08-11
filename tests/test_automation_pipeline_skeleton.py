@@ -418,7 +418,6 @@ def _make_schedule_document(*, execution_enabled: bool = True) -> ScheduleDocume
         slots={
             CURRENT_SLOT_ID: {
                 "inverter": {"kind": "stop_export"},
-                "appliances": {},
             }
         },
     )
@@ -543,7 +542,10 @@ def _make_optimizer_instance(
         id=optimizer_id,
         kind=kind,
         enabled=enabled,
-        target=target or {},
+        # The config reader stamps the spec's ``controllable_id`` default, so a
+        # hand-built instance has to carry it too -- it is the schedule lane
+        # every trace and explanation record is filed under.
+        target=target or {"controllable_id": "inverter"},
         params={
             "when_price_below": 0.0,
             "action": "stop_export",
@@ -939,7 +941,6 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {},
                 }
             },
         )
@@ -1021,13 +1022,10 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {
-                        "boiler": {"on": True, "setBy": "user"},
-                    },
+                    "boiler": {"on": True, "setBy": "user"},
                 },
                 next_slot_id: {
                     "inverter": {"kind": "normal"},
-                    "appliances": {},
                 },
             },
         )
@@ -1057,14 +1055,10 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 "slotMinutes": 30,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {
-                            "boiler": {"on": True, "setBy": "user"},
-                        },
+                        "boiler": {"on": True, "setBy": "user"},
                     },
                     next_slot_id: {
                         "inverter": {"kind": "normal"},
-                        "appliances": {},
                     },
                 },
             },
@@ -1084,7 +1078,6 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {},
                 }
             },
         )
@@ -1146,7 +1139,6 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {},
                 }
             },
         )
@@ -1210,7 +1202,6 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {},
                 }
             },
         )
@@ -1301,7 +1292,6 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {},
                 }
             },
         )
@@ -1351,7 +1341,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "normal"},
-                    "appliances": {"boiler": {"on": True, "setBy": "automation"}},
+                    "boiler": {"on": True, "setBy": "automation"},
                 }
             },
         )
@@ -1379,7 +1369,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",
                         kind="appliance_runtime",
-                        target={"appliance_id": "boiler"},
+                        target={"controllable_id": "boiler"},
                         params={},
                     )
                 ),
@@ -1535,7 +1525,6 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {},
                 }
             },
         )
@@ -1581,7 +1570,6 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_export", "setBy": "automation"},
-                    "appliances": {},
                 }
             },
         )
@@ -1686,7 +1674,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "normal"},
-                    "appliances": {"boiler": {"on": True, "setBy": "automation"}},
+                    "boiler": {"on": True, "setBy": "automation"},
                 }
             },
         )
@@ -1720,7 +1708,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "normal"},
-                    "appliances": {"boiler": {"on": True, "setBy": "automation"}},
+                    "boiler": {"on": True, "setBy": "automation"},
                 }
             },
         )
@@ -1749,7 +1737,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         writes = result.to_dict()["trace"]["steps"][0]["writes"]
-        boiler_writes = [w for w in writes if w["domain"] == "appliance:boiler"]
+        boiler_writes = [w for w in writes if w["domain"] == "boiler"]
         self.assertEqual(len(boiler_writes), 1)
         self.assertIsNone(boiler_writes[0]["before"])
         self.assertEqual(
@@ -1810,15 +1798,15 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                         optimizer_id="run-boiler",
                         kind="appliance_runtime",
                         params={"appliance_id": "boiler", "action": "on"},
-                        target={"appliance_id": "boiler"},
+                        target={"controllable_id": "boiler"},
                     ),
                 ),
             ).run(reference_time=REFERENCE_TIME)
 
         explanation = coordinator.recorded_explanations[0]
         self.assertEqual(
-            [optimizer.target_key for optimizer in explanation.optimizers],
-            ["inverter", "appliance:boiler"],
+            [optimizer.controllable_id for optimizer in explanation.optimizers],
+            ["inverter", "boiler"],
         )
 
     async def test_a_failed_run_records_no_explanation(self) -> None:
@@ -1877,7 +1865,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "normal"},
-                    "appliances": {"boiler": {"on": True, "setBy": "automation"}},
+                    "boiler": {"on": True, "setBy": "automation"},
                 }
             },
         )
@@ -1905,7 +1893,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",
                         kind="appliance_runtime",
-                        target={"appliance_id": "boiler"},
+                        target={"controllable_id": "boiler"},
                         params={},
                     )
                 ),
@@ -2212,7 +2200,7 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
     MESSAGE = {
         "id": 1,
         "type": "helman/get_schedule_explanation",
-        "target_key": "inverter",
+        "controllable_id": "inverter",
         "date": "2026-07-31",
     }
 
@@ -2231,7 +2219,7 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
                     OptimizerExplanation(
                         optimizer_id="avoid-negative-export",
                         kind="export_price",
-                        target_key="inverter",
+                        controllable_id="inverter",
                         slots=tuple(
                             SlotExplanation(
                                 slot_id=slot_id,
@@ -2250,8 +2238,8 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         book = self._book_with_a_run()
         coordinator = SimpleNamespace(
             get_schedule_explanation=Mock(
-                side_effect=lambda *, target_key, date: book.get(
-                    target_key=target_key, date=date
+                side_effect=lambda *, controllable_id, date: book.get(
+                    controllable_id=controllable_id, date=date
                 )
             )
         )
@@ -2262,18 +2250,18 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
 
         coordinator.get_schedule_explanation.assert_called_once_with(
-            target_key="inverter", date="2026-07-31"
+            controllable_id="inverter", date="2026-07-31"
         )
         self.assertEqual(connection.errors, [])
         payload = connection.results[0][1]
-        self.assertEqual(payload["targetKey"], "inverter")
+        self.assertEqual(payload["controllableId"], "inverter")
         self.assertEqual(payload["date"], "2026-07-31")
         self.assertEqual(len(payload["slotIds"]), 2)
         self.assertEqual(payload["runAt"], "2026-07-31T08:00:00+02:00")
         optimizer = payload["optimizers"][0]
         self.assertEqual(optimizer["optimizerId"], "avoid-negative-export")
         self.assertEqual(optimizer["kind"], "export_price")
-        self.assertEqual(optimizer["targetKey"], "inverter")
+        self.assertEqual(optimizer["controllableId"], "inverter")
         self.assertEqual(optimizer["status"], "ok")
         self.assertEqual(optimizer["verdict"], [["execute", 2]])
         self.assertEqual(
@@ -2293,7 +2281,7 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         ws_get_schedule_explanation(
             _FakeHass(coordinator),
             connection,
-            {**self.MESSAGE, "target_key": "appliance:nobody"},
+            {**self.MESSAGE, "controllable_id": "appliance:nobody"},
         )
 
         self.assertEqual(connection.errors, [])
@@ -2333,7 +2321,7 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(vol.Invalid):
             schema({**self.MESSAGE, "date": "31.7.2026"})
         with self.assertRaises(vol.Invalid):
-            schema({**self.MESSAGE, "target_key": ""})
+            schema({**self.MESSAGE, "controllable_id": ""})
         self.assertEqual(schema(dict(self.MESSAGE))["date"], "2026-07-31")
 
 

@@ -40,6 +40,14 @@ export interface OptimizerSchema {
     target: SchemaField[];
     params: SchemaField[];
     conditionTypes: SchemaConditionType[];
+    /**
+     * Controllable kinds this optimizer kind may drive.
+     *
+     * Derived in Python from `CONTROLLABLE_SPECS`' `optimizer_kinds`, so the
+     * picker offers exactly what config validation accepts. Optional because a
+     * card must still render against a schema served by an older backend.
+     */
+    controllableKinds?: string[];
     /** What "Add <kind>" seeds, authored beside the schema in Python. */
     newDraft: JsonObject;
 }
@@ -122,8 +130,8 @@ export interface OptimizerEditorHost {
         labelKey: string,
         helpKey: string,
     ): TemplateResult;
-    /** The appliance picker, which needs live registry state the schema cannot carry. */
-    renderApplianceTargetFields(
+    /** The target picker, which needs draft and live state the schema cannot carry. */
+    renderControllableTargetFields(
         optimizerIndex: number,
         kind: string,
     ): TemplateResult | typeof import("lit").nothing;
