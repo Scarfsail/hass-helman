@@ -79,8 +79,9 @@ import {
   aggregateWhSeries,
   minutesToSlot,
   sampleBounds,
-  socAtSelectionStart,
+  socBarAtSelectionEnd,
   sumWhOverSlots,
+  sampleBucketEndOnGrid,
   sampleOnGrid,
   snapSlotToGrid,
 } from "./slot-aggregation.js";
@@ -1408,7 +1409,10 @@ export class HelmanSolarInspector extends LitElement {
         gridActual: measured(s.gridActual),
         batteryForecast: aggregateWhSeries(s.batteryForecast, slot),
         batteryActual: measured(s.batteryActual),
-        batterySocForecast: sampleOnGrid(s.batterySocForecast, slot),
+        // The forecast reports the level its slot ends at, so a wider bucket
+        // takes its last reading; the actual is an instantaneous reading at the
+        // slot start, so its bucket takes the first.
+        batterySocForecast: sampleBucketEndOnGrid(s.batterySocForecast, slot),
         batterySocActual: sampleOnGrid(s.batterySocActual, slot),
       },
       batterySocBounds: sampleBounds(payload.batterySocBounds, slot),
@@ -2344,6 +2348,29 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
+   * One series' columns across the whole day, for the selected-slot panel.
+   *
+   * The panel reports the two series side by side, so neither may yield to the
+   * other at the seam the way the strip's columns do: each is built as if it
+   * were the only one there. The forecast still rides along when the measured
+   * columns are built, since a measured column at the edge of the recording
+   * borrows the forecast's step across its own slot -- exactly as the strip
+   * does. With nothing measured there is no measured column to speak of; the
+   * empty list keeps `buildSocBars` from handing the forecast the whole day.
+   */
+  private _socSelectionBars(payload: InspectorPayload, series: "actual" | "forecast"): SocBar[] {
+    if (series === "forecast") {
+      return buildSocBars([], payload.series.batterySocForecast, Number.NEGATIVE_INFINITY);
+    }
+    if (!payload.series.batterySocActual.length) return [];
+    return buildSocBars(
+      payload.series.batterySocActual,
+      payload.series.batterySocForecast,
+      Number.POSITIVE_INFINITY,
+    );
+  }
+
+  /**
    * The forecast's own level at every slot of the day, not just the ones it
    * speaks for alone -- so it can be traced as a dashed line over the measured
    * columns too, the same way the chart above keeps drawing the forecast's
@@ -2762,8 +2789,12 @@ export class HelmanSolarInspector extends LitElement {
       payload.series.houseActualBreakdown,
       slots,
     );
-    const batterySocFc = socAtSelectionStart(payload.series.batterySocForecast, slots);
-    const batterySocAc = socAtSelectionStart(payload.series.batterySocActual, slots);
+    // Both SoC readings come off the strip's own columns, so the panel states
+    // the level the selection ends at exactly as the last column drawn under it
+    // does — rather than the level it opened on, which for a multi-slot
+    // selection is a reading from somewhere in its middle.
+    const batterySocFc = socBarAtSelectionEnd(this._socSelectionBars(payload, "forecast"), slots);
+    const batterySocAc = socBarAtSelectionEnd(this._socSelectionBars(payload, "actual"), slots);
     const gridFcWh = sumWhOverSlots(payload.series.gridForecast, slots);
     const gridAcWh = sumWhOverSlots(payload.series.gridActual, slots);
     const batteryFcWh = sumWhOverSlots(payload.series.batteryForecast, slots);

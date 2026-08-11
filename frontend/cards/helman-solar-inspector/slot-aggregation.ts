@@ -1,10 +1,9 @@
 import { SLOT_MINUTES } from "./chart-stack";
-import { slotToMinutes, type SocBoundsPoint } from "./chart-soc";
+import { slotToMinutes, type SocBar, type SocBoundsPoint } from "./chart-soc";
 import { nodeAccentColor } from "../color-utils";
 import type { BucketSourceMix } from "../shared/power-history-bars";
 import type {
   ApplianceComponent,
-  BatterySocPoint,
   HouseBreakdownPoint,
   ImpactPoint,
   InspectorPoint,
@@ -234,6 +233,36 @@ export function sampleOnGrid<T extends { slot: string }>(
   });
 }
 
+/**
+ * Sample a per-slot series that reports the level its slot *ends* at down to the
+ * wider grid, by keeping each bucket's last reading and restamping it at the
+ * bucket's start.
+ *
+ * The forecast SoC is such a series: a simulated slot is stamped with its start
+ * but carries the level left once its own flow has been applied. Keeping the
+ * reading at the bucket start — as `sampleOnGrid` does for an instantaneous
+ * measurement — would show the level one native slot into the bucket, dragging
+ * the whole trajectory late and painting columns as charging for as long after
+ * the charge stopped as the bucket is wide.
+ */
+export function sampleBucketEndOnGrid<T extends { slot: string }>(
+  points: T[],
+  slotMinutes: number,
+): T[] {
+  if (slotMinutes <= SLOT_MINUTES) return points;
+  const latest = new Map<number, { minutes: number; point: T }>();
+  for (const point of points) {
+    const minutes = slotToMinutes(point.slot);
+    if (minutes === null) continue;
+    const start = bucketStart(minutes, slotMinutes);
+    const existing = latest.get(start);
+    if (!existing || minutes > existing.minutes) latest.set(start, { minutes, point });
+  }
+  return [...latest.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([start, entry]) => ({ ...entry.point, slot: minutesToSlot(start) }));
+}
+
 /** Sample SoC bounds onto the wider grid, same as any per-slot series. */
 export function sampleBounds(
   bounds: SocBoundsPoint[],
@@ -459,16 +488,25 @@ export function consumerBarsOverSlots(
 }
 
 /**
- * The SoC reading the selection opens on. Summing a level would be meaningless,
- * so this mirrors `sampleOnGrid`: show the reading at the start, which is the
- * same one the slot at that time already showed on its own.
+ * The level the selection *ends* at, read off the strip's own columns.
+ *
+ * Summing a level would be meaningless, so a selection reports a reading rather
+ * than a total — and the reading that describes a span is the one it closes on,
+ * the same statement every column of the strip makes about its own slot. Taking
+ * it from the bars rather than the raw series is what keeps the two agreeing:
+ * the bars already resolve where within a slot each series is read, so a
+ * measured selection reports the reading that opens the slot after it and a
+ * forecast one the level its last slot was simulated to.
+ *
+ * The last selected slot may have no column at all — a selection can run past
+ * where a series reaches — so this walks back to the last one that does.
  */
-export function socAtSelectionStart(
-  points: readonly BatterySocPoint[],
+export function socBarAtSelectionEnd(
+  bars: readonly SocBar[],
   slots: readonly string[],
-): BatterySocPoint | null {
-  for (const slot of slots) {
-    const found = points.find((point) => point.slot === slot);
+): SocBar | null {
+  for (let index = slots.length - 1; index >= 0; index--) {
+    const found = bars.find((bar) => bar.slot === slots[index]);
     if (found) return found;
   }
   return null;
