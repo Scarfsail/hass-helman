@@ -105,7 +105,9 @@ def _config() -> dict:
                 "id": "living-room-hvac",
                 "name": "Living Room HVAC",
                 "controls": {"climate": {"entity_id": "climate.living_room"}},
-                "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.5},
+                "consumption": {
+                    "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.5},
+                },
             },
             {
                 "kind": "ev_charger",
@@ -145,7 +147,9 @@ def _config() -> dict:
                 "id": "dishwasher",
                 "name": "Dishwasher",
                 "controls": {"switch": {"entity_id": "switch.dishwasher"}},
-                "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
+                "consumption": {
+                    "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
+                },
             },
         ],
     }

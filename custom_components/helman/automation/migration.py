@@ -401,6 +401,66 @@ def _target_controllable_id(optimizer: dict[str, Any]) -> dict[str, Any]:
     return {**optimizer, "target": target}
 
 
+def _migrate_v8_to_v9(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``projection`` -> ``consumption.projection``, with the meter lifted out.
+
+    A controllable entry said everything about how the device is *driven* under
+    ``controls`` and nothing about what it *draws* in any one place: the energy
+    meter lived at ``projection.history_average.energy_entity_id``, nested
+    inside a strategy, as though it belonged to the strategy rather than to the
+    device. It does not — an EV charger has a meter and no projection at all,
+    and so had nowhere to declare one.
+
+    ``consumption`` is the sibling of ``controls`` that block was missing.
+    Three moves, all mechanical: ``projection`` goes under it, the meter comes
+    up to ``consumption.energy_entity_id``, and ``lookback_days`` flattens onto
+    ``projection`` — with the meter gone ``history_average`` held one key, and
+    the name still carries its meaning in ``strategy: history_average``.
+
+    Entries with no ``projection`` are left alone: the inverter must never get
+    a ``consumption`` block, and an entry that gains one for its meter alone is
+    version 10's business. An entry that already has ``consumption`` is left
+    alone too — it was hand-written against the new shape.
+    """
+    controllables = document.get("controllables")
+    if not isinstance(controllables, list):
+        return (document, [])
+
+    rebuilt: list[Any] = []
+    for entry in controllables:
+        if not isinstance(entry, Mapping) or "consumption" in entry:
+            rebuilt.append(entry)
+            continue
+        migrated = dict(entry)
+        raw_projection = migrated.pop("projection", None)
+        if raw_projection is None:
+            rebuilt.append(migrated)
+            continue
+        if not isinstance(raw_projection, Mapping):
+            # Not ours to interpret. It still belongs under consumption, and
+            # the reader reports the type error in the new vocabulary.
+            migrated["consumption"] = {"projection": raw_projection}
+            rebuilt.append(migrated)
+            continue
+
+        projection = deepcopy(dict(raw_projection))
+        consumption: dict[str, Any] = {}
+        history_average = projection.pop("history_average", None)
+        if isinstance(history_average, Mapping):
+            energy_entity_id = history_average.get("energy_entity_id")
+            if energy_entity_id is not None:
+                consumption["energy_entity_id"] = deepcopy(energy_entity_id)
+            lookback_days = history_average.get("lookback_days")
+            if lookback_days is not None:
+                projection["lookback_days"] = deepcopy(lookback_days)
+        consumption["projection"] = projection
+        migrated["consumption"] = consumption
+        rebuilt.append(migrated)
+
+    document["controllables"] = rebuilt
+    return (document, [])
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -409,6 +469,7 @@ _MIGRATIONS = {
     5: _migrate_v5_to_v6,
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
+    8: _migrate_v8_to_v9,
 }
 
 

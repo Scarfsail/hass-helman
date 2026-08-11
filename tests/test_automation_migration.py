@@ -409,6 +409,19 @@ class ControllablesUnificationTests(unittest.TestCase):
         "controls": {"switch": {"entity_id": "switch.dishwasher"}},
         "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
     }
+    #: What ``_APPLIANCE`` looks like once the chain has also run v8 -> v9,
+    #: which moves ``projection`` under ``consumption``. These tests migrate all
+    #: the way to the current version, so the v6 -> v7 assertions have to expect
+    #: the later step's output too.
+    _APPLIANCE_V9 = {
+        "kind": "generic",
+        "id": "dishwasher",
+        "name": "Dishwasher",
+        "controls": {"switch": {"entity_id": "switch.dishwasher"}},
+        "consumption": {
+            "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
+        },
+    }
 
     @classmethod
     def _migrate_from_v6(cls, document):
@@ -440,19 +453,20 @@ class ControllablesUnificationTests(unittest.TestCase):
                         }
                     },
                 },
-                self._APPLIANCE,
+                self._APPLIANCE_V9,
             ],
         )
         self.assertEqual(ids, [])
 
-    def test_appliance_entries_move_verbatim_and_keep_their_order(self) -> None:
+    def test_appliance_entries_move_across_and_keep_their_order(self) -> None:
         second = {**self._APPLIANCE, "id": "boiler", "name": "Boiler"}
+        second_v9 = {**self._APPLIANCE_V9, "id": "boiler", "name": "Boiler"}
 
         migrated, _ids = self._migrate_from_v6(
             {"appliances": [self._APPLIANCE, second]}
         )
 
-        self.assertEqual(migrated["controllables"], [self._APPLIANCE, second])
+        self.assertEqual(migrated["controllables"], [self._APPLIANCE_V9, second_v9])
 
     def test_an_installation_without_a_wired_inverter_gets_no_entry(self) -> None:
         migrated, _ids = self._migrate_from_v6({"scheduler": {}, "appliances": []})
@@ -652,6 +666,119 @@ class RunWhenInversionTests(unittest.TestCase):
         self.assertNotIn("skip", migrated["params"])
         self.assertEqual(
             migrated["params"]["daily_minimum"]["max_consecutive_skips"], 2
+        )
+
+
+class ConsumptionBlockTests(unittest.TestCase):
+    """v8->v9: ``projection`` moves under ``consumption``, meter lifted out.
+
+    Table-driven over the shapes a stored entry can have: a history strategy
+    carrying a meter, a fixed strategy carrying none, an entry with no
+    projection at all, and the two shapes that must be left alone.
+    """
+
+    @staticmethod
+    def _migrate_from_v8(*controllables):
+        migrated, _ids = migrate_config_document(
+            {"controllables": list(controllables), "config_version": 8}
+        )
+        return migrated["controllables"]
+
+    def test_the_meter_comes_up_and_lookback_flattens(self) -> None:
+        (entry,) = self._migrate_from_v8(
+            {
+                "kind": "generic",
+                "id": "pool-pump",
+                "controls": {"switch": {"entity_id": "switch.pool_pump"}},
+                "projection": {
+                    "strategy": "history_average",
+                    "hourly_energy_kwh": 1.2,
+                    "history_average": {
+                        "energy_entity_id": "sensor.pool_pump_energy_total",
+                        "lookback_days": 21,
+                    },
+                },
+            }
+        )
+
+        self.assertNotIn("projection", entry)
+        self.assertEqual(
+            entry["consumption"],
+            {
+                "energy_entity_id": "sensor.pool_pump_energy_total",
+                "projection": {
+                    "strategy": "history_average",
+                    "hourly_energy_kwh": 1.2,
+                    "lookback_days": 21,
+                },
+            },
+        )
+
+    def test_a_fixed_strategy_moves_across_without_gaining_a_meter(self) -> None:
+        (entry,) = self._migrate_from_v8(
+            {
+                "kind": "generic",
+                "id": "dishwasher",
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.9},
+            }
+        )
+
+        self.assertEqual(
+            entry["consumption"],
+            {"projection": {"strategy": "fixed", "hourly_energy_kwh": 0.9}},
+        )
+
+    def test_an_entry_without_a_projection_is_left_alone(self) -> None:
+        # The inverter's case, and the EV charger's. Neither may grow a
+        # consumption block here — version 10 is what gives the charger one.
+        entries = self._migrate_from_v8(
+            {"kind": "inverter", "id": "inverter", "controls": {"mode": {}}},
+            {"kind": "ev_charger", "id": "ev", "controls": {"charge": {}}},
+        )
+
+        for entry in entries:
+            self.assertNotIn("consumption", entry)
+
+    def test_an_entry_already_carrying_consumption_is_left_alone(self) -> None:
+        already = {
+            "kind": "generic",
+            "id": "dishwasher",
+            "consumption": {
+                "energy_entity_id": "sensor.dishwasher_energy_total",
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.9},
+            },
+        }
+
+        (entry,) = self._migrate_from_v8(already)
+
+        self.assertEqual(entry, already)
+
+    def test_a_projection_of_the_wrong_type_still_moves(self) -> None:
+        # The information survives; the reader reports the type error in the
+        # new vocabulary rather than the value vanishing on upgrade.
+        (entry,) = self._migrate_from_v8(
+            {"kind": "generic", "id": "dishwasher", "projection": "nonsense"}
+        )
+
+        self.assertEqual(entry["consumption"], {"projection": "nonsense"})
+
+    def test_a_history_average_holding_only_a_meter_leaves_no_empty_block(self) -> None:
+        (entry,) = self._migrate_from_v8(
+            {
+                "kind": "climate",
+                "id": "hvac",
+                "projection": {
+                    "strategy": "history_average",
+                    "hourly_energy_kwh": 1.5,
+                    "history_average": {"energy_entity_id": "sensor.hvac_energy"},
+                },
+            }
+        )
+
+        self.assertNotIn("history_average", entry["consumption"]["projection"])
+        self.assertNotIn("lookback_days", entry["consumption"]["projection"])
+        self.assertEqual(
+            entry["consumption"]["energy_entity_id"], "sensor.hvac_energy"
         )
 
 

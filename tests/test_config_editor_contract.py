@@ -582,9 +582,11 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                     "controls": {
                         "switch": {"entity_id": "switch.dishwasher"},
                     },
-                    "projection": {
-                        "strategy": "fixed",
-                        "hourly_energy_kwh": 1.2,
+                    "consumption": {
+                        "projection": {
+                            "strategy": "fixed",
+                            "hourly_energy_kwh": 1.2,
+                        },
                     },
                 }
             ],

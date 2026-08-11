@@ -165,9 +165,11 @@ def _valid_config(
                         "entity_id": "switch.dishwasher",
                     }
                 },
-                "projection": {
-                    "strategy": "fixed",
-                    "hourly_energy_kwh": 1.1,
+                "consumption": {
+                    "projection": {
+                        "strategy": "fixed",
+                        "hourly_energy_kwh": 1.1,
+                    },
                 },
             }
         )
@@ -182,9 +184,11 @@ def _valid_config(
                         "entity_id": "climate.living_room",
                     }
                 },
-                "projection": {
-                    "strategy": "fixed",
-                    "hourly_energy_kwh": 1.5,
+                "consumption": {
+                    "projection": {
+                        "strategy": "fixed",
+                        "hourly_energy_kwh": 1.5,
+                    },
                 },
             }
         )

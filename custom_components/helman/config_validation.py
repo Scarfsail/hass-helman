@@ -874,6 +874,7 @@ def _validate_controllables_config(
         return
 
     seen_ids: set[str] = set()
+    seen_energy_entity_ids: set[str] = set()
     seen_inverter = False
     for index, raw_controllable in enumerate(raw_controllables):
         path = f"controllables[{index}]"
@@ -929,6 +930,14 @@ def _validate_controllables_config(
         ):
             continue
 
+        _validate_controllable_consumption(
+            raw_controllable,
+            path=path,
+            kind=kind,
+            seen_energy_entity_ids=seen_energy_entity_ids,
+            report=report,
+        )
+
         if kind == CONTROLLABLE_KIND_INVERTER:
             seen_inverter = True
             _validate_inverter_controllable(config, raw_controllable, path, report)
@@ -947,6 +956,96 @@ def _validate_controllables_config(
                 code="invalid_appliance",
                 message=str(err),
             )
+
+
+def _validate_controllable_consumption(
+    raw_controllable: Mapping[str, Any],
+    *,
+    path: str,
+    kind: str,
+    seen_energy_entity_ids: set[str],
+    report: ValidationReport,
+) -> None:
+    """The ``consumption`` block: the meter, and who may declare one.
+
+    The per-kind appliance readers already check the shape of
+    ``consumption.projection``, and the meter itself when a projection needs it.
+    What only this function can see is everything *across* entries and outside
+    the appliance kinds: a meter on an EV charger (which has no projection to
+    hang validation off), the same meter claimed by two devices, and a
+    ``consumption`` block on the inverter.
+
+    The inverter is refused the block outright rather than field by field. It is
+    not house consumption — it is what moves energy in and out of the battery —
+    so a meter, a deferrable flag and a demand projection are all equally
+    meaningless on it, and one error saying so beats three saying almost the
+    same thing.
+    """
+    section = "controllables"
+
+    if "projection" in raw_controllable:
+        report.add_error(
+            section=section,
+            path=f"{path}.projection",
+            code="retired_config_key",
+            message=(
+                f"{path}.projection moved to {path}.consumption.projection, and its "
+                "'history_average.energy_entity_id' to "
+                f"{path}.consumption.energy_entity_id"
+            ),
+        )
+
+    raw_consumption = raw_controllable.get("consumption")
+    if raw_consumption is None:
+        return
+
+    if kind == CONTROLLABLE_KIND_INVERTER:
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption",
+            code="consumption_not_allowed",
+            message=(
+                "the inverter has no consumption of its own; it moves energy "
+                "rather than drawing it"
+            ),
+        )
+        return
+
+    if not isinstance(raw_consumption, Mapping):
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption",
+            code="invalid_type",
+            message=f"{path}.consumption must be an object",
+        )
+        return
+
+    energy_entity_id = raw_consumption.get("energy_entity_id")
+    if energy_entity_id is None:
+        return
+
+    _validate_optional_entity_id(
+        report,
+        section,
+        f"{path}.consumption.energy_entity_id",
+        energy_entity_id,
+        allowed_domains=("sensor",),
+    )
+    if not _is_non_empty_string(energy_entity_id):
+        return
+
+    entity_id = energy_entity_id.strip()
+    if entity_id in seen_energy_entity_ids:
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption.energy_entity_id",
+            code="duplicate_entity_id",
+            message=(
+                f"energy meter {entity_id!r} is already claimed by another "
+                "controllable; two devices sharing one meter would be counted twice"
+            ),
+        )
+    seen_energy_entity_ids.add(entity_id)
 
 
 def _validate_controllable_id(

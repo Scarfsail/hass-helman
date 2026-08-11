@@ -586,9 +586,11 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                         "id": "dishwasher",
                         "name": "Dishwasher",
                         "controls": {"switch": {"entity_id": "switch.dishwasher"}},
-                        "projection": {
-                            "strategy": "fixed",
-                            "hourly_energy_kwh": 1.2,
+                        "consumption": {
+                            "projection": {
+                                "strategy": "fixed",
+                                "hourly_energy_kwh": 1.2,
+                            },
                         },
                     },
                     {
@@ -598,13 +600,13 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                         "controls": {
                             "climate": {"entity_id": "climate.living_room"}
                         },
-                        "projection": {
-                            "strategy": "history_average",
-                            "hourly_energy_kwh": 1.5,
-                            "history_average": {
-                                "energy_entity_id": (
-                                    "sensor.living_room_hvac_energy_total"
-                                ),
+                        "consumption": {
+                            "energy_entity_id": (
+                                "sensor.living_room_hvac_energy_total"
+                            ),
+                            "projection": {
+                                "strategy": "history_average",
+                                "hourly_energy_kwh": 1.5,
                                 "lookback_days": 30,
                             },
                         },
@@ -673,11 +675,11 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                         "id": "dishwasher",
                         "name": "Dishwasher",
                         "controls": {"switch": {"entity_id": "switch.dishwasher"}},
-                        "projection": {
-                            "strategy": "history_average",
-                            "hourly_energy_kwh": 1.2,
-                            "history_average": {
-                                "energy_entity_id": "sensor.dishwasher_energy_total",
+                        "consumption": {
+                            "energy_entity_id": "sensor.dishwasher_energy_total",
+                            "projection": {
+                                "strategy": "history_average",
+                                "hourly_energy_kwh": 1.2,
                                 "lookback_days": 30,
                             },
                         },
@@ -689,13 +691,13 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                         "controls": {
                             "climate": {"entity_id": "climate.living_room"}
                         },
-                        "projection": {
-                            "strategy": "history_average",
-                            "hourly_energy_kwh": 1.5,
-                            "history_average": {
-                                "energy_entity_id": (
-                                    "sensor.living_room_hvac_energy_total"
-                                ),
+                        "consumption": {
+                            "energy_entity_id": (
+                                "sensor.living_room_hvac_energy_total"
+                            ),
+                            "projection": {
+                                "strategy": "history_average",
+                                "hourly_energy_kwh": 1.5,
                                 "lookback_days": 30,
                             },
                         },
@@ -705,9 +707,11 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                         "id": "pool-pump",
                         "name": "Pool Pump",
                         "controls": {"switch": {"entity_id": "switch.pool_pump"}},
-                        "projection": {
-                            "strategy": "fixed",
-                            "hourly_energy_kwh": 0.7,
+                        "consumption": {
+                            "projection": {
+                                "strategy": "fixed",
+                                "hourly_energy_kwh": 0.7,
+                            },
                         },
                     },
                 ]
@@ -901,11 +905,11 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
                     "id": "dishwasher",
                     "name": "Dishwasher",
                     "controls": {"switch": {"entity_id": "switch.dishwasher"}},
-                    "projection": {
-                        "strategy": "history_average",
-                        "hourly_energy_kwh": 1.2,
-                        "history_average": {
-                            "energy_entity_id": "sensor.dishwasher_energy",
+                    "consumption": {
+                        "energy_entity_id": "sensor.dishwasher_energy",
+                        "projection": {
+                            "strategy": "history_average",
+                            "hourly_energy_kwh": 1.2,
                             "lookback_days": 30,
                         },
                     },
@@ -983,7 +987,9 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
                     "id": "pool-pump",
                     "name": "Pool Pump",
                     "controls": {"switch": {"entity_id": "switch.pool_pump"}},
-                    "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.7},
+                    "consumption": {
+                        "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.7},
+                    },
                 },
             ],
         )

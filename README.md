@@ -206,7 +206,7 @@ ceiling. Rebuilding reads today's battery history from Recorder, which is bounde
 the day.
 
 **No card read issues a multi-day Recorder query.** Appliances that estimate their energy use from
-history (`projection.strategy: history_average`) used to have their `lookback_days` window read
+history (`consumption.projection.strategy: history_average`) used to have their `lookback_days` window read
 inside that projection rebuild, so a card refresh or a slot edit could block on a 30-day scan. That
 estimate is resolved once a night by job #6 now and read from storage here.
 
@@ -258,7 +258,7 @@ question you are now asking; that resolves as soon as the rebuild finishes.
   read a lot of Recorder history and you do not want them competing with anything.
 - `training_window_days` (default 56) — how much history the house consumption fit reads. This is
   the single biggest driver of job #6's cost. It has no effect on the per-quarter-hour work.
-- An appliance's `history_average.lookback_days` (default 30) — how much history each such
+- An appliance's `consumption.projection.lookback_days` (default 30) — how much history each such
   appliance's estimate reads: two Recorder queries over the window, one for its switch/climate
   entity and one for its energy meter. Like `training_window_days`, this is a **job #6** cost paid
   once a night, so it scales the nightly run rather than anything you wait for. With every appliance
@@ -282,7 +282,7 @@ Things worth checking, roughly in order:
 - **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the
   nightly cost scales with how many you configure.
 - **Appliances estimating their energy use from history** — each one adds two multi-day reads to
-  job #6, sized by its `history_average.lookback_days`. Nightly only; nothing on the quarter-hour
+  job #6, sized by its `consumption.projection.lookback_days`. Nightly only; nothing on the quarter-hour
   cadence and nothing a card waits for.
 - **A stale-forecast banner on the cards** means rebuilds have been failing for over an hour; the
   Home Assistant log will say why.
