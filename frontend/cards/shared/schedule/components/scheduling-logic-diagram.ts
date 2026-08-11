@@ -479,15 +479,17 @@ const ALWAYS_ADVISORY_GATES = new Set<string>([
  *
  * **The other gates were checked against their docstrings, not their names:**
  *
- * - `before_release` (`charge_hold.py:69-71`) — a *requirement*. "The slot
- *   precedes the day's release"; `false` is stamped for `after_release_by_day`,
- *   whose slots are not held. It vetoes.
- * - `hold_room` (`charge_hold.py:66-68`) — a *requirement*, day-scoped. "The
- *   day's remaining solar can still refill the battery from *somewhere* in the
- *   window", and where it is false "even releasing at the window start leaves
- *   the day's remaining solar short of the need, so no slot of it can be held"
- *   (`charge_hold.py:438-445`). Nothing is placed, unlike the two advisory
- *   capacity gates whose `false` still places what it can.
+ * - `cheapest_rank` (`charge_hold.py`) — a *requirement*. The slot lost the
+ *   day's export-price ranking, so it is held; `false` is stamped for the slots
+ *   released to charge, which are not held. It vetoes. Note the polarity is the
+ *   opposite of `charge_from_grid`'s gate of the same name, where the cut is
+ *   what gets written rather than what is left alone — but both are `true` on
+ *   the slots their optimizer acts on, which is what rule 2 below needs.
+ * - `hold_room` (`charge_hold.py`) — a *requirement*, day-scoped. The day's
+ *   remaining solar can still refill the battery at all, and where it is false
+ *   "the day's whole remaining surplus falls short of the need, so no slot of
+ *   it can be held". Nothing is placed, unlike the two advisory capacity gates
+ *   whose `false` still places what it can.
  */
 const OVERRIDE_GATES = new Set<string>(["consecutive_skip_override"]);
 
@@ -522,11 +524,6 @@ export function gateDetail(
             const window = range(shortTime(params.start), shortTime(params.end));
             if (window === null) return null;
             return atMs === null ? window : `${atMs} ∈ ${window}`;
-        }
-        case "before_release": {
-            const release = shortTime(params.releaseSlot);
-            if (release === null) return null;
-            return atMs === null ? release : `${atMs} < ${release}`;
         }
         case "daily_minimum_remaining":
             // The day's quota, counted up to *this* slot. `doneHours` alone is
