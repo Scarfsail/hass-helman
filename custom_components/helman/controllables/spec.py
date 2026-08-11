@@ -24,7 +24,7 @@ The capability flags are not decoration; they record real, verified asymmetries:
 ``affects_battery``
     Only the inverter's actions reach :mod:`..battery_slot_simulation`. The
     simulator takes one ``ScheduleAction``, and every caller sources it from the
-    inverter domain — the forecast builder from ``domains.inverter``, the
+    slot's ``inverter`` entry — the forecast builder from the schedule map, the
     ``ensure_self_sustainability`` condition from the schedule overlay, which is
     built from the same field. An appliance moves the battery too, but only
     *indirectly*, by adding house demand — which is what ``affects_consumption``

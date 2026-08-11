@@ -83,10 +83,10 @@ def _validate_schedule_date(value: object) -> str:
         raise vol.Invalid("date must be an ISO calendar date (YYYY-MM-DD)") from err
 
 
-def _validate_target_key(value: object) -> str:
-    """A schedule lane key: ``"inverter"`` or ``"appliance:<id>"``."""
+def _validate_controllable_id(value: object) -> str:
+    """A schedule lane: the controllable's own id, ``inverter`` included."""
     if not isinstance(value, str) or not value:
-        raise vol.Invalid("target_key must be a non-empty string")
+        raise vol.Invalid("controllable_id must be a non-empty string")
     return value
 
 
@@ -141,7 +141,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_schedule_explanation",
-    vol.Required("target_key"): _validate_target_key,
+    vol.Required("controllable_id"): _validate_controllable_id,
     vol.Required("date"): _validate_schedule_date,
 })
 @callback
@@ -152,9 +152,9 @@ def ws_get_schedule_explanation(
 ) -> None:
     """Why every slot of one schedule lane looks the way it does, on one date.
 
-    Keyed by the lane the user clicked (``"inverter"`` / ``"appliance:<id>"``),
-    not by optimizer: the inverter lane is written by three optimizer kinds, so
-    one lane click has no single optimizer to ask. The result carries every
+    Keyed by the lane the user clicked — the controllable's own id — not by
+    optimizer: the inverter lane is written by three optimizer kinds, so one
+    lane click has no single optimizer to ask. The result carries every
     optimizer that touched the target, in pipeline order.
 
     ``None`` when nothing is recorded for that lane and date — before the first
@@ -171,7 +171,7 @@ def ws_get_schedule_explanation(
     connection.send_result(
         msg["id"],
         coordinator.get_schedule_explanation(
-            target_key=msg["target_key"],
+            controllable_id=msg["controllable_id"],
             date=msg["date"],
         ),
     )

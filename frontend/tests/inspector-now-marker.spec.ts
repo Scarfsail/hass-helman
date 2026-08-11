@@ -150,7 +150,7 @@ async function mountBand(page: Page, date: string): Promise<void> {
             startMs: dayStartMs + index * hourMs,
             endMs: dayStartMs + (index + 1) * hourMs,
             dayKey: day, timeLabel: "", endLabel: "", rangeLabel: "",
-            assignments: { inverter: { action: { kind: "empty" }, setBy: null }, appliances: {} },
+            assignments: {},
             runtime: null, isCurrent: false,
         }));
         const wrap = document.createElement("div");
@@ -166,8 +166,8 @@ async function mountBand(page: Page, date: string): Promise<void> {
             startMs: dayStartMs, endMs: dayStartMs + 24 * hourMs, editableFromMs: dayStartMs,
         };
         band.lanes = [{
-            key: "appliance:boiler", entityId: "switch.boiler", name: "Boiler", icon: "mdi:water-boiler",
-            target: { kind: "appliance", applianceId: "boiler" },
+            key: "boiler", entityId: "switch.boiler", name: "Boiler", icon: "mdi:water-boiler",
+            target: "boiler",
             appliance: { id: "boiler", kind: "generic", name: "Boiler", icon: "mdi:water-boiler" },
             isAvailable: true, actualSegments: [], blocks: [],
             blockProjections: new Map(), blockVehicleSoc: new Map(),

@@ -107,7 +107,9 @@ EvChargerUseModeRuntime = ev_charger_module.EvChargerUseModeRuntime
 EvVehicleRuntime = ev_charger_module.EvVehicleRuntime
 format_slot_id = schedule_module.format_slot_id
 ScheduleDocument = schedule_module.ScheduleDocument
-ScheduleDomains = schedule_module.ScheduleDomains
+build_controllable_actions = schedule_module.build_controllable_actions
+inverter_action = schedule_module.inverter_action
+appliance_actions = schedule_module.appliance_actions
 
 
 def _valid_config() -> dict:
@@ -256,7 +258,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={
                             "garage-ev": {
                                 "charge": True,
@@ -295,7 +297,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={
                             "garage-ev": {
                                 "charge": True,
@@ -331,7 +333,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:30:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:30:00+01:00": build_controllable_actions(
                         appliances={
                             "garage-ev": {
                                 "charge": True,
@@ -372,7 +374,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:30:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:30:00+01:00": build_controllable_actions(
                         appliances={
                             "garage-ev": {
                                 "charge": True,
@@ -438,7 +440,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:30:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:30:00+01:00": build_controllable_actions(
                         appliances={
                             "garage-ev": {
                                 "charge": True,
@@ -483,7 +485,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"garage-ev": {"charge": False}}
                     )
                 }
@@ -508,7 +510,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={
                             "garage-ev": {
                                 "charge": True,
@@ -517,7 +519,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
                             }
                         }
                     ),
-                    "2026-03-20T21:30:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:30:00+01:00": build_controllable_actions(
                         appliances={
                             "garage-ev": {
                                 "charge": True,
@@ -545,7 +547,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"dishwasher": {"on": True}}
                     )
                 }
@@ -577,7 +579,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"dishwasher": {"on": True}}
                     )
                 }
@@ -604,7 +606,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"dishwasher": {"on": True}}
                     )
                 }
@@ -646,7 +648,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"dishwasher": {"on": True}}
                     )
                 }
@@ -670,7 +672,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"living-room-hvac": {"mode": "heat"}}
                     )
                 }
@@ -701,7 +703,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"living-room-hvac": {"mode": "off"}}
                     )
                 }
@@ -724,7 +726,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"living-room-hvac": {"mode": "cool"}}
                     )
                 }
@@ -751,7 +753,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             hass=None,
             schedule_document=ScheduleDocument(
                 slots={
-                    "2026-03-20T21:00:00+01:00": ScheduleDomains(
+                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
                         appliances={"living-room-hvac": {"mode": "heat"}}
                     )
                 }
@@ -873,7 +875,7 @@ def _six_hour_schedule(vehicle_id: str, mode: str, extra: dict | None = None) ->
         ]
     ]
     return ScheduleDocument(
-        slots={slot_id: ScheduleDomains(appliances={"garage-ev": action}) for slot_id in slot_starts}
+        slots={slot_id: build_controllable_actions(appliances={"garage-ev": action}) for slot_id in slot_starts}
     )
 
 

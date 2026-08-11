@@ -172,14 +172,18 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
     schedule_mod.ScheduleSlot = dict
     schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
     schedule_mod.ScheduleAction = type("ScheduleAction", (), {})
-    schedule_mod.ScheduleDomains = type("ScheduleDomains", (), {})
     schedule_mod.EMPTY_SCHEDULE_ACTION = None
+    schedule_mod.appliance_actions = lambda actions: {
+        controllable_id: action
+        for controllable_id, action in actions.items()
+        if controllable_id != "inverter"
+    }
+    schedule_mod.inverter_action = lambda actions: actions.get("inverter")
     schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
     schedule_mod.build_horizon_end = lambda reference_time: reference_time
     schedule_mod.build_horizon_start = lambda reference_time: reference_time
     schedule_mod.describe_schedule_control_config_issue = lambda config: None
     schedule_mod.format_slot_id = lambda slot: ""
-    schedule_mod.is_default_domains = lambda domains: True
     schedule_mod.iter_horizon_slot_ids = lambda reference_time: iter([])
     schedule_mod.parse_slot_id = datetime.fromisoformat
     schedule_mod.materialize_schedule_slots = lambda stored_slots, reference_time: []

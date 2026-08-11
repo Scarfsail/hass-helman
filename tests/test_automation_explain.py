@@ -644,7 +644,7 @@ class ExplanationBookTests(unittest.TestCase):
         run_at: datetime,
         slot_ids,
         *,
-        target_key: str = "inverter",
+        controllable_id: str = "inverter",
         optimizer_id: str = "export",
         kind: str = "export_price",
         verdict: str = "skip",
@@ -657,7 +657,7 @@ class ExplanationBookTests(unittest.TestCase):
                 OptimizerExplanation(
                     optimizer_id=optimizer_id,
                     kind=kind,
-                    target_key=target_key,
+                    controllable_id=controllable_id,
                     status=status,
                     slots=tuple(
                         SlotExplanation(slot_id=slot_id, verdict=verdict)
@@ -672,7 +672,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING))
         book.record(self._run(self.RUN_20, self.EVENING))
 
-        record = book.get(target_key="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
 
         self.assertEqual(
             record["slotIds"], list(self.MORNING) + list(self.EVENING)
@@ -683,7 +683,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING))
         book.record(self._run(self.RUN_20, self.EVENING))
 
-        record = book.get(target_key="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
         run_ats = decode_runs(
             record["optimizers"][0]["runAt"], len(record["slotIds"])
         )
@@ -700,7 +700,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING, verdict="skip"))
         book.record(self._run(self.RUN_20, self.MORNING, verdict="execute"))
 
-        record = book.get(target_key="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
         verdicts = decode_runs(record["optimizers"][0]["verdict"], 4)
 
         self.assertEqual(verdicts, ["execute"] * 4)
@@ -715,11 +715,11 @@ class ExplanationBookTests(unittest.TestCase):
         # an empty record did arrive, it must not erase what stands.
         book = ExplanationBook()
         book.record(self._run(self.RUN_08, self.MORNING, verdict="execute"))
-        before = book.get(target_key="inverter", date="2026-07-31")
+        before = book.get(controllable_id="inverter", date="2026-07-31")
 
         book.record(RunExplanation(run_at=self.RUN_20, slot_ids=self.MORNING))
 
-        self.assertEqual(book.get(target_key="inverter", date="2026-07-31"), before)
+        self.assertEqual(book.get(controllable_id="inverter", date="2026-07-31"), before)
 
     def test_dates_before_the_run_are_evicted(self) -> None:
         book = ExplanationBook()
@@ -731,12 +731,12 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(
             self._run(datetime(2026, 7, 30, 8, 0, tzinfo=TZ), yesterday)
         )
-        self.assertIsNotNone(book.get(target_key="inverter", date="2026-07-30"))
+        self.assertIsNotNone(book.get(controllable_id="inverter", date="2026-07-30"))
 
         book.record(self._run(self.RUN_08, self.MORNING))
 
-        self.assertIsNone(book.get(target_key="inverter", date="2026-07-30"))
-        self.assertIsNotNone(book.get(target_key="inverter", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="inverter", date="2026-07-30"))
+        self.assertIsNotNone(book.get(controllable_id="inverter", date="2026-07-31"))
 
     def test_a_run_is_filed_into_every_date_it_spans(self) -> None:
         # A 48 h horizon from a slot-floored start spans three calendar dates.
@@ -749,10 +749,10 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_20, crossing))
 
         self.assertEqual(
-            len(book.get(target_key="inverter", date="2026-07-31")["slotIds"]), 2
+            len(book.get(controllable_id="inverter", date="2026-07-31")["slotIds"]), 2
         )
         self.assertEqual(
-            len(book.get(target_key="inverter", date="2026-08-01")["slotIds"]), 2
+            len(book.get(controllable_id="inverter", date="2026-08-01")["slotIds"]), 2
         )
 
     def test_lanes_are_separate_and_unknown_lanes_return_none(self) -> None:
@@ -762,14 +762,14 @@ class ExplanationBookTests(unittest.TestCase):
             self._run(
                 self.RUN_08,
                 self.MORNING,
-                target_key="appliance:boiler",
+                controllable_id="boiler",
                 optimizer_id="boiler-run",
                 kind="appliance_runtime",
             )
         )
 
-        inverter = book.get(target_key="inverter", date="2026-07-31")
-        appliance = book.get(target_key="appliance:boiler", date="2026-07-31")
+        inverter = book.get(controllable_id="inverter", date="2026-07-31")
+        appliance = book.get(controllable_id="boiler", date="2026-07-31")
 
         self.assertEqual(
             [entry["optimizerId"] for entry in inverter["optimizers"]], ["export"]
@@ -778,8 +778,8 @@ class ExplanationBookTests(unittest.TestCase):
             [entry["optimizerId"] for entry in appliance["optimizers"]],
             ["boiler-run"],
         )
-        self.assertIsNone(book.get(target_key="appliance:heatpump", date="2026-07-31"))
-        self.assertIsNone(book.get(target_key="inverter", date="2026-08-05"))
+        self.assertIsNone(book.get(controllable_id="heatpump", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="inverter", date="2026-08-05"))
 
     def test_every_optimizer_touching_a_lane_is_returned_in_pipeline_order(
         self,
@@ -795,7 +795,7 @@ class ExplanationBookTests(unittest.TestCase):
                     OptimizerExplanation(
                         optimizer_id=optimizer_id,
                         kind=kind,
-                        target_key="inverter",
+                        controllable_id="inverter",
                         slots=tuple(
                             SlotExplanation(slot_id=slot_id)
                             for slot_id in self.MORNING
@@ -810,7 +810,7 @@ class ExplanationBookTests(unittest.TestCase):
             )
         )
 
-        record = book.get(target_key="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
 
         self.assertEqual(
             [entry["optimizerId"] for entry in record["optimizers"]],
@@ -822,16 +822,16 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING, status="ok"))
         book.record(self._run(self.RUN_20, self.EVENING, status="skipped"))
 
-        record = book.get(target_key="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
 
         self.assertEqual(record["optimizers"][0]["status"], "skipped")
 
-    def test_an_optimizer_without_a_target_key_is_not_recorded(self) -> None:
+    def test_an_optimizer_without_a_controllable_id_is_not_recorded(self) -> None:
         book = ExplanationBook()
-        book.record(self._run(self.RUN_08, self.MORNING, target_key=""))
+        book.record(self._run(self.RUN_08, self.MORNING, controllable_id=""))
 
-        self.assertIsNone(book.get(target_key="inverter", date="2026-07-31"))
-        self.assertIsNone(book.get(target_key="", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="inverter", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="", date="2026-07-31"))
 
 
 if __name__ == "__main__":

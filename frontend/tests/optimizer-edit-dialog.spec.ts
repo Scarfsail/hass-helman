@@ -30,7 +30,7 @@ const SLOT_IDS = [`${DATE}T13:00:00+02:00`, `${DATE}T13:30:00+02:00`];
 
 /** One optimizer, one slot it rejected on price — enough to draw a diagram. */
 const PAYLOAD = {
-    targetKey: "inverter",
+    controllableId: "inverter",
     date: DATE,
     slotIds: SLOT_IDS,
     runAt: RUN_AT,
@@ -38,7 +38,7 @@ const PAYLOAD = {
         {
             optimizerId: "export_price",
             kind: "export_price",
-            targetKey: "inverter",
+            controllableId: "inverter",
             status: "ok",
             runAt: [[RUN_AT, 2]],
             verdict: [["execute", 1], ["skip", 1]],
@@ -273,12 +273,12 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await mountPanel(page, {
             payload: {
                 ...PAYLOAD,
-                targetKey: "appliance:heater-shower",
+                controllableId: "heater-shower",
                 optimizers: [{
                     ...PAYLOAD.optimizers[0],
                     optimizerId: "surplus-appliance-4",
                     kind: "appliance_runtime",
-                    targetKey: "appliance:heater-shower",
+                    controllableId: "heater-shower",
                 }],
             },
             applianceName: "Bathroom radiator",

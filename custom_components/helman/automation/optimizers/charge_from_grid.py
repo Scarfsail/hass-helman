@@ -36,7 +36,7 @@ from ...const import (
 )
 from ...scheduling.schedule import (
     ScheduleDocument,
-    ScheduleDomains,
+    inverter_action,
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
@@ -394,8 +394,8 @@ def _rank_cheapest_slots(
 
     candidates: list[tuple[float, datetime, str]] = []
     for slot_id in cheap_slots:
-        current_domains = document.slots.get(slot_id, ScheduleDomains())
-        if is_user_owned_inverter_action(current_domains.inverter):
+        current_actions = document.slots.get(slot_id, {})
+        if is_user_owned_inverter_action(inverter_action(current_actions)):
             continue
         cursor = parse_slot_id(slot_id)
         candidates.append(

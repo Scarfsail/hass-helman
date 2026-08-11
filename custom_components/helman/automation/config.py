@@ -8,7 +8,6 @@ from ..const import (
     DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO,
     DAY_CONTEXT_DEFAULT_SURPLUS_ABOVE_RATIO,
 )
-from ..controllables.config import CONTROLLABLE_ID_INVERTER
 from .fields import (
     MISSING,
     AutomationConfigError,
@@ -107,31 +106,16 @@ class OptimizerInstanceConfig:
         used to imply their target from their own ``kind``. This is the identity
         validation resolves and the editor picks — one lookup, no by-kind
         fallback.
+
+        It is also the identity of the *schedule lane* this optimizer writes,
+        which is why the trace, the explanation book and the frontend's lane key
+        are all the same string. They were not, until the schedule flattened to
+        one id-keyed map: a separate ``target_key`` derived ``"appliance:<id>"``
+        from this id, because the schedule had two domains to tell apart. With
+        one map there is nothing left to disambiguate, so the derived key is
+        gone and the id is the whole identity.
         """
         return str(self.target.get("controllable_id", ""))
-
-    @property
-    def target_key(self) -> str:
-        """The schedule *lane* this optimizer writes — a transport format.
-
-        ``"inverter"`` or ``"appliance:<id>"``. Deliberately still spelled that
-        way, and deliberately no longer the same thing as
-        :attr:`controllable_id`: the key is the identity of a schedule lane, and
-        the schedule still keeps two domains (``domains.inverter`` /
-        ``domains.appliances``). It is the same string as ``TraceWrite.domain``
-        and the frontend's ``getEntityScheduleTargetKey``, which is what lets
-        the explanation book be queried by the lane the user clicked rather than
-        by optimizer (the inverter lane has three of those).
-
-        So it derives from the controllable id rather than being one. Flattening
-        the schedule domains to a single id-keyed map is what retires the
-        prefix, on the wire and here at once; doing it now would break the
-        lookup for a phase.
-        """
-        controllable_id = self.controllable_id
-        if not controllable_id or controllable_id == CONTROLLABLE_ID_INVERTER:
-            return CONTROLLABLE_ID_INVERTER
-        return f"appliance:{controllable_id}"
 
 
 @dataclass(frozen=True)

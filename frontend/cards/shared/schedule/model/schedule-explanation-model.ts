@@ -130,7 +130,8 @@ export interface ExplanationCell {
 export interface ExplanationColumn {
     optimizerId: string;
     kind: string;
-    targetKey: string;
+    /** The lane this optimizer writes: the controllable's own id. */
+    controllableId: string;
     status: ExplanationStatus;
     statusReason: string | null;
     /** True for `skipped`/`failed`: the whole column is greyed. */
@@ -158,7 +159,8 @@ export interface ExplanationRow {
 }
 
 export interface ScheduleExplanationModel {
-    targetKey: string;
+    /** The lane this record is about: the controllable's own id. */
+    controllableId: string;
     date: string;
     /** The newest run touching this lane and date. */
     runAt: string | null;
@@ -483,7 +485,8 @@ function parseColumn(
     return {
         optimizerId,
         kind: typeof payload.kind === "string" ? payload.kind : "",
-        targetKey: typeof payload.targetKey === "string" ? payload.targetKey : "",
+        controllableId:
+            typeof payload.controllableId === "string" ? payload.controllableId : "",
         status,
         statusReason: typeof payload.statusReason === "string" ? payload.statusReason : null,
         inactive,
@@ -551,7 +554,8 @@ export function parseScheduleExplanation(payload: unknown): ScheduleExplanationM
     }
 
     return {
-        targetKey: typeof payload.targetKey === "string" ? payload.targetKey : "",
+        controllableId:
+            typeof payload.controllableId === "string" ? payload.controllableId : "",
         date: typeof payload.date === "string" ? payload.date : "",
         runAt: typeof payload.runAt === "string" ? payload.runAt : null,
         rows,

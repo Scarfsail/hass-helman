@@ -45,9 +45,11 @@ from .schedule import (
     ScheduleDocument,
     ScheduleError,
     ScheduleNotConfiguredError,
+    appliance_actions,
     build_horizon_start,
     find_active_slot,
     format_slot_id,
+    inverter_action,
     parse_slot_id,
     prune_expired_slots,
     strip_candidate_actions,
@@ -450,9 +452,13 @@ class ScheduleExecutor:
                 reference_time=request_now,
             )
             active_action = (
-                EMPTY_SCHEDULE_ACTION if active_slot is None else active_slot.domains.inverter
+                EMPTY_SCHEDULE_ACTION
+                if active_slot is None
+                else inverter_action(active_slot.controllables)
             )
-            active_actions = {} if active_slot is None else dict(active_slot.domains.appliances)
+            active_actions = (
+                {} if active_slot is None else appliance_actions(active_slot.controllables)
+            )
             last_scheduled_actions = _build_last_scheduled_appliance_actions(
                 stored_slots=committed_document.slots,
                 reference_time=request_now,
@@ -588,7 +594,9 @@ class ScheduleExecutor:
                 stored_slots=schedule_document.slots,
                 reference_time=reference_time,
             )
-            active_actions = {} if active_slot is None else dict(active_slot.domains.appliances)
+            active_actions = (
+                {} if active_slot is None else appliance_actions(active_slot.controllables)
+            )
 
             appliance_result = await self._appliances_executor.async_restore_active_slot(
                 registry=self._dependencies.read_appliances_registry(),
@@ -662,13 +670,13 @@ def _build_last_scheduled_appliance_actions(
     current_slot_start = build_horizon_start(reference_time)
     last_actions: dict[str, ApplianceScheduleActionDict] = {}
 
-    for slot_id, domains in sorted(
+    for slot_id, actions in sorted(
         stored_slots.items(),
         key=lambda item: parse_slot_id(item[0]),
     ):
         if parse_slot_id(slot_id) > current_slot_start:
             break
-        for appliance_id, action in domains.appliances.items():
+        for appliance_id, action in appliance_actions(actions).items():
             last_actions[appliance_id] = action
 
     return last_actions

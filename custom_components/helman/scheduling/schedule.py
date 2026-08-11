@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..appliances.schedule import (
+    ApplianceScheduleActionDict,
     ApplianceScheduleActionsDict,
     normalize_appliance_schedule_actions,
     read_appliance_schedule_actions,
@@ -53,14 +54,16 @@ TARGET_ACTION_KINDS = {
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
 }
-SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
+#: The two members of the pre-version-8 ``domains`` object, kept only so a
+#: stored document in that shape can still be recognised and converted.
+LEGACY_SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
 #: How the inverter's control block is named when reporting a config problem.
 #: Not an index: the inverter is a singleton found by kind, so its position in
 #: the list is not stable and would only mislead.
 _INVERTER_CONTROL_PATH = (
     f"controllables[{CONTROLLABLE_ID_INVERTER}].controls.mode"
 )
-SCHEDULE_SLOT_KEYS = {"id", "domains"}
+SCHEDULE_SLOT_KEYS = {"id", "controllables"}
 
 if SCHEDULE_SLOT_MINUTES <= 0 or 60 % SCHEDULE_SLOT_MINUTES != 0:
     raise ValueError("SCHEDULE_SLOT_MINUTES must be a positive divisor of 60")
@@ -75,14 +78,20 @@ class ScheduleActionDict(TypedDict):
     conditionMet: NotRequired[bool]
 
 
-class ScheduleDomainsDict(TypedDict):
-    inverter: ScheduleActionDict
-    appliances: ApplianceScheduleActionsDict
+#: One controllable's action as it travels on the wire and in storage.
+#:
+#: Deliberately a union rather than one shape: the inverter's action is a
+#: ``kind``/``targetSoc`` pair, a generic appliance's is ``{"on": bool}``, a
+#: climate's a mode and an EV charger's a charge flag. The map they live in is
+#: keyed by controllable id and discriminated by that controllable's configured
+#: kind, exactly as the appliance map already was before the inverter joined it.
+ControllableScheduleActionDict = ScheduleActionDict | ApplianceScheduleActionDict
+ControllableScheduleActionsDict = dict[str, ControllableScheduleActionDict]
 
 
 class ScheduleSlotDict(TypedDict):
     id: str
-    domains: ScheduleDomainsDict
+    controllables: ControllableScheduleActionsDict
 
 
 class ScheduleResponseDict(TypedDict):
@@ -107,43 +116,100 @@ EMPTY_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
 NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
 
 
-@dataclass(frozen=True)
-class ScheduleDomains:
-    inverter: ScheduleAction = field(default_factory=lambda: EMPTY_SCHEDULE_ACTION)
-    appliances: ApplianceScheduleActionsDict = field(default_factory=dict)
+#: One controllable's action, in memory.
+#:
+#: The inverter's stays the validated :class:`ScheduleAction` it has always
+#: been — its ``kind``/``target_soc`` pair drives the battery simulation and is
+#: read attribute-wise by the forecast, the executor and three optimizers —
+#: while an appliance's stays the plain dict its own per-kind normalizer owns.
+#: The map is what unified; the shapes inside it never were the same.
+ControllableScheduleAction = ScheduleAction | ApplianceScheduleActionDict
+#: Every controllable's action for one slot, keyed by controllable id.
+#:
+#: The inverter sits under its reserved ``inverter`` id as a peer, which is what
+#: replaced the old two-member ``ScheduleDomains``. An action that means
+#: "nothing scheduled" is never stored: an appliance says that by being absent,
+#: and since version 8 so does the inverter, so ``not actions`` is the whole of
+#: "this slot is empty".
+ControllableScheduleActions = dict[str, ControllableScheduleAction]
+
+
+def build_controllable_actions(
+    *,
+    inverter: ScheduleAction | None = None,
+    appliances: Mapping[str, ApplianceScheduleActionDict] | None = None,
+) -> ControllableScheduleActions:
+    """One slot's action map, assembled from the two halves that produce it.
+
+    Optimizers, the merge and the executor each still author *either* an
+    inverter action *or* appliance actions — that is a fact about what they
+    drive, not a leftover of the old split — so this is the one place that knows
+    the inverter's reserved id and that an empty inverter action is stored as
+    absence.
+    """
+    actions: ControllableScheduleActions = {}
+    if inverter is not None and inverter.kind != SCHEDULE_ACTION_EMPTY:
+        actions[CONTROLLABLE_ID_INVERTER] = inverter
+    if appliances:
+        actions.update(
+            {
+                appliance_id: dict(action)
+                for appliance_id, action in appliances.items()
+            }
+        )
+    return actions
+
+
+def inverter_action(actions: Mapping[str, Any]) -> ScheduleAction:
+    """The inverter's action for a slot, empty when it has none."""
+    action = actions.get(CONTROLLABLE_ID_INVERTER)
+    return EMPTY_SCHEDULE_ACTION if action is None else action
+
+
+def appliance_actions(actions: Mapping[str, Any]) -> ApplianceScheduleActionsDict:
+    """Everything in the map that is not the inverter."""
+    return {
+        controllable_id: action
+        for controllable_id, action in actions.items()
+        if controllable_id != CONTROLLABLE_ID_INVERTER
+    }
 
 
 @dataclass(frozen=True, init=False)
 class ScheduleSlot:
     id: str
-    domains: ScheduleDomains
+    controllables: ControllableScheduleActions
 
     def __init__(
         self,
         id: str,
         *,
         action: ScheduleAction | Mapping[str, Any] | None = None,
-        domains: ScheduleDomains | Mapping[str, Any] | None = None,
+        controllables: Mapping[str, Any] | None = None,
     ) -> None:
-        if action is not None and domains is not None:
-            raise ValueError("ScheduleSlot accepts either action or domains, not both")
+        if action is not None and controllables is not None:
+            raise ValueError(
+                "ScheduleSlot accepts either action or controllables, not both"
+            )
 
         object.__setattr__(self, "id", id)
         object.__setattr__(
             self,
-            "domains",
-            _coerce_schedule_domains(action if domains is None else domains),
+            "controllables",
+            build_controllable_actions(inverter=_coerce_schedule_action(action))
+            if controllables is None
+            else _coerce_controllable_actions(controllables),
         )
 
     @property
     def action(self) -> ScheduleAction:
-        return self.domains.inverter
+        return inverter_action(self.controllables)
 
 
 @dataclass(init=False)
 class ScheduleDocument:
     execution_enabled: bool = False
-    slots: dict[str, ScheduleDomains] = field(default_factory=dict)
+    slots: dict[str, ControllableScheduleActions] = field(default_factory=dict)
 
     def __init__(
         self,
@@ -155,8 +221,8 @@ class ScheduleDocument:
             {}
             if slots is None
             else {
-                slot_id: _coerce_schedule_domains(domains)
-                for slot_id, domains in dict(slots).items()
+                slot_id: _coerce_controllable_actions(actions)
+                for slot_id, actions in dict(slots).items()
             }
         )
 
@@ -239,48 +305,53 @@ def action_to_dict(action: ScheduleAction) -> ScheduleActionDict:
     return payload
 
 
-def domains_from_dict(data: Any, *, context: str) -> ScheduleDomains:
+def controllable_actions_from_dict(
+    data: Any, *, context: str
+) -> ControllableScheduleActions:
+    """One slot's flat, id-keyed action map, as read off the wire or storage.
+
+    Only the inverter's entry is parsed into a :class:`ScheduleAction`; every
+    other id keeps the raw dict its own kind's normalizer validates later, since
+    which kind an id names is a fact about the *config*, which this layer does
+    not have. An inverter action of kind ``empty`` is dropped rather than kept,
+    so "nothing scheduled" is spelled the same way for every controllable.
+    """
     if not isinstance(data, Mapping):
-        raise ScheduleActionError(f"{context} domains must be an object")
+        raise ScheduleActionError(f"{context} controllables must be an object")
 
-    unsupported_keys = sorted(
-        str(key) for key in data.keys() if key not in SCHEDULE_DOMAIN_KEYS
-    )
-    if unsupported_keys:
+    raw_inverter = data.get(CONTROLLABLE_ID_INVERTER)
+    if raw_inverter is not None and not isinstance(raw_inverter, Mapping):
         raise ScheduleActionError(
-            f"{context} domains contain unsupported keys: {', '.join(unsupported_keys)}"
+            f"{context} controllables.{CONTROLLABLE_ID_INVERTER} must be an object"
         )
-
-    raw_inverter = data.get("inverter")
-    if not isinstance(raw_inverter, Mapping):
-        raise ScheduleActionError(f"{context} domains.inverter must be an object")
-
-    raw_appliances = data.get("appliances", {})
-    if not isinstance(raw_appliances, Mapping):
-        raise ScheduleActionError(f"{context} domains.appliances must be an object")
 
     try:
         appliances = read_appliance_schedule_actions(
-            raw_appliances,
-            context=f"{context} domains.appliances",
+            {
+                controllable_id: action
+                for controllable_id, action in data.items()
+                if controllable_id != CONTROLLABLE_ID_INVERTER
+            },
+            context=f"{context} controllables",
         )
     except ValueError as err:
         raise ScheduleActionError(str(err)) from err
 
-    return ScheduleDomains(
-        inverter=action_from_dict(raw_inverter),
+    return build_controllable_actions(
+        inverter=None if raw_inverter is None else action_from_dict(raw_inverter),
         appliances=appliances,
     )
 
 
-def domains_to_dict(domains: ScheduleDomains) -> ScheduleDomainsDict:
-    return {
-        "inverter": action_to_dict(domains.inverter),
-        "appliances": {
-            appliance_id: dict(action)
-            for appliance_id, action in domains.appliances.items()
-        },
-    }
+def controllable_actions_to_dict(
+    actions: Mapping[str, Any],
+) -> ControllableScheduleActionsDict:
+    payload: ControllableScheduleActionsDict = {}
+    for controllable_id, action in actions.items():
+        payload[controllable_id] = (
+            dict(action) if isinstance(action, Mapping) else action_to_dict(action)
+        )
+    return payload
 
 
 def slot_from_dict(data: Mapping[str, Any]) -> ScheduleSlot:
@@ -291,10 +362,10 @@ def slot_from_dict(data: Mapping[str, Any]) -> ScheduleSlot:
     if slot_id is None:
         raise ScheduleSlotsError("Schedule slot id must be a non-empty string")
 
-    if "action" in data:
+    if "action" in data or "domains" in data:
         raise ScheduleActionError(
-            "Legacy schedule payload uses top-level 'action'; use "
-            "'domains.inverter' and 'domains.appliances' instead"
+            "Legacy schedule payload uses top-level 'action' or 'domains'; use "
+            "'controllables' keyed by controllable id instead"
         )
     if "runtime" in data:
         raise ScheduleActionError("Schedule slot runtime is read-only and cannot be set")
@@ -307,14 +378,19 @@ def slot_from_dict(data: Mapping[str, Any]) -> ScheduleSlot:
 
     return ScheduleSlot(
         id=format_slot_id(parse_slot_id(slot_id)),
-        domains=domains_from_dict(data.get("domains"), context="Schedule slot"),
+        controllables=controllable_actions_from_dict(
+            data.get("controllables", {}), context="Schedule slot"
+        ),
     )
 
 
 def slot_to_dict(
     slot: ScheduleSlot,
 ) -> ScheduleSlotDict:
-    return {"id": slot.id, "domains": domains_to_dict(slot.domains)}
+    return {
+        "id": slot.id,
+        "controllables": controllable_actions_to_dict(slot.controllables),
+    }
 
 
 def with_slot_set_by(
@@ -325,17 +401,18 @@ def with_slot_set_by(
     if set_by is None:
         return slot
 
+    current_inverter = inverter_action(slot.controllables)
     return ScheduleSlot(
         id=slot.id,
-        domains=ScheduleDomains(
+        controllables=build_controllable_actions(
             inverter=ScheduleAction(
-                kind=slot.domains.inverter.kind,
-                target_soc=slot.domains.inverter.target_soc,
-                set_by=slot.domains.inverter.set_by or set_by,
-                condition_met=slot.domains.inverter.condition_met,
+                kind=current_inverter.kind,
+                target_soc=current_inverter.target_soc,
+                set_by=current_inverter.set_by or set_by,
+                condition_met=current_inverter.condition_met,
             ),
             appliances=with_appliance_schedule_actions_set_by(
-                slot.domains.appliances,
+                appliance_actions(slot.controllables),
                 set_by=set_by,
             ),
         ),
@@ -371,16 +448,16 @@ def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocum
     if not isinstance(raw_slots, Mapping):
         raise ScheduleSlotsError("Persisted schedule slots must be an object")
 
-    slots: dict[str, ScheduleDomains] = {}
-    for raw_slot_id, raw_domains in raw_slots.items():
+    slots: dict[str, ControllableScheduleActions] = {}
+    for raw_slot_id, raw_actions in raw_slots.items():
         slot_id = _read_non_empty_string(raw_slot_id)
         if slot_id is None:
             raise ScheduleSlotsError(
                 "Persisted schedule slot ids must be non-empty strings"
             )
-        if not isinstance(raw_domains, Mapping):
-            raise ScheduleActionError("Persisted schedule slot domains must be an object")
-        if any(key in raw_domains for key in ("kind", "targetSoc", "target_soc")):
+        if not isinstance(raw_actions, Mapping):
+            raise ScheduleActionError("Persisted schedule slot must be an object")
+        if any(key in raw_actions for key in ("kind", "targetSoc", "target_soc")):
             raise ScheduleStorageCompatibilityError(
                 "Persisted schedule uses legacy flat action shape and must be reset"
             )
@@ -396,13 +473,51 @@ def schedule_document_from_dict(data: Mapping[str, Any] | None) -> ScheduleDocum
         if canonical_slot_id in slots:
             raise ScheduleSlotsError("Persisted schedule contains duplicate slot ids")
 
-        domains = domains_from_dict(raw_domains, context="Persisted schedule slot")
-        if is_default_domains(domains):
+        actions = controllable_actions_from_dict(
+            _convert_legacy_slot_domains(raw_actions),
+            context="Persisted schedule slot",
+        )
+        if not actions:
             continue
 
-        slots[canonical_slot_id] = domains
+        slots[canonical_slot_id] = actions
 
     return ScheduleDocument(execution_enabled=execution_enabled, slots=slots)
+
+
+def _convert_legacy_slot_domains(raw_slot: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Flatten a pre-version-8 ``{inverter, appliances}`` slot, in place on load.
+
+    The reshape is mechanical — the appliance map's entries move up one level
+    and the inverter's action takes its reserved id — so a stored schedule
+    converts silently on first start instead of being thrown away. Every field
+    survives: the inverter's action dict is passed through untouched, so
+    ``kind``, ``targetSoc``, ``setBy`` and ``conditionMet`` all arrive at
+    :func:`action_from_dict` exactly as they were written.
+
+    Recognising the old shape has to be positive rather than negative, because
+    the new shape is also a mapping of ids to action objects. ``appliances``
+    present *and* holding a map of maps is the signature no new-shape slot can
+    have: a controllable literally named ``appliances`` would carry its own
+    kind's action (``{"on": true}``, ``{"mode": "heat"}``), whose values are
+    scalars. Anything the conversion cannot make sense of is left alone and
+    fails validation below, where the reject-and-reset path already lives —
+    the schedule is a rolling 48-hour horizon, so the worst case is two days of
+    manual entries.
+    """
+    raw_appliances = raw_slot.get("appliances")
+    if not isinstance(raw_appliances, Mapping):
+        return raw_slot
+    if not all(isinstance(action, Mapping) for action in raw_appliances.values()):
+        return raw_slot
+    if any(key not in LEGACY_SCHEDULE_DOMAIN_KEYS for key in raw_slot):
+        return raw_slot
+
+    converted: dict[str, Any] = dict(raw_appliances)
+    raw_inverter = raw_slot.get(CONTROLLABLE_ID_INVERTER)
+    if raw_inverter is not None:
+        converted[CONTROLLABLE_ID_INVERTER] = raw_inverter
+    return converted
 
 
 def schedule_document_to_dict(doc: ScheduleDocument) -> dict[str, Any]:
@@ -410,9 +525,9 @@ def schedule_document_to_dict(doc: ScheduleDocument) -> dict[str, Any]:
         "executionEnabled": doc.execution_enabled,
         "slotMinutes": SCHEDULE_SLOT_MINUTES,
         "slots": {
-            slot_id: domains_to_dict(domains)
-            for slot_id, domains in sorted(doc.slots.items())
-            if not is_default_domains(domains)
+            slot_id: controllable_actions_to_dict(actions)
+            for slot_id, actions in sorted(doc.slots.items())
+            if actions
         },
     }
 
@@ -540,13 +655,13 @@ def iter_horizon_slot_ids(reference_time: datetime) -> list[str]:
 
 def materialize_schedule_slots(
     *,
-    stored_slots: Mapping[str, ScheduleDomains],
+    stored_slots: Mapping[str, ControllableScheduleActions],
     reference_time: datetime,
 ) -> list[ScheduleSlot]:
     return [
         ScheduleSlot(
             id=slot_id,
-            domains=stored_slots.get(slot_id, ScheduleDomains()),
+            controllables=stored_slots.get(slot_id, {}),
         )
         for slot_id in iter_horizon_slot_ids(reference_time)
     ]
@@ -554,41 +669,41 @@ def materialize_schedule_slots(
 
 def find_active_slot(
     *,
-    stored_slots: Mapping[str, ScheduleDomains],
+    stored_slots: Mapping[str, ControllableScheduleActions],
     reference_time: datetime,
 ) -> ScheduleSlot | None:
     slot_id = format_slot_id(build_horizon_start(reference_time))
-    domains = stored_slots.get(slot_id)
-    if domains is None:
+    actions = stored_slots.get(slot_id)
+    if actions is None:
         return None
-    return ScheduleSlot(id=slot_id, domains=domains)
+    return ScheduleSlot(id=slot_id, controllables=actions)
 
 
 def apply_slot_patches(
     *,
-    stored_slots: Mapping[str, ScheduleDomains],
+    stored_slots: Mapping[str, ControllableScheduleActions],
     slot_patches: Sequence[ScheduleSlot],
-) -> dict[str, ScheduleDomains]:
+) -> dict[str, ControllableScheduleActions]:
     updated_slots = dict(stored_slots)
 
     for slot_patch in slot_patches:
-        if is_default_domains(slot_patch.domains):
-            updated_slots.pop(slot_patch.id, None)
+        if slot_patch.controllables:
+            updated_slots[slot_patch.id] = slot_patch.controllables
         else:
-            updated_slots[slot_patch.id] = slot_patch.domains
+            updated_slots.pop(slot_patch.id, None)
 
     return dict(sorted(updated_slots.items()))
 
 
 def prune_expired_slots(
     *,
-    stored_slots: Mapping[str, ScheduleDomains],
+    stored_slots: Mapping[str, ControllableScheduleActions],
     reference_time: datetime,
-) -> dict[str, ScheduleDomains]:
+) -> dict[str, ControllableScheduleActions]:
     reference_local = dt_util.as_local(reference_time)
     pruned_slots = {
-        slot_id: domains
-        for slot_id, domains in stored_slots.items()
+        slot_id: actions
+        for slot_id, actions in stored_slots.items()
         if parse_slot_id(slot_id) + SCHEDULE_SLOT_DURATION > reference_local
     }
     return dict(sorted(pruned_slots.items()))
@@ -597,7 +712,7 @@ def prune_expired_slots(
 def normalize_slot_patch(
     *,
     slot_id: str,
-    domains: ScheduleDomains,
+    controllables: ControllableScheduleActions,
     reference_time: datetime,
     battery_soc_bounds: BatterySocBounds | None,
     appliances_registry: AppliancesRuntimeRegistry | None,
@@ -613,8 +728,8 @@ def normalize_slot_patch(
         )
     return ScheduleSlot(
         id=slot_id,
-        domains=normalize_schedule_domains(
-            domains=domains,
+        controllables=normalize_controllable_actions(
+            controllables=controllables,
             battery_soc_bounds=battery_soc_bounds,
             require_target_soc_bounds=True,
             appliances_registry=appliances_registry,
@@ -660,7 +775,7 @@ def normalize_slot_patch_request(
         normalized_slots.append(
             normalize_slot_patch(
                 slot_id=slot.id,
-                domains=slot.domains,
+                controllables=slot.controllables,
                 reference_time=reference_time,
                 battery_soc_bounds=battery_soc_bounds,
                 appliances_registry=appliances_registry,
@@ -668,10 +783,6 @@ def normalize_slot_patch_request(
         )
 
     return normalized_slots
-
-
-def is_default_domains(domains: ScheduleDomains) -> bool:
-    return domains.inverter.kind == SCHEDULE_ACTION_EMPTY and not domains.appliances
 
 
 def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
@@ -682,23 +793,19 @@ def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
     must not consume resources (forecast rebuild) nor be executed — callers use
     this "committed" view for both.
     """
-    stripped_slots: dict[str, ScheduleDomains] = {}
-    for slot_id, domains in doc.slots.items():
-        stripped_domains = ScheduleDomains(
-            inverter=(
-                ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
-                if not domains.inverter.condition_met
-                else domains.inverter
-            ),
-            appliances={
-                appliance_id: dict(action)
-                for appliance_id, action in domains.appliances.items()
-                if action.get("conditionMet") is not False
-            },
-        )
-        if is_default_domains(stripped_domains):
+    stripped_slots: dict[str, ControllableScheduleActions] = {}
+    for slot_id, actions in doc.slots.items():
+        stripped: ControllableScheduleActions = {}
+        for controllable_id, action in actions.items():
+            if not isinstance(action, Mapping):
+                if action.condition_met:
+                    stripped[controllable_id] = action
+                continue
+            if action.get("conditionMet") is not False:
+                stripped[controllable_id] = dict(action)
+        if not stripped:
             continue
-        stripped_slots[slot_id] = stripped_domains
+        stripped_slots[slot_id] = stripped
 
     return ScheduleDocument(
         execution_enabled=doc.execution_enabled,
@@ -706,40 +813,38 @@ def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
     )
 
 
-def normalize_schedule_domains(
+def normalize_controllable_actions(
     *,
-    domains: ScheduleDomains,
+    controllables: Mapping[str, Any],
     battery_soc_bounds: BatterySocBounds | None,
     require_target_soc_bounds: bool,
     appliances_registry: AppliancesRuntimeRegistry | None,
     context: str,
     appliance_mode: Literal["strict", "load_prune"],
-) -> ScheduleDomains:
+) -> ControllableScheduleActions:
     registry = (
         AppliancesRuntimeRegistry() if appliances_registry is None else appliances_registry
     )
 
+    inverter = inverter_action(controllables)
     _validate_action(
-        action=domains.inverter,
-        has_target_soc=domains.inverter.target_soc is not None,
+        action=inverter,
+        has_target_soc=inverter.target_soc is not None,
         battery_soc_bounds=battery_soc_bounds,
         require_target_soc_bounds=require_target_soc_bounds,
     )
 
     try:
         appliances = normalize_appliance_schedule_actions(
-            domains.appliances,
+            appliance_actions(controllables),
             registry=registry,
-            context=f"{context} domains.appliances",
+            context=f"{context} controllables",
             mode=appliance_mode,
         )
     except ValueError as err:
         raise ScheduleActionError(str(err)) from err
 
-    return ScheduleDomains(
-        inverter=domains.inverter,
-        appliances=appliances,
-    )
+    return build_controllable_actions(inverter=inverter, appliances=appliances)
 
 
 def normalize_schedule_document_for_registry(
@@ -747,20 +852,20 @@ def normalize_schedule_document_for_registry(
     *,
     appliances_registry: AppliancesRuntimeRegistry,
 ) -> ScheduleDocument:
-    normalized_slots: dict[str, ScheduleDomains] = {}
+    normalized_slots: dict[str, ControllableScheduleActions] = {}
 
-    for slot_id, domains in doc.slots.items():
-        normalized_domains = normalize_schedule_domains(
-            domains=domains,
+    for slot_id, actions in doc.slots.items():
+        normalized = normalize_controllable_actions(
+            controllables=actions,
             battery_soc_bounds=None,
             require_target_soc_bounds=False,
             appliances_registry=appliances_registry,
             context="Persisted schedule slot",
             appliance_mode="load_prune",
         )
-        if is_default_domains(normalized_domains):
+        if not normalized:
             continue
-        normalized_slots[slot_id] = normalized_domains
+        normalized_slots[slot_id] = normalized
 
     return ScheduleDocument(
         execution_enabled=doc.execution_enabled,
@@ -768,39 +873,32 @@ def normalize_schedule_document_for_registry(
     )
 
 
-def _coerce_schedule_domains(value: Any) -> ScheduleDomains:
+def _coerce_controllable_actions(value: Any) -> ControllableScheduleActions:
+    """Accept whatever a caller has and return the canonical id-keyed map.
+
+    Callers hand in already-built maps (the common case), raw wire mappings, or
+    — in tests — a bare inverter action. The inverter's entry is coerced to a
+    validated :class:`ScheduleAction` whichever way it arrived; every other
+    entry stays the dict its own kind owns.
+    """
     if value is None:
-        return ScheduleDomains()
+        return {}
 
-    if isinstance(value, ScheduleDomains):
-        return ScheduleDomains(
-            inverter=_coerce_schedule_action(value.inverter),
-            appliances=_coerce_appliances_mapping(value.appliances),
-        )
+    if not isinstance(value, Mapping):
+        return build_controllable_actions(inverter=_coerce_schedule_action(value))
 
-    if isinstance(value, Mapping):
-        if "inverter" in value or "appliances" in value:
-            raw_inverter = value.get("inverter", EMPTY_SCHEDULE_ACTION)
-            return ScheduleDomains(
-                inverter=_coerce_schedule_action(raw_inverter),
-                appliances=_coerce_appliances_mapping(value.get("appliances", {})),
-            )
-        return ScheduleDomains(
-            inverter=_coerce_schedule_action(value),
-            appliances={},
-        )
-
-    if hasattr(value, "inverter") or hasattr(value, "appliances"):
-        raw_inverter = getattr(value, "inverter", EMPTY_SCHEDULE_ACTION)
-        raw_appliances = getattr(value, "appliances", {})
-        return ScheduleDomains(
-            inverter=_coerce_schedule_action(raw_inverter),
-            appliances=_coerce_appliances_mapping(raw_appliances),
-        )
-
-    return ScheduleDomains(
-        inverter=_coerce_schedule_action(value),
-        appliances={},
+    raw_inverter = value.get(CONTROLLABLE_ID_INVERTER)
+    return build_controllable_actions(
+        inverter=(
+            None if raw_inverter is None else _coerce_schedule_action(raw_inverter)
+        ),
+        appliances=_coerce_appliances_mapping(
+            {
+                controllable_id: action
+                for controllable_id, action in value.items()
+                if controllable_id != CONTROLLABLE_ID_INVERTER
+            }
+        ),
     )
 
 

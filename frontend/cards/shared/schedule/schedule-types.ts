@@ -18,27 +18,42 @@ export type ScheduleApplianceAction = WithoutSetBy<ScheduleApplianceActionDTO>;
 export type ScheduleEvChargerAction = Extract<ScheduleApplianceAction, { charge: boolean }>;
 export type ScheduleGenericApplianceAction = Extract<ScheduleApplianceAction, { on: boolean }>;
 export type ScheduleClimateApplianceAction = Extract<ScheduleApplianceAction, { mode: string }>;
-export interface ScheduleDomains {
-    inverter: ScheduleInverterAction;
-    appliances: Record<string, ScheduleApplianceAction>;
+/**
+ * One slot's actions, keyed by controllable id -- the inverter under its
+ * reserved `inverter` id, every appliance under its own.
+ *
+ * A union of shapes rather than one shape, because an inverter action and a
+ * boiler's are genuinely different things; what unified is the map they live
+ * in. An id that is absent has nothing scheduled, which is how an appliance
+ * has always said it and now how the inverter does too.
+ */
+export type ScheduleControllableAction = ScheduleInverterAction | ScheduleApplianceAction;
+export type ScheduleControllableActions = Record<string, ScheduleControllableAction>;
+
+/** The one place that knows which id the inverter reserves. */
+export const INVERTER_CONTROLLABLE_ID = "inverter";
+
+export function isScheduleInverterAction(
+    action: ScheduleControllableAction,
+): action is ScheduleInverterAction {
+    return "kind" in action;
 }
 
 export type ScheduleSetBy = ScheduleSetByDTO;
 
-export interface ScheduleInverterAssignment {
-    action: ScheduleInverterAction;
+export interface ScheduleAssignment {
+    action: ScheduleControllableAction;
     setBy: ScheduleSetBy | null;
 }
 
-export interface ScheduleApplianceAssignment {
-    action: ScheduleApplianceAction;
-    setBy: ScheduleSetBy | null;
-}
-
-export interface ScheduleAssignments {
-    inverter: ScheduleInverterAssignment;
-    appliances: Record<string, ScheduleApplianceAssignment>;
-}
+/**
+ * Who authored what in one slot, keyed by controllable id.
+ *
+ * Absent means nothing is scheduled for that controllable, so a reader asks
+ * `assignments[id]` and gets `undefined` for the inverter exactly as it always
+ * did for a boiler -- one lookup for every lane.
+ */
+export type ScheduleAssignments = Record<string, ScheduleAssignment>;
 
 export type ScheduleAuthorshipState = "none" | "user" | "automation" | "mixed";
 
@@ -50,10 +65,10 @@ export interface ScheduleActionAuthorshipSummary {
     };
 }
 
-export interface ScheduleRangeEditAuthorshipSummary {
-    inverter: ScheduleActionAuthorshipSummary;
-    appliances: Record<string, ScheduleActionAuthorshipSummary>;
-}
+export type ScheduleRangeEditAuthorshipSummary = Record<
+    string,
+    ScheduleActionAuthorshipSummary
+>;
 
 export interface ScheduleInverterRuntime {
     actionKind: RuntimeActionKind;
@@ -72,9 +87,10 @@ export interface ScheduleApplianceRuntime {
     updatedAt?: string;
 }
 
+export type ScheduleControllableRuntime = ScheduleInverterRuntime | ScheduleApplianceRuntime;
+
 export interface ScheduleRuntime {
-    inverter: ScheduleInverterRuntime | null;
-    appliances: Record<string, ScheduleApplianceRuntime>;
+    controllables: Record<string, ScheduleControllableRuntime>;
     reconciledAt?: string;
 }
 
@@ -151,10 +167,10 @@ export interface ScheduleSelectionValueSummary<TValue> {
     distinctValues: ScheduleSelectionValueOption<TValue>[];
 }
 
-export interface ScheduleRangeEditSelectionSummary {
-    inverter: ScheduleSelectionValueSummary<ScheduleAction>;
-    appliances: Record<string, ScheduleSelectionValueSummary<ScheduleApplianceAction | null>>;
-}
+export type ScheduleRangeEditSelectionSummary = Record<
+    string,
+    ScheduleSelectionValueSummary<ScheduleControllableAction | null>
+>;
 
 export interface ScheduleDialogState {
     selectedSlots: ScheduleSlot[];
@@ -162,19 +178,19 @@ export interface ScheduleDialogState {
     authorshipSummary: ScheduleRangeEditAuthorshipSummary;
 }
 
-export type ScheduleInverterEditIntent =
+/**
+ * What one lane's edit means, for any controllable.
+ *
+ * `unset_user` is now the only way to say "nothing here": the inverter used to
+ * spell that as `set_user` with an `empty` action, because its lane always had
+ * an action, and it no longer does.
+ */
+export type ScheduleEditIntent =
     | { kind: "keep" }
-    | { kind: "set_user"; action: ScheduleAction };
-
-export type ScheduleApplianceEditIntent =
-    | { kind: "keep" }
-    | { kind: "set_user"; action: ScheduleApplianceAction }
+    | { kind: "set_user"; action: ScheduleControllableAction }
     | { kind: "unset_user" };
 
-export interface ScheduleRangeEditIntent {
-    inverter: ScheduleInverterEditIntent;
-    appliances: Record<string, ScheduleApplianceEditIntent>;
-}
+export type ScheduleRangeEditIntent = Record<string, ScheduleEditIntent>;
 
 export interface ScheduleOwnerError {
     code: string | null;
@@ -201,7 +217,7 @@ export interface NormalizedScheduleModel {
 
 export interface ScheduleSlotPatch {
     id: string;
-    domains: ScheduleDomains;
+    controllables: ScheduleControllableActions;
 }
 
 export function cloneScheduleInverterAction(action: ScheduleInverterAction): ScheduleInverterAction {
@@ -221,16 +237,23 @@ export function cloneScheduleApplianceAction(
     return { ...action };
 }
 
-export function cloneScheduleDomains(domains: ScheduleDomains): ScheduleDomains {
-    return {
-        inverter: cloneScheduleInverterAction(domains.inverter),
-        appliances: Object.fromEntries(
-            Object.entries(domains.appliances).map(([applianceId, action]) => [
-                applianceId,
-                cloneScheduleApplianceAction(action),
-            ]),
-        ),
-    };
+export function cloneScheduleControllableAction(
+    action: ScheduleControllableAction,
+): ScheduleControllableAction {
+    return isScheduleInverterAction(action)
+        ? cloneScheduleInverterAction(action)
+        : cloneScheduleApplianceAction(action);
+}
+
+export function cloneScheduleControllableActions(
+    controllables: ScheduleControllableActions,
+): ScheduleControllableActions {
+    return Object.fromEntries(
+        Object.entries(controllables).map(([controllableId, action]) => [
+            controllableId,
+            cloneScheduleControllableAction(action),
+        ]),
+    );
 }
 
 export function cloneScheduleInverterRuntime(
@@ -262,13 +285,15 @@ export function cloneScheduleApplianceRuntime(
 
 export function cloneScheduleRuntime(runtime: ScheduleRuntime): ScheduleRuntime {
     return {
-        inverter: runtime.inverter
-            ? cloneScheduleInverterRuntime(runtime.inverter)
-            : null,
-        appliances: Object.fromEntries(
-            Object.entries(runtime.appliances).map(([applianceId, applianceRuntime]) => [
-                applianceId,
-                cloneScheduleApplianceRuntime(applianceRuntime),
+        controllables: Object.fromEntries(
+            Object.entries(runtime.controllables).map(([controllableId, entry]) => [
+                controllableId,
+                // Which shape an entry has is decided by its id, not by
+                // sniffing its fields: an inverter runtime that failed before
+                // it acted carries neither `executedAction` nor `reason`.
+                controllableId === INVERTER_CONTROLLABLE_ID
+                    ? cloneScheduleInverterRuntime(entry as ScheduleInverterRuntime)
+                    : cloneScheduleApplianceRuntime(entry as ScheduleApplianceRuntime),
             ]),
         ),
         reconciledAt: runtime.reconciledAt,
@@ -312,29 +337,41 @@ export function areScheduleApplianceActionsEqual(
         === getScheduleApplianceActionIdentityKey(right);
 }
 
-export function areScheduleDomainsEqual(
-    left: ScheduleDomains,
-    right: ScheduleDomains,
-): boolean {
-    if (!areScheduleActionsEqual(left.inverter, right.inverter)) {
-        return false;
-    }
+export function getScheduleControllableActionIdentityKey(
+    action: ScheduleControllableAction,
+): string {
+    return isScheduleInverterAction(action)
+        // Prefixed by the action's *shape*, not by a lane: two lanes never
+        // compare their keys, but an inverter action and an appliance action
+        // must never collide on one. Deliberately not the bare word
+        // "appliance", which used to prefix a lane key and no longer prefixes
+        // anything.
+        ? `inverter-action:${getScheduleActionIdentityKey(action)}`
+        : `appliance-action:${getScheduleApplianceActionIdentityKey(action)}`;
+}
 
-    const leftIds = Object.keys(left.appliances).sort();
-    const rightIds = Object.keys(right.appliances).sort();
+export function areScheduleControllableActionsEqual(
+    left: ScheduleControllableActions,
+    right: ScheduleControllableActions,
+): boolean {
+    const leftIds = Object.keys(left).sort();
+    const rightIds = Object.keys(right).sort();
     if (leftIds.length !== rightIds.length) {
         return false;
     }
 
     for (let index = 0; index < leftIds.length; index += 1) {
-        const applianceId = leftIds[index];
-        if (applianceId !== rightIds[index]) {
+        const controllableId = leftIds[index];
+        if (controllableId !== rightIds[index]) {
             return false;
         }
 
-        const leftAction = left.appliances[applianceId];
-        const rightAction = right.appliances[applianceId];
-        if (!leftAction || !rightAction || !areScheduleApplianceActionsEqual(leftAction, rightAction)) {
+        const leftAction = left[controllableId];
+        const rightAction = right[controllableId];
+        if (
+            getScheduleControllableActionIdentityKey(leftAction)
+            !== getScheduleControllableActionIdentityKey(rightAction)
+        ) {
             return false;
         }
     }

@@ -47,14 +47,14 @@ const OPTIMIZER_ID = "appliance_runtime";
  * the block alone cannot say which condition refused.
  */
 const CANDIDATE_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: [SLOT_ID],
     runAt: CELL_RUN_AT,
     optimizers: [{
         optimizerId: OPTIMIZER_ID,
         kind: OPTIMIZER_ID,
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[CELL_RUN_AT, 1]],
         verdict: [["candidate", 1]],

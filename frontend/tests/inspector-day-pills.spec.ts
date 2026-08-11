@@ -56,7 +56,7 @@ async function mountInspector(page: Page, minDaysBack = 30): Promise<void> {
             executionEnabled: true,
             slots: slotIds.map((id) => ({
                 id,
-                domains: { inverter: { kind: "empty" }, appliances: {} },
+                controllables: {},
             })),
         };
 

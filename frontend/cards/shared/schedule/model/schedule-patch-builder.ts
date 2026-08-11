@@ -1,17 +1,28 @@
 import type {
-    ScheduleApplianceEditIntent,
-    ScheduleDomains,
+    ScheduleControllableActions,
+    ScheduleEditIntent,
     ScheduleRangeEditIntent,
     ScheduleSlot,
     ScheduleSlotPatch,
 } from "../schedule-types";
 import {
-    areScheduleDomainsEqual,
-    cloneScheduleApplianceAction,
-    cloneScheduleDomains,
-    cloneScheduleInverterAction,
+    areScheduleControllableActionsEqual,
+    cloneScheduleControllableAction,
+    cloneScheduleControllableActions,
 } from "../schedule-types";
 
+/**
+ * One batch of slot patches from one edit intent.
+ *
+ * A patch carries the slot's whole set of *user* actions, so the builder starts
+ * from what the user already owns and applies the intent on top: the
+ * automation's own placements are deliberately not echoed back, which is what
+ * lets the backend tell "the user left this alone" from "the user cleared it".
+ *
+ * One loop over one map, where there used to be an inverter arm beside an
+ * appliance one -- the two now differ in nothing at all, including how they
+ * spell "nothing here" (`unset_user`).
+ */
 export function buildScheduleSlotPatches({
     selectedSlots,
     result,
@@ -21,75 +32,70 @@ export function buildScheduleSlotPatches({
 }): ScheduleSlotPatch[] {
     const patches: ScheduleSlotPatch[] = [];
     for (const slot of selectedSlots) {
-        const currentDomains = _buildCurrentUserDomains(slot);
-        const nextDomains = _buildNextDomains(currentDomains, result);
-        if (!_requiresForcedPatch(slot, result) && areScheduleDomainsEqual(currentDomains, nextDomains)) {
+        const current = _buildCurrentUserActions(slot);
+        const next = _buildNextActions(current, result);
+        if (
+            !_requiresForcedPatch(slot, result)
+            && areScheduleControllableActionsEqual(current, next)
+        ) {
             continue;
         }
 
         patches.push({
             id: slot.id,
-            domains: nextDomains,
+            controllables: next,
         });
     }
 
     return patches;
 }
 
-function _buildCurrentUserDomains(slot: ScheduleSlot): ScheduleDomains {
-    return {
-        inverter: slot.assignments.inverter.setBy === "user"
-            ? cloneScheduleInverterAction(slot.assignments.inverter.action)
-            : { kind: "empty" },
-        appliances: Object.fromEntries(
-            Object.entries(slot.assignments.appliances).flatMap(([applianceId, assignment]) =>
-                assignment.setBy === "user"
-                    ? [[applianceId, cloneScheduleApplianceAction(assignment.action)]]
-                    : []
-            ),
+function _buildCurrentUserActions(slot: ScheduleSlot): ScheduleControllableActions {
+    return Object.fromEntries(
+        Object.entries(slot.assignments).flatMap(([controllableId, assignment]) =>
+            assignment.setBy === "user"
+                ? [[controllableId, cloneScheduleControllableAction(assignment.action)]]
+                : []
         ),
-    };
+    );
 }
 
-function _buildNextDomains(
-    currentDomains: ScheduleDomains,
+function _buildNextActions(
+    current: ScheduleControllableActions,
     result: ScheduleRangeEditIntent,
-): ScheduleDomains {
-    const nextDomains = cloneScheduleDomains(currentDomains);
-    if (result.inverter.kind === "set_user") {
-        nextDomains.inverter = cloneScheduleInverterAction(result.inverter.action);
+): ScheduleControllableActions {
+    const next = cloneScheduleControllableActions(current);
+    for (const [controllableId, intent] of Object.entries(result)) {
+        _applyIntent(next, controllableId, intent);
     }
 
-    for (const [applianceId, intent] of Object.entries(result.appliances)) {
-        _applyApplianceIntent(nextDomains, applianceId, intent);
-    }
-
-    return nextDomains;
+    return next;
 }
 
-function _applyApplianceIntent(
-    nextDomains: ScheduleDomains,
-    applianceId: string,
-    intent: ScheduleApplianceEditIntent,
+function _applyIntent(
+    next: ScheduleControllableActions,
+    controllableId: string,
+    intent: ScheduleEditIntent,
 ): void {
     if (intent.kind === "keep") {
         return;
     }
 
     if (intent.kind === "unset_user") {
-        delete nextDomains.appliances[applianceId];
+        delete next[controllableId];
         return;
     }
 
-    nextDomains.appliances[applianceId] = cloneScheduleApplianceAction(intent.action);
+    next[controllableId] = cloneScheduleControllableAction(intent.action);
 }
 
+/**
+ * A patch is still sent when the intent takes a lane over from the automation,
+ * even though the resulting user actions look unchanged: the point of that
+ * write is the takeover itself.
+ */
 function _requiresForcedPatch(slot: ScheduleSlot, result: ScheduleRangeEditIntent): boolean {
-    if (result.inverter.kind === "set_user" && slot.assignments.inverter.setBy !== "user") {
-        return true;
-    }
-
-    return Object.entries(result.appliances).some(([applianceId, intent]) =>
-        intent.kind !== "keep" && slot.assignments.appliances[applianceId]?.setBy !== "user"
+    return Object.entries(result).some(([controllableId, intent]) =>
+        intent.kind !== "keep" && slot.assignments[controllableId]?.setBy !== "user"
     );
 }

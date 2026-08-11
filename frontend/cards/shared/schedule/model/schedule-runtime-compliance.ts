@@ -15,8 +15,10 @@ import type {
     ScheduleSlot,
 } from "../schedule-types";
 import {
+    INVERTER_CONTROLLABLE_ID,
     areScheduleActionsEqual,
     isScheduleApplianceActionEnabled,
+    isScheduleInverterAction,
     isTargetScheduleAction,
 } from "../schedule-types";
 
@@ -81,17 +83,22 @@ export function buildScheduleRuntimeComplianceModel({
     const issues: ScheduleRuntimeComplianceIssue[] = [];
     const inverterIssue = _buildInverterIssue({
         slot,
-        runtime: slot.runtime.inverter,
+        runtime: (slot.runtime.controllables[INVERTER_CONTROLLABLE_ID] as
+            | ScheduleInverterRuntime
+            | undefined) ?? null,
         localize,
     });
     if (inverterIssue) {
         issues.push(inverterIssue);
     }
 
+    // Both maps hold the inverter under its reserved id; it has already had
+    // its own issue built above, so it is dropped here rather than being
+    // reported a second time as an appliance nobody can name.
     const applianceIds = new Set([
-        ...Object.keys(slot.assignments.appliances),
-        ...Object.keys(slot.runtime.appliances),
-    ]);
+        ...Object.keys(slot.assignments),
+        ...Object.keys(slot.runtime.controllables),
+    ].filter((controllableId) => controllableId !== INVERTER_CONTROLLABLE_ID));
     const applianceOrder = new Map(
         appliances.map((appliance) => [appliance.id, appliance.order] as const),
     );
@@ -105,12 +112,18 @@ export function buildScheduleRuntimeComplianceModel({
     });
     for (const applianceId of sortedApplianceIds) {
         const appliance = getScheduleApplianceById(appliances, applianceId);
-        const rawPlannedAction = slot.assignments.appliances[applianceId]?.action ?? null;
+        const rawAssignedAction = slot.assignments[applianceId]?.action ?? null;
+        const rawPlannedAction =
+            rawAssignedAction === null || isScheduleInverterAction(rawAssignedAction)
+                ? null
+                : rawAssignedAction;
         // A candidate (execution condition not met) is expected NOT to run, so
         // treat it as "no planned action": on-plan unless it actually ran.
         const plannedAction =
             rawPlannedAction?.conditionMet === false ? null : rawPlannedAction;
-        const runtime = slot.runtime.appliances[applianceId] ?? null;
+        const runtime = (slot.runtime.controllables[applianceId] as
+            | ScheduleApplianceRuntime
+            | undefined) ?? null;
         if (plannedAction === null) {
             const unexpectedIssue = runtime
                 ? _buildUnexpectedApplianceIssue({
@@ -170,10 +183,13 @@ function _buildInverterIssue({
     // A candidate action (execution condition not met) is expected NOT to run,
     // so the executor doing nothing / restoring normal is on-plan — treat it
     // exactly like an empty slot for compliance.
+    const assignedAction = slot.assignments[INVERTER_CONTROLLABLE_ID]?.action ?? null;
     const plannedAction: ScheduleInverterAction =
-        slot.assignments.inverter.action.conditionMet === false
+        assignedAction === null
+            || !isScheduleInverterAction(assignedAction)
+            || assignedAction.conditionMet === false
             ? { kind: "empty" }
-            : slot.assignments.inverter.action;
+            : assignedAction;
     const expectedLabel = getScheduleActionLabel(plannedAction, localize);
     if (runtime === null) {
         return _createIssue({

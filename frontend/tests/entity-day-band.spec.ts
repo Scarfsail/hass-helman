@@ -78,7 +78,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             timeLabel: "",
             endLabel: "",
             rangeLabel: "",
-            assignments: { inverter: { action: { kind: "empty" }, setBy: null }, appliances: {} },
+            assignments: {},
             runtime: null,
             isCurrent: false,
         }));
@@ -107,11 +107,11 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             };
         }
         const boilerLane = {
-            key: "appliance:boiler",
+            key: "boiler",
             entityId: "switch.boiler",
             name: "Boiler",
             icon: "mdi:water-boiler",
-            target: { kind: "appliance", applianceId: "boiler" },
+            target: "boiler",
             appliance: { id: "boiler", kind: "generic", name: "Boiler", icon: "mdi:water-boiler" },
             isAvailable: true,
             // 08:00-10:00 behind the now-line, 12:00-14:00 ahead of it.
@@ -140,7 +140,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             blockVehicleSoc: new Map(),
         };
         band.lanes = twoLanes
-            ? [boilerLane, { ...boilerLane, key: "appliance:pump", name: "Pump", blocks: [] }]
+            ? [boilerLane, { ...boilerLane, key: "pump", name: "Pump", blocks: [] }]
             : [boilerLane];
         band.nowMs = nowMs;
         band.readonly = true;
@@ -149,7 +149,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         band.slotPicks = slotPicks;
         band.selectedSlot = selectedSlot === undefined
             ? null
-            : { laneKey: "appliance:boiler", slotId: new Date(at(selectedSlot)).toISOString() };
+            : { laneKey: "boiler", slotId: new Date(at(selectedSlot)).toISOString() };
         band.showForecastRows = halfHourly;
         band.showAxis = axis;
         if (halfHourly) {
@@ -294,7 +294,7 @@ test.describe("entity day band, read only", () => {
         );
         expect(selects).toHaveLength(1);
         expect(selects[0].detail).toMatchObject({
-            laneKey: "appliance:boiler",
+            laneKey: "boiler",
             blockKey: "block:boiler:12",
         });
     });
@@ -310,7 +310,7 @@ test.describe("entity day band, read only", () => {
             (event) => event.type === "entity-day-band-lane-select",
         );
         expect(selects).toHaveLength(1);
-        expect(selects[0].detail).toMatchObject({ laneKey: "appliance:boiler" });
+        expect(selects[0].detail).toMatchObject({ laneKey: "boiler" });
     });
 
     test("the pointer's place on the axis is published as a time", async ({ page }) => {
@@ -453,14 +453,14 @@ test.describe("entity day band, slot grid", () => {
         // Through the run drawn there: the grid takes no pointer events here,
         // and hovering an hour the boiler is busy is exactly the case worth
         // pinning -- that is when the other rows are worth reading.
-        await cell("appliance:boiler").hover({ force: true });
+        await cell("boiler").hover({ force: true });
 
         // One lane is being pointed at, and the other is the context that makes
         // the first one worth pointing at.
         await expect(band.locator(".slot-pick.hovered")).toHaveCount(1);
-        await expect(cell("appliance:boiler")).toHaveClass(/hovered/);
+        await expect(cell("boiler")).toHaveClass(/hovered/);
         await expect(band.locator(".slot-pick.co-hovered")).toHaveCount(1);
-        await expect(cell("appliance:pump")).toHaveClass(/co-hovered/);
+        await expect(cell("pump")).toHaveClass(/co-hovered/);
     });
 
     test("the grid is inert until a host asks for presses", async ({ page }) => {
@@ -492,7 +492,7 @@ test.describe("entity day band, slot grid", () => {
         const events = await readEvents(page);
         const picks = events.filter((event) => event.type === "entity-day-band-slot-select");
         expect(picks).toHaveLength(1);
-        expect(picks[0].detail).toEqual({ laneKey: "appliance:boiler", slotId });
+        expect(picks[0].detail).toEqual({ laneKey: "boiler", slotId });
         // The slot already says which lane it is in; the track's own press
         // would answer the same question a second time.
         expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
@@ -510,7 +510,7 @@ test.describe("entity day band, slot grid", () => {
         const band = page.locator("scheduling-entity-day-band");
         await expect(band.locator(".slot-pick.selected")).toHaveCount(1);
         await expect(
-            band.locator('.lane[data-lane="appliance:boiler"] .slot-pick.selected'),
+            band.locator('.lane[data-lane="boiler"] .slot-pick.selected'),
         ).toHaveCount(1);
     });
 });

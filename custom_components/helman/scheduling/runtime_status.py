@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
+from ..controllables.config import CONTROLLABLE_ID_INVERTER
+
 if TYPE_CHECKING:
     from .schedule import ScheduleAction, ScheduleActionDict
 
@@ -29,16 +31,24 @@ class ApplianceRuntimeDict(TypedDict):
     updatedAt: NotRequired[str]
 
 
+#: What one controllable did with its slot, on the wire.
+#:
+#: A union rather than one shape, keyed by controllable id in the same flat map
+#: the slot's actions travel in: the inverter reports the action it applied and
+#: why, an appliance reports when it was last written. Both answer "did this
+#: lane do what the schedule said", which is the only question the card asks of
+#: the map as a whole.
+ControllableRuntimeDict = InverterRuntimeDict | ApplianceRuntimeDict
+
+
 class ActiveSlotRuntimeBranchDict(TypedDict):
-    appliances: dict[str, ApplianceRuntimeDict]
-    inverter: NotRequired[InverterRuntimeDict]
+    controllables: dict[str, ControllableRuntimeDict]
     reconciledAt: NotRequired[str]
 
 
 class ScheduleRuntimeDict(TypedDict):
     activeSlotId: str
-    appliances: dict[str, ApplianceRuntimeDict]
-    inverter: NotRequired[InverterRuntimeDict]
+    controllables: dict[str, ControllableRuntimeDict]
     reconciledAt: NotRequired[str]
 
 
@@ -125,14 +135,15 @@ class ScheduleExecutionStatus:
 def active_slot_runtime_to_dict(
     runtime: ActiveSlotRuntimeStatus,
 ) -> ActiveSlotRuntimeBranchDict:
-    payload: ActiveSlotRuntimeBranchDict = {
-        "appliances": {
-            appliance_id: _appliance_runtime_to_dict(appliance_runtime)
-            for appliance_id, appliance_runtime in runtime.appliances.items()
-        }
+    controllables: dict[str, ControllableRuntimeDict] = {
+        appliance_id: _appliance_runtime_to_dict(appliance_runtime)
+        for appliance_id, appliance_runtime in runtime.appliances.items()
     }
     if runtime.inverter is not None:
-        payload["inverter"] = _inverter_runtime_to_dict(runtime.inverter)
+        controllables[CONTROLLABLE_ID_INVERTER] = _inverter_runtime_to_dict(
+            runtime.inverter
+        )
+    payload: ActiveSlotRuntimeBranchDict = {"controllables": controllables}
     if runtime.reconciled_at is not None:
         payload["reconciledAt"] = runtime.reconciled_at
     return payload
@@ -150,10 +161,8 @@ def schedule_execution_status_to_dict(
     runtime = active_slot_runtime_to_dict(execution_status.active_slot_runtime)
     payload: ScheduleRuntimeDict = {
         "activeSlotId": execution_status.active_slot_id,
-        "appliances": runtime["appliances"],
+        "controllables": runtime["controllables"],
     }
-    if "inverter" in runtime:
-        payload["inverter"] = runtime["inverter"]
     if "reconciledAt" in runtime:
         payload["reconciledAt"] = runtime["reconciledAt"]
     return payload

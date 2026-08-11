@@ -26,8 +26,8 @@ Implemented today:
 - live execution of the current inverter slot through the configured mode entity
 - target-SoC actions resolved against live battery state
 - top-level runtime metadata in `helman/get_schedule`
-- appliance-ready authored slot shape via `domains.inverter` and `domains.appliances`
-- EV appliance action authoring and sparse persistence under `domains.appliances[applianceId]`
+- authored slot shape as one id-keyed `controllables` map, the inverter under its reserved `inverter` id
+- EV appliance action authoring and sparse persistence under `controllables[controllableId]`
 - stable empty appliance metadata/projection payloads for Story 01
 - persisted schedule documents are treated as a fresh setup if their saved slot duration no longer matches the configured slot duration
 - persisted appliance actions referencing removed appliances or vehicles are pruned on load
@@ -68,34 +68,33 @@ Each authored slot uses the composite `domains` shape:
 ```json
 {
   "id": "2026-03-20T21:00:00+01:00",
-  "domains": {
+  "controllables": {
     "inverter": {
       "kind": "charge_to_target_soc",
       "targetSoc": 70
-    },
-    "appliances": {}
+    }
   }
 }
 ```
 
-`domains.appliances` is a sparse object keyed by `applianceId`.
+`controllables` is a sparse object keyed by controllable id. An id that is
+absent has nothing scheduled -- including the inverter, which has no "empty"
+action to write.
 
 Example EV payload:
 
 ```json
 {
   "id": "2026-03-20T21:00:00+01:00",
-  "domains": {
+  "controllables": {
     "inverter": {
       "kind": "normal"
     },
-    "appliances": {
-      "garage-ev": {
-        "charge": true,
-        "vehicleId": "kona",
-        "useMode": "ECO",
-        "ecoGear": "6A"
-      }
+    "garage-ev": {
+      "charge": true,
+      "vehicleId": "kona",
+      "useMode": "ECO",
+      "ecoGear": "6A"
     }
   }
 }
@@ -360,14 +359,13 @@ Slot rules:
 - slot ids must be timezone-aware ISO timestamps
 - slot ids must align to the configured `SCHEDULE_SLOT_MINUTES` boundary
 - slot ids must fall inside the rolling `48` hour horizon
-- only `id` and `domains` are accepted on authored slot payloads
+- only `id` and `controllables` are accepted on authored slot payloads
 
-Domain rules:
+Controllable map rules:
 
-- `domains.inverter` must be an object with a supported inverter action
-- `domains.appliances` must be an object
-- `domains.appliances` is keyed by `applianceId`
-- every appliance action value must be an object
+- `controllables` must be an object keyed by controllable id
+- `controllables.inverter`, when present, must be a supported inverter action
+- every other value must be an object, validated against its controllable's kind
 
 Inverter action rules:
 

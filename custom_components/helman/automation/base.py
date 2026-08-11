@@ -2,9 +2,9 @@
 
 All five optimizers ended their run with the same preamble and the same
 bookkeeping: deepcopy the snapshot's slots into a fresh document, skip anything
-the user owns, rebuild ``ScheduleDomains`` around the one domain being touched,
-stamp ``condition_met``, and record the ``blocked_user_owned`` veto for whatever
-was skipped. :class:`ScheduleWriter` owns all of it, so an optimizer module
+the user owns, rebuild the slot's action map around the one controllable being
+touched, stamp ``condition_met``, and record the ``blocked_user_owned`` veto for
+whatever was skipped. :class:`ScheduleWriter` owns all of it, so an optimizer module
 contains only its decision logic.
 """
 
@@ -16,11 +16,11 @@ from typing import TYPE_CHECKING, Any
 
 from ..appliances.climate_appliance import ClimateApplianceRuntime
 from ..appliances.generic_appliance import GenericApplianceRuntime
+from ..controllables.config import CONTROLLABLE_ID_INVERTER
 from ..scheduling.schedule import (
     ScheduleAction,
     ScheduleDocument,
-    ScheduleDomains,
-    is_default_domains,
+    inverter_action,
 )
 from .explain import STATE_FALSE, STATE_TRUE
 from .fields import OptimizerConfigError
@@ -142,7 +142,7 @@ class ScheduleWriter:
         *,
         eligibility: "Eligibility",
         trace: "OptimizerTrace | None" = None,
-        domain: str = "inverter",
+        controllable_id: str = CONTROLLABLE_ID_INVERTER,
         pre_filters_ownership: bool = False,
     ) -> None:
         self.document = ScheduleDocument(
@@ -151,7 +151,7 @@ class ScheduleWriter:
         )
         self._eligibility = eligibility
         self._trace = trace or NULL_TRACE
-        self._domain = domain
+        self._controllable_id = controllable_id
         self._pre_filters_ownership = pre_filters_ownership
         self._blocked_slot_ids: list[str] = []
         self._written_slot_ids: list[str] = []
@@ -171,8 +171,8 @@ class ScheduleWriter:
         target_soc: int | None = None,
     ) -> bool:
         """Write an inverter action. ``False`` when the user owns the slot."""
-        current = self.document.slots.get(slot_id, ScheduleDomains())
-        if is_user_owned_inverter_action(current.inverter):
+        current = self.document.slots.get(slot_id, {})
+        if is_user_owned_inverter_action(inverter_action(current)):
             self._blocked_slot_ids.append(slot_id)
             return False
         action = ScheduleAction(
@@ -181,10 +181,9 @@ class ScheduleWriter:
             condition_met=self._condition_met(slot_id),
             **({} if target_soc is None else {"target_soc": target_soc}),
         )
-        self.document.slots[slot_id] = ScheduleDomains(
-            inverter=action,
-            appliances=dict(current.appliances),
-        )
+        updated = dict(current)
+        updated[CONTROLLABLE_ID_INVERTER] = action
+        self.document.slots[slot_id] = updated
         self._written_slot_ids.append(slot_id)
         return True
 
@@ -196,18 +195,15 @@ class ScheduleWriter:
         action: dict[str, Any],
     ) -> bool:
         """Write an appliance action. ``False`` when the user owns the slot."""
-        current = self.document.slots.get(slot_id, ScheduleDomains())
-        if is_user_owned_appliance_action(current.appliances.get(appliance_id)):
+        current = self.document.slots.get(slot_id, {})
+        if is_user_owned_appliance_action(current.get(appliance_id)):
             self._blocked_slot_ids.append(slot_id)
             return False
-        appliances = dict(current.appliances)
-        appliances[appliance_id] = stamp_automation_appliance_action(
+        updated = dict(current)
+        updated[appliance_id] = stamp_automation_appliance_action(
             action, condition_met=self._condition_met(slot_id)
         )
-        self.document.slots[slot_id] = ScheduleDomains(
-            inverter=current.inverter,
-            appliances=appliances,
-        )
+        self.document.slots[slot_id] = updated
         self._written_slot_ids.append(slot_id)
         return True
 
@@ -237,14 +233,14 @@ class ScheduleWriter:
                 slot_ids=self._written_slot_ids,
                 key=GATE_BLOCKED_USER_OWNED,
                 state=STATE_TRUE,
-                params={"domain": self._domain},
+                params={"domain": self._controllable_id},
             )
         if self._blocked_slot_ids:
             self._trace.gate(
                 slot_ids=self._blocked_slot_ids,
                 key=GATE_BLOCKED_USER_OWNED,
                 state=STATE_FALSE,
-                params={"domain": self._domain},
+                params={"domain": self._controllable_id},
             )
             self._trace.decision(
                 slot_ids=self._blocked_slot_ids,

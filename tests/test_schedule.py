@@ -78,11 +78,13 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleAction,
     ScheduleActionError,
     ScheduleDocument,
-    ScheduleDomains,
     ScheduleNotConfiguredError,
     ScheduleSlot,
     ScheduleStorageCompatibilityError,
     ScheduleSlotsError,
+    appliance_actions,
+    build_controllable_actions,
+    inverter_action,
     apply_slot_patches,
     build_horizon_start,
     find_active_slot,
@@ -92,7 +94,6 @@ from custom_components.helman.scheduling.schedule import (
     read_schedule_control_config,
     schedule_document_from_dict,
     schedule_document_to_dict,
-    is_default_domains,
     slot_to_dict,
     validate_slot_patch_request,
 )
@@ -107,7 +108,6 @@ def _domains_payload(kind: str, target_soc: int | None = None) -> dict:
         inverter["targetSoc"] = target_soc
     return {
         "inverter": inverter,
-        "appliances": {},
     }
 
 
@@ -342,13 +342,12 @@ class ScheduleHelperTests(unittest.TestCase):
                             "kind": SCHEDULE_ACTION_NORMAL,
                             "setBy": "user",
                         },
-                        "appliances": {},
                     },
                 },
             }
         )
 
-        self.assertEqual(doc.slots[slot_ids[1]].inverter.set_by, "user")
+        self.assertEqual(inverter_action(doc.slots[slot_ids[1]]).set_by, "user")
         self.assertEqual(
             schedule_document_to_dict(doc),
             {
@@ -360,7 +359,6 @@ class ScheduleHelperTests(unittest.TestCase):
                             "kind": SCHEDULE_ACTION_NORMAL,
                             "setBy": "user",
                         },
-                        "appliances": {},
                     },
                 },
             },
@@ -375,11 +373,9 @@ class ScheduleHelperTests(unittest.TestCase):
                 "slots": {
                     slot_ids[0]: {
                         "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "charge": False,
-                            }
-                        },
+                            },
                     }
                 },
             }
@@ -393,36 +389,35 @@ class ScheduleHelperTests(unittest.TestCase):
                 "slots": {
                     slot_ids[0]: {
                         "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
-                        "appliances": {
-                            "garage-ev": {
+                        "garage-ev": {
                                 "charge": False,
-                            }
-                        },
+                            },
                     }
                 },
             },
         )
 
-    def test_is_default_domains_requires_empty_appliances(self) -> None:
-        self.assertFalse(
-            is_default_domains(
-                ScheduleDomains(
-                    appliances={
-                        "garage-ev": {
-                            "charge": False,
-                        }
+    def test_a_slot_with_only_an_appliance_action_is_not_empty(self) -> None:
+        # "This slot has nothing scheduled" is now one question with one
+        # answer -- an empty map -- rather than two members to check.
+        self.assertTrue(
+            build_controllable_actions(
+                appliances={
+                    "garage-ev": {
+                        "charge": False,
                     }
-                )
+                }
             )
         )
 
-    def test_is_default_domains_ignores_set_by_on_empty_inverter(self) -> None:
-        self.assertTrue(
-            is_default_domains(
-                ScheduleDomains(
-                    inverter=ScheduleAction(kind=SCHEDULE_ACTION_EMPTY, set_by="user")
-                )
-            )
+    def test_an_empty_inverter_action_is_stored_as_absence(self) -> None:
+        # An appliance says "nothing scheduled" by not being in the map; since
+        # the flattening the inverter says it the same way, set_by and all.
+        self.assertEqual(
+            build_controllable_actions(
+                inverter=ScheduleAction(kind=SCHEDULE_ACTION_EMPTY, set_by="user")
+            ),
+            {},
         )
 
     def test_schedule_document_from_dict_rejects_mismatched_slot_minutes(self) -> None:
@@ -450,7 +445,7 @@ class ScheduleHelperTests(unittest.TestCase):
             slot_dict,
             {
                 "id": "2026-03-20T21:00:00+01:00",
-                "domains": _domains_payload(
+                "controllables": _domains_payload(
                     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
                     80,
                 ),
@@ -469,15 +464,136 @@ class ScheduleHelperTests(unittest.TestCase):
             slot_dict,
             {
                 "id": "2026-03-20T21:00:00+01:00",
-                "domains": {
+                "controllables": {
                     "inverter": {
                         "kind": SCHEDULE_ACTION_NORMAL,
                         "setBy": "user",
                     },
-                    "appliances": {},
                 },
             },
         )
+
+    def test_a_stored_domains_document_converts_on_load(self) -> None:
+        # The version-8 reshape, in place. Every field of every action has to
+        # survive: kind, targetSoc, setBy and conditionMet for the inverter, and
+        # the appliance dicts verbatim, because the alternative is the user
+        # losing two days of hand-entered schedule.
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        doc = schedule_document_from_dict(
+            {
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[0]: {
+                        "inverter": {
+                            "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            "targetSoc": 80,
+                            "setBy": "automation",
+                            "conditionMet": False,
+                        },
+                        "appliances": {
+                            "boiler": {"on": True, "setBy": "user"},
+                            "garage-ev": {"charge": True, "setBy": "automation"},
+                        },
+                    },
+                    slot_ids[1]: {
+                        "inverter": {"kind": SCHEDULE_ACTION_EMPTY},
+                        "appliances": {"boiler": {"on": False, "setBy": "user"}},
+                    },
+                },
+            }
+        )
+
+        self.assertTrue(doc.execution_enabled)
+        first = doc.slots[slot_ids[0]]
+        self.assertEqual(
+            inverter_action(first),
+            ScheduleAction(
+                kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                target_soc=80,
+                set_by="automation",
+                condition_met=False,
+            ),
+        )
+        self.assertEqual(
+            appliance_actions(first),
+            {
+                "boiler": {"on": True, "setBy": "user"},
+                "garage-ev": {"charge": True, "setBy": "automation"},
+            },
+        )
+        # An empty inverter action converts to absence, like an appliance's.
+        self.assertEqual(
+            doc.slots[slot_ids[1]], {"boiler": {"on": False, "setBy": "user"}}
+        )
+
+    def test_a_stored_domains_document_rewrites_flat(self) -> None:
+        # The conversion is only worth anything if it persists: the coordinator
+        # rewrites storage whenever the round trip differs, and this is the
+        # shape it writes.
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        raw = {
+            "executionEnabled": False,
+            "slotMinutes": SCHEDULE_SLOT_MINUTES,
+            "slots": {
+                slot_ids[0]: {
+                    "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
+                    "appliances": {"boiler": {"on": True, "setBy": "user"}},
+                }
+            },
+        }
+
+        self.assertEqual(
+            schedule_document_to_dict(schedule_document_from_dict(raw)),
+            {
+                "executionEnabled": False,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    slot_ids[0]: {
+                        "boiler": {"on": True, "setBy": "user"},
+                        "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
+                    }
+                },
+            },
+        )
+
+    def test_a_flat_document_loads_unchanged(self) -> None:
+        # Conversion has to be a no-op on what it just wrote, or every start
+        # would rewrite storage.
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        raw = {
+            "executionEnabled": True,
+            "slotMinutes": SCHEDULE_SLOT_MINUTES,
+            "slots": {
+                slot_ids[0]: {
+                    "boiler": {"on": True, "setBy": "user"},
+                    "inverter": {"kind": SCHEDULE_ACTION_NORMAL, "setBy": "user"},
+                }
+            },
+        }
+
+        self.assertEqual(
+            schedule_document_to_dict(schedule_document_from_dict(raw)), raw
+        )
+
+    def test_an_unconvertible_domains_slot_is_rejected_for_reset(self) -> None:
+        # The fallback the reshape keeps: anything the conversion cannot make
+        # sense of raises a ScheduleError, which the coordinator catches and
+        # answers by resetting the stored schedule rather than failing to load.
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        with self.assertRaises(ScheduleActionError):
+            schedule_document_from_dict(
+                {
+                    "executionEnabled": False,
+                    "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                    "slots": {
+                        slot_ids[0]: {
+                            "inverter": {"kind": SCHEDULE_ACTION_NORMAL},
+                            "appliances": "boiler",
+                        }
+                    },
+                }
+            )
 
     def test_schedule_document_from_dict_rejects_misaligned_slot_ids(self) -> None:
         with self.assertRaises(ScheduleStorageCompatibilityError):
@@ -575,7 +691,6 @@ class ScheduleHelperTests(unittest.TestCase):
             "slots": {
                 slot_id: {
                     "inverter": {"kind": SCHEDULE_ACTION_STOP_EXPORT},
-                    "appliances": {},
                 }
             },
         }
@@ -583,7 +698,7 @@ class ScheduleHelperTests(unittest.TestCase):
         document = schedule_document_from_dict(payload)
 
         self.assertEqual(
-            document.slots[slot_id].inverter.kind,
+            inverter_action(document.slots[slot_id]).kind,
             SCHEDULE_ACTION_STOP_EXPORT,
         )
 

@@ -56,7 +56,6 @@ from homeassistant.util import dt as dt_util
 from ...const import SCHEDULE_SLOT_MINUTES
 from ...scheduling.schedule import (
     ScheduleDocument,
-    ScheduleDomains,
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
@@ -202,7 +201,6 @@ class ApplianceRuntimeOptimizer:
             slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
         )
         appliance_id = self.target.appliance.id
-        appliance_domain = f"appliance:{appliance_id}"
         # Capped mode ranks, and `_rank_slots` drops user-owned slots and reports
         # that as `slot_available`, so the writer's veto would only restate it.
         # Uncapped mode does not rank at all: there the veto is the only node
@@ -212,10 +210,10 @@ class ApplianceRuntimeOptimizer:
             snapshot,
             eligibility=eligibility,
             trace=trace,
-            domain=appliance_domain,
+            controllable_id=appliance_id,
             pre_filters_ownership=capped,
         )
-        action = {"domain": appliance_domain, **self.target.authored_action}
+        action = {"domain": appliance_id, **self.target.authored_action}
 
         # Master params decide the mode: `daily_minimum` is not something a group
         # can introduce (its required, non-overridable `max_consecutive_skips`
@@ -1223,8 +1221,8 @@ def _rank_slots(
     """
     candidates: list[tuple[float, int, datetime, str]] = []
     for slot_id in window_slots:
-        current_domains = document.slots.get(slot_id, ScheduleDomains())
-        if is_user_owned_appliance_action(current_domains.appliances.get(appliance_id)):
+        current_actions = document.slots.get(slot_id, {})
+        if is_user_owned_appliance_action(current_actions.get(appliance_id)):
             continue
         covered = _slot_is_solar_covered(
             slot_id=slot_id,

@@ -33,8 +33,8 @@ import {
     buildEntityScheduleDays,
     buildEntityScheduleLanePatches,
     getEmptyEntityScheduleAction,
-    getEntityScheduleTargetKey,
     isEntityInverterAction,
+    isInverterScheduleTarget,
     isEntityScheduleActionEmpty,
     resolveEntityScheduleRangeLimits,
     sanitizeEntityScheduleAction,
@@ -869,7 +869,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _renderActionChip(lane: EntityScheduleLane, action: EntityScheduleAction) {
-        if (lane.target.kind === "inverter" && isEntityInverterAction(action)) {
+        if (isInverterScheduleTarget(lane.target) && isEntityInverterAction(action)) {
             return html`
                 <scheduling-action-chip
                     .action=${action}
@@ -917,7 +917,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         return [{
-            key: getEntityScheduleTargetKey(this.target),
+            key: this.target,
             target: this.target,
             // The roster is where the entity ids come from; without it there is
             // nothing to resolve, so the lane's label keeps its static icon.
@@ -974,7 +974,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._explanationsRequested = new Set();
         this._selectedLaneKey = this.target === null
             ? this._lanes[0]?.key ?? null
-            : getEntityScheduleTargetKey(this.target);
+            : this.target;
         this._dayIndex = this._resolveInitialDayIndex();
     }
 
@@ -1141,7 +1141,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         try {
             const payload = await hass.callWS<unknown>({
                 type: "helman/get_schedule_explanation",
-                target_key: laneKey,
+                controllable_id: laneKey,
                 date: dayKey,
             });
             // A null answer is not a failure: it means nothing was recorded for
@@ -1555,7 +1555,7 @@ export class SchedulingEntityDayEditor extends LitElement {
      * complete action rather than an empty one.
      */
     private _buildDefaultAction(lane: EntityScheduleLane): EntityScheduleAction {
-        if (lane.target.kind === "inverter") {
+        if (isInverterScheduleTarget(lane.target)) {
             return { kind: "charge_to_target_soc", targetSoc: 100 };
         }
 

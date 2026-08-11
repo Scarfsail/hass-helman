@@ -10,8 +10,8 @@ import {
     buildElapsedScheduleSlots,
     buildEntityActualSegments,
     buildEntityScheduleBlocks,
-    getEntityScheduleTargetKey,
     isEntityInverterAction,
+    isInverterScheduleTarget,
     selectEntityScheduleDayBlocks,
     type EntityActualSegment,
     type EntityActualSlot,
@@ -61,6 +61,10 @@ import {
  * Ordered inverter first and then by name rather than by what happens to be
  * running, because these are stacked timelines -- a row that moves between
  * refreshes is a row nobody can point at.
+ *
+ * The inverter's place is an explicit sort on which controllable a lane is,
+ * not a by-product of how the lanes were gathered: they now come from one flat
+ * roster keyed by controllable id, so nothing else would keep it at the top.
  */
 export function buildEntityScheduleLanes({
     statuses,
@@ -84,11 +88,11 @@ export function buildEntityScheduleLanes({
                 return [];
             }
 
-            const appliance = target.kind === "inverter"
+            const appliance = isInverterScheduleTarget(target)
                 ? null
-                : getScheduleApplianceById(appliances, target.applianceId);
+                : getScheduleApplianceById(appliances, target);
             return [{
-                key: getEntityScheduleTargetKey(target),
+                key: target,
                 target,
                 entityId: status.entityId,
                 name: status.name,
@@ -106,8 +110,10 @@ export function buildEntityScheduleLanes({
             }];
         })
         .sort((left, right) => {
-            if ((left.target.kind === "inverter") !== (right.target.kind === "inverter")) {
-                return left.target.kind === "inverter" ? -1 : 1;
+            const leftIsInverter = isInverterScheduleTarget(left.target);
+            const rightIsInverter = isInverterScheduleTarget(right.target);
+            if (leftIsInverter !== rightIsInverter) {
+                return leftIsInverter ? -1 : 1;
             }
 
             return left.name.localeCompare(right.name, locale);
@@ -199,7 +205,7 @@ export function resolveLaneRunPresentation(
     run: { action: EntityScheduleAction },
     localize: LocalizeFunction,
 ) {
-    if (lane.target.kind === "inverter" && isEntityInverterAction(run.action)) {
+    if (isInverterScheduleTarget(lane.target) && isEntityInverterAction(run.action)) {
         return getScheduleActionPresentation(run.action, localize);
     }
 

@@ -474,12 +474,12 @@ class OptimizerExplanation:
 
     optimizer_id: str
     kind: str
-    #: The schedule lane this step writes — ``"inverter"`` or
-    #: ``"appliance:<id>"``, matching ``TraceWrite.domain`` and the frontend's
-    #: ``getEntityScheduleTargetKey``. The record is queried by lane, not by
-    #: optimizer: the inverter lane is written by three optimizer kinds, so one
-    #: lane click has no single optimizer to ask.
-    target_key: str = ""
+    #: The schedule lane this step writes: the controllable's own id, matching
+    #: ``TraceWrite.controllable_id`` and the key of the frontend's lane. The
+    #: record is queried by lane, not by optimizer — the inverter lane is
+    #: written by three optimizer kinds, so one lane click has no single
+    #: optimizer to ask.
+    controllable_id: str = ""
     status: str = STATUS_OK
     status_reason: str | None = None
     slots: tuple[SlotExplanation, ...] = ()
@@ -517,8 +517,8 @@ class OptimizerExplanation:
                 [slot.verdict if slot is not None else None for slot in aligned]
             ),
         }
-        if self.target_key:
-            payload["targetKey"] = self.target_key
+        if self.controllable_id:
+            payload["controllableId"] = self.controllable_id
         if self.status_reason is not None:
             payload["statusReason"] = self.status_reason
         winners = encode_sparse(
@@ -564,7 +564,7 @@ class OptimizerExplanation:
         return cls(
             optimizer_id=payload.get("optimizerId", ""),
             kind=payload.get("kind", ""),
-            target_key=payload.get("targetKey", ""),
+            controllable_id=payload.get("controllableId", ""),
             status=payload.get("status", STATUS_OK),
             status_reason=payload.get("statusReason"),
             slots=tuple(slots),
@@ -631,7 +631,7 @@ class _OptimizerRecord:
 
     optimizer_id: str
     kind: str
-    target_key: str
+    controllable_id: str
     status: str
     status_reason: str | None
     #: Newest run that reported this optimizer for this date; owns the header
@@ -652,7 +652,7 @@ def _slot_start(slot_id: str) -> datetime | None:
 
 
 class ExplanationBook:
-    """Accumulative, in-memory ``(target_key, date)`` index of run records.
+    """Accumulative, in-memory ``(controllable_id, date)`` index of run records.
 
     A run spans three calendar dates (96 half-hour slots from a slot-floored
     start), so each run's slots are filed into per-date buckets rather than
@@ -662,7 +662,7 @@ class ExplanationBook:
     """
 
     def __init__(self) -> None:
-        # date (YYYY-MM-DD) -> target key -> optimizer id -> record, the last
+        # date (YYYY-MM-DD) -> controllable id -> optimizer id -> record, the last
         # dict in the pipeline order of the newest run that touched it.
         self._by_date: dict[str, dict[str, dict[str, _OptimizerRecord]]] = {}
 
@@ -678,10 +678,10 @@ class ExplanationBook:
         run_at = explanation.run_at
         touched: dict[tuple[str, str], list[str]] = {}
         for optimizer in explanation.optimizers:
-            target_key = optimizer.target_key
-            if not target_key:
+            controllable_id = optimizer.controllable_id
+            if not controllable_id:
                 _LOGGER.warning(
-                    "explanation for %s has no target key; not recorded",
+                    "explanation for %s has no controllable id; not recorded",
                     optimizer.optimizer_id,
                 )
                 continue
@@ -691,14 +691,14 @@ class ExplanationBook:
                     continue
                 date_key = slot_start.date().isoformat()
                 bucket = self._by_date.setdefault(date_key, {}).setdefault(
-                    target_key, {}
+                    controllable_id, {}
                 )
                 record = bucket.get(optimizer.optimizer_id)
                 if record is None:
                     record = _OptimizerRecord(
                         optimizer_id=optimizer.optimizer_id,
                         kind=optimizer.kind,
-                        target_key=target_key,
+                        controllable_id=controllable_id,
                         status=optimizer.status,
                         status_reason=optimizer.status_reason,
                         run_at=run_at,
@@ -712,14 +712,14 @@ class ExplanationBook:
                 previous = record.slots.get(slot.slot_id)
                 if previous is None or previous[0] <= run_at:
                     record.slots[slot.slot_id] = (run_at, slot)
-                order = touched.setdefault((date_key, target_key), [])
+                order = touched.setdefault((date_key, controllable_id), [])
                 if optimizer.optimizer_id not in order:
                     order.append(optimizer.optimizer_id)
 
         # Column order is pipeline order, and the newest run is the authority on
         # what that is (optimizers can be added, removed or reordered in config).
-        for (date_key, target_key), order in touched.items():
-            bucket = self._by_date[date_key][target_key]
+        for (date_key, controllable_id), order in touched.items():
+            bucket = self._by_date[date_key][controllable_id]
             reordered = {
                 optimizer_id: bucket[optimizer_id]
                 for optimizer_id in order
@@ -727,7 +727,7 @@ class ExplanationBook:
             }
             for optimizer_id, record in bucket.items():
                 reordered.setdefault(optimizer_id, record)
-            self._by_date[date_key][target_key] = reordered
+            self._by_date[date_key][controllable_id] = reordered
 
         self.evict_before(run_at.date())
 
@@ -742,14 +742,14 @@ class ExplanationBook:
 
     # --- reading -------------------------------------------------------------
 
-    def get(self, *, target_key: str, date: str) -> dict[str, Any] | None:
+    def get(self, *, controllable_id: str, date: str) -> dict[str, Any] | None:
         """The serialized record for one lane on one date, or ``None``.
 
         Returns **every** optimizer that touched the target, in pipeline order —
         the inverter lane is written by three optimizer kinds, so a lane click
         has no single optimizer to ask.
         """
-        records = self._by_date.get(date, {}).get(target_key)
+        records = self._by_date.get(date, {}).get(controllable_id)
         if not records:
             return None
 
@@ -763,7 +763,7 @@ class ExplanationBook:
             payload = OptimizerExplanation(
                 optimizer_id=record.optimizer_id,
                 kind=record.kind,
-                target_key=record.target_key,
+                controllable_id=record.controllable_id,
                 status=record.status,
                 status_reason=record.status_reason,
                 slots=tuple(
@@ -788,7 +788,7 @@ class ExplanationBook:
                 newest = record.run_at
 
         return {
-            "targetKey": target_key,
+            "controllableId": controllable_id,
             "date": date,
             "slotIds": slot_ids,
             # The newest run contributing to this lane/date; per-row provenance

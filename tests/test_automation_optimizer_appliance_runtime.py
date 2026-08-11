@@ -481,10 +481,10 @@ def _runtime(appliance_id: str, cfg: OptimizerInstanceConfig):
 
 def _placed_slots(result: ScheduleDocument, appliance_id: str) -> dict[str, dict]:
     return {
-        slot_id: domains.appliances[appliance_id]
-        for slot_id, domains in result.slots.items()
-        if appliance_id in domains.appliances
-        and domains.appliances[appliance_id].get("setBy") == "automation"
+        slot_id: actions[appliance_id]
+        for slot_id, actions in result.slots.items()
+        if appliance_id in actions
+        and actions[appliance_id].get("setBy") == "automation"
     }
 
 
@@ -788,8 +788,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
             execution_enabled=True,
             slots={
                 _slot_id(12, 0): {
-                    "inverter": {"kind": "empty"},
-                    "appliances": {appliance.id: {"on": False, "setBy": "user"}},
+                    appliance.id: {"on": False, "setBy": "user"},
                 }
             },
         )
@@ -2149,8 +2148,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
                 execution_enabled=True,
                 slots={
                     _slot_id(12, 0): {
-                        "inverter": {"kind": "empty"},
-                        "appliances": {appliance.id: {"on": False, "setBy": "user"}},
+                        appliance.id: {"on": False, "setBy": "user"},
                     }
                 },
             ),

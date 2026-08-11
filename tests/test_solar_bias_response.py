@@ -343,6 +343,12 @@ def _install_coordinator_import_stubs() -> dict[str, types.ModuleType | None]:
     schedule_mod.ScheduleResponseDict = dict
     schedule_mod.ScheduleSlot = dict
     schedule_mod.SCHEDULE_SLOT_DURATION = timedelta(minutes=30)
+    schedule_mod.appliance_actions = lambda actions: {
+        controllable_id: action
+        for controllable_id, action in actions.items()
+        if controllable_id != "inverter"
+    }
+    schedule_mod.inverter_action = lambda actions: actions.get("inverter")
     schedule_mod.apply_slot_patches = lambda stored_slots, slot_patches: []
     schedule_mod.build_horizon_start = lambda reference_time: reference_time
     schedule_mod.describe_schedule_control_config_issue = lambda config: None

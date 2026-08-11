@@ -157,7 +157,6 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             slots={
                 THIRD_SLOT_ID: {
                     "inverter": {"kind": "normal"},
-                    "appliances": {},
                 }
             },
         )
@@ -195,8 +194,7 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             execution_enabled=True,
             slots={
                 CURRENT_SLOT_ID: {
-                    "inverter": {"kind": "empty"},
-                    "appliances": {"boiler": {"on": True, "setBy": "user"}},
+                    "boiler": {"on": True, "setBy": "user"},
                 }
             },
         )
@@ -237,7 +235,7 @@ class ExportPriceOptimizerTests(unittest.TestCase):
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "inverter": {"kind": "stop_export", "setBy": "automation"},
-                        "appliances": {"boiler": {"on": True, "setBy": "user"}},
+                        "boiler": {"on": True, "setBy": "user"},
                     }
                 },
             },
@@ -274,7 +272,6 @@ class ExportPriceOptimizerTests(unittest.TestCase):
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "inverter": {"kind": "stop_export", "setBy": "automation"},
-                        "appliances": {},
                     }
                 },
             },
@@ -286,7 +283,6 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "normal", "setBy": "user"},
-                    "appliances": {},
                 }
             },
         )
@@ -319,7 +315,7 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             slots={
                 THIRD_SLOT_ID: {
                     "inverter": {"kind": "normal"},
-                    "appliances": {"boiler": {"on": True, "setBy": "user"}},
+                    "boiler": {"on": True, "setBy": "user"},
                 }
             },
         )
@@ -553,7 +549,6 @@ class ExportPriceTraceContractTests(unittest.TestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_charging", "setBy": "user"},
-                    "appliances": {},
                 }
             },
         )
@@ -594,7 +589,6 @@ class ExportPriceTraceContractTests(unittest.TestCase):
             slots={
                 CURRENT_SLOT_ID: {
                     "inverter": {"kind": "stop_charging", "setBy": "user"},
-                    "appliances": {},
                 }
             },
         )

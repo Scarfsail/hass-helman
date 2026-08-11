@@ -60,14 +60,14 @@ function conditionColumn(
 }
 
 const PAYLOAD = {
-    targetKey: "inverter",
+    controllableId: "inverter",
     date: DATE,
     slotIds: SLOT_IDS,
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "export_price",
         kind: "export_price",
-        targetKey: "inverter",
+        controllableId: "inverter",
         status: "ok",
         runAt: [[RUN_AT, 4]],
         verdict: [["execute", 1], ["skip", 1], ["candidate", 1], ["execute", 1]],
@@ -149,14 +149,14 @@ const PAYLOAD = {
  * One group also means there is nothing for a `≥1` to choose between.
  */
 const SINGLE_GROUP_PAYLOAD = {
-    targetKey: "appliance.dryer",
+    controllableId: "appliance.dryer",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 2),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.dryer",
+        controllableId: "appliance.dryer",
         status: "ok",
         runAt: [[RUN_AT, 2]],
         verdict: [["execute", 1], ["skip", 1]],
@@ -225,14 +225,14 @@ const SINGLE_GROUP_PAYLOAD = {
  * and "your template is broken" is the one a person has to act on.
  */
 const ERRORED_CUSTOM_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["candidate", 1]],
@@ -263,14 +263,14 @@ const ERRORED_CUSTOM_PAYLOAD = {
  * without downgrading it to a candidate.
  */
 const MET_CUSTOM_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["execute", 1]],
@@ -303,14 +303,14 @@ const MET_CUSTOM_PAYLOAD = {
  * candidate that has one. That was the reported inconsistency.
  */
 const SECOND_GROUP_CUSTOM_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["execute", 1]],
@@ -363,14 +363,14 @@ const SECOND_GROUP_CUSTOM_PAYLOAD = {
  * at a diagram that appears to deny it exists.
  */
 const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["execute", 1]],
@@ -416,14 +416,14 @@ const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
  * morning did. The plan's own hours are the missing half.
  */
 const DAILY_MINIMUM_RUN_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS,
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 4]],
         verdict: [["execute", 4]],
@@ -459,14 +459,14 @@ const DAILY_MINIMUM_RUN_PAYLOAD = {
  * group: the note would point at nothing.
  */
 const LONE_GROUP_UNMATCHED_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["skip", 1]],
@@ -498,14 +498,14 @@ const LONE_GROUP_UNMATCHED_PAYLOAD = {
  */
 function selfSustainabilityPayload(level = "strict") {
     return {
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         date: DATE,
         slotIds: SLOT_IDS,
         runAt: RUN_AT,
         optimizers: [{
             optimizerId: "appliance_runtime",
             kind: "appliance_runtime",
-            targetKey: "appliance.pool",
+            controllableId: "appliance.pool",
             status: "ok",
             runAt: [[RUN_AT, 4]],
             verdict: [["execute", 1], ["skip", 3]],
@@ -570,14 +570,14 @@ const SELF_SUSTAINABILITY_PAYLOAD = selfSustainabilityPayload();
  * with the failing test and the numbers, in the block right next to it.
  */
 const SELF_GATING_TWO_GROUP_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "pool-heatpump",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["skip", 1]],
@@ -673,14 +673,14 @@ const SELF_GATING_TWO_GROUP_PAYLOAD = {
  * non-passing readings can be told apart in one picture.
  */
 const FORCED_DAY_PAYLOAD = {
-    targetKey: "appliance.pool",
+    controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.pool",
+        controllableId: "appliance.pool",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["execute", 1]],
@@ -754,14 +754,14 @@ const FORCED_DAY_PAYLOAD = {
  * part in the AND, which is what lets this slot run.
  */
 const NOT_APPLICABLE_PAYLOAD = {
-    targetKey: "appliance.dryer",
+    controllableId: "appliance.dryer",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
         kind: "appliance_runtime",
-        targetKey: "appliance.dryer",
+        controllableId: "appliance.dryer",
         status: "ok",
         runAt: [[RUN_AT, 1]],
         verdict: [["execute", 1]],

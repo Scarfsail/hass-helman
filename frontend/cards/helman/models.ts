@@ -5,7 +5,7 @@ import type {
     ApplianceProjectionsPayload,
     ScheduleApplianceActionDTO,
     ScheduleActionDTO,
-    ScheduleDomainsDTO,
+    ScheduleControllableActionsDTO,
     SchedulePayload,
     ScheduleSlotDTO,
 } from "../helman-api";
@@ -19,7 +19,7 @@ export type HelmanApplianceProjection = ApplianceProjectionDTO;
 
 export interface HelmanSchedulePatch {
     id: string;
-    domains: ScheduleDomainsDTO;
+    controllables: ScheduleControllableActionsDTO;
 }
 
 export function cloneHelmanScheduleAction(action: HelmanScheduleAction): HelmanScheduleAction {
@@ -39,28 +39,29 @@ export function cloneHelmanScheduleApplianceAction(
     return { ...action };
 }
 
-export function cloneScheduleDomainsDTO(domains: ScheduleDomainsDTO): ScheduleDomainsDTO {
-    return {
-        inverter: cloneHelmanScheduleAction(domains.inverter),
-        appliances: Object.fromEntries(
-            Object.entries(domains.appliances).map(([applianceId, action]) => [
-                applianceId,
-                cloneHelmanScheduleApplianceAction(action),
-            ]),
-        ),
-    };
+export function cloneScheduleControllableActionsDTO(
+    controllables: ScheduleControllableActionsDTO,
+): ScheduleControllableActionsDTO {
+    return Object.fromEntries(
+        Object.entries(controllables).map(([controllableId, action]) => [
+            controllableId,
+            "kind" in action
+                ? cloneHelmanScheduleAction(action)
+                : cloneHelmanScheduleApplianceAction(action),
+        ]),
+    );
 }
 
 export function buildScheduleSlotDTO(patch: HelmanSchedulePatch): ScheduleSlotDTO {
     return {
         id: patch.id,
-        domains: cloneScheduleDomainsDTO(patch.domains),
+        controllables: cloneScheduleControllableActionsDTO(patch.controllables),
     };
 }
 
 export function cloneScheduleSlotDTO(slot: ScheduleSlotDTO): ScheduleSlotDTO {
     return {
         id: slot.id,
-        domains: cloneScheduleDomainsDTO(slot.domains),
+        controllables: cloneScheduleControllableActionsDTO(slot.controllables),
     };
 }
