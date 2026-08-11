@@ -1,10 +1,26 @@
 """``charge_hold`` optimizer (use case 1).
 
-On qualifying days, hold the battery out of charging through the morning so the
-day's solar surplus charges it later (displacing morning grid charging and
-freeing the surplus for export), releasing no later than the latest slot from
-which the day's remaining solar can still refill the battery — and no later than
-the day's cheapest export slot. Single pass, read-only over the input snapshot.
+On qualifying days, hold the battery out of charging wherever the surplus is
+worth more exported than stored, so the battery fills from **the day's cheapest
+export slots** and everything dearer is sold. Single pass, read-only over the
+input snapshot.
+
+**The charge set, not a release time.** Charging the battery from solar costs
+the export revenue that surplus would have earned, so the slots to charge in are
+the cheapest ones that together cover the need — which is in general *not* a
+contiguous block, and in particular not "everything from the cheapest slot
+onward". Anchoring on a release time is what made the hold end *at* the day's
+minimum and spill the rest of the charge into the rising prices behind it
+(issue #79). So the day resolves to a set: rank every slot from the window start
+to the end of the local day by export price, take the cheapest until the need is
+covered, and hold every window slot outside that set.
+
+The ranking spans the whole day while the hold only covers the window, because
+those are different questions: which slots are *worth* charging in is a fact
+about the day, while the window is the user's declaration of where this rule may
+write at all. Slots past ``window.end`` are never held — they are free either
+way, and ranking them is what lets "hold the whole morning, charge in the
+afternoon" fall out of the same arithmetic as "charge at noon".
 
 Runs **before** ``export_price`` in config order so ``export_price``'s protective
 ``stop_export`` wins any slot both want.
@@ -16,7 +32,7 @@ a group can hold to a later hour or a higher target SoC on surplus days.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
@@ -39,13 +55,16 @@ from ..explain import (
     VERDICT_SKIP,
 )
 from ..fields import time_on
-from ..rails import read_clipped_surplus_by_bucket
+from ..rails import (
+    read_clipped_surplus_by_bucket,
+    read_export_price_by_bucket,
+    slot_bucket_starts,
+)
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
     from ..conditions import Eligibility
     from ..config import OptimizerInstanceConfig
-    from ..day_context import DayContext
     from ..snapshot import OptimizationSnapshot
     from ..trace import OptimizerTrace
 
@@ -63,12 +82,22 @@ GATE_DAY_CONTEXT = "day_context"
 GATE_DAY_GROUP_MATCHED = "day_group_matched"
 #: The slot falls inside the group's configured hold window.
 GATE_HOLD_WINDOW = "hold_window"
-#: The day's remaining solar can still refill the battery from *somewhere* in
-#: the window. Day-scoped: one release computation serves every slot of the date.
+#: The day's remaining solar can still refill the battery at all. Day-scoped:
+#: one accounting serves every slot of the date.
 GATE_HOLD_ROOM = "hold_room"
-#: The slot precedes the day's release. This is the day-hold release itself —
-#: ``params.boundBy`` names what set it (surplus / window_end / day_min_window).
-GATE_BEFORE_RELEASE = "before_release"
+#: Where the slot placed in the day's export-price ranking. **An ordinal, not a
+#: truth value** — ``params.rank`` / ``params.rankOf`` carry the position, the
+#: same shape ``charge_from_grid`` uses for its cheap band.
+#:
+#: The polarity is the one this module's gates have always had — ``true`` means
+#: *this slot is held*. So ``true`` is the slot that lost the ranking: enough
+#: cheaper slots already cover the need, and the surplus here is worth more
+#: exported. ``false`` releases the slot to charge. (``charge_from_grid`` reads
+#: the other way round because there the cut is what it *writes*; here the cut
+#: is what it leaves alone.) The diagram requires it this way too: a slot that
+#: ends at ``execute`` must have every gate ``true``, or the picture contradicts
+#: its own terminal.
+GATE_CHEAPEST_RANK = "cheapest_rank"
 
 
 @dataclass(frozen=True)
@@ -114,13 +143,22 @@ class ChargeHoldOptimizer:
             )
             return writer.flush(action=_ACTION)
 
-        surplus_by_bucket = read_clipped_surplus_by_bucket(
-            snapshot, max_charge_power_kw=max_charge_power_kw
+        surplus_by_slot = _read_surplus_by_slot(
+            snapshot,
+            slot_ids=eligibility.horizon_slot_ids,
+            max_charge_power_kw=max_charge_power_kw,
+        )
+        price_by_slot = _read_export_price_by_slot(
+            snapshot, slot_ids=eligibility.horizon_slot_ids
         )
         tzinfo = build_horizon_start(snapshot.context.now).tzinfo
 
+        slots_by_date: dict[date, list[str]] = {}
+        for slot_id in eligibility.horizon_slot_ids:
+            slots_by_date.setdefault(parse_slot_id(slot_id).date(), []).append(slot_id)
+
         # Categorize every horizon slot so the column is fully explained. The
-        # hold window / release rationale is genuinely non-derivable, so it is
+        # hold window / ranking rationale is genuinely non-derivable, so it is
         # all emitted here (the E rows of the reason catalogue).
         resolutions: dict[date, _DayHoldResolution] = {}
 
@@ -128,14 +166,11 @@ class ChargeHoldOptimizer:
             if local_date in resolutions:
                 return resolutions[local_date]
             resolved = eligibility.for_day(local_date)
-            day_context = snapshot.context.day_contexts.get(local_date)
-            if resolved is None or day_context is None:
+            if resolved is None or local_date not in snapshot.context.day_contexts:
                 return None
             params = resolved.params
             battery_first = params["battery_first"]
             resolution = _resolve_day_hold(
-                local_date=local_date,
-                day_context=day_context,
                 window_start=time_on(
                     params["window"]["start"], local_date, tzinfo=tzinfo
                 ),
@@ -148,14 +183,15 @@ class ChargeHoldOptimizer:
                 ),
                 margin_pct=battery_first["margin_pct"],
                 group_label=resolved.group.label,
-                surplus_by_bucket=surplus_by_bucket,
-                tzinfo=tzinfo,
+                day_slot_ids=slots_by_date.get(local_date, []),
+                surplus_by_slot=surplus_by_slot,
+                price_by_slot=price_by_slot,
             )
             resolutions[local_date] = resolution
             return resolution
 
         applied_by_day: dict[date, list[str]] = {}
-        after_release_by_day: dict[date, list[str]] = {}
+        released_by_day: dict[date, list[str]] = {}
         no_room_by_day: dict[date, list[str]] = {}
         no_day_context: list[str] = []
         outside_window_by_day: dict[date, list[str]] = {}
@@ -180,22 +216,22 @@ class ChargeHoldOptimizer:
             if not (resolved.window_start <= slot_start < resolved.window_end):
                 outside_window_by_day.setdefault(local_date, []).append(slot_id)
                 continue
-            if resolved.release_slot is None:
+            if not resolved.has_room:
                 no_room_by_day.setdefault(local_date, []).append(slot_id)
                 continue
-            if slot_start < resolved.release_slot:
-                held_by_day.setdefault(local_date, []).append(slot_id)
-                if writer.set_inverter(slot_id, kind=SCHEDULE_ACTION_STOP_CHARGING):
-                    applied_by_day.setdefault(local_date, []).append(slot_id)
-            else:
-                after_release_by_day.setdefault(local_date, []).append(slot_id)
+            if slot_id in resolved.released:
+                released_by_day.setdefault(local_date, []).append(slot_id)
+                continue
+            held_by_day.setdefault(local_date, []).append(slot_id)
+            if writer.set_inverter(slot_id, kind=SCHEDULE_ACTION_STOP_CHARGING):
+                applied_by_day.setdefault(local_date, []).append(slot_id)
 
         _emit_charge_hold_gates(
             trace,
             eligibility=eligibility,
             resolutions=resolutions,
             applied_by_day=applied_by_day,
-            after_release_by_day=after_release_by_day,
+            released_by_day=released_by_day,
             no_room_by_day=no_room_by_day,
             no_day_context=no_day_context,
             outside_window_by_day=outside_window_by_day,
@@ -205,7 +241,7 @@ class ChargeHoldOptimizer:
         _emit_charge_hold_decisions(
             trace,
             applied_by_day=applied_by_day,
-            after_release_by_day=after_release_by_day,
+            released_by_day=released_by_day,
             no_room_by_day=no_room_by_day,
             outside_window=[
                 slot_id
@@ -232,12 +268,36 @@ def _compute_needed_kwh(
 
 
 @dataclass(frozen=True)
+class _RankedSlot:
+    """One candidate slot's place in the day's export-price ranking."""
+
+    slot_id: str
+    rank: int  # 1-based
+    price: float | None  # None = the export feed says nothing about this slot
+    surplus_kwh: float
+    #: Need covered by this slot and every cheaper one — only for a slot that is
+    #: actually in the charge set. A held slot contributes nothing, so quoting a
+    #: running total against it would read as energy it supplies.
+    cumulative_kwh: float | None
+
+
+@dataclass(frozen=True)
 class _DayHoldResolution:
     window_start: datetime
     window_end: datetime
-    release_slot: datetime | None
-    bound_by: str | None
+    #: The day's slots that may charge — the cheapest prefix of the ranking that
+    #: covers the threshold. Slots outside the window are in here too, because
+    #: the ranking spans the day; the hold only ever consults window slots.
+    released: frozenset[str]
+    #: Rank record per *window* slot, for the gate. Keyed by slot id.
+    ranked_by_slot: dict[str, _RankedSlot]
+    rank_of: int
+    #: Price of the dearest slot that made the charge set — what every held slot
+    #: lost to.
+    marginal_price: float | None
+    has_room: bool
     surplus_at_window_start: float
+    threshold_kwh: float
     # Carried per day because `battery_first` is group-overridable: two days can
     # resolve to different groups and so to different needs and margins.
     needed_kwh: float
@@ -247,77 +307,105 @@ class _DayHoldResolution:
 
 def _resolve_day_hold(
     *,
-    local_date: date,
-    day_context: "DayContext",
     window_start: datetime,
     window_end: datetime,
     needed_kwh: float,
     margin_pct: float,
     group_label: str,
-    surplus_by_bucket: list[tuple[datetime, float]],
-    tzinfo,
+    day_slot_ids: list[str],
+    surplus_by_slot: dict[str, float],
+    price_by_slot: dict[str, float],
 ) -> _DayHoldResolution:
-    def _resolution(
-        release_slot: datetime | None,
-        bound_by: str | None,
-        surplus_at_window_start: float,
-    ) -> _DayHoldResolution:
-        return _DayHoldResolution(
-            window_start=window_start,
-            window_end=window_end,
-            release_slot=release_slot,
-            bound_by=bound_by,
-            surplus_at_window_start=surplus_at_window_start,
-            needed_kwh=needed_kwh,
-            margin_pct=margin_pct,
-            group_label=group_label,
-        )
+    """Rank the day's slots by export price and cut at the need.
 
-    if window_end <= window_start:
-        return _resolution(None, None, 0.0)
-
-    # Only this calendar day's own solar can refill the battery for this day's
-    # hold, so bound the surplus accounting at the local midnight after
-    # ``local_date`` — never spill tomorrow's forecast surplus into today.
-    day_end = datetime.combine(local_date + timedelta(days=1), time.min, tzinfo=tzinfo)
-    surplus_at_window_start = _surplus_between(surplus_by_bucket, window_start, day_end)
-    day_min_window_start = (
-        None if day_context.day_min_window is None else day_context.day_min_window.start
+    Candidates run from ``window_start`` to the end of the local day — only this
+    calendar day's own solar can refill the battery for this day's hold, and
+    ``day_slot_ids`` is already scoped to the date, so no part of tomorrow's
+    forecast can leak in.
+    """
+    threshold = max(0.0, needed_kwh) * (1 + margin_pct / 100)
+    # A slot with no surplus is not a place the battery can charge, so it takes
+    # no place in the ranking: letting it into the cheap prefix would spend a
+    # rank on nothing and read as "released" where there is nothing to release.
+    # Left out of the ranking it is simply held, as every pre-dawn slot was
+    # under the release model.
+    candidates = [
+        slot_id
+        for slot_id in day_slot_ids
+        if parse_slot_id(slot_id) >= window_start
+        and surplus_by_slot.get(slot_id, 0.0) > 0
+    ]
+    # Cheapest first; ties go to the earlier slot, which banks the charge sooner
+    # and so leaves more of the day to recover from a short forecast. An unknown
+    # price sorts last: it is only ever charged into as a last resort.
+    ranking = sorted(
+        candidates,
+        key=lambda slot_id: (
+            price_by_slot.get(slot_id, float("inf")),
+            dt_util.as_utc(parse_slot_id(slot_id)),
+        ),
     )
 
-    if needed_kwh <= 0:
-        # Nothing to charge: hold across the whole window (price bound may only
-        # shorten it).
-        latest_safe_release = window_end
-        bound_by = "window_end"
-    else:
-        threshold = needed_kwh * (1 + margin_pct / 100)
-        # surplus in [t, day_end) is monotonically non-increasing in t, so the
-        # latest candidate slot that still covers the threshold is the boundary.
-        latest_safe_release = None
-        cursor = window_start
-        while cursor <= window_end:
-            if _surplus_between(surplus_by_bucket, cursor, day_end) >= threshold:
-                latest_safe_release = cursor
-            cursor += _SLOT_DURATION
-        if latest_safe_release is None:
-            # Even releasing at window.start cannot cover the need: no room to
-            # hold.
-            return _resolution(None, None, surplus_at_window_start)
-        bound_by = "surplus"
-
-    if day_min_window_start is not None and day_min_window_start < latest_safe_release:
-        return _resolution(
-            day_min_window_start, "day_min_window", surplus_at_window_start
+    released: set[str] = set()
+    ranked: list[_RankedSlot] = []
+    cumulative = 0.0
+    covered = cumulative >= threshold
+    for index, slot_id in enumerate(ranking):
+        surplus_kwh = surplus_by_slot.get(slot_id, 0.0)
+        in_charge_set = not covered
+        if in_charge_set:
+            cumulative += surplus_kwh
+            released.add(slot_id)
+            covered = cumulative >= threshold
+        ranked.append(
+            _RankedSlot(
+                slot_id=slot_id,
+                rank=index + 1,
+                price=price_by_slot.get(slot_id),
+                surplus_kwh=surplus_kwh,
+                cumulative_kwh=cumulative if in_charge_set else None,
+            )
         )
-    return _resolution(latest_safe_release, bound_by, surplus_at_window_start)
+
+    # `covered` is the room test: the ranking walks every slot of the day from
+    # the window start, so failing to reach the threshold means the day's whole
+    # remaining surplus falls short and no slot of it can be held.
+    marginal_price: float | None = None
+    if covered and released:
+        prices = [
+            record.price
+            for record in ranked
+            if record.slot_id in released and record.price is not None
+        ]
+        marginal_price = max(prices) if prices else None
+
+    return _DayHoldResolution(
+        window_start=window_start,
+        window_end=window_end,
+        released=frozenset(released),
+        ranked_by_slot={
+            record.slot_id: record
+            for record in ranked
+            if parse_slot_id(record.slot_id) < window_end
+        },
+        rank_of=len(ranked),
+        marginal_price=marginal_price,
+        has_room=covered and window_end > window_start,
+        surplus_at_window_start=sum(
+            surplus_by_slot.get(slot_id, 0.0) for slot_id in candidates
+        ),
+        threshold_kwh=threshold,
+        needed_kwh=needed_kwh,
+        margin_pct=margin_pct,
+        group_label=group_label,
+    )
 
 
 def _emit_charge_hold_decisions(
     trace,
     *,
     applied_by_day: dict[date, list[str]],
-    after_release_by_day: dict[date, list[str]],
+    released_by_day: dict[date, list[str]],
     no_room_by_day: dict[date, list[str]],
     outside_window: list[str],
     day_not_matched: dict[str, list[str]],
@@ -331,7 +419,7 @@ def _emit_charge_hold_decisions(
     """
     for slot_ids in applied_by_day.values():
         trace.decision(slot_ids=slot_ids, outcome="applied", action=_ACTION)
-    for slot_ids in after_release_by_day.values():
+    for slot_ids in released_by_day.values():
         trace.decision(slot_ids=slot_ids, outcome="out_of_scope")
     for slot_ids in no_room_by_day.values():
         trace.decision(slot_ids=slot_ids, outcome="rejected")
@@ -347,7 +435,7 @@ def _emit_charge_hold_gates(
     eligibility: "Eligibility",
     resolutions: dict[date, _DayHoldResolution],
     applied_by_day: dict[date, list[str]],
-    after_release_by_day: dict[date, list[str]],
+    released_by_day: dict[date, list[str]],
     no_room_by_day: dict[date, list[str]],
     no_day_context: list[str],
     outside_window_by_day: dict[date, list[str]],
@@ -415,17 +503,36 @@ def _emit_charge_hold_gates(
             "neededKwh": round(resolved.needed_kwh, 3),
             "marginPct": resolved.margin_pct,
             "surplusAtWindowStart": round(resolved.surplus_at_window_start, 3),
+            "thresholdKwh": round(resolved.threshold_kwh, 3),
         }
 
-    def _release_params(resolved: _DayHoldResolution) -> dict[str, Any]:
-        return {
-            "releaseSlot": (
-                None
-                if resolved.release_slot is None
-                else format_slot_id(resolved.release_slot)
-            ),
-            "boundBy": resolved.bound_by,
-        }
+    def _emit_rank(
+        local_date: date, slot_ids: list[str], *, state: str
+    ) -> None:
+        """One gate per slot: the ranking is the one thing that differs per slot."""
+        resolved = resolutions[local_date]
+        for slot_id in slot_ids:
+            record = resolved.ranked_by_slot.get(slot_id)
+            trace.gate(
+                slot_ids=[slot_id],
+                key=GATE_CHEAPEST_RANK,
+                state=state,
+                params={
+                    "rank": None if record is None else record.rank,
+                    "rankOf": resolved.rank_of,
+                    "price": None if record is None else _rounded(record.price),
+                    "marginalPrice": _rounded(resolved.marginal_price),
+                    "slotSurplusKwh": (
+                        None if record is None else round(record.surplus_kwh, 3)
+                    ),
+                    "cumulativeKwh": (
+                        None
+                        if record is None or record.cumulative_kwh is None
+                        else round(record.cumulative_kwh, 3)
+                    ),
+                    "thresholdKwh": round(resolved.threshold_kwh, 3),
+                },
+            )
 
     for local_date, slot_ids in outside_window_by_day.items():
         resolved = _day_gates(local_date, slot_ids)
@@ -443,15 +550,15 @@ def _emit_charge_hold_gates(
             state=STATE_TRUE,
             params=_window_params(resolved),
         )
-        # Day-scoped: even releasing at the window start leaves the day's
-        # remaining solar short of the need, so no slot of it can be held.
+        # Day-scoped: the day's whole remaining surplus falls short of the need,
+        # so no slot of it can be held.
         trace.gate(
             slot_ids=slot_ids,
             key=GATE_HOLD_ROOM,
             state=STATE_FALSE,
             params=_room_params(resolved),
         )
-    for local_date, slot_ids in after_release_by_day.items():
+    for local_date, slot_ids in released_by_day.items():
         resolved = _day_gates(local_date, slot_ids)
         trace.gate(
             slot_ids=slot_ids,
@@ -465,12 +572,7 @@ def _emit_charge_hold_gates(
             state=STATE_TRUE,
             params=_room_params(resolved),
         )
-        trace.gate(
-            slot_ids=slot_ids,
-            key=GATE_BEFORE_RELEASE,
-            state=STATE_FALSE,
-            params=_release_params(resolved),
-        )
+        _emit_rank(local_date, slot_ids, state=STATE_FALSE)
     for local_date, slot_ids in held_by_day.items():
         # Held slots the user owns pass every one of these gates and are still
         # not written, so the gates cover the whole held set while only the
@@ -488,12 +590,7 @@ def _emit_charge_hold_gates(
             state=STATE_TRUE,
             params=_room_params(resolved),
         )
-        trace.gate(
-            slot_ids=slot_ids,
-            key=GATE_BEFORE_RELEASE,
-            state=STATE_TRUE,
-            params=_release_params(resolved),
-        )
+        _emit_rank(local_date, slot_ids, state=STATE_TRUE)
     for slot_ids in applied_by_day.values():
         _stamp_verdicts(trace, eligibility, slot_ids)
 
@@ -517,18 +614,76 @@ def _stamp_verdicts(
         )
 
 
-def _surplus_between(
-    surplus_by_bucket: list[tuple[datetime, float]],
-    release_time: datetime,
-    day_end: datetime,
-) -> float:
-    release_utc = dt_util.as_utc(release_time)
-    day_end_utc = dt_util.as_utc(day_end)
-    return sum(
-        surplus
-        for bucket_start, surplus in surplus_by_bucket
-        if release_utc <= dt_util.as_utc(bucket_start) < day_end_utc
-    )
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 4)
+
+
+def _read_surplus_by_slot(
+    snapshot: "OptimizationSnapshot",
+    *,
+    slot_ids: list[str],
+    max_charge_power_kw: float,
+) -> dict[str, float]:
+    """Charge-able surplus per schedule slot, from the finer forecast buckets.
+
+    Buckets are assigned to the slot that *contains* them rather than looked up
+    by :func:`slot_bucket_starts`, because the first bucket of a run starts at
+    ``now`` and so is off the canonical grid — an exact lookup would silently
+    drop the current slot's surplus.
+    """
+    by_slot: dict[str, float] = {}
+    slot_start_by_time = {parse_slot_id(slot_id): slot_id for slot_id in slot_ids}
+    if not slot_start_by_time:
+        return by_slot
+    starts = sorted(slot_start_by_time, key=dt_util.as_utc)
+    for bucket_start, surplus_kwh in read_clipped_surplus_by_bucket(
+        snapshot, max_charge_power_kw=max_charge_power_kw
+    ):
+        containing = _slot_containing(starts, bucket_start)
+        if containing is None:
+            continue
+        slot_id = slot_start_by_time[containing]
+        by_slot[slot_id] = by_slot.get(slot_id, 0.0) + surplus_kwh
+    return by_slot
+
+
+def _slot_containing(
+    starts: list[datetime], bucket_start: datetime
+) -> datetime | None:
+    """The latest slot start at or before ``bucket_start``, if it spans it."""
+    bucket_utc = dt_util.as_utc(bucket_start)
+    latest: datetime | None = None
+    for start in starts:
+        if dt_util.as_utc(start) <= bucket_utc:
+            latest = start
+        else:
+            break
+    if latest is None or dt_util.as_utc(latest) + _SLOT_DURATION <= bucket_utc:
+        return None
+    return latest
+
+
+def _read_export_price_by_slot(
+    snapshot: "OptimizationSnapshot", *, slot_ids: list[str]
+) -> dict[str, float]:
+    """Export price per schedule slot, or absent where the feed says nothing.
+
+    The rail already forward-fills the published points onto the canonical
+    buckets and stops at the end of the published day, so a slot's price is the
+    mean over the buckets it spans — within a slot they are all but always the
+    same value, and averaging never invents one where the day has ended.
+    """
+    price_by_bucket = read_export_price_by_bucket(snapshot)
+    by_slot: dict[str, float] = {}
+    for slot_id in slot_ids:
+        known = [
+            price
+            for bucket_start in slot_bucket_starts(slot_id)
+            if (price := price_by_bucket.get(bucket_start)) is not None
+        ]
+        if known:
+            by_slot[slot_id] = sum(known) / len(known)
+    return by_slot
 
 
 def build_charge_hold_optimizer(

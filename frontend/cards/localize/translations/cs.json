@@ -487,7 +487,6 @@
         "run_window": "Okno běhu",
         "hold_window": "Okno držení",
         "hold_room": "Prostor pro držení",
-        "before_release": "Před uvolněním",
         "day_context": "Kontext dne",
         "day_group_matched": "Skupina pro tento den",
         "daily_minimum_remaining": "Denní minimum",
@@ -505,7 +504,7 @@
         "blocked_user_owned": "Automatizace zapisuje jen do slotů, které si nenastavil uživatel. Splněno = slot není obsazen uživatelským plánem, je volný pro automatizaci; nesplněno = slot vlastní uživatel a automatizace do něj nezapíše.",
         "slot_available": "Slot, se kterým optimalizátor vůbec může počítat — sloty nastavené uživatelem se vyřazují ještě před výběrem, takže se do nich neplánuje.",
         "daily_minimum_remaining": "Kolik hodin denního minima je za tímto slotem: co spotřebič dnes už odběhl podle měřené historie plus to, co má plán naplánováno před tímto slotem. Samotné rozhodnutí padlo jednou pro celý den — brána říká, že den ještě nějaké hodiny dlužil, a podle toho se vybral počet slotů.",
-        "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot.",
+        "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot. U držení nabíjení je to obráceně: splněno = slot v žebříčku neuspěl, levnější sloty už potřebu pokryjí a přebytek se tady vyplatí spíš prodat.",
         "ensure_self_sustainability": "Co běh spotřebiče udělá s baterií: horizont se přepočítá s tímto slotem navíc a porovná se s průběhem bez spotřebiče. Měkký režim hlídá jen podlahu SoC, přísný navíc chce, aby se den zaplatil sám. Vyhodnocuje se postupně v pořadí podle ceny, takže výsledek závisí i na tom, které sloty byly přijaty před tímto."
       },
       "self_sustainability": {
