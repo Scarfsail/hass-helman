@@ -26,11 +26,20 @@ power_devices:
       total_energy_entity_id: sensor.house_energy_total
       min_history_days: 14
       training_window_days: 56
-      deferrable_consumers:
-        - energy_entity_id: sensor.ev_charging_energy_total
-          label: EV Charging
-        - energy_entity_id: sensor.pool_heating_energy_total
-          label: Pool Heating
+
+controllables:
+  - id: ev
+    kind: ev_charger
+    name: EV Charging
+    controls: { ... }
+    consumption:
+      energy_entity_id: sensor.ev_charging_energy_total
+  - id: pool
+    kind: generic
+    name: Pool Heating
+    controls: { ... }
+    consumption:
+      energy_entity_id: sensor.pool_heating_energy_total
 ```
 
 ### Config fields
@@ -38,11 +47,12 @@ power_devices:
 - `power_devices.house.forecast.total_energy_entity_id` — Required. Statistics-friendly cumulative energy entity used as the total forecast source.
 - `power_devices.house.forecast.min_history_days` — Optional. Minimum Recorder history span required before the forecast becomes available. Default: `14`.
 - `power_devices.house.forecast.training_window_days` — Optional. Hourly Recorder/statistics lookback window used to build the model. Default: `56`.
-- `power_devices.house.forecast.deferrable_consumers` — Optional list of separately forecasted flexible loads.
-  - `energy_entity_id` — Required. Statistics-friendly cumulative energy entity for the consumer.
-  - `label` — Optional user-facing label. If omitted, the entity ID is used.
 
-Deferrable consumers are deduplicated by `energy_entity_id`.
+The deferrable consumers — the separately forecast flexible loads — are not configured here. They are
+derived from `controllables` by `read_deferrable_consumers`: every non-inverter entry whose
+`consumption.energy_entity_id` names a statistics-friendly cumulative energy entity, unless
+`consumption.deferrable` is `false`. The entry's `name` is the user-facing label, falling back to the
+entity id. Order follows the `controllables` list and duplicate meters are taken once.
 
 ### Inspector history retention
 

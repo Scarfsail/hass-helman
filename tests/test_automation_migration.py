@@ -702,8 +702,12 @@ class ConsumptionBlockTests(unittest.TestCase):
         )
 
         self.assertNotIn("projection", entry)
+        consumption = dict(entry["consumption"])
+        # Written by the *next* step, which opts a meter that was never a
+        # deferrable consumer out of the split. Not this step's business.
+        consumption.pop("deferrable", None)
         self.assertEqual(
-            entry["consumption"],
+            consumption,
             {
                 "energy_entity_id": "sensor.pool_pump_energy_total",
                 "projection": {
@@ -739,7 +743,11 @@ class ConsumptionBlockTests(unittest.TestCase):
         for entry in entries:
             self.assertNotIn("consumption", entry)
 
-    def test_an_entry_already_carrying_consumption_is_left_alone(self) -> None:
+    def test_an_entry_already_carrying_consumption_keeps_its_own_shape(self) -> None:
+        # v8->v9 leaves a hand-written consumption block untouched. v9->v10 then
+        # writes `deferrable: false` on it, because a meter absent from the old
+        # deferrable list was never part of the baseline split — see
+        # DeferrableConsumerDerivationTests.
         already = {
             "kind": "generic",
             "id": "dishwasher",
@@ -751,7 +759,11 @@ class ConsumptionBlockTests(unittest.TestCase):
 
         (entry,) = self._migrate_from_v8(already)
 
-        self.assertEqual(entry, already)
+        self.assertEqual(entry["consumption"]["projection"], already["consumption"]["projection"])
+        self.assertEqual(
+            entry["consumption"]["energy_entity_id"],
+            "sensor.dishwasher_energy_total",
+        )
 
     def test_a_projection_of_the_wrong_type_still_moves(self) -> None:
         # The information survives; the reader reports the type error in the
@@ -779,6 +791,134 @@ class ConsumptionBlockTests(unittest.TestCase):
         self.assertNotIn("lookback_days", entry["consumption"]["projection"])
         self.assertEqual(
             entry["consumption"]["energy_entity_id"], "sensor.hvac_energy"
+        )
+
+
+class DeferrableConsumerDerivationTests(unittest.TestCase):
+    """v9->v10: ``deferrable_consumers`` is derived from ``controllables``.
+
+    The rule under test is the *baseline-preserving* one: the new default is
+    "a metered controllable is deferrable", but that was not true of any
+    existing config, so the step writes the old truth out explicitly rather
+    than letting the default rewrite every forecast on upgrade.
+    """
+
+    @staticmethod
+    def _migrate_from_v9(controllables, *listed):
+        document = {
+            "config_version": 9,
+            "controllables": list(controllables),
+            "power_devices": {
+                "house": {
+                    "forecast": {
+                        "total_energy_entity_id": "sensor.house_total",
+                        "deferrable_consumers": list(listed),
+                    }
+                }
+            },
+        }
+        migrated, _ids = migrate_config_document(document)
+        return (
+            migrated["controllables"],
+            migrated["power_devices"]["house"]["forecast"],
+        )
+
+    @staticmethod
+    def _metered(controllable_id, meter, name=None):
+        return {
+            "kind": "generic",
+            "id": controllable_id,
+            "name": name or controllable_id.title(),
+            "consumption": {
+                "energy_entity_id": meter,
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.0},
+            },
+        }
+
+    def test_a_listed_meter_keeps_the_new_default(self) -> None:
+        entries, forecast = self._migrate_from_v9(
+            [self._metered("pool", "sensor.pool_energy")],
+            {"energy_entity_id": "sensor.pool_energy", "label": "Pool"},
+        )
+
+        self.assertNotIn("deferrable", entries[0]["consumption"])
+        self.assertNotIn("deferrable_consumers", forecast)
+
+    def test_a_meter_that_was_never_listed_is_opted_out_explicitly(self) -> None:
+        # v9 lifted this meter out of `history_average`: the device was metered
+        # to project itself and was never part of the baseline split. Letting
+        # the new default claim it would move every forecast.
+        (entry,), _forecast = self._migrate_from_v9(
+            [self._metered("rack", "sensor.rack_energy")]
+        )
+
+        self.assertIs(entry["consumption"]["deferrable"], False)
+
+    def test_a_listed_device_with_no_meter_gains_one_by_its_name(self) -> None:
+        # The EV charger's case: it has no projection, so v9 gave it no
+        # consumption block, and the old list is the only place its meter was
+        # ever written down. The label is the link.
+        (entry,), _forecast = self._migrate_from_v9(
+            [
+                {
+                    "kind": "ev_charger",
+                    "id": "ev",
+                    "name": "EV Charging",
+                    "controls": {"charge": {"entity_id": "switch.ev"}},
+                }
+            ],
+            {
+                "energy_entity_id": "sensor.ev_charging_energy_total",
+                "label": "EV Charging",
+            },
+        )
+
+        self.assertEqual(
+            entry["consumption"],
+            {"energy_entity_id": "sensor.ev_charging_energy_total"},
+        )
+
+    def test_an_entry_matching_nothing_is_dropped(self) -> None:
+        entries, forecast = self._migrate_from_v9(
+            [self._metered("pool", "sensor.pool_energy")],
+            {"energy_entity_id": "sensor.pool_energy", "label": "Pool"},
+            {"energy_entity_id": "sensor.submeter_only", "label": "Something else"},
+        )
+
+        self.assertEqual(len(entries), 1)
+        self.assertNotIn("deferrable_consumers", forecast)
+
+    def test_the_inverter_is_never_touched(self) -> None:
+        (entry,), _forecast = self._migrate_from_v9(
+            [{"kind": "inverter", "id": "inverter", "name": "Inverter"}]
+        )
+
+        self.assertNotIn("consumption", entry)
+
+    def test_an_unmetered_controllable_is_left_alone(self) -> None:
+        untouched = {
+            "kind": "generic",
+            "id": "rail",
+            "name": "Towel rail",
+            "consumption": {
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.3}
+            },
+        }
+
+        (entry,), _forecast = self._migrate_from_v9([untouched])
+
+        self.assertEqual(entry, untouched)
+
+    def test_a_document_with_no_old_key_still_opts_metered_devices_out(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {
+                "config_version": 9,
+                "controllables": [self._metered("pool", "sensor.pool_energy")],
+            }
+        )
+
+        self.assertIs(
+            migrated["controllables"][0]["consumption"]["deferrable"], False
         )
 
 

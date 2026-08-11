@@ -146,9 +146,6 @@ power_devices:
       total_energy_entity_id: sensor.house_energy_total
       min_history_days: 14
       training_window_days: 42
-      deferrable_consumers:
-        - energy_entity_id: sensor.ev_charging_energy_total
-          label: EV Charging
 ```
 
 - `total_energy_entity_id`: required cumulative energy sensor used as the forecast source.
@@ -156,8 +153,26 @@ power_devices:
   before charts can be shown.
 - `training_window_days` (default 56): Recorder lookback window; keep ≥ `min_history_days`. This is
   the main driver of the nightly training cost — see [Scheduled work](#scheduled-work).
-- `deferrable_consumers`: optional per-consumer sub-meters, each a non-overlapping sub-meter already
-  included in the house total. Baseline is derived as `house total - sum(deferrables)`.
+
+**Deferrable consumers** — the loads subtracted from the house total to leave the baseline
+(`house total - sum(deferrables)`) — are not listed here. They are read off `controllables`: a
+controllable is a device whose consumption can be deferred, so each one that names its energy meter
+counts as one, unless it opts out.
+
+```yaml
+controllables:
+  - id: ev
+    kind: ev_charger
+    name: EV Charging
+    controls: { ... }
+    consumption:
+      energy_entity_id: sensor.ev_charging_energy_total   # a non-overlapping sub-meter
+      deferrable: true                                    # optional; true is the default
+```
+
+Set `deferrable: false` for a device you meter for its own demand projection but want left inside
+the baseline. The inverter may not declare `consumption` at all — it moves energy rather than
+drawing it.
 
 For how the house-load chain feeding `total_energy_entity_id` is built, see
 [Supporting entities](docs/supporting-entities.md#1-the-house-load-chain).

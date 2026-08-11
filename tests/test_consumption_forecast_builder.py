@@ -180,15 +180,24 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                         "total_energy_entity_id": "sensor.house_total",
                         "training_window_days": 56,
                         "min_history_days": 14,
-                        "deferrable_consumers": [
-                            {
-                                "energy_entity_id": "sensor.washer_energy",
-                                "label": "Washer",
-                            }
-                        ],
                     }
                 }
-            }
+            },
+            # The deferrable split is read off the controllables now: the
+            # washer is one because it is a controllable that names its meter,
+            # not because a second list said so.
+            "controllables": [
+                {
+                    "kind": "generic",
+                    "id": "washer",
+                    "name": "Washer",
+                    "controls": {"switch": {"entity_id": "switch.washer"}},
+                    "consumption": {
+                        "energy_entity_id": "sensor.washer_energy",
+                        "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.5},
+                    },
+                }
+            ],
         }
         return (
             consumption_module,

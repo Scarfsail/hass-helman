@@ -57,6 +57,9 @@ from custom_components.helman.automation.spec import (  # noqa: E402
     KNOWN_OPTIMIZER_KINDS,
     OPTIMIZER_SPECS,
 )
+from custom_components.helman.controllables.config import (  # noqa: E402
+    read_deferrable_consumers,
+)
 from custom_components.helman.controllables.spec import (  # noqa: E402
     CONTROLLABLE_SPECS,
     controllable_kinds_for_optimizer_kind,
@@ -405,6 +408,94 @@ class MigratedRuntimeEquivalenceTests(unittest.TestCase):
         self.assertEqual(
             json.dumps(roster(migrated)), json.dumps(roster(_config()))
         )
+
+
+class DeferrableConsumerReaderTests(unittest.TestCase):
+    """``read_deferrable_consumers``: which controllables the house forecast
+    carves out of its baseline, and what each one is called."""
+
+    @staticmethod
+    def _entry(controllable_id, *, meter=None, name=None, deferrable=None, kind="generic"):
+        entry = {"kind": kind, "id": controllable_id}
+        if name is not None:
+            entry["name"] = name
+        consumption = {}
+        if meter is not None:
+            consumption["energy_entity_id"] = meter
+        if deferrable is not None:
+            consumption["deferrable"] = deferrable
+        if consumption:
+            entry["consumption"] = consumption
+        return entry
+
+    def test_a_metered_controllable_is_deferrable_by_default(self) -> None:
+        consumers = read_deferrable_consumers(
+            {
+                "controllables": [
+                    self._entry("pool", meter="sensor.pool_energy", name="Pool pump")
+                ]
+            }
+        )
+
+        self.assertEqual(
+            consumers,
+            [{"energy_entity_id": "sensor.pool_energy", "label": "Pool pump"}],
+        )
+
+    def test_only_an_explicit_false_opts_a_device_out(self) -> None:
+        config = {
+            "controllables": [
+                self._entry("a", meter="sensor.a", name="A", deferrable=False),
+                self._entry("b", meter="sensor.b", name="B", deferrable=True),
+                # Neither None nor a bad value shrinks the list: the default is
+                # what a controllable means, not what it happens to say.
+                self._entry("c", meter="sensor.c", name="C", deferrable="yes"),
+            ]
+        }
+
+        self.assertEqual(
+            [c["energy_entity_id"] for c in read_deferrable_consumers(config)],
+            ["sensor.b", "sensor.c"],
+        )
+
+    def test_the_inverter_is_never_a_deferrable_consumer(self) -> None:
+        config = {
+            "controllables": [
+                self._entry(
+                    "inverter", meter="sensor.inverter", name="Inverter", kind="inverter"
+                )
+            ]
+        }
+
+        self.assertEqual(read_deferrable_consumers(config), [])
+
+    def test_a_controllable_without_a_meter_contributes_nothing(self) -> None:
+        config = {"controllables": [self._entry("rail", name="Towel rail")]}
+
+        self.assertEqual(read_deferrable_consumers(config), [])
+
+    def test_order_follows_the_list_and_a_duplicate_meter_is_taken_once(self) -> None:
+        config = {
+            "controllables": [
+                self._entry("b", meter="sensor.b", name="B"),
+                self._entry("a", meter="sensor.a", name="A"),
+                self._entry("b2", meter="sensor.b", name="B again"),
+            ]
+        }
+
+        self.assertEqual(
+            [c["label"] for c in read_deferrable_consumers(config)], ["B", "A"]
+        )
+
+    def test_an_unnamed_device_is_labelled_by_its_meter(self) -> None:
+        config = {"controllables": [self._entry("x", meter="sensor.x")]}
+
+        self.assertEqual(read_deferrable_consumers(config)[0]["label"], "sensor.x")
+
+    def test_a_config_without_controllables_yields_nothing(self) -> None:
+        self.assertEqual(read_deferrable_consumers({}), [])
+        self.assertEqual(read_deferrable_consumers(None), [])
+        self.assertEqual(read_deferrable_consumers({"controllables": "nonsense"}), [])
 
 
 if __name__ == "__main__":

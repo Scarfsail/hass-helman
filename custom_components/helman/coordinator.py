@@ -105,6 +105,7 @@ from .const import (
     SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
+from .controllables.config import read_deferrable_consumers
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
     profile_from_dict,
@@ -973,19 +974,13 @@ class HelmanCoordinator:
         )
 
     def _get_house_deferrable_consumers(self) -> list[dict[str, str]]:
-        """The configured deferrable appliances feeding the house forecast.
+        """The deferrable controllables feeding the house forecast.
 
-        Reuses the forecast builder's own reader so the inspector splits the
-        house actual by exactly the consumers the forecast is trained on.
+        One derivation, shared: the inspector splits the house actual by
+        exactly the consumers the forecast is trained on, because both ask
+        ``controllables`` the same question.
         """
-        power_devices = ConsumptionForecastBuilder._read_dict(
-            self._active_config.get("power_devices")
-        )
-        house_config = ConsumptionForecastBuilder._read_dict(power_devices.get("house"))
-        forecast_cfg = ConsumptionForecastBuilder._read_dict(house_config.get("forecast"))
-        return ConsumptionForecastBuilder._read_deferrable_consumers(
-            forecast_cfg.get("deferrable_consumers")
-        )
+        return read_deferrable_consumers(self._active_config)
 
     def _get_house_unmeasured_label(self) -> str | None:
         """The power card's own title for unmetered house load.
@@ -1073,9 +1068,7 @@ class HelmanCoordinator:
             forecast_cfg.get("min_history_days"),
             HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         )
-        consumers_config = ConsumptionForecastBuilder._read_deferrable_consumers(
-            forecast_cfg.get("deferrable_consumers")
-        )
+        consumers_config = read_deferrable_consumers(self._active_config)
         config_fingerprint = ConsumptionForecastBuilder._build_config_fingerprint(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,

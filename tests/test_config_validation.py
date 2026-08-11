@@ -80,12 +80,6 @@ def _valid_config() -> dict:
                     "total_energy_entity_id": "sensor.house_energy_total",
                     "min_history_days": 14,
                     "training_window_days": 56,
-                    "deferrable_consumers": [
-                        {
-                            "energy_entity_id": "sensor.washer_energy",
-                            "label": "Washer",
-                        }
-                    ],
                 },
             },
             "solar": {

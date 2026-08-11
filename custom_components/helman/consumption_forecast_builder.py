@@ -26,6 +26,7 @@ from .consumption_forecast_profiles import (
     HourOfWeekWinsorizedMeanProfile,
 )
 from .consumption_forecast_statistics import ForecastBand
+from .controllables.config import read_deferrable_consumers
 from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import (
     TodaySlotEnergyReader,
@@ -99,9 +100,7 @@ class ConsumptionForecastBuilder:
             forecast_config.get("training_window_days"),
             HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
         )
-        consumers_config = self._read_deferrable_consumers(
-            forecast_config.get("deferrable_consumers")
-        )
+        consumers_config = read_deferrable_consumers(self._config)
         config_fingerprint = self._build_config_fingerprint(
             total_energy_entity_id=total_energy_entity_id,
             training_window_days=training_window_days,
@@ -547,28 +546,6 @@ class ConsumptionForecastBuilder:
         if isinstance(raw_value, float) and raw_value.is_integer() and raw_value > 0:
             return int(raw_value)
         return default
-
-    @staticmethod
-    def _read_deferrable_consumers(raw_value: Any) -> list[dict[str, Any]]:
-        if not isinstance(raw_value, list):
-            return []
-        result: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for item in raw_value:
-            if not isinstance(item, dict):
-                continue
-            entity_id = item.get("energy_entity_id")
-            if not isinstance(entity_id, str) or not entity_id.strip():
-                continue
-            eid = entity_id.strip()
-            if eid in seen:
-                continue
-            seen.add(eid)
-            result.append({
-                "energy_entity_id": eid,
-                "label": item.get("label", eid),
-            })
-        return result
 
     @staticmethod
     def _build_config_fingerprint(

@@ -461,6 +461,126 @@ def _migrate_v8_to_v9(document: dict[str, Any]) -> tuple[dict[str, Any], list[st
     return (document, [])
 
 
+def _migrate_v9_to_v10(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``deferrable_consumers`` is derived from ``controllables`` now.
+
+    The old key listed ``{energy_entity_id, label}`` for the loads the house
+    forecast carves out of its baseline — the same devices already described
+    in ``controllables``, named a second time, with nothing holding the two
+    lists in agreement. Version 9 gave each entry its meter, so the list is
+    derivable and the key has nothing left to say.
+
+    The subtle half is the *default*. From here on a metered controllable is
+    deferrable unless it says otherwise, which is the right rule going forward
+    but not a description of any existing config: version 9 lifted meters out
+    of ``history_average`` for appliances that were metered only to project
+    themselves, and those were never in the deferrable list. Defaulting them
+    to ``True`` would quietly widen the baseline split on upgrade and change
+    every forecast. So this step writes ``deferrable: false`` on exactly those
+    entries — what was true before, said out loud — and leaves the ones that
+    *were* listed at the default.
+
+    Matching is by meter where both sides have one, and by the old entry's
+    ``label`` against the controllable's ``name`` where they do not — which is
+    how a device that was *only* ever a deferrable consumer, the EV charger
+    being the obvious one, gets its meter written onto its entry. The label was
+    typed to name the same device in the same UI, so it is the only link the
+    two lists ever had.
+
+    An entry matching neither is dropped. It described something measured but
+    not controlled, which the new shape has no room for; inventing a
+    control-less entry to hold it would be worse than the gap, and the user can
+    add the device properly.
+    """
+    forecast = _house_forecast_block(document)
+    by_meter, by_label = _listed_deferrable_consumers(forecast)
+
+    controllables = document.get("controllables")
+    if isinstance(controllables, list):
+        rebuilt: list[Any] = []
+        for entry in controllables:
+            if not isinstance(entry, Mapping) or entry.get("kind") == "inverter":
+                rebuilt.append(entry)
+                continue
+
+            raw_consumption = entry.get("consumption")
+            consumption = (
+                dict(raw_consumption) if isinstance(raw_consumption, Mapping) else {}
+            )
+            meter = consumption.get("energy_entity_id")
+            meter = meter.strip() if isinstance(meter, str) and meter.strip() else None
+            name = entry.get("name")
+            name = name.strip() if isinstance(name, str) else None
+
+            if meter is not None:
+                if meter in by_meter:
+                    by_meter.pop(meter)
+                else:
+                    # Metered for its own projection, never a deferrable
+                    # consumer. Say so, rather than letting the new default
+                    # widen the split behind the user's back.
+                    consumption.setdefault("deferrable", False)
+            elif name is not None and name in by_label:
+                consumption["energy_entity_id"] = by_label.pop(name)
+            else:
+                rebuilt.append(entry)
+                continue
+
+            rebuilt.append({**entry, "consumption": consumption})
+        document["controllables"] = rebuilt
+
+    if isinstance(forecast, dict):
+        forecast.pop("deferrable_consumers", None)
+    return (document, [])
+
+
+def _house_forecast_block(document: dict[str, Any]) -> Any:
+    """``power_devices.house.forecast``, or ``None`` if the path is not there."""
+    power_devices = document.get("power_devices")
+    if not isinstance(power_devices, dict):
+        return None
+    house = power_devices.get("house")
+    if not isinstance(house, dict):
+        return None
+    forecast = house.get("forecast")
+    return forecast if isinstance(forecast, dict) else None
+
+
+def _listed_deferrable_consumers(
+    forecast: Any,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The retired key as two indexes: ``meter -> label`` and ``label -> meter``.
+
+    Both are needed because the two lists could be joined from either side: an
+    entry whose meter the controllable already carries matches by meter, and
+    one whose device had no meter of its own matches by the name the user gave
+    it. First wins on either side; the old reader deduplicated by meter too.
+    """
+    if not isinstance(forecast, dict):
+        return ({}, {})
+    raw = forecast.get("deferrable_consumers")
+    if not isinstance(raw, list):
+        return ({}, {})
+
+    by_meter: dict[str, str] = {}
+    by_label: dict[str, str] = {}
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        entity_id = item.get("energy_entity_id")
+        if not isinstance(entity_id, str) or not entity_id.strip():
+            continue
+        entity_id = entity_id.strip()
+        label = item.get("label")
+        label = label.strip() if isinstance(label, str) and label.strip() else None
+        if entity_id in by_meter:
+            continue
+        by_meter[entity_id] = label or entity_id
+        if label is not None:
+            by_label.setdefault(label, entity_id)
+    return (by_meter, by_label)
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -470,6 +590,7 @@ _MIGRATIONS = {
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
+    9: _migrate_v9_to_v10,
 }
 
 
