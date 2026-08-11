@@ -741,6 +741,68 @@ class ConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_a_projection_without_a_meter_is_not_warned_about(self) -> None:
+        # The ordinary case: a fixed-strategy appliance that is simply not
+        # metered. The deferrable default must stay silent here, or most of a
+        # real config lights up with warnings that ask for nothing.
+        config = _valid_config()
+        config["controllables"] = [_inverter_controllable(), _generic_appliance()]
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.warnings, [])
+
+    def test_an_explicit_deferrable_without_a_meter_warns(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance()
+        appliance["consumption"]["deferrable"] = True
+        config["controllables"] = [_inverter_controllable(), appliance]
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertTrue(
+            any(
+                issue.code == "deferrable_without_meter"
+                and issue.path == "controllables[1].consumption"
+                for issue in report.warnings
+            )
+        )
+
+    def test_deferrable_must_be_a_boolean(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance(strategy="history_average")
+        appliance["consumption"]["deferrable"] = "yes"
+        config["controllables"] = [_inverter_controllable(), appliance]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "controllables[1].consumption.deferrable"
+                for issue in report.errors
+            )
+        )
+
+    def test_the_retired_deferrable_consumers_key_is_reported(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["house"]["forecast"]["deferrable_consumers"] = [
+            {"energy_entity_id": "sensor.washer_energy", "label": "Washer"}
+        ]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.house.forecast.deferrable_consumers"
+                and issue.code == "retired_config_key"
+                for issue in report.errors
+            )
+        )
+
     def test_climate_requires_climate_domain(self) -> None:
         config = _valid_config()
         appliance = _climate_appliance()

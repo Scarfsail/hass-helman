@@ -1034,9 +1034,12 @@ def _validate_controllable_consumption(
             code="invalid_type",
             message=f"{path}.consumption.deferrable must be true or false",
         )
-    elif deferrable is not False and energy_entity_id is None:
-        # Not an error: it configures nothing, but it breaks nothing either,
-        # and a half-filled form mid-edit should not read as broken config.
+    elif deferrable is True and energy_entity_id is None:
+        # Only an *explicit* true earns this: the user asked for something that
+        # will not happen. The default is silent — an appliance with a fixed
+        # projection and no meter is an ordinary config, not a half-finished
+        # one. Not an error either way: it configures nothing but breaks
+        # nothing, and a half-filled form mid-edit should not read as broken.
         report.add_warning(
             section=section,
             path=f"{path}.consumption",
