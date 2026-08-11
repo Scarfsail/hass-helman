@@ -16,7 +16,6 @@
       "saving": "Saving...",
       "add_category": "Add category",
       "add_badge_text": "Add badge text",
-      "add_deferrable_consumer": "Add deferrable consumer",
       "add_daily_energy_entity": "Add daily energy entity",
       "add_import_price_window": "Add import price window",
       "add_inverter": "Add inverter",
@@ -65,7 +64,6 @@
       "action_options": "Action options",
       "identity_and_limits": "Identity and limits",
       "controls": "Controls",
-      "projection": "Projection",
       "use_modes": "Use modes",
       "eco_gears": "Eco gears",
       "vehicles": "Vehicles",
@@ -75,7 +73,8 @@
       "solar_general": "General",
       "solar_forecast": "Forecast",
       "solar_forecast_general": "General",
-      "bias_correction_config": "Configuration"
+      "bias_correction_config": "Configuration",
+      "consumption": "Consumption"
     },
     "notes": {
       "device_label_text": "Configure badge text maps such as rooms or custom label groups. Unknown categories and entries are preserved.",
@@ -85,7 +84,8 @@
       "optimizer_pipeline": "Configure the ordered optimizer list here. Optimizers run in order, the runtime rebuilds the snapshot between steps, and unknown future optimizer keys and kinds are preserved exactly as stored so they can still be edited in YAML.",
       "controllables": "Everything Helman drives lives in one list: the inverter and the EV charger, climate and generic appliances. All four are edited directly here. Unsupported future kinds are preserved and shown read-only unless you remove them.",
       "generic_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the switch was on and falls back to the fixed value if history is insufficient.",
-      "climate_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the climate entity was active in heat or cool mode and falls back to the fixed value if history is insufficient."
+      "climate_appliance_projection": "Configure the fixed average hourly energy in kWh. When history average is selected, Helman estimates the average hourly energy while the climate entity was active in heat or cool mode and falls back to the fixed value if history is insufficient.",
+      "ev_charger_consumption": "The charger's own energy meter. It has no demand projection — that comes from the vehicle — but its load is deferrable, which is what lets the optimizer move charging into cheaper slots."
     },
     "empty": {
       "no_automation_optimizers": "No optimizers configured yet.",
@@ -95,7 +95,6 @@
     "card": {
       "category": "Category",
       "badge_text_entry": "Badge text entry",
-      "house_deferrable_consumer": "House forecast deferrable consumer",
       "daily_energy_entity": "Daily energy entity",
       "import_window": "Import window",
       "local_time_window": "Local time window",
@@ -184,7 +183,6 @@
       "switch_entity": "Switch entity",
       "projection_strategy": "Projection strategy",
       "hourly_energy_kwh": "Average hourly energy kWh",
-      "history_energy_entity": "History energy entity",
       "history_lookback_days": "History lookback days",
       "max_charging_power_kw": "Max charging power kW",
       "charge_switch_entity": "Charge switch entity",
@@ -218,7 +216,9 @@
       "condition_groups": "Condition groups",
       "custom_conditions": "Custom conditions",
       "group_params_override": "Override settings for this group",
-      "run_when": "Run on days"
+      "run_when": "Run on days",
+      "consumption_energy_entity": "Energy meter entity",
+      "consumption_deferrable": "Deferrable consumer"
     },
     "helpers": {
       "history_buckets": "How many history buckets Helman keeps for UI history.",
@@ -239,7 +239,6 @@
       "appliance_runtime_climate_mode_single": "This climate appliance currently exposes only one authorable mode, so the field is read-only.",
       "appliance_runtime_climate_mode_unknown": "The stored climate mode is no longer supported by the selected appliance. Pick one of the live supported modes to repair it.",
       "appliance_icon": "Optional. Leave empty to use the default energy icon in appliance metadata.",
-      "history_energy_entity": "Use a cumulative energy sensor that tracks the appliance energy consumption.",
       "bias_correction_min_history_days": "Minimum days of historical data (1-365) before training begins.",
       "bias_correction_max_training_window_days": "Maximum number of past days Helman may use to train the solar bias correction model.",
       "bias_correction_min_valid_slot_days": "Minimum number of valid historical day-slot samples required before a slot can contribute to training.",
@@ -252,7 +251,8 @@
       "condition_groups": "Evaluated first to last; the optimizer may act if any group matches as a whole.",
       "group_params_inherited": "Nothing overridden — this group uses the settings above.",
       "last_condition_group": "An optimizer needs at least one condition group.",
-      "custom_conditions": "ANDed with this group's system conditions. When only these fail, actions are still scheduled as candidates but never executed."
+      "custom_conditions": "ANDed with this group's system conditions. When only these fail, actions are still scheduled as candidates but never executed.",
+      "consumption_energy_entity": "Cumulative energy sensor (kWh) for this device. Optional."
     },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -324,7 +324,6 @@
       }
     },
     "dynamic": {
-      "consumer": "Consumer {index}",
       "daily_energy_entity": "Daily energy entity {index}",
       "import_window": "Import window {index}",
       "appliance": "Appliance {index}",
@@ -398,7 +397,6 @@
       "appliance_runtime_window": "Restrict placement to a daily time window. Leave off to allow the whole horizon.",
       "appliance_runtime_max_run_price": "Threshold in the same unit as the export price forecast. A window slot may only be used while its export price stays at or below this value for the whole slot; leave empty to place on any slot in the window. A day that cannot reach its minimum hours under this threshold still runs on the slots that qualify, and max consecutive skips eventually forces a full run.",
       "appliance_runtime_max_consecutive_skips": "Maximum consecutive days that may be skipped before the appliance is forced to run.",
-      "deferrable_consumer_energy_entity": "Cumulative energy sensor (kWh) that tracks this appliance's total electricity consumption. Helman uses its recorded history to estimate how much energy this appliance will consume in upcoming time slots, so it can be deferred to cheaper periods.",
       "appliance_id": "Unique internal identifier for this appliance. Used in automation references and schedule tracking. Should not be changed after the appliance is configured, as it may break existing automations.",
       "appliance_name": "Display name shown for this appliance in the Helman dashboard and energy breakdowns.",
       "ev_max_charging_power_kw": "Maximum charging power of the EV charger in kW. Used by the optimizer to model how quickly the vehicle can be charged and to plan charging windows accordingly.",
@@ -437,7 +435,9 @@
       "window_start": "Start of the daily window, as HH:MM local time.",
       "window_end": "End of the daily window, as HH:MM local time. Must be after the start.",
       "climate_mode": "Which mode this optimizer authors on the climate appliance.",
-      "min_hours_per_day": "Hours the appliance must accumulate inside the window each day."
+      "min_hours_per_day": "Hours the appliance must accumulate inside the window each day.",
+      "consumption_energy_entity": "Cumulative energy sensor (kWh) that tracks this device's total electricity consumption. It belongs to the device, not to any one use of it: the house forecast subtracts it from the house total to find the baseline, and a history-based demand projection reads it too.",
+      "consumption_deferrable": "On by default. The house consumption forecast subtracts this device from the house total, leaving a baseline of load that cannot be moved in time. Turn it off for a device you meter but that is not realistically schedulable — its load then stays inside the baseline."
     }
   },
   "common": {

@@ -89,9 +89,11 @@ def _generic_appliance() -> dict:
         "controls": {
             "switch": {"entity_id": "switch.dishwasher"},
         },
-        "projection": {
-            "strategy": "fixed",
-            "hourly_energy_kwh": 0.9,
+        "consumption": {
+            "projection": {
+                "strategy": "fixed",
+                "hourly_energy_kwh": 0.9,
+            },
         },
     }
 
@@ -104,9 +106,11 @@ def _climate_appliance() -> dict:
         "controls": {
             "climate": {"entity_id": "climate.living_room"},
         },
-        "projection": {
-            "strategy": "fixed",
-            "hourly_energy_kwh": 1.5,
+        "consumption": {
+            "projection": {
+                "strategy": "fixed",
+                "hourly_energy_kwh": 1.5,
+            },
         },
     }
 

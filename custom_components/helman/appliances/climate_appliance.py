@@ -120,37 +120,30 @@ def read_climate_appliance(
         allowed_domains=("climate",),
     )
 
-    projection = _read_mapping(value.get("projection"), path=f"{path}.projection")
+    consumption = _read_mapping(value.get("consumption"), path=f"{path}.consumption")
+    projection = _read_mapping(
+        consumption.get("projection"), path=f"{path}.consumption.projection"
+    )
     projection_strategy = _read_projection_strategy(
         projection.get("strategy"),
-        path=f"{path}.projection.strategy",
+        path=f"{path}.consumption.projection.strategy",
     )
     hourly_energy_kwh = _read_positive_float(
         projection.get("hourly_energy_kwh"),
-        path=f"{path}.projection.hourly_energy_kwh",
+        path=f"{path}.consumption.projection.hourly_energy_kwh",
     )
 
     history_energy_entity_id = None
     history_lookback_days = _DEFAULT_HISTORY_LOOKBACK_DAYS
-    raw_history_average = projection.get("history_average")
     if projection_strategy == "history_average":
-        if raw_history_average is None:
-            raise ClimateApplianceConfigError(
-                f"{path}.projection.history_average is required when strategy is "
-                "'history_average'"
-            )
-        history_average = _read_mapping(
-            raw_history_average,
-            path=f"{path}.projection.history_average",
-        )
         history_energy_entity_id = _read_entity_id(
-            history_average.get("energy_entity_id"),
-            path=f"{path}.projection.history_average.energy_entity_id",
+            consumption.get("energy_entity_id"),
+            path=f"{path}.consumption.energy_entity_id",
             allowed_domains=("sensor",),
         )
         history_lookback_days = _read_positive_int(
-            history_average.get("lookback_days", _DEFAULT_HISTORY_LOOKBACK_DAYS),
-            path=f"{path}.projection.history_average.lookback_days",
+            projection.get("lookback_days", _DEFAULT_HISTORY_LOOKBACK_DAYS),
+            path=f"{path}.consumption.projection.lookback_days",
         )
 
     return ClimateApplianceRuntime(

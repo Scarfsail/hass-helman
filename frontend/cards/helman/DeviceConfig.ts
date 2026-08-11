@@ -30,16 +30,10 @@ export interface GridDeviceConfig extends PowerDeviceConfigBase {
     }
 }
 
-export interface HouseForecastDeferrableConsumerConfig {
-    energy_entity_id: string;
-    label?: string;
-}
-
 export interface HouseForecastConfig {
     total_energy_entity_id: string;
     min_history_days?: number;
     training_window_days?: number;
-    deferrable_consumers?: HouseForecastDeferrableConsumerConfig[];
 }
 
 export interface HouseDeviceConfig extends PowerDeviceConfigBase {

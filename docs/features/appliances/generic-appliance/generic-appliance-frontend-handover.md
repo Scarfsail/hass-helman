@@ -16,11 +16,11 @@ The later frontend work elsewhere only needs to consume the new backend surfaces
       "entity_id": "switch.dishwasher"
     }
   },
-  "projection": {
-    "strategy": "fixed",
-    "hourly_energy_kwh": 1.2,
-    "history_average": {
-      "energy_entity_id": "sensor.dishwasher_energy_total",
+  "consumption": {
+    "energy_entity_id": "sensor.dishwasher_energy_total",
+    "projection": {
+      "strategy": "fixed",
+      "hourly_energy_kwh": 1.2,
       "lookback_days": 30
     }
   }
@@ -29,12 +29,13 @@ The later frontend work elsewhere only needs to consume the new backend surfaces
 
 ## Semantics
 
-- `projection.hourly_energy_kwh` is always required and represents **average hourly energy**, not per-slot energy.
-- `projection.strategy` supports `fixed` and `history_average`.
-- When `projection.strategy` is `history_average`, `projection.history_average.energy_entity_id` and `lookback_days` are required.
-- `projection.history_average.energy_entity_id` must be a cumulative energy sensor.
-- If history is insufficient, the backend falls back to `projection.hourly_energy_kwh`.
-- When strategy is `fixed`, any `history_average` branch is ignored by the runtime.
+- `consumption` is the sibling of `controls`: everything the device *draws*, as against how it is driven.
+- `consumption.projection.hourly_energy_kwh` is always required and represents **average hourly energy**, not per-slot energy.
+- `consumption.projection.strategy` supports `fixed` and `history_average`.
+- When the strategy is `history_average`, `consumption.energy_entity_id` is required; `lookback_days` defaults to 30.
+- `consumption.energy_entity_id` must be a cumulative energy sensor. It belongs to the device, not to the strategy, so a kind with no projection at all may still declare one.
+- If history is insufficient, the backend falls back to `consumption.projection.hourly_energy_kwh`.
+- When the strategy is `fixed`, `consumption.energy_entity_id` is not read by the projection path.
 
 ## get_appliances
 

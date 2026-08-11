@@ -87,11 +87,11 @@ def _generic_appliance() -> dict:
                 "entity_id": "switch.dishwasher",
             }
         },
-        "projection": {
-            "strategy": "history_average",
-            "hourly_energy_kwh": 1.2,
-            "history_average": {
-                "energy_entity_id": "sensor.dishwasher_energy_total",
+        "consumption": {
+            "energy_entity_id": "sensor.dishwasher_energy_total",
+            "projection": {
+                "strategy": "history_average",
+                "hourly_energy_kwh": 1.2,
                 "lookback_days": 21,
             },
         },
@@ -108,16 +108,18 @@ def _climate_appliance(*, strategy: str = "fixed") -> dict:
                 "entity_id": "climate.living_room",
             }
         },
-        "projection": {
-            "strategy": strategy,
-            "hourly_energy_kwh": 1.5,
+        "consumption": {
+            "projection": {
+                "strategy": strategy,
+                "hourly_energy_kwh": 1.5,
+            },
         },
     }
     if strategy == "history_average":
-        appliance["projection"]["history_average"] = {
-            "energy_entity_id": "sensor.living_room_hvac_energy_total",
-            "lookback_days": 14,
-        }
+        appliance["consumption"]["energy_entity_id"] = (
+            "sensor.living_room_hvac_energy_total"
+        )
+        appliance["consumption"]["projection"]["lookback_days"] = 14
     return appliance
 
 
@@ -278,15 +280,15 @@ class ApplianceConfigTests(unittest.TestCase):
         self.assertEqual(registry.appliances, ())
         self.assertIn(".icon", captured.output[0])
 
-    def test_invalid_generic_history_strategy_is_ignored_with_error_log(self) -> None:
+    def test_history_strategy_without_energy_entity_is_ignored_with_error_log(self) -> None:
         invalid = _generic_appliance()
-        del invalid["projection"]["history_average"]
+        del invalid["consumption"]["energy_entity_id"]
 
         with self.assertLogs("custom_components.helman.appliances.config", level="ERROR") as captured:
             registry = build_appliances_runtime_registry({"controllables": [invalid]})
 
         self.assertEqual(registry.appliances, ())
-        self.assertIn("history_average is required", captured.output[0])
+        self.assertIn("consumption.energy_entity_id", captured.output[0])
 
     def test_invalid_climate_domain_is_ignored_with_error_log(self) -> None:
         invalid = _climate_appliance()

@@ -409,6 +409,19 @@ class ControllablesUnificationTests(unittest.TestCase):
         "controls": {"switch": {"entity_id": "switch.dishwasher"}},
         "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
     }
+    #: What ``_APPLIANCE`` looks like once the chain has also run v8 -> v9,
+    #: which moves ``projection`` under ``consumption``. These tests migrate all
+    #: the way to the current version, so the v6 -> v7 assertions have to expect
+    #: the later step's output too.
+    _APPLIANCE_V9 = {
+        "kind": "generic",
+        "id": "dishwasher",
+        "name": "Dishwasher",
+        "controls": {"switch": {"entity_id": "switch.dishwasher"}},
+        "consumption": {
+            "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.2},
+        },
+    }
 
     @classmethod
     def _migrate_from_v6(cls, document):
@@ -440,19 +453,20 @@ class ControllablesUnificationTests(unittest.TestCase):
                         }
                     },
                 },
-                self._APPLIANCE,
+                self._APPLIANCE_V9,
             ],
         )
         self.assertEqual(ids, [])
 
-    def test_appliance_entries_move_verbatim_and_keep_their_order(self) -> None:
+    def test_appliance_entries_move_across_and_keep_their_order(self) -> None:
         second = {**self._APPLIANCE, "id": "boiler", "name": "Boiler"}
+        second_v9 = {**self._APPLIANCE_V9, "id": "boiler", "name": "Boiler"}
 
         migrated, _ids = self._migrate_from_v6(
             {"appliances": [self._APPLIANCE, second]}
         )
 
-        self.assertEqual(migrated["controllables"], [self._APPLIANCE, second])
+        self.assertEqual(migrated["controllables"], [self._APPLIANCE_V9, second_v9])
 
     def test_an_installation_without_a_wired_inverter_gets_no_entry(self) -> None:
         migrated, _ids = self._migrate_from_v6({"scheduler": {}, "appliances": []})
@@ -652,6 +666,259 @@ class RunWhenInversionTests(unittest.TestCase):
         self.assertNotIn("skip", migrated["params"])
         self.assertEqual(
             migrated["params"]["daily_minimum"]["max_consecutive_skips"], 2
+        )
+
+
+class ConsumptionBlockTests(unittest.TestCase):
+    """v8->v9: ``projection`` moves under ``consumption``, meter lifted out.
+
+    Table-driven over the shapes a stored entry can have: a history strategy
+    carrying a meter, a fixed strategy carrying none, an entry with no
+    projection at all, and the two shapes that must be left alone.
+    """
+
+    @staticmethod
+    def _migrate_from_v8(*controllables):
+        migrated, _ids = migrate_config_document(
+            {"controllables": list(controllables), "config_version": 8}
+        )
+        return migrated["controllables"]
+
+    def test_the_meter_comes_up_and_lookback_flattens(self) -> None:
+        (entry,) = self._migrate_from_v8(
+            {
+                "kind": "generic",
+                "id": "pool-pump",
+                "controls": {"switch": {"entity_id": "switch.pool_pump"}},
+                "projection": {
+                    "strategy": "history_average",
+                    "hourly_energy_kwh": 1.2,
+                    "history_average": {
+                        "energy_entity_id": "sensor.pool_pump_energy_total",
+                        "lookback_days": 21,
+                    },
+                },
+            }
+        )
+
+        self.assertNotIn("projection", entry)
+        consumption = dict(entry["consumption"])
+        # Written by the *next* step, which opts a meter that was never a
+        # deferrable consumer out of the split. Not this step's business.
+        consumption.pop("deferrable", None)
+        self.assertEqual(
+            consumption,
+            {
+                "energy_entity_id": "sensor.pool_pump_energy_total",
+                "projection": {
+                    "strategy": "history_average",
+                    "hourly_energy_kwh": 1.2,
+                    "lookback_days": 21,
+                },
+            },
+        )
+
+    def test_a_fixed_strategy_moves_across_without_gaining_a_meter(self) -> None:
+        (entry,) = self._migrate_from_v8(
+            {
+                "kind": "generic",
+                "id": "dishwasher",
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.9},
+            }
+        )
+
+        self.assertEqual(
+            entry["consumption"],
+            {"projection": {"strategy": "fixed", "hourly_energy_kwh": 0.9}},
+        )
+
+    def test_an_entry_without_a_projection_is_left_alone(self) -> None:
+        # The inverter's case, and the EV charger's. Neither may grow a
+        # consumption block here — version 10 is what gives the charger one.
+        entries = self._migrate_from_v8(
+            {"kind": "inverter", "id": "inverter", "controls": {"mode": {}}},
+            {"kind": "ev_charger", "id": "ev", "controls": {"charge": {}}},
+        )
+
+        for entry in entries:
+            self.assertNotIn("consumption", entry)
+
+    def test_an_entry_already_carrying_consumption_keeps_its_own_shape(self) -> None:
+        # v8->v9 leaves a hand-written consumption block untouched. v9->v10 then
+        # writes `deferrable: false` on it, because a meter absent from the old
+        # deferrable list was never part of the baseline split — see
+        # DeferrableConsumerDerivationTests.
+        already = {
+            "kind": "generic",
+            "id": "dishwasher",
+            "consumption": {
+                "energy_entity_id": "sensor.dishwasher_energy_total",
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.9},
+            },
+        }
+
+        (entry,) = self._migrate_from_v8(already)
+
+        self.assertEqual(entry["consumption"]["projection"], already["consumption"]["projection"])
+        self.assertEqual(
+            entry["consumption"]["energy_entity_id"],
+            "sensor.dishwasher_energy_total",
+        )
+
+    def test_a_projection_of_the_wrong_type_still_moves(self) -> None:
+        # The information survives; the reader reports the type error in the
+        # new vocabulary rather than the value vanishing on upgrade.
+        (entry,) = self._migrate_from_v8(
+            {"kind": "generic", "id": "dishwasher", "projection": "nonsense"}
+        )
+
+        self.assertEqual(entry["consumption"], {"projection": "nonsense"})
+
+    def test_a_history_average_holding_only_a_meter_leaves_no_empty_block(self) -> None:
+        (entry,) = self._migrate_from_v8(
+            {
+                "kind": "climate",
+                "id": "hvac",
+                "projection": {
+                    "strategy": "history_average",
+                    "hourly_energy_kwh": 1.5,
+                    "history_average": {"energy_entity_id": "sensor.hvac_energy"},
+                },
+            }
+        )
+
+        self.assertNotIn("history_average", entry["consumption"]["projection"])
+        self.assertNotIn("lookback_days", entry["consumption"]["projection"])
+        self.assertEqual(
+            entry["consumption"]["energy_entity_id"], "sensor.hvac_energy"
+        )
+
+
+class DeferrableConsumerDerivationTests(unittest.TestCase):
+    """v9->v10: ``deferrable_consumers`` is derived from ``controllables``.
+
+    The rule under test is the *baseline-preserving* one: the new default is
+    "a metered controllable is deferrable", but that was not true of any
+    existing config, so the step writes the old truth out explicitly rather
+    than letting the default rewrite every forecast on upgrade.
+    """
+
+    @staticmethod
+    def _migrate_from_v9(controllables, *listed):
+        document = {
+            "config_version": 9,
+            "controllables": list(controllables),
+            "power_devices": {
+                "house": {
+                    "forecast": {
+                        "total_energy_entity_id": "sensor.house_total",
+                        "deferrable_consumers": list(listed),
+                    }
+                }
+            },
+        }
+        migrated, _ids = migrate_config_document(document)
+        return (
+            migrated["controllables"],
+            migrated["power_devices"]["house"]["forecast"],
+        )
+
+    @staticmethod
+    def _metered(controllable_id, meter, name=None):
+        return {
+            "kind": "generic",
+            "id": controllable_id,
+            "name": name or controllable_id.title(),
+            "consumption": {
+                "energy_entity_id": meter,
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.0},
+            },
+        }
+
+    def test_a_listed_meter_keeps_the_new_default(self) -> None:
+        entries, forecast = self._migrate_from_v9(
+            [self._metered("pool", "sensor.pool_energy")],
+            {"energy_entity_id": "sensor.pool_energy", "label": "Pool"},
+        )
+
+        self.assertNotIn("deferrable", entries[0]["consumption"])
+        self.assertNotIn("deferrable_consumers", forecast)
+
+    def test_a_meter_that_was_never_listed_is_opted_out_explicitly(self) -> None:
+        # v9 lifted this meter out of `history_average`: the device was metered
+        # to project itself and was never part of the baseline split. Letting
+        # the new default claim it would move every forecast.
+        (entry,), _forecast = self._migrate_from_v9(
+            [self._metered("rack", "sensor.rack_energy")]
+        )
+
+        self.assertIs(entry["consumption"]["deferrable"], False)
+
+    def test_a_listed_device_with_no_meter_gains_one_by_its_name(self) -> None:
+        # The EV charger's case: it has no projection, so v9 gave it no
+        # consumption block, and the old list is the only place its meter was
+        # ever written down. The label is the link.
+        (entry,), _forecast = self._migrate_from_v9(
+            [
+                {
+                    "kind": "ev_charger",
+                    "id": "ev",
+                    "name": "EV Charging",
+                    "controls": {"charge": {"entity_id": "switch.ev"}},
+                }
+            ],
+            {
+                "energy_entity_id": "sensor.ev_charging_energy_total",
+                "label": "EV Charging",
+            },
+        )
+
+        self.assertEqual(
+            entry["consumption"],
+            {"energy_entity_id": "sensor.ev_charging_energy_total"},
+        )
+
+    def test_an_entry_matching_nothing_is_dropped(self) -> None:
+        entries, forecast = self._migrate_from_v9(
+            [self._metered("pool", "sensor.pool_energy")],
+            {"energy_entity_id": "sensor.pool_energy", "label": "Pool"},
+            {"energy_entity_id": "sensor.submeter_only", "label": "Something else"},
+        )
+
+        self.assertEqual(len(entries), 1)
+        self.assertNotIn("deferrable_consumers", forecast)
+
+    def test_the_inverter_is_never_touched(self) -> None:
+        (entry,), _forecast = self._migrate_from_v9(
+            [{"kind": "inverter", "id": "inverter", "name": "Inverter"}]
+        )
+
+        self.assertNotIn("consumption", entry)
+
+    def test_an_unmetered_controllable_is_left_alone(self) -> None:
+        untouched = {
+            "kind": "generic",
+            "id": "rail",
+            "name": "Towel rail",
+            "consumption": {
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 0.3}
+            },
+        }
+
+        (entry,), _forecast = self._migrate_from_v9([untouched])
+
+        self.assertEqual(entry, untouched)
+
+    def test_a_document_with_no_old_key_still_opts_metered_devices_out(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {
+                "config_version": 9,
+                "controllables": [self._metered("pool", "sensor.pool_energy")],
+            }
+        )
+
+        self.assertIs(
+            migrated["controllables"][0]["consumption"]["deferrable"], False
         )
 
 

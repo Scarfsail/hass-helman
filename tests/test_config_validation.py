@@ -80,12 +80,6 @@ def _valid_config() -> dict:
                     "total_energy_entity_id": "sensor.house_energy_total",
                     "min_history_days": 14,
                     "training_window_days": 56,
-                    "deferrable_consumers": [
-                        {
-                            "energy_entity_id": "sensor.washer_energy",
-                            "label": "Washer",
-                        }
-                    ],
                 },
             },
             "solar": {
@@ -207,16 +201,16 @@ def _generic_appliance(*, strategy: str = "fixed") -> dict:
         "controls": {
             "switch": {"entity_id": "switch.dishwasher"},
         },
-        "projection": {
-            "strategy": strategy,
-            "hourly_energy_kwh": 1.2,
+        "consumption": {
+            "projection": {
+                "strategy": strategy,
+                "hourly_energy_kwh": 1.2,
+            },
         },
     }
     if strategy == "history_average":
-        appliance["projection"]["history_average"] = {
-            "energy_entity_id": "sensor.dishwasher_energy_total",
-            "lookback_days": 30,
-        }
+        appliance["consumption"]["energy_entity_id"] = "sensor.dishwasher_energy_total"
+        appliance["consumption"]["projection"]["lookback_days"] = 30
     return appliance
 
 
@@ -230,16 +224,18 @@ def _climate_appliance(*, strategy: str = "fixed") -> dict:
                 "entity_id": "climate.living_room",
             }
         },
-        "projection": {
-            "strategy": strategy,
-            "hourly_energy_kwh": 1.5,
+        "consumption": {
+            "projection": {
+                "strategy": strategy,
+                "hourly_energy_kwh": 1.5,
+            },
         },
     }
     if strategy == "history_average":
-        appliance["projection"]["history_average"] = {
-            "energy_entity_id": "sensor.living_room_hvac_energy_total",
-            "lookback_days": 30,
-        }
+        appliance["consumption"]["energy_entity_id"] = (
+            "sensor.living_room_hvac_energy_total"
+        )
+        appliance["consumption"]["projection"]["lookback_days"] = 30
     return appliance
 
 
@@ -655,7 +651,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_generic_history_average_requires_energy_entity(self) -> None:
         config = _valid_config()
         appliance = _generic_appliance(strategy="history_average")
-        del appliance["projection"]["history_average"]
+        del appliance["consumption"]["energy_entity_id"]
         config["controllables"] = [_inverter_controllable(), appliance]
 
         report = validate_config_document(config)
@@ -664,7 +660,145 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path == "controllables[1]"
-                and "history_average is required" in issue.message
+                and "consumption.energy_entity_id" in issue.message
+                for issue in report.errors
+            )
+        )
+
+    def test_the_inverter_may_not_declare_consumption(self) -> None:
+        config = _valid_config()
+        inverter = _inverter_controllable()
+        inverter["consumption"] = {"energy_entity_id": "sensor.inverter_energy"}
+        config["controllables"] = [inverter, _generic_appliance()]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "controllables[0].consumption"
+                and issue.code == "consumption_not_allowed"
+                for issue in report.errors
+            )
+        )
+
+    def test_two_controllables_may_not_share_one_meter(self) -> None:
+        config = _valid_config()
+        first = _generic_appliance(strategy="history_average")
+        second = {
+            **_climate_appliance(),
+            "consumption": {
+                "energy_entity_id": first["consumption"]["energy_entity_id"],
+                "projection": {"strategy": "fixed", "hourly_energy_kwh": 1.5},
+            },
+        }
+        config["controllables"] = [_inverter_controllable(), first, second]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "controllables[2].consumption.energy_entity_id"
+                and issue.code == "duplicate_entity_id"
+                for issue in report.errors
+            )
+        )
+
+    def test_the_meter_must_be_a_sensor(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance()
+        appliance["consumption"]["energy_entity_id"] = "switch.not_a_meter"
+        config["controllables"] = [_inverter_controllable(), appliance]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "controllables[1].consumption.energy_entity_id"
+                for issue in report.errors
+            )
+        )
+
+    def test_a_top_level_projection_is_reported_by_its_new_path(self) -> None:
+        # Migration runs on load; a hand-edited save is told where the key went
+        # rather than having it silently ignored.
+        config = _valid_config()
+        appliance = _generic_appliance()
+        appliance["projection"] = {"strategy": "fixed", "hourly_energy_kwh": 1.2}
+        config["controllables"] = [_inverter_controllable(), appliance]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "controllables[1].projection"
+                and issue.code == "retired_config_key"
+                and "consumption.projection" in issue.message
+                for issue in report.errors
+            )
+        )
+
+    def test_a_projection_without_a_meter_is_not_warned_about(self) -> None:
+        # The ordinary case: a fixed-strategy appliance that is simply not
+        # metered. The deferrable default must stay silent here, or most of a
+        # real config lights up with warnings that ask for nothing.
+        config = _valid_config()
+        config["controllables"] = [_inverter_controllable(), _generic_appliance()]
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(report.warnings, [])
+
+    def test_an_explicit_deferrable_without_a_meter_warns(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance()
+        appliance["consumption"]["deferrable"] = True
+        config["controllables"] = [_inverter_controllable(), appliance]
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertTrue(
+            any(
+                issue.code == "deferrable_without_meter"
+                and issue.path == "controllables[1].consumption"
+                for issue in report.warnings
+            )
+        )
+
+    def test_deferrable_must_be_a_boolean(self) -> None:
+        config = _valid_config()
+        appliance = _generic_appliance(strategy="history_average")
+        appliance["consumption"]["deferrable"] = "yes"
+        config["controllables"] = [_inverter_controllable(), appliance]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "controllables[1].consumption.deferrable"
+                for issue in report.errors
+            )
+        )
+
+    def test_the_retired_deferrable_consumers_key_is_reported(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["house"]["forecast"]["deferrable_consumers"] = [
+            {"energy_entity_id": "sensor.washer_energy", "label": "Washer"}
+        ]
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path == "power_devices.house.forecast.deferrable_consumers"
+                and issue.code == "retired_config_key"
                 for issue in report.errors
             )
         )

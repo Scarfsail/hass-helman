@@ -97,6 +97,61 @@ def peek_controllable_id(value: Any) -> str | None:
     return controllable_id.strip() or None
 
 
+def read_deferrable_consumers(
+    config: Mapping[str, Any] | None,
+) -> list[dict[str, str]]:
+    """``[{energy_entity_id, label}]`` — the devices carved out of house load.
+
+    The house consumption forecast splits the house total into a baseline plus
+    the loads that can be moved in time; this is that second list. It used to
+    be its own ``power_devices.house.forecast.deferrable_consumers`` key, hand
+    maintained beside the very same devices in ``controllables``, with nothing
+    keeping the two in agreement. There is nothing to keep in agreement now:
+    a controllable *is* a device whose consumption can be deferred, so every
+    metered one is in the list unless it says otherwise.
+
+    Hence the default. ``consumption.deferrable`` opts a device *out* — for a
+    load that is metered for its own projection but not realistically
+    schedulable — and only ``False`` does so; a missing or malformed value
+    reads as the default rather than silently shrinking the list.
+
+    The inverter is never here: it moves energy rather than drawing it, and
+    validation refuses it a ``consumption`` block at all. An entry with no
+    meter contributes nothing either — there would be nothing to subtract.
+
+    Order follows the ``controllables`` list, and a duplicate meter is taken
+    once: counting one sensor twice would eat the baseline twice over.
+    Validation reports the duplicate separately.
+    """
+    controllables = read_controllables(config)
+    if not isinstance(controllables, list):
+        return []
+
+    consumers: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for entry in controllables:
+        if not isinstance(entry, Mapping):
+            continue
+        if peek_controllable_kind(entry) == CONTROLLABLE_KIND_INVERTER:
+            continue
+        consumption = entry.get("consumption")
+        if not isinstance(consumption, Mapping):
+            continue
+        if consumption.get("deferrable") is False:
+            continue
+        entity_id = consumption.get("energy_entity_id")
+        if not isinstance(entity_id, str) or not entity_id.strip():
+            continue
+        entity_id = entity_id.strip()
+        if entity_id in seen:
+            continue
+        seen.add(entity_id)
+        name = entry.get("name")
+        label = name.strip() if isinstance(name, str) and name.strip() else entity_id
+        consumers.append({"energy_entity_id": entity_id, "label": label})
+    return consumers
+
+
 def find_inverter_controllable(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """The single ``kind: inverter`` entry, or an empty mapping.
 

@@ -289,12 +289,17 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
         "power_devices.house.forecast.training_window_days",
         forecast_map.get("training_window_days"),
     )
-    _validate_deferrable_consumers(
-        forecast_map.get("deferrable_consumers"),
-        report,
-        section,
-        "power_devices.house.forecast.deferrable_consumers",
-    )
+    if "deferrable_consumers" in forecast_map:
+        report.add_error(
+            section=section,
+            path="power_devices.house.forecast.deferrable_consumers",
+            code="retired_config_key",
+            message=(
+                "'deferrable_consumers' is no longer a config key; a controllable "
+                "is a deferrable consumer when its 'consumption.energy_entity_id' "
+                "is set and 'consumption.deferrable' is not false"
+            ),
+        )
 
 
 def _validate_solar_config(
@@ -874,6 +879,7 @@ def _validate_controllables_config(
         return
 
     seen_ids: set[str] = set()
+    seen_energy_entity_ids: set[str] = set()
     seen_inverter = False
     for index, raw_controllable in enumerate(raw_controllables):
         path = f"controllables[{index}]"
@@ -929,6 +935,14 @@ def _validate_controllables_config(
         ):
             continue
 
+        _validate_controllable_consumption(
+            raw_controllable,
+            path=path,
+            kind=kind,
+            seen_energy_entity_ids=seen_energy_entity_ids,
+            report=report,
+        )
+
         if kind == CONTROLLABLE_KIND_INVERTER:
             seen_inverter = True
             _validate_inverter_controllable(config, raw_controllable, path, report)
@@ -947,6 +961,120 @@ def _validate_controllables_config(
                 code="invalid_appliance",
                 message=str(err),
             )
+
+
+def _validate_controllable_consumption(
+    raw_controllable: Mapping[str, Any],
+    *,
+    path: str,
+    kind: str,
+    seen_energy_entity_ids: set[str],
+    report: ValidationReport,
+) -> None:
+    """The ``consumption`` block: the meter, and who may declare one.
+
+    The per-kind appliance readers already check the shape of
+    ``consumption.projection``, and the meter itself when a projection needs it.
+    What only this function can see is everything *across* entries and outside
+    the appliance kinds: a meter on an EV charger (which has no projection to
+    hang validation off), the same meter claimed by two devices, and a
+    ``consumption`` block on the inverter.
+
+    The inverter is refused the block outright rather than field by field. It is
+    not house consumption — it is what moves energy in and out of the battery —
+    so a meter, a deferrable flag and a demand projection are all equally
+    meaningless on it, and one error saying so beats three saying almost the
+    same thing.
+    """
+    section = "controllables"
+
+    if "projection" in raw_controllable:
+        report.add_error(
+            section=section,
+            path=f"{path}.projection",
+            code="retired_config_key",
+            message=(
+                f"{path}.projection moved to {path}.consumption.projection, and its "
+                "'history_average.energy_entity_id' to "
+                f"{path}.consumption.energy_entity_id"
+            ),
+        )
+
+    raw_consumption = raw_controllable.get("consumption")
+    if raw_consumption is None:
+        return
+
+    if kind == CONTROLLABLE_KIND_INVERTER:
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption",
+            code="consumption_not_allowed",
+            message=(
+                "the inverter has no consumption of its own; it moves energy "
+                "rather than drawing it"
+            ),
+        )
+        return
+
+    if not isinstance(raw_consumption, Mapping):
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption",
+            code="invalid_type",
+            message=f"{path}.consumption must be an object",
+        )
+        return
+
+    energy_entity_id = raw_consumption.get("energy_entity_id")
+    deferrable = raw_consumption.get("deferrable")
+    if deferrable is not None and not isinstance(deferrable, bool):
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption.deferrable",
+            code="invalid_type",
+            message=f"{path}.consumption.deferrable must be true or false",
+        )
+    elif deferrable is True and energy_entity_id is None:
+        # Only an *explicit* true earns this: the user asked for something that
+        # will not happen. The default is silent — an appliance with a fixed
+        # projection and no meter is an ordinary config, not a half-finished
+        # one. Not an error either way: it configures nothing but breaks
+        # nothing, and a half-filled form mid-edit should not read as broken.
+        report.add_warning(
+            section=section,
+            path=f"{path}.consumption",
+            code="deferrable_without_meter",
+            message=(
+                f"{path} counts as a deferrable consumer only once "
+                "'consumption.energy_entity_id' names its energy meter"
+            ),
+        )
+
+    if energy_entity_id is None:
+        return
+
+    _validate_optional_entity_id(
+        report,
+        section,
+        f"{path}.consumption.energy_entity_id",
+        energy_entity_id,
+        allowed_domains=("sensor",),
+    )
+    if not _is_non_empty_string(energy_entity_id):
+        return
+
+    entity_id = energy_entity_id.strip()
+    if entity_id in seen_energy_entity_ids:
+        report.add_error(
+            section=section,
+            path=f"{path}.consumption.energy_entity_id",
+            code="duplicate_entity_id",
+            message=(
+                f"energy meter {entity_id!r} is already claimed by another "
+                "controllable; two devices sharing one meter would be counted twice"
+            ),
+        )
+    seen_energy_entity_ids.add(entity_id)
 
 
 def _validate_controllable_id(
@@ -1280,61 +1408,6 @@ def _validate_device_label_text(
                         "non-empty string"
                     ),
                 )
-
-
-def _validate_deferrable_consumers(
-    value: object,
-    report: ValidationReport,
-    section: str,
-    path: str,
-) -> None:
-    if value is None:
-        return
-    if not isinstance(value, list):
-        report.add_error(
-            section=section,
-            path=path,
-            code="invalid_type",
-            message=f"{path} must be a list",
-        )
-        return
-
-    seen_entity_ids: set[str] = set()
-    for index, raw_item in enumerate(value):
-        item_path = f"{path}[{index}]"
-        if not isinstance(raw_item, Mapping):
-            report.add_error(
-                section=section,
-                path=item_path,
-                code="invalid_type",
-                message=f"{item_path} must be an object",
-            )
-            continue
-
-        energy_entity_id = raw_item.get("energy_entity_id")
-        _validate_optional_entity_id(
-            report,
-            section,
-            f"{item_path}.energy_entity_id",
-            energy_entity_id,
-        )
-        if _is_non_empty_string(energy_entity_id):
-            entity_id = energy_entity_id.strip()
-            if entity_id in seen_entity_ids:
-                report.add_error(
-                    section=section,
-                    path=f"{item_path}.energy_entity_id",
-                    code="duplicate_entity_id",
-                    message=f"duplicate deferrable consumer entity id {entity_id!r}",
-                )
-            seen_entity_ids.add(entity_id)
-
-        _validate_optional_string(
-            report,
-            section,
-            f"{item_path}.label",
-            raw_item.get("label"),
-        )
 
 
 def _validate_entity_id_list(

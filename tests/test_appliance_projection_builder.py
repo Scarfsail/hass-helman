@@ -209,16 +209,16 @@ def _generic_appliance(*, strategy: str = "fixed") -> dict:
         "controls": {
             "switch": {"entity_id": "switch.dishwasher"},
         },
-        "projection": {
-            "strategy": strategy,
-            "hourly_energy_kwh": 1.2,
+        "consumption": {
+            "projection": {
+                "strategy": strategy,
+                "hourly_energy_kwh": 1.2,
+            },
         },
     }
     if strategy == "history_average":
-        appliance["projection"]["history_average"] = {
-            "energy_entity_id": "sensor.dishwasher_energy_total",
-            "lookback_days": 30,
-        }
+        appliance["consumption"]["energy_entity_id"] = "sensor.dishwasher_energy_total"
+        appliance["consumption"]["projection"]["lookback_days"] = 30
     return appliance
 
 
@@ -230,16 +230,18 @@ def _climate_appliance(*, strategy: str = "fixed") -> dict:
         "controls": {
             "climate": {"entity_id": "climate.living_room"},
         },
-        "projection": {
-            "strategy": strategy,
-            "hourly_energy_kwh": 1.5,
+        "consumption": {
+            "projection": {
+                "strategy": strategy,
+                "hourly_energy_kwh": 1.5,
+            },
         },
     }
     if strategy == "history_average":
-        appliance["projection"]["history_average"] = {
-            "energy_entity_id": "sensor.living_room_hvac_energy_total",
-            "lookback_days": 30,
-        }
+        appliance["consumption"]["energy_entity_id"] = (
+            "sensor.living_room_hvac_energy_total"
+        )
+        appliance["consumption"]["projection"]["lookback_days"] = 30
     return appliance
 
 
@@ -425,7 +427,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         # floor; the charger stays pinned at the floor (topped up from battery).
         config = _valid_config()
         big_load = _generic_appliance()
-        big_load["projection"]["hourly_energy_kwh"] = 9.0
+        big_load["consumption"]["projection"]["hourly_energy_kwh"] = 9.0
         config["controllables"].append(big_load)
         registry = build_appliances_runtime_registry(config)
         inputs = build_projection_input_bundle(

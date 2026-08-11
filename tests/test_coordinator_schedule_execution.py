@@ -339,9 +339,11 @@ def _valid_climate_config() -> dict:
                         "entity_id": "climate.living_room",
                     }
                 },
-                "projection": {
-                    "strategy": "fixed",
-                    "hourly_energy_kwh": 1.5,
+                "consumption": {
+                    "projection": {
+                        "strategy": "fixed",
+                        "hourly_energy_kwh": 1.5,
+                    },
                 },
             }
         ]
