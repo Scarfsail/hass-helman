@@ -40,12 +40,29 @@ const INVERTER = {
     },
 };
 
+const EV_CHARGER = {
+    kind: "ev_charger",
+    id: "ev",
+    name: "EV Charging",
+    limits: { max_charging_power_kw: 11 },
+    controls: {
+        charge: { entity_id: "switch.ev_charge" },
+        use_mode: { entity_id: "input_select.ev_use_mode", values: {} },
+        eco_gear: { entity_id: "input_select.ev_eco_gear", values: {} },
+    },
+    vehicles: [],
+    consumption: { energy_entity_id: "sensor.ev_energy_total" },
+};
+
 const BOILER = {
     kind: "generic",
     id: "boiler",
     name: "Boiler",
     controls: { switch: { entity_id: "switch.boiler" } },
-    projection: { strategy: "fixed", hourly_energy_kwh: 2 },
+    consumption: {
+        energy_entity_id: "sensor.boiler_energy_total",
+        projection: { strategy: "fixed", hourly_energy_kwh: 2 },
+    },
 };
 
 declare global {
@@ -239,4 +256,75 @@ test("Add inverter is offered only while there is no inverter", async ({ page })
     await expect.poll(() => cardTitles(page)).toContain("Inverter");
     // The config the singleton rule rejects is now unreachable from the UI.
     expect(await addButtons(page)).not.toContain("Add inverter");
+});
+
+/** Section headings rendered inside the first controllable card, in order. */
+function sectionTitles(page: Page): Promise<string[]> {
+    return page.evaluate(() =>
+        Array.from(
+            document
+                .querySelector("helman-config-editor-panel")
+                ?.shadowRoot?.querySelectorAll(".section-summary-label") ?? [],
+        ).map((title) => title.textContent?.trim() ?? ""),
+    );
+}
+
+/** Field labels rendered inside the first controllable card. */
+function fieldLabels(page: Page): Promise<string[]> {
+    return page.evaluate(() =>
+        Array.from(
+            document
+                .querySelector("helman-config-editor-panel")
+                ?.shadowRoot?.querySelector(".list-card")
+                ?.querySelectorAll("label, ha-formfield") ?? [],
+        ).map((label) =>
+            // ha-formfield takes its label as a property, so the attribute is
+            // absent and textContent is the empty slot.
+            (
+                (label as HTMLElement & { label?: string }).label ??
+                label.textContent ??
+                ""
+            ).trim(),
+        ),
+    );
+}
+
+test("a controllable carries a Consumption section, beside Controls", async ({
+    page,
+}) => {
+    await mountEditor(page, [BOILER]);
+
+    const titles = await sectionTitles(page);
+    expect(titles).toContain("Controls");
+    expect(titles).toContain("Consumption");
+    // The old name is gone: the projection lives inside consumption now.
+    expect(titles).not.toContain("Projection");
+});
+
+test("the usage options appear only once a meter is picked", async ({ page }) => {
+    const unmetered = {
+        ...BOILER,
+        consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 2 } },
+    };
+
+    await mountEditor(page, [unmetered]);
+    expect(await fieldLabels(page)).not.toContain("Deferrable consumer");
+
+    await mountEditor(page, [BOILER]);
+    expect(await fieldLabels(page)).toContain("Deferrable consumer");
+});
+
+test("the EV charger gets a meter but no projection controls", async ({ page }) => {
+    await mountEditor(page, [EV_CHARGER]);
+
+    expect(await sectionTitles(page)).toContain("Consumption");
+    const labels = await fieldLabels(page);
+    expect(labels).toContain("Energy meter entity");
+    expect(labels).not.toContain("Projection strategy");
+});
+
+test("the inverter is offered no Consumption section at all", async ({ page }) => {
+    await mountEditor(page, [INVERTER]);
+
+    expect(await sectionTitles(page)).not.toContain("Consumption");
 });

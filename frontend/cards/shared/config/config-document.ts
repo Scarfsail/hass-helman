@@ -376,13 +376,6 @@ export function createEcoGearEntry(): JsonObject {
   };
 }
 
-export function createDeferrableConsumerDraft(label: string): JsonObject {
-  return {
-    energy_entity_id: "",
-    label,
-  };
-}
-
 export function createImportPriceWindowDraft(): JsonObject {
   return {
     start: "00:00",

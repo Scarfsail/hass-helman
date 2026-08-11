@@ -13,7 +13,6 @@ import {
   createGenericApplianceDraft,
   createCategoryKey,
   createDailyEnergyEntityDraft,
-  createDeferrableConsumerDraft,
   createOptimizerDraft,
   createEcoGearEntry,
   createGearKey,
@@ -1196,10 +1195,6 @@ export class HelmanConfigEditorPanel
   private _renderPowerDevicesTab(): TemplateResult {
     const dailyEnergyEntityIds =
       asJsonArray(this._getValue(["power_devices", "solar", "forecast", "daily_energy_entity_ids"])) ?? [];
-    const deferrableConsumers =
-      asJsonArray(
-        this._getValue(["power_devices", "house", "forecast", "deferrable_consumers"]),
-      ) ?? [];
     const importPriceWindows =
       asJsonArray(this._getValue(["power_devices", "grid", "forecast", "import_price_windows"])) ?? [];
 
@@ -1247,17 +1242,6 @@ export class HelmanConfigEditorPanel
               undefined,
               "editor.help.house_training_window_days",
             )}
-          </div>
-
-          <div class="list-stack">
-            ${deferrableConsumers.map((consumer, index) =>
-              this._renderDeferrableConsumer(consumer, index, deferrableConsumers.length),
-            )}
-          </div>
-          <div class="section-footer">
-            <button type="button" class="add-button" @click=${this._handleAddDeferrableConsumer}>
-              ${this._t("editor.actions.add_deferrable_consumer")}
-            </button>
           </div>
         `,
         { initialOpen: false },
@@ -1948,80 +1932,6 @@ export class HelmanConfigEditorPanel
     });
   }
 
-  private _renderDeferrableConsumer(
-    consumer: unknown,
-    index: number,
-    total: number,
-  ): TemplateResult {
-    const consumerObject = asJsonObject(consumer) ?? {};
-    const basePath: PathSegment[] = [
-      "power_devices",
-      "house",
-      "forecast",
-      "deferrable_consumers",
-      index,
-    ];
-
-    return html`
-      <div class="list-card">
-        <div class="card-header">
-          <div class="card-title">
-            <strong>${this._stringValue(consumerObject.label) || this._tFormat("editor.dynamic.consumer", { index: index + 1 })}</strong>
-            <span class="card-subtitle">${this._t("editor.card.house_deferrable_consumer")}</span>
-          </div>
-          <div class="list-actions">
-            <button
-              type="button"
-              ?disabled=${index === 0}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "house", "forecast", "deferrable_consumers"],
-                  index,
-                  index - 1,
-                )}
-            >
-              ${this._t("editor.actions.up")}
-            </button>
-            <button
-              type="button"
-              ?disabled=${index === total - 1}
-              @click=${() =>
-                this._moveListItem(
-                  ["power_devices", "house", "forecast", "deferrable_consumers"],
-                  index,
-                  index + 1,
-                )}
-            >
-              ${this._t("editor.actions.down")}
-            </button>
-            <button
-              type="button"
-              class="danger"
-              @click=${() =>
-                this._removeListItem(
-                  ["power_devices", "house", "forecast", "deferrable_consumers"],
-                  index,
-                )}
-            >
-              ${this._t("editor.actions.remove")}
-            </button>
-          </div>
-        </div>
-        <div class="field-grid">
-          ${this._renderRequiredEntityField(
-            [...basePath, "energy_entity_id"],
-            "editor.fields.energy_entity",
-            ["sensor"],
-            undefined,
-            undefined,
-            "editor.help.deferrable_consumer_energy_entity",
-          )}
-          ${this._renderOptionalTextField([...basePath, "label"], "editor.fields.label")}
-        </div>
-      </div>
-    `;
-  }
-
   private _renderDailyEnergyEntity(
     value: unknown,
     index: number,
@@ -2429,6 +2339,12 @@ export class HelmanConfigEditorPanel
                 </div>`,
               )}
               ${this._renderSimpleSection(
+                this._t("editor.sections.consumption"),
+                this._renderConsumptionSection([...basePath, "consumption"], {
+                  noteKey: "editor.notes.ev_charger_consumption",
+                }),
+              )}
+              ${this._renderSimpleSection(
                 this._t("editor.sections.vehicles"),
                 html`<div class="list-stack">
                   ${vehicles.map((vehicle, vehicleIndex) => this._renderVehicle(basePath, vehicle, vehicleIndex, vehicles.length))}
@@ -2449,9 +2365,9 @@ export class HelmanConfigEditorPanel
     total: number,
   ): TemplateResult {
     const basePath: PathSegment[] = ["controllables", index];
-    const historyAveragePath: PathSegment[] = [...basePath, "projection", "history_average"];
+    const consumptionPath: PathSegment[] = [...basePath, "consumption"];
     const projectionStrategy =
-      this._stringValue(this._getValue([...basePath, "projection", "strategy"])) || "fixed";
+      this._stringValue(this._getValue([...consumptionPath, "projection", "strategy"])) || "fixed";
     const applianceName =
       this._stringValue(appliance.name) ||
       this._tFormat("editor.dynamic.generic_appliance", { index: index + 1 });
@@ -2504,12 +2420,13 @@ export class HelmanConfigEditorPanel
                 </div>`,
               )}
               ${this._renderSimpleSection(
-                this._t("editor.sections.projection"),
-                this._renderProjectedApplianceProjectionSection(
-                  basePath, projectionStrategy, historyAveragePath,
-                  "editor.notes.generic_appliance_projection",
-                  (strategy) => this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-                ),
+                this._t("editor.sections.consumption"),
+                this._renderConsumptionSection(consumptionPath, {
+                  noteKey: "editor.notes.generic_appliance_projection",
+                  projectionStrategy,
+                  onStrategyChange: (strategy) =>
+                    this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+                }),
               )}
             `}
         </div>
@@ -2523,9 +2440,9 @@ export class HelmanConfigEditorPanel
     total: number,
   ): TemplateResult {
     const basePath: PathSegment[] = ["controllables", index];
-    const historyAveragePath: PathSegment[] = [...basePath, "projection", "history_average"];
+    const consumptionPath: PathSegment[] = [...basePath, "consumption"];
     const projectionStrategy =
-      this._stringValue(this._getValue([...basePath, "projection", "strategy"])) || "fixed";
+      this._stringValue(this._getValue([...consumptionPath, "projection", "strategy"])) || "fixed";
     const applianceName =
       this._stringValue(appliance.name) ||
       this._tFormat("editor.dynamic.climate_appliance", { index: index + 1 });
@@ -2578,12 +2495,13 @@ export class HelmanConfigEditorPanel
                 </div>`,
               )}
               ${this._renderSimpleSection(
-                this._t("editor.sections.projection"),
-                this._renderProjectedApplianceProjectionSection(
-                  basePath, projectionStrategy, historyAveragePath,
-                  "editor.notes.climate_appliance_projection",
-                  (strategy) => this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
-                ),
+                this._t("editor.sections.consumption"),
+                this._renderConsumptionSection(consumptionPath, {
+                  noteKey: "editor.notes.climate_appliance_projection",
+                  projectionStrategy,
+                  onStrategyChange: (strategy) =>
+                    this._handleProjectedApplianceProjectionStrategyChange(index, strategy),
+                }),
               )}
             `}
         </div>
@@ -2591,60 +2509,88 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderProjectedApplianceProjectionSection(
-    appliancePath: PathSegment[],
-    projectionStrategy: string,
-    historyAveragePath: PathSegment[],
-    noteKey: string,
-    onStrategyChange: (strategy: string) => void,
+  /**
+   * The energy meter and what it is used for — the sibling of the Controls
+   * section. `projection` is nested inside because a demand estimate is a
+   * statement about consumption, not about how the device is driven.
+   *
+   * The usage options only appear once a meter is picked: with no meter there
+   * is nothing to defer against and no history to average, so the choices
+   * would configure nothing.
+   */
+  private _renderConsumptionSection(
+    consumptionPath: PathSegment[],
+    options: {
+      noteKey?: string;
+      projectionStrategy?: string;
+      onStrategyChange?: (strategy: string) => void;
+    } = {},
   ): TemplateResult {
+    const { noteKey, projectionStrategy, onStrategyChange } = options;
+    const hasMeter = Boolean(
+      this._stringValue(this._getValue([...consumptionPath, "energy_entity_id"])),
+    );
+    const projectionPath: PathSegment[] = [...consumptionPath, "projection"];
+
     return html`
       <div class="section-content">
-        <p class="inline-note">
-          ${this._t(noteKey)}
-        </p>
+        ${noteKey ? html`<p class="inline-note">${this._t(noteKey)}</p>` : nothing}
         <div class="field-grid">
-          <div class="field">
-            <div class="field-label-row">
-              <label>${this._t("editor.fields.projection_strategy")}</label>
-              ${this._renderHelpIcon("editor.fields.projection_strategy", "editor.help.appliance_projection_strategy")}
-            </div>
-            <select
-              .value=${projectionStrategy}
-              @change=${(event: Event) =>
-                onStrategyChange((event.currentTarget as HTMLSelectElement).value)}
-            >
-              ${GENERIC_PROJECTION_STRATEGIES.map(
-                (option) => html`
-                  <option value=${option.value}>${this._t(option.labelKey)}</option>
-                `,
-              )}
-            </select>
-          </div>
-          ${this._renderRequiredNumberField(
-            [...appliancePath, "projection", "hourly_energy_kwh"],
-            "editor.fields.hourly_energy_kwh",
-            undefined,
-            "any",
-            "editor.help.appliance_hourly_energy_kwh",
+          ${this._renderOptionalEntityField(
+            [...consumptionPath, "energy_entity_id"],
+            "editor.fields.consumption_energy_entity",
+            ["sensor"],
+            "editor.helpers.consumption_energy_entity",
+            "editor.help.consumption_energy_entity",
           )}
         </div>
-        ${projectionStrategy === "history_average"
+        ${hasMeter
           ? html`
               <div class="field-grid">
-                ${this._renderRequiredEntityField(
-                  [...historyAveragePath, "energy_entity_id"],
-                  "editor.fields.history_energy_entity",
-                  ["sensor"],
-                  "editor.helpers.history_energy_entity",
+                ${this._renderBooleanField(
+                  [...consumptionPath, "deferrable"],
+                  "editor.fields.consumption_deferrable",
+                  true,
                 )}
+              </div>
+            `
+          : nothing}
+        ${onStrategyChange
+          ? html`
+              <div class="field-grid">
+                <div class="field">
+                  <div class="field-label-row">
+                    <label>${this._t("editor.fields.projection_strategy")}</label>
+                    ${this._renderHelpIcon("editor.fields.projection_strategy", "editor.help.appliance_projection_strategy")}
+                  </div>
+                  <select
+                    .value=${projectionStrategy ?? "fixed"}
+                    @change=${(event: Event) =>
+                      onStrategyChange((event.currentTarget as HTMLSelectElement).value)}
+                  >
+                    ${GENERIC_PROJECTION_STRATEGIES.map(
+                      (option) => html`
+                        <option value=${option.value}>${this._t(option.labelKey)}</option>
+                      `,
+                    )}
+                  </select>
+                </div>
                 ${this._renderRequiredNumberField(
-                  [...historyAveragePath, "lookback_days"],
-                  "editor.fields.history_lookback_days",
+                  [...projectionPath, "hourly_energy_kwh"],
+                  "editor.fields.hourly_energy_kwh",
                   undefined,
-                  "1",
-                  "editor.help.appliance_history_lookback_days",
+                  "any",
+                  "editor.help.appliance_hourly_energy_kwh",
                 )}
+                ${projectionStrategy === "history_average"
+                  ? this._renderRequiredNumberField(
+                      [...projectionPath, "lookback_days"],
+                      "editor.fields.history_lookback_days",
+                      undefined,
+                      "1",
+                      "editor.help.appliance_history_lookback_days",
+                    )
+                  : nothing}
               </div>
             `
           : nothing}
@@ -3469,22 +3415,6 @@ export class HelmanConfigEditorPanel
     });
   }
 
-  private _handleAddDeferrableConsumer = (): void => {
-    const count =
-      asJsonArray(
-        this._getValue(["power_devices", "house", "forecast", "deferrable_consumers"]),
-      )?.length ?? 0;
-    this._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["power_devices", "house", "forecast", "deferrable_consumers"],
-        createDeferrableConsumerDraft(
-          this._tFormat("editor.dynamic.consumer", { index: count + 1 }),
-        ),
-      );
-    });
-  };
-
   private _handleAddDailyEnergyEntity = (): void => {
     this._applyMutation((draft) => {
       appendListItem(
@@ -3666,23 +3596,28 @@ export class HelmanConfigEditorPanel
     }
 
     this._applyMutation((draft) => {
-      const basePath: PathSegment[] = ["controllables", applianceIndex, "projection"];
+      const basePath: PathSegment[] = [
+        "controllables",
+        applianceIndex,
+        "consumption",
+        "projection",
+      ];
       setValueAtPath(draft, [...basePath, "strategy"], strategy);
       if (strategy !== "history_average") {
         return;
       }
 
-      const existingHistoryAverage = asJsonObject(
-        getValueAtPath(draft, [...basePath, "history_average"]),
-      );
-      const existingLookbackDays = existingHistoryAverage?.lookback_days;
-      setValueAtPath(draft, [...basePath, "history_average"], {
-        energy_entity_id: this._stringValue(existingHistoryAverage?.energy_entity_id),
-        lookback_days:
-          typeof existingLookbackDays === "number" && Number.isFinite(existingLookbackDays)
-            ? existingLookbackDays
-            : 30,
-      });
+      // Only the window is seeded. The meter lives on the consumption block
+      // now, where it may already have been picked for the deferrable split
+      // alone — writing it from here would either clobber that or invent an
+      // empty one.
+      const existingLookbackDays = getValueAtPath(draft, [...basePath, "lookback_days"]);
+      if (
+        typeof existingLookbackDays !== "number" ||
+        !Number.isFinite(existingLookbackDays)
+      ) {
+        setValueAtPath(draft, [...basePath, "lookback_days"], 30);
+      }
     });
   }
 
