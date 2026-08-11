@@ -363,7 +363,6 @@ def _day_context_on(local_date: date, classification: str = "tight") -> DayConte
         predicted_consumption_kwh=5.0,
         export_price_min=1.0,
         export_price_max=5.0,
-        day_min_window=None,
         import_bands=(),
     )
 
@@ -376,7 +375,6 @@ def _day_context(classification: str = "tight") -> DayContext:
         predicted_consumption_kwh=5.0,
         export_price_min=1.0,
         export_price_max=5.0,
-        day_min_window=None,
         import_bands=(),
     )
 

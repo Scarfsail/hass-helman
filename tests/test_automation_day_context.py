@@ -65,7 +65,6 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.day_context import (  # noqa: E402
-    DayMinWindow,
     FrozenDayContext,
     build_day_contexts,
 )
@@ -161,32 +160,6 @@ class BuildDayContextsTests(unittest.TestCase):
         )
         self.assertEqual(contexts[TODAY].classification, "deficit")
 
-    def test_day_min_window_is_contiguous_run_at_minimum(self) -> None:
-        # cheapest export at slots 2..3 (13:00..14:00)
-        values = [5.0, 5.0, 1.0, 1.0, 5.0, 5.0]
-        day_export = _slot_points(day_start=DAY_START, values=values)
-        contexts = build_day_contexts(
-            battery_series=_battery_series(
-                day_start=DAY_START,
-                solar_per_slot=1.0,
-                house_per_slot=1.0,
-                baseline_soc_pct=100.0,
-            ),
-            export_price_points=day_export,
-            import_price_points=_slot_points(day_start=DAY_START, values=[3.0] * 6),
-            battery_max_soc=100.0,
-            deficit_below_ratio=0.7,
-            surplus_above_ratio=1.3,
-        )
-        window = contexts[TODAY].day_min_window
-        self.assertEqual(
-            window,
-            DayMinWindow(
-                start=DAY_START + timedelta(minutes=60),
-                end=DAY_START + timedelta(minutes=120),
-            ),
-        )
-
     def test_import_bands_partition_two_level_tariff(self) -> None:
         # cheap (low) 00:00-01:00, expensive 01:00-02:00, cheap 02:00-03:00
         values = [2.0, 2.0, 6.0, 6.0, 2.0, 2.0]
@@ -228,11 +201,7 @@ class BuildDayContextsTests(unittest.TestCase):
         self.assertIn(TODAY, contexts)
         self.assertNotIn(tomorrow_start.date(), contexts)
 
-    def test_frozen_override_pins_classification_and_window(self) -> None:
-        frozen_window = DayMinWindow(
-            start=DAY_START + timedelta(minutes=600),
-            end=DAY_START + timedelta(minutes=630),
-        )
+    def test_frozen_override_pins_classification(self) -> None:
         contexts = build_day_contexts(
             battery_series=_battery_series(
                 day_start=DAY_START,
@@ -246,15 +215,11 @@ class BuildDayContextsTests(unittest.TestCase):
             deficit_below_ratio=0.7,
             surplus_above_ratio=1.3,
             frozen_overrides={
-                TODAY: FrozenDayContext(
-                    classification="deficit",
-                    day_min_window=frozen_window,
-                )
+                TODAY: FrozenDayContext(classification="deficit")
             },
         )
         ctx = contexts[TODAY]
         self.assertEqual(ctx.classification, "deficit")
-        self.assertEqual(ctx.day_min_window, frozen_window)
         # volatile stats still recomputed live
         self.assertAlmostEqual(ctx.predicted_solar_kwh, 48.0)
 

@@ -82,7 +82,6 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.day_context import (  # noqa: E402
-    DayMinWindow,
     FrozenDayContext,
 )
 from custom_components.helman.automation.day_context_store import (  # noqa: E402
@@ -92,11 +91,6 @@ from custom_components.helman.automation.day_context_store import (  # noqa: E40
 TODAY = date(2026, 7, 10)
 
 
-def _window() -> DayMinWindow:
-    start = datetime(2026, 7, 10, 13, 0, tzinfo=PRAGUE)
-    return DayMinWindow(start=start, end=start + timedelta(minutes=30))
-
-
 class DayContextStoreTests(unittest.TestCase):
     def test_first_run_persists_then_reuses(self) -> None:
         async def scenario() -> None:
@@ -104,9 +98,7 @@ class DayContextStoreTests(unittest.TestCase):
             self.assertEqual(await store.async_load(), {})
             await store.async_freeze_and_prune(
                 computed={
-                    TODAY: FrozenDayContext(
-                        classification="surplus", day_min_window=_window()
-                    )
+                    TODAY: FrozenDayContext(classification="surplus")
                 },
                 today=TODAY,
             )
@@ -114,7 +106,6 @@ class DayContextStoreTests(unittest.TestCase):
             reloaded = await store.async_load()
             self.assertIn(TODAY, reloaded)
             self.assertEqual(reloaded[TODAY].classification, "surplus")
-            self.assertEqual(reloaded[TODAY].day_min_window, _window())
 
         asyncio.run(scenario())
 
@@ -124,9 +115,7 @@ class DayContextStoreTests(unittest.TestCase):
             await store.async_load()
             await store.async_freeze_and_prune(
                 computed={
-                    TODAY: FrozenDayContext(
-                        classification="surplus", day_min_window=_window()
-                    )
+                    TODAY: FrozenDayContext(classification="surplus")
                 },
                 today=TODAY,
             )
@@ -134,9 +123,7 @@ class DayContextStoreTests(unittest.TestCase):
             # Re-freeze with a different classification: existing day is kept.
             await store.async_freeze_and_prune(
                 computed={
-                    TODAY: FrozenDayContext(
-                        classification="deficit", day_min_window=None
-                    )
+                    TODAY: FrozenDayContext(classification="deficit")
                 },
                 today=TODAY,
             )
@@ -151,9 +138,7 @@ class DayContextStoreTests(unittest.TestCase):
             await store.async_load()
             await store.async_freeze_and_prune(
                 computed={
-                    TODAY: FrozenDayContext(
-                        classification="surplus", day_min_window=_window()
-                    )
+                    TODAY: FrozenDayContext(classification="surplus")
                 },
                 today=TODAY,
             )
@@ -161,9 +146,7 @@ class DayContextStoreTests(unittest.TestCase):
             tomorrow = TODAY + timedelta(days=1)
             await store.async_freeze_and_prune(
                 computed={
-                    tomorrow: FrozenDayContext(
-                        classification="tight", day_min_window=None
-                    )
+                    tomorrow: FrozenDayContext(classification="tight")
                 },
                 today=tomorrow,
             )

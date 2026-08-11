@@ -675,7 +675,6 @@ export interface AutomationOptimizerSummaryDTO {
 export interface AutomationDayContextSummaryDTO {
     localDate: string;
     classification: string;
-    dayMinWindow: { start: string; end: string } | null;
 }
 
 export interface AutomationRunPayload {

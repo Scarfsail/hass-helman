@@ -2,8 +2,8 @@
 
 A ``DayContext`` classifies a calendar day (surplus / tight / deficit) and
 carries the price statistics and import-band segmentation the day-scoped rules
-read. It is computed framework-side once per automation run and — for its
-stability-sensitive fields (classification, day-min window) — frozen per day by
+read. It is computed framework-side once per automation run and — for its one
+stability-sensitive field, the classification — frozen per day by
 ``day_context_store`` so a rule's decision cannot flip mid-day.
 
 The builder here is pure: it consumes already-parsed forecast series/points and
@@ -41,17 +41,10 @@ class ImportBand:
 
 
 @dataclass(frozen=True)
-class DayMinWindow:
-    start: datetime
-    end: datetime
-
-
-@dataclass(frozen=True)
 class FrozenDayContext:
     """The per-day fields frozen across runs of the same calendar day."""
 
     classification: str
-    day_min_window: DayMinWindow | None
 
 
 @dataclass(frozen=True)
@@ -62,7 +55,6 @@ class DayContext:
     predicted_consumption_kwh: float
     export_price_min: float | None
     export_price_max: float | None
-    day_min_window: DayMinWindow | None
     import_bands: tuple[ImportBand, ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -73,14 +65,6 @@ class DayContext:
             "predictedConsumptionKwh": self.predicted_consumption_kwh,
             "exportPriceMin": self.export_price_min,
             "exportPriceMax": self.export_price_max,
-            "dayMinWindow": (
-                None
-                if self.day_min_window is None
-                else {
-                    "start": self.day_min_window.start.isoformat(),
-                    "end": self.day_min_window.end.isoformat(),
-                }
-            ),
             "importBands": [
                 {
                     "level": band.level,
@@ -106,8 +90,8 @@ def build_day_contexts(
 
     A day is emitted only when it has both solar/house forecast coverage and
     export price points — so tomorrow appears only once tomorrow's prices have
-    arrived. ``frozen_overrides`` pins the stability-sensitive fields
-    (classification, day-min window) for days already frozen by the store.
+    arrived. ``frozen_overrides`` pins the classification for days already
+    frozen by the store.
     """
     frozen_overrides = frozen_overrides or {}
 
@@ -129,7 +113,6 @@ def build_day_contexts(
         export_values = [value for _, value in day_export_points]
         export_price_min = min(export_values)
         export_price_max = max(export_values)
-        day_min_window = _build_day_min_window(day_export_points, export_price_min)
 
         import_bands = _build_import_bands(
             import_points_by_date.get(local_date, [])
@@ -138,7 +121,6 @@ def build_day_contexts(
         override = frozen_overrides.get(local_date)
         if override is not None:
             classification = override.classification
-            day_min_window = override.day_min_window
         else:
             classification = _classify(
                 predicted_solar_kwh=predicted_solar_kwh,
@@ -156,7 +138,6 @@ def build_day_contexts(
             predicted_consumption_kwh=predicted_consumption_kwh,
             export_price_min=export_price_min,
             export_price_max=export_price_max,
-            day_min_window=day_min_window,
             import_bands=import_bands,
         )
 
@@ -196,30 +177,6 @@ def _classify(
         classification = DAY_CLASSIFICATION_TIGHT
 
     return classification
-
-
-def _build_day_min_window(
-    day_export_points: list[tuple[datetime, float]],
-    export_price_min: float,
-) -> DayMinWindow | None:
-    if not day_export_points:
-        return None
-
-    granularity = _infer_granularity(day_export_points)
-    # First contiguous run of slots at the minimum export price.
-    run_start: datetime | None = None
-    run_end: datetime | None = None
-    for point_time, value in day_export_points:
-        if abs(value - export_price_min) <= _PRICE_TOLERANCE:
-            if run_start is None:
-                run_start = point_time
-            run_end = point_time
-        elif run_start is not None:
-            break
-
-    if run_start is None or run_end is None:
-        return None
-    return DayMinWindow(start=run_start, end=run_end + granularity)
 
 
 def _build_import_bands(

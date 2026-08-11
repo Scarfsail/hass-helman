@@ -47,20 +47,13 @@ _install_import_stubs()
 
 from custom_components.helman.automation.day_context import (  # noqa: E402
     DayContext,
-    DayMinWindow,
 )
 from custom_components.helman.automation.pipeline import (  # noqa: E402
     _summarize_day_contexts,
 )
 
 
-def _day_context(local_date: date, classification: str, *, with_window: bool) -> DayContext:
-    window = None
-    if with_window:
-        start = datetime.combine(local_date, datetime.min.time(), tzinfo=TZ) + timedelta(
-            hours=13
-        )
-        window = DayMinWindow(start=start, end=start + timedelta(minutes=30))
+def _day_context(local_date: date, classification: str) -> DayContext:
     return DayContext(
         local_date=local_date,
         classification=classification,
@@ -68,7 +61,6 @@ def _day_context(local_date: date, classification: str, *, with_window: bool) ->
         predicted_consumption_kwh=1.0,
         export_price_min=1.0,
         export_price_max=5.0,
-        day_min_window=window,
         import_bands=(),
     )
 
@@ -77,14 +69,14 @@ class SummarizeDayContextsTests(unittest.TestCase):
     def test_returns_empty_without_snapshot(self) -> None:
         self.assertEqual(_summarize_day_contexts(None), [])
 
-    def test_summarizes_classification_and_window_sorted_by_date(self) -> None:
+    def test_summarizes_classification_sorted_by_date(self) -> None:
         today = date(2026, 7, 10)
         tomorrow = date(2026, 7, 11)
         snapshot = types.SimpleNamespace(
             context=types.SimpleNamespace(
                 day_contexts={
-                    tomorrow: _day_context(tomorrow, "deficit", with_window=False),
-                    today: _day_context(today, "surplus", with_window=True),
+                    tomorrow: _day_context(tomorrow, "deficit"),
+                    today: _day_context(today, "surplus"),
                 }
             )
         )
@@ -94,9 +86,7 @@ class SummarizeDayContextsTests(unittest.TestCase):
             ["2026-07-10", "2026-07-11"],
         )
         self.assertEqual(summaries[0]["classification"], "surplus")
-        self.assertIsNotNone(summaries[0]["dayMinWindow"])
         self.assertEqual(summaries[1]["classification"], "deficit")
-        self.assertIsNone(summaries[1]["dayMinWindow"])
 
 
 if __name__ == "__main__":

@@ -201,7 +201,7 @@ class AutomationRunResult:
 def _summarize_day_contexts(
     snapshot: OptimizationSnapshot | None,
 ) -> list[dict[str, Any]]:
-    """Concise per-day summary (classification + day-min window) for the UI.
+    """Concise per-day summary (the day's classification) for the UI.
 
     Surfaces the frozen classification beside the run result so the frontend can
     show "today: surplus day" and why the schedule is shaped as it is, without
@@ -209,24 +209,13 @@ def _summarize_day_contexts(
     """
     if snapshot is None:
         return []
-    summaries: list[dict[str, Any]] = []
-    for local_date, day_context in sorted(snapshot.context.day_contexts.items()):
-        day_min_window = day_context.day_min_window
-        summaries.append(
-            {
-                "localDate": local_date.isoformat(),
-                "classification": day_context.classification,
-                "dayMinWindow": (
-                    None
-                    if day_min_window is None
-                    else {
-                        "start": day_min_window.start.isoformat(),
-                        "end": day_min_window.end.isoformat(),
-                    }
-                ),
-            }
-        )
-    return summaries
+    return [
+        {
+            "localDate": local_date.isoformat(),
+            "classification": day_context.classification,
+        }
+        for local_date, day_context in sorted(snapshot.context.day_contexts.items())
+    ]
 
 
 @dataclass(frozen=True)

@@ -154,7 +154,6 @@ def _day_context(
         predicted_consumption_kwh=4.0,
         export_price_min=1.0,
         export_price_max=9.0,
-        day_min_window=None,
         import_bands=(),
     )
 

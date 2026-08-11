@@ -1,7 +1,7 @@
 """Per-calendar-day freeze store for day-scoped automation rules (A4).
 
-A tiny JSON store keyed by local calendar date holding the stability-sensitive
-fields of a ``DayContext`` — its classification and day-min window — plus when
+A tiny JSON store keyed by local calendar date holding the one
+stability-sensitive field of a ``DayContext`` — its classification — plus when
 they were frozen. Everything else in a ``DayContext`` is recomputed live each
 run; only these fields are pinned so a rule's decision cannot flip mid-day.
 
@@ -11,7 +11,7 @@ model; it is framework-owned and invisible to the optimizer contract.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -19,7 +19,7 @@ from homeassistant.helpers import storage
 from homeassistant.util import dt as dt_util
 
 from ..const import DAY_CONTEXT_STORAGE_KEY, DAY_CONTEXT_STORAGE_VERSION
-from .day_context import DayMinWindow, FrozenDayContext
+from .day_context import FrozenDayContext
 
 
 class DayContextStore:
@@ -71,14 +71,12 @@ class DayContextStore:
 def _record_to_frozen(record: dict[str, Any]) -> FrozenDayContext:
     return FrozenDayContext(
         classification=record["classification"],
-        day_min_window=_deserialize_window(record.get("dayMinWindow")),
     )
 
 
 def _frozen_to_record(frozen: FrozenDayContext) -> dict[str, Any]:
     return {
         "classification": frozen.classification,
-        "dayMinWindow": _serialize_window(frozen.day_min_window),
         "frozenAt": dt_util.now().isoformat(),
     }
 
@@ -110,28 +108,3 @@ def _deserialize_records(stored: Any) -> dict[date, dict[str, Any]]:
             continue
         records[local_date] = record
     return records
-
-
-def _serialize_window(window: DayMinWindow | None) -> dict[str, str] | None:
-    if window is None:
-        return None
-    return {"start": window.start.isoformat(), "end": window.end.isoformat()}
-
-
-def _deserialize_window(raw: Any) -> DayMinWindow | None:
-    if not isinstance(raw, dict):
-        return None
-    start = _parse_datetime(raw.get("start"))
-    end = _parse_datetime(raw.get("end"))
-    if start is None or end is None:
-        return None
-    return DayMinWindow(start=start, end=end)
-
-
-def _parse_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        return None
-    return dt_util.as_local(parsed)

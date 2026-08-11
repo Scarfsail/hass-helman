@@ -3104,7 +3104,6 @@ class HelmanCoordinator:
             computed={
                 local_date: FrozenDayContext(
                     classification=day_context.classification,
-                    day_min_window=day_context.day_min_window,
                 )
                 for local_date, day_context in day_contexts.items()
             },
