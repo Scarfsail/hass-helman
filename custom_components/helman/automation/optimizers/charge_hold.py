@@ -22,6 +22,13 @@ write at all. Slots past ``window.end`` are never held — they are free either
 way, and ranking them is what lets "hold the whole morning, charge in the
 afternoon" fall out of the same arithmetic as "charge at noon".
 
+**The hold ends when the battery reaches target.** Once the charge set has
+covered the need, holding on protects nothing — the surplus is worth the same
+exported whether the battery is full or not — while denying the battery the
+headroom to absorb a consumption peak and take the dip straight back. So every
+slot from the last charge-set slot onward joins the charge set: the battery is
+free to breathe for the rest of the day.
+
 **The need is measured per day, at that day's window start.** How much the
 battery has to take is a fact about the morning the hold governs, not about the
 moment the run happens: a 48 h horizon sizes tomorrow too, and the overnight
@@ -326,10 +333,15 @@ class _RankedSlot:
 class _DayHoldResolution:
     window_start: datetime
     window_end: datetime
-    #: The day's slots that may charge — the cheapest prefix of the ranking that
-    #: covers the threshold. Slots outside the window are in here too, because
-    #: the ranking spans the day; the hold only ever consults window slots.
+    #: The day's slots that may charge: the cheapest prefix of the ranking that
+    #: covers the threshold, plus everything from ``charge_complete_at`` on.
+    #: Slots outside the window are in here too, because the ranking spans the
+    #: day; the hold only ever consults window slots.
     released: frozenset[str]
+    #: When the charge set reaches the target — after this the battery is free.
+    #: ``None`` only when the day's surplus never covers the need, which is the
+    #: no-room case and holds nothing regardless.
+    charge_complete_at: datetime | None
     #: Rank record per *window* slot, for the gate. Keyed by slot id.
     ranked_by_slot: dict[str, _RankedSlot]
     rank_of: int
@@ -390,7 +402,7 @@ def _resolve_day_hold(
         ),
     )
 
-    released: set[str] = set()
+    charge_set: set[str] = set()
     ranked: list[_RankedSlot] = []
     cumulative = 0.0
     covered = cumulative >= threshold
@@ -399,7 +411,7 @@ def _resolve_day_hold(
         in_charge_set = not covered
         if in_charge_set:
             cumulative += surplus_kwh
-            released.add(slot_id)
+            charge_set.add(slot_id)
             covered = cumulative >= threshold
         ranked.append(
             _RankedSlot(
@@ -415,18 +427,43 @@ def _resolve_day_hold(
     # the window start, so failing to reach the threshold means the day's whole
     # remaining surplus falls short and no slot of it can be held.
     marginal_price: float | None = None
-    if covered and released:
+    if covered and charge_set:
         prices = [
             record.price
             for record in ranked
-            if record.slot_id in released and record.price is not None
+            if record.slot_id in charge_set and record.price is not None
         ]
         marginal_price = max(prices) if prices else None
+
+    # Where the charge set finishes the job — the instant the battery is at
+    # target and the hold has nothing left to protect. An empty charge set on a
+    # covered day means the need was already zero, so that instant is the window
+    # start itself. Not covered at all is the no-room case, which holds nothing
+    # anyway.
+    charge_complete_at: datetime | None = None
+    if covered:
+        charge_complete_at = (
+            max(parse_slot_id(slot_id) for slot_id in charge_set)
+            if charge_set
+            else window_start
+        )
+        # Past that instant the battery may charge freely. Holding on would buy
+        # nothing — the surplus it protects is worth the same exported whether
+        # the battery is full or not — while costing the battery its headroom to
+        # ride a consumption peak and take the dip straight back. Every slot
+        # qualifies, not just the ranked ones: a slot with no surplus of its own
+        # is still a slot the battery should be free to move in.
+        charge_set.update(
+            slot_id
+            for slot_id in day_slot_ids
+            if parse_slot_id(slot_id) >= charge_complete_at
+        )
 
     return _DayHoldResolution(
         window_start=window_start,
         window_end=window_end,
-        released=frozenset(released),
+        released=frozenset(charge_set),
+        charge_complete_at=charge_complete_at,
         ranked_by_slot={
             record.slot_id: record
             for record in ranked
