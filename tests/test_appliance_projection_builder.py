@@ -570,6 +570,51 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             ],
         )
 
+    def test_the_slot_in_progress_carries_its_whole_scheduled_demand(self) -> None:
+        """The clock clips what is left to plan, not what the slot was scheduled for.
+
+        A reader drawing the slot against a whole-slot forecast needs the figure
+        that does not shrink as the slot ages; the optimizer keeps the one that
+        does. Only the slot containing the reference time can differ.
+        """
+        registry = build_appliances_runtime_registry(
+            {"controllables": [_generic_appliance()]}
+        )
+
+        plan = build_appliance_projection_plan(
+            generated_at=REFERENCE_TIME.isoformat(),
+            registry=registry,
+            hass=None,
+            schedule_document=ScheduleDocument(
+                slots={
+                    slot_id: build_controllable_actions(
+                        appliances={"dishwasher": {"on": True}}
+                    )
+                    for slot_id in (
+                        "2026-03-20T21:00:00+01:00",
+                        "2026-03-20T21:30:00+01:00",
+                    )
+                }
+            ),
+            inputs=None,
+            reference_time=REFERENCE_TIME,
+        )
+
+        # 1.2 kWh/h over a 15-minute slot is 0.3 kWh; at 21:07 only 8 of the
+        # 21:00 slot's minutes are still to come.
+        self.assertEqual(
+            [
+                (point.slot_id, point.energy_kwh, point.scheduled_energy_kwh)
+                for point in plan.demand_points
+            ],
+            [
+                ("2026-03-20T21:00:00+01:00", 0.16, 0.3),
+                ("2026-03-20T21:15:00+01:00", 0.3, 0.3),
+                ("2026-03-20T21:30:00+01:00", 0.3, 0.3),
+                ("2026-03-20T21:45:00+01:00", 0.3, 0.3),
+            ],
+        )
+
     def test_generic_history_projection_prefers_estimate(self) -> None:
         registry = build_appliances_runtime_registry(
             {"controllables": [_generic_appliance(strategy="history_average")]}
@@ -826,8 +871,12 @@ def _registry_with_charge_limit() -> AppliancesRuntimeRegistry:
 _SOC_REFERENCE_TIME = datetime.fromisoformat("2026-03-20T10:00:00+01:00")
 
 
-def _make_house_forecast_for_soc_test() -> dict:
-    """Covers canonical slots 10:00–12:45 (13 slots)."""
+def _make_house_forecast_for_soc_test(current_slot: str = "10:00") -> dict:
+    """Covers canonical slots 10:00–12:45 (13 slots).
+
+    ``current_slot`` is the one the pipeline built the forecast for: the series
+    begins one canonical slot after it, as the real one does.
+    """
     series_timestamps = [
         f"2026-03-20T{h:02d}:{m:02d}:00+01:00"
         for h, m in [
@@ -839,12 +888,13 @@ def _make_house_forecast_for_soc_test() -> dict:
     return {
         "status": "available",
         "currentSlot": {
-            "timestamp": "2026-03-20T10:00:00+01:00",
+            "timestamp": f"2026-03-20T{current_slot}:00+01:00",
             "nonDeferrable": {"value": 0.1},
         },
         "series": [
             {"timestamp": ts, "nonDeferrable": {"value": 0.1}}
             for ts in series_timestamps
+            if ts > f"2026-03-20T{current_slot}:00+01:00"
         ],
     }
 
@@ -943,6 +993,81 @@ class EvChargerProjectionSoCCapTests(unittest.TestCase):
         for dp in demand[:9]:
             self.assertEqual(dp.energy_kwh, 2.75)
         self.assertEqual(demand[9].energy_kwh, round(25.6 - 22.0 - 2.75, 4))  # 0.85
+
+    def test_remaining_capacity_caps_the_whole_slot_figure_too(self) -> None:
+        """Both figures are capped, the unclipped one against the whole slot.
+
+        The clipped pass places what is left of the slot in progress — 1.4667 kWh
+        of the 10:00 slice, then 1.5333 kWh at 10:15 — out of the 3 kWh of
+        capacity the vehicle has left. Had the whole 10:00 slot still been ahead
+        of the clock it would have taken 2.75 kWh of that same capacity, which is
+        what its whole-slot figure reports. Only that one slot is recomputed: 10:15
+        is not cut by the clock, so its two figures are one number.
+        """
+        registry = _registry_with_charge_limit()
+        # 64 kWh battery: 50% → 54.6875% is exactly 3 kWh.
+        hass = _FakeHass({
+            "sensor.kona_soc": _FakeState("50"),
+            "number.kona_charge_limit": _FakeState("54.6875"),
+        })
+        reference_time = datetime.fromisoformat("2026-03-20T10:07:00+01:00")
+
+        plan = build_appliance_projection_plan(
+            generated_at=reference_time.isoformat(),
+            registry=registry,
+            hass=hass,
+            schedule_document=_six_hour_schedule("kona", "Fast"),
+            inputs=build_projection_input_bundle(
+                solar_forecast=_make_solar_forecast_for_soc_test(),
+                house_forecast=_make_house_forecast_for_soc_test(),
+                reference_time=reference_time,
+            ),
+        )
+
+        self.assertEqual(
+            [
+                (point.slot_id, point.energy_kwh, point.scheduled_energy_kwh)
+                for point in plan.demand_points
+            ],
+            [
+                ("2026-03-20T10:00:00+01:00", 1.4667, 2.75),
+                ("2026-03-20T10:15:00+01:00", 1.5333, 1.5333),
+            ],
+        )
+
+    def test_the_clock_past_the_schedule_slots_midpoint_still_reports_it(self) -> None:
+        """The 10:00 schedule slot's second half is the slot in progress at 10:22.
+
+        Its first canonical slot has wholly elapsed and no forecast covers it any
+        more, so the whole-slot figure has to be taken from the slot the clock is
+        actually in rather than from the schedule slot's start — otherwise the one
+        slot the user is looking at is the one that keeps melting.
+        """
+        registry = _registry_with_charge_limit()
+        hass = _FakeHass({
+            "sensor.kona_soc": _FakeState("50"),
+            "number.kona_charge_limit": _FakeState("90"),
+        })
+        reference_time = datetime.fromisoformat("2026-03-20T10:22:00+01:00")
+
+        plan = build_appliance_projection_plan(
+            generated_at=reference_time.isoformat(),
+            registry=registry,
+            hass=hass,
+            schedule_document=_six_hour_schedule("kona", "Fast"),
+            inputs=build_projection_input_bundle(
+                solar_forecast=_make_solar_forecast_for_soc_test(),
+                house_forecast=_make_house_forecast_for_soc_test("10:15"),
+                reference_time=reference_time,
+            ),
+        )
+
+        first = plan.demand_points[0]
+        # 8 of the 10:15 slot's minutes are left at 11 kW; the whole of it is 2.75.
+        self.assertEqual(
+            (first.slot_id, first.energy_kwh, first.scheduled_energy_kwh),
+            ("2026-03-20T10:15:00+01:00", 1.4667, 2.75),
+        )
 
     def test_vehicle_already_at_target_produces_no_projection(self) -> None:
         registry = _registry_with_charge_limit()

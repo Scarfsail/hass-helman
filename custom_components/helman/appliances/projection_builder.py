@@ -31,9 +31,20 @@ _UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}
 
 @dataclass(frozen=True)
 class ApplianceDemandPoint:
+    """One appliance's demand in one canonical slot.
+
+    ``energy_kwh`` is what the optimizer plans against: the slot containing
+    ``now`` carries only the energy still to come, because that is all that can
+    still be scheduled. ``scheduled_energy_kwh`` is the same computation with the
+    clock taken out — what the whole slot was scheduled to draw — so a reader
+    comparing a slot against a whole-slot forecast gets a figure that does not
+    shrink as the slot ages. They differ only in the slot containing ``now``.
+    """
+
     appliance_id: str
     slot_id: str
     energy_kwh: float
+    scheduled_energy_kwh: float
 
 
 @dataclass(frozen=True)
@@ -189,6 +200,9 @@ def build_appliance_projection_plan(
         demand_points.extend(result.demand_points)
 
     concurrent_demand_kwh_by_slot_id = _aggregate_demand_kwh_by_slot_id(demand_points)
+    concurrent_scheduled_demand_kwh_by_slot_id = _aggregate_demand_kwh_by_slot_id(
+        demand_points, scheduled=True
+    )
 
     for appliance in deferred_ev_appliances:
         if inputs is None:
@@ -199,6 +213,9 @@ def build_appliance_projection_plan(
             inputs=inputs,
             hass=hass,
             concurrent_demand_kwh_by_slot_id=concurrent_demand_kwh_by_slot_id,
+            concurrent_scheduled_demand_kwh_by_slot_id=(
+                concurrent_scheduled_demand_kwh_by_slot_id
+            ),
             vehicle_remaining_capacity_kwh_by_vehicle_id=(
                 vehicle_remaining_capacity_kwh_by_vehicle_id
             ),
@@ -241,6 +258,7 @@ def _build_ev_charger_projection_series(
     inputs: ProjectionInputBundle,
     hass,
     concurrent_demand_kwh_by_slot_id: Mapping[str, float] | None = None,
+    concurrent_scheduled_demand_kwh_by_slot_id: Mapping[str, float] | None = None,
     vehicle_remaining_capacity_kwh_by_vehicle_id: Mapping[str, float | None] | None = None,
 ) -> _ApplianceProjectionBuildResult:
     points: list[ApplianceProjectionPlanPoint] = []
@@ -248,6 +266,11 @@ def _build_ev_charger_projection_series(
     vehicle_charged_kwh: dict[str, float] = {}
     vehicle_remaining_kwh: dict[str, float | None] = {}
     concurrent_demand_kwh = concurrent_demand_kwh_by_slot_id or {}
+    concurrent_scheduled_demand_kwh = (
+        concurrent_scheduled_demand_kwh_by_slot_id
+        if concurrent_scheduled_demand_kwh_by_slot_id is not None
+        else concurrent_demand_kwh
+    )
 
     for slot_id, actions in sorted(schedule_document.slots.items()):
         action = actions.get(appliance.id)
@@ -294,24 +317,42 @@ def _build_ev_charger_projection_series(
         if slot_slices is None or not slot_slices:
             continue
 
-        raw_slice_energies = tuple(
-            _calculate_slot_slice_energy(
-                appliance=appliance,
-                vehicle=vehicle,
-                action=action,
-                use_mode=use_mode,
-                slot_slice=slot_slice,
-                concurrent_demand_kwh=concurrent_demand_kwh.get(
-                    format_slot_id(slot_slice.slot_start), 0.0
-                ),
+        slice_energy_kwhs = _build_slice_energies(
+            appliance=appliance,
+            vehicle=vehicle,
+            action=action,
+            use_mode=use_mode,
+            slot_slices=slot_slices,
+            concurrent_demand_kwh_by_slot_id=concurrent_demand_kwh,
+            capacity_left=capacity_left,
+        )
+
+        # The whole-slot figure for the one canonical slot the clock cuts short:
+        # the same computation with `now` moved back to that slot's own start, and
+        # against the unclipped concurrent demand so both passes agree about the
+        # surplus an ECO gear chases. Every other slot in this schedule slot is
+        # untouched by the clip, so its two figures are the same number — only the
+        # first slice is recomputed, and it is capped against the same capacity the
+        # clipped pass had on entering the slot.
+        scheduled_energy_by_slot_id: dict[str, float] = {}
+        if slot_slices[0].slot_start == inputs.current_slot_start:
+            unclipped_slices = _build_schedule_slot_slices(
+                slot_id=slot_id,
+                inputs=inputs,
+                reference_time=inputs.current_slot_start,
             )
-            for slot_slice in slot_slices
-        )
-        slice_energy_kwhs = (
-            _cap_slice_energies(raw_slice_energies, capacity_left)
-            if capacity_left is not None
-            else raw_slice_energies
-        )
+            if unclipped_slices:
+                scheduled_energy_by_slot_id = {
+                    format_slot_id(inputs.current_slot_start): _build_slice_energies(
+                        appliance=appliance,
+                        vehicle=vehicle,
+                        action=action,
+                        use_mode=use_mode,
+                        slot_slices=unclipped_slices[:1],
+                        concurrent_demand_kwh_by_slot_id=concurrent_scheduled_demand_kwh,
+                        capacity_left=capacity_left,
+                    )[0]
+                }
 
         energy_kwh = sum(slice_energy_kwhs)
         if energy_kwh <= 0:
@@ -332,6 +373,12 @@ def _build_ev_charger_projection_series(
                 appliance_id=appliance.id,
                 slot_id=format_slot_id(slot_slice.slot_start),
                 energy_kwh=round(slice_energy_kwh, 4),
+                scheduled_energy_kwh=round(
+                    scheduled_energy_by_slot_id.get(
+                        format_slot_id(slot_slice.slot_start), slice_energy_kwh
+                    ),
+                    4,
+                ),
             )
             for slot_slice, slice_energy_kwh in zip(
                 slot_slices,
@@ -497,6 +544,19 @@ def _build_constant_hourly_projection_series(
         if energy_kwh <= 0:
             continue
 
+        # The whole-slot figures: the same slices built with `now` moved back to
+        # the start of the canonical slot it falls in, so the clock cannot shorten
+        # the one slice it cuts through. Every other slice is unaffected and comes
+        # out identical to the clipped pass.
+        scheduled_energy_by_bucket = {
+            demand_slice.bucket_start: demand_slice.energy_kwh
+            for demand_slice in build_when_active_demand_slices(
+                slot_id=slot_id,
+                reference_time=_canonical_slot_start(reference_time),
+                hourly_energy_kwh=demand_profile.hourly_energy_kwh,
+            )
+        }
+
         points.append(
             ApplianceProjectionPlanPoint(
                 slot_id=slot_id,
@@ -510,6 +570,9 @@ def _build_constant_hourly_projection_series(
                 appliance_id=appliance_id,
                 slot_id=format_slot_id(demand_slice.bucket_start),
                 energy_kwh=demand_slice.energy_kwh,
+                scheduled_energy_kwh=scheduled_energy_by_bucket.get(
+                    demand_slice.bucket_start, demand_slice.energy_kwh
+                ),
             )
             for demand_slice in demand_slices
         )
@@ -544,15 +607,30 @@ def _resolve_climate_action_projection(
     return False, None
 
 
+def _canonical_slot_start(reference_time: datetime) -> datetime:
+    """The start of the canonical slot ``reference_time`` falls in.
+
+    The clip only ever cuts through this one slot: everything before it has
+    elapsed and everything after it is whole, so this is the reference that takes
+    the clock out of the projection without inventing energy for a slot that has
+    already gone.
+    """
+    return get_local_current_slot_start(
+        dt_util.as_local(reference_time),
+        interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    )
+
+
 def _build_schedule_slot_slices(
     *,
     slot_id: str,
     inputs: ProjectionInputBundle,
+    reference_time: datetime | None = None,
 ) -> list[_ProjectionSlotSlice] | None:
     slices: list[_ProjectionSlotSlice] = []
     for time_slice in _build_time_slices(
         slot_id=slot_id,
-        reference_time=inputs.reference_time,
+        reference_time=inputs.reference_time if reference_time is None else reference_time,
     ):
         baseline_house_kwh = (
             inputs.current_house_kwh
@@ -647,14 +725,43 @@ def _calculate_slot_slice_energy(
     )
 
 
+def _build_slice_energies(
+    *,
+    appliance: EvChargerApplianceRuntime,
+    vehicle: EvVehicleRuntime,
+    action: dict[str, Any],
+    use_mode: EvChargerUseModeRuntime,
+    slot_slices: Iterable[_ProjectionSlotSlice],
+    concurrent_demand_kwh_by_slot_id: Mapping[str, float],
+    capacity_left: float | None,
+) -> tuple[float, ...]:
+    raw_slice_energies = tuple(
+        _calculate_slot_slice_energy(
+            appliance=appliance,
+            vehicle=vehicle,
+            action=action,
+            use_mode=use_mode,
+            slot_slice=slot_slice,
+            concurrent_demand_kwh=concurrent_demand_kwh_by_slot_id.get(
+                format_slot_id(slot_slice.slot_start), 0.0
+            ),
+        )
+        for slot_slice in slot_slices
+    )
+    if capacity_left is None:
+        return raw_slice_energies
+    return _cap_slice_energies(raw_slice_energies, capacity_left)
+
+
 def _aggregate_demand_kwh_by_slot_id(
     demand_points: Iterable[ApplianceDemandPoint],
+    *,
+    scheduled: bool = False,
 ) -> dict[str, float]:
     totals: dict[str, float] = {}
     for point in demand_points:
-        totals[point.slot_id] = round(
-            totals.get(point.slot_id, 0.0) + point.energy_kwh, 4
-        )
+        energy_kwh = point.scheduled_energy_kwh if scheduled else point.energy_kwh
+        totals[point.slot_id] = round(totals.get(point.slot_id, 0.0) + energy_kwh, 4)
     return totals
 
 

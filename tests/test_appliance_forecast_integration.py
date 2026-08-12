@@ -158,16 +158,19 @@ class ApplianceForecastIntegrationTests(unittest.TestCase):
                     appliance_id="garage-ev",
                     slot_id="2026-03-20T21:00:00+01:00",
                     energy_kwh=0.8,
+                    scheduled_energy_kwh=0.8,
                 ),
                 ApplianceDemandPoint(
                     appliance_id="pool",
                     slot_id="2026-03-20T21:00:00+01:00",
                     energy_kwh=0.3,
+                    scheduled_energy_kwh=0.3,
                 ),
                 ApplianceDemandPoint(
                     appliance_id="garage-ev",
                     slot_id="2026-03-20T21:15:00+01:00",
                     energy_kwh=0.5,
+                    scheduled_energy_kwh=0.5,
                 ),
             ]
         )
@@ -188,11 +191,13 @@ class ApplianceForecastIntegrationTests(unittest.TestCase):
                     appliance_id="garage-ev",
                     slot_id="2026-03-20T21:00:00+01:00",
                     energy_kwh=0.8,
+                    scheduled_energy_kwh=0.8,
                 ),
                 ApplianceDemandPoint(
                     appliance_id="garage-ev",
                     slot_id="2026-03-20T21:15:00+01:00",
                     energy_kwh=0.5,
+                    scheduled_energy_kwh=0.5,
                 ),
             ],
         )
@@ -205,6 +210,34 @@ class ApplianceForecastIntegrationTests(unittest.TestCase):
         self.assertEqual(adjusted["series"][0]["nonDeferrable"]["upper"], 1.2)
         self.assertEqual(adjusted["series"][1]["nonDeferrable"]["value"], 0.4)
 
+    def test_the_optimizer_view_ignores_the_whole_slot_figure(self) -> None:
+        """``scheduled_energy_kwh`` is additive: nothing the planner reads sees it.
+
+        The slot in progress can only take the energy still to come, so both the
+        per-slot aggregate and the adjusted forecast built from it must keep
+        reporting ``energy_kwh`` however much larger the whole slot was.
+        """
+        demand_points = [
+            ApplianceDemandPoint(
+                appliance_id="garage-ev",
+                slot_id="2026-03-20T21:00:00+01:00",
+                energy_kwh=0.3,
+                scheduled_energy_kwh=0.9,
+            )
+        ]
+
+        self.assertEqual(
+            aggregate_appliance_demand_by_slot(demand_points),
+            {"2026-03-20T21:00:00+01:00": 0.3},
+        )
+        adjusted = build_adjusted_house_forecast(
+            house_forecast=_make_house_forecast(),
+            demand_points=demand_points,
+        )
+        # 0.5 kWh of base plus the 0.3 kWh still to come, not the 0.9 kWh the
+        # whole slot was scheduled for.
+        self.assertEqual(adjusted["currentSlot"]["nonDeferrable"]["value"], 0.8)
+
     def test_build_adjusted_house_forecast_keeps_original_input_unchanged(self) -> None:
         house_forecast = _make_house_forecast()
 
@@ -215,6 +248,7 @@ class ApplianceForecastIntegrationTests(unittest.TestCase):
                     appliance_id="garage-ev",
                     slot_id="2026-03-20T21:00:00+01:00",
                     energy_kwh=0.8,
+                    scheduled_energy_kwh=0.8,
                 )
             ],
         )

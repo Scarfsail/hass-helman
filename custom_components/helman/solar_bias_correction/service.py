@@ -517,17 +517,19 @@ class SolarBiasCorrectionService:
             )
 
         # --- House forecast ---
-        # The recorder history of the house forecast sensor (W → Wh) covers every
-        # slot up to and including the one in progress; the cached forecast
-        # snapshot (kWh → Wh) covers the slots after it, because the recorder
-        # would hold the last value flat across the rest of the day.
-        # The two must meet at the next slot boundary: the snapshot's series
-        # begins there (the in-progress slot sits in its "currentSlot" field, not
-        # in "series"), so cutting the recorder any earlier would leave a hole.
-        next_slot = _next_slot_boundary(local_now) if target_date == today else None
+        # The recorder history of the house forecast sensor (W → Wh) covers the
+        # slots that have elapsed; the cached forecast snapshot (kWh → Wh) covers
+        # the slots after the one in progress, because the recorder would hold the
+        # last value flat across the rest of the day. The slot in progress sits
+        # between them, in the snapshot's "currentSlot" field rather than its
+        # "series", and is served from the live composition — total and parts from
+        # the one vintage.
+        current_slot_start = _current_slot_start(local_now) if target_date == today else None
+        next_slot = (
+            None if current_slot_start is None else current_slot_start + timedelta(minutes=15)
+        )
         need_past = target_date <= today
         need_future = target_date >= today
-        actual_local_now = local_now if target_date == today else None
 
         # Independent recorder/snapshot reads, so overlap them rather than
         # awaiting in turn.
@@ -538,9 +540,7 @@ class SolarBiasCorrectionService:
                     "house forecast history",
                 ),
                 self._guarded_points(
-                    self._load_house_actual_for_date(
-                        target_date, timezone, local_now=actual_local_now
-                    ),
+                    self._load_house_actual_for_date(target_date, timezone),
                     "house actual",
                 ),
                 self._guarded_points(
@@ -548,15 +548,11 @@ class SolarBiasCorrectionService:
                     "battery SoC actual",
                 ),
                 self._guarded_points(
-                    self._load_grid_actual_for_date(
-                        target_date, timezone, local_now=actual_local_now
-                    ),
+                    self._load_grid_actual_for_date(target_date, timezone),
                     "grid actual",
                 ),
                 self._guarded_points(
-                    self._load_battery_actual_for_date(
-                        target_date, timezone, local_now=actual_local_now
-                    ),
+                    self._load_battery_actual_for_date(target_date, timezone),
                     "battery actual",
                 ),
                 self._load_house_consumer_breakdown_for_date(target_date, timezone),
@@ -597,18 +593,35 @@ class SolarBiasCorrectionService:
             consumer_slot_maps,
         )
 
-        house_forecast_points: list[dict] = []
-        if need_past:
-            house_forecast_points = _points_before(
-                house_forecast_history_points, cutoff=next_slot
-            )
+        # Every actual series stops at the slot in progress, which is a forecast
+        # like any other unfinished slot; the day's totals below still count it,
+        # since a sum is an accumulation and not a slot-by-slot comparison, so the
+        # drawn series and the summed series are held apart here.
+        running_slot = (
+            None if current_slot_start is None else current_slot_start.strftime("%H:%M")
+        )
+        drawn_actual_points = _drop_running_slot(actual_points, running_slot=running_slot)
+        drawn_invalidated_points = _drop_running_slot(
+            invalidated_points, running_slot=running_slot
+        )
+        drawn_house_actual_points = _drop_running_slot(
+            house_actual_points, running_slot=running_slot
+        )
+        drawn_house_actual_breakdown_points = _drop_running_slot(
+            house_actual_breakdown_points, running_slot=running_slot
+        )
+        drawn_battery_soc_actual_points = _drop_running_slot(
+            battery_soc_actual_points, running_slot=running_slot
+        )
+        drawn_grid_actual_points = _drop_running_slot(
+            grid_actual_points, running_slot=running_slot
+        )
+        drawn_battery_actual_points = _drop_running_slot(
+            battery_actual_points, running_slot=running_slot
+        )
+
         house_forecast_breakdown_points: list[SolarBiasHouseBreakdownPoint] = []
         if need_future:
-            house_forecast_points += _house_forecast_points_from_snapshot(
-                self._get_house_forecast_snapshot(),
-                target_date,
-                next_slot=next_slot,
-            )
             # Only here, inside the need_future branch: the composition is read
             # off the pipeline the gather above has just built, so a past-only
             # day never touches it and no forecast rebuild can follow from
@@ -619,6 +632,28 @@ class SolarBiasCorrectionService:
                 target_date,
                 next_slot=next_slot,
                 metered_by_entity=breakdown_consumers,
+            )
+        current_slot_points = _house_forecast_total_for_slot(
+            house_forecast_breakdown_points, slot_start=current_slot_start
+        )
+
+        house_forecast_points: list[dict] = []
+        if need_past:
+            # The archive stops where the composition takes over: at the slot in
+            # progress when that slot has a composition, so its total and its
+            # parts are one vintage and neither moves as the slot ages — and one
+            # slot later when it has none, a lagging or cold pipeline being no
+            # reason to leave a hole where the user is looking.
+            house_forecast_points = _points_before(
+                house_forecast_history_points,
+                cutoff=current_slot_start if current_slot_points else next_slot,
+            )
+        house_forecast_points += current_slot_points
+        if need_future:
+            house_forecast_points += _house_forecast_points_from_snapshot(
+                self._get_house_forecast_snapshot(),
+                target_date,
+                next_slot=next_slot,
             )
 
         # --- Battery SoC, grid and battery forecast ---
@@ -668,23 +703,25 @@ class SolarBiasCorrectionService:
             series=SolarBiasInspectorSeries(
                 raw=_inspector_points(raw_points),
                 corrected=_inspector_points(corrected_points),
-                actual=actual_points,
-                invalidated=invalidated_points,
+                actual=drawn_actual_points,
+                invalidated=drawn_invalidated_points,
                 factors=factors,
                 impact=_impact_points_for_day(
                     raw_points,
                     corrected_points,
                 ),
                 house_forecast=_inspector_points_from_raw(house_forecast_points),
-                house_actual=_inspector_points_from_raw(house_actual_points),
-                house_actual_breakdown=house_actual_breakdown_points,
+                house_actual=_inspector_points_from_raw(drawn_house_actual_points),
+                house_actual_breakdown=drawn_house_actual_breakdown_points,
                 house_forecast_breakdown=house_forecast_breakdown_points,
                 battery_soc_forecast=_battery_soc_points_from_raw(battery_soc_forecast_points),
-                battery_soc_actual=_battery_soc_points_from_raw(battery_soc_actual_points),
+                battery_soc_actual=_battery_soc_points_from_raw(
+                    drawn_battery_soc_actual_points
+                ),
                 grid_forecast=_inspector_points_from_raw(grid_forecast_points),
-                grid_actual=_inspector_points_from_raw(grid_actual_points),
+                grid_actual=_inspector_points_from_raw(drawn_grid_actual_points),
                 battery_forecast=_inspector_points_from_raw(battery_forecast_points),
-                battery_actual=_inspector_points_from_raw(battery_actual_points),
+                battery_actual=_inspector_points_from_raw(drawn_battery_actual_points),
             ),
             totals=SolarBiasInspectorTotals(
                 raw_wh=_sum_point_values(raw_points) if raw_points else None,
@@ -726,19 +763,19 @@ class SolarBiasCorrectionService:
             availability=SolarBiasInspectorAvailability(
                 has_raw_forecast=bool(raw_points),
                 has_corrected_forecast=bool(corrected_points),
-                has_actuals=bool(actuals_by_slot),
+                has_actuals=bool(drawn_actual_points),
                 has_profile=has_profile,
-                has_invalidated=bool(invalidated_points),
+                has_invalidated=bool(drawn_invalidated_points),
                 has_house_forecast=bool(house_forecast_points),
-                has_house_actual=bool(house_actual_points),
-                has_house_actual_breakdown=bool(house_actual_breakdown_points),
+                has_house_actual=bool(drawn_house_actual_points),
+                has_house_actual_breakdown=bool(drawn_house_actual_breakdown_points),
                 has_house_forecast_breakdown=bool(house_forecast_breakdown_points),
                 has_battery_soc_forecast=bool(battery_soc_forecast_points),
-                has_battery_soc_actual=bool(battery_soc_actual_points),
+                has_battery_soc_actual=bool(drawn_battery_soc_actual_points),
                 has_grid_forecast=bool(grid_forecast_points),
-                has_grid_actual=bool(grid_actual_points),
+                has_grid_actual=bool(drawn_grid_actual_points),
                 has_battery_forecast=bool(battery_forecast_points),
-                has_battery_actual=bool(battery_actual_points),
+                has_battery_actual=bool(drawn_battery_actual_points),
             ),
             is_today=target_date == today,
             is_future=target_date > today,
@@ -912,7 +949,7 @@ class SolarBiasCorrectionService:
         )
 
     async def _load_house_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo, local_now: datetime | None = None
+        self, target_date: date, local_tz: ZoneInfo
     ) -> list[dict]:
         """Load per-15-min house energy actuals for target_date."""
         if self._house_energy_entity_id_provider is None:
@@ -928,7 +965,6 @@ class SolarBiasCorrectionService:
         return _slot_energy_points(
             {slot: kwh * 1000.0 for slot, kwh in by_slot.items()},
             target_date,
-            local_now=local_now,
         )
 
     @staticmethod
@@ -1116,7 +1152,7 @@ class SolarBiasCorrectionService:
             return [], []
 
     async def _load_grid_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo, local_now: datetime | None = None
+        self, target_date: date, local_tz: ZoneInfo
     ) -> list[dict]:
         """Load per-15-min net grid energy for target_date.
 
@@ -1153,10 +1189,10 @@ class SolarBiasCorrectionService:
             slot: (exported.get(slot, 0.0) - imported.get(slot, 0.0)) * 1000.0
             for slot in imported.keys() | exported.keys()
         }
-        return _slot_energy_points(net_wh_by_slot, target_date, local_now=local_now)
+        return _slot_energy_points(net_wh_by_slot, target_date)
 
     async def _load_battery_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo, local_now: datetime | None = None
+        self, target_date: date, local_tz: ZoneInfo
     ) -> list[dict]:
         """Load per-15-min net battery energy for target_date.
 
@@ -1196,7 +1232,7 @@ class SolarBiasCorrectionService:
             slot: (charged.get(slot, 0.0) - discharged.get(slot, 0.0)) * 1000.0
             for slot in charged.keys() | discharged.keys()
         }
-        return _slot_energy_points(net_wh_by_slot, target_date, local_now=local_now)
+        return _slot_energy_points(net_wh_by_slot, target_date)
 
     async def _load_battery_soc_actual_for_date(
         self, target_date: date, local_tz: ZoneInfo
@@ -1886,24 +1922,56 @@ def _points_before(points: list[dict], *, cutoff: datetime | None) -> list[dict]
 def _slot_energy_points(
     wh_by_slot_utc: dict[datetime, float],
     target_date: date,
-    *,
-    local_now: datetime | None,
 ) -> list[dict]:
     """Turn UTC-keyed slot energies into local per-slot inspector points.
 
-    When local_now is given the still-running slot is dropped, since its energy
-    delta only covers part of the slot.
+    The slot in progress is kept: it is partial, so the chart must not draw it
+    (see ``_drop_running_slot``), but the day's total is an accumulation and
+    counts every Wh the meter has recorded.
     """
-    running_slot_start = _current_slot_start(local_now) if local_now is not None else None
     points: list[dict] = []
     for slot_start_utc, wh in sorted(wh_by_slot_utc.items()):
         slot_local = dt_util.as_local(slot_start_utc)
         if slot_local.date() != target_date:
             continue
-        if running_slot_start is not None and slot_local >= running_slot_start:
-            continue
         points.append({"timestamp": slot_local.isoformat(), "wh": wh})
     return points
+
+
+def _point_field(point: Any, name: str) -> Any:
+    """Read a field off an inspector point, dict-shaped or dataclass-shaped."""
+    return point.get(name) if isinstance(point, dict) else getattr(point, name, None)
+
+
+def _drop_running_slot(points: list, *, running_slot: str | None) -> list:
+    """Drop actual points in or after the slot in progress.
+
+    A slot that has not finished has only partial actuals, and comparing a
+    part-slot measurement against a whole-slot forecast is a category error. The
+    aggregated buckets already apply this rule; applying it here applies it to
+    every actual series at the native 15-minute width too.
+
+    Points are matched on their local ``HH:MM`` slot, carried either as a ``slot``
+    label or inside an ISO ``timestamp``; every series here is already filtered to
+    the day in question, and ``running_slot`` is only set for today.
+    """
+    if running_slot is None:
+        return points
+
+    def _slot_of(point: Any) -> str | None:
+        slot = _point_field(point, "slot")
+        if isinstance(slot, str):
+            return slot
+        timestamp = _point_field(point, "timestamp")
+        if isinstance(timestamp, str) and len(timestamp) >= 16:
+            return timestamp[11:16]
+        return None
+
+    return [
+        point
+        for point in points
+        if (slot := _slot_of(point)) is None or slot < running_slot
+    ]
 
 
 def _build_house_actual_breakdown(
@@ -2047,7 +2115,10 @@ def _build_house_forecast_breakdown(
         by_appliance = demand_by_slot.setdefault(slot, {})
         by_appliance[demand_point.appliance_id] = (
             by_appliance.get(demand_point.appliance_id, 0.0)
-            + float(demand_point.energy_kwh)
+            # The whole slot's scheduled energy, not the part of it still to come:
+            # the breakdown is drawn against a whole-slot forecast, so the slot in
+            # progress must report the same figure at 13:16 as at 13:29.
+            + float(demand_point.scheduled_energy_kwh)
         )
 
     points: list[SolarBiasHouseBreakdownPoint] = []
@@ -2073,6 +2144,33 @@ def _build_house_forecast_breakdown(
             )
         )
     return points
+
+
+def _house_forecast_total_for_slot(
+    breakdown_points: list[SolarBiasHouseBreakdownPoint],
+    *,
+    slot_start: datetime | None,
+) -> list[dict]:
+    """The one slot's house forecast total, summed from its own composition.
+
+    The slot in progress is the only slot whose total is not read from a series:
+    the archive's sample of it predates the schedule the composition describes, so
+    reading the two from different vintages is what made its deferrable share melt
+    across the slot. Summing the parts instead makes the total agree with them by
+    construction. At most one point, and none at all on a day that is not today or
+    with no composition to sum.
+    """
+    if slot_start is None:
+        return []
+    slot = slot_start.strftime("%H:%M")
+    for point in breakdown_points:
+        if point.slot != slot:
+            continue
+        total_wh = point.unmeasured_wh + sum(
+            appliance.value_wh for appliance in point.appliances
+        )
+        return [{"timestamp": slot_start.isoformat(), "wh": round(total_wh, 4)}]
+    return []
 
 
 def _iter_future_snapshot_entries(

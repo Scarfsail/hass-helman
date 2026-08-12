@@ -351,23 +351,46 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         )
         return service
 
-    async def _inspect(self, service, target_date, *, house_forecast_points=None):
+    async def _inspect(
+        self,
+        service,
+        target_date,
+        *,
+        house_forecast_points=None,
+        actuals_by_slot=None,
+        house_actual=None,
+        battery_soc_actual=None,
+        grid_actual=None,
+        battery_actual=None,
+    ):
         current_slot, next_slot = _pinned_slot_helpers()
         old_now = service_mod.dt_util.now
         old_actuals = service_mod.load_actuals_for_day
         try:
             service_mod.dt_util.now = lambda: datetime.fromisoformat(NOW)
-            service_mod.load_actuals_for_day = AsyncMock(return_value={})
+            service_mod.load_actuals_for_day = AsyncMock(
+                return_value=actuals_by_slot or {}
+            )
             with current_slot, next_slot, patch.object(
                 service_mod,
                 "load_house_forecast_points_for_day",
                 AsyncMock(return_value=house_forecast_points or []),
             ), patch.object(
-                service, "_load_house_actual_for_date", AsyncMock(return_value=[])
+                service,
+                "_load_house_actual_for_date",
+                AsyncMock(return_value=house_actual or []),
             ), patch.object(
-                service, "_load_battery_soc_actual_for_date", AsyncMock(return_value=[])
+                service,
+                "_load_battery_soc_actual_for_date",
+                AsyncMock(return_value=battery_soc_actual or []),
             ), patch.object(
-                service, "_load_grid_actual_for_date", AsyncMock(return_value=[])
+                service,
+                "_load_grid_actual_for_date",
+                AsyncMock(return_value=grid_actual or []),
+            ), patch.object(
+                service,
+                "_load_battery_actual_for_date",
+                AsyncMock(return_value=battery_actual or []),
             ):
                 return await service.async_get_inspector_day(target_date)
         finally:
@@ -426,19 +449,21 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         soc = payload["series"]["batterySocForecast"]
         self.assertEqual([p["slot"] for p in soc], ["10:15"])
 
-    async def test_today_house_forecast_joins_recorder_history_to_the_snapshot(self):
-        """The recorder covers through the slot in progress, the snapshot after it.
+    async def test_today_house_forecast_joins_recorder_to_the_live_slot_and_snapshot(self):
+        """Three sources, one series, no slot served by two of them.
 
-        The snapshot's series starts at the *next* slot -- the one in progress
-        lives in its "currentSlot" field -- so the recorder has to run right up
-        to that boundary or 10:00 falls through the gap between the two sources.
-        Past that boundary the recorder is useless: it holds its last value flat
-        all the way to midnight.
+        The recorder covers the slots that have elapsed; the slot in progress is
+        summed from the live composition, so its total and the parts drawn under
+        it are one vintage; the snapshot covers the slots after it. Past its own
+        boundary the recorder is useless anyway: it holds its last value flat all
+        the way to midnight.
         """
         service = self._service(_FakeHistory({}), _snapshot())
         recorder_points = [
             {"timestamp": f"{TODAY}T09:45:00+02:00", "wh": 100.0},
-            {"timestamp": f"{TODAY}T10:00:00+02:00", "wh": 200.0},
+            # The archive's stale sample of the slot in progress, taken before the
+            # schedule the composition describes: the composition supersedes it.
+            {"timestamp": f"{TODAY}T10:00:00+02:00", "wh": 999.0},
             {"timestamp": f"{TODAY}T10:15:00+02:00", "wh": 999.0},
             {"timestamp": f"{TODAY}T10:30:00+02:00", "wh": 999.0},
         ]
@@ -449,6 +474,22 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
                 {"timestamp": f"{TODAY}T10:30:00+02:00", "nonDeferrable": {"value": 0.5}},
             ],
         }
+        service._house_scheduled_consumers_provider = lambda: SCHEDULED_CONSUMERS
+        service._house_forecast_composition_provider = lambda: {
+            "original_house_forecast": {
+                "status": "available",
+                "currentSlot": {
+                    "timestamp": f"{TODAY}T10:00:00+02:00",
+                    "nonDeferrable": {"value": 0.25},
+                },
+                "series": [],
+            },
+            # Half the slot has run, so the planner has 0.05 kWh of pool left to
+            # place in it out of the 0.15 kWh the whole slot was scheduled for.
+            "demand_points": (
+                _demand("pool", f"{TODAY}T10:00:00+02:00", 0.05, 0.15),
+            ),
+        }
         payload = await self._inspect(
             service, TODAY, house_forecast_points=recorder_points
         )
@@ -457,9 +498,52 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         slots = [p["timestamp"][11:16] for p in house]
         # No hole at 10:00: every slot from 09:45 to 10:30 is present exactly once.
         self.assertEqual(slots, ["09:45", "10:00", "10:15", "10:30"])
-        # 09:45 and 10:00 from the recorder; 10:15 and 10:30 from the snapshot
+        # 09:45 from the recorder; 10:00 summed from its own composition, base plus
+        # the *whole* slot's scheduled demand; 10:15 and 10:30 from the snapshot
         # (kWh → Wh), never the recorder's held-flat 999.
-        self.assertEqual([p["valueWh"] for p in house], [100.0, 200.0, 400.0, 500.0])
+        self.assertEqual([p["valueWh"] for p in house], [100.0, 400.0, 400.0, 500.0])
+
+    async def test_no_actual_series_reaches_into_the_slot_in_progress(self):
+        """A part-slot measurement is not comparable to a whole-slot forecast.
+
+        The 10:00 slot is still running at 10:07, so every actual series stops at
+        09:45 — the rule the wider buckets already applied, applied at the native
+        width too. The day's totals are an accumulation rather than a comparison,
+        so they keep counting what the meters have recorded in it.
+        """
+        service = self._service(_FakeHistory({}), _snapshot())
+
+        def _wh(wh_by_slot):
+            return [
+                {"timestamp": f"{TODAY}T{slot}:00+02:00", "wh": wh}
+                for slot, wh in wh_by_slot.items()
+            ]
+
+        payload = await self._inspect(
+            service,
+            TODAY,
+            actuals_by_slot={"09:45": 100.0, "10:00": 40.0},
+            house_actual=_wh({"09:45": 200.0, "10:00": 80.0}),
+            grid_actual=_wh({"09:45": -300.0, "10:00": -90.0}),
+            battery_actual=_wh({"09:45": 400.0, "10:00": 110.0}),
+            battery_soc_actual=[
+                {"slot": "09:45", "pct": 55.0},
+                {"slot": "10:00", "pct": 57.0},
+            ],
+        )
+
+        series = payload["series"]
+        for key in ("actual", "houseActual", "gridActual", "batteryActual"):
+            self.assertEqual(
+                [p["timestamp"][11:16] for p in series[key]], ["09:45"], key
+            )
+        self.assertEqual([p["slot"] for p in series["batterySocActual"]], ["09:45"])
+
+        totals = payload["totals"]
+        self.assertEqual(totals["actualWh"], 140.0)
+        self.assertEqual(totals["houseActualWh"], 280.0)
+        self.assertEqual(totals["gridActualWh"], -390.0)
+        self.assertEqual(totals["batteryActualWh"], 510.0)
 
     async def test_house_forecast_ignores_the_deferrable_consumers_band(self):
         """nonDeferrable already carries the scheduled appliance demand.
@@ -487,10 +571,25 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p["valueWh"] for p in house], [400.0])
 
 
-def _demand(appliance_id: str, slot_id: str, energy_kwh: float):
-    """One ApplianceDemandPoint, as the projection plan carries them."""
+def _demand(
+    appliance_id: str,
+    slot_id: str,
+    energy_kwh: float,
+    scheduled_energy_kwh: float | None = None,
+):
+    """One ApplianceDemandPoint, as the projection plan carries them.
+
+    The two figures differ only in the slot containing now, where ``energy_kwh``
+    is the part of the slot still to come and ``scheduled_energy_kwh`` the whole
+    of it; everywhere else they are the same number.
+    """
     return SimpleNamespace(
-        appliance_id=appliance_id, slot_id=slot_id, energy_kwh=energy_kwh
+        appliance_id=appliance_id,
+        slot_id=slot_id,
+        energy_kwh=energy_kwh,
+        scheduled_energy_kwh=(
+            energy_kwh if scheduled_energy_kwh is None else scheduled_energy_kwh
+        ),
     )
 
 
@@ -533,6 +632,26 @@ SCHEDULED_CONSUMERS = [
         "deferrable": False,
     },
 ]
+
+
+# The same day with a composition for the slot in progress: 0.25 kWh of base and
+# a pool pump scheduled across the whole of it, of which only part is still to
+# come. `remaining_kwh` is what the clock has left of that 0.15 kWh.
+def _composition_with_current_slot(remaining_kwh: float) -> dict:
+    return {
+        "original_house_forecast": {
+            "status": "available",
+            "currentSlot": {
+                "timestamp": f"{TODAY}T10:00:00+02:00",
+                "nonDeferrable": {"value": 0.25},
+            },
+            "series": ORIGINAL_HOUSE_FORECAST["series"],
+        },
+        "demand_points": (
+            _demand("pool", f"{TODAY}T10:00:00+02:00", remaining_kwh, 0.15),
+            *DEMAND_POINTS,
+        ),
+    }
 
 
 class TestInspectorForecastComposition(_InspectorHarness):
@@ -698,6 +817,75 @@ class TestInspectorForecastComposition(_InspectorHarness):
                 forecast_by_slot[point["slot"]],
                 places=4,
             )
+
+    async def test_the_slot_in_progress_sums_to_its_own_composition(self):
+        """One slot, one vintage: its total is the sum of the parts drawn under it.
+
+        The archive's sample of the running slot is ignored — it predates the
+        schedule the composition describes, and drawing the two together is what
+        made the deferrable share melt across the slot.
+        """
+        payload = await self._inspect(
+            self._service(composition=_composition_with_current_slot(0.05)),
+            TODAY,
+            house_forecast_points=[
+                {"timestamp": f"{TODAY}T10:00:00+02:00", "wh": 999.0}
+            ],
+        )
+
+        forecast_by_slot = {
+            p["timestamp"][11:16]: p["valueWh"]
+            for p in payload["series"]["houseForecast"]
+        }
+        breakdown = {p["slot"]: p for p in payload["series"]["houseForecastBreakdown"]}
+        # 0.25 kWh of base plus the 0.15 kWh the whole slot was scheduled for.
+        self.assertEqual(forecast_by_slot["10:00"], 400.0)
+        self.assertEqual(
+            breakdown["10:00"]["unmeasuredWh"]
+            + sum(a["wh"] for a in breakdown["10:00"]["appliances"]),
+            forecast_by_slot["10:00"],
+        )
+
+    async def test_a_pipeline_with_nothing_for_the_running_slot_keeps_the_archive(self):
+        """A composition that does not reach the slot in progress leaves no hole.
+
+        The live pipeline can lag the clock by a slot, or be cold outright. The
+        archive is a worse source for that slot — it is what this change moved
+        away from — but it is a better one than nothing at all.
+        """
+        payload = await self._inspect(
+            self._service(),
+            TODAY,
+            house_forecast_points=[
+                {"timestamp": f"{TODAY}T09:45:00+02:00", "wh": 100.0},
+                {"timestamp": f"{TODAY}T10:00:00+02:00", "wh": 200.0},
+            ],
+        )
+
+        house = {
+            p["timestamp"][11:16]: p["valueWh"]
+            for p in payload["series"]["houseForecast"]
+        }
+        self.assertEqual(house["10:00"], 200.0)
+        self.assertEqual(sorted(house), ["09:45", "10:00", "10:15", "10:30"])
+
+    async def test_the_slot_in_progress_holds_still_as_it_ages(self):
+        """Later in the same slot there is less left to plan — and nothing moves.
+
+        All the clock changes is ``energy_kwh``, the part of the slot still to
+        come; both the total and the parts read the whole-slot figure, so the
+        user sitting in the slot sees the same numbers throughout it.
+        """
+        early, late = [
+            await self._inspect(
+                self._service(composition=_composition_with_current_slot(remaining)),
+                TODAY,
+            )
+            for remaining in (0.14, 0.01)
+        ]
+
+        for key in ("houseForecast", "houseForecastBreakdown"):
+            self.assertEqual(early["series"][key], late["series"][key])
 
     async def test_elapsed_and_other_day_demand_is_left_out(self):
         """Slot ids are local ISO timestamps; only this day's future ones count.
