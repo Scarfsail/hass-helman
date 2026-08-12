@@ -67,16 +67,20 @@ export class PowerDeviceInfo extends LitElement {
         const customLabels = this.device.customLabelTexts ?? [];
         const hasCustomLabels = customLabels.length > 0;
         // What the box says about the schedule. Decided here — beside
-        // power-device's tint, off the same device — which is what makes the
-        // power card and the solar inspector mark a load identically.
+        // power-device's tint, off the same `deferrable` flag — which is what
+        // makes the power card and the solar inspector mark a load identically.
+        // Gating on the flag rather than on the id alone matters: the forecast
+        // breakdown names the controllable behind every scheduled appliance,
+        // including one that opted out of being shiftable, and that one belongs
+        // in the base-load group unbadged, exactly as it is on the power card.
         //
         // A group is not a controllable, so it stands for its shiftable
-        // descendants and folds their states into one tint. Only a group the
-        // tree already marks shiftable does, though: the inspector's
+        // descendants and folds their states into one tint — the inspector's
         // "Deferrable consumption" row, not the house total and not every label
         // category that happens to contain a dishwasher.
-        const controllableId = this.device.controllableId ?? null;
-        const controllableIds = controllableId === null && this.device.deferrable
+        const deferrable = this.device.deferrable === true;
+        const controllableId = deferrable ? this.device.controllableId ?? null : null;
+        const controllableIds = deferrable && controllableId === null
             ? _collectControllableIds(this.device)
             : [];
         const hasBadge = controllableId !== null || controllableIds.length > 0;

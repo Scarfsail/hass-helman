@@ -212,13 +212,18 @@ test.describe("deferrable house consumers on the power card", () => {
                 controllableId: "dishwasher",
             },
             { id: "sensor.fridge_energy", name: "Fridge" },
+            // Scheduled, but opted out of being shiftable: the forecast
+            // breakdown still names its controllable, and it still belongs in
+            // the base-load group unbadged — the way it reads on the power card,
+            // whose tree hands it no controllable at all.
+            { id: "sensor.pump_energy", name: "Pump", controllableId: "pump" },
         ]);
 
-        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "Fridge"]);
+        expect(rows.map((r) => r.label)).toEqual(["Dishwasher", "Fridge", "Pump"]);
         // The ordinary consumer sets no tint of its own, so it keeps inheriting
         // the house section's colour exactly as it did before this existed.
-        expect(rows.map((r) => r.tint)).toEqual([DEFERRABLE_TINT, ""]);
-        expect(rows.map((r) => r.badgeColor)).toEqual([AUTOMATION_COLOR, null]);
+        expect(rows.map((r) => r.tint)).toEqual([DEFERRABLE_TINT, "", ""]);
+        expect(rows.map((r) => r.badgeColor)).toEqual([AUTOMATION_COLOR, null, null]);
     });
 
     test("the badge names the current slot's author, and nothing else", async ({ page }) => {

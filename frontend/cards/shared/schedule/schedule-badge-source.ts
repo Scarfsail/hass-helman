@@ -11,7 +11,7 @@ import {
 } from "./model/schedule-appliance-metadata";
 import { NormalizedScheduleCache } from "./model/schedule-normalizer";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "./schedule-owner";
-import type { ScheduleOwnerSnapshot, ScheduleSetBy } from "./schedule-types";
+import type { ScheduleOwnerSnapshot, ScheduleSetBy, ScheduleSlot } from "./schedule-types";
 
 /**
  * Coarse on purpose, and the same resolution the band strip's own clock runs
@@ -92,7 +92,6 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
             this._listeners.delete(listener);
             if (this._listeners.size === 0) {
                 this._dispose();
-                badgeSources.delete(this._hass.connection);
             }
         };
     }
@@ -108,13 +107,25 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
      * exactly the reason it does in the entity list.
      */
     public getAuthorship(controllableId: string): ScheduleSetBy | null {
-        const normalized = this._normalizedCache.get(
-            this._snapshot?.schedule ?? null,
-            this._timeZone,
-            this._locale,
-            new Date(this._nowMs),
-        );
-        const activeSlot = normalized.slots.find((slot) => slot.isCurrent) ?? null;
+        // Normalization throws on a payload with an authorless action, and this
+        // runs inside a badge's render: an uncaught throw there rejects the
+        // element's update and freezes it for the rest of the session. A badge
+        // that cannot read the schedule says nothing is scheduled, and says it
+        // again — correctly — as soon as a good payload arrives.
+        let activeSlot: ScheduleSlot | null;
+        try {
+            const normalized = this._normalizedCache.get(
+                this._snapshot?.schedule ?? null,
+                this._timeZone,
+                this._locale,
+                new Date(this._nowMs),
+            );
+            activeSlot = normalized.slots.find((slot) => slot.isCurrent) ?? null;
+        } catch (error) {
+            console.warn("schedule: failed to read the current slot for badges", error);
+            return null;
+        }
+
         const action = _readCommittedApplianceAction(activeSlot, controllableId);
         if (action === null) {
             return null;
@@ -179,6 +190,12 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
             const scheduleChanged = snapshot.schedule !== this._snapshot?.schedule;
             this._snapshot = snapshot;
             if (scheduleChanged) {
+                // The rosters are the other half of an answer, and a load that
+                // failed while Home Assistant was still starting would otherwise
+                // never be tried again — leaving every badge grey for the life of
+                // the page while the schedule beside it refreshes happily. The
+                // owner's own refresh is the retry.
+                void this._loadRosters();
                 this._emit();
             }
         });
@@ -241,6 +258,16 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
         }
     }
 
+    /**
+     * Go quiet, but keep what was loaded.
+     *
+     * The last badge unmounting is routine, not the end of the page: collapsing
+     * the house node takes every badge with it and expanding it again brings
+     * them straight back. The subscription and the timer are what cost
+     * something while nobody is looking, so those are dropped; the rosters and
+     * the last snapshot stay, and the source keeps its place in
+     * `badgeSources` — re-subscribing then costs no round trip at all.
+     */
     private _dispose(): void {
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = null;
