@@ -199,11 +199,12 @@ export function aggregateBreakdownSeries(
     }
     if (Number.isFinite(point.unmeasuredWh)) bucket.unmeasuredWh += point.unmeasuredWh;
     for (const appliance of point.appliances) {
-      const existing = bucket.appliances.get(appliance.entityId);
+      const key = applianceKey(appliance);
+      const existing = bucket.appliances.get(key);
       if (existing) {
         existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
       } else {
-        bucket.appliances.set(appliance.entityId, { ...appliance });
+        bucket.appliances.set(key, { ...appliance });
       }
     }
   }
@@ -355,6 +356,31 @@ export function splitHouseByDeferrable(
   return { deferrable, nonDeferrable };
 }
 
+/**
+ * Whether the breakdown says anything about these slots at all.
+ *
+ * `splitHouseByDeferrable` leaves an uncovered slot wholly non-deferrable, which
+ * is what the chart should draw — the band has to be somewhere. A figure quoted
+ * in the popup must not read that silence as a measurement, though: the elapsed
+ * half of today's forecast has no composition, and printing its deferrable share
+ * as 0 Wh would understate it by exactly what it overstates the other row by.
+ */
+/**
+ * What merges one appliance's rows across slots: its meter, or its name when it
+ * has none — the same identity the panel keys its box on.
+ */
+function applianceKey(appliance: ApplianceComponent): string {
+  return appliance.entityId ?? appliance.label;
+}
+
+export function breakdownCoversSlots(
+  breakdown: readonly HouseBreakdownPoint[],
+  slots: readonly string[],
+): boolean {
+  const wanted = new Set(slots);
+  return breakdown.some((point) => wanted.has(point.slot));
+}
+
 /** Merge the house breakdown over the selected slots, one row per appliance. */
 export function aggregateBreakdownOverSlots(
   points: readonly HouseBreakdownPoint[],
@@ -368,11 +394,12 @@ export function aggregateBreakdownOverSlots(
   for (const point of group) {
     if (Number.isFinite(point.unmeasuredWh)) unmeasuredWh += point.unmeasuredWh;
     for (const appliance of point.appliances) {
-      const existing = appliances.get(appliance.entityId);
+      const key = applianceKey(appliance);
+      const existing = appliances.get(key);
       if (existing) {
         existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
       } else {
-        appliances.set(appliance.entityId, { ...appliance });
+        appliances.set(key, { ...appliance });
       }
     }
   }

@@ -59,6 +59,7 @@ from custom_components.helman.automation.spec import (  # noqa: E402
 )
 from custom_components.helman.controllables.config import (  # noqa: E402
     read_deferrable_consumers,
+    read_scheduled_consumers,
 )
 from custom_components.helman.controllables.spec import (  # noqa: E402
     CONTROLLABLE_SPECS,
@@ -527,6 +528,98 @@ class DeferrableConsumerReaderTests(unittest.TestCase):
         self.assertEqual(read_deferrable_consumers({}), [])
         self.assertEqual(read_deferrable_consumers(None), [])
         self.assertEqual(read_deferrable_consumers({"controllables": "nonsense"}), [])
+
+
+class ScheduledConsumerReaderTests(unittest.TestCase):
+    """``read_scheduled_consumers``: everything the planner can schedule demand
+    for, which is a wider list than the deferrable one and keyed differently."""
+
+    _entry = staticmethod(DeferrableConsumerReaderTests._entry)
+
+    def test_a_meterless_controllable_still_gets_a_row(self) -> None:
+        """The difference that matters against ``read_deferrable_consumers``.
+
+        There is nothing to subtract from the house baseline for a device with
+        no meter, so the deferrable roster drops it — but the planner schedules
+        it all the same, and its forecast row has to be named after something.
+        """
+        config = {
+            "controllables": [
+                {
+                    "kind": "ev_charger",
+                    "id": "ev",
+                    "name": "EV charger",
+                    # Projected, and so scheduled, without ever being metered.
+                    "consumption": {
+                        "projection": {"strategy": "fixed", "hourly_energy_kwh": 7.0}
+                    },
+                }
+            ]
+        }
+
+        self.assertEqual(
+            read_scheduled_consumers(config),
+            [
+                {
+                    "id": "ev",
+                    "label": "EV charger",
+                    "energy_entity_id": None,
+                    "deferrable": True,
+                }
+            ],
+        )
+
+    def test_the_opt_out_is_carried_rather_than_filtered_on(self) -> None:
+        """A device that opted out is still scheduled; it is just not shiftable.
+
+        Filtering it out here, as the deferrable roster does, would leave its
+        forecast row unnamed and assumed deferrable — the same appliance reading
+        as two different things either side of now.
+        """
+        config = {
+            "controllables": [
+                self._entry("a", meter="sensor.a", name="A", deferrable=False),
+                self._entry("b", meter="sensor.b", name="B"),
+            ]
+        }
+
+        self.assertEqual(
+            [(c["id"], c["deferrable"]) for c in read_scheduled_consumers(config)],
+            [("a", False), ("b", True)],
+        )
+
+    def test_an_entry_with_no_id_is_skipped(self) -> None:
+        """Nothing can be scheduled against it, so nothing keys off it."""
+        config = {
+            "controllables": [
+                {"kind": "generic", "name": "Anonymous", "consumption": {}},
+                self._entry("pool", meter="sensor.pool_energy", name="Pool pump"),
+            ]
+        }
+
+        self.assertEqual([c["id"] for c in read_scheduled_consumers(config)], ["pool"])
+
+    def test_an_unnamed_device_is_labelled_by_its_id(self) -> None:
+        """Not by its meter: the row is identified by the controllable here."""
+        config = {"controllables": [self._entry("x", meter="sensor.x")]}
+
+        self.assertEqual(read_scheduled_consumers(config)[0]["label"], "x")
+
+    def test_the_inverter_is_never_a_scheduled_consumer(self) -> None:
+        config = {
+            "controllables": [
+                self._entry(
+                    "inverter", meter="sensor.inverter", name="Inverter", kind="inverter"
+                )
+            ]
+        }
+
+        self.assertEqual(read_scheduled_consumers(config), [])
+
+    def test_a_config_without_controllables_yields_nothing(self) -> None:
+        self.assertEqual(read_scheduled_consumers({}), [])
+        self.assertEqual(read_scheduled_consumers(None), [])
+        self.assertEqual(read_scheduled_consumers({"controllables": "nonsense"}), [])
 
 
 if __name__ == "__main__":

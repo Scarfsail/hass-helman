@@ -69,6 +69,7 @@ import {
   actualsCoverUntil,
   aggregateBreakdownOverSlots,
   aggregateBreakdownSeries,
+  breakdownCoversSlots,
   consumerBarsOverSlots,
   expandSlotsToNative,
   houseSourceMixBySlot,
@@ -1410,6 +1411,13 @@ export class HelmanSolarInspector extends LitElement {
     const measured = (points: InspectorPoint[]) =>
       dropPartialBuckets(aggregateWhSeries(points, slot), slot, coverUntil, (p) =>
         timestampMinutes(p.timestamp));
+    // Where the forecast's composition starts: everything from the next slot
+    // boundary on, and nothing before it.
+    const forecastBreakdownFrom = Math.min(
+      ...s.houseForecastBreakdown
+        .map((point) => slotToMinutes(point.slot))
+        .filter((minutes): minutes is number => minutes !== null),
+    );
     return {
       ...payload,
       series: {
@@ -1420,9 +1428,16 @@ export class HelmanSolarInspector extends LitElement {
         invalidated: measured(s.invalidated),
         impact: aggregateImpactSeries(s.impact, slot),
         houseForecast: aggregateWhSeries(s.houseForecast, slot),
-        // No partial-bucket drop on the forecast side: a forecast bucket is
-        // whole the moment it is served, exactly like houseForecast itself.
-        houseForecastBreakdown: aggregateBreakdownSeries(s.houseForecastBreakdown, slot),
+        // The bucket straddling now is only half a story: houseForecast reaches
+        // back through the archive across the whole bucket, while the
+        // composition begins at the next slot boundary. Aggregating both would
+        // itemise parts summing to less than the total printed beside them, so
+        // a bucket the composition starts inside is dropped and reads as
+        // uncovered -- one whole band, no panel -- rather than as understated.
+        houseForecastBreakdown: aggregateBreakdownSeries(
+          s.houseForecastBreakdown,
+          slot,
+        ).filter((point) => (slotToMinutes(point.slot) ?? -1) >= forecastBreakdownFrom),
         houseActual: measured(s.houseActual),
         houseActualBreakdown: dropPartialBuckets(
           aggregateBreakdownSeries(s.houseActualBreakdown, slot),
@@ -1770,9 +1785,10 @@ export class HelmanSolarInspector extends LitElement {
         // house row it always was, rather than growing a permanent zero row.
         //
         // Over elapsed slots the forecast has no composition to split by -- only
-        // its scalar survives in the recorder -- so it degrades to wholly
-        // non-deferrable. That is precisely what the band above shows, so popup
-        // and chart still say the same thing.
+        // its scalar survives in the recorder -- so neither forecast cell is
+        // filled there. The band above draws that stretch wholly non-deferrable
+        // because it must draw it somewhere; quoting the same silence as a
+        // figure would understate one row by what it overstates the other.
         const actual = splitHouseByDeferrable(
           payload.series.houseActual,
           payload.series.houseActualBreakdown,
@@ -1781,8 +1797,14 @@ export class HelmanSolarInspector extends LitElement {
           payload.series.houseForecast,
           payload.series.houseForecastBreakdown,
         );
+        const forecastSplit = breakdownCoversSlots(
+          payload.series.houseForecastBreakdown,
+          slots,
+        );
         const actualDeferrableWh = sumWhOverSlots(actual.deferrable, slots);
-        const forecastDeferrableWh = sumWhOverSlots(forecast.deferrable, slots);
+        const forecastDeferrableWh = forecastSplit
+          ? sumWhOverSlots(forecast.deferrable, slots)
+          : null;
         if (!actualDeferrableWh && !forecastDeferrableWh) {
           return [
             this._powerRow(
@@ -1798,7 +1820,7 @@ export class HelmanSolarInspector extends LitElement {
             this._t("bias_correction.inspector.merged.house_non_deferrable"),
             CHART_COLORS.house,
             negateWh(sumWhOverSlots(actual.nonDeferrable, slots)),
-            negateWh(sumWhOverSlots(forecast.nonDeferrable, slots)),
+            forecastSplit ? negateWh(sumWhOverSlots(forecast.nonDeferrable, slots)) : null,
           ),
           this._powerRow(
             this._t("bias_correction.inspector.merged.house_deferrable"),
@@ -3124,8 +3146,12 @@ export class HelmanSolarInspector extends LitElement {
     bars: ReturnType<typeof consumerBarsOverSlots>,
     deferrable: boolean = false,
   ): DeviceNode {
+    // A scheduled appliance with no meter has no entity to key on and none to
+    // open: it is named by its controllable, so the label is the only identity
+    // there is, and the box gets no sensor rather than a dialog for an entity
+    // that does not exist.
     const node = new DeviceNode(
-      entityId ?? "house-unmeasured",
+      entityId ?? (isUnmeasured ? "house-unmeasured" : label),
       label,
       powerEntityId ?? entityId,
       switchEntityId,

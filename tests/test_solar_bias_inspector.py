@@ -167,7 +167,6 @@ def test_inspector_day_serializes_frontend_contract():
             "hasHouseForecast": False,
             "hasHouseActual": False,
             "hasHouseActualBreakdown": False,
-        "hasHouseForecastBreakdown": False,
             "hasHouseForecastBreakdown": False,
             "hasBatterySocForecast": False,
             "hasBatterySocActual": False,

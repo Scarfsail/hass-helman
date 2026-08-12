@@ -28,7 +28,8 @@ async function loadCardBundle(page: Page): Promise<void> {
 }
 
 type Appliance = {
-    entityId: string;
+    /** null for a scheduled appliance with no meter configured. */
+    entityId: string | null;
     label: string;
     wh: number;
     switchEntityId?: string | null;
@@ -62,7 +63,17 @@ async function mountInspector(
          * entirely the forecast series stays empty, as it is on a past day whose
          * composition nothing recorded.
          */
-        forecast?: { baseWh: number; appliances: Appliance[] };
+        forecast?: {
+            baseWh: number;
+            appliances: Appliance[];
+            /**
+             * Minute of the day the *composition* starts at, the live pipeline
+             * covering only slots ahead of now. The forecast series itself still
+             * spans the whole day, read back from the recorder — so before this
+             * point there is a house forecast with nothing to itemise it by.
+             */
+            breakdownFromMinutes?: number;
+        };
     },
 ): Promise<void> {
     await page.evaluate((opts) => {
@@ -75,7 +86,7 @@ async function mountInspector(
             slot: string;
             unmeasuredWh: number;
             appliances: Array<{
-                entityId: string;
+                entityId: string | null;
                 label: string;
                 wh: number;
                 switchEntityId: string | null;
@@ -124,19 +135,22 @@ async function mountInspector(
                     timestamp: `${date}T${hh}:${mm}:00`,
                     valueWh: fc.baseWh + fc.appliances.reduce((sum, a) => sum + a.wh, 0),
                 });
-                houseForecastBreakdown.push({
-                    slot: `${hh}:${mm}`,
-                    // The forecast's remainder is the base load, not an unmetered
-                    // rest — the same field, a different quantity.
-                    unmeasuredWh: fc.baseWh,
-                    appliances: fc.appliances.map((a) => ({
-                        ...a,
-                        switchEntityId: a.switchEntityId ?? null,
-                        powerEntityId: a.powerEntityId ?? null,
-                        // Everything the planner schedules is shiftable by definition.
-                        deferrable: a.deferrable ?? true,
-                    })),
-                });
+                if (m >= (fc.breakdownFromMinutes ?? 0)) {
+                    houseForecastBreakdown.push({
+                        slot: `${hh}:${mm}`,
+                        // The forecast's remainder is the base load, not an unmetered
+                        // rest — the same field, a different quantity.
+                        unmeasuredWh: fc.baseWh,
+                        appliances: fc.appliances.map((a) => ({
+                            ...a,
+                            entityId: a.entityId ?? null,
+                            switchEntityId: a.switchEntityId ?? null,
+                            powerEntityId: a.powerEntityId ?? null,
+                            // Everything the planner schedules is shiftable by definition.
+                            deferrable: a.deferrable ?? true,
+                        })),
+                    });
+                }
             }
             impact.push({
                 slot: `${hh}:${mm}`,
@@ -952,6 +966,32 @@ test.describe("solar inspector deferrable house load", () => {
         ]);
     });
 
+    test("an uncomposed stretch of forecast reports no split at all", async ({ page }) => {
+        await loadCardBundle(page);
+        // The composition starts at 18:00, as it does on today: everything before
+        // is the recorder's archive of the forecast sensor, a scalar whose parts
+        // nothing kept.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: {
+                baseWh: 80,
+                appliances: [{ entityId: "sensor.dishwasher", label: "Dishwasher", wh: 40 }],
+                breakdownFromMinutes: 1080,
+            },
+        });
+
+        // The hovered hour is noon, well inside the uncomposed stretch. Quoting
+        // its deferrable forecast as 0 Wh would understate it by exactly what it
+        // overstates the row above by, so both cells stay empty — while the
+        // actual half, which is composed throughout, still splits.
+        expect(await houseTooltipRows(page)).toEqual([
+            { label: "House (non-deferrable)", actual: "-520 Wh", forecast: "—" },
+            { label: "House (deferrable)", actual: "-200 Wh", forecast: "—" },
+        ]);
+    });
+
     test("the hover popup keeps one house row when nothing was shiftable", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
@@ -1041,6 +1081,28 @@ test.describe("solar inspector forecast composition", () => {
             ["Dishwasher", "160 Wh", "deferrable"],
         ]);
         expect(forecastRows.map((r) => r.tint)).toEqual(["", DEFERRABLE_TINT]);
+    });
+
+    test("a scheduled appliance with no meter is named but opens nothing", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: {
+                baseWh: 80,
+                appliances: [{ entityId: null, label: "EV charger", wh: 40 }],
+            },
+        });
+        await selectNoonSlot(page);
+
+        const forecastRows = await breakdownBoxes(page, 1);
+        // It keeps its row and its name — the demand is real — but there is no
+        // sensor behind the box, so it is not dressed up as one.
+        expect(forecastRows.map((r) => [r.label, r.power, r.hasSensor])).toEqual([
+            ["Base load", "320 Wh", false],
+            ["EV charger", "160 Wh", false],
+        ]);
     });
 
     test("a day whose forecast composition was never recorded shows only the actual panel", async ({

@@ -515,8 +515,23 @@ DEMAND_POINTS = (
     _demand("pool", f"{TODAY}T10:15:00+02:00", 0.3),
     _demand("ev", f"{TODAY}T10:15:00+02:00", 0.1),
 )
-DEFERRABLE_CONSUMERS = [
-    {"energy_entity_id": "sensor.pool_energy", "label": "Pool pump", "id": "pool"},
+# Every schedulable controllable, keyed by the id the demand points use. The EV
+# has no meter and is still scheduled; the boiler is metered but opted out of
+# deferrability, so it must not be reported as shiftable on either side of now.
+SCHEDULED_CONSUMERS = [
+    {
+        "id": "pool",
+        "label": "Pool pump",
+        "energy_entity_id": "sensor.pool_energy",
+        "deferrable": True,
+    },
+    {"id": "ev", "label": "EV charger", "energy_entity_id": None, "deferrable": True},
+    {
+        "id": "boiler",
+        "label": "Boiler",
+        "energy_entity_id": "sensor.boiler_energy",
+        "deferrable": False,
+    },
 ]
 
 
@@ -530,8 +545,8 @@ class TestInspectorForecastComposition(_InspectorHarness):
     def _service(self, history=None, snapshot=None, *, composition=..., consumers=None):
         service = super()._service(history or _FakeHistory({}), snapshot or _snapshot())
         service._house_forecast_snapshot_provider = lambda: ADJUSTED_HOUSE_FORECAST
-        service._house_deferrable_consumers_provider = lambda: (
-            DEFERRABLE_CONSUMERS if consumers is None else consumers
+        service._house_scheduled_consumers_provider = lambda: (
+            SCHEDULED_CONSUMERS if consumers is None else consumers
         )
         if composition is ...:
             composition = {
@@ -553,9 +568,10 @@ class TestInspectorForecastComposition(_InspectorHarness):
              for a in breakdown[0]["appliances"]],
             [
                 ("sensor.pool_energy", "Pool pump", 300.0, True),
-                # No meter configured for the EV, so its own id names it rather
-                # than the row disappearing.
-                ("ev", "ev", 100.0, True),
+                # No meter configured for the EV, so it is named after the
+                # controllable and carries no entity id: there is no sensor for
+                # the card to open, and its bare id is not one.
+                (None, "EV charger", 100.0, True),
             ],
         )
         # The base is the house before the appliances were added, and the slot
@@ -563,6 +579,78 @@ class TestInspectorForecastComposition(_InspectorHarness):
         self.assertEqual([p["unmeasuredWh"] for p in breakdown], [400.0, 500.0])
         self.assertEqual(breakdown[1]["appliances"], [])
         self.assertTrue(payload["availability"]["hasHouseForecastBreakdown"])
+
+    async def test_an_appliance_that_opted_out_is_not_reported_deferrable(self):
+        """``consumption.deferrable: false`` holds on both sides of now.
+
+        The planner still schedules such a device, so it still has demand to
+        itemise — but reporting it shiftable here while the measured breakdown
+        picks it up from the device tree as non-deferrable would make one
+        appliance mean two different things either side of the clock.
+        """
+        composition = {
+            "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+            "demand_points": (_demand("boiler", f"{TODAY}T10:15:00+02:00", 0.2),),
+        }
+        payload = await self._inspect(self._service(composition=composition), TODAY)
+
+        appliances = payload["series"]["houseForecastBreakdown"][0]["appliances"]
+        self.assertEqual(
+            [(a["label"], a["deferrable"]) for a in appliances], [("Boiler", False)]
+        )
+
+    async def test_an_unknown_controllable_is_named_but_never_given_an_entity(self):
+        """A demand point for something the roster does not know at all.
+
+        Its id is the only name there is, so it labels the row — but it is not an
+        entity id, and passing it off as one would offer the card a more-info
+        dialog for an entity that does not exist.
+        """
+        composition = {
+            "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+            "demand_points": (_demand("ghost", f"{TODAY}T10:15:00+02:00", 0.2),),
+        }
+        payload = await self._inspect(self._service(composition=composition), TODAY)
+
+        appliances = payload["series"]["houseForecastBreakdown"][0]["appliances"]
+        self.assertEqual(
+            [(a["entityId"], a["label"], a["deferrable"]) for a in appliances],
+            [(None, "ghost", False)],
+        )
+
+    def test_a_forecast_row_adopts_its_measured_twins_sensors(self):
+        """The same appliance opens the same sensor either side of now.
+
+        Switch and power sensors are known only to the device tree, which the
+        measured half has already read on any day that has one; the forecast row
+        takes them from that roster rather than reading it a second time. Built
+        directly, since the enrichment is a property of the builder and not of
+        the recorder plumbing that supplies it.
+        """
+        points = service_mod._build_house_forecast_breakdown(
+            {
+                "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+                "demand_points": DEMAND_POINTS,
+            },
+            SCHEDULED_CONSUMERS,
+            date.fromisoformat(TODAY),
+            next_slot=None,
+            metered_by_entity=[
+                {
+                    "energy_entity_id": "sensor.pool_energy",
+                    "switch_entity_id": "switch.pool",
+                    "power_entity_id": "sensor.pool_power",
+                }
+            ],
+        )
+
+        pool, ev = points[0].appliances
+        self.assertEqual(
+            (pool.switch_entity_id, pool.power_entity_id),
+            ("switch.pool", "sensor.pool_power"),
+        )
+        # The meterless one has no tree entry to adopt anything from.
+        self.assertEqual((ev.switch_entity_id, ev.power_entity_id), (None, None))
 
     async def test_the_parts_sum_to_the_house_forecast_they_decompose(self):
         payload = await self._inspect(self._service(), TODAY)

@@ -139,6 +139,8 @@ class SolarBiasApplianceComponent:
     ``entity_id`` is the device's energy stat (the series the breakdown is summed
     from); ``power_entity_id`` is the live power sensor the power card reads, where
     the tree knows one, so clicking a box opens the same W sensor the card does.
+    It is None for a scheduled appliance with no meter configured, which has
+    demand to report but no sensor to open.
 
     ``deferrable`` says the consumer is a shiftable appliance — it came from the
     configured deferrable controllables rather than from the device tree alone. It
@@ -146,7 +148,7 @@ class SolarBiasApplianceComponent:
     still counts as deferrable in the slot it happened to run in.
     """
 
-    entity_id: str
+    entity_id: str | None
     label: str
     value_wh: float
     switch_entity_id: str | None = None

@@ -74,6 +74,7 @@ class SolarBiasCorrectionService:
         house_forecast_composition_provider=None,
         house_energy_entity_id_provider=None,
         house_deferrable_consumers_provider=None,
+        house_scheduled_consumers_provider=None,
         house_device_consumers_provider=None,
         house_unmeasured_label_provider=None,
         battery_soc_entity_id_provider=None,
@@ -94,6 +95,7 @@ class SolarBiasCorrectionService:
         self._house_forecast_composition_provider = house_forecast_composition_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
         self._house_deferrable_consumers_provider = house_deferrable_consumers_provider
+        self._house_scheduled_consumers_provider = house_scheduled_consumers_provider
         self._house_device_consumers_provider = house_device_consumers_provider
         self._house_unmeasured_label_provider = house_unmeasured_label_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
@@ -613,9 +615,10 @@ class SolarBiasCorrectionService:
             # opening an old day.
             house_forecast_breakdown_points = _build_house_forecast_breakdown(
                 self._get_house_forecast_composition(),
-                self._house_deferrable_consumers(),
+                self._house_scheduled_consumers(),
                 target_date,
                 next_slot=next_slot,
+                metered_by_entity=breakdown_consumers,
             )
 
         # --- Battery SoC, grid and battery forecast ---
@@ -981,6 +984,22 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("House deferrable consumers provider failed")
             return []
         return self._normalize_consumers(raw, deferrable=True)
+
+    def _house_scheduled_consumers(self) -> list[dict]:
+        """Every schedulable controllable by id, for naming the forecast's rows.
+
+        Taken raw rather than through :meth:`_normalize_consumers`, which exists
+        to enforce a usable meter — the whole point here is that a scheduled
+        appliance without one still gets a row.
+        """
+        if self._house_scheduled_consumers_provider is None:
+            return []
+        try:
+            raw = self._house_scheduled_consumers_provider() or []
+        except Exception:
+            _LOGGER.exception("House scheduled consumers provider failed")
+            return []
+        return [consumer for consumer in raw if isinstance(consumer, dict)]
 
     def _house_unmeasured_label(self) -> str | None:
         """The power card's configured title for unmetered load, if any."""
@@ -1905,12 +1924,38 @@ def _build_house_actual_breakdown(
     return points
 
 
+def _forecast_appliance_component(
+    appliance_id: str,
+    energy_kwh: float,
+    consumer: dict | None,
+    metered_by_entity_id: dict[str, dict],
+) -> SolarBiasApplianceComponent:
+    """One scheduled appliance's row, named and flagged as its controllable is.
+
+    A controllable the roster does not know at all keeps its id as a last-resort
+    label — it is the only name there is — but never as an entity id, and it is
+    reported non-deferrable rather than assumed shiftable.
+    """
+    consumer = consumer or {}
+    entity_id = consumer.get("energy_entity_id")
+    metered = metered_by_entity_id.get(entity_id) if entity_id else None
+    return SolarBiasApplianceComponent(
+        entity_id=entity_id,
+        label=consumer.get("label") or appliance_id,
+        value_wh=round(energy_kwh * 1000.0, 4),
+        switch_entity_id=(metered or {}).get("switch_entity_id"),
+        power_entity_id=(metered or {}).get("power_entity_id"),
+        deferrable=bool(consumer.get("deferrable")),
+    )
+
+
 def _build_house_forecast_breakdown(
     composition: dict | None,
     consumers: list[dict],
     target_date: date,
     *,
     next_slot: datetime | None,
+    metered_by_entity: list[dict] | None = None,
 ) -> list[SolarBiasHouseBreakdownPoint]:
     """Split each forecast slot into the base load plus every appliance scheduled in it.
 
@@ -1921,9 +1966,18 @@ def _build_house_forecast_breakdown(
     houseForecast series the chart draws, slot for slot — the same guarantee the
     measured breakdown gives against houseActual.
 
-    An appliance is named by the deferrable consumer sharing its controllable id,
-    so a given device is one row with one name whether the slot is past or future;
-    one with no meter configured still gets a row, keyed by its appliance id.
+    An appliance is named by the schedulable consumer sharing its controllable id,
+    so a given device is one row with one name — and one deferrability — whether
+    the slot is past or future. One with no meter configured still gets a row,
+    named after the controllable and carrying no entity id: there is no sensor to
+    open, and passing the bare id off as one would offer the card a more-info
+    dialog for an entity that does not exist.
+
+    ``metered_by_entity`` is the measured breakdown's own roster, already merged
+    with the device tree, and is how a forecast row picks up the switch and power
+    sensor its measured twin shows. It is empty on a day with no past half, which
+    is also a day with no measured panel to look asymmetric beside.
+
     With no composition to read — a cold pipeline — the breakdown is empty and the
     card falls back to the plain forecast figure.
     """
@@ -1939,6 +1993,9 @@ def _build_house_forecast_breakdown(
 
     consumer_by_id = {
         consumer["id"]: consumer for consumer in consumers if consumer.get("id")
+    }
+    metered_by_entity_id = {
+        consumer["energy_entity_id"]: consumer for consumer in metered_by_entity or []
     }
     # Slot ids are local ISO timestamps; the breakdown is keyed "HH:MM" like the
     # rest of the inspector, so convert once here and drop other days rather than
@@ -1965,19 +2022,11 @@ def _build_house_forecast_breakdown(
             continue
         slot = timestamp[11:16]
         appliances = [
-            SolarBiasApplianceComponent(
-                entity_id=(
-                    consumer_by_id[appliance_id]["energy_entity_id"]
-                    if appliance_id in consumer_by_id
-                    else appliance_id
-                ),
-                label=(
-                    consumer_by_id[appliance_id]["label"]
-                    if appliance_id in consumer_by_id
-                    else appliance_id
-                ),
-                value_wh=round(energy_kwh * 1000.0, 4),
-                deferrable=True,
+            _forecast_appliance_component(
+                appliance_id,
+                energy_kwh,
+                consumer_by_id.get(appliance_id),
+                metered_by_entity_id,
             )
             for appliance_id, energy_kwh in demand_by_slot.get(slot, {}).items()
         ]

@@ -105,7 +105,7 @@ from .const import (
     SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
-from .controllables.config import read_deferrable_consumers
+from .controllables.config import read_deferrable_consumers, read_scheduled_consumers
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
     profile_from_dict,
@@ -717,6 +717,7 @@ class HelmanCoordinator:
             house_forecast_composition_provider=self._get_house_forecast_composition,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             house_deferrable_consumers_provider=self._get_house_deferrable_consumers,
+            house_scheduled_consumers_provider=self._get_house_scheduled_consumers,
             house_device_consumers_provider=self._get_house_device_consumers,
             house_unmeasured_label_provider=self._get_house_unmeasured_label,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
@@ -982,6 +983,16 @@ class HelmanCoordinator:
         ``controllables`` the same question.
         """
         return read_deferrable_consumers(self._active_config)
+
+    def _get_house_scheduled_consumers(self) -> list[dict[str, Any]]:
+        """Every controllable the planner can schedule demand for, by id.
+
+        The forecast's itemisation names appliances from this rather than from
+        the deferrable roster: the planner schedules meterless controllables
+        too, and one that opted out of deferrability still gets scheduled — it
+        just is not deferrable, on either side of now.
+        """
+        return read_scheduled_consumers(self._active_config)
 
     def _get_house_unmeasured_label(self) -> str | None:
         """The power card's own title for unmetered house load.
