@@ -3241,13 +3241,11 @@ export class HelmanSolarInspector extends LitElement {
     );
     node.displayName = label;
     node.isUnmeasured = isUnmeasured;
-    // Shiftable load is marked twice over: `deferrable` paints the box in the
-    // shared lighter house shade, and the card's own badge channel names the shade
-    // so the colour is not the only thing carrying the meaning.
+    // Shiftable load is marked twice over: the box takes the shared lighter house
+    // shade and the card's badge channel names the shade, so the colour is not the
+    // only thing carrying the meaning. Both follow from this one flag — power-device
+    // paints it, power-device-info tags it — for every card that draws these boxes.
     node.deferrable = deferrable;
-    if (deferrable) {
-      node.customLabelTexts = [this._t("bias_correction.inspector.deferrable_tag")];
-    }
     // Energy throughout — the selection's total on the box, each sample's own on
     // the bars — so the figures are the Wh the breakdown actually reports and no
     // unit conversion sits between the data and what is drawn.

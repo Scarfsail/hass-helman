@@ -3,6 +3,7 @@
     "loading": "Načítání energetických dat…"
   },
   "house_section": {
+    "deferrable_tag": "odložitelná",
     "group_by": "Seskupit podle",
     "others": "Ostatní",
     "show_more": "Více",
@@ -554,7 +555,6 @@
       "house_composition_forecast": "Složení spotřeby (predikce)",
       "house_unmeasured": "Nesledovaná spotřeba",
       "house_base_load": "Základní spotřeba",
-      "deferrable_tag": "odložitelná",
       "house_group_base": "Základní spotřeba",
       "house_group_deferrable": "Odložitelná spotřeba",
       "battery_soc_forecast": "Predikce SoC baterie",

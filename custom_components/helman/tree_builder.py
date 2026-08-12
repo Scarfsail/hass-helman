@@ -11,6 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 
 from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
+from .controllables.config import read_deferrable_consumers
 
 @dataclass
 class DeviceNodeDTO:
@@ -35,6 +36,10 @@ class DeviceNodeDTO:
     children: list["DeviceNodeDTO"] = field(default_factory=list)
     ratio_sensor_id: str | None = None
     source_type: str | None = None
+    # A house child whose energy statistic is a deferrable controllable, so the
+    # card can mark the load the optimizer is free to move in time. Every other
+    # node — sources, unmeasured remainders, virtual groups — is never deferrable.
+    deferrable: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -59,6 +64,7 @@ class DeviceNodeDTO:
             "children": [c.to_dict() for c in self.children],
             "ratioSensorId": self.ratio_sensor_id,
             "sourceType": self.source_type,
+            "deferrable": self.deferrable,
         }
 
 
@@ -259,6 +265,14 @@ class HelmanTreeBuilder:
 
         device_consumption = prefs.get("device_consumption", [])
 
+        # A house child's node id *is* its energy statistic, which is the same
+        # ``energy_entity_id`` the deferrable roster is keyed by — so the match
+        # needs no extra configuration and no second round-trip: the config is
+        # already in hand and parsing it is pure in-memory work.
+        deferrable_stats = {
+            c["energy_entity_id"] for c in read_deferrable_consumers(self._config)
+        }
+
         ps_label_id = self._find_label_id(lbl_reg, power_sensor_label) if power_sensor_label else None
         sw_label_id = self._find_label_id(lbl_reg, power_switch_label) if power_switch_label else None
 
@@ -367,6 +381,7 @@ class HelmanTreeBuilder:
                 hide_children=False,
                 hide_children_indicator=False,
                 sort_children_by_power=False,
+                deferrable=stat_entity_id in deferrable_stats,
             )
             device_map[stat_entity_id] = node
 

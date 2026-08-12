@@ -21,7 +21,6 @@
       "house_composition_forecast": "House composition (forecast)",
       "house_unmeasured": "Unmeasured consumption",
       "house_base_load": "Base load",
-      "deferrable_tag": "deferrable",
       "house_group_base": "Base consumption",
       "house_group_deferrable": "Deferrable consumption",
       "battery_soc_forecast": "Battery SoC forecast",
@@ -90,6 +89,7 @@
     }
   },
   "house_section": {
+    "deferrable_tag": "deferrable",
     "show_more": "More",
     "show_less": "Less"
   },
