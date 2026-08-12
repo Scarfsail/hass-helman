@@ -117,6 +117,27 @@ def _surplus_series() -> list[dict[str, object]]:
     return series
 
 
+def _series_with_soc(soc_pct: float) -> list[dict[str, object]]:
+    """The surplus series behind an overnight point carrying a forecast SoC.
+
+    The real battery forecast stamps every bucket with the level it ends at;
+    only the last bucket before the window start decides the day's need, so one
+    leading point is enough to fix it. It carries no surplus of its own, which
+    keeps the charge-able energy identical to :func:`_surplus_series`.
+    """
+    return [
+        {
+            "timestamp": datetime(2026, 7, 10, 5, 30, tzinfo=TZ).isoformat(
+                timespec="seconds"
+            ),
+            "solarKwh": 0.0,
+            "baselineHouseKwh": 0.0,
+            "durationHours": 0.5,
+            "socPct": soc_pct,
+        }
+    ] + _surplus_series()
+
+
 #: Hourly export price, dearest in the morning and bottoming out at 13:00 — the
 #: shape of the real day that exposed the release-time bug (issue #79). Only the
 #: hours the surplus series covers matter, but the feed publishes the whole day.
@@ -373,6 +394,60 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         self.assertIn(_slot_id(12, 30), held)
         self.assertIn(_slot_id(13, 30), held)
         self.assertNotIn(_slot_id(14, 0), held)  # past window.end
+
+    def test_need_is_measured_from_the_forecast_soc_at_the_window_start(self) -> None:
+        # The battery reads 60% now but the forecast has it down to 30% by the
+        # time the window opens, so the need is 7 kWh rather than 4 — and the
+        # charge set grows from the four cheapest slots to the seven cheapest.
+        # Sizing this off the run-time reading is what held 10:00–11:30 while
+        # the battery was still 30 points short.
+        result = build_charge_hold_optimizer(_make_config()).optimize(
+            _make_snapshot(
+                day_context=_day_context(),
+                current_soc=60.0,
+                surplus_series=_series_with_soc(30.0),
+            ),
+            _make_config(),
+        )
+        held = _held_slot_ids(result)
+        self.assertEqual(
+            held,
+            {_slot_id(hour, minute) for hour in range(6, 10) for minute in (0, 30)}
+            | {_slot_id(10, 30)},
+        )
+
+    def test_a_forecast_soc_above_the_reading_shrinks_the_charge_set(self) -> None:
+        # The correction runs both ways: a battery the forecast fills overnight
+        # needs less of the cheap band, not more. 80% leaves 2 kWh to cover, so
+        # only the two cheapest slots are released.
+        result = build_charge_hold_optimizer(_make_config()).optimize(
+            _make_snapshot(
+                day_context=_day_context(),
+                current_soc=60.0,
+                surplus_series=_series_with_soc(80.0),
+            ),
+            _make_config(),
+        )
+        held = _held_slot_ids(result)
+        self.assertIn(_slot_id(12, 0), held)
+        self.assertIn(_slot_id(12, 30), held)
+        self.assertNotIn(_slot_id(13, 0), held)
+        self.assertNotIn(_slot_id(13, 30), held)
+
+    def test_the_starting_soc_is_recorded_on_the_room_gate(self) -> None:
+        _, trace = run_optimizer_with_trace(
+            build_charge_hold_optimizer(_make_config()),
+            _make_snapshot(
+                day_context=_day_context(),
+                current_soc=60.0,
+                surplus_series=_series_with_soc(30.0),
+            ),
+            _make_config(),
+            reference_time=REFERENCE_TIME,
+        )
+        gate = _gate(_slots_by_id(trace)[_slot_id(10, 30)], "hold_room")
+        self.assertEqual(gate.params["startSocPct"], 30.0)
+        self.assertEqual(gate.params["neededKwh"], 7.0)
 
     def test_leaves_user_owned_inverter_untouched(self) -> None:
         schedule_document = ScheduleDocument(

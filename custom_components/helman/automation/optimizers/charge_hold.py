@@ -22,6 +22,14 @@ write at all. Slots past ``window.end`` are never held — they are free either
 way, and ranking them is what lets "hold the whole morning, charge in the
 afternoon" fall out of the same arithmetic as "charge at noon".
 
+**The need is measured per day, at that day's window start.** How much the
+battery has to take is a fact about the morning the hold governs, not about the
+moment the run happens: a 48 h horizon sizes tomorrow too, and the overnight
+discharge sits between the two readings. Sizing every day off the run-time SoC
+made tomorrow look nearly full, so a single slot covered the phantom need and
+the rest of the cheap band was held — leaving the real charge to finish in the
+dear afternoon behind it.
+
 Runs **before** ``export_price`` in config order so ``export_price``'s protective
 ``stop_export`` wins any slot both want.
 
@@ -58,6 +66,7 @@ from ..fields import time_on
 from ..rails import (
     read_clipped_surplus_by_bucket,
     read_export_price_by_bucket,
+    read_forecast_soc_at,
     slot_bucket_starts,
 )
 from ..trace import NULL_TRACE
@@ -170,17 +179,28 @@ class ChargeHoldOptimizer:
                 return None
             params = resolved.params
             battery_first = params["battery_first"]
+            window_start = time_on(params["window"]["start"], local_date, tzinfo=tzinfo)
+            # The gap to close is the one the battery will have when this day's
+            # window opens, not the one it has at run time: a 48 h horizon sizes
+            # tomorrow, and the overnight discharge between the two is exactly
+            # what tonight's reading omits. A window already open (today's, on a
+            # midday run) reads at `now`, which is where the forecast starts and
+            # so is the live SoC either way.
+            start_soc = _soc_at_window_start(
+                snapshot,
+                window_start=window_start,
+                fallback_soc=battery_state.current_soc,
+            )
             resolution = _resolve_day_hold(
-                window_start=time_on(
-                    params["window"]["start"], local_date, tzinfo=tzinfo
-                ),
+                window_start=window_start,
                 window_end=time_on(params["window"]["end"], local_date, tzinfo=tzinfo),
                 needed_kwh=_compute_needed_kwh(
                     target_soc=battery_first["target_soc"],
-                    current_soc=battery_state.current_soc,
+                    current_soc=start_soc,
                     usable_capacity_kwh=usable_capacity_kwh,
                     charge_efficiency=charge_efficiency,
                 ),
+                start_soc=start_soc,
                 margin_pct=battery_first["margin_pct"],
                 group_label=resolved.group.label,
                 day_slot_ids=slots_by_date.get(local_date, []),
@@ -254,6 +274,27 @@ class ChargeHoldOptimizer:
         return writer.flush(action=_ACTION)
 
 
+def _soc_at_window_start(
+    snapshot: "OptimizationSnapshot",
+    *,
+    window_start: datetime,
+    fallback_soc: float,
+) -> float:
+    """The day's starting SoC, forecast where the window is still ahead.
+
+    Clamped to ``now`` because the forecast begins there: a window that opened
+    hours ago has no forecast point before it, and the battery's own reading is
+    the honest answer for the stretch that is already running. A forecast with
+    no SoC at all falls back the same way, which is what keeps this readable
+    against a series that carries only solar and house figures.
+    """
+    read_at = max(
+        dt_util.as_utc(window_start), dt_util.as_utc(snapshot.context.now)
+    )
+    forecast_soc = read_forecast_soc_at(snapshot, read_at)
+    return fallback_soc if forecast_soc is None else forecast_soc
+
+
 def _compute_needed_kwh(
     *,
     target_soc: float,
@@ -301,6 +342,8 @@ class _DayHoldResolution:
     # Carried per day because `battery_first` is group-overridable: two days can
     # resolve to different groups and so to different needs and margins.
     needed_kwh: float
+    #: SoC the day's window opens at — what `needed_kwh` was measured from.
+    start_soc: float
     margin_pct: float
     group_label: str
 
@@ -310,6 +353,7 @@ def _resolve_day_hold(
     window_start: datetime,
     window_end: datetime,
     needed_kwh: float,
+    start_soc: float,
     margin_pct: float,
     group_label: str,
     day_slot_ids: list[str],
@@ -396,6 +440,7 @@ def _resolve_day_hold(
         ),
         threshold_kwh=threshold,
         needed_kwh=needed_kwh,
+        start_soc=start_soc,
         margin_pct=margin_pct,
         group_label=group_label,
     )
@@ -501,6 +546,9 @@ def _emit_charge_hold_gates(
     def _room_params(resolved: _DayHoldResolution) -> dict[str, Any]:
         return {
             "neededKwh": round(resolved.needed_kwh, 3),
+            # The SoC the need was measured from — the one number that makes a
+            # surprising `neededKwh` legible instead of arbitrary.
+            "startSocPct": round(resolved.start_soc, 2),
             "marginPct": resolved.margin_pct,
             "surplusAtWindowStart": round(resolved.surplus_at_window_start, 3),
             "thresholdKwh": round(resolved.threshold_kwh, 3),
