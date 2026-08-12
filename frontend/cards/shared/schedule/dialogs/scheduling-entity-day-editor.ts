@@ -972,9 +972,12 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._explanations = new Map();
         this._explanationFailures = new Set();
         this._explanationsRequested = new Set();
-        this._selectedLaneKey = this.target === null
-            ? this._lanes[0]?.key ?? null
-            : this.target;
+        // No target means the opener pointed at no single lane -- a group row
+        // standing for several appliances. Selecting one for them would arm an
+        // editor on an appliance nobody pointed at, and since the roster sorts
+        // the inverter first, that appliance would usually be the inverter. The
+        // dialog stacks the whole day and asks which lane instead.
+        this._selectedLaneKey = this.target;
         this._dayIndex = this._resolveInitialDayIndex();
     }
 

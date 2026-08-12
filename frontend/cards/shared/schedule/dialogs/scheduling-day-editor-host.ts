@@ -109,14 +109,14 @@ export class SchedulingDayEditorHost extends LitElement {
     @property({ attribute: false }) public hass?: HomeAssistant;
     @property({ type: String }) public timeZone = "UTC";
     /**
-     * The day the editor opens on, `YYYY-MM-DD`.
+     * Something beside this host draws the day, so it must always be complete.
      *
-     * Null means today: a card with no day of its own — the power card — asks
-     * for the editor and gets the day the schedule says is current, while the
-     * inspector passes whichever day it is showing.
+     * The inspector's band is that something. A card that only ever opens the
+     * dialog — the power card — leaves this off and pays for the recorder's
+     * morning and the projections when somebody actually asks for an editor,
+     * rather than on every schedule refresh for every user who never does.
      */
-    @property({ attribute: false }) public initialDayKey: string | null = null;
-
+    @property({ type: Boolean }) public preload = false;
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
     @state() private _appliances: ScheduleApplianceMetadata[] = [];
     @state() private _controllableEntities: ControllableEntityDTO[] = [];
@@ -135,7 +135,13 @@ export class SchedulingDayEditorHost extends LitElement {
      * event, which never arrives if the element was torn out at the same moment.
      */
     @state() private _editorMounted = false;
-    /** The day the open dialog was asked for, overriding `initialDayKey`. */
+    /**
+     * The day the open dialog was asked for, or null for today.
+     *
+     * Per opening, not per host: a band press means the day the band is
+     * drawing, while a badge press means today whatever day is on screen
+     * around it, since a badge reports the slot running now.
+     */
     @state() private _editorDayKey: string | null = null;
     /** The schedule changed under the open draft; Save will overwrite what arrived. */
     @state() private _editorScheduleChanged = false;
@@ -150,6 +156,8 @@ export class SchedulingDayEditorHost extends LitElement {
     private _forecastLoader: ForecastLoader | null = null;
     private _forecastLoaderKey: string | null = null;
     private _projectionLoadGeneration = 0;
+    /** An editor has been asked for, so the day is worth keeping complete. */
+    private _opened = false;
     /** The schedule the open draft was seeded from, to notice a refresh under it. */
     private _editorScheduleAtOpen: unknown = null;
 
@@ -166,6 +174,7 @@ export class SchedulingDayEditorHost extends LitElement {
         entities: unknown;
         history: unknown;
         forecast: unknown;
+        projections: unknown;
         nowMs: number;
         timeZone: string;
     } | null = null;
@@ -213,8 +222,10 @@ export class SchedulingDayEditorHost extends LitElement {
             return;
         }
 
+        this._opened = true;
         void this._loadActualHistory();
         void this._loadForecast();
+        void this._loadProjections();
         this._editorScheduleChanged = false;
         this._editorScheduleAtOpen = this._ownerSnapshot.schedule;
         this._editorLane = target === null
@@ -290,9 +301,7 @@ export class SchedulingDayEditorHost extends LitElement {
                 .entityName=${lane?.name ?? ""}
                 .entityIcon=${lane?.icon}
                 .currentDayKey=${this._normalized.currentDayKey}
-                .initialDayKey=${this._editorDayKey
-                    ?? this.initialDayKey
-                    ?? this._normalized.currentDayKey}
+                .initialDayKey=${this._editorDayKey ?? this._normalized.currentDayKey}
                 .locale=${this._locale}
                 .timeZone=${this.timeZone}
                 .nowMs=${this._nowMs}
@@ -371,7 +380,7 @@ export class SchedulingDayEditorHost extends LitElement {
         }
         this._projectionLoadGeneration += 1;
         this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-        if (snapshot.schedule !== null) {
+        if (snapshot.schedule !== null && (this.preload || this._opened)) {
             void this._loadActualHistory();
             void this._loadProjections();
         }
@@ -474,7 +483,9 @@ export class SchedulingDayEditorHost extends LitElement {
             }
             this._controllableEntities = payload.entities;
             this._emitWatchedEntities();
-            void this._loadActualHistory();
+            if (this.preload || this._opened) {
+                void this._loadActualHistory();
+            }
         } catch {
             if (this.hass?.connection !== hass.connection) {
                 return;
@@ -588,6 +599,11 @@ export class SchedulingDayEditorHost extends LitElement {
             && previous.entities === this._controllableEntities
             && previous.history === this._actualHistory
             && previous.forecast === this._forecast
+            // A band drawn off this host reads the projections through a getter,
+            // and they land a round trip after the schedule they belong to. Leave
+            // them out of the memo and the run labels keep the blank index the
+            // refresh installed until some unrelated update happens by.
+            && previous.projections === this._projectionIndex
             && previous.nowMs === this._nowMs
             && previous.timeZone === this.timeZone
         ) {
@@ -600,6 +616,7 @@ export class SchedulingDayEditorHost extends LitElement {
             entities: this._controllableEntities,
             history: this._actualHistory,
             forecast: this._forecast,
+            projections: this._projectionIndex,
             nowMs: this._nowMs,
             timeZone: this.timeZone,
         };

@@ -1290,8 +1290,8 @@ export class HelmanSolarInspector extends LitElement {
              which day is on screen. -->
         <scheduling-day-editor-host
           .hass=${this.hass}
+          .preload=${true}
           .timeZone=${this._haTimeZone() ?? "UTC"}
-          .initialDayKey=${this._selectedDate || null}
         ></scheduling-day-editor-host>
         ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
@@ -1311,12 +1311,16 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * A badge in the composition panel asked for the day editor.
    *
-   * Routed to the same host the band strip opens, on the day the card is
-   * showing — pressing a lane and pressing a badge land in one dialog.
+   * Routed to the same host the band strip opens, so pressing a lane and
+   * pressing a badge land in one dialog. It opens on today rather than on the
+   * browsed day, because today is what the badge is about: it reports the slot
+   * running now. The browsed day is often one the schedule no longer holds —
+   * the backend prunes what has gone — and the dialog would quietly land
+   * somewhere else anyway.
    */
   private _handleOpenScheduleEditor = (event: CustomEvent<OpenScheduleEditorDetail>): void => {
     event.stopPropagation();
-    this._editorHost?.openFor(event.detail.target, this._selectedDate || null);
+    this._editorHost?.openFor(event.detail.target);
   };
 
   private _renderNavigation() {

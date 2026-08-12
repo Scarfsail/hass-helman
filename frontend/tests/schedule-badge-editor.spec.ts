@@ -192,15 +192,31 @@ async function pressBadge(page: Page, label: string): Promise<void> {
     }, label);
 }
 
-/** The dialog's landing state: which lane it opened on, and whether it is open. */
-async function editorState(page: Page): Promise<{ open: boolean; target: string | null }> {
+/**
+ * The dialog's landing state.
+ *
+ * `selected` is what the dialog actually armed for editing, which is the part
+ * worth pinning: a null `target` that quietly selects the first lane of the
+ * roster would open an editor on the inverter, an appliance nobody pressed.
+ */
+async function editorState(page: Page): Promise<{
+    open: boolean;
+    target: string | null;
+    selected: string | null;
+    hasHint: boolean;
+}> {
     return page.evaluate(async () => {
         const host = document.querySelector("scheduling-day-editor-host") as any;
         await host.updateComplete;
         const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
-        if (!editor) return { open: false, target: null };
+        if (!editor) return { open: false, target: null, selected: null, hasHint: false };
         await editor.updateComplete;
-        return { open: editor.open === true, target: editor.target ?? null };
+        return {
+            open: editor.open === true,
+            target: editor.target ?? null,
+            selected: editor._selectedLaneKey ?? null,
+            hasHint: !!editor.shadowRoot.querySelector(".select-hint"),
+        };
     });
 }
 
@@ -218,7 +234,12 @@ test.describe("opening the day editor from a scheduling badge", () => {
 
         await pressBadge(page, "Boiler");
 
-        expect(await editorState(page)).toEqual({ open: true, target: "boiler" });
+        expect(await editorState(page)).toEqual({
+            open: true,
+            target: "boiler",
+            selected: "boiler",
+            hasHint: false,
+        });
     });
 
     test("a group row opens the editor on no lane at all", async ({ page }) => {
@@ -236,7 +257,13 @@ test.describe("opening the day editor from a scheduling badge", () => {
 
         await pressBadge(page, "Deferrable consumption");
 
-        expect(await editorState(page)).toEqual({ open: true, target: null });
+        // No lane armed, and the hint naming what to press instead.
+        expect(await editorState(page)).toEqual({
+            open: true,
+            target: null,
+            selected: null,
+            hasHint: true,
+        });
     });
 
     /**
@@ -292,7 +319,12 @@ test.describe("opening the day editor from a scheduling badge", () => {
             { id: "s2", name: "Boiler", deferrable: true, controllableId: "boiler" },
         ]);
 
-        expect(await editorState(page)).toEqual({ open: false, target: null });
+        expect(await editorState(page)).toEqual({
+            open: false,
+            target: null,
+            selected: null,
+            hasHint: false,
+        });
     });
 });
 
