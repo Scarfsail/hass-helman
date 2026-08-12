@@ -291,6 +291,52 @@ def test_inspector_day_to_payload_includes_invalidated_series():
     assert payload["availability"]["hasInvalidated"] is True
 
 
+def test_appliance_component_defaults_carry_no_controllable():
+    from custom_components.helman.solar_bias_correction.models import (
+        SolarBiasApplianceComponent,
+    )
+
+    appliance = SolarBiasApplianceComponent(
+        entity_id="sensor.fridge_energy",
+        label="Fridge",
+        value_wh=120.0,
+    )
+
+    assert appliance.controllable_id is None
+
+
+def test_house_breakdown_payload_carries_the_controllable_id():
+    from custom_components.helman.solar_bias_correction.models import (
+        SolarBiasApplianceComponent,
+        SolarBiasHouseBreakdownPoint,
+        _house_breakdown_payload,
+    )
+
+    point = SolarBiasHouseBreakdownPoint(
+        slot="12:00",
+        unmeasured_wh=50.0,
+        appliances=[
+            SolarBiasApplianceComponent(
+                entity_id="sensor.dishwasher_energy",
+                label="Dishwasher",
+                value_wh=900.0,
+                deferrable=True,
+                controllable_id="dishwasher",
+            ),
+            # A consumer the roster names no controllable for stays schedule-less.
+            SolarBiasApplianceComponent(
+                entity_id="sensor.fridge_energy",
+                label="Fridge",
+                value_wh=120.0,
+            ),
+        ],
+    )
+
+    payload = _house_breakdown_payload(point)
+
+    assert [a["controllableId"] for a in payload["appliances"]] == ["dishwasher", None]
+
+
 def test_read_bias_config_passes_explicit_aggregation_method():
     config = {
         "power_devices": {

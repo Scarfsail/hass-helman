@@ -3092,6 +3092,7 @@ export class HelmanSolarInspector extends LitElement {
         false,
         barsFor(appliance.entityId),
         appliance.deferrable,
+        appliance.controllableId ?? null,
       ),
     );
     if (unmeasuredWh > 0) {
@@ -3241,6 +3242,7 @@ export class HelmanSolarInspector extends LitElement {
     isUnmeasured: boolean,
     bars: ReturnType<typeof consumerBarsOverSlots>,
     deferrable: boolean = false,
+    controllableId: string | null = null,
   ): DeviceNode {
     // A scheduled appliance with no meter has no entity to key on and none to
     // open: it is named by its controllable, so the label is the only identity
@@ -3260,6 +3262,10 @@ export class HelmanSolarInspector extends LitElement {
     // only thing carrying the meaning. Both follow from this one flag — power-device
     // paints it, power-device-info tags it — for every card that draws these boxes.
     node.deferrable = deferrable;
+    // What the badge on the box asks the schedule about. The energy stat above
+    // cannot stand in for it: it is a meter, not the key assignments are stored
+    // under, and a scheduled appliance may have no meter at all.
+    node.controllableId = controllableId;
     // Energy throughout — the selection's total on the box, each sample's own on
     // the bars — so the figures are the Wh the breakdown actually reports and no
     // unit conversion sits between the data and what is drawn.

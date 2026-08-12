@@ -20,6 +20,11 @@ export type ApplianceComponent = {
    * the device, not of the slot: it stays true in slots nothing scheduled it.
    */
   deferrable: boolean;
+  /**
+   * The controllable this appliance is, where it is one — the id the schedule
+   * keys its assignments by, which {@link entityId} (a meter) is not.
+   */
+  controllableId: string | null;
 };
 export type HouseBreakdownPoint = {
   slot: string;

@@ -2013,6 +2013,7 @@ def _build_house_actual_breakdown(
                     switch_entity_id=consumer.get("switch_entity_id"),
                     power_entity_id=consumer.get("power_entity_id"),
                     deferrable=bool(consumer.get("deferrable")),
+                    controllable_id=consumer.get("id"),
                 )
             )
         unmeasured_wh = round(max(0.0, float(house_wh) - measured_sum), 4)
@@ -2046,6 +2047,7 @@ def _forecast_appliance_component(
         switch_entity_id=(metered or {}).get("switch_entity_id"),
         power_entity_id=(metered or {}).get("power_entity_id"),
         deferrable=bool(consumer.get("deferrable")),
+        controllable_id=appliance_id,
     )
 
 

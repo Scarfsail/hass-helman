@@ -146,6 +146,11 @@ class SolarBiasApplianceComponent:
     configured deferrable controllables rather than from the device tree alone. It
     is a property of the device, not of the slot: an appliance nothing scheduled
     still counts as deferrable in the slot it happened to run in.
+
+    ``controllable_id`` is the controllable the row belongs to — the key the
+    schedule stores assignments under — where there is one, so the inspector can
+    resolve what is scheduled for the row right now. It is None for a consumer
+    the roster names no controllable for.
     """
 
     entity_id: str | None
@@ -154,6 +159,7 @@ class SolarBiasApplianceComponent:
     switch_entity_id: str | None = None
     power_entity_id: str | None = None
     deferrable: bool = False
+    controllable_id: str | None = None
 
 
 @dataclass
@@ -404,6 +410,7 @@ def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, A
                 "switchEntityId": c.switch_entity_id,
                 "powerEntityId": c.power_entity_id,
                 "deferrable": c.deferrable,
+                "controllableId": c.controllable_id,
             }
             for c in point.appliances
         ],
