@@ -36,6 +36,8 @@ type Appliance = {
     powerEntityId?: string | null;
     /** A shiftable appliance — a configured deferrable controllable. */
     deferrable?: boolean;
+    /** The controllable id the schedule keys its assignments by, where there is one. */
+    controllableId?: string | null;
 };
 
 /**
@@ -99,6 +101,7 @@ async function mountInspector(
                 switchEntityId: string | null;
                 powerEntityId: string | null;
                 deferrable: boolean;
+                controllableId: string | null;
             }>;
         }> = [];
         const houseForecast: Array<{ timestamp: string; valueWh: number }> = [];
@@ -137,6 +140,7 @@ async function mountInspector(
                         switchEntityId: a.switchEntityId ?? null,
                         powerEntityId: a.powerEntityId ?? null,
                         deferrable: a.deferrable ?? false,
+                        controllableId: a.controllableId ?? null,
                     })),
                 });
             }
@@ -159,6 +163,7 @@ async function mountInspector(
                             powerEntityId: a.powerEntityId ?? null,
                             // Everything the planner schedules is shiftable by definition.
                             deferrable: a.deferrable ?? true,
+                            controllableId: a.controllableId ?? null,
                         })),
                     });
                 }
@@ -344,7 +349,7 @@ async function breakdownBoxes(
     page: Page,
     /** Which composition panel: 0 is the actual one, 1 the forecast beside it. */
     panel = 0,
-): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null; tag: string; tint: string }>> {
+): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null; tag: string; tint: string; scheduleBadge: string | null }>> {
     // The consumers live one level down, inside the two groups the panel files
     // them under, and a collapsed group renders no children at all.
     await expandBreakdownGroups(page, panel);
@@ -379,6 +384,11 @@ async function breakdownBoxes(
                 share: (display?.shadowRoot?.querySelector(".powerValue + div")?.textContent ?? "").trim(),
                 hasSensor: !!display?.shadowRoot?.querySelector(".powerDisplay.has-sensor"),
                 switchEntityId: badge ? badge.entityId : null,
+                // The scheduling badge, by the controllable it asks about — the
+                // marker that replaced the "deferrable" word in `tag`.
+                scheduleBadge: (content
+                    .querySelector("power-device-info")
+                    ?.shadowRoot?.querySelector("helman-schedule-badge") as any)?.controllableId ?? null,
             };
         });
     }, panel);
@@ -889,7 +899,13 @@ const DEFERRABLE_FILL = "#e2c6fc"; // DEFERRABLE_HOUSE_COLOR, blended from it
 const DEFERRABLE_TINT = "#e2c6fc60";
 
 const MIXED_APPLIANCES: Appliance[] = [
-    { entityId: "sensor.dishwasher", label: "Dishwasher", wh: 50, deferrable: true },
+    {
+        entityId: "sensor.dishwasher",
+        label: "Dishwasher",
+        wh: 50,
+        deferrable: true,
+        controllableId: "dishwasher",
+    },
     { entityId: "sensor.fridge", label: "Fridge", wh: 30 },
 ];
 
@@ -1041,7 +1057,10 @@ test.describe("solar inspector deferrable house load", () => {
         // Base group first, heaviest first inside it (unmeasured 400, fridge 120),
         // then the deferrable group's dishwasher at 200 — ranking is per group now.
         expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Fridge", "Dishwasher"]);
-        expect(rows.map((r) => r.tag)).toEqual(["", "", "deferrable"]);
+        // The word is gone from the label channel; the shiftable row carries the
+        // scheduling badge instead, and only it — the others name no controllable.
+        expect(rows.map((r) => r.tag)).toEqual(["", "", ""]);
+        expect(rows.map((r) => r.scheduleBadge)).toEqual([null, null, "dishwasher"]);
         // Only the shiftable box overrides the panel's house tint; the others
         // inherit it by setting none of their own.
         expect(rows.map((r) => r.tint)).toEqual(["", "", DEFERRABLE_TINT]);
@@ -1186,7 +1205,14 @@ test.describe("solar inspector deferrable house load", () => {
 test.describe("solar inspector forecast composition", () => {
     const FORECAST = {
         baseWh: 80,
-        appliances: [{ entityId: "sensor.dishwasher", label: "Dishwasher", wh: 40 }],
+        appliances: [
+            {
+                entityId: "sensor.dishwasher",
+                label: "Dishwasher",
+                wh: 40,
+                controllableId: "dishwasher",
+            },
+        ],
     };
 
     test("the forecast stack draws two house bands, non-deferrable against the baseline", async ({
@@ -1251,8 +1277,9 @@ test.describe("solar inspector forecast composition", () => {
         const forecastRows = await breakdownBoxes(page, 1);
         expect(forecastRows.map((r) => [r.label, r.power, r.tag])).toEqual([
             ["Base load", "320 Wh", ""],
-            ["Dishwasher", "160 Wh", "deferrable"],
+            ["Dishwasher", "160 Wh", ""],
         ]);
+        expect(forecastRows.map((r) => r.scheduleBadge)).toEqual([null, "dishwasher"]);
         expect(forecastRows.map((r) => r.tint)).toEqual(["", DEFERRABLE_TINT]);
     });
 

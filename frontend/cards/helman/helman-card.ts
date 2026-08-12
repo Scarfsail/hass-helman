@@ -20,6 +20,13 @@ import "../helman-simple/node-detail-dialog";
 import "./power-flow-arrows"
 import "./power-device-info"
 import "./power-house-devices-section"
+import "../shared/schedule/dialogs/scheduling-day-editor-host"
+import {
+    OPEN_SCHEDULE_EDITOR_EVENT,
+    type OpenScheduleEditorDetail,
+    type SchedulingDayEditorHost,
+} from "../shared/schedule/dialogs/scheduling-day-editor-host";
+import { WATCHED_ENTITIES_EVENT, type WatchedEntitiesDetail } from "../shared/hass-change";
 import "./helman-card-editor"
 import type { LovelaceCardEditor } from "../../hass-frontend/src/panels/lovelace/types";
 
@@ -54,6 +61,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     private _localize?: LocalizeFunction;
     private _sourceNodes: DeviceNode[] = [];
     private _watchedEntityIds: Set<string> = new Set();
+    /** Entity ids the schedule editor host resolved, folded into the filter. */
+    private _scheduleWatchedIds: Set<string> = new Set();
     private _latestHass?: HomeAssistant;
 
     // 5. State properties
@@ -110,6 +119,11 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     // 9. Lifecycle methods
     async connectedCallback() {
         super.connectedCallback();
+        // On the card itself rather than on `ha-card`: the node detail dialog is
+        // rendered beside it and draws the very same house rows, badges and all,
+        // so a listener inside the card body would hear nothing from there.
+        this.addEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
+        this.addEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         if (this._latestHass) {
             await this._loadBackendData();
         }
@@ -117,6 +131,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
+        this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
+        this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this._historyEngine?.stop();
     }
 
@@ -192,6 +208,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                     ></power-house-devices-section>
                 </div>
             </ha-card>
+            <scheduling-day-editor-host
+                .hass=${this._hass}
+                .timeZone=${this._hass.config?.time_zone || "UTC"}
+            ></scheduling-day-editor-host>
             ${dialogParams ? html`
                 <node-detail-dialog
                     .hass=${this._hass}
@@ -213,6 +233,40 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     private _closeNodeDetail(): void {
         this._dialogNodeType = null;
     }
+
+    /**
+     * A badge asked for the day editor; open it on the controllable it named.
+     *
+     * The card has no day of its own, so the host is left to open on today —
+     * which is the only day a badge is ever talking about, since it reports the
+     * slot running right now.
+     */
+    private _handleOpenScheduleEditor = (event: Event): void => {
+        event.stopPropagation();
+        const detail = (event as CustomEvent<OpenScheduleEditorDetail>).detail;
+        const host = this.shadowRoot?.querySelector<SchedulingDayEditorHost>(
+            "scheduling-day-editor-host",
+        );
+        host?.openFor(detail.target);
+    };
+
+    /**
+     * The editor host resolves controllable entities the device tree knows
+     * nothing about — switches, climates, the EV charger's mode selects — and
+     * the card filters `hass` down to what it watches. Without folding these in,
+     * the editor opened from a badge would read stale states on a quiet house.
+     */
+    private _handleWatchedEntities = (event: Event): void => {
+        const detail = (event as CustomEvent<WatchedEntitiesDetail>).detail;
+        const next = new Set(detail.entityIds);
+        if (next.size === this._scheduleWatchedIds.size
+            && [...next].every((id) => this._scheduleWatchedIds.has(id))) {
+            return;
+        }
+
+        this._scheduleWatchedIds = next;
+        this._rebuildWatchedEntityIds();
+    };
 
     private _buildDialogParams(nodeType: NodeType) {
         return buildNodeDetailParams(this._buildNodeDetailContext(), nodeType);
@@ -354,6 +408,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const batteryConfig = (batteryProducerNode?.deviceConfig ?? batteryConsumerNode?.deviceConfig) as import("./DeviceConfig").BatteryDeviceConfig | undefined;
         if (batteryConfig?.entities.capacity) ids.add(batteryConfig.entities.capacity);
         if (batteryConfig?.entities.remaining_energy) ids.add(batteryConfig.entities.remaining_energy);
+
+        for (const id of this._scheduleWatchedIds) {
+            ids.add(id);
+        }
 
         this._watchedEntityIds = ids;
     }

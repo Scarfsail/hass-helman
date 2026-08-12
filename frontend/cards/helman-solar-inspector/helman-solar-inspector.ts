@@ -1,5 +1,5 @@
 import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
-import { property, state } from "lit/decorators.js";
+import { property, query, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { symmetricPowerAxis } from "./chart-axis";
@@ -38,6 +38,11 @@ import { formatEnergy } from "../power-format";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import "./helman-solar-schedule-band-strip";
+import "../shared/schedule/dialogs/scheduling-day-editor-host";
+import type {
+  OpenScheduleEditorDetail,
+  SchedulingDayEditorHost,
+} from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import "./helman-solar-day-pills";
 import type { DayPillForecastHealthDetail, DayPillSelectDetail } from "./helman-solar-day-pills";
 import "../shared/forecast-health-banner";
@@ -470,6 +475,10 @@ export class HelmanSolarInspector extends LitElement {
    * redraws the whole stack.
    */
   @state() private _nowMs = Date.now();
+  /** The one day editor this card opens, however it was asked for. */
+  @query("scheduling-day-editor-host")
+  private _editorHostElement?: SchedulingDayEditorHost;
+  @state() private _editorHost: SchedulingDayEditorHost | null = null;
   @state() private _payload: InspectorPayload | null = null;
   /**
    * The composition panels' group nodes, kept across renders so their
@@ -1228,6 +1237,12 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   protected updated(changed: Map<string, unknown>) {
+    // The band strip is handed the host as a property, so the element has to
+    // exist before it can be passed: it is picked up on the render after the
+    // one that created it, which is one frame the strip renders no band.
+    if (this._editorHost !== (this._editorHostElement ?? null)) {
+      this._editorHost = this._editorHostElement ?? null;
+    }
     // Seed the view from the configured default. `changed` only carries this when
     // the config value actually changes, so the runtime toggle — which touches
     // `_daylightOnly`, not this property — is never overridden.
@@ -1268,7 +1283,16 @@ export class HelmanSolarInspector extends LitElement {
   private _renderBody() {
     const payload = this._payload?.date === this._selectedDate ? this._payload : null;
     return html`
-      <div class="body">
+      <div class="body" @helman-open-schedule-editor=${this._handleOpenScheduleEditor}>
+        <!-- One editor for the whole card. The band strip draws its day off
+             this host and opens it on a lane press; a badge in the composition
+             panel opens the same instance, so the two never disagree about
+             which day is on screen. -->
+        <scheduling-day-editor-host
+          .hass=${this.hass}
+          .preload=${true}
+          .timeZone=${this._haTimeZone() ?? "UTC"}
+        ></scheduling-day-editor-host>
         ${this._renderNavigation()}
         <!-- One per card. The pills and the schedule band each read the
              forecast, but the warning is about the card's data as a whole, so
@@ -1283,6 +1307,21 @@ export class HelmanSolarInspector extends LitElement {
       </div>
     `;
   }
+
+  /**
+   * A badge in the composition panel asked for the day editor.
+   *
+   * Routed to the same host the band strip opens, so pressing a lane and
+   * pressing a badge land in one dialog. It opens on today rather than on the
+   * browsed day, because today is what the badge is about: it reports the slot
+   * running now. The browsed day is often one the schedule no longer holds —
+   * the backend prunes what has gone — and the dialog would quietly land
+   * somewhere else anyway.
+   */
+  private _handleOpenScheduleEditor = (event: CustomEvent<OpenScheduleEditorDetail>): void => {
+    event.stopPropagation();
+    this._editorHost?.openFor(event.detail.target);
+  };
 
   private _renderNavigation() {
     // Both computed in `willUpdate`; nothing is derived or assigned here.
@@ -1648,6 +1687,7 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <helman-solar-schedule-band-strip
         .hass=${this.hass}
+        .editorHost=${this._editorHost}
         .date=${payload.date}
         .timeZone=${this._haTimeZone() ?? "UTC"}
         .slotMinutes=${this._slotMinutes}
@@ -3092,6 +3132,7 @@ export class HelmanSolarInspector extends LitElement {
         false,
         barsFor(appliance.entityId),
         appliance.deferrable,
+        appliance.controllableId ?? null,
       ),
     );
     if (unmeasuredWh > 0) {
@@ -3241,6 +3282,7 @@ export class HelmanSolarInspector extends LitElement {
     isUnmeasured: boolean,
     bars: ReturnType<typeof consumerBarsOverSlots>,
     deferrable: boolean = false,
+    controllableId: string | null = null,
   ): DeviceNode {
     // A scheduled appliance with no meter has no entity to key on and none to
     // open: it is named by its controllable, so the label is the only identity
@@ -3260,6 +3302,10 @@ export class HelmanSolarInspector extends LitElement {
     // only thing carrying the meaning. Both follow from this one flag — power-device
     // paints it, power-device-info tags it — for every card that draws these boxes.
     node.deferrable = deferrable;
+    // What the badge on the box asks the schedule about. The energy stat above
+    // cannot stand in for it: it is a meter, not the key assignments are stored
+    // under, and a scheduled appliance may have no meter at all.
+    node.controllableId = controllableId;
     // Energy throughout — the selection's total on the box, each sample's own on
     // the bars — so the figures are the Wh the breakdown actually reports and no
     // unit conversion sits between the data and what is drawn.

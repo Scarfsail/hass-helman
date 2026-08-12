@@ -15,6 +15,12 @@ import {
     type NodeDetailContext,
 } from "./node-detail/node-detail-params-builder";
 import "./node-detail-dialog";
+import "../shared/schedule/dialogs/scheduling-day-editor-host";
+import {
+    OPEN_SCHEDULE_EDITOR_EVENT,
+    type OpenScheduleEditorDetail,
+    type SchedulingDayEditorHost,
+} from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import "./simple-card-solar";
 import "./simple-card-battery";
 import "./simple-card-grid";
@@ -210,6 +216,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     // 9. Lifecycle methods
     async connectedCallback() {
         super.connectedCallback();
+        // The house detail dialog draws the same consumer boxes the power card
+        // does, badges and all, and a badge is a request nobody else here would
+        // answer — so this card hosts the editor too rather than leaving a
+        // control that does nothing.
+        this.addEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
         if (this._latestHass) {
             await this._loadFromBackend();
         }
@@ -217,6 +228,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
+        this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
         this._historyEngine?.stop();
     }
 
@@ -369,10 +381,22 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     @closed=${() => { this._dialogNodeType = null; }}
                 ></node-detail-dialog>
             ` : ''}
+            <scheduling-day-editor-host
+                .hass=${this._hass}
+                .timeZone=${this._hass?.config?.time_zone || "UTC"}
+            ></scheduling-day-editor-host>
         `;
     }
 
     // 12. Private helper methods
+
+    private _handleOpenScheduleEditor = (event: Event): void => {
+        event.stopPropagation();
+        const detail = (event as CustomEvent<OpenScheduleEditorDetail>).detail;
+        this.shadowRoot
+            ?.querySelector<SchedulingDayEditorHost>("scheduling-day-editor-host")
+            ?.openFor(detail.target);
+    };
 
     private _rebuildWatchedEntityIds(): void {
         const ids = new Set<string>();

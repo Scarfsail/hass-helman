@@ -40,6 +40,11 @@ class DeviceNodeDTO:
     # card can mark the load the optimizer is free to move in time. Every other
     # node — sources, unmeasured remainders, virtual groups — is never deferrable.
     deferrable: bool = False
+    # The controllable this node's energy statistic belongs to, where the
+    # deferrable roster names one, so the card can look the node's schedule up.
+    # None for a deferrable entry that declares no controllable, and for every
+    # node that is not a deferrable house child at all.
+    controllable_id: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +70,7 @@ class DeviceNodeDTO:
             "ratioSensorId": self.ratio_sensor_id,
             "sourceType": self.source_type,
             "deferrable": self.deferrable,
+            "controllableId": self.controllable_id,
         }
 
 
@@ -269,8 +275,9 @@ class HelmanTreeBuilder:
         # ``energy_entity_id`` the deferrable roster is keyed by — so the match
         # needs no extra configuration and no second round-trip: the config is
         # already in hand and parsing it is pure in-memory work.
-        deferrable_stats = {
-            c["energy_entity_id"] for c in read_deferrable_consumers(self._config)
+        deferrable_stats: dict[str, str | None] = {
+            c["energy_entity_id"]: c.get("id")
+            for c in read_deferrable_consumers(self._config)
         }
 
         ps_label_id = self._find_label_id(lbl_reg, power_sensor_label) if power_sensor_label else None
@@ -382,6 +389,7 @@ class HelmanTreeBuilder:
                 hide_children_indicator=False,
                 sort_children_by_power=False,
                 deferrable=stat_entity_id in deferrable_stats,
+                controllable_id=deferrable_stats.get(stat_entity_id),
             )
             device_map[stat_entity_id] = node
 

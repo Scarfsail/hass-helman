@@ -218,7 +218,12 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
     async def test_house_actual_breakdown_splits_base_and_appliances(self):
         payload = await _inspector_payload(
             house_deferrable_consumers_provider=lambda: [
-                {"energy_entity_id": "sensor.dishwasher", "label": "Dishwasher"},
+                {
+                    "energy_entity_id": "sensor.dishwasher",
+                    "label": "Dishwasher",
+                    "id": "dishwasher",
+                },
+                # A roster entry that declares no controllable keys off nothing.
                 {"energy_entity_id": "sensor.ev", "label": "EV charger"},
             ],
             _consumer_slot_by_entity={
@@ -243,6 +248,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": None,
                     "powerEntityId": None,
                     "deferrable": True,
+                    "controllableId": "dishwasher",
                 },
                 {
                     "entityId": "sensor.ev",
@@ -251,6 +257,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": None,
                     "powerEntityId": None,
                     "deferrable": True,
+                    "controllableId": None,
                 },
             ],
         )
@@ -302,6 +309,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": "switch.ev",
                     "powerEntityId": "sensor.ev_power",
                     "deferrable": True,
+                    "controllableId": None,
                 },
                 {
                     "entityId": "sensor.fridge",
@@ -310,6 +318,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "switchEntityId": "switch.fridge",
                     "powerEntityId": "sensor.fridge_power",
                     "deferrable": False,
+                    "controllableId": None,
                 },
             ],
         )

@@ -260,7 +260,7 @@ function _buildLiveStateView({
  * Candidates (`conditionMet === false`) are never executed, so they count as
  * nothing being scheduled.
  */
-function _readCommittedApplianceAction(
+export function _readCommittedApplianceAction(
     activeSlot: ScheduleSlot | null,
     applianceId: string | null,
 ): ScheduleApplianceAction | null {
@@ -504,7 +504,7 @@ function _readScheduledAction({
  * action for an appliance stops it, so both land on the resting state -- which
  * is what makes "does this slot change anything?" a plain string comparison.
  */
-function _projectEntityState({
+export function _projectEntityState({
     entity,
     action,
 }: {

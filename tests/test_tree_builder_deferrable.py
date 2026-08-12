@@ -3,7 +3,8 @@
 The power card marks the loads the optimizer may move in time, and it must do so
 from the same roster the house forecast carves out — no second list to keep in
 agreement. A house child's node id *is* its energy statistic, which is exactly
-what ``read_deferrable_consumers`` is keyed by, so the match is a set lookup and
+what ``read_deferrable_consumers`` is keyed by, so the match is a dict lookup —
+which also hands the node the controllable id the schedule is stored under — and
 nothing else on the tree is touched.
 """
 
@@ -48,11 +49,13 @@ class _Hass:
 
 
 def _controllable(controllable_id, energy_entity_id, **consumption):
-    return {
-        "id": controllable_id,
-        "name": controllable_id.title(),
+    entry = {
+        "name": (controllable_id or energy_entity_id).title(),
         "consumption": {"energy_entity_id": energy_entity_id, **consumption},
     }
+    if controllable_id is not None:
+        entry["id"] = controllable_id
+    return entry
 
 
 def _house_children(controllables, stats, parent_of=None):
@@ -103,10 +106,53 @@ class TestHouseChildDeferrability(unittest.TestCase):
 
         payload = kitchen.to_dict()
         self.assertFalse(payload["deferrable"])
+        self.assertIsNone(payload["controllableId"])
         self.assertEqual(
             {c["id"]: c["deferrable"] for c in payload["children"]},
             {"sensor.dishwasher_energy": True, "sensor_kitchen_energy_unmeasured": False},
         )
+        self.assertEqual(
+            {c["id"]: c["controllableId"] for c in payload["children"]},
+            {
+                "sensor.dishwasher_energy": "dishwasher",
+                "sensor_kitchen_energy_unmeasured": None,
+            },
+        )
+
+
+class TestHouseChildControllableId(unittest.TestCase):
+    """The badge needs the key the schedule is stored under, not the meter."""
+
+    def test_a_deferrable_child_carries_the_controllable_that_owns_its_meter(self):
+        nodes = _house_children(
+            [_controllable("dishwasher", "sensor.dishwasher_energy")],
+            ["sensor.dishwasher_energy", "sensor.fridge_energy"],
+        )
+
+        self.assertEqual(
+            nodes["sensor.dishwasher_energy"].controllable_id, "dishwasher"
+        )
+        # Nothing the roster does not name is given an id to look a schedule up by.
+        self.assertIsNone(nodes["sensor.fridge_energy"].controllable_id)
+
+    def test_a_roster_entry_with_no_id_is_deferrable_with_no_controllable(self):
+        # Such an entry can never be scheduled, so there is nothing to key off —
+        # but it is still carved out of the base load, so it stays deferrable.
+        nodes = _house_children(
+            [_controllable(None, "sensor.dryer_energy")],
+            ["sensor.dryer_energy"],
+        )
+
+        self.assertTrue(nodes["sensor.dryer_energy"].deferrable)
+        self.assertIsNone(nodes["sensor.dryer_energy"].controllable_id)
+
+    def test_a_controllable_that_opted_out_carries_no_controllable_id(self):
+        nodes = _house_children(
+            [_controllable("boiler", "sensor.boiler_energy", deferrable=False)],
+            ["sensor.boiler_energy"],
+        )
+
+        self.assertIsNone(nodes["sensor.boiler_energy"].controllable_id)
 
 
 if __name__ == "__main__":

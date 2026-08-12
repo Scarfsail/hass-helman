@@ -7,6 +7,7 @@ export function hydrateNode(dto: DeviceNodeDTO, historyBuckets: number): DeviceN
     node.sourceType = dto.sourceType;
     node.isUnmeasured = dto.isUnmeasured;
     node.deferrable = dto.deferrable;
+    node.controllableId = dto.controllableId;
     node.valueType = dto.valueType;
     node.labels = dto.labels;
     if (dto.labelBadgeTexts.length > 0) node.customLabelTexts = dto.labelBadgeTexts;

@@ -693,6 +693,12 @@ class TestInspectorForecastComposition(_InspectorHarness):
                 (None, "EV charger", 100.0, True),
             ],
         )
+        # A forecast row is keyed by the controllable the demand was scheduled
+        # for, so the card can look its schedule up either side of now.
+        self.assertEqual(
+            [a["controllableId"] for a in breakdown[0]["appliances"]],
+            ["pool", "ev"],
+        )
         # The base is the house before the appliances were added, and the slot
         # with nothing scheduled is all base.
         self.assertEqual([p["unmeasuredWh"] for p in breakdown], [400.0, 500.0])

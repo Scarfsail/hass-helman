@@ -6,7 +6,7 @@ import { BatteryDeviceConfig, GridDeviceConfig, HouseDeviceConfig, SolarDeviceCo
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { sharedStyles } from "./shared-styles";
 import { convertToKWh, getDisplayEnergyUnit } from "./energy-unit-converter";
-import { getLocalizeFunction } from "../localize/localize";
+import "../schedule-badge";
 
 @customElement("power-device-info")
 export class PowerDeviceInfo extends LitElement {
@@ -20,7 +20,10 @@ export class PowerDeviceInfo extends LitElement {
                 flex-direction: row;
                 gap: 5px;
                 justify-content: space-evenly;
-                height: 16px;
+                /* A minimum rather than a height: the row is one line of tiny
+                   text on most boxes, but the scheduling badge is taller than
+                   that, and the box clips what overflows it. */
+                min-height: 16px;
                 margin-left:5px;
                 margin-right:5px;
             }
@@ -41,6 +44,12 @@ export class PowerDeviceInfo extends LitElement {
                 justify-content: left;
             }
 
+            /* Pinned right whatever else the row holds — the labels keep the
+               left, and a box with nothing but a badge still puts it there. */
+            helman-schedule-badge {
+                margin-left: auto;
+            }
+
 
         `];
     }
@@ -58,24 +67,28 @@ export class PowerDeviceInfo extends LitElement {
         }
 
         const hasAdditionalInfo = this.device.show_additional_info;
-        // The deferrable tag rides the same badge channel as the configured label
-        // texts and is appended to them, never in place of them: a device can be
-        // both labelled and shiftable. Deciding it here — beside power-device's
-        // tint, off the same `deferrable` flag — is what makes the power card and
-        // the solar inspector mark the load identically.
-        //
-        // Only a device wears it. A group of shiftable devices takes the tint, but
-        // tagging it too would badge a row already named for the thing the badge
-        // says — the inspector's "Deferrable consumption" header labelled
-        // "deferrable".
-        const tagDeferrable = this.device.deferrable && !this.device.children?.length;
-        const customLabels = [
-            ...(this.device.customLabelTexts ?? []),
-            ...(tagDeferrable ? [getLocalizeFunction(this.hass)("house_section.deferrable_tag")] : []),
-        ];
+        const customLabels = this.device.customLabelTexts ?? [];
         const hasCustomLabels = customLabels.length > 0;
+        // What the box says about the schedule. Decided here — beside
+        // power-device's tint, off the same `deferrable` flag — which is what
+        // makes the power card and the solar inspector mark a load identically.
+        // Gating on the flag rather than on the id alone matters: the forecast
+        // breakdown names the controllable behind every scheduled appliance,
+        // including one that opted out of being shiftable, and that one belongs
+        // in the base-load group unbadged, exactly as it is on the power card.
+        //
+        // A group is not a controllable, so it stands for its shiftable
+        // descendants and folds their states into one tint — the inspector's
+        // "Deferrable consumption" row, not the house total and not every label
+        // category that happens to contain a dishwasher.
+        const deferrable = this.device.deferrable === true;
+        const controllableId = deferrable ? this.device.controllableId ?? null : null;
+        const controllableIds = deferrable && controllableId === null
+            ? _collectControllableIds(this.device)
+            : [];
+        const hasBadge = controllableId !== null || controllableIds.length > 0;
 
-        if (!hasAdditionalInfo && !hasCustomLabels) {
+        if (!hasAdditionalInfo && !hasCustomLabels && !hasBadge) {
             return nothing;
         }
 
@@ -90,6 +103,13 @@ export class PowerDeviceInfo extends LitElement {
                     <div class="info custom-labels">
                         ${customLabels.join(' • ')}
                     </div>
+                ` : nothing}
+                ${hasBadge ? html`
+                    <helman-schedule-badge
+                        .hass=${this.hass}
+                        .controllableId=${controllableId}
+                        .controllableIds=${controllableIds}
+                    ></helman-schedule-badge>
                 ` : nothing}
             </div>
         `;
@@ -248,4 +268,16 @@ export class PowerDeviceInfo extends LitElement {
 
 
 
+}
+
+/** Every controllable under a group row, at whatever depth it sits. */
+function _collectControllableIds(device: DeviceNode): string[] {
+    const ids: string[] = [];
+    for (const child of device.children ?? []) {
+        if (child.controllableId) {
+            ids.push(child.controllableId);
+        }
+        ids.push(..._collectControllableIds(child));
+    }
+    return ids;
 }
