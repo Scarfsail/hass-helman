@@ -220,7 +220,7 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([(p["timestamp"], p["wh"]) for p in points], [(_slot(12).isoformat(), 800.0)])
 
-    async def test_drops_the_still_running_slot_for_today(self):
+    async def test_keeps_the_still_running_slot_for_the_daily_total(self):
         service = self._make_service()
 
         async def _fake_load(entity_id, target_date, local_tz):
@@ -229,12 +229,15 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
             return {}
 
         with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points = await service._load_grid_actual_for_date(
-                date(2026, 5, 10), PRAGUE, local_now=_slot(10, 7)
-            )
+            points = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
 
-        # 10:00 is still running at 10:07, so only the completed 09:45 slot survives.
-        self.assertEqual([p["timestamp"] for p in points], [_slot(9, 45).isoformat()])
+        # The loader reports every Wh the meter recorded; the running slot is
+        # dropped from the drawn series where the payload is assembled, so the
+        # day's total still counts it.
+        self.assertEqual(
+            [p["timestamp"] for p in points],
+            [_slot(9, 45).isoformat(), _slot(10, 0).isoformat()],
+        )
 
     async def test_returns_empty_when_neither_meter_is_configured(self):
         service = self._make_service(import_entity=None, export_entity=None)

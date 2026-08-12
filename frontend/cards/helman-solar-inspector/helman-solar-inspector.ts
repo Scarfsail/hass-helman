@@ -1437,11 +1437,12 @@ export class HelmanSolarInspector extends LitElement {
         impact: aggregateImpactSeries(s.impact, slot),
         houseForecast: aggregateWhSeries(s.houseForecast, slot),
         // A bucket the composition only partly covers is kept rather than
-        // dropped: the slot in progress is the one most worth itemising, and
-        // dropping its bucket left the slot the user is looking at as the only
-        // one with no composition at all. What the composition does not reach
-        // lands in the panel's base row, which is drawn as the residual against
-        // the forecast total for exactly this reason.
+        // dropped: on today, a wide bucket straddles elapsed slots — which keep a
+        // forecast scalar but leave no composition behind — and the slots from the
+        // one in progress on, which have both. Dropping it would leave the bucket
+        // the user is looking at as the only one with no composition at all. What
+        // the composition does not reach lands in the panel's base row, which is
+        // drawn as the residual against the forecast total for exactly this reason.
         houseForecastBreakdown: aggregateBreakdownSeries(s.houseForecastBreakdown, slot),
         houseActual: measured(s.houseActual),
         houseActualBreakdown: dropPartialBuckets(
@@ -3063,10 +3064,11 @@ export class HelmanSolarInspector extends LitElement {
     // one whose whole demand is metered — shows no dead box.
     //
     // The forecast's remainder is the residual against the house forecast the
-    // panel sits under, not the composed base alone. Over a bucket the
-    // composition only partly covers — the one the slot in progress falls in —
-    // those two differ, and the residual is what keeps the parts summing to the
-    // figure printed above them.
+    // panel sits under, not the composed base alone. At the native width the two
+    // are the same number — every slot the forecast covers now carries a
+    // composition summing to it — but a wide bucket straddling elapsed slots is
+    // only partly covered, and the residual is what keeps the parts summing to
+    // the figure printed above them there.
     const composedBase = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
     const unmeasuredWh = forecast
       ? Math.max(

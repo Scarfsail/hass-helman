@@ -58,6 +58,13 @@ async function mountInspector(
         /** Daily solar-production total, in Wh. */
         actualTotalWh?: number;
         /**
+         * Minute of the day the measurements stop at, as they do on today: the
+         * backend serves no actual for the slot in progress or anything after it.
+         */
+        actualsUntilMinutes?: number;
+        /** The slot width the card opens at. */
+        slotMinutes?: number;
+        /**
          * The forecast half: a base load per 15-min slot plus the appliances the
          * planner scheduled into it, mirroring `houseForecastBreakdown`. Left out
          * entirely the forecast series stays empty, as it is on a past day whose
@@ -110,14 +117,18 @@ async function mountInspector(
             const mm = String(m % 60).padStart(2, "0");
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
             corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v });
-            houseActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: slotTotal });
-            if (opts.gridWh !== undefined) {
+            const measured =
+                opts.actualsUntilMinutes === undefined || m < opts.actualsUntilMinutes;
+            if (measured) {
+                houseActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: slotTotal });
+            }
+            if (opts.gridWh !== undefined && measured) {
                 gridActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: opts.gridWh });
             }
-            if (opts.batteryWh !== undefined) {
+            if (opts.batteryWh !== undefined && measured) {
                 batteryActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: opts.batteryWh });
             }
-            if (opts.withBreakdown) {
+            if (opts.withBreakdown && measured) {
                 houseActualBreakdown.push({
                     slot: `${hh}:${mm}`,
                     unmeasuredWh: opts.unmeasuredWh,
@@ -244,7 +255,7 @@ async function mountInspector(
 
         const el = document.createElement("helman-solar-inspector") as any;
         el.daylightOnlyDefault = false;
-        el.slotMinutesDefault = 60;
+        el.slotMinutesDefault = opts.slotMinutes ?? 60;
         el.hass = {
             language: "en",
             config: { time_zone: "UTC" },
@@ -304,14 +315,15 @@ async function selectNoonSlot(page: Page): Promise<void> {
     await selectSlotAtMinutes(page, 720, "12:00");
 }
 
-/** Click the middle of the hour slot starting at `minutes`. */
+/** Click the middle of the slot starting at `minutes`, at the card's slot width. */
 async function selectSlotAtMinutes(
     page: Page,
     minutes: number,
     expected: string,
+    widthMinutes = 60,
 ): Promise<void> {
     const geom = await chartGeom(page);
-    const { x, y } = pagePoint(geom, xForMinutes(geom, minutes + 30));
+    const { x, y } = pagePoint(geom, xForMinutes(geom, minutes + widthMinutes / 2));
     await page.mouse.click(x, y);
     await page.waitForFunction(
         (slot) => {
@@ -943,6 +955,19 @@ async function panelTitles(page: Page): Promise<string[]> {
     });
 }
 
+/** The selected-slot house tile's chips: the forecast one, the actual one, or both. */
+async function houseMetricChips(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const card = [...el.shadowRoot.querySelectorAll(".metrics-section")[0]
+            .querySelectorAll(".metric-card")]
+            .find((node) => /^House/.test((node.querySelector(".metric-label")?.textContent ?? "").trim()));
+        return [...(card?.querySelectorAll(".metric-chip") ?? [])].map((chip) =>
+            (chip.textContent ?? "").replace(/\s+/g, " ").trim(),
+        );
+    });
+}
+
 /** The hovered slot's house rows, as label/actual/forecast triples in render order. */
 async function houseTooltipRows(
     page: Page,
@@ -1278,6 +1303,35 @@ test.describe("solar inspector forecast composition", () => {
             ["Base load", "320 Wh", false],
             ["EV charger", "160 Wh", false],
         ]);
+    });
+
+    test("the slot in progress reads as forecast: itemised, and with no actual beside it", async ({
+        page,
+    }) => {
+        await loadCardBundle(page);
+        // Noon is the slot in progress: the measurements stop at its start, and the
+        // composition begins there. This is the shape the backend now serves — one
+        // slot, one vintage, forecast on both halves of the panel.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: { ...FORECAST, breakdownFromMinutes: 720 },
+            actualsUntilMinutes: 720,
+            slotMinutes: 15,
+        });
+        await selectSlotAtMinutes(page, 720, "12:00", 15);
+
+        // Nothing measured that slot, so there is no measured panel to draw; the
+        // forecast one itemises it down to the appliance.
+        expect(await panelTitles(page)).toEqual(["House composition (forecast)"]);
+        expect((await breakdownBoxes(page, 0)).map((r) => [r.label, r.power])).toEqual([
+            ["Base load", "80 Wh"],
+            ["Dishwasher", "40 Wh"],
+        ]);
+        // And the tile above it quotes a forecast with nothing to compare it to,
+        // rather than a part-slot measurement dressed up as the slot's total.
+        expect(await houseMetricChips(page)).toEqual(["-120 Wh"]);
     });
 
     test("a day whose forecast composition was never recorded shows only the actual panel", async ({
