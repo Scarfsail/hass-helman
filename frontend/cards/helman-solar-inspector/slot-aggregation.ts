@@ -511,25 +511,41 @@ export function consumerBarsOverSlots(
   entityId: string | null | undefined,
   mixes: Map<string, BucketSourceMix>,
 ): { values: number[]; sourceHistory: (BucketSourceMix | undefined)[] } {
+  return partBarsOverSlots(points, slots, mixes, (point) => {
+    if (entityId === undefined) {
+      return (
+        finiteWh(point.unmeasuredWh) +
+        point.appliances.reduce((sum, a) => sum + finiteWh(a.wh), 0)
+      );
+    }
+    if (entityId === null) return finiteWh(point.unmeasuredWh);
+    const appliance = point.appliances.find((a) => a.entityId === entityId);
+    return appliance ? finiteWh(appliance.wh) : 0;
+  });
+}
+
+const finiteWh = (value: number) => (Number.isFinite(value) ? Math.max(0, value) : 0);
+
+/**
+ * Bars for any part of the house, named by how much of a slot it drew.
+ *
+ * The scaling of the source mix is the whole point of doing this once: a bar's
+ * segments only mean anything if they are the house's own mix rescaled to that
+ * part's energy, so one consumer, a group of them and the house itself are all
+ * measured the same way and stack honestly against each other.
+ */
+export function partBarsOverSlots(
+  points: readonly HouseBreakdownPoint[],
+  slots: readonly string[],
+  mixes: Map<string, BucketSourceMix>,
+  energyInSlot: (point: HouseBreakdownPoint) => number,
+): { values: number[]; sourceHistory: (BucketSourceMix | undefined)[] } {
   const bySlot = new Map(points.map((point) => [point.slot, point]));
   const values: number[] = [];
   const sourceHistory: (BucketSourceMix | undefined)[] = [];
-  const finite = (value: number) => (Number.isFinite(value) ? Math.max(0, value) : 0);
   for (const slot of slots) {
     const point = bySlot.get(slot);
-    let wh = 0;
-    if (point) {
-      if (entityId === undefined) {
-        wh =
-          finite(point.unmeasuredWh) +
-          point.appliances.reduce((sum, a) => sum + finite(a.wh), 0);
-      } else if (entityId === null) {
-        wh = finite(point.unmeasuredWh);
-      } else {
-        const appliance = point.appliances.find((a) => a.entityId === entityId);
-        wh = appliance ? finite(appliance.wh) : 0;
-      }
-    }
+    const wh = point ? finiteWh(energyInSlot(point)) : 0;
     values.push(wh);
     // The house mix is a set of proportions; rescaling it to this consumer's own
     // energy keeps each segment's height meaningful against the bar it sits in.

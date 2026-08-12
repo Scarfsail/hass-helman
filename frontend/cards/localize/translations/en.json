@@ -22,6 +22,8 @@
       "house_unmeasured": "Unmeasured consumption",
       "house_base_load": "Base load",
       "deferrable_tag": "deferrable",
+      "house_group_base": "Base consumption",
+      "house_group_deferrable": "Deferrable consumption",
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
       "battery_soc_strip": "Battery state of charge",

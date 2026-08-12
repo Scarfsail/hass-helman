@@ -301,13 +301,25 @@ function pagePoint(geom: ChartGeom, viewBoxX: number): { x: number; y: number } 
 
 /** Click the middle of the 12:00 hour slot to select it. */
 async function selectNoonSlot(page: Page): Promise<void> {
+    await selectSlotAtMinutes(page, 720, "12:00");
+}
+
+/** Click the middle of the hour slot starting at `minutes`. */
+async function selectSlotAtMinutes(
+    page: Page,
+    minutes: number,
+    expected: string,
+): Promise<void> {
     const geom = await chartGeom(page);
-    const { x, y } = pagePoint(geom, xForMinutes(geom, 720 + 30));
+    const { x, y } = pagePoint(geom, xForMinutes(geom, minutes + 30));
     await page.mouse.click(x, y);
-    await page.waitForFunction(() => {
-        const el = document.querySelector("helman-solar-inspector") as any;
-        return el._selectedSlot === "12:00";
-    });
+    await page.waitForFunction(
+        (slot) => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            return el._selectedSlot === slot;
+        },
+        expected,
+    );
 }
 
 /**
@@ -321,12 +333,20 @@ async function breakdownBoxes(
     /** Which composition panel: 0 is the actual one, 1 the forecast beside it. */
     panel = 0,
 ): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null; tag: string; tint: string }>> {
+    // The consumers live one level down, inside the two groups the panel files
+    // them under, and a collapsed group renders no children at all.
+    await expandBreakdownGroups(page, panel);
     return page.evaluate((index) => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelectorAll(".house-breakdown")
             [index]?.querySelector("power-devices-container");
-        const devices = container?.shadowRoot?.querySelectorAll("power-device") ?? [];
+        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+        const devices = groups.flatMap((group: any) => [
+            ...(group.shadowRoot
+                ?.querySelector("power-devices-container")
+                ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+        ]);
         return [...devices].map((device: any) => {
             const content = device.shadowRoot.querySelector(".deviceContent");
             const display = content.querySelector("power-device-power-display");
@@ -352,14 +372,78 @@ async function breakdownBoxes(
     }, panel);
 }
 
+/**
+ * The panel's group rows: what it lists before anything is expanded.
+ *
+ * `collapsed` reads the card's own indicator rather than any internal state —
+ * ► for shut, ▼ for open — since that is what the user is looking at.
+ */
+async function breakdownGroups(
+    page: Page,
+    panel = 0,
+): Promise<Array<{ label: string; power: string; collapsed: boolean }>> {
+    return page.evaluate((index) => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const container = el.shadowRoot
+            .querySelectorAll(".house-breakdown")
+            [index]?.querySelector("power-devices-container");
+        const groups = [...(container?.shadowRoot?.querySelectorAll("power-device") ?? [])];
+        return groups.map((group: any) => {
+            const content = group.shadowRoot.querySelector(".deviceContent");
+            const name = (content.querySelector(".deviceName")?.textContent ?? "").trim();
+            const display = content.querySelector("power-device-power-display");
+            return {
+                label: name.replace(/[►▼]\s*$/, "").trim(),
+                power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
+                    .replace(/\s+/g, " ")
+                    .trim(),
+                collapsed: name.endsWith("►"),
+            };
+        });
+    }, panel);
+}
+
+/** Open every group in a panel that is not open already. */
+async function expandBreakdownGroups(page: Page, panel = 0): Promise<void> {
+    const groups = await breakdownGroups(page, panel);
+    for (const [index, group] of groups.entries()) {
+        if (group.collapsed) await toggleBreakdownGroup(page, index, panel);
+    }
+}
+
+/** Click a group's name, the affordance the power card gives its own groups. */
+async function toggleBreakdownGroup(page: Page, index: number, panel = 0): Promise<void> {
+    await page.evaluate(
+        (o) => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const container = el.shadowRoot
+                .querySelectorAll(".house-breakdown")
+                [o.panel]?.querySelector("power-devices-container");
+            const group = container.shadowRoot.querySelectorAll("power-device")[o.index] as any;
+            (group.shadowRoot.querySelector(".deviceName") as HTMLElement).click();
+        },
+        { index, panel },
+    );
+    await page.evaluate(async () => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        await el.updateComplete;
+    });
+}
+
 /** Click a composition box's power figure — the card's own more-info affordance. */
 async function clickBoxPower(page: Page, index: number): Promise<void> {
+    await expandBreakdownGroups(page, 0);
     await page.evaluate((i) => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelector(".house-breakdown")
             .querySelector("power-devices-container");
-        const device = container.shadowRoot.querySelectorAll("power-device")[i] as any;
+        const groups = [...container.shadowRoot.querySelectorAll("power-device")];
+        const device = groups.flatMap((group: any) => [
+            ...(group.shadowRoot
+                ?.querySelector("power-devices-container")
+                ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+        ])[i] as any;
         const display = device.shadowRoot
             .querySelector(".deviceContent")
             .querySelector("power-device-power-display");
@@ -375,12 +459,15 @@ const BATTERY_RGB = "rgba(34, 197, 94, 0.376)"; // nodeAccentColor("battery")
 
 /** The distinct segment colours painted across the first composition box's bars. */
 async function barSegmentColours(page: Page): Promise<string[]> {
+    await expandBreakdownGroups(page, 0);
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
             .querySelector(".house-breakdown")
             .querySelector("power-devices-container");
-        const device = container.shadowRoot.querySelector("power-device") as any;
+        const device = (container.shadowRoot.querySelector("power-device") as any).shadowRoot
+            ?.querySelector("power-devices-container")
+            ?.shadowRoot?.querySelector("power-device") as any;
         const bars = device.shadowRoot
             .querySelector(".deviceContent")
             .querySelector("helman-power-history-bars");
@@ -593,12 +680,20 @@ test.describe("solar inspector house composition", () => {
         });
         await selectNoonSlot(page);
 
+        await expandBreakdownGroups(page);
         await page.evaluate(() => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            const devices = el.shadowRoot
-                .querySelector(".house-breakdown")
-                .querySelector("power-devices-container")
-                .shadowRoot.querySelectorAll("power-device");
+            const groups = [
+                ...el.shadowRoot
+                    .querySelector(".house-breakdown")
+                    .querySelector("power-devices-container")
+                    .shadowRoot.querySelectorAll("power-device"),
+            ];
+            const devices = groups.flatMap((group: any) => [
+                ...(group.shadowRoot
+                    ?.querySelector("power-devices-container")
+                    ?.shadowRoot?.querySelectorAll("power-device") ?? []),
+            ]);
             // The remainder outranks the dishwasher here, so find the box that
             // actually carries a badge rather than assuming a position.
             const badge = [...devices]
@@ -774,9 +869,9 @@ test.describe("solar inspector house composition", () => {
  */
 
 const HOUSE_FILL = "#a855f7"; // HOUSE_COLOR
-const DEFERRABLE_FILL = "#c58efa"; // DEFERRABLE_HOUSE_COLOR, blended from it
+const DEFERRABLE_FILL = "#e2c6fc"; // DEFERRABLE_HOUSE_COLOR, blended from it
 // nodeAccentColor's alpha, applied to the deferrable shade.
-const DEFERRABLE_TINT = "#c58efa60";
+const DEFERRABLE_TINT = "#e2c6fc60";
 
 const MIXED_APPLIANCES: Appliance[] = [
     { entityId: "sensor.dishwasher", label: "Dishwasher", wh: 50, deferrable: true },
@@ -915,12 +1010,60 @@ test.describe("solar inspector deferrable house load", () => {
         await selectNoonSlot(page);
 
         const rows = await breakdownBoxes(page);
-        // Ranked heaviest first: unmeasured 400, dishwasher 200, fridge 120.
-        expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Dishwasher", "Fridge"]);
-        expect(rows.map((r) => r.tag)).toEqual(["", "deferrable", ""]);
+        // Base group first, heaviest first inside it (unmeasured 400, fridge 120),
+        // then the deferrable group's dishwasher at 200 — ranking is per group now.
+        expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Fridge", "Dishwasher"]);
+        expect(rows.map((r) => r.tag)).toEqual(["", "", "deferrable"]);
         // Only the shiftable box overrides the panel's house tint; the others
         // inherit it by setting none of their own.
-        expect(rows.map((r) => r.tint)).toEqual(["", DEFERRABLE_TINT, ""]);
+        expect(rows.map((r) => r.tint)).toEqual(["", "", DEFERRABLE_TINT]);
+    });
+
+    test("the panel files consumers under a base and a deferrable group", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        // Two rows, each carrying its half of the slot: 400 unmeasured + 120
+        // fridge against the dishwasher's 200. The remainder is not shiftable, so
+        // it files under the base group like any other unshiftable load.
+        expect(await breakdownGroups(page)).toEqual([
+            { label: "Base consumption", power: "520 Wh", collapsed: true },
+            { label: "Deferrable consumption", power: "200 Wh", collapsed: true },
+        ]);
+    });
+
+    test("a slot with nothing shiftable keeps a single group", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
+        await selectNoonSlot(page);
+
+        expect((await breakdownGroups(page)).map((g) => g.label)).toEqual([
+            "Base consumption",
+        ]);
+    });
+
+    test("an opened group stays open when another slot is picked", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+        await toggleBreakdownGroup(page, 1);
+
+        expect((await breakdownGroups(page)).map((g) => g.collapsed)).toEqual([true, false]);
+
+        // The panel is rebuilt for the new selection, but the state the user set
+        // belongs to the group, not to the slot they set it in.
+        await selectSlotAtMinutes(page, 780, "13:00");
+
+        expect((await breakdownGroups(page)).map((g) => g.collapsed)).toEqual([true, false]);
     });
 
     test("the hover popup subdivides the house row when the slot had shiftable load", async ({
@@ -1072,8 +1215,8 @@ test.describe("solar inspector forecast composition", () => {
         // and each scheduled appliance, tagged and tinted like any shiftable row.
         expect((await breakdownBoxes(page, 0)).map((r) => r.label)).toEqual([
             "Unmeasured consumption",
-            "Dishwasher",
             "Fridge",
+            "Dishwasher",
         ]);
         const forecastRows = await breakdownBoxes(page, 1);
         expect(forecastRows.map((r) => [r.label, r.power, r.tag])).toEqual([

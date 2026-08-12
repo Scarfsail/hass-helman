@@ -71,6 +71,7 @@ import {
   aggregateBreakdownSeries,
   breakdownCoversSlots,
   consumerBarsOverSlots,
+  partBarsOverSlots,
   expandSlotsToNative,
   houseSourceMixBySlot,
   dropPartialBuckets,
@@ -463,6 +464,13 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _nowMs = Date.now();
   @state() private _payload: InspectorPayload | null = null;
+  /**
+   * The composition panels' group nodes, kept across renders so their
+   * expanded state survives picking another slot. Not `@state`: the nodes are
+   * mutated in place and re-handed to the same containers, and the render that
+   * rebuilds their children is always driven by something else changing.
+   */
+  private readonly _breakdownGroups = new Map<string, DeviceNode>();
   /**
    * The day range the last successful load reported. Kept apart from the
    * payload so the day pills stay put while the next day loads — the payload is
@@ -3060,7 +3068,7 @@ export class HelmanSolarInspector extends LitElement {
     const total = consumers.reduce((sum, c) => sum + c.wh, 0) + Math.max(0, unmeasuredWh);
     if (total <= 0) return "";
 
-    const nodes: DeviceNode[] = consumers.map((appliance) =>
+    const consumerNodes: DeviceNode[] = consumers.map((appliance) =>
       this._breakdownNode(
         appliance.entityId,
         appliance.label,
@@ -3073,7 +3081,7 @@ export class HelmanSolarInspector extends LitElement {
       ),
     );
     if (unmeasuredWh > 0) {
-      nodes.push(
+      consumerNodes.push(
         this._breakdownNode(
           null,
           forecast
@@ -3089,8 +3097,36 @@ export class HelmanSolarInspector extends LitElement {
     }
     // Ranked heaviest first so the slot's dominant load reads at a glance. The
     // remainder sorts by size like any other box rather than being pinned last,
-    // or a large unmetered block would sit below trivial named ones.
-    nodes.sort((a, b) => (b.powerValue ?? 0) - (a.powerValue ?? 0));
+    // or a large unmetered block would sit below trivial named ones. Groups sort
+    // their own children the same way, one level down.
+    consumerNodes.sort((a, b) => (b.powerValue ?? 0) - (a.powerValue ?? 0));
+
+    // The two groups the panel actually lists. What is shiftable is the question
+    // the whole feature is about, so it is the axis the rows are filed under
+    // rather than something the eye has to reassemble from colours; the
+    // remainder is not shiftable and so files under the base, whichever kind of
+    // remainder this panel's is.
+    const nodes = [
+      this._breakdownGroup(
+        variant,
+        "base",
+        consumerNodes.filter((node) => !node.deferrable),
+        partBarsOverSlots(breakdownSeries, barSlots, mixes, (point) =>
+          point.appliances.reduce((sum, a) => (a.deferrable ? sum : sum + a.wh), 0) +
+          point.unmeasuredWh,
+        ),
+      ),
+      this._breakdownGroup(
+        variant,
+        "deferrable",
+        consumerNodes.filter((node) => node.deferrable),
+        partBarsOverSlots(breakdownSeries, barSlots, mixes, (point) =>
+          point.appliances.reduce((sum, a) => (a.deferrable ? sum + a.wh : sum), 0),
+        ),
+      ),
+      // A group with nothing in it is not a story about this slot, it is an empty
+      // box; a day with nothing shiftable keeps the single list it always had.
+    ].filter((group) => group.children.length > 0);
 
     // The house's own per-sample energy. Handing it down as the parent scales
     // every box's bars against the house exactly as the power card scales a child
@@ -3121,6 +3157,52 @@ export class HelmanSolarInspector extends LitElement {
         ></power-devices-container>
       </div>
     `;
+  }
+
+  /**
+   * One of the panel's two groups, as the power card draws a virtual group: a
+   * node whose children are the boxes, collapsed until asked.
+   *
+   * The node object is cached and refilled rather than rebuilt, because that is
+   * where the expanded state lives — `power-device` toggles `childrenCollapsed`
+   * on the node it was handed, so a group rebuilt per selection would snap shut
+   * every time the user picked another slot. Cached per panel and per group, the
+   * state outlives the selection exactly as the user left it.
+   *
+   * The group carries the sum of its children and their summed bars, so the
+   * collapsed row still says how much of the slot the group accounts for and
+   * what fed it.
+   */
+  private _breakdownGroup(
+    variant: "actual" | "forecast",
+    kind: "base" | "deferrable",
+    children: DeviceNode[],
+    bars: ReturnType<typeof partBarsOverSlots>,
+  ): DeviceNode {
+    const id = `house-breakdown:${variant}:${kind}`;
+    let node = this._breakdownGroups.get(id);
+    if (!node) {
+      node = new DeviceNode(id, "", null, null, bars.values.length);
+      node.children_full_width = true;
+      // Collapsed until the user says otherwise, like every group the power card
+      // draws: the panel's job at a glance is the two totals, not the roster.
+      node.childrenCollapsed = true;
+      this._breakdownGroups.set(id, node);
+    }
+    node.name = this._t(
+      kind === "deferrable"
+        ? "bias_correction.inspector.house_group_deferrable"
+        : "bias_correction.inspector.house_group_base",
+    );
+    node.displayName = node.name;
+    node.deferrable = kind === "deferrable";
+    node.valueKind = "energy";
+    node.historyBuckets = bars.values.length;
+    node.children = children;
+    node.powerValue = children.reduce((sum, child) => sum + (child.powerValue ?? 0), 0);
+    node.powerHistory = bars.values;
+    node.sourcePowerHistory = bars.sourceHistory.map((mix) => mix ?? {});
+    return node;
   }
 
   /**

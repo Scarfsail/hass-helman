@@ -24,9 +24,9 @@ export const HOUSE_COLOR = '#a855f7'; // purple-500
  * and defined here once: every card imports this and never re-derives it.
  */
 export const DEFERRABLE_HOUSE_COLOR = blendHex([
-    { hex: HOUSE_COLOR, weight: 2 },
-    { hex: '#ffffff', weight: 1 },
-]); // #c58efa
+    { hex: HOUSE_COLOR, weight: 1 },
+    { hex: '#ffffff', weight: 2 },
+]); // #e2c6fc
 
 /** Which way the grid is flowing. Distinct from GRID_COLOR, which is the node itself. */
 export const GRID_IMPORT_COLOR = '#2563eb'; // blue-600

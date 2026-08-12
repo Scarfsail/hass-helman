@@ -555,6 +555,8 @@
       "house_unmeasured": "Nesledovaná spotřeba",
       "house_base_load": "Základní spotřeba",
       "deferrable_tag": "odložitelná",
+      "house_group_base": "Základní spotřeba",
+      "house_group_deferrable": "Odložitelná spotřeba",
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
       "battery_soc_strip": "Stav nabití baterie",
