@@ -381,7 +381,7 @@ async function breakdownBoxes(
 async function breakdownGroups(
     page: Page,
     panel = 0,
-): Promise<Array<{ label: string; power: string; collapsed: boolean }>> {
+): Promise<Array<{ label: string; power: string; collapsed: boolean; tag: string }>> {
     return page.evaluate((index) => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
@@ -394,6 +394,9 @@ async function breakdownGroups(
             const display = content.querySelector("power-device-power-display");
             return {
                 label: name.replace(/[►▼]\s*$/, "").trim(),
+                tag: (content
+                    .querySelector("power-device-info")
+                    ?.shadowRoot?.querySelector(".custom-labels")?.textContent ?? "").trim(),
                 power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
                     .replace(/\s+/g, " ")
                     .trim(),
@@ -1031,9 +1034,11 @@ test.describe("solar inspector deferrable house load", () => {
         // Two rows, each carrying its half of the slot: 400 unmeasured + 120
         // fridge against the dishwasher's 200. The remainder is not shiftable, so
         // it files under the base group like any other unshiftable load.
+        // The group takes the shade but no badge: it is already named for the
+        // thing the badge would say.
         expect(await breakdownGroups(page)).toEqual([
-            { label: "Base consumption", power: "520 Wh", collapsed: true },
-            { label: "Deferrable consumption", power: "200 Wh", collapsed: true },
+            { label: "Base consumption", power: "520 Wh", collapsed: true, tag: "" },
+            { label: "Deferrable consumption", power: "200 Wh", collapsed: true, tag: "" },
         ]);
     });
 

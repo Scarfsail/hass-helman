@@ -63,9 +63,15 @@ export class PowerDeviceInfo extends LitElement {
         // both labelled and shiftable. Deciding it here — beside power-device's
         // tint, off the same `deferrable` flag — is what makes the power card and
         // the solar inspector mark the load identically.
+        //
+        // Only a device wears it. A group of shiftable devices takes the tint, but
+        // tagging it too would badge a row already named for the thing the badge
+        // says — the inspector's "Deferrable consumption" header labelled
+        // "deferrable".
+        const tagDeferrable = this.device.deferrable && !this.device.children?.length;
         const customLabels = [
             ...(this.device.customLabelTexts ?? []),
-            ...(this.device.deferrable ? [getLocalizeFunction(this.hass)("house_section.deferrable_tag")] : []),
+            ...(tagDeferrable ? [getLocalizeFunction(this.hass)("house_section.deferrable_tag")] : []),
         ];
         const hasCustomLabels = customLabels.length > 0;
 
