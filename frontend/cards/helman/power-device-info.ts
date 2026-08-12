@@ -20,10 +20,7 @@ export class PowerDeviceInfo extends LitElement {
                 flex-direction: row;
                 gap: 5px;
                 justify-content: space-evenly;
-                /* A minimum rather than a height: the row is one line of tiny
-                   text on most boxes, but the scheduling badge is taller than
-                   that, and the box clips what overflows it. */
-                min-height: 16px;
+                height: 16px;
                 margin-left:5px;
                 margin-right:5px;
             }

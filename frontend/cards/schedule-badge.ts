@@ -44,7 +44,7 @@ export class ScheduleBadge extends LitElement {
             }
 
             ha-icon {
-                --mdc-icon-size: 28px;
+                --mdc-icon-size: 14px;
                 display: flex;
                 cursor: pointer;
             }
