@@ -714,6 +714,7 @@ class HelmanCoordinator:
             battery_forecast_provider=self._async_get_battery_forecast_snapshot,
             battery_forecast_history=self._battery_forecast_history,
             house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
+            house_forecast_composition_provider=self._get_house_forecast_composition,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             house_deferrable_consumers_provider=self._get_house_deferrable_consumers,
             house_device_consumers_provider=self._get_house_device_consumers,
@@ -2585,6 +2586,30 @@ class HelmanCoordinator:
         if pipeline is None:
             return None
         return pipeline.adjusted_house_forecast
+
+    def _get_house_forecast_composition(self) -> dict[str, Any] | None:
+        """What the adjusted house forecast is made of: the base, and each appliance.
+
+        The inspector itemises a future slot the way it itemises a past one, and
+        the adjusted forecast alone cannot say who is in it — its nonDeferrable is
+        one scalar with every scheduled appliance already folded in. The two
+        halves that produced it are still on the pipeline, so they are handed over
+        untouched: the original house forecast, and the plan's per-appliance
+        demand points.
+
+        Synchronous and cache-only, exactly like
+        _get_adjusted_house_forecast_snapshot: awaiting a pipeline getter here
+        would let opening a day in the inspector kick off a full appliance and
+        battery forecast rebuild. Cold cache yields None and the card degrades to
+        a plain forecast figure.
+        """
+        pipeline = self._cached_appliance_forecast_pipeline
+        if pipeline is None:
+            return None
+        return {
+            "original_house_forecast": pipeline.original_house_forecast,
+            "demand_points": pipeline.projection_plan.demand_points,
+        }
 
     def _build_forecast_schedule_documents(
         self,

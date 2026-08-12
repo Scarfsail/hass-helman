@@ -395,6 +395,8 @@ type InspectorPayload = {
     houseForecast: InspectorPoint[];
     houseActual: InspectorPoint[];
     houseActualBreakdown: HouseBreakdownPoint[];
+    /** The same shape ahead of the clock: the base load plus each scheduled appliance. */
+    houseForecastBreakdown: HouseBreakdownPoint[];
     batterySocForecast: BatterySocPoint[];
     batterySocActual: BatterySocPoint[];
     gridForecast: InspectorPoint[];
@@ -1418,6 +1420,9 @@ export class HelmanSolarInspector extends LitElement {
         invalidated: measured(s.invalidated),
         impact: aggregateImpactSeries(s.impact, slot),
         houseForecast: aggregateWhSeries(s.houseForecast, slot),
+        // No partial-bucket drop on the forecast side: a forecast bucket is
+        // whole the moment it is served, exactly like houseForecast itself.
+        houseForecastBreakdown: aggregateBreakdownSeries(s.houseForecastBreakdown, slot),
         houseActual: measured(s.houseActual),
         houseActualBreakdown: dropPartialBuckets(
           aggregateBreakdownSeries(s.houseActualBreakdown, slot),
@@ -1758,37 +1763,48 @@ export class HelmanSolarInspector extends LitElement {
           ),
         ];
       case "house": {
-        // The house row stays whole, because the forecast is whole: its
-        // nonDeferrable already carries the scheduled appliances, so pairing it
-        // with only the measured non-deferrable half would compare two different
-        // scopes. The measured subdivision is reported beneath it instead, and
-        // only when something shiftable actually ran -- so an ordinary slot's
-        // popup is unchanged rather than growing a permanent zero row.
-        const houseRow = this._powerRow(
-          this._t("bias_correction.inspector.merged.house"),
-          CHART_COLORS.house,
-          negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
-          negateWh(sumWhOverSlots(payload.series.houseForecast, slots)),
-        );
-        const { deferrable, nonDeferrable } = splitHouseByDeferrable(
+        // Both columns are split the same way the two bands are, so each row
+        // compares like with like: what was shifted against what was scheduled,
+        // and the rest of the house against the rest of the forecast. With
+        // nothing shiftable on either side the pair collapses back to the single
+        // house row it always was, rather than growing a permanent zero row.
+        //
+        // Over elapsed slots the forecast has no composition to split by -- only
+        // its scalar survives in the recorder -- so it degrades to wholly
+        // non-deferrable. That is precisely what the band above shows, so popup
+        // and chart still say the same thing.
+        const actual = splitHouseByDeferrable(
           payload.series.houseActual,
           payload.series.houseActualBreakdown,
         );
-        const deferrableWh = sumWhOverSlots(deferrable, slots);
-        if (!deferrableWh) return [houseRow];
+        const forecast = splitHouseByDeferrable(
+          payload.series.houseForecast,
+          payload.series.houseForecastBreakdown,
+        );
+        const actualDeferrableWh = sumWhOverSlots(actual.deferrable, slots);
+        const forecastDeferrableWh = sumWhOverSlots(forecast.deferrable, slots);
+        if (!actualDeferrableWh && !forecastDeferrableWh) {
+          return [
+            this._powerRow(
+              this._t("bias_correction.inspector.merged.house"),
+              CHART_COLORS.house,
+              negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
+              negateWh(sumWhOverSlots(payload.series.houseForecast, slots)),
+            ),
+          ];
+        }
         return [
-          houseRow,
           this._powerRow(
             this._t("bias_correction.inspector.merged.house_non_deferrable"),
             CHART_COLORS.house,
-            negateWh(sumWhOverSlots(nonDeferrable, slots)),
-            null,
+            negateWh(sumWhOverSlots(actual.nonDeferrable, slots)),
+            negateWh(sumWhOverSlots(forecast.nonDeferrable, slots)),
           ),
           this._powerRow(
             this._t("bias_correction.inspector.merged.house_deferrable"),
             CHART_COLORS.houseDeferrable,
-            negateWh(deferrableWh),
-            null,
+            negateWh(actualDeferrableWh),
+            negateWh(forecastDeferrableWh),
           ),
         ];
       }
@@ -2046,21 +2062,26 @@ export class HelmanSolarInspector extends LitElement {
    * solar, battery discharge and grid import above; house, battery charge and
    * grid export below.
    *
-   * The measured house is drawn as two bands rather than one — non-deferrable
-   * against the baseline, the shiftable part stacked on top of it in the lighter
-   * house shade. They sum to the same house total, so every band above them keeps
-   * its place and the day's shape is unchanged; only its subdivision appears.
+   * House is drawn as two bands rather than one, on both sides of now —
+   * non-deferrable against the baseline, the shiftable part stacked on top of it
+   * in the lighter house shade. Each pair sums to the same house total, so every
+   * band above them keeps its place and the day's shape is unchanged; only its
+   * subdivision appears.
    */
   private _buildStacks(payload: InspectorPayload): ChartStacks {
     const series = payload.series;
-    const houseSplit = splitHouseByDeferrable(series.houseActual, series.houseActualBreakdown);
+    // One helper, one shape, both sides of now: measured demand splits by what
+    // the meters say ran, forecast demand by what the planner scheduled.
+    const actualSplit = splitHouseByDeferrable(series.houseActual, series.houseActualBreakdown);
+    const forecastSplit = splitHouseByDeferrable(series.houseForecast, series.houseForecastBreakdown);
     const solarForecast = this._stackLayer("corrected", CHART_COLORS.corrected, series.corrected, false);
     const solarActual = this._stackLayer("actual", CHART_COLORS.actual, series.actual, false);
-    const houseForecast = this._stackLayer("houseForecast", CHART_COLORS.house, series.houseForecast, true);
-    // Both house bands share the `houseActual` key and its single legend entry,
+    // Each family's two bands share one `SeriesKey` and its single legend entry,
     // so hiding house still collapses the pair.
-    const houseActualNonDeferrable = this._stackLayer("houseActual", CHART_COLORS.house, houseSplit.nonDeferrable, true);
-    const houseActualDeferrable = this._stackLayer("houseActual", CHART_COLORS.houseDeferrable, houseSplit.deferrable, true);
+    const houseForecastNonDeferrable = this._stackLayer("houseForecast", CHART_COLORS.house, forecastSplit.nonDeferrable, true);
+    const houseForecastDeferrable = this._stackLayer("houseForecast", CHART_COLORS.houseDeferrable, forecastSplit.deferrable, true);
+    const houseActualNonDeferrable = this._stackLayer("houseActual", CHART_COLORS.house, actualSplit.nonDeferrable, true);
+    const houseActualDeferrable = this._stackLayer("houseActual", CHART_COLORS.houseDeferrable, actualSplit.deferrable, true);
     const batteryForecast = this._stackLayer("batteryForecast", CHART_COLORS.battery, series.batteryForecast, true);
     const batteryActual = this._stackLayer("batteryActual", CHART_COLORS.battery, series.batteryActual, true);
     const gridForecast = this._stackLayer("gridForecast", CHART_COLORS.grid, series.gridForecast, true);
@@ -2068,7 +2089,7 @@ export class HelmanSolarInspector extends LitElement {
     return {
       forecast: {
         positive: [solarForecast, batteryForecast, gridForecast],
-        negative: [houseForecast, batteryForecast, gridForecast],
+        negative: [houseForecastNonDeferrable, houseForecastDeferrable, batteryForecast, gridForecast],
       },
       actual: {
         positive: [solarActual, batteryActual, gridActual],
@@ -2822,6 +2843,10 @@ export class HelmanSolarInspector extends LitElement {
       payload.series.houseActualBreakdown,
       slots,
     );
+    const houseForecastBreakdown = aggregateBreakdownOverSlots(
+      payload.series.houseForecastBreakdown,
+      slots,
+    );
     // Both SoC readings come off the strip's own columns, so the panel states
     // the level the selection ends at exactly as the last column drawn under it
     // does — rather than the level it opened on, which for a multi-slot
@@ -2917,28 +2942,12 @@ export class HelmanSolarInspector extends LitElement {
             : ""}
         </div>
       </div>
-      ${this._renderHouseBreakdown(
-        houseBreakdown,
-        payload.houseUnmeasuredLabel,
-        slots,
-      )}
+      ${this._renderHouseBreakdown(houseBreakdown, slots, "actual", payload.houseUnmeasuredLabel)}
+      ${this._renderHouseBreakdown(houseForecastBreakdown, slots, "forecast", null)}
       ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
     `;
   }
 
-  /**
-   * The measured house demand for the selected slot split into each individually
-   * metered consumer plus whatever no meter accounted for, so the single house
-   * figure above reads as a sum of named parts. Every row carries a proportion bar
-   * sized to its share of the slot total, and the parts reconcile with the
-   * house-actual value by construction. Rendered only when the backend supplied a
-   * breakdown — consumers configured and the day elapsed — so a bare house figure
-   * simply stands alone.
-   *
-   * `unmeasuredLabel` is the power card's own configured title for unmetered load,
-   * so both views name the concept identically; it falls back to this card's
-   * localized string when the card leaves it unset.
-   */
   /**
    * The switch entities the house-composition panel draws a live badge for,
    * bubbled up so the card at the top can watch them. This is the inspector's
@@ -2962,10 +2971,31 @@ export class HelmanSolarInspector extends LitElement {
     dispatchWatchedEntities(this, [...ids]);
   }
 
+  /**
+   * The house demand for the selected slot split into each named part plus the
+   * remainder, so the single house figure above reads as a sum. Every row carries
+   * a proportion bar sized to its share of the slot total, and the parts reconcile
+   * with the house value by construction. Rendered only when the backend supplied
+   * a breakdown, so a bare house figure simply stands alone.
+   *
+   * One renderer, both sides of now — the two series share a shape precisely so
+   * they can share it. `variant` picks which house the panel is about: `"actual"`
+   * itemises the metered consumers against the measured house, `"forecast"` the
+   * scheduled appliances against the forecast one, each reading its own source
+   * mix so a future slot's bars are coloured by the forecast supply rather than by
+   * measurements that do not exist yet. Their remainders differ in kind and so are
+   * named apart: what no meter accounted for, against the base load.
+   *
+   * `unmeasuredLabel` is the power card's own configured title for unmetered load,
+   * so both views name the concept identically; it falls back to this card's
+   * localized string when the card leaves it unset, and does not apply to the
+   * forecast, whose remainder is the base load.
+   */
   private _renderHouseBreakdown(
     breakdown: HouseBreakdownPoint | null,
-    unmeasuredLabel: string | null,
     slots: readonly string[],
+    variant: "actual" | "forecast",
+    unmeasuredLabel: string | null,
   ) {
     if (!breakdown) return "";
     // Bars read off the backend's native 15-minute grid rather than the width the
@@ -2973,15 +3003,28 @@ export class HelmanSolarInspector extends LitElement {
     // the shape of the consumption, not a single flat block.
     const native = this._payload?.series;
     if (!native) return "";
+    const forecast = variant === "forecast";
     const barSlots = expandSlotsToNative(slots, this._slotMinutes);
     // How the house was fed in each of those samples, shared by every consumer:
     // the mix is a house-level property, so it is derived once and then rescaled
     // per consumer rather than recomputed box by box.
-    const mixes = houseSourceMixBySlot(native, barSlots);
+    const mixes = houseSourceMixBySlot(
+      forecast
+        ? {
+            houseActual: native.houseForecast,
+            gridActual: native.gridForecast,
+            batteryActual: native.batteryForecast,
+          }
+        : native,
+      barSlots,
+    );
+    const breakdownSeries = forecast
+      ? native.houseForecastBreakdown
+      : native.houseActualBreakdown;
     // Every box reads the same series over the same samples; only which part it
     // asks for differs.
     const barsFor = (entityId: string | null | undefined) =>
-      consumerBarsOverSlots(native.houseActualBreakdown, barSlots, entityId, mixes);
+      consumerBarsOverSlots(breakdownSeries, barSlots, entityId, mixes);
 
     const consumers = breakdown.appliances.filter(
       (appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0,
@@ -3011,7 +3054,9 @@ export class HelmanSolarInspector extends LitElement {
       nodes.push(
         this._breakdownNode(
           null,
-          unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
+          forecast
+            ? this._t("bias_correction.inspector.house_base_load")
+            : unmeasuredLabel || this._t("bias_correction.inspector.house_unmeasured"),
           unmeasuredWh,
           null,
           null,
@@ -3036,7 +3081,13 @@ export class HelmanSolarInspector extends LitElement {
            that bubbles composed straight out of this card. Re-handling it would
            open every dialog twice. -->
       <div class="house-breakdown">
-        <div class="house-breakdown-title">${this._t("bias_correction.inspector.house_composition")}</div>
+        <div class="house-breakdown-title">
+          ${this._t(
+            forecast
+              ? "bias_correction.inspector.house_composition_forecast"
+              : "bias_correction.inspector.house_composition",
+          )}
+        </div>
         <power-devices-container
           .hass=${this.hass}
           .devices=${nodes}
@@ -3391,6 +3442,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.series.houseForecast ??= [];
       payload.series.houseActual ??= [];
       payload.series.houseActualBreakdown ??= [];
+      payload.series.houseForecastBreakdown ??= [];
       payload.series.batterySocForecast ??= [];
       payload.series.batterySocActual ??= [];
       payload.series.gridForecast ??= [];

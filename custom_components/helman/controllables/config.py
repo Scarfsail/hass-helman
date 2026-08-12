@@ -100,7 +100,13 @@ def peek_controllable_id(value: Any) -> str | None:
 def read_deferrable_consumers(
     config: Mapping[str, Any] | None,
 ) -> list[dict[str, str]]:
-    """``[{energy_entity_id, label}]`` — the devices carved out of house load.
+    """``[{energy_entity_id, label, id}]`` — the devices carved out of house load.
+
+    ``id`` is the controllable's own id, carried so a scheduled appliance's
+    demand — which is keyed by exactly that id — resolves to the same meter and
+    the same name the measured breakdown gives it. It is omitted for an entry
+    that declares none; such an entry can never be scheduled, so nothing keys
+    off it.
 
     The house consumption forecast splits the house total into a baseline plus
     the loads that can be moved in time; this is that second list. It used to
@@ -148,7 +154,11 @@ def read_deferrable_consumers(
         seen.add(entity_id)
         name = entry.get("name")
         label = name.strip() if isinstance(name, str) and name.strip() else entity_id
-        consumers.append({"energy_entity_id": entity_id, "label": label})
+        consumer = {"energy_entity_id": entity_id, "label": label}
+        controllable_id = peek_controllable_id(entry)
+        if controllable_id is not None:
+            consumer["id"] = controllable_id
+        consumers.append(consumer)
     return consumers
 
 

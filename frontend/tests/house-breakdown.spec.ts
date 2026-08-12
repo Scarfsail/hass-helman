@@ -56,6 +56,13 @@ async function mountInspector(
         batteryWh?: number;
         /** Daily solar-production total, in Wh. */
         actualTotalWh?: number;
+        /**
+         * The forecast half: a base load per 15-min slot plus the appliances the
+         * planner scheduled into it, mirroring `houseForecastBreakdown`. Left out
+         * entirely the forecast series stays empty, as it is on a past day whose
+         * composition nothing recorded.
+         */
+        forecast?: { baseWh: number; appliances: Appliance[] };
     },
 ): Promise<void> {
     await page.evaluate((opts) => {
@@ -76,6 +83,8 @@ async function mountInspector(
                 deferrable: boolean;
             }>;
         }> = [];
+        const houseForecast: Array<{ timestamp: string; valueWh: number }> = [];
+        const houseForecastBreakdown: typeof houseActualBreakdown = [];
         const impact: Array<{
             slot: string;
             rawWh: number | null;
@@ -109,6 +118,26 @@ async function mountInspector(
                     })),
                 });
             }
+            if (opts.forecast) {
+                const fc = opts.forecast;
+                houseForecast.push({
+                    timestamp: `${date}T${hh}:${mm}:00`,
+                    valueWh: fc.baseWh + fc.appliances.reduce((sum, a) => sum + a.wh, 0),
+                });
+                houseForecastBreakdown.push({
+                    slot: `${hh}:${mm}`,
+                    // The forecast's remainder is the base load, not an unmetered
+                    // rest — the same field, a different quantity.
+                    unmeasuredWh: fc.baseWh,
+                    appliances: fc.appliances.map((a) => ({
+                        ...a,
+                        switchEntityId: a.switchEntityId ?? null,
+                        powerEntityId: a.powerEntityId ?? null,
+                        // Everything the planner schedules is shiftable by definition.
+                        deferrable: a.deferrable ?? true,
+                    })),
+                });
+            }
             impact.push({
                 slot: `${hh}:${mm}`,
                 rawWh: v,
@@ -138,9 +167,10 @@ async function mountInspector(
                 invalidated: [],
                 factors: [],
                 impact,
-                houseForecast: [],
+                houseForecast,
                 houseActual,
                 houseActualBreakdown,
+                houseForecastBreakdown,
                 batterySocForecast: [],
                 batterySocActual: [],
                 gridForecast: [],
@@ -165,9 +195,10 @@ async function mountInspector(
                 hasActuals: false,
                 hasInvalidated: false,
                 hasProfile: true,
-                hasHouseForecast: false,
+                hasHouseForecast: !!opts.forecast,
                 hasHouseActual: true,
                 hasHouseActualBreakdown: opts.withBreakdown,
+                hasHouseForecastBreakdown: !!opts.forecast,
                 hasBatterySocForecast: false,
                 hasBatterySocActual: false,
                 hasGridForecast: false,
@@ -273,12 +304,14 @@ async function selectNoonSlot(page: Page): Promise<void> {
  */
 async function breakdownBoxes(
     page: Page,
+    /** Which composition panel: 0 is the actual one, 1 the forecast beside it. */
+    panel = 0,
 ): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null; tag: string; tint: string }>> {
-    return page.evaluate(() => {
+    return page.evaluate((index) => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
-            .querySelector(".house-breakdown")
-            ?.querySelector("power-devices-container");
+            .querySelectorAll(".house-breakdown")
+            [index]?.querySelector("power-devices-container");
         const devices = container?.shadowRoot?.querySelectorAll("power-device") ?? [];
         return [...devices].map((device: any) => {
             const content = device.shadowRoot.querySelector(".deviceContent");
@@ -302,7 +335,7 @@ async function breakdownBoxes(
                 switchEntityId: badge ? badge.entityId : null,
             };
         });
-    });
+    }, panel);
 }
 
 /** Click a composition box's power figure — the card's own more-info affordance. */
@@ -760,8 +793,48 @@ async function bandExtent(
     }, fill);
 }
 
-/** The hovered slot's house rows, as label/actual pairs in render order. */
-async function houseTooltipRows(page: Page): Promise<Array<{ label: string; actual: string }>> {
+/**
+ * The forecast band's outer edge, plus the zero baseline.
+ *
+ * Over measured hours the forecast stack recedes to dashed outlines, so a
+ * forecast band is found by its stroke colour and dash rather than by a fill —
+ * and it is the band's outer edge that is drawn, which is all the ordering of the
+ * two bands needs.
+ */
+async function forecastBandOutline(
+    page: Page,
+    stroke: string,
+): Promise<{ y: number; baseline: number } | null> {
+    return page.evaluate((wanted) => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const ys: number[] = [];
+        for (const path of svg.querySelectorAll("path")) {
+            if (path.getAttribute("stroke") !== wanted) continue;
+            if (path.getAttribute("stroke-dasharray") !== "4 3") continue;
+            for (const m of (path.getAttribute("d") ?? "").matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)) {
+                ys.push(parseFloat(m[2]));
+            }
+        }
+        if (!ys.length) return null;
+        return { y: Math.max(...ys), baseline: el._lastLayoutForStrip.yForW(0) };
+    }, stroke);
+}
+
+/** The titles of the composition panels currently rendered, in document order. */
+async function panelTitles(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        return [...el.shadowRoot.querySelectorAll(".house-breakdown-title")].map((node) =>
+            (node.textContent ?? "").trim(),
+        );
+    });
+}
+
+/** The hovered slot's house rows, as label/actual/forecast triples in render order. */
+async function houseTooltipRows(
+    page: Page,
+): Promise<Array<{ label: string; actual: string; forecast: string }>> {
     const geom = await chartGeom(page);
     const { x, y } = pagePoint(geom, xForMinutes(geom, 720 + 30));
     await page.mouse.move(x, y);
@@ -772,13 +845,14 @@ async function houseTooltipRows(page: Page): Promise<Array<{ label: string; actu
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const table = el.shadowRoot.querySelector(".hover-tooltip-table") as HTMLElement;
-        const rows: Array<{ label: string; actual: string }> = [];
+        const rows: Array<{ label: string; actual: string; forecast: string }> = [];
         // label / actual / forecast per row, after the three header cells.
         const cells = [...table.children].slice(3);
         for (let i = 0; i < cells.length; i += 3) {
             rows.push({
                 label: (cells[i].textContent ?? "").trim(),
                 actual: (cells[i + 1].textContent ?? "").replace(/\s+/g, " ").trim(),
+                forecast: (cells[i + 2].textContent ?? "").replace(/\s+/g, " ").trim(),
             });
         }
         return rows.filter((row) => row.label.startsWith("House"));
@@ -847,13 +921,34 @@ test.describe("solar inspector deferrable house load", () => {
 
         // The hour bucket sums four 15-minute slots: 200 shiftable of 720 total.
         // Demand is negative in the chart's convention, as the single house row
-        // always was. The whole-house row stays, because only it has a forecast
-        // to compare against -- the forecast is not split until the parts of it
-        // are known per appliance.
+        // always was. No whole-house row: the two parts are the house, and each
+        // carries its own comparison. This day has no forecast at all, so both
+        // forecast cells are blank rather than a fabricated zero.
         expect(await houseTooltipRows(page)).toEqual([
-            { label: "House", actual: "-720 Wh" },
-            { label: "House (non-deferrable)", actual: "-520 Wh" },
-            { label: "House (deferrable)", actual: "-200 Wh" },
+            { label: "House (non-deferrable)", actual: "-520 Wh", forecast: "—" },
+            { label: "House (deferrable)", actual: "-200 Wh", forecast: "—" },
+        ]);
+    });
+
+    test("the hover popup pairs each half with its own forecast", async ({ page }) => {
+        await loadCardBundle(page);
+        // 80 Wh of base plus a 40 Wh scheduled run per 15-min slot, against a
+        // measured 130 + 50.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: {
+                baseWh: 80,
+                appliances: [{ entityId: "sensor.dishwasher", label: "Dishwasher", wh: 40 }],
+            },
+        });
+
+        // Like against like: what was shifted against what was scheduled, and the
+        // rest of the house against the rest of the forecast.
+        expect(await houseTooltipRows(page)).toEqual([
+            { label: "House (non-deferrable)", actual: "-520 Wh", forecast: "-320 Wh" },
+            { label: "House (deferrable)", actual: "-200 Wh", forecast: "-160 Wh" },
         ]);
     });
 
@@ -861,6 +956,104 @@ test.describe("solar inspector deferrable house load", () => {
         await loadCardBundle(page);
         await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
 
-        expect(await houseTooltipRows(page)).toEqual([{ label: "House", actual: "-720 Wh" }]);
+        expect(await houseTooltipRows(page)).toEqual([
+            { label: "House", actual: "-720 Wh", forecast: "—" },
+        ]);
+    });
+});
+
+/**
+ * The forecast half of the same story.
+ *
+ * `houseForecastBreakdown` says what a future slot's demand is made of — the base
+ * load the model predicts, plus each appliance the planner scheduled into it — in
+ * the very shape the measured breakdown uses, so the band splits, the popup pairs
+ * and the composition panel are all the same code serving both sides of now.
+ */
+test.describe("solar inspector forecast composition", () => {
+    const FORECAST = {
+        baseWh: 80,
+        appliances: [{ entityId: "sensor.dishwasher", label: "Dishwasher", wh: 40 }],
+    };
+
+    test("the forecast stack draws two house bands, non-deferrable against the baseline", async ({
+        page,
+    }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: FORECAST,
+        });
+
+        // The forecast bands over measured hours are drawn as dashed outlines, so
+        // they are found by their stroke rather than by a fill.
+        const nonDeferrable = await forecastBandOutline(page, HOUSE_FILL);
+        const deferrable = await forecastBandOutline(page, DEFERRABLE_FILL);
+        expect(nonDeferrable).not.toBeNull();
+        expect(deferrable).not.toBeNull();
+        // Demand is drawn downwards: the non-deferrable outline sits between the
+        // zero line and the deferrable one stacked beyond it.
+        expect(nonDeferrable!.y).toBeGreaterThan(nonDeferrable!.baseline);
+        expect(deferrable!.y).toBeGreaterThan(nonDeferrable!.y);
+    });
+
+    test("a forecast with nothing scheduled draws one house band", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: { baseWh: 120, appliances: [] },
+        });
+
+        expect(await forecastBandOutline(page, DEFERRABLE_FILL)).toBeNull();
+        expect(await forecastBandOutline(page, HOUSE_FILL)).not.toBeNull();
+    });
+
+    test("selecting a slot itemises the forecast beside the actual composition", async ({
+        page,
+    }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: FORECAST,
+        });
+        await selectNoonSlot(page);
+
+        expect(await panelTitles(page)).toEqual([
+            "House composition (actual)",
+            "House composition (forecast)",
+        ]);
+        // The measured panel is unchanged; the forecast one names the base load
+        // and each scheduled appliance, tagged and tinted like any shiftable row.
+        expect((await breakdownBoxes(page, 0)).map((r) => r.label)).toEqual([
+            "Unmeasured consumption",
+            "Dishwasher",
+            "Fridge",
+        ]);
+        const forecastRows = await breakdownBoxes(page, 1);
+        expect(forecastRows.map((r) => [r.label, r.power, r.tag])).toEqual([
+            ["Base load", "320 Wh", ""],
+            ["Dishwasher", "160 Wh", "deferrable"],
+        ]);
+        expect(forecastRows.map((r) => r.tint)).toEqual(["", DEFERRABLE_TINT]);
+    });
+
+    test("a day whose forecast composition was never recorded shows only the actual panel", async ({
+        page,
+    }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        expect(await panelTitles(page)).toEqual(["House composition (actual)"]);
     });
 });

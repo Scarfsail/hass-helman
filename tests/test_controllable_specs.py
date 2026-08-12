@@ -439,7 +439,38 @@ class DeferrableConsumerReaderTests(unittest.TestCase):
 
         self.assertEqual(
             consumers,
-            [{"energy_entity_id": "sensor.pool_energy", "label": "Pool pump"}],
+            [
+                {
+                    "energy_entity_id": "sensor.pool_energy",
+                    "label": "Pool pump",
+                    "id": "pool",
+                }
+            ],
+        )
+
+    def test_the_controllable_id_rides_along_where_one_is_declared(self) -> None:
+        """The key the forecast's scheduled demand is reported under.
+
+        Without it a scheduled appliance could not be resolved back to the meter
+        and the name the measured breakdown gives it, and the same device would
+        read as two different rows either side of now. An entry that declares no
+        id simply omits the key: it can never be scheduled, so nothing keys off
+        it.
+        """
+        config = {
+            "controllables": [
+                self._entry("pool", meter="sensor.pool_energy", name="Pool pump"),
+                {
+                    "kind": "generic",
+                    "name": "Anonymous",
+                    "consumption": {"energy_entity_id": "sensor.anon"},
+                },
+            ]
+        }
+
+        self.assertEqual(
+            [c.get("id") for c in read_deferrable_consumers(config)],
+            ["pool", None],
         )
 
     def test_only_an_explicit_false_opts_a_device_out(self) -> None:
