@@ -1,21 +1,14 @@
 import type { ChartEntry } from "./chart-power";
 
-/** The four things the combined chart stacks; a hover hit-tests to exactly one. */
-export type SeriesFamily = "solar" | "house" | "battery" | "grid";
-
 /**
- * One band of a stacked area: a colour, the family it belongs to, and average
- * power per 15-minute slot in the chart's supply-positive convention.
+ * One band of a stacked area: a colour, and average power per 15-minute slot in
+ * the chart's supply-positive convention.
  *
  * Battery and grid appear in both the supply and the demand stack — the same
  * layer object, clamped to one side of zero at render time, since a single slot
  * is either charging or discharging but never both.
- *
- * A family can be drawn as more than one band (house splits into non-deferrable
- * and deferrable), so each layer names its own rather than a hit test walking a
- * parallel array of families that would silently desync from the stack order.
  */
-export type StackLayer = { color: string; family: SeriesFamily; values: Map<number, number> };
+export type StackLayer = { color: string; values: Map<number, number> };
 
 /** Supply stacks upwards from zero, demand downwards, each in its own order. */
 export type StackSet = { positive: StackLayer[]; negative: StackLayer[] };

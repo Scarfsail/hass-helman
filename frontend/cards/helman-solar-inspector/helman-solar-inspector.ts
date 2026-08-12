@@ -8,12 +8,10 @@ import {
   SLOT_MINUTES,
   accumulateBands,
   bandRuns,
-  clampToSign,
   lastStackSlot,
   stackSlots,
   stackTotals,
   toSlotMap,
-  type SeriesFamily,
   type StackBand,
   type StackLayer,
   type StackSet,
@@ -177,21 +175,20 @@ type SeriesKey =
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
 
 /**
- * Which family each stacked series belongs to. The SoC series and the raw
- * forecast are drawn elsewhere and stack nothing, so they are not in here.
+ * The series that stack. The SoC series and the raw forecast are drawn
+ * elsewhere and stack nothing, so they are not in here.
  */
-const SERIES_FAMILY = {
-  corrected:       "solar",
-  actual:          "solar",
-  houseForecast:   "house",
-  houseActual:     "house",
-  gridForecast:    "grid",
-  gridActual:      "grid",
-  batteryForecast: "battery",
-  batteryActual:   "battery",
-} as const satisfies Partial<Record<SeriesKey, SeriesFamily>>;
-
-type StackedSeriesKey = keyof typeof SERIES_FAMILY;
+type StackedSeriesKey = Extract<
+  SeriesKey,
+  | "corrected"
+  | "actual"
+  | "houseForecast"
+  | "houseActual"
+  | "gridForecast"
+  | "gridActual"
+  | "batteryForecast"
+  | "batteryActual"
+>;
 
 /**
  * Flip a consumption-positive payload series into the chart's sign convention.
@@ -370,6 +367,9 @@ type TooltipContent = {
   hasActual: boolean;
   rows: TooltipRow[];
 };
+
+/** The four things the combined chart stacks; one popup section per family. */
+type SeriesFamily = "solar" | "house" | "battery" | "grid";
 
 type InspectorPayload = {
   date: string;
@@ -1726,28 +1726,6 @@ export class HelmanSolarInspector extends LitElement {
       .filter((row) => row.actual !== null || row.forecast !== null);
   }
 
-  /**
-   * Which of a stack's bands, if any, the cursor's watt value falls inside at
-   * this slot. Walked layer by layer from the zero baseline rather than via
-   * `accumulateBands`, whose bands drop a layer entirely when it is flat --
-   * which would lose the layer the hit belongs to. Each layer names its own
-   * family, so the two house bands both answer "house".
-   */
-  private _hitTestStackFamily(set: StackSet, slot: number, watts: number): SeriesFamily | null {
-    const sign: 1 | -1 = watts >= 0 ? 1 : -1;
-    const layers = sign > 0 ? set.positive : set.negative;
-    let base = 0;
-    for (const layer of layers) {
-      const value = clampToSign(layer.values.get(slot) ?? 0, sign);
-      const top = base + value;
-      const lo = Math.min(base, top);
-      const hi = Math.max(base, top);
-      if (lo !== hi && watts >= lo && watts <= hi) return layer.family;
-      base = top;
-    }
-    return null;
-  }
-
   /** One row's actual/forecast pair as Wh, formatted, colour-matched to its series. */
   private _powerRow(
     label: string,
@@ -1780,32 +1758,31 @@ export class HelmanSolarInspector extends LitElement {
           ),
         ];
       case "house": {
-        // The measured half reads as the two bands the chart draws. The forecast
-        // is still one block, so it rides the row drawn at the baseline beside it
-        // — and the split is skipped entirely when nothing shiftable ran, so an
-        // ordinary slot keeps its single house row rather than a permanent zero.
+        // The house row stays whole, because the forecast is whole: its
+        // nonDeferrable already carries the scheduled appliances, so pairing it
+        // with only the measured non-deferrable half would compare two different
+        // scopes. The measured subdivision is reported beneath it instead, and
+        // only when something shiftable actually ran -- so an ordinary slot's
+        // popup is unchanged rather than growing a permanent zero row.
+        const houseRow = this._powerRow(
+          this._t("bias_correction.inspector.merged.house"),
+          CHART_COLORS.house,
+          negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
+          negateWh(sumWhOverSlots(payload.series.houseForecast, slots)),
+        );
         const { deferrable, nonDeferrable } = splitHouseByDeferrable(
           payload.series.houseActual,
           payload.series.houseActualBreakdown,
         );
         const deferrableWh = sumWhOverSlots(deferrable, slots);
-        const houseForecastWh = negateWh(sumWhOverSlots(payload.series.houseForecast, slots));
-        if (!deferrableWh) {
-          return [
-            this._powerRow(
-              this._t("bias_correction.inspector.merged.house"),
-              CHART_COLORS.house,
-              negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
-              houseForecastWh,
-            ),
-          ];
-        }
+        if (!deferrableWh) return [houseRow];
         return [
+          houseRow,
           this._powerRow(
             this._t("bias_correction.inspector.merged.house_non_deferrable"),
             CHART_COLORS.house,
             negateWh(sumWhOverSlots(nonDeferrable, slots)),
-            houseForecastWh,
+            null,
           ),
           this._powerRow(
             this._t("bias_correction.inspector.merged.house_deferrable"),
@@ -2116,12 +2093,10 @@ export class HelmanSolarInspector extends LitElement {
     points: InspectorPoint[],
     consumptionPositive: boolean,
   ): StackLayer {
-    const family = SERIES_FAMILY[key];
-    if (!this._isSeriesVisible(key)) return { color, family, values: new Map() };
+    if (!this._isSeriesVisible(key)) return { color, values: new Map() };
     const oriented = consumptionPositive ? asSupplyPositive(points) : points;
     return {
       color,
-      family,
       values: toSlotMap(toAveragePower(oriented, { bucketMinutes: this._slotMinutes })),
     };
   }

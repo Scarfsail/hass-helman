@@ -835,7 +835,9 @@ test.describe("solar inspector deferrable house load", () => {
         expect(rows.map((r) => r.tint)).toEqual(["", DEFERRABLE_TINT, ""]);
     });
 
-    test("the hover popup splits the house row when the slot had shiftable load", async ({ page }) => {
+    test("the hover popup subdivides the house row when the slot had shiftable load", async ({
+        page,
+    }) => {
         await loadCardBundle(page);
         await mountInspector(page, {
             withBreakdown: true,
@@ -845,8 +847,11 @@ test.describe("solar inspector deferrable house load", () => {
 
         // The hour bucket sums four 15-minute slots: 200 shiftable of 720 total.
         // Demand is negative in the chart's convention, as the single house row
-        // always was.
+        // always was. The whole-house row stays, because only it has a forecast
+        // to compare against -- the forecast is not split until the parts of it
+        // are known per appliance.
         expect(await houseTooltipRows(page)).toEqual([
+            { label: "House", actual: "-720 Wh" },
             { label: "House (non-deferrable)", actual: "-520 Wh" },
             { label: "House (deferrable)", actual: "-200 Wh" },
         ]);
