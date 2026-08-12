@@ -33,6 +33,8 @@ type Appliance = {
     wh: number;
     switchEntityId?: string | null;
     powerEntityId?: string | null;
+    /** A shiftable appliance — a configured deferrable controllable. */
+    deferrable?: boolean;
 };
 
 /**
@@ -71,6 +73,7 @@ async function mountInspector(
                 wh: number;
                 switchEntityId: string | null;
                 powerEntityId: string | null;
+                deferrable: boolean;
             }>;
         }> = [];
         const impact: Array<{
@@ -102,6 +105,7 @@ async function mountInspector(
                         ...a,
                         switchEntityId: a.switchEntityId ?? null,
                         powerEntityId: a.powerEntityId ?? null,
+                        deferrable: a.deferrable ?? false,
                     })),
                 });
             }
@@ -269,7 +273,7 @@ async function selectNoonSlot(page: Page): Promise<void> {
  */
 async function breakdownBoxes(
     page: Page,
-): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null }>> {
+): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null; tag: string; tint: string }>> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
         const container = el.shadowRoot
@@ -284,6 +288,12 @@ async function breakdownBoxes(
                 ?.shadowRoot?.querySelector("helman-appliance-switch-badge") as any;
             return {
                 label: (content.querySelector(".deviceName")?.textContent ?? "").trim(),
+                // The badge channel the card already uses for label texts, and the
+                // per-box tint that overrides the panel's house colour.
+                tag: (content
+                    .querySelector("power-device-info")
+                    ?.shadowRoot?.querySelector(".custom-labels")?.textContent ?? "").trim(),
+                tint: content.style.getPropertyValue("--device-tint").trim(),
                 power: (display?.shadowRoot?.querySelector(".powerValue")?.textContent ?? "")
                     .replace(/\s+/g, " ")
                     .trim(),
@@ -703,5 +713,149 @@ test.describe("solar inspector house composition", () => {
             "200 Wh",
             "120 Wh",
         ]);
+    });
+});
+
+/**
+ * Deferrable load as its own quantity.
+ *
+ * A consumer the payload marks `deferrable` is shiftable, so the card draws it
+ * apart from the rest of the house: its own band stacked on top of the
+ * non-deferrable one, its own hover row, and a tinted, tagged row in the
+ * composition panel. Everything here is presentation over the same totals — the
+ * two bands sum to the house figure that was drawn as one band before.
+ */
+
+const HOUSE_FILL = "#a855f7"; // HOUSE_COLOR
+const DEFERRABLE_FILL = "#c58efa"; // DEFERRABLE_HOUSE_COLOR, blended from it
+// nodeAccentColor's alpha, applied to the deferrable shade.
+const DEFERRABLE_TINT = "#c58efa60";
+
+const MIXED_APPLIANCES: Appliance[] = [
+    { entityId: "sensor.dishwasher", label: "Dishwasher", wh: 50, deferrable: true },
+    { entityId: "sensor.fridge", label: "Fridge", wh: 30 },
+];
+
+/** The vertical extent of every band painted in one colour, plus the zero baseline. */
+async function bandExtent(
+    page: Page,
+    fill: string,
+): Promise<{ top: number; bottom: number; baseline: number } | null> {
+    return page.evaluate((wanted) => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const ys: number[] = [];
+        for (const path of svg.querySelectorAll("path")) {
+            if (path.getAttribute("fill") !== wanted) continue;
+            for (const m of (path.getAttribute("d") ?? "").matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)) {
+                ys.push(parseFloat(m[2]));
+            }
+        }
+        if (!ys.length) return null;
+        return {
+            top: Math.min(...ys),
+            bottom: Math.max(...ys),
+            baseline: el._lastLayoutForStrip.yForW(0),
+        };
+    }, fill);
+}
+
+/** The hovered slot's house rows, as label/actual pairs in render order. */
+async function houseTooltipRows(page: Page): Promise<Array<{ label: string; actual: string }>> {
+    const geom = await chartGeom(page);
+    const { x, y } = pagePoint(geom, xForMinutes(geom, 720 + 30));
+    await page.mouse.move(x, y);
+    await page.waitForFunction(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        return !!el.shadowRoot.querySelector(".hover-tooltip");
+    });
+    return page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        const table = el.shadowRoot.querySelector(".hover-tooltip-table") as HTMLElement;
+        const rows: Array<{ label: string; actual: string }> = [];
+        // label / actual / forecast per row, after the three header cells.
+        const cells = [...table.children].slice(3);
+        for (let i = 0; i < cells.length; i += 3) {
+            rows.push({
+                label: (cells[i].textContent ?? "").trim(),
+                actual: (cells[i + 1].textContent ?? "").replace(/\s+/g, " ").trim(),
+            });
+        }
+        return rows.filter((row) => row.label.startsWith("House"));
+    });
+}
+
+test.describe("solar inspector deferrable house load", () => {
+    test("the measured house draws two bands, non-deferrable against the baseline", async ({ page }) => {
+        await loadCardBundle(page);
+        // 180 Wh a slot: 50 shiftable, 130 not (30 metered fridge + 100 unmeasured).
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+        });
+
+        const nonDeferrable = await bandExtent(page, HOUSE_FILL);
+        const deferrable = await bandExtent(page, DEFERRABLE_FILL);
+        expect(nonDeferrable).not.toBeNull();
+        expect(deferrable).not.toBeNull();
+
+        // Demand is drawn downwards, so the non-deferrable band starts at the zero
+        // line and the shiftable part is stacked beyond it — they abut, and their
+        // combined depth is the house total that used to be one band.
+        expect(nonDeferrable!.top).toBeCloseTo(nonDeferrable!.baseline, 1);
+        expect(deferrable!.top).toBeCloseTo(nonDeferrable!.bottom, 1);
+        expect(deferrable!.bottom).toBeGreaterThan(deferrable!.top);
+    });
+
+    test("a slot with nothing shiftable draws the house as a single band", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
+
+        expect(await bandExtent(page, DEFERRABLE_FILL)).toBeNull();
+        const house = await bandExtent(page, HOUSE_FILL);
+        expect(house!.top).toBeCloseTo(house!.baseline, 1);
+    });
+
+    test("the composition panel tints and tags the deferrable rows, and only those", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        const rows = await breakdownBoxes(page);
+        // Ranked heaviest first: unmeasured 400, dishwasher 200, fridge 120.
+        expect(rows.map((r) => r.label)).toEqual(["Unmeasured consumption", "Dishwasher", "Fridge"]);
+        expect(rows.map((r) => r.tag)).toEqual(["", "deferrable", ""]);
+        // Only the shiftable box overrides the panel's house tint; the others
+        // inherit it by setting none of their own.
+        expect(rows.map((r) => r.tint)).toEqual(["", DEFERRABLE_TINT, ""]);
+    });
+
+    test("the hover popup splits the house row when the slot had shiftable load", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+        });
+
+        // The hour bucket sums four 15-minute slots: 200 shiftable of 720 total.
+        // Demand is negative in the chart's convention, as the single house row
+        // always was.
+        expect(await houseTooltipRows(page)).toEqual([
+            { label: "House (non-deferrable)", actual: "-520 Wh" },
+            { label: "House (deferrable)", actual: "-200 Wh" },
+        ]);
+    });
+
+    test("the hover popup keeps one house row when nothing was shiftable", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountInspector(page, { withBreakdown: true, appliances: APPLIANCES, unmeasuredWh: 100 });
+
+        expect(await houseTooltipRows(page)).toEqual([{ label: "House", actual: "-720 Wh" }]);
     });
 });

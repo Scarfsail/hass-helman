@@ -317,6 +317,44 @@ export function aggregateImpactOverSlots(
   return { slot: slots[0] ?? group[0].slot, rawWh, correctedWh, impactWh, factor };
 }
 
+/**
+ * Split a house series into its deferrable and non-deferrable halves, using the
+ * matching per-slot breakdown to say how much of each slot was shiftable.
+ *
+ * The deferrable half is summed from the breakdown's flagged appliances; the
+ * non-deferrable half is whatever the house series has left, floored at zero. So
+ * the pair always sums back to the original series — the unmeasured remainder and
+ * every non-deferrable meter land in the non-deferrable half by construction —
+ * and a slot the breakdown does not cover stays wholly non-deferrable rather than
+ * disappearing.
+ */
+export function splitHouseByDeferrable(
+  points: readonly InspectorPoint[],
+  breakdown: readonly HouseBreakdownPoint[],
+): { deferrable: InspectorPoint[]; nonDeferrable: InspectorPoint[] } {
+  const deferrableBySlot = new Map<string, number>();
+  for (const point of breakdown) {
+    const wh = point.appliances.reduce(
+      (sum, appliance) =>
+        appliance.deferrable && Number.isFinite(appliance.wh) ? sum + appliance.wh : sum,
+      0,
+    );
+    deferrableBySlot.set(point.slot, (deferrableBySlot.get(point.slot) ?? 0) + wh);
+  }
+  const deferrable: InspectorPoint[] = [];
+  const nonDeferrable: InspectorPoint[] = [];
+  for (const point of points) {
+    const total = Number.isFinite(point.valueWh) ? point.valueWh : 0;
+    const shiftable = Math.min(
+      Math.max(0, deferrableBySlot.get(slotKey(point.timestamp)) ?? 0),
+      Math.max(0, total),
+    );
+    deferrable.push({ timestamp: point.timestamp, valueWh: shiftable });
+    nonDeferrable.push({ timestamp: point.timestamp, valueWh: total - shiftable });
+  }
+  return { deferrable, nonDeferrable };
+}
+
 /** Merge the house breakdown over the selected slots, one row per appliance. */
 export function aggregateBreakdownOverSlots(
   points: readonly HouseBreakdownPoint[],

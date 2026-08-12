@@ -900,13 +900,16 @@ class SolarBiasCorrectionService:
         )
 
     @staticmethod
-    def _normalize_consumers(raw_consumers: Any) -> list[dict]:
+    def _normalize_consumers(raw_consumers: Any, *, deferrable: bool) -> list[dict]:
         """Coerce a provider's list to
-        ``[{energy_entity_id, label, switch_entity_id, power_entity_id}]``.
+        ``[{energy_entity_id, label, switch_entity_id, power_entity_id, deferrable}]``.
 
         Drops anything without a usable entity id and defaults a missing label to
         the entity id, so callers get a clean, deduplicable list. The switch and
         power sensor are optional — only the device tree knows them.
+
+        ``deferrable`` is the caller's answer for the whole list: a provider is one
+        roster, so which roster an entry came from is the only thing that decides it.
         """
         result: list[dict] = []
         for consumer in raw_consumers or []:
@@ -924,6 +927,7 @@ class SolarBiasCorrectionService:
                     "label": consumer.get("label", eid),
                     "switch_entity_id": switch if isinstance(switch, str) and switch else None,
                     "power_entity_id": power if isinstance(power, str) and power else None,
+                    "deferrable": deferrable,
                 }
             )
         return result
@@ -937,7 +941,7 @@ class SolarBiasCorrectionService:
         except Exception:
             _LOGGER.exception("House deferrable consumers provider failed")
             return []
-        return self._normalize_consumers(raw)
+        return self._normalize_consumers(raw, deferrable=True)
 
     def _house_unmeasured_label(self) -> str | None:
         """The power card's configured title for unmetered load, if any."""
@@ -959,7 +963,7 @@ class SolarBiasCorrectionService:
         except Exception:
             _LOGGER.exception("House device consumers provider failed")
             return []
-        return self._normalize_consumers(raw)
+        return self._normalize_consumers(raw, deferrable=False)
 
     async def _house_breakdown_consumers(self) -> list[dict]:
         """The full set the house actual is split by: deferrable appliances first,
@@ -972,7 +976,8 @@ class SolarBiasCorrectionService:
         it. A deferrable consumer that IS also a tree node keeps its own label but
         adopts the tree's switch and power sensor, which is the only place either
         is known — otherwise the appliances most likely to have them would lose
-        them to the dedup.
+        them to the dedup. It also keeps its ``deferrable`` flag: being metered by
+        the tree as well does not make a shiftable appliance unshiftable.
         """
         deferrable = self._house_deferrable_consumers()
         device = await self._house_device_consumers()
@@ -1849,6 +1854,7 @@ def _build_house_actual_breakdown(
                     value_wh=round(wh, 4),
                     switch_entity_id=consumer.get("switch_entity_id"),
                     power_entity_id=consumer.get("power_entity_id"),
+                    deferrable=bool(consumer.get("deferrable")),
                 )
             )
         unmeasured_wh = round(max(0.0, float(house_wh) - measured_sum), 4)

@@ -552,6 +552,7 @@
       "house_actual": "Skutečná spotřeba",
       "house_composition": "Složení spotřeby (skutečné)",
       "house_unmeasured": "Nesledovaná spotřeba",
+      "deferrable_tag": "odložitelná",
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
       "battery_soc_strip": "Stav nabití baterie",
@@ -607,6 +608,8 @@
       "merged": {
         "solar": "Solární výroba",
         "house": "Spotřeba",
+        "house_non_deferrable": "Spotřeba (neodložitelná)",
+        "house_deferrable": "Spotřeba (odložitelná)",
         "grid": "Síť",
         "battery": "Baterie",
         "battery_soc": "SoC baterie",

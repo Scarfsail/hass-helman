@@ -19,6 +19,7 @@
       "house_actual": "Actual house",
       "house_composition": "House composition (actual)",
       "house_unmeasured": "Unmeasured consumption",
+      "deferrable_tag": "deferrable",
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
       "battery_soc_strip": "Battery state of charge",
@@ -75,6 +76,8 @@
       "merged": {
         "solar": "Solar production",
         "house": "House",
+        "house_non_deferrable": "House (non-deferrable)",
+        "house_deferrable": "House (deferrable)",
         "grid": "Grid",
         "battery": "Battery",
         "battery_soc": "Battery SoC",

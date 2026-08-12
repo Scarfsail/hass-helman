@@ -13,6 +13,7 @@ import {
   stackSlots,
   stackTotals,
   toSlotMap,
+  type SeriesFamily,
   type StackBand,
   type StackLayer,
   type StackSet,
@@ -27,6 +28,7 @@ import { SOC_COLUMN_OPACITY, SOC_DIRECTION_COLOR } from "../shared/soc-columns";
 import {
   BATT_COLOR,
   CHARGE_COLOR,
+  DEFERRABLE_HOUSE_COLOR,
   DISCHARGE_COLOR,
   FORECAST_RAW_COLOR,
   GRID_COLOR,
@@ -84,6 +86,7 @@ import {
   sampleBucketEndOnGrid,
   sampleOnGrid,
   snapSlotToGrid,
+  splitHouseByDeferrable,
 } from "./slot-aggregation.js";
 import {
   EMPTY_SLOT_SELECTION,
@@ -147,14 +150,15 @@ function defaultSlotMinutesForViewport(): number {
 }
 
 const CHART_COLORS = {
-  raw:            FORECAST_RAW_COLOR,
-  corrected:      SOLAR_COLOR,
-  actual:         SOLAR_COLOR,
-  house:          HOUSE_COLOR,
-  battery:        BATT_COLOR,
-  grid:           GRID_COLOR,
-  impactPositive: CHARGE_COLOR,
-  impactNegative: DISCHARGE_COLOR,
+  raw:             FORECAST_RAW_COLOR,
+  corrected:       SOLAR_COLOR,
+  actual:          SOLAR_COLOR,
+  house:           HOUSE_COLOR,
+  houseDeferrable: DEFERRABLE_HOUSE_COLOR,
+  battery:         BATT_COLOR,
+  grid:            GRID_COLOR,
+  impactPositive:  CHARGE_COLOR,
+  impactNegative:  DISCHARGE_COLOR,
 } as const;
 
 type SeriesKey =
@@ -171,6 +175,23 @@ type SeriesKey =
   | "batteryActual";
 
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
+
+/**
+ * Which family each stacked series belongs to. The SoC series and the raw
+ * forecast are drawn elsewhere and stack nothing, so they are not in here.
+ */
+const SERIES_FAMILY = {
+  corrected:       "solar",
+  actual:          "solar",
+  houseForecast:   "house",
+  houseActual:     "house",
+  gridForecast:    "grid",
+  gridActual:      "grid",
+  batteryForecast: "battery",
+  batteryActual:   "battery",
+} as const satisfies Partial<Record<SeriesKey, SeriesFamily>>;
+
+type StackedSeriesKey = keyof typeof SERIES_FAMILY;
 
 /**
  * Flip a consumption-positive payload series into the chart's sign convention.
@@ -349,9 +370,6 @@ type TooltipContent = {
   hasActual: boolean;
   rows: TooltipRow[];
 };
-
-/** The four things the combined chart stacks; a hover hit-tests to exactly one. */
-type SeriesFamily = "solar" | "house" | "battery" | "grid";
 
 type InspectorPayload = {
   date: string;
@@ -1712,20 +1730,19 @@ export class HelmanSolarInspector extends LitElement {
    * Which of a stack's bands, if any, the cursor's watt value falls inside at
    * this slot. Walked layer by layer from the zero baseline rather than via
    * `accumulateBands`, whose bands drop a layer entirely when it is flat --
-   * which would desync a band index from the family it belongs to.
+   * which would lose the layer the hit belongs to. Each layer names its own
+   * family, so the two house bands both answer "house".
    */
   private _hitTestStackFamily(set: StackSet, slot: number, watts: number): SeriesFamily | null {
     const sign: 1 | -1 = watts >= 0 ? 1 : -1;
     const layers = sign > 0 ? set.positive : set.negative;
-    const families: readonly SeriesFamily[] =
-      sign > 0 ? ["solar", "battery", "grid"] : ["house", "battery", "grid"];
     let base = 0;
-    for (let index = 0; index < layers.length; index++) {
-      const value = clampToSign(layers[index].values.get(slot) ?? 0, sign);
+    for (const layer of layers) {
+      const value = clampToSign(layer.values.get(slot) ?? 0, sign);
       const top = base + value;
       const lo = Math.min(base, top);
       const hi = Math.max(base, top);
-      if (lo !== hi && watts >= lo && watts <= hi) return families[index];
+      if (lo !== hi && watts >= lo && watts <= hi) return layer.family;
       base = top;
     }
     return null;
@@ -1762,15 +1779,42 @@ export class HelmanSolarInspector extends LitElement {
             sumWhOverSlots(payload.series.corrected, slots),
           ),
         ];
-      case "house":
+      case "house": {
+        // The measured half reads as the two bands the chart draws. The forecast
+        // is still one block, so it rides the row drawn at the baseline beside it
+        // — and the split is skipped entirely when nothing shiftable ran, so an
+        // ordinary slot keeps its single house row rather than a permanent zero.
+        const { deferrable, nonDeferrable } = splitHouseByDeferrable(
+          payload.series.houseActual,
+          payload.series.houseActualBreakdown,
+        );
+        const deferrableWh = sumWhOverSlots(deferrable, slots);
+        const houseForecastWh = negateWh(sumWhOverSlots(payload.series.houseForecast, slots));
+        if (!deferrableWh) {
+          return [
+            this._powerRow(
+              this._t("bias_correction.inspector.merged.house"),
+              CHART_COLORS.house,
+              negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
+              houseForecastWh,
+            ),
+          ];
+        }
         return [
           this._powerRow(
-            this._t("bias_correction.inspector.merged.house"),
+            this._t("bias_correction.inspector.merged.house_non_deferrable"),
             CHART_COLORS.house,
-            negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
-            negateWh(sumWhOverSlots(payload.series.houseForecast, slots)),
+            negateWh(sumWhOverSlots(nonDeferrable, slots)),
+            houseForecastWh,
+          ),
+          this._powerRow(
+            this._t("bias_correction.inspector.merged.house_deferrable"),
+            CHART_COLORS.houseDeferrable,
+            negateWh(deferrableWh),
+            null,
           ),
         ];
+      }
       case "grid":
         return [
           this._powerRow(
@@ -2024,13 +2068,22 @@ export class HelmanSolarInspector extends LitElement {
    * The two stacks, in the order they build outwards from the zero baseline:
    * solar, battery discharge and grid import above; house, battery charge and
    * grid export below.
+   *
+   * The measured house is drawn as two bands rather than one — non-deferrable
+   * against the baseline, the shiftable part stacked on top of it in the lighter
+   * house shade. They sum to the same house total, so every band above them keeps
+   * its place and the day's shape is unchanged; only its subdivision appears.
    */
   private _buildStacks(payload: InspectorPayload): ChartStacks {
     const series = payload.series;
+    const houseSplit = splitHouseByDeferrable(series.houseActual, series.houseActualBreakdown);
     const solarForecast = this._stackLayer("corrected", CHART_COLORS.corrected, series.corrected, false);
     const solarActual = this._stackLayer("actual", CHART_COLORS.actual, series.actual, false);
     const houseForecast = this._stackLayer("houseForecast", CHART_COLORS.house, series.houseForecast, true);
-    const houseActual = this._stackLayer("houseActual", CHART_COLORS.house, series.houseActual, true);
+    // Both house bands share the `houseActual` key and its single legend entry,
+    // so hiding house still collapses the pair.
+    const houseActualNonDeferrable = this._stackLayer("houseActual", CHART_COLORS.house, houseSplit.nonDeferrable, true);
+    const houseActualDeferrable = this._stackLayer("houseActual", CHART_COLORS.houseDeferrable, houseSplit.deferrable, true);
     const batteryForecast = this._stackLayer("batteryForecast", CHART_COLORS.battery, series.batteryForecast, true);
     const batteryActual = this._stackLayer("batteryActual", CHART_COLORS.battery, series.batteryActual, true);
     const gridForecast = this._stackLayer("gridForecast", CHART_COLORS.grid, series.gridForecast, true);
@@ -2042,7 +2095,7 @@ export class HelmanSolarInspector extends LitElement {
       },
       actual: {
         positive: [solarActual, batteryActual, gridActual],
-        negative: [houseActual, batteryActual, gridActual],
+        negative: [houseActualNonDeferrable, houseActualDeferrable, batteryActual, gridActual],
       },
     };
   }
@@ -2058,14 +2111,19 @@ export class HelmanSolarInspector extends LitElement {
 
   /** A hidden series yields an empty layer, so toggling it collapses its band. */
   private _stackLayer(
-    key: SeriesKey,
+    key: StackedSeriesKey,
     color: string,
     points: InspectorPoint[],
     consumptionPositive: boolean,
   ): StackLayer {
-    if (!this._isSeriesVisible(key)) return { color, values: new Map() };
+    const family = SERIES_FAMILY[key];
+    if (!this._isSeriesVisible(key)) return { color, family, values: new Map() };
     const oriented = consumptionPositive ? asSupplyPositive(points) : points;
-    return { color, values: toSlotMap(toAveragePower(oriented, { bucketMinutes: this._slotMinutes })) };
+    return {
+      color,
+      family,
+      values: toSlotMap(toAveragePower(oriented, { bucketMinutes: this._slotMinutes })),
+    };
   }
 
   /**
@@ -2971,6 +3029,7 @@ export class HelmanSolarInspector extends LitElement {
         appliance.powerEntityId ?? null,
         false,
         barsFor(appliance.entityId),
+        appliance.deferrable,
       ),
     );
     if (unmeasuredWh > 0) {
@@ -3021,10 +3080,13 @@ export class HelmanSolarInspector extends LitElement {
    *
    * The node carries no `sourceType`, so it draws no glow of its own and inherits
    * the house tint the panel sets — the same way the power card's own house
-   * children do. Clicking the box opens the device's live power (W) sensor — the
-   * very entity the power card reads — falling back to the energy stat only where
-   * the tree resolved no power sensor; the unmetered remainder has neither and so
-   * stays inert, exactly as it did before.
+   * children do — unless it is deferrable, in which case it paints itself in the
+   * lighter house shade instead and carries a tag naming it.
+   *
+   * Clicking the box opens the device's live power (W) sensor — the very entity
+   * the power card reads — falling back to the energy stat only where the tree
+   * resolved no power sensor; the unmetered remainder has neither and so stays
+   * inert, exactly as it did before.
    */
   private _breakdownNode(
     entityId: string | null,
@@ -3034,6 +3096,7 @@ export class HelmanSolarInspector extends LitElement {
     powerEntityId: string | null,
     isUnmeasured: boolean,
     bars: ReturnType<typeof consumerBarsOverSlots>,
+    deferrable: boolean = false,
   ): DeviceNode {
     const node = new DeviceNode(
       entityId ?? "house-unmeasured",
@@ -3044,6 +3107,13 @@ export class HelmanSolarInspector extends LitElement {
     );
     node.displayName = label;
     node.isUnmeasured = isUnmeasured;
+    // Shiftable load is marked twice over: `deferrable` paints the box in the
+    // shared lighter house shade, and the card's own badge channel names the shade
+    // so the colour is not the only thing carrying the meaning.
+    node.deferrable = deferrable;
+    if (deferrable) {
+      node.customLabelTexts = [this._t("bias_correction.inspector.deferrable_tag")];
+    }
     // Energy throughout — the selection's total on the box, each sample's own on
     // the bars — so the figures are the Wh the breakdown actually reports and no
     // unit conversion sits between the data and what is drawn.

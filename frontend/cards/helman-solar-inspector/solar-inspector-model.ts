@@ -11,6 +11,11 @@ export type ApplianceComponent = {
    * stat) only where the tree resolved no power sensor.
    */
   powerEntityId: string | null;
+  /**
+   * A shiftable appliance — a configured deferrable controllable. A property of
+   * the device, not of the slot: it stays true in slots nothing scheduled it.
+   */
+  deferrable: boolean;
 };
 export type HouseBreakdownPoint = {
   slot: string;

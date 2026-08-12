@@ -139,6 +139,11 @@ class SolarBiasApplianceComponent:
     ``entity_id`` is the device's energy stat (the series the breakdown is summed
     from); ``power_entity_id`` is the live power sensor the power card reads, where
     the tree knows one, so clicking a box opens the same W sensor the card does.
+
+    ``deferrable`` says the consumer is a shiftable appliance — it came from the
+    configured deferrable controllables rather than from the device tree alone. It
+    is a property of the device, not of the slot: an appliance nothing scheduled
+    still counts as deferrable in the slot it happened to run in.
     """
 
     entity_id: str
@@ -146,6 +151,7 @@ class SolarBiasApplianceComponent:
     value_wh: float
     switch_entity_id: str | None = None
     power_entity_id: str | None = None
+    deferrable: bool = False
 
 
 @dataclass
@@ -384,6 +390,7 @@ def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, A
                 "wh": c.value_wh,
                 "switchEntityId": c.switch_entity_id,
                 "powerEntityId": c.power_entity_id,
+                "deferrable": c.deferrable,
             }
             for c in point.appliances
         ],
