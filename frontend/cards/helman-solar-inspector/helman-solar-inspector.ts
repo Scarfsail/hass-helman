@@ -232,10 +232,17 @@ const ACTUAL_BAND_FILL_OPACITY = 0.45;
 const FORECAST_BAND_FILL_OPACITY = 0.9;
 const FORECAST_OUTLINE: StrokeStyle = { width: 1.4, opacity: 0.55 };
 
-/** Band colours needing a hatch pattern; solar's forecast reuses the solar hue. */
+/**
+ * Band colours needing a hatch pattern; solar's forecast reuses the solar hue.
+ *
+ * Every colour a forecast band can be drawn in must be here: the fill is
+ * `url(#hatchId(colour))`, and an unregistered pattern is not a fallback to the
+ * flat colour — it paints the band black.
+ */
 const STACK_HATCH_COLORS = [
   CHART_COLORS.corrected,
   CHART_COLORS.house,
+  CHART_COLORS.houseDeferrable,
   CHART_COLORS.battery,
   CHART_COLORS.grid,
 ] as const;
@@ -1419,13 +1426,6 @@ export class HelmanSolarInspector extends LitElement {
     const measured = (points: InspectorPoint[]) =>
       dropPartialBuckets(aggregateWhSeries(points, slot), slot, coverUntil, (p) =>
         timestampMinutes(p.timestamp));
-    // Where the forecast's composition starts: everything from the next slot
-    // boundary on, and nothing before it.
-    const forecastBreakdownFrom = Math.min(
-      ...s.houseForecastBreakdown
-        .map((point) => slotToMinutes(point.slot))
-        .filter((minutes): minutes is number => minutes !== null),
-    );
     return {
       ...payload,
       series: {
@@ -1436,16 +1436,13 @@ export class HelmanSolarInspector extends LitElement {
         invalidated: measured(s.invalidated),
         impact: aggregateImpactSeries(s.impact, slot),
         houseForecast: aggregateWhSeries(s.houseForecast, slot),
-        // The bucket straddling now is only half a story: houseForecast reaches
-        // back through the archive across the whole bucket, while the
-        // composition begins at the next slot boundary. Aggregating both would
-        // itemise parts summing to less than the total printed beside them, so
-        // a bucket the composition starts inside is dropped and reads as
-        // uncovered -- one whole band, no panel -- rather than as understated.
-        houseForecastBreakdown: aggregateBreakdownSeries(
-          s.houseForecastBreakdown,
-          slot,
-        ).filter((point) => (slotToMinutes(point.slot) ?? -1) >= forecastBreakdownFrom),
+        // A bucket the composition only partly covers is kept rather than
+        // dropped: the slot in progress is the one most worth itemising, and
+        // dropping its bucket left the slot the user is looking at as the only
+        // one with no composition at all. What the composition does not reach
+        // lands in the panel's base row, which is drawn as the residual against
+        // the forecast total for exactly this reason.
+        houseForecastBreakdown: aggregateBreakdownSeries(s.houseForecastBreakdown, slot),
         houseActual: measured(s.houseActual),
         houseActualBreakdown: dropPartialBuckets(
           aggregateBreakdownSeries(s.houseActualBreakdown, slot),
@@ -3064,7 +3061,22 @@ export class HelmanSolarInspector extends LitElement {
     // "unmeasured" node, so it borrows that node's configured title. Like the
     // consumer boxes it is dropped when it carries nothing, so an empty slot — or
     // one whose whole demand is metered — shows no dead box.
-    const unmeasuredWh = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
+    //
+    // The forecast's remainder is the residual against the house forecast the
+    // panel sits under, not the composed base alone. Over a bucket the
+    // composition only partly covers — the one the slot in progress falls in —
+    // those two differ, and the residual is what keeps the parts summing to the
+    // figure printed above them.
+    const composedBase = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
+    const unmeasuredWh = forecast
+      ? Math.max(
+          0,
+          // Over the native samples the selection expands to, since that is the
+          // grid the series is served on and the bars are drawn from.
+          (sumWhOverSlots(native.houseForecast, barSlots) ?? 0) -
+            consumers.reduce((sum, c) => sum + c.wh, 0),
+        )
+      : composedBase;
     const total = consumers.reduce((sum, c) => sum + c.wh, 0) + Math.max(0, unmeasuredWh);
     if (total <= 0) return "";
 

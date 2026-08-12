@@ -1231,6 +1231,33 @@ test.describe("solar inspector forecast composition", () => {
         expect(forecastRows.map((r) => r.tint)).toEqual(["", DEFERRABLE_TINT]);
     });
 
+    test("a bucket the composition only partly covers still itemises", async ({ page }) => {
+        await loadCardBundle(page);
+        // The composition starts at 12:30, halfway through the selected hour —
+        // the shape of the slot in progress, whose earlier samples predate the
+        // live pipeline's horizon.
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: MIXED_APPLIANCES,
+            unmeasuredWh: 100,
+            forecast: {
+                baseWh: 80,
+                appliances: [{ entityId: "sensor.dishwasher", label: "Dishwasher", wh: 40 }],
+                breakdownFromMinutes: 750,
+            },
+        });
+        await selectNoonSlot(page);
+
+        // The hour's forecast is 4 × 120 = 480 Wh, of which the composition
+        // accounts for two samples: 80 of dishwasher and 160 of base. The base
+        // row is the residual against the whole hour, not the composed part, so
+        // the panel still sums to the figure printed above it.
+        expect((await breakdownBoxes(page, 1)).map((r) => [r.label, r.power])).toEqual([
+            ["Base load", "400 Wh"],
+            ["Dishwasher", "80 Wh"],
+        ]);
+    });
+
     test("a scheduled appliance with no meter is named but opens nothing", async ({ page }) => {
         await loadCardBundle(page);
         await mountInspector(page, {

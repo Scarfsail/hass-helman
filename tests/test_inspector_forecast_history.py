@@ -580,6 +580,40 @@ class TestInspectorForecastComposition(_InspectorHarness):
         self.assertEqual(breakdown[1]["appliances"], [])
         self.assertTrue(payload["availability"]["hasHouseForecastBreakdown"])
 
+    def test_the_slot_in_progress_is_itemised_from_the_currentSlot_entry(self):
+        """The one slot the planner schedules into that is not in the series.
+
+        `currentSlot` rides alongside the series and takes scheduled demand like
+        any other entry, so reading only the series left the slot the user is
+        most likely looking at as the only one with no composition at all.
+        """
+        original = {
+            "status": "available",
+            "currentSlot": {
+                "timestamp": f"{TODAY}T10:00:00+02:00",
+                "nonDeferrable": {"value": 0.6},
+            },
+            "series": ORIGINAL_HOUSE_FORECAST["series"],
+        }
+        points = service_mod._build_house_forecast_breakdown(
+            {
+                "original_house_forecast": original,
+                "demand_points": (
+                    _demand("pool", f"{TODAY}T10:00:00+02:00", 0.2),
+                    *DEMAND_POINTS,
+                ),
+            },
+            SCHEDULED_CONSUMERS,
+            date.fromisoformat(TODAY),
+            next_slot=NEXT_SLOT,
+        )
+
+        self.assertEqual([p.slot for p in points], ["10:00", "10:15", "10:30"])
+        self.assertEqual(points[0].unmeasured_wh, 600.0)
+        self.assertEqual(
+            [(a.label, a.value_wh) for a in points[0].appliances], [("Pool pump", 200.0)]
+        )
+
     async def test_an_appliance_that_opted_out_is_not_reported_deferrable(self):
         """``consumption.deferrable: false`` holds on both sides of now.
 
