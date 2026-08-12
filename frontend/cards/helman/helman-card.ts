@@ -20,6 +20,11 @@ import "../helman-simple/node-detail-dialog";
 import "./power-flow-arrows"
 import "./power-device-info"
 import "./power-house-devices-section"
+import "../shared/schedule/dialogs/scheduling-day-editor-host"
+import type {
+    OpenScheduleEditorDetail,
+    SchedulingDayEditorHost,
+} from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import "./helman-card-editor"
 import type { LovelaceCardEditor } from "../../hass-frontend/src/panels/lovelace/types";
 
@@ -146,7 +151,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             : null;
 
         return html`
-            <ha-card @show-node-detail=${this._handleShowNodeDetail}>
+            <ha-card
+                @show-node-detail=${this._handleShowNodeDetail}
+                @helman-open-schedule-editor=${this._handleOpenScheduleEditor}
+            >
                 <div class="card-content">
                     <power-devices-container
                         .hass=${this._hass!}
@@ -192,6 +200,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                     ></power-house-devices-section>
                 </div>
             </ha-card>
+            <scheduling-day-editor-host
+                .hass=${this._hass}
+                .timeZone=${this._hass.config?.time_zone || "UTC"}
+            ></scheduling-day-editor-host>
             ${dialogParams ? html`
                 <node-detail-dialog
                     .hass=${this._hass}
@@ -212,6 +224,21 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 
     private _closeNodeDetail(): void {
         this._dialogNodeType = null;
+    }
+
+    /**
+     * A badge asked for the day editor; open it on the controllable it named.
+     *
+     * The card has no day of its own, so the host is left to open on today —
+     * which is the only day a badge is ever talking about, since it reports the
+     * slot running right now.
+     */
+    private _handleOpenScheduleEditor(event: CustomEvent<OpenScheduleEditorDetail>): void {
+        event.stopPropagation();
+        const host = this.shadowRoot?.querySelector<SchedulingDayEditorHost>(
+            "scheduling-day-editor-host",
+        );
+        host?.openFor(event.detail.target);
     }
 
     private _buildDialogParams(nodeType: NodeType) {

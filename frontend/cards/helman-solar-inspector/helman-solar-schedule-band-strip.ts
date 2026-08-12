@@ -2,14 +2,12 @@ import { LitElement, css, html, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import type { ControllableEntityDTO, EntityActualHistorySlotDTO, ForecastPayload } from "../helman-api";
-import { ForecastLoader } from "../helman/forecast-loader";
-import { getSharedHelmanStore } from "../helman/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
-import { dispatchWatchedEntities } from "../shared/hass-change";
 import "../shared/schedule/components/scheduling-entity-day-band";
-import "../shared/schedule/dialogs/scheduling-entity-day-editor";
+import {
+    SCHEDULE_DAY_MODEL_CHANGED_EVENT,
+    type SchedulingDayEditorHost,
+} from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import type {
     EntityDayBandBlockSelectDetail,
     EntityDayBandGridTick,
@@ -18,49 +16,14 @@ import type {
     EntityDayBandPointerMoveDetail,
     EntityDayBandTimeHoverDetail,
 } from "../shared/schedule/components/scheduling-entity-day-band";
-import type { EntityScheduleSaveDetail } from "../shared/schedule/dialogs/scheduling-entity-day-editor";
-import {
-    buildControllableEntityStatuses,
-    type ControllableEntityStatus,
-} from "../shared/schedule/model/controllable-entity-status";
-import {
-    buildEntityScheduleDays,
-    type EntityScheduleDay,
-    type EntityScheduleLane,
-} from "../shared/schedule/model/entity-day-schedule-model";
+import type { EntityScheduleDay } from "../shared/schedule/model/entity-day-schedule-model";
 import {
     buildEntityDayBandLanes,
-    buildEntityScheduleDayView,
-    buildEntityScheduleLanes,
     formatLaneRunRange,
     resolveLaneRunPresentation,
     type EntityDayBandLane,
-    type EntityScheduleDayView,
 } from "../shared/schedule/model/entity-lane-source";
-import {
-    normalizeScheduleApplianceMetadata,
-    type ScheduleApplianceMetadata,
-} from "../shared/schedule/model/schedule-appliance-metadata";
-import {
-    buildScheduleApplianceProjectionIndex,
-    EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
-    type ScheduleApplianceProjectionIndex,
-} from "../shared/schedule/model/schedule-appliance-projection";
-import {
-    EMPTY_NORMALIZED_SCHEDULE,
-    NormalizedScheduleCache,
-} from "../shared/schedule/model/schedule-normalizer";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
-import {
-    buildSlotForecastMap,
-    deriveScheduleForecastParams,
-    EMPTY_SLOT_FORECAST_MAP,
-    type SlotForecastMap,
-} from "../shared/schedule/model/slot-forecast-model";
-import type {
-    NormalizedScheduleModel,
-    ScheduleOwnerSnapshot,
-} from "../shared/schedule/schedule-types";
 import { stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
 import { slotGridTicks } from "../shared/slot-gridlines";
 import { SLOT_MINUTES } from "./chart-stack";
@@ -85,19 +48,6 @@ const MINUTES_PER_DAY = 1440;
 const MINUTE_MS = 60_000;
 /** Slim: the strip sits between charts, where a row is a glance and not a grip. */
 const TRACK_HEIGHT_PX = 16;
-/** How far the clock has to move before the day is worth rebuilding. */
-const NOW_RESOLUTION_MS = 30_000;
-
-const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
-    schedule: null,
-    loading: false,
-    refreshing: false,
-    writing: false,
-    togglingExecution: false,
-    error: null,
-    updatedAt: null,
-    stale: false,
-};
 
 /**
  * The house's schedule as a stack of per-entity timelines, on the solar
@@ -114,6 +64,11 @@ const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
  * nothing to say about the day being inspected -- it is still one click away in
  * the editor, which lists every lane precisely because that is where entities
  * get scheduled.
+ *
+ * The day itself -- the schedule, the rosters, the recorder's morning, the
+ * clock -- and the editor a press opens belong to `scheduling-day-editor-host`,
+ * which the card above owns and hands down. This element is the drawing: the
+ * geometry, the highlights, the hover, and the band.
  */
 @customElement("helman-solar-schedule-band-strip")
 export class HelmanSolarScheduleBandStrip extends LitElement {
@@ -142,98 +97,71 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     @property({ attribute: false }) public selectedMinutes: number[] = [];
     /** Minute-of-day under the pointer, wherever in the inspector it is. */
     @property({ attribute: false }) public hoverMinutes: number | null = null;
+    /**
+     * The day editor's host, owned by the card above.
+     *
+     * The strip draws the day; the host owns it — the schedule, the rosters, the
+     * recorder's morning and the clock, plus the dialog itself. Passed in rather
+     * than created here so pressing a lane and pressing a badge elsewhere on the
+     * page land in one dialog looking at one day.
+     */
+    @property({ attribute: false }) public editorHost: SchedulingDayEditorHost | null = null;
 
-    @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
-    @state() private _appliances: ScheduleApplianceMetadata[] = [];
-    @state() private _controllableEntities: ControllableEntityDTO[] = [];
-    @state() private _actualHistory: Record<string, EntityActualHistorySlotDTO[]> = {};
-    @state() private _projectionIndex: ScheduleApplianceProjectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-    @state() private _forecast: ForecastPayload | null = null;
-    @state() private _nowMs = Date.now();
-    @state() private _editorTarget: EntityScheduleLane | null = null;
-    @state() private _editorOpen = false;
-    /** The schedule changed under the open draft; Save will overwrite what arrived. */
-    @state() private _editorScheduleChanged = false;
-
-    private _nowTimer?: number;
     private _localizeFn?: LocalizeFunction;
-    private _scheduleOwner?: SharedScheduleOwner;
-    private _unsubscribeOwner?: () => void;
-    private _loadedConnection: unknown = null;
-    private _appliancesRequested = false;
-    private _entitiesRequested = false;
-    private _forecastLoader: ForecastLoader | null = null;
-    private _forecastLoaderKey: string | null = null;
-    private _projectionLoadGeneration = 0;
-    /** The schedule the open draft was seeded from, to notice a refresh under it. */
-    private _editorScheduleAtOpen: unknown = null;
-
-    private _normalizedCache = new NormalizedScheduleCache();
-    private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
-
-    private _dayView: EntityScheduleDayView = { slots: [], forecastPoints: new Map() };
-    private _lanes: EntityScheduleLane[] = [];
-    private _days: EntityScheduleDay[] = [];
     /** The lanes actually drawn on the last render, for the hover popup to read. */
     private _lastBandLanes: EntityDayBandLane[] = [];
-    private _forecastMap: SlotForecastMap = EMPTY_SLOT_FORECAST_MAP;
-    private _derivedFor: {
-        normalized: unknown;
-        appliances: unknown;
-        entities: unknown;
-        history: unknown;
-        forecast: unknown;
-        nowMs: number;
-        timeZone: string;
-    } | null = null;
+    private _observedHost: SchedulingDayEditorHost | null = null;
 
     protected willUpdate(changed: PropertyValues<this>): void {
         if (changed.has("hass") && this.hass) {
             this._localizeFn = getLocalizeFunction(this.hass);
-            if (this._loadedConnection !== this.hass.connection) {
-                this._loadedConnection = this.hass.connection;
-                this._appliancesRequested = false;
-                this._entitiesRequested = false;
-                this._actualHistory = {};
-                this._projectionLoadGeneration += 1;
-                this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-                this._syncOwner();
-                void this._loadAppliances();
-                void this._loadControllableEntities();
-            } else {
-                this._syncOwner();
-            }
         }
-        this._rebuildNormalizedIfNeeded();
-        this._rebuildDerivedIfNeeded();
+        if (changed.has("editorHost")) {
+            this._observeHost();
+        }
     }
 
     connectedCallback(): void {
         super.connectedCallback();
-        // The wall clock owns a timer, because `hass` churn is not a clock: the
-        // card above filters `hass` down to the entities this strip actually
-        // reads, and `_nowMs` is the *only* `_derivedFor` key that moves on an
-        // idle installation. Advance it from `hass` and the whole derived model
-        // freezes the moment the house goes quiet — elapsed bands, entity
-        // statuses, day labels and the open editor's clock with it. Coarse on
-        // purpose: every move rebuilds the day.
-        this._nowMs = Date.now();
-        this._nowTimer = window.setInterval(() => {
-            this._nowMs = Date.now();
-        }, NOW_RESOLUTION_MS);
+        this._observeHost();
     }
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
-        if (this._nowTimer !== undefined) {
-            window.clearInterval(this._nowTimer);
-            this._nowTimer = undefined;
-        }
         this._emitHover(null);
-        this._unsubscribeOwner?.();
-        this._unsubscribeOwner = undefined;
-        this._scheduleOwner = undefined;
+        this._observedHost?.removeEventListener(
+            SCHEDULE_DAY_MODEL_CHANGED_EVENT,
+            this._handleHostModelChanged,
+        );
+        this._observedHost = null;
     }
+
+    /**
+     * Re-render when the host's day moves.
+     *
+     * Everything the band draws is read off the host through plain getters, and
+     * a getter is not a reactive property: without this the strip would keep
+     * drawing the day it last derived while the schedule, the roster or the
+     * clock moved on underneath it.
+     */
+    private _observeHost(): void {
+        const host = this.editorHost;
+        if (this._observedHost === host) {
+            return;
+        }
+
+        this._observedHost?.removeEventListener(
+            SCHEDULE_DAY_MODEL_CHANGED_EVENT,
+            this._handleHostModelChanged,
+        );
+        this._observedHost = host;
+        host?.addEventListener(SCHEDULE_DAY_MODEL_CHANGED_EVENT, this._handleHostModelChanged);
+        this.requestUpdate();
+    }
+
+    private _handleHostModelChanged = (): void => {
+        this.requestUpdate();
+    };
 
     render() {
         if (!this.hass || this.geometry === null) {
@@ -287,47 +215,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                     @entity-day-band-pointer-move=${this._handlePointerMove}
                 ></scheduling-entity-day-band>
             </div>
-            ${this._renderEditor()}
-        `;
-    }
-
-    /**
-     * The day editor, opened on whichever lane was pressed.
-     *
-     * It is the shared day editor, fed from the same builders -- so what the
-     * user gets from here is not an inspector-flavoured editor but *the*
-     * editor, already looking at the entity they pointed at.
-     */
-    private _renderEditor() {
-        const lane = this._editorTarget;
-        if (lane === null) {
-            return nothing;
-        }
-
-        return html`
-            <scheduling-entity-day-editor
-                .hass=${this.hass}
-                .open=${this._editorOpen}
-                .localize=${this._localize}
-                .target=${lane.target}
-                .appliance=${lane.appliance}
-                .lanes=${this._lanes}
-                .slots=${this._dayView.slots}
-                .forecastPoints=${this._dayView.forecastPoints}
-                .projectionIndex=${this._projectionIndex}
-                .priceUnit=${this._forecastMap.priceDisplayUnit}
-                .entityName=${lane.name}
-                .entityIcon=${lane.icon}
-                .currentDayKey=${this._normalized.currentDayKey}
-                .initialDayKey=${this.date}
-                .locale=${this._locale}
-                .timeZone=${this.timeZone}
-                .nowMs=${this._nowMs}
-                .busy=${this._ownerSnapshot.writing}
-                .scheduleChanged=${this._editorScheduleChanged}
-                @closed=${this._handleEditorClosed}
-                @entity-schedule-save=${this._handleEditorSave}
-            ></scheduling-entity-day-editor>
         `;
     }
 
@@ -385,104 +272,31 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
      * row of empty tracks that would read as "nothing was scheduled".
      */
     private _selectedDay(): EntityScheduleDay | null {
-        return this._days.find((day) => day.dayKey === this.date) ?? null;
+        return this.editorHost?.days.find((day) => day.dayKey === this.date) ?? null;
     }
 
     private _buildBandLanes(day: EntityScheduleDay): EntityDayBandLane[] {
-        return buildEntityDayBandLanes({
-            lanes: this._lanes,
-            slots: this._dayView.slots,
-            day,
-            nowMs: this._nowMs,
-            activeOnly: true,
-            projectionIndex: this._projectionIndex,
-        });
-    }
+        const host = this.editorHost;
+        if (host === null) {
+            return [];
+        }
 
-    private get _controllableEntityStatuses(): ControllableEntityStatus[] {
-        return buildControllableEntityStatuses({
-            controllableEntities: this._controllableEntities,
-            appliances: this._appliances,
-            states: this.hass?.states,
-            slots: this._normalized.slots,
-            nowMs: this._nowMs,
-            executionEnabled: this._ownerSnapshot.schedule?.executionEnabled ?? false,
+        return buildEntityDayBandLanes({
+            lanes: host.lanes,
+            slots: host.dayView.slots,
+            day,
+            nowMs: host.nowMs,
+            activeOnly: true,
+            projectionIndex: host.projectionIndex,
         });
     }
 
     /**
-     * Everything derived from the loaded data, rebuilt only when that data
-     * changes.
-     *
-     * The inspector re-renders on every pointer move -- the hover travels
-     * through it -- and the day view alone means padding the morning back in
-     * and projecting a forecast over it. Deriving that per frame would make
-     * moving the mouse across a chart the most expensive thing the card does.
+     * The host's coarse clock, so the band, the highlights and the dialog all
+     * read the same "now" and move in one step.
      */
-    private _rebuildDerivedIfNeeded(): void {
-        const previous = this._derivedFor;
-        if (
-            previous !== null
-            && previous.normalized === this._normalized
-            && previous.appliances === this._appliances
-            && previous.entities === this._controllableEntities
-            && previous.history === this._actualHistory
-            && previous.forecast === this._forecast
-            && previous.nowMs === this._nowMs
-            && previous.timeZone === this.timeZone
-        ) {
-            return;
-        }
-
-        this._derivedFor = {
-            normalized: this._normalized,
-            appliances: this._appliances,
-            entities: this._controllableEntities,
-            history: this._actualHistory,
-            forecast: this._forecast,
-            nowMs: this._nowMs,
-            timeZone: this.timeZone,
-        };
-        this._forecastMap = this._buildForecastMap();
-        this._dayView = buildEntityScheduleDayView({
-            scheduleSlots: this._normalized.slots,
-            timeZone: this.timeZone,
-            locale: this._locale,
-            forecast: this._forecast,
-            baseForecastPoints: this._forecastMap.points,
-        });
-        this._lanes = buildEntityScheduleLanes({
-            statuses: this._controllableEntityStatuses,
-            controllableEntities: this._controllableEntities,
-            appliances: this._appliances,
-            actualHistory: this._actualHistory,
-            slotDurationMs: (this._normalized.granularityMinutes ?? 60) * 60_000,
-            locale: this._locale,
-        });
-        this._days = buildEntityScheduleDays({
-            slots: this._dayView.slots,
-            timeZone: this.timeZone,
-            locale: this._locale,
-            currentDayKey: this._normalized.currentDayKey,
-            todayLabel: this._localize("scheduling.day.today"),
-            tomorrowLabel: this._localize("scheduling.day.tomorrow"),
-            nowMs: this._nowMs,
-        });
-    }
-
-    private _buildForecastMap(): SlotForecastMap {
-        if (this._forecast === null || this._normalized.slots.length === 0) {
-            return EMPTY_SLOT_FORECAST_MAP;
-        }
-
-        return buildSlotForecastMap(
-            this._forecast,
-            this._normalized.slots.map((slot) => ({
-                ...slot,
-                source: "schedule" as const,
-                scheduleSlot: slot,
-            })),
-        );
+    private get _nowMs(): number {
+        return this.editorHost?.nowMs ?? Date.now();
     }
 
     private _handleLaneSelect = (event: CustomEvent<EntityDayBandLaneSelectDetail>): void => {
@@ -495,55 +309,15 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         this._openEditor(event.detail.laneKey);
     };
 
-    /**
-     * Whatever was pressed, the answer is the same: open the day on that entity.
-     *
-     * Which run was pressed is deliberately dropped. The editor opens with the
-     * lane selected and nothing under edit, which is the state a person can
-     * read -- landing straight in an open edit session on a run they only meant
-     * to look at would be an edit they did not ask for.
-     */
     private _openEditor(laneKey: string): void {
-        const lane = this._lanes.find((candidate) => candidate.key === laneKey);
-        if (lane === undefined || this._normalized.slots.length === 0) {
+        const host = this.editorHost;
+        const lane = host?.lanes.find((candidate) => candidate.key === laneKey);
+        if (host === null || host === undefined || lane === undefined) {
             return;
         }
 
-        void this._loadActualHistory();
-        void this._loadForecast();
-        this._editorScheduleChanged = false;
-        this._editorScheduleAtOpen = this._ownerSnapshot.schedule;
-        this._editorTarget = lane;
-        this._editorOpen = true;
+        host.openFor(lane.target, this.date);
     }
-
-    private _handleEditorClosed = (event: Event): void => {
-        event.stopPropagation();
-        this._editorOpen = false;
-        this._editorTarget = null;
-        this._editorScheduleChanged = false;
-        this._editorScheduleAtOpen = null;
-    };
-
-    /**
-     * The day's draft, as one write, through the shared schedule owner -- so a
-     * change made from here lands on every other view of the same day.
-     *
-     * The dialog stays open until the write settles, so a failure leaves the
-     * draft on screen rather than closing over a change that never happened.
-     */
-    private _handleEditorSave = async (event: CustomEvent<EntityScheduleSaveDetail>): Promise<void> => {
-        event.stopPropagation();
-        const patches = event.detail.patches;
-        if (patches.length > 0) {
-            await this._scheduleOwner?.applySchedulePatches(patches);
-            if (this._ownerSnapshot.error !== null) {
-                return;
-            }
-        }
-
-        this._editorOpen = false;
-    };
 
     private _handleTimeHover = (event: CustomEvent<EntityDayBandTimeHoverDetail>): void => {
         event.stopPropagation();
@@ -613,233 +387,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             bubbles: true,
             composed: true,
         }));
-    }
-
-    private _syncOwner(): void {
-        const hass = this.hass;
-        if (!hass) {
-            return;
-        }
-
-        const owner = getSharedScheduleOwner(hass);
-        if (this._scheduleOwner === owner) {
-            this._applyOwnerSnapshot(owner.getSnapshot());
-            return;
-        }
-
-        this._unsubscribeOwner?.();
-        this._scheduleOwner = owner;
-        this._applyOwnerSnapshot(owner.getSnapshot());
-        this._unsubscribeOwner = owner.subscribe((snapshot) => this._applyOwnerSnapshot(snapshot));
-    }
-
-    /**
-     * A new schedule is also the cue to re-read the recorder.
-     *
-     * The elapsed half of the band would otherwise stop growing at whatever the
-     * morning looked like when the card loaded. Riding the schedule's own
-     * refresh keeps the two halves the same age without a clock of its own.
-     */
-    private _applyOwnerSnapshot(snapshot: ScheduleOwnerSnapshot): void {
-        const scheduleChanged = snapshot.schedule !== this._ownerSnapshot.schedule;
-        this._ownerSnapshot = snapshot;
-        if (!scheduleChanged) {
-            return;
-        }
-
-        if (this._editorOpen && this._editorScheduleAtOpen !== null) {
-            this._editorScheduleChanged = snapshot.schedule !== this._editorScheduleAtOpen;
-        }
-        this._projectionLoadGeneration += 1;
-        this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-        if (snapshot.schedule !== null) {
-            void this._loadActualHistory();
-            void this._loadProjections();
-        }
-    }
-
-    /**
-     * What each scheduled run is projected to consume, and where it leaves the
-     * car.
-     *
-     * Reloaded with the schedule, because that is what it is a projection of:
-     * moving a charging run changes both the energy under it and every SoC
-     * after it. Failure is silent for the same reason the history's is -- the
-     * band is entirely readable as bare runs, and this only ever adds a figure
-     * to one.
-     */
-    private async _loadProjections(): Promise<void> {
-        const hass = this.hass;
-        if (!hass) {
-            return;
-        }
-
-        const generation = this._projectionLoadGeneration;
-        try {
-            const payload = await getSharedHelmanStore(hass).getApplianceProjections();
-            if (generation !== this._projectionLoadGeneration || this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._projectionIndex = buildScheduleApplianceProjectionIndex(payload);
-        } catch (error) {
-            if (generation !== this._projectionLoadGeneration || this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-            console.warn("helman-solar-inspector: failed to load appliance projections", error);
-        }
-    }
-
-    /**
-     * Every entity id this strip resolves out of `hass.states`, bubbled up so
-     * the card at the top can filter `hass` without repeating the fetch that
-     * found them (`getControllableEntities` does not cache, so a card-level call
-     * would be an extra round trip per dashboard load).
-     *
-     * Always the whole set, never a delta: the two loads that contribute land
-     * independently — the EV `useMode`/`ecoGear` selects come from the appliance
-     * metadata, the rest from the controllable entities — and either may be the
-     * one that arrives second. `controlEntityIds.primary` is already a
-     * controllable entity id, so including it costs nothing and stops the set
-     * depending on that invariant holding.
-     */
-    private _emitWatchedEntities(): void {
-        const ids = new Set<string>();
-        for (const entity of this._controllableEntities) {
-            ids.add(entity.entityId);
-        }
-        for (const appliance of this._appliances) {
-            const controls = appliance.controlEntityIds;
-            if (!controls) continue;
-            if (controls.primary) ids.add(controls.primary);
-            if (controls.useMode) ids.add(controls.useMode);
-            if (controls.ecoGear) ids.add(controls.ecoGear);
-        }
-        dispatchWatchedEntities(this, [...ids]);
-    }
-
-    private async _loadAppliances(): Promise<void> {
-        const hass = this.hass;
-        if (!hass || this._appliancesRequested) {
-            return;
-        }
-
-        this._appliancesRequested = true;
-        try {
-            const payload = await getSharedHelmanStore(hass).getAppliances();
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._appliances = normalizeScheduleApplianceMetadata(payload);
-            this._emitWatchedEntities();
-        } catch (error) {
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._appliancesRequested = false;
-            this._appliances = [];
-            console.error("helman-solar-inspector: failed to load appliance metadata", error);
-        }
-    }
-
-    private async _loadControllableEntities(): Promise<void> {
-        const hass = this.hass;
-        if (!hass || this._entitiesRequested) {
-            return;
-        }
-
-        this._entitiesRequested = true;
-        try {
-            const payload = await getSharedHelmanStore(hass).getControllableEntities();
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._controllableEntities = payload.entities;
-            this._emitWatchedEntities();
-            void this._loadActualHistory();
-        } catch {
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._entitiesRequested = false;
-            this._controllableEntities = [];
-        }
-    }
-
-    /**
-     * What the entities really did earlier today, from the recorder.
-     *
-     * Failure is silent: the strip is perfectly readable with the morning
-     * blank, and an error banner between two charts would be louder than the
-     * loss.
-     */
-    private async _loadActualHistory(): Promise<void> {
-        const hass = this.hass;
-        if (!hass || this._controllableEntities.length === 0) {
-            return;
-        }
-
-        try {
-            const payload = await getSharedHelmanStore(hass).getEntityActualHistory();
-            if (this.hass?.connection === hass.connection) {
-                this._actualHistory = payload.entities;
-            }
-        } catch (error) {
-            console.warn("helman-solar-inspector: failed to load entity history", error);
-        }
-    }
-
-    /**
-     * Loaded when the editor opens rather than with the strip.
-     *
-     * The band draws no forecast rows here -- the inspector's own charts are
-     * the forecast, at far more detail -- so the only thing that needs it is the
-     * dialog, and only once somebody asks for one.
-     */
-    private async _loadForecast(): Promise<void> {
-        const hass = this.hass;
-        const schedule = this._ownerSnapshot.schedule;
-        if (!hass || schedule === null) {
-            return;
-        }
-
-        const params = deriveScheduleForecastParams(schedule.slots);
-        if (params === null) {
-            return;
-        }
-
-        const key = `${params.granularity}:${params.forecastDays ?? ""}`;
-        if (this._forecastLoader === null || this._forecastLoaderKey !== key) {
-            this._forecastLoader = new ForecastLoader(params.granularity, params.forecastDays ?? null);
-            this._forecastLoaderKey = key;
-        }
-
-        try {
-            const forecast = await this._forecastLoader.load(hass);
-            if (this.hass?.connection === hass.connection) {
-                this._forecast = forecast;
-            }
-        } catch (error) {
-            console.error("helman-solar-inspector: failed to load forecast", error);
-        }
-    }
-
-    /**
-     * The schedule as slots, with the one the clock is inside marked.
-     *
-     * Read from the strip's own coarse `_nowMs` rather than the wall clock, so
-     * that `_normalized` moves in the same step as every other clock-derived
-     * key of `_derivedFor` -- and, critically, only when that timer ticks. Pass
-     * `new Date()` here instead and the model would gain a new identity on
-     * every render that crossed a slot boundary out of step with `_nowMs`.
-     */
-    private _rebuildNormalizedIfNeeded(): void {
-        this._normalized = this._normalizedCache.get(
-            this._ownerSnapshot.schedule,
-            this.timeZone,
-            this._locale,
-            new Date(this._nowMs),
-        );
     }
 
     private get _localize(): LocalizeFunction {

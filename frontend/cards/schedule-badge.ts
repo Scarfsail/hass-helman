@@ -2,6 +2,10 @@ import { LitElement, PropertyValues, TemplateResult, css, html, nothing } from "
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../hass-frontend/src/types";
 import { getLocalizeFunction } from "./localize/localize";
+import {
+    OPEN_SCHEDULE_EDITOR_EVENT,
+    type OpenScheduleEditorDetail,
+} from "./shared/schedule/dialogs/scheduling-day-editor-host";
 import { summarizeScheduleAuthorship } from "./shared/schedule/model/schedule-authorship";
 import {
     getSharedScheduleBadgeSource,
@@ -42,6 +46,7 @@ export class ScheduleBadge extends LitElement {
             ha-icon {
                 --mdc-icon-size: 14px;
                 display: flex;
+                cursor: pointer;
             }
         `;
     }
@@ -95,8 +100,28 @@ export class ScheduleBadge extends LitElement {
                 style="color: ${AUTHORSHIP_COLORS[this._authorshipState(ids)]}"
                 title=${label}
                 aria-label=${label}
+                @click=${this._requestEditor}
             ></ha-icon>
         `;
+    }
+
+    /**
+     * Ask for the day editor; the host decides where it opens.
+     *
+     * Following `helman-appliance-switch-badge`'s rule that a badge asks rather
+     * than acts. A group row sends no target at all, which the editor already
+     * handles: it opens on the whole stack with its "pick an entity" hint,
+     * rather than the badge guessing which of the children the press meant.
+     */
+    private _requestEditor(event: Event): void {
+        event.stopPropagation();
+        this.dispatchEvent(
+            new CustomEvent<OpenScheduleEditorDetail>(OPEN_SCHEDULE_EDITOR_EVENT, {
+                bubbles: true,
+                composed: true,
+                detail: { target: this.controllableId },
+            }),
+        );
     }
 
     private _resolvedIds(): readonly string[] {
