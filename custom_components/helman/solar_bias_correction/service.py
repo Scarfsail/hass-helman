@@ -1795,6 +1795,38 @@ def _house_forecast_points_from_snapshot(
     return points
 
 
+def _house_forecast_current_slot_points(
+    snapshot: dict | None, target_date: date
+) -> list[dict]:
+    """The snapshot's `currentSlot` entry as a base point, if it is on this day.
+
+    Same shape as the series entries — `build_adjusted_house_forecast` adds
+    demand to it exactly as it does to them — but it is held apart from the
+    series, so it has to be asked for by name. At most one point.
+    """
+    if not isinstance(snapshot, dict) or snapshot.get("status") != "available":
+        return []
+    entry = snapshot.get("currentSlot")
+    if not isinstance(entry, dict):
+        return []
+    ts_raw = entry.get("timestamp")
+    if not isinstance(ts_raw, str):
+        return []
+    try:
+        ts = datetime.fromisoformat(ts_raw)
+    except ValueError:
+        return []
+    if ts.date() != target_date:
+        return []
+    non_deferrable = entry.get("nonDeferrable")
+    value = non_deferrable.get("value") if isinstance(non_deferrable, dict) else None
+    try:
+        wh = float(value) * 1000
+    except (TypeError, ValueError):
+        return []
+    return [{"timestamp": ts_raw, "wh": wh}]
+
+
 def _current_slot_start(local_now: datetime) -> datetime:
     """Return the start of the 15-min slot containing local_now.
 
@@ -1983,10 +2015,13 @@ def _build_house_forecast_breakdown(
     """
     if not isinstance(composition, dict):
         return []
-    base_points = _house_forecast_points_from_snapshot(
-        composition.get("original_house_forecast"),
-        target_date,
-        next_slot=next_slot,
+    original = composition.get("original_house_forecast")
+    # The slot in progress is not in the snapshot's series — it rides alongside it
+    # as `currentSlot`, and the planner schedules into it like any other. Reading
+    # only the series would leave the slot the user is most likely looking at as
+    # the one slot with no composition at all.
+    base_points = _house_forecast_current_slot_points(original, target_date) + (
+        _house_forecast_points_from_snapshot(original, target_date, next_slot=next_slot)
     )
     if not base_points:
         return []
