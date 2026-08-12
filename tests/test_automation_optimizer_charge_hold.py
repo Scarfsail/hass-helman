@@ -117,6 +117,27 @@ def _surplus_series() -> list[dict[str, object]]:
     return series
 
 
+def _series_with_soc(soc_pct: float) -> list[dict[str, object]]:
+    """The surplus series behind an overnight point carrying a forecast SoC.
+
+    The real battery forecast stamps every bucket with the level it ends at;
+    only the last bucket before the window start decides the day's need, so one
+    leading point is enough to fix it. It carries no surplus of its own, which
+    keeps the charge-able energy identical to :func:`_surplus_series`.
+    """
+    return [
+        {
+            "timestamp": datetime(2026, 7, 10, 5, 30, tzinfo=TZ).isoformat(
+                timespec="seconds"
+            ),
+            "solarKwh": 0.0,
+            "baselineHouseKwh": 0.0,
+            "durationHours": 0.5,
+            "socPct": soc_pct,
+        }
+    ] + _surplus_series()
+
+
 #: Hourly export price, dearest in the morning and bottoming out at 13:00 — the
 #: shape of the real day that exposed the release-time bug (issue #79). Only the
 #: hours the surplus series covers matter, but the feed publishes the whole day.
@@ -277,8 +298,15 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         self.assertNotIn(_slot_id(13, 0), held)
         self.assertNotIn(_slot_id(13, 30), held)
 
-    def test_a_cheap_morning_is_released_and_the_dear_afternoon_held(self) -> None:
-        """The ranking spans the day, so the hold is not tied to the morning."""
+    def test_a_cheap_morning_frees_the_dear_afternoon_behind_it(self) -> None:
+        """Reaching target ends the hold, however dear what follows is.
+
+        Ascending prices put the whole charge set in the morning, so the battery
+        is full by 11:30 — and the 3.0/4.0 afternoon behind it is released even
+        though it is the dearest surplus of the day. Holding it would protect
+        nothing (the surplus exports for the same price either way) and cost the
+        battery the headroom to ride a peak and take the dip back.
+        """
         prices = {10: 1.0, 11: 2.0, 12: 3.0, 13: 4.0}
         result = build_charge_hold_optimizer(_make_config()).optimize(
             _make_snapshot(
@@ -290,8 +318,10 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         held = _held_slot_ids(result)
         self.assertNotIn(_slot_id(10, 0), held)
         self.assertNotIn(_slot_id(11, 30), held)
-        self.assertIn(_slot_id(12, 0), held)
-        self.assertIn(_slot_id(13, 30), held)
+        self.assertNotIn(_slot_id(12, 0), held)
+        self.assertNotIn(_slot_id(13, 30), held)
+        # The pre-surplus morning is still held: the target is not reached yet.
+        self.assertIn(_slot_id(9, 30), held)
 
     def test_slots_past_the_window_are_ranked_but_never_held(self) -> None:
         """A window ending at noon still charges from the cheap afternoon.
@@ -363,16 +393,106 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         )
         self.assertEqual(_held_slot_ids(result), set())
 
-    def test_already_full_holds_the_whole_window(self) -> None:
-        # needed <= 0 -> nothing to charge, so no slot is worth releasing.
+    def test_already_at_target_holds_nothing(self) -> None:
+        # needed <= 0 -> the battery is at target before the window even opens,
+        # so the hold has nothing to protect from the first slot on.
         result = build_charge_hold_optimizer(_make_config()).optimize(
             _make_snapshot(day_context=_day_context(), current_soc=100.0),
             _make_config(),
         )
+        self.assertEqual(_held_slot_ids(result), set())
+
+    def test_the_hold_ends_where_the_charge_set_reaches_target(self) -> None:
+        # 4 kWh need, 1 kWh per slot: the cheapest four are 13:00/13:30 (1.0)
+        # and 12:00/12:30 (2.0), so the target is reached at 13:30. Nothing from
+        # there on is held, and the held set is exactly the run before it.
+        result = build_charge_hold_optimizer(_make_config()).optimize(
+            _make_snapshot(day_context=_day_context()), _make_config()
+        )
         held = _held_slot_ids(result)
+        self.assertEqual(max(held), _slot_id(11, 30))
+        self.assertNotIn(_slot_id(13, 30), held)
+
+    def test_slots_after_target_are_freed_even_without_surplus(self) -> None:
+        """Breathing room is not confined to the slots the ranking saw.
+
+        The ranking only ever contains slots with surplus, but a slot with none
+        is still one the battery should be free to move in once it is full — so
+        the release runs over the day's slots, not over the candidates.
+        """
+        # Surplus stops at 12:00, so 12:00-13:30 are the only ranked slots after
+        # the 4 kWh need is covered... and the day's remaining slots have none.
+        series = [
+            point
+            for point in _surplus_series()
+            if point["timestamp"] < _slot_id(12, 0)
+        ]
+        result = build_charge_hold_optimizer(
+            _make_config(window_end="14:00")
+        ).optimize(
+            _make_snapshot(day_context=_day_context(), surplus_series=series),
+            _make_config(window_end="14:00"),
+        )
+        held = _held_slot_ids(result)
+        # 10:00-11:30 is 4 kWh of surplus and covers the need exactly, so the
+        # target lands at 11:30 and the surplus-less rest of the window is free.
+        self.assertEqual(max(held), _slot_id(9, 30))
+        self.assertNotIn(_slot_id(12, 0), held)
+        self.assertNotIn(_slot_id(13, 30), held)
+
+    def test_need_is_measured_from_the_forecast_soc_at_the_window_start(self) -> None:
+        # The battery reads 60% now but the forecast has it down to 30% by the
+        # time the window opens, so the need is 7 kWh rather than 4 — and the
+        # charge set grows from the four cheapest slots to the seven cheapest.
+        # Sizing this off the run-time reading is what held 10:00–11:30 while
+        # the battery was still 30 points short.
+        result = build_charge_hold_optimizer(_make_config()).optimize(
+            _make_snapshot(
+                day_context=_day_context(),
+                current_soc=60.0,
+                surplus_series=_series_with_soc(30.0),
+            ),
+            _make_config(),
+        )
+        held = _held_slot_ids(result)
+        self.assertEqual(
+            held,
+            {_slot_id(hour, minute) for hour in range(6, 10) for minute in (0, 30)}
+            | {_slot_id(10, 30)},
+        )
+
+    def test_a_forecast_soc_above_the_reading_shrinks_the_charge_set(self) -> None:
+        # The correction runs both ways: a battery the forecast fills overnight
+        # needs less of the cheap band, not more. 80% leaves 2 kWh to cover, so
+        # only the two cheapest slots are released.
+        result = build_charge_hold_optimizer(_make_config()).optimize(
+            _make_snapshot(
+                day_context=_day_context(),
+                current_soc=60.0,
+                surplus_series=_series_with_soc(80.0),
+            ),
+            _make_config(),
+        )
+        held = _held_slot_ids(result)
+        self.assertIn(_slot_id(12, 0), held)
         self.assertIn(_slot_id(12, 30), held)
-        self.assertIn(_slot_id(13, 30), held)
-        self.assertNotIn(_slot_id(14, 0), held)  # past window.end
+        self.assertNotIn(_slot_id(13, 0), held)
+        self.assertNotIn(_slot_id(13, 30), held)
+
+    def test_the_starting_soc_is_recorded_on_the_room_gate(self) -> None:
+        _, trace = run_optimizer_with_trace(
+            build_charge_hold_optimizer(_make_config()),
+            _make_snapshot(
+                day_context=_day_context(),
+                current_soc=60.0,
+                surplus_series=_series_with_soc(30.0),
+            ),
+            _make_config(),
+            reference_time=REFERENCE_TIME,
+        )
+        gate = _gate(_slots_by_id(trace)[_slot_id(10, 30)], "hold_room")
+        self.assertEqual(gate.params["startSocPct"], 30.0)
+        self.assertEqual(gate.params["neededKwh"], 7.0)
 
     def test_leaves_user_owned_inverter_untouched(self) -> None:
         schedule_document = ScheduleDocument(

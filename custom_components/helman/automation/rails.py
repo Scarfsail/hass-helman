@@ -382,6 +382,47 @@ def read_clipped_surplus_by_bucket(
     return surplus_by_bucket
 
 
+def read_forecast_soc_at(
+    snapshot: "OptimizationSnapshot", timestamp: datetime
+) -> float | None:
+    """Forecast state of charge (percent) *entering* ``timestamp``, or ``None``.
+
+    A bucket's ``socPct`` is the level it *ends* at, so the answer is the last
+    bucket that starts strictly before ``timestamp``. ``None`` means the series
+    says nothing — either it carries no SoC at all, or ``timestamp`` is at or
+    before its first bucket, where the caller's own live reading is the better
+    answer anyway.
+
+    An optimizer sizing a *future* day cannot use the battery's reading at run
+    time: an overnight discharge sits between the two, so tonight's SoC
+    understates tomorrow morning's gap and the day is sized against a battery
+    that is already nearly full. This reads the same series the surplus comes
+    from, so the need and the surplus covering it are quoted against one
+    forecast.
+    """
+    raw_series = snapshot.battery_forecast.get("series")
+    if not isinstance(raw_series, list):
+        return None
+    target = dt_util.as_utc(timestamp)
+    soc: float | None = None
+    latest: datetime | None = None
+    for point in raw_series:
+        if not isinstance(point, dict):
+            continue
+        point_start = parse_timestamp(point.get("timestamp"))
+        if point_start is None:
+            continue
+        point_utc = dt_util.as_utc(point_start)
+        if point_utc >= target or (latest is not None and point_utc <= latest):
+            continue
+        value = read_optional_float(point.get("socPct"))
+        if value is None:
+            continue
+        soc = value
+        latest = point_utc
+    return soc
+
+
 def horizon_slots_between(
     start: datetime,
     end: datetime,
