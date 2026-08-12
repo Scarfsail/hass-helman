@@ -139,22 +139,33 @@ class SolarBiasApplianceComponent:
     ``entity_id`` is the device's energy stat (the series the breakdown is summed
     from); ``power_entity_id`` is the live power sensor the power card reads, where
     the tree knows one, so clicking a box opens the same W sensor the card does.
+    It is None for a scheduled appliance with no meter configured, which has
+    demand to report but no sensor to open.
+
+    ``deferrable`` says the consumer is a shiftable appliance — it came from the
+    configured deferrable controllables rather than from the device tree alone. It
+    is a property of the device, not of the slot: an appliance nothing scheduled
+    still counts as deferrable in the slot it happened to run in.
     """
 
-    entity_id: str
+    entity_id: str | None
     label: str
     value_wh: float
     switch_entity_id: str | None = None
     power_entity_id: str | None = None
+    deferrable: bool = False
 
 
 @dataclass
 class SolarBiasHouseBreakdownPoint:
     """A slot's house demand split into each itemised consumer and the remainder.
 
-    ``unmeasured_wh`` is what no individual meter accounted for — the analogue of
-    the power card's "unmeasured" node, NOT the forecast's non-deferrable base
-    load, which stays a separate concept owned by the house forecast.
+    On the measured side ``unmeasured_wh`` is what no individual meter accounted
+    for — the analogue of the power card's "unmeasured" node, NOT the forecast's
+    non-deferrable base load. On the forecast side it IS that base load: the
+    house forecast before any scheduled appliance was added to it. Either way it
+    is "the part this slot's itemised appliances do not explain", which is why
+    one shape and one renderer serve both.
 
     The parts reconcile with the matching house series: ``unmeasured_wh`` plus the
     sum of ``appliances`` equals that slot's houseActual/houseForecast value.
@@ -221,6 +232,9 @@ class SolarBiasInspectorSeries:
     house_actual_breakdown: list[SolarBiasHouseBreakdownPoint] = field(
         default_factory=list
     )
+    house_forecast_breakdown: list[SolarBiasHouseBreakdownPoint] = field(
+        default_factory=list
+    )
     battery_soc_forecast: list[BatterySocPoint] = field(default_factory=list)
     battery_soc_actual: list[BatterySocPoint] = field(default_factory=list)
     grid_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
@@ -252,6 +266,7 @@ class SolarBiasInspectorAvailability:
     has_house_forecast: bool = False
     has_house_actual: bool = False
     has_house_actual_breakdown: bool = False
+    has_house_forecast_breakdown: bool = False
     has_battery_soc_forecast: bool = False
     has_battery_soc_actual: bool = False
     has_grid_forecast: bool = False
@@ -316,6 +331,9 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "houseActualBreakdown": [
                 _house_breakdown_payload(p) for p in day.series.house_actual_breakdown
             ],
+            "houseForecastBreakdown": [
+                _house_breakdown_payload(p) for p in day.series.house_forecast_breakdown
+            ],
             "batterySocForecast": [
                 {"slot": p.slot, "pct": p.pct} for p in day.series.battery_soc_forecast
             ],
@@ -351,6 +369,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasHouseForecast": day.availability.has_house_forecast,
             "hasHouseActual": day.availability.has_house_actual,
             "hasHouseActualBreakdown": day.availability.has_house_actual_breakdown,
+            "hasHouseForecastBreakdown": day.availability.has_house_forecast_breakdown,
             "hasBatterySocForecast": day.availability.has_battery_soc_forecast,
             "hasBatterySocActual": day.availability.has_battery_soc_actual,
             "hasGridForecast": day.availability.has_grid_forecast,
@@ -384,6 +403,7 @@ def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, A
                 "wh": c.value_wh,
                 "switchEntityId": c.switch_entity_id,
                 "powerEntityId": c.power_entity_id,
+                "deferrable": c.deferrable,
             }
             for c in point.appliances
         ],

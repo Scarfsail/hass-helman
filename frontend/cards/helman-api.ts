@@ -51,6 +51,8 @@ export interface DeviceNodeDTO extends DeviceNodeDTOBase {
     sortChildrenByPower: boolean;
     children: DeviceNodeDTO[];
     ratioSensorId: string | null;
+    /** A house child whose energy statistic is a deferrable controllable. */
+    deferrable: boolean;
 }
 
 // ── UI config (part of the tree payload) ─────────────────────────────────────

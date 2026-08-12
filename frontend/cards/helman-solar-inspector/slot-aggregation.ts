@@ -199,11 +199,12 @@ export function aggregateBreakdownSeries(
     }
     if (Number.isFinite(point.unmeasuredWh)) bucket.unmeasuredWh += point.unmeasuredWh;
     for (const appliance of point.appliances) {
-      const existing = bucket.appliances.get(appliance.entityId);
+      const key = applianceKey(appliance);
+      const existing = bucket.appliances.get(key);
       if (existing) {
         existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
       } else {
-        bucket.appliances.set(appliance.entityId, { ...appliance });
+        bucket.appliances.set(key, { ...appliance });
       }
     }
   }
@@ -317,6 +318,69 @@ export function aggregateImpactOverSlots(
   return { slot: slots[0] ?? group[0].slot, rawWh, correctedWh, impactWh, factor };
 }
 
+/**
+ * Split a house series into its deferrable and non-deferrable halves, using the
+ * matching per-slot breakdown to say how much of each slot was shiftable.
+ *
+ * The deferrable half is summed from the breakdown's flagged appliances; the
+ * non-deferrable half is whatever the house series has left, floored at zero. So
+ * the pair always sums back to the original series — the unmeasured remainder and
+ * every non-deferrable meter land in the non-deferrable half by construction —
+ * and a slot the breakdown does not cover stays wholly non-deferrable rather than
+ * disappearing.
+ */
+export function splitHouseByDeferrable(
+  points: readonly InspectorPoint[],
+  breakdown: readonly HouseBreakdownPoint[],
+): { deferrable: InspectorPoint[]; nonDeferrable: InspectorPoint[] } {
+  const deferrableBySlot = new Map<string, number>();
+  for (const point of breakdown) {
+    const wh = point.appliances.reduce(
+      (sum, appliance) =>
+        appliance.deferrable && Number.isFinite(appliance.wh) ? sum + appliance.wh : sum,
+      0,
+    );
+    deferrableBySlot.set(point.slot, (deferrableBySlot.get(point.slot) ?? 0) + wh);
+  }
+  const deferrable: InspectorPoint[] = [];
+  const nonDeferrable: InspectorPoint[] = [];
+  for (const point of points) {
+    const total = Number.isFinite(point.valueWh) ? point.valueWh : 0;
+    const shiftable = Math.min(
+      Math.max(0, deferrableBySlot.get(slotKey(point.timestamp)) ?? 0),
+      Math.max(0, total),
+    );
+    deferrable.push({ timestamp: point.timestamp, valueWh: shiftable });
+    nonDeferrable.push({ timestamp: point.timestamp, valueWh: total - shiftable });
+  }
+  return { deferrable, nonDeferrable };
+}
+
+/**
+ * Whether the breakdown says anything about these slots at all.
+ *
+ * `splitHouseByDeferrable` leaves an uncovered slot wholly non-deferrable, which
+ * is what the chart should draw — the band has to be somewhere. A figure quoted
+ * in the popup must not read that silence as a measurement, though: the elapsed
+ * half of today's forecast has no composition, and printing its deferrable share
+ * as 0 Wh would understate it by exactly what it overstates the other row by.
+ */
+/**
+ * What merges one appliance's rows across slots: its meter, or its name when it
+ * has none — the same identity the panel keys its box on.
+ */
+function applianceKey(appliance: ApplianceComponent): string {
+  return appliance.entityId ?? appliance.label;
+}
+
+export function breakdownCoversSlots(
+  breakdown: readonly HouseBreakdownPoint[],
+  slots: readonly string[],
+): boolean {
+  const wanted = new Set(slots);
+  return breakdown.some((point) => wanted.has(point.slot));
+}
+
 /** Merge the house breakdown over the selected slots, one row per appliance. */
 export function aggregateBreakdownOverSlots(
   points: readonly HouseBreakdownPoint[],
@@ -330,11 +394,12 @@ export function aggregateBreakdownOverSlots(
   for (const point of group) {
     if (Number.isFinite(point.unmeasuredWh)) unmeasuredWh += point.unmeasuredWh;
     for (const appliance of point.appliances) {
-      const existing = appliances.get(appliance.entityId);
+      const key = applianceKey(appliance);
+      const existing = appliances.get(key);
       if (existing) {
         existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
       } else {
-        appliances.set(appliance.entityId, { ...appliance });
+        appliances.set(key, { ...appliance });
       }
     }
   }
@@ -446,25 +511,41 @@ export function consumerBarsOverSlots(
   entityId: string | null | undefined,
   mixes: Map<string, BucketSourceMix>,
 ): { values: number[]; sourceHistory: (BucketSourceMix | undefined)[] } {
+  return partBarsOverSlots(points, slots, mixes, (point) => {
+    if (entityId === undefined) {
+      return (
+        finiteWh(point.unmeasuredWh) +
+        point.appliances.reduce((sum, a) => sum + finiteWh(a.wh), 0)
+      );
+    }
+    if (entityId === null) return finiteWh(point.unmeasuredWh);
+    const appliance = point.appliances.find((a) => a.entityId === entityId);
+    return appliance ? finiteWh(appliance.wh) : 0;
+  });
+}
+
+const finiteWh = (value: number) => (Number.isFinite(value) ? Math.max(0, value) : 0);
+
+/**
+ * Bars for any part of the house, named by how much of a slot it drew.
+ *
+ * The scaling of the source mix is the whole point of doing this once: a bar's
+ * segments only mean anything if they are the house's own mix rescaled to that
+ * part's energy, so one consumer, a group of them and the house itself are all
+ * measured the same way and stack honestly against each other.
+ */
+export function partBarsOverSlots(
+  points: readonly HouseBreakdownPoint[],
+  slots: readonly string[],
+  mixes: Map<string, BucketSourceMix>,
+  energyInSlot: (point: HouseBreakdownPoint) => number,
+): { values: number[]; sourceHistory: (BucketSourceMix | undefined)[] } {
   const bySlot = new Map(points.map((point) => [point.slot, point]));
   const values: number[] = [];
   const sourceHistory: (BucketSourceMix | undefined)[] = [];
-  const finite = (value: number) => (Number.isFinite(value) ? Math.max(0, value) : 0);
   for (const slot of slots) {
     const point = bySlot.get(slot);
-    let wh = 0;
-    if (point) {
-      if (entityId === undefined) {
-        wh =
-          finite(point.unmeasuredWh) +
-          point.appliances.reduce((sum, a) => sum + finite(a.wh), 0);
-      } else if (entityId === null) {
-        wh = finite(point.unmeasuredWh);
-      } else {
-        const appliance = point.appliances.find((a) => a.entityId === entityId);
-        wh = appliance ? finite(appliance.wh) : 0;
-      }
-    }
+    const wh = point ? finiteWh(energyInSlot(point)) : 0;
     values.push(wh);
     // The house mix is a set of proportions; rescaling it to this consumer's own
     // energy keeps each segment's height meaningful against the bar it sits in.

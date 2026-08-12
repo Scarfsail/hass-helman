@@ -13,6 +13,21 @@ export const GRID_COLOR  = '#38bdf8'; // sky-400
 export const BATT_COLOR  = '#22c55e'; // green-500
 export const HOUSE_COLOR = '#a855f7'; // purple-500
 
+/**
+ * Shiftable house load: the same purple, lightened.
+ *
+ * Deferrable consumption is still house consumption, so it must read as a shade
+ * of the house colour rather than a hue of its own — the band stacked on top of
+ * the non-deferrable one, the tinted rows in the inspector's composition panel
+ * and the power card's deferrable children are all the same quantity. Derived
+ * from HOUSE_COLOR rather than written out, so it cannot drift out of the family,
+ * and defined here once: every card imports this and never re-derives it.
+ */
+export const DEFERRABLE_HOUSE_COLOR = blendHex([
+    { hex: HOUSE_COLOR, weight: 1 },
+    { hex: '#ffffff', weight: 2 },
+]); // #e2c6fc
+
 /** Which way the grid is flowing. Distinct from GRID_COLOR, which is the node itself. */
 export const GRID_IMPORT_COLOR = '#2563eb'; // blue-600
 export const GRID_EXPORT_COLOR = '#7dd3fc'; // sky-300

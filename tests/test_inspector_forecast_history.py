@@ -317,7 +317,10 @@ def _make_cfg():
     )
 
 
-class TestInspectorServesArchivedForecast(unittest.IsolatedAsyncioTestCase):
+class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
+    """A bias service wired to a fake history and a fixed battery snapshot, plus
+    the inspector call with the clock and the recorder reads pinned."""
+
     def _service(self, history, snapshot):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
@@ -482,6 +485,269 @@ class TestInspectorServesArchivedForecast(unittest.IsolatedAsyncioTestCase):
 
         house = payload["series"]["houseForecast"]
         self.assertEqual([p["valueWh"] for p in house], [400.0])
+
+
+def _demand(appliance_id: str, slot_id: str, energy_kwh: float):
+    """One ApplianceDemandPoint, as the projection plan carries them."""
+    return SimpleNamespace(
+        appliance_id=appliance_id, slot_id=slot_id, energy_kwh=energy_kwh
+    )
+
+
+# The house before any appliance was scheduled into it, and what the planner then
+# added: 0.3 kWh of pool and 0.1 kWh of EV at 10:15, nothing at 10:30. The adjusted
+# forecast below is their sum, exactly as build_adjusted_house_forecast makes it.
+ORIGINAL_HOUSE_FORECAST = {
+    "status": "available",
+    "series": [
+        {"timestamp": f"{TODAY}T10:15:00+02:00", "nonDeferrable": {"value": 0.4}},
+        {"timestamp": f"{TODAY}T10:30:00+02:00", "nonDeferrable": {"value": 0.5}},
+    ],
+}
+ADJUSTED_HOUSE_FORECAST = {
+    "status": "available",
+    "series": [
+        {"timestamp": f"{TODAY}T10:15:00+02:00", "nonDeferrable": {"value": 0.8}},
+        {"timestamp": f"{TODAY}T10:30:00+02:00", "nonDeferrable": {"value": 0.5}},
+    ],
+}
+DEMAND_POINTS = (
+    _demand("pool", f"{TODAY}T10:15:00+02:00", 0.3),
+    _demand("ev", f"{TODAY}T10:15:00+02:00", 0.1),
+)
+# Every schedulable controllable, keyed by the id the demand points use. The EV
+# has no meter and is still scheduled; the boiler is metered but opted out of
+# deferrability, so it must not be reported as shiftable on either side of now.
+SCHEDULED_CONSUMERS = [
+    {
+        "id": "pool",
+        "label": "Pool pump",
+        "energy_entity_id": "sensor.pool_energy",
+        "deferrable": True,
+    },
+    {"id": "ev", "label": "EV charger", "energy_entity_id": None, "deferrable": True},
+    {
+        "id": "boiler",
+        "label": "Boiler",
+        "energy_entity_id": "sensor.boiler_energy",
+        "deferrable": False,
+    },
+]
+
+
+class TestInspectorForecastComposition(_InspectorHarness):
+    """The forecast half of the house breakdown: base load plus each scheduled appliance.
+
+    Reuses the archived-forecast harness above for the service and the pinned
+    slot helpers; only the two composition providers are new.
+    """
+
+    def _service(self, history=None, snapshot=None, *, composition=..., consumers=None):
+        service = super()._service(history or _FakeHistory({}), snapshot or _snapshot())
+        service._house_forecast_snapshot_provider = lambda: ADJUSTED_HOUSE_FORECAST
+        service._house_scheduled_consumers_provider = lambda: (
+            SCHEDULED_CONSUMERS if consumers is None else consumers
+        )
+        if composition is ...:
+            composition = {
+                "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+                "demand_points": DEMAND_POINTS,
+            }
+        service._house_forecast_composition_provider = lambda: composition
+        return service
+
+    async def test_a_future_slot_is_itemised_per_scheduled_appliance(self):
+        payload = await self._inspect(self._service(), TODAY)
+
+        breakdown = payload["series"]["houseForecastBreakdown"]
+        self.assertEqual([p["slot"] for p in breakdown], ["10:15", "10:30"])
+        # The scheduled appliance is named by the consumer sharing its
+        # controllable id, so it is the same row the measured breakdown draws.
+        self.assertEqual(
+            [(a["entityId"], a["label"], a["wh"], a["deferrable"])
+             for a in breakdown[0]["appliances"]],
+            [
+                ("sensor.pool_energy", "Pool pump", 300.0, True),
+                # No meter configured for the EV, so it is named after the
+                # controllable and carries no entity id: there is no sensor for
+                # the card to open, and its bare id is not one.
+                (None, "EV charger", 100.0, True),
+            ],
+        )
+        # The base is the house before the appliances were added, and the slot
+        # with nothing scheduled is all base.
+        self.assertEqual([p["unmeasuredWh"] for p in breakdown], [400.0, 500.0])
+        self.assertEqual(breakdown[1]["appliances"], [])
+        self.assertTrue(payload["availability"]["hasHouseForecastBreakdown"])
+
+    async def test_an_appliance_that_opted_out_is_not_reported_deferrable(self):
+        """``consumption.deferrable: false`` holds on both sides of now.
+
+        The planner still schedules such a device, so it still has demand to
+        itemise — but reporting it shiftable here while the measured breakdown
+        picks it up from the device tree as non-deferrable would make one
+        appliance mean two different things either side of the clock.
+        """
+        composition = {
+            "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+            "demand_points": (_demand("boiler", f"{TODAY}T10:15:00+02:00", 0.2),),
+        }
+        payload = await self._inspect(self._service(composition=composition), TODAY)
+
+        appliances = payload["series"]["houseForecastBreakdown"][0]["appliances"]
+        self.assertEqual(
+            [(a["label"], a["deferrable"]) for a in appliances], [("Boiler", False)]
+        )
+
+    async def test_an_unknown_controllable_is_named_but_never_given_an_entity(self):
+        """A demand point for something the roster does not know at all.
+
+        Its id is the only name there is, so it labels the row — but it is not an
+        entity id, and passing it off as one would offer the card a more-info
+        dialog for an entity that does not exist.
+        """
+        composition = {
+            "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+            "demand_points": (_demand("ghost", f"{TODAY}T10:15:00+02:00", 0.2),),
+        }
+        payload = await self._inspect(self._service(composition=composition), TODAY)
+
+        appliances = payload["series"]["houseForecastBreakdown"][0]["appliances"]
+        self.assertEqual(
+            [(a["entityId"], a["label"], a["deferrable"]) for a in appliances],
+            [(None, "ghost", False)],
+        )
+
+    def test_a_forecast_row_adopts_its_measured_twins_sensors(self):
+        """The same appliance opens the same sensor either side of now.
+
+        Switch and power sensors are known only to the device tree, which the
+        measured half has already read on any day that has one; the forecast row
+        takes them from that roster rather than reading it a second time. Built
+        directly, since the enrichment is a property of the builder and not of
+        the recorder plumbing that supplies it.
+        """
+        points = service_mod._build_house_forecast_breakdown(
+            {
+                "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+                "demand_points": DEMAND_POINTS,
+            },
+            SCHEDULED_CONSUMERS,
+            date.fromisoformat(TODAY),
+            next_slot=None,
+            metered_by_entity=[
+                {
+                    "energy_entity_id": "sensor.pool_energy",
+                    "switch_entity_id": "switch.pool",
+                    "power_entity_id": "sensor.pool_power",
+                }
+            ],
+        )
+
+        pool, ev = points[0].appliances
+        self.assertEqual(
+            (pool.switch_entity_id, pool.power_entity_id),
+            ("switch.pool", "sensor.pool_power"),
+        )
+        # The meterless one has no tree entry to adopt anything from.
+        self.assertEqual((ev.switch_entity_id, ev.power_entity_id), (None, None))
+
+    async def test_the_parts_sum_to_the_house_forecast_they_decompose(self):
+        payload = await self._inspect(self._service(), TODAY)
+
+        forecast_by_slot = {
+            p["timestamp"][11:16]: p["valueWh"] for p in payload["series"]["houseForecast"]
+        }
+        for point in payload["series"]["houseForecastBreakdown"]:
+            self.assertAlmostEqual(
+                point["unmeasuredWh"] + sum(a["wh"] for a in point["appliances"]),
+                forecast_by_slot[point["slot"]],
+                places=4,
+            )
+
+    async def test_elapsed_and_other_day_demand_is_left_out(self):
+        """Slot ids are local ISO timestamps; only this day's future ones count.
+
+        A slot the clock has passed is not part of the forecast series at all, and
+        tomorrow's 10:15 would otherwise collide with today's on the "HH:MM" key.
+        """
+        composition = {
+            "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
+            "demand_points": (
+                _demand("pool", f"{TODAY}T09:00:00+02:00", 0.9),
+                _demand("pool", "2026-05-12T10:15:00+02:00", 0.9),
+                *DEMAND_POINTS,
+            ),
+        }
+        payload = await self._inspect(self._service(composition=composition), TODAY)
+
+        breakdown = payload["series"]["houseForecastBreakdown"]
+        self.assertEqual([p["slot"] for p in breakdown], ["10:15", "10:30"])
+        self.assertEqual([a["wh"] for a in breakdown[0]["appliances"]], [300.0, 100.0])
+
+    async def test_a_cold_pipeline_yields_no_composition(self):
+        payload = await self._inspect(self._service(composition=None), TODAY)
+
+        self.assertEqual(payload["series"]["houseForecastBreakdown"], [])
+        self.assertFalse(payload["availability"]["hasHouseForecastBreakdown"])
+        # The plain forecast figure is untouched — the card just has nothing to
+        # itemise.
+        self.assertEqual(
+            [p["valueWh"] for p in payload["series"]["houseForecast"]], [800.0, 500.0]
+        )
+
+    async def test_a_past_only_day_never_reads_the_pipeline(self):
+        """Opening an old day must not touch the forecast pipeline at all.
+
+        The provider is cache-only, but reading it from outside the need_future
+        branch would still be a step towards a rebuild being triggered by a day
+        the user is only looking back at.
+        """
+        reads: list[str] = []
+        service = self._service()
+
+        def _composition():
+            reads.append("read")
+            return None
+
+        service._house_forecast_composition_provider = _composition
+        payload = await self._inspect(service, PAST_DAY)
+
+        self.assertEqual(reads, [])
+        self.assertEqual(payload["series"]["houseForecastBreakdown"], [])
+
+    async def test_the_deferrable_consumers_band_is_not_the_itemisation(self):
+        """The base model's own probabilistic band is a different quantity.
+
+        It is the forecast of what those appliances might draw, not what the
+        planner scheduled; the itemisation follows the demand points even when the
+        two disagree.
+        """
+        original = {
+            "status": "available",
+            "series": [
+                {
+                    "timestamp": f"{TODAY}T10:15:00+02:00",
+                    "nonDeferrable": {"value": 0.4},
+                    "deferrableConsumers": [
+                        {"entityId": "sensor.pool_energy", "value": 0.75},
+                    ],
+                },
+            ],
+        }
+        payload = await self._inspect(
+            self._service(
+                composition={
+                    "original_house_forecast": original,
+                    "demand_points": DEMAND_POINTS,
+                }
+            ),
+            TODAY,
+        )
+
+        breakdown = payload["series"]["houseForecastBreakdown"]
+        self.assertEqual([p["unmeasuredWh"] for p in breakdown], [400.0])
+        self.assertEqual([a["wh"] for a in breakdown[0]["appliances"]], [300.0, 100.0])
 
 
 if __name__ == "__main__":

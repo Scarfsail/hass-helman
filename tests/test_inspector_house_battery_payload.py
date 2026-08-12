@@ -242,6 +242,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "wh": 50.0,
                     "switchEntityId": None,
                     "powerEntityId": None,
+                    "deferrable": True,
                 },
                 {
                     "entityId": "sensor.ev",
@@ -249,6 +250,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "wh": 30.0,
                     "switchEntityId": None,
                     "powerEntityId": None,
+                    "deferrable": True,
                 },
             ],
         )
@@ -299,6 +301,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "wh": 30.0,
                     "switchEntityId": "switch.ev",
                     "powerEntityId": "sensor.ev_power",
+                    "deferrable": True,
                 },
                 {
                     "entityId": "sensor.fridge",
@@ -306,11 +309,45 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
                     "wh": 20.0,
                     "switchEntityId": "switch.fridge",
                     "powerEntityId": "sensor.fridge_power",
+                    "deferrable": False,
                 },
             ],
         )
         # House 180 − (30 + 20) = 130 unmeasured remainder.
         self.assertEqual(slot["unmeasuredWh"], 130.0)
+
+    async def test_house_actual_breakdown_marks_deferrable_consumers(self):
+        # Deferrability is a property of the device, read from which roster the
+        # consumer came from: the configured deferrable controllable is shiftable,
+        # the tree-only meter is not, and being on both lists keeps it shiftable.
+        async def _devices():
+            return [
+                {"energy_entity_id": "sensor.ev", "label": "EV (tree)"},
+                {"energy_entity_id": "sensor.fridge", "label": "Fridge"},
+            ]
+
+        payload = await _inspector_payload(
+            house_deferrable_consumers_provider=lambda: [
+                {"energy_entity_id": "sensor.dishwasher", "label": "Dishwasher"},
+                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
+            ],
+            house_device_consumers_provider=_devices,
+            _consumer_slot_by_entity={
+                "sensor.dishwasher": {"00:00": 50.0},
+                "sensor.ev": {"00:00": 30.0},
+                "sensor.fridge": {"00:00": 20.0},
+            },
+        )
+
+        slot = payload["series"]["houseActualBreakdown"][0]
+        self.assertEqual(
+            {a["entityId"]: a["deferrable"] for a in slot["appliances"]},
+            {
+                "sensor.dishwasher": True,
+                "sensor.ev": True,
+                "sensor.fridge": False,
+            },
+        )
 
     async def test_house_actual_breakdown_clamps_negative_base(self):
         # Appliances momentarily over-report past the house total: base floors at 0.

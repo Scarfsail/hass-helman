@@ -71,8 +71,10 @@ class SolarBiasCorrectionService:
         battery_forecast_provider=None,
         battery_forecast_history=None,
         house_forecast_snapshot_provider=None,
+        house_forecast_composition_provider=None,
         house_energy_entity_id_provider=None,
         house_deferrable_consumers_provider=None,
+        house_scheduled_consumers_provider=None,
         house_device_consumers_provider=None,
         house_unmeasured_label_provider=None,
         battery_soc_entity_id_provider=None,
@@ -90,8 +92,10 @@ class SolarBiasCorrectionService:
         self._battery_forecast_provider = battery_forecast_provider
         self._battery_forecast_history = battery_forecast_history
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
+        self._house_forecast_composition_provider = house_forecast_composition_provider
         self._house_energy_entity_id_provider = house_energy_entity_id_provider
         self._house_deferrable_consumers_provider = house_deferrable_consumers_provider
+        self._house_scheduled_consumers_provider = house_scheduled_consumers_provider
         self._house_device_consumers_provider = house_device_consumers_provider
         self._house_unmeasured_label_provider = house_unmeasured_label_provider
         self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
@@ -598,11 +602,23 @@ class SolarBiasCorrectionService:
             house_forecast_points = _points_before(
                 house_forecast_history_points, cutoff=next_slot
             )
+        house_forecast_breakdown_points: list[SolarBiasHouseBreakdownPoint] = []
         if need_future:
             house_forecast_points += _house_forecast_points_from_snapshot(
                 self._get_house_forecast_snapshot(),
                 target_date,
                 next_slot=next_slot,
+            )
+            # Only here, inside the need_future branch: the composition is read
+            # off the pipeline the gather above has just built, so a past-only
+            # day never touches it and no forecast rebuild can follow from
+            # opening an old day.
+            house_forecast_breakdown_points = _build_house_forecast_breakdown(
+                self._get_house_forecast_composition(),
+                self._house_scheduled_consumers(),
+                target_date,
+                next_slot=next_slot,
+                metered_by_entity=breakdown_consumers,
             )
 
         # --- Battery SoC, grid and battery forecast ---
@@ -662,6 +678,7 @@ class SolarBiasCorrectionService:
                 house_forecast=_inspector_points_from_raw(house_forecast_points),
                 house_actual=_inspector_points_from_raw(house_actual_points),
                 house_actual_breakdown=house_actual_breakdown_points,
+                house_forecast_breakdown=house_forecast_breakdown_points,
                 battery_soc_forecast=_battery_soc_points_from_raw(battery_soc_forecast_points),
                 battery_soc_actual=_battery_soc_points_from_raw(battery_soc_actual_points),
                 grid_forecast=_inspector_points_from_raw(grid_forecast_points),
@@ -715,6 +732,7 @@ class SolarBiasCorrectionService:
                 has_house_forecast=bool(house_forecast_points),
                 has_house_actual=bool(house_actual_points),
                 has_house_actual_breakdown=bool(house_actual_breakdown_points),
+                has_house_forecast_breakdown=bool(house_forecast_breakdown_points),
                 has_battery_soc_forecast=bool(battery_soc_forecast_points),
                 has_battery_soc_actual=bool(battery_soc_actual_points),
                 has_grid_forecast=bool(grid_forecast_points),
@@ -792,6 +810,20 @@ class SolarBiasCorrectionService:
             return self._house_forecast_snapshot_provider()
         except Exception:
             _LOGGER.exception("House forecast snapshot provider failed")
+            return None
+
+    def _get_house_forecast_composition(self) -> dict | None:
+        """What the adjusted house forecast is made of, or None when unknown.
+
+        A plain read of the pipeline the request has already built — never a
+        rebuild, so opening an old day cannot trigger a forecast run.
+        """
+        if self._house_forecast_composition_provider is None:
+            return None
+        try:
+            return self._house_forecast_composition_provider()
+        except Exception:
+            _LOGGER.exception("House forecast composition provider failed")
             return None
 
     async def _get_battery_forecast_snapshot(self) -> dict | None:
@@ -900,13 +932,20 @@ class SolarBiasCorrectionService:
         )
 
     @staticmethod
-    def _normalize_consumers(raw_consumers: Any) -> list[dict]:
+    def _normalize_consumers(raw_consumers: Any, *, deferrable: bool) -> list[dict]:
         """Coerce a provider's list to
-        ``[{energy_entity_id, label, switch_entity_id, power_entity_id}]``.
+        ``[{energy_entity_id, label, switch_entity_id, power_entity_id, deferrable, id}]``.
 
         Drops anything without a usable entity id and defaults a missing label to
         the entity id, so callers get a clean, deduplicable list. The switch and
         power sensor are optional — only the device tree knows them.
+
+        ``deferrable`` is the caller's answer for the whole list: a provider is one
+        roster, so which roster an entry came from is the only thing that decides it.
+
+        ``id`` is the controllable id where the roster carries one — the key the
+        forecast's scheduled demand is reported under, and None for a device the
+        tree alone knows about.
         """
         result: list[dict] = []
         for consumer in raw_consumers or []:
@@ -918,12 +957,19 @@ class SolarBiasCorrectionService:
             eid = entity_id.strip()
             switch = consumer.get("switch_entity_id")
             power = consumer.get("power_entity_id")
+            controllable_id = consumer.get("id")
             result.append(
                 {
                     "energy_entity_id": eid,
                     "label": consumer.get("label", eid),
                     "switch_entity_id": switch if isinstance(switch, str) and switch else None,
                     "power_entity_id": power if isinstance(power, str) and power else None,
+                    "deferrable": deferrable,
+                    "id": (
+                        controllable_id
+                        if isinstance(controllable_id, str) and controllable_id
+                        else None
+                    ),
                 }
             )
         return result
@@ -937,7 +983,23 @@ class SolarBiasCorrectionService:
         except Exception:
             _LOGGER.exception("House deferrable consumers provider failed")
             return []
-        return self._normalize_consumers(raw)
+        return self._normalize_consumers(raw, deferrable=True)
+
+    def _house_scheduled_consumers(self) -> list[dict]:
+        """Every schedulable controllable by id, for naming the forecast's rows.
+
+        Taken raw rather than through :meth:`_normalize_consumers`, which exists
+        to enforce a usable meter — the whole point here is that a scheduled
+        appliance without one still gets a row.
+        """
+        if self._house_scheduled_consumers_provider is None:
+            return []
+        try:
+            raw = self._house_scheduled_consumers_provider() or []
+        except Exception:
+            _LOGGER.exception("House scheduled consumers provider failed")
+            return []
+        return [consumer for consumer in raw if isinstance(consumer, dict)]
 
     def _house_unmeasured_label(self) -> str | None:
         """The power card's configured title for unmetered load, if any."""
@@ -959,7 +1021,7 @@ class SolarBiasCorrectionService:
         except Exception:
             _LOGGER.exception("House device consumers provider failed")
             return []
-        return self._normalize_consumers(raw)
+        return self._normalize_consumers(raw, deferrable=False)
 
     async def _house_breakdown_consumers(self) -> list[dict]:
         """The full set the house actual is split by: deferrable appliances first,
@@ -972,7 +1034,8 @@ class SolarBiasCorrectionService:
         it. A deferrable consumer that IS also a tree node keeps its own label but
         adopts the tree's switch and power sensor, which is the only place either
         is known — otherwise the appliances most likely to have them would lose
-        them to the dedup.
+        them to the dedup. It also keeps its ``deferrable`` flag: being metered by
+        the tree as well does not make a shiftable appliance unshiftable.
         """
         deferrable = self._house_deferrable_consumers()
         device = await self._house_device_consumers()
@@ -1849,12 +1912,129 @@ def _build_house_actual_breakdown(
                     value_wh=round(wh, 4),
                     switch_entity_id=consumer.get("switch_entity_id"),
                     power_entity_id=consumer.get("power_entity_id"),
+                    deferrable=bool(consumer.get("deferrable")),
                 )
             )
         unmeasured_wh = round(max(0.0, float(house_wh) - measured_sum), 4)
         points.append(
             SolarBiasHouseBreakdownPoint(
                 slot=slot, unmeasured_wh=unmeasured_wh, appliances=appliances
+            )
+        )
+    return points
+
+
+def _forecast_appliance_component(
+    appliance_id: str,
+    energy_kwh: float,
+    consumer: dict | None,
+    metered_by_entity_id: dict[str, dict],
+) -> SolarBiasApplianceComponent:
+    """One scheduled appliance's row, named and flagged as its controllable is.
+
+    A controllable the roster does not know at all keeps its id as a last-resort
+    label — it is the only name there is — but never as an entity id, and it is
+    reported non-deferrable rather than assumed shiftable.
+    """
+    consumer = consumer or {}
+    entity_id = consumer.get("energy_entity_id")
+    metered = metered_by_entity_id.get(entity_id) if entity_id else None
+    return SolarBiasApplianceComponent(
+        entity_id=entity_id,
+        label=consumer.get("label") or appliance_id,
+        value_wh=round(energy_kwh * 1000.0, 4),
+        switch_entity_id=(metered or {}).get("switch_entity_id"),
+        power_entity_id=(metered or {}).get("power_entity_id"),
+        deferrable=bool(consumer.get("deferrable")),
+    )
+
+
+def _build_house_forecast_breakdown(
+    composition: dict | None,
+    consumers: list[dict],
+    target_date: date,
+    *,
+    next_slot: datetime | None,
+    metered_by_entity: list[dict] | None = None,
+) -> list[SolarBiasHouseBreakdownPoint]:
+    """Split each forecast slot into the base load plus every appliance scheduled in it.
+
+    The two halves come off the same pipeline snapshot the adjusted forecast was
+    built from: ``original_house_forecast`` is the house before any appliance was
+    added, and ``demand_points`` is what the planner added to it. Since the
+    adjusted nonDeferrable is exactly their sum, the parts reconcile with the
+    houseForecast series the chart draws, slot for slot — the same guarantee the
+    measured breakdown gives against houseActual.
+
+    An appliance is named by the schedulable consumer sharing its controllable id,
+    so a given device is one row with one name — and one deferrability — whether
+    the slot is past or future. One with no meter configured still gets a row,
+    named after the controllable and carrying no entity id: there is no sensor to
+    open, and passing the bare id off as one would offer the card a more-info
+    dialog for an entity that does not exist.
+
+    ``metered_by_entity`` is the measured breakdown's own roster, already merged
+    with the device tree, and is how a forecast row picks up the switch and power
+    sensor its measured twin shows. It is empty on a day with no past half, which
+    is also a day with no measured panel to look asymmetric beside.
+
+    With no composition to read — a cold pipeline — the breakdown is empty and the
+    card falls back to the plain forecast figure.
+    """
+    if not isinstance(composition, dict):
+        return []
+    base_points = _house_forecast_points_from_snapshot(
+        composition.get("original_house_forecast"),
+        target_date,
+        next_slot=next_slot,
+    )
+    if not base_points:
+        return []
+
+    consumer_by_id = {
+        consumer["id"]: consumer for consumer in consumers if consumer.get("id")
+    }
+    metered_by_entity_id = {
+        consumer["energy_entity_id"]: consumer for consumer in metered_by_entity or []
+    }
+    # Slot ids are local ISO timestamps; the breakdown is keyed "HH:MM" like the
+    # rest of the inspector, so convert once here and drop other days rather than
+    # letting the same clock time on two dates collide.
+    demand_by_slot: dict[str, dict[str, float]] = {}
+    for demand_point in composition.get("demand_points") or ():
+        try:
+            slot_start = datetime.fromisoformat(demand_point.slot_id)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if slot_start.date() != target_date:
+            continue
+        slot = slot_start.strftime("%H:%M")
+        by_appliance = demand_by_slot.setdefault(slot, {})
+        by_appliance[demand_point.appliance_id] = (
+            by_appliance.get(demand_point.appliance_id, 0.0)
+            + float(demand_point.energy_kwh)
+        )
+
+    points: list[SolarBiasHouseBreakdownPoint] = []
+    for point in base_points:
+        timestamp = point.get("timestamp")
+        if not isinstance(timestamp, str) or len(timestamp) < 16:
+            continue
+        slot = timestamp[11:16]
+        appliances = [
+            _forecast_appliance_component(
+                appliance_id,
+                energy_kwh,
+                consumer_by_id.get(appliance_id),
+                metered_by_entity_id,
+            )
+            for appliance_id, energy_kwh in demand_by_slot.get(slot, {}).items()
+        ]
+        points.append(
+            SolarBiasHouseBreakdownPoint(
+                slot=slot,
+                unmeasured_wh=round(float(point["wh"]), 4),
+                appliances=appliances,
             )
         )
     return points

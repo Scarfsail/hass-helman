@@ -30,6 +30,10 @@ export class DeviceNode {
     public powerHistory: number[] = [];
     public historyBuckets: number;
     public isUnmeasured: boolean = false; // Indicates if this node represents unmeasured power
+    // A shiftable house consumer — a configured deferrable controllable. Paints the
+    // box in the shared lighter house shade; a property of the device, not of when
+    // it happened to run.
+    public deferrable?: boolean;
     public valueType: ValueType;
 
     public sourcePowerHistory?: { [sourceName: string]: { power: number; color: string } }[];

@@ -18,7 +18,11 @@
       "house_forecast": "House forecast",
       "house_actual": "Actual house",
       "house_composition": "House composition (actual)",
+      "house_composition_forecast": "House composition (forecast)",
       "house_unmeasured": "Unmeasured consumption",
+      "house_base_load": "Base load",
+      "house_group_base": "Base consumption",
+      "house_group_deferrable": "Deferrable consumption",
       "battery_soc_forecast": "Battery SoC forecast",
       "battery_soc_actual": "Actual battery SoC",
       "battery_soc_strip": "Battery state of charge",
@@ -75,6 +79,8 @@
       "merged": {
         "solar": "Solar production",
         "house": "House",
+        "house_non_deferrable": "House (non-deferrable)",
+        "house_deferrable": "House (deferrable)",
         "grid": "Grid",
         "battery": "Battery",
         "battery_soc": "Battery SoC",
@@ -83,6 +89,7 @@
     }
   },
   "house_section": {
+    "deferrable_tag": "deferrable",
     "show_more": "More",
     "show_less": "Less"
   },

@@ -3,6 +3,7 @@
     "loading": "Načítání energetických dat…"
   },
   "house_section": {
+    "deferrable_tag": "odložitelná",
     "group_by": "Seskupit podle",
     "others": "Ostatní",
     "show_more": "Více",
@@ -551,7 +552,11 @@
       "house_forecast": "Predikce spotřeby",
       "house_actual": "Skutečná spotřeba",
       "house_composition": "Složení spotřeby (skutečné)",
+      "house_composition_forecast": "Složení spotřeby (predikce)",
       "house_unmeasured": "Nesledovaná spotřeba",
+      "house_base_load": "Základní spotřeba",
+      "house_group_base": "Základní spotřeba",
+      "house_group_deferrable": "Odložitelná spotřeba",
       "battery_soc_forecast": "Predikce SoC baterie",
       "battery_soc_actual": "Skutečné SoC baterie",
       "battery_soc_strip": "Stav nabití baterie",
@@ -607,6 +612,8 @@
       "merged": {
         "solar": "Solární výroba",
         "house": "Spotřeba",
+        "house_non_deferrable": "Spotřeba (neodložitelná)",
+        "house_deferrable": "Spotřeba (odložitelná)",
         "grid": "Síť",
         "battery": "Baterie",
         "battery_soc": "SoC baterie",

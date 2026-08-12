@@ -6,6 +6,7 @@ import { BatteryDeviceConfig, GridDeviceConfig, HouseDeviceConfig, SolarDeviceCo
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { sharedStyles } from "./shared-styles";
 import { convertToKWh, getDisplayEnergyUnit } from "./energy-unit-converter";
+import { getLocalizeFunction } from "../localize/localize";
 
 @customElement("power-device-info")
 export class PowerDeviceInfo extends LitElement {
@@ -57,7 +58,22 @@ export class PowerDeviceInfo extends LitElement {
         }
 
         const hasAdditionalInfo = this.device.show_additional_info;
-        const hasCustomLabels = this.device.customLabelTexts && this.device.customLabelTexts.length > 0;
+        // The deferrable tag rides the same badge channel as the configured label
+        // texts and is appended to them, never in place of them: a device can be
+        // both labelled and shiftable. Deciding it here — beside power-device's
+        // tint, off the same `deferrable` flag — is what makes the power card and
+        // the solar inspector mark the load identically.
+        //
+        // Only a device wears it. A group of shiftable devices takes the tint, but
+        // tagging it too would badge a row already named for the thing the badge
+        // says — the inspector's "Deferrable consumption" header labelled
+        // "deferrable".
+        const tagDeferrable = this.device.deferrable && !this.device.children?.length;
+        const customLabels = [
+            ...(this.device.customLabelTexts ?? []),
+            ...(tagDeferrable ? [getLocalizeFunction(this.hass)("house_section.deferrable_tag")] : []),
+        ];
+        const hasCustomLabels = customLabels.length > 0;
 
         if (!hasAdditionalInfo && !hasCustomLabels) {
             return nothing;
@@ -72,7 +88,7 @@ export class PowerDeviceInfo extends LitElement {
                 ` : nothing}
                 ${hasCustomLabels ? html`
                     <div class="info custom-labels">
-                        ${this.device.customLabelTexts!.join(' • ')}
+                        ${customLabels.join(' • ')}
                     </div>
                 ` : nothing}
             </div>

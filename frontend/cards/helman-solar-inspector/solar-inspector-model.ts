@@ -1,6 +1,10 @@
 export type InspectorPoint = { timestamp: string; valueWh: number };
 export type ApplianceComponent = {
-  entityId: string;
+  /**
+   * The device's energy stat, or null for a scheduled appliance with no meter
+   * configured — it has demand to report but no sensor to open.
+   */
+  entityId: string | null;
   label: string;
   wh: number;
   /** The device's controlling switch, where the power card knows one. */
@@ -11,6 +15,11 @@ export type ApplianceComponent = {
    * stat) only where the tree resolved no power sensor.
    */
   powerEntityId: string | null;
+  /**
+   * A shiftable appliance — a configured deferrable controllable. A property of
+   * the device, not of the slot: it stays true in slots nothing scheduled it.
+   */
+  deferrable: boolean;
 };
 export type HouseBreakdownPoint = {
   slot: string;

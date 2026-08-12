@@ -105,7 +105,7 @@ from .const import (
     SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .consumption_forecast_builder import ConsumptionForecastBuilder
-from .controllables.config import read_deferrable_consumers
+from .controllables.config import read_deferrable_consumers, read_scheduled_consumers
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
     profile_from_dict,
@@ -714,8 +714,10 @@ class HelmanCoordinator:
             battery_forecast_provider=self._async_get_battery_forecast_snapshot,
             battery_forecast_history=self._battery_forecast_history,
             house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
+            house_forecast_composition_provider=self._get_house_forecast_composition,
             house_energy_entity_id_provider=self._get_house_energy_entity_id,
             house_deferrable_consumers_provider=self._get_house_deferrable_consumers,
+            house_scheduled_consumers_provider=self._get_house_scheduled_consumers,
             house_device_consumers_provider=self._get_house_device_consumers,
             house_unmeasured_label_provider=self._get_house_unmeasured_label,
             battery_soc_entity_id_provider=self._get_battery_soc_entity_id,
@@ -981,6 +983,16 @@ class HelmanCoordinator:
         ``controllables`` the same question.
         """
         return read_deferrable_consumers(self._active_config)
+
+    def _get_house_scheduled_consumers(self) -> list[dict[str, Any]]:
+        """Every controllable the planner can schedule demand for, by id.
+
+        The forecast's itemisation names appliances from this rather than from
+        the deferrable roster: the planner schedules meterless controllables
+        too, and one that opted out of deferrability still gets scheduled — it
+        just is not deferrable, on either side of now.
+        """
+        return read_scheduled_consumers(self._active_config)
 
     def _get_house_unmeasured_label(self) -> str | None:
         """The power card's own title for unmetered house load.
@@ -2585,6 +2597,30 @@ class HelmanCoordinator:
         if pipeline is None:
             return None
         return pipeline.adjusted_house_forecast
+
+    def _get_house_forecast_composition(self) -> dict[str, Any] | None:
+        """What the adjusted house forecast is made of: the base, and each appliance.
+
+        The inspector itemises a future slot the way it itemises a past one, and
+        the adjusted forecast alone cannot say who is in it — its nonDeferrable is
+        one scalar with every scheduled appliance already folded in. The two
+        halves that produced it are still on the pipeline, so they are handed over
+        untouched: the original house forecast, and the plan's per-appliance
+        demand points.
+
+        Synchronous and cache-only, exactly like
+        _get_adjusted_house_forecast_snapshot: awaiting a pipeline getter here
+        would let opening a day in the inspector kick off a full appliance and
+        battery forecast rebuild. Cold cache yields None and the card degrades to
+        a plain forecast figure.
+        """
+        pipeline = self._cached_appliance_forecast_pipeline
+        if pipeline is None:
+            return None
+        return {
+            "original_house_forecast": pipeline.original_house_forecast,
+            "demand_points": pipeline.projection_plan.demand_points,
+        }
 
     def _build_forecast_schedule_documents(
         self,

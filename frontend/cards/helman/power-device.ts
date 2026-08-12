@@ -3,7 +3,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import { nodeAccentColor } from "../color-utils";
+import { DEFERRABLE_HOUSE_COLOR, nodeAccentColor, withAlpha } from "../color-utils";
 import { DeviceNode, isNodeVisible } from "./DeviceNode";
 import "./power-device";
 import "./power-devices-container";
@@ -196,9 +196,17 @@ export class PowerDevice extends LitElement {
         // inherit their section's tint — that's how the house breakdown picks up
         // the house color.
         const nodeColor = device.sourceType ? nodeAccentColor(device.sourceType) : undefined;
-        const historyBarColor = nodeColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
+        // A shiftable consumer is still a house child, so it earns no glow of its
+        // own — only the lighter house shade, so deferrable load reads as its own
+        // quantity against the section tint it would otherwise inherit. This is the
+        // single place that decision is made, for every card that draws these boxes.
+        const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '60') : undefined);
+        const historyBarColor = tintColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
-                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap(nodeColor ? {'--device-shadow-color': nodeColor, '--device-tint': nodeColor} : {})}>
+                <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap({
+                    ...(nodeColor ? {'--device-shadow-color': nodeColor} : {}),
+                    ...(tintColor ? {'--device-tint': tintColor} : {}),
+                })}>
                     <helman-power-history-bars
                         .historyToRender=${[...historyToRender]}
                         .maxHistoryPower=${maxHistoryPower}
