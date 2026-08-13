@@ -976,6 +976,14 @@ class SelfSustainabilityUnificationTests(unittest.TestCase):
         )
 
     def test_the_master_margin_lands_on_every_group(self) -> None:
+        """Including the group with no budget — deliberately, unlike the default.
+
+        A named master margin *was* what every group resolved, so dropping it
+        from the ones without a budget would mean a group that gains one later
+        silently runs on `5` instead of the 12 the config has said all along.
+        Contrast `test_a_group_that_never_used_the_feature_gets_no_margin_written`:
+        there is no such meaning to preserve in a value nobody typed.
+        """
         migrated, _ids = self._migrate_from_v10(
             self._runtime(
                 params={"self_sustainability": {"margin_pct": 12}},

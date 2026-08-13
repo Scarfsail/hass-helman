@@ -31,14 +31,13 @@ Assumes the shape and semantics of
 | Decision | Note |
 |---|---|
 | Coverage and self-sustainability stay independent | Neither subsumes the other. Coverage refuses a slot with thin sun even when the battery is full and would cover it for nothing; self-sustainability permits battery use precisely when the simulation shows it is harmless. |
-| The floor is `inverter min_soc + margin_pct`, in **percentage points** | Not a bare SoC threshold. A floor *at* `min_soc` is provably inert: `min_energy_kwh = nominal × min_soc/100` (`battery_state.py:243`), every discharge path clamps `remaining = max(min_energy_kwh, …)`, and `socPct = remaining/nominal × 100` — so the projected SoC can never reach `min_soc`, let alone breach it. Only a floor strictly above it can ever fire. |
+| The floor is `inverter min_soc + self_sustainability_margin_pct`, in **percentage points** | Not a bare SoC threshold. A floor *at* `min_soc` is provably inert: `min_energy_kwh = nominal × min_soc/100` (`battery_state.py:243`), every discharge path clamps `remaining = max(min_energy_kwh, …)`, and `socPct = remaining/nominal × 100` — so the projected SoC can never reach `min_soc`, let alone breach it. Only a floor strictly above it can ever fire. |
 | The budget is the condition's *value*, not a bool | One key, per group, and absent still means unconstrained. A bool plus a separate knob would let them contradict. **`0` is the strictest value, not the absent one** — every reader tests `is None`, never truthiness. |
 | Both numbers are conditions | The margin was a param, which buried it in the optimizer's general section and let its label fall back to the shared `margin_pct` string. As a condition it sits beside the budget it qualifies and is natively per-group. |
 | `ensure_self_sustainability` is **self-gating** | It couples slots — placing at 09:00 changes whether 20:00 is feasible — and `system_mask &= mask` (`evaluation.py:201`) assumes slot independence. Follows the `reserve_floor_soc` precedent (`conditions/types.py:227`, `charge_from_grid.py:180`). |
 | The budget **inherits** the floor rather than replacing it | A day can come in under budget while still dipping through the floor at noon. The floor test runs first and unconditionally, at every budget value. |
-| The budget sums battery drain and grid import | Both are energy the sun did not provide, and which of them a placement lands on is battery physics rather than anything the optimizer picks — budgeting one would leave the other ungoverned. |
+| The budget sums battery drain and grid import | Both are energy the sun did not provide, and which of them a placement lands on is battery physics rather than anything the optimizer picks — budgeting one would leave the other ungoverned. SoC alone especially does not prove solar paid, since grid import can leave the battery unchanged; see "Why ΔSoC alone is not enough". |
 | `100` means *unbounded*, not one battery's worth | A multi-kW appliance running a full window can exceed nominal capacity in a day, so a literal 100 % budget would still refuse placements the floor alone was meant to govern. |
-| Strict compares **both** ΔSoC and Δimport | SoC alone does not prove solar paid: grid import also leaves the battery unchanged. See "Why ΔSoC alone is not enough". |
 | `min_soc_pct` is kept | "Is the battery low *now*" is a different question from "will the plan *make* it low". |
 | Forced runs bypass self-sustainability | Consistent with today: `max_consecutive_skips` already defeats every group's conditions. The forced ranking inverts to `(covered, price)` so the run takes the least damaging slots. |
 | `when_price_below`'s bucket aggregation is **out of scope** | It is a pre-existing inconsistency in a condition shared with `export_price`, with its own design question. Tracked as #5 — see "Deliberately not here". |
@@ -103,10 +102,15 @@ gives it teeth — which is also why a margin of `0` is legal and simply never f
 |---|---|
 | `ensure_self_sustainability: strict` | `ensure_self_sustainability: 0` |
 | `ensure_self_sustainability: soft` | `ensure_self_sustainability: 100` |
-| `params.self_sustainability.margin_pct: 12` | `self_sustainability_margin_pct: 12` on every group |
+| `params.self_sustainability.margin_pct: 12` | `self_sustainability_margin_pct: 12` on **every** group, including ones with no budget |
 | a group override setting `margin_pct: 20` | `self_sustainability_margin_pct: 20` on that group, beating the master |
 | the feature used, no margin named anywhere | `self_sustainability_margin_pct: 5` — the old param default, written out |
-| a group that never used the feature | nothing written; the condition field's own default covers it |
+| no margin named, and a group that never used the feature | nothing written; the condition field's own default covers it |
+
+The first and last rows look inconsistent and are not. A named master margin *was* what every group
+resolved, so dropping it from the ones without a budget would mean a group that gains one later
+silently runs on `5` instead of the 12 the config has said all along. A margin nobody typed has no
+such meaning to preserve, and writing it out would be noise on every group of every appliance.
 
 `params.self_sustainability` is removed either way, as is a group `params` override the move
 empties — an empty override renders in the editor as a group that overrides params when it does not.

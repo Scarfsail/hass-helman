@@ -565,6 +565,15 @@ def _unify_self_sustainability(optimizer: dict[str, Any]) -> dict[str, Any]:
     is left off and the condition field's own default supplies it, because
     stamping ``5`` onto every group of every appliance would be noise the user
     did not write and would have to read past.
+
+    **A named master margin is written onto every group, including ones with no
+    budget; an unnamed one is not.** The asymmetry is deliberate, and it is the
+    difference between a number the user wrote and a default they never saw. A
+    master ``margin_pct: 12`` genuinely *was* what all three groups of a
+    three-group optimizer resolved, so dropping it from the two without a budget
+    would mean a group that gains one later silently runs on ``5`` instead of
+    the 12 the config has said all along. Carrying a value nobody typed would
+    have no such meaning to preserve.
     """
     if optimizer.get("kind") != "appliance_runtime":
         return optimizer
