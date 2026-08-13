@@ -1059,6 +1059,36 @@ class SelfSustainabilityUnificationTests(unittest.TestCase):
 
         self.assertEqual(migrated["conditions"][0], {"run_when": ALL_DAYS})
 
+    def test_a_malformed_conditions_key_is_left_for_the_reader(self) -> None:
+        """Not replaced with `[]`, which would launder it into "no groups".
+
+        There is nothing to move the margin onto either way, and such a document
+        is rejected on load regardless — an optimizer must list at least one
+        condition group — so the honest move is to leave it exactly as found.
+        """
+        broken = self._runtime(
+            params={"self_sustainability": {"margin_pct": 12}},
+            conditions="junk",
+        )
+        migrated, _ids = self._migrate_from_v10(broken)
+
+        self.assertEqual(migrated["conditions"], "junk")
+        self.assertEqual(
+            migrated["params"], {"self_sustainability": {"margin_pct": 12}}
+        )
+
+    def test_a_group_that_is_not_a_mapping_is_passed_through(self) -> None:
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(
+                conditions=["junk", {"ensure_self_sustainability": "strict"}]
+            )
+        )
+
+        self.assertEqual(migrated["conditions"][0], "junk")
+        self.assertEqual(
+            migrated["conditions"][1]["ensure_self_sustainability"], 0
+        )
+
     def test_other_kinds_are_untouched(self) -> None:
         migrated, _ids = self._migrate_from_v10(
             {

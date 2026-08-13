@@ -569,13 +569,18 @@ def _unify_self_sustainability(optimizer: dict[str, Any]) -> dict[str, Any]:
     if optimizer.get("kind") != "appliance_runtime":
         return optimizer
 
+    conditions = optimizer.get("conditions")
+    if not isinstance(conditions, list):
+        # Nothing to move the margin *onto*, and a malformed or absent
+        # `conditions` is the reader's to reject — replacing it with `[]` here
+        # would launder it into a valid config that silently means "no groups".
+        # Same bail as `_rename_appliance_runtime_price_condition`.
+        return optimizer
+
     params = optimizer.get("params")
     params = dict(params) if isinstance(params, Mapping) else {}
     master_margin = _margin_from(params)
 
-    conditions = optimizer.get("conditions")
-    if not isinstance(conditions, list):
-        conditions = []
     rebuilt: list[Any] = []
     for group in conditions:
         if not isinstance(group, Mapping):
