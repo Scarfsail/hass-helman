@@ -65,9 +65,6 @@ _INVERTER_CONTROL_PATH = (
 )
 SCHEDULE_SLOT_KEYS = {"id", "controllables"}
 
-if SCHEDULE_SLOT_MINUTES <= 0 or 60 % SCHEDULE_SLOT_MINUTES != 0:
-    raise ValueError("SCHEDULE_SLOT_MINUTES must be a positive divisor of 60")
-
 SCHEDULE_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 
 

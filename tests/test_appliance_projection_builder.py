@@ -4,7 +4,7 @@ import importlib
 import sys
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +82,7 @@ def _restore_modules(previous_modules: dict[str, types.ModuleType | None]) -> No
 _previous_modules = _install_import_stubs()
 try:
     config_module = importlib.import_module("custom_components.helman.appliances.config")
+    const_module = importlib.import_module("custom_components.helman.const")
     ev_charger_module = importlib.import_module(
         "custom_components.helman.appliances.ev_charger"
     )
@@ -105,11 +106,24 @@ EvChargerApplianceRuntime = ev_charger_module.EvChargerApplianceRuntime
 EvChargerEcoGearRuntime = ev_charger_module.EvChargerEcoGearRuntime
 EvChargerUseModeRuntime = ev_charger_module.EvChargerUseModeRuntime
 EvVehicleRuntime = ev_charger_module.EvVehicleRuntime
+SCHEDULE_SLOT_MINUTES = const_module.SCHEDULE_SLOT_MINUTES
 format_slot_id = schedule_module.format_slot_id
 ScheduleDocument = schedule_module.ScheduleDocument
 build_controllable_actions = schedule_module.build_controllable_actions
 inverter_action = schedule_module.inverter_action
 appliance_actions = schedule_module.appliance_actions
+
+
+def _slots_spanning(action: dict, *slot_ids: str) -> dict:
+    """The same appliance action on each of ``slot_ids``.
+
+    Several projection tests need a scheduled run long enough to cross more than
+    one forecast bucket; on the 15-minute grid that takes more than one slot.
+    """
+    return {
+        slot_id: build_controllable_actions(appliances=action)
+        for slot_id in slot_ids
+    }
 
 
 def _valid_config() -> dict:
@@ -259,17 +273,11 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             registry=registry,
             hass=None,
             schedule_document=ScheduleDocument(
-                slots={
-                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
-                        appliances={
-                            "garage-ev": {
-                                "charge": True,
-                                "vehicleId": "tesla",
-                                "useMode": "Fast",
-                            }
-                        }
-                    )
-                }
+                slots=_slots_spanning(
+                    {"garage-ev": {"charge": True, "vehicleId": "tesla", "useMode": "Fast"}},
+                    "2026-03-20T21:00:00+01:00",
+                    "2026-03-20T21:15:00+01:00",
+                )
             ),
             inputs=inputs,
         )
@@ -298,17 +306,11 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             registry=registry,
             hass=None,
             schedule_document=ScheduleDocument(
-                slots={
-                    "2026-03-20T21:00:00+01:00": build_controllable_actions(
-                        appliances={
-                            "garage-ev": {
-                                "charge": True,
-                                "vehicleId": "tesla",
-                                "useMode": "Boost",
-                            }
-                        }
-                    )
-                }
+                slots=_slots_spanning(
+                    {"garage-ev": {"charge": True, "vehicleId": "tesla", "useMode": "Boost"}},
+                    "2026-03-20T21:00:00+01:00",
+                    "2026-03-20T21:15:00+01:00",
+                )
             ),
             inputs=inputs,
         )
@@ -334,18 +336,18 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             registry=registry,
             hass=None,
             schedule_document=ScheduleDocument(
-                slots={
-                    "2026-03-20T21:30:00+01:00": build_controllable_actions(
-                        appliances={
-                            "garage-ev": {
-                                "charge": True,
-                                "vehicleId": "kona",
-                                "useMode": "ECO",
-                                "ecoGear": "6A",
-                            }
+                slots=_slots_spanning(
+                    {
+                        "garage-ev": {
+                            "charge": True,
+                            "vehicleId": "kona",
+                            "useMode": "ECO",
+                            "ecoGear": "6A",
                         }
-                    )
-                }
+                    },
+                    "2026-03-20T21:30:00+01:00",
+                    "2026-03-20T21:45:00+01:00",
+                )
             ),
             inputs=inputs,
         )
@@ -375,19 +377,19 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             registry=registry,
             hass=None,
             schedule_document=ScheduleDocument(
-                slots={
-                    "2026-03-20T21:30:00+01:00": build_controllable_actions(
-                        appliances={
-                            "garage-ev": {
-                                "charge": True,
-                                "vehicleId": "kona",
-                                "useMode": "ECO",
-                                "ecoGear": "6A",
-                            },
-                            "dishwasher": {"on": True},
-                        }
-                    )
-                }
+                slots=_slots_spanning(
+                    {
+                        "garage-ev": {
+                            "charge": True,
+                            "vehicleId": "kona",
+                            "useMode": "ECO",
+                            "ecoGear": "6A",
+                        },
+                        "dishwasher": {"on": True},
+                    },
+                    "2026-03-20T21:30:00+01:00",
+                    "2026-03-20T21:45:00+01:00",
+                )
             ),
             inputs=inputs,
         )
@@ -441,19 +443,19 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
             registry=registry,
             hass=None,
             schedule_document=ScheduleDocument(
-                slots={
-                    "2026-03-20T21:30:00+01:00": build_controllable_actions(
-                        appliances={
-                            "garage-ev": {
-                                "charge": True,
-                                "vehicleId": "kona",
-                                "useMode": "ECO",
-                                "ecoGear": "6A",
-                            },
-                            "dishwasher": {"on": True},
-                        }
-                    )
-                }
+                slots=_slots_spanning(
+                    {
+                        "garage-ev": {
+                            "charge": True,
+                            "vehicleId": "kona",
+                            "useMode": "ECO",
+                            "ecoGear": "6A",
+                        },
+                        "dishwasher": {"on": True},
+                    },
+                    "2026-03-20T21:30:00+01:00",
+                    "2026-03-20T21:45:00+01:00",
+                )
             ),
             inputs=inputs,
         )
@@ -560,14 +562,11 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
         self.assertEqual(
             [(point.slot_id, point.energy_kwh, point.projection_method) for point in plan.appliances_by_id["dishwasher"].points],
-            [("2026-03-20T21:00:00+01:00", 0.46, "fixed")],
+            [("2026-03-20T21:00:00+01:00", 0.16, "fixed")],
         )
         self.assertEqual(
             [(point.slot_id, point.energy_kwh) for point in plan.demand_points],
-            [
-                ("2026-03-20T21:00:00+01:00", 0.16),
-                ("2026-03-20T21:15:00+01:00", 0.3),
-            ],
+            [("2026-03-20T21:00:00+01:00", 0.16)],
         )
 
     def test_the_slot_in_progress_carries_its_whole_scheduled_demand(self) -> None:
@@ -592,7 +591,9 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
                     )
                     for slot_id in (
                         "2026-03-20T21:00:00+01:00",
+                        "2026-03-20T21:15:00+01:00",
                         "2026-03-20T21:30:00+01:00",
+                        "2026-03-20T21:45:00+01:00",
                     )
                 }
             ),
@@ -638,7 +639,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
         series = plan.appliances_by_id["dishwasher"].points
         self.assertEqual(len(series), 1)
-        self.assertEqual(series[0].energy_kwh, 0.3067)
+        self.assertEqual(series[0].energy_kwh, 0.1067)
         self.assertEqual(series[0].projection_method, "history_average")
 
     def test_resolved_input_demand_profile_matches_projection_plan_demand_points(self) -> None:
@@ -707,7 +708,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
         series = plan.appliances_by_id["dishwasher"].points
         self.assertEqual(len(series), 1)
-        self.assertEqual(series[0].energy_kwh, 0.46)
+        self.assertEqual(series[0].energy_kwh, 0.16)
         self.assertEqual(series[0].projection_method, "fixed_fallback")
 
     def test_climate_fixed_projection_prorates_slot_duration_and_emits_mode(self) -> None:
@@ -730,15 +731,12 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
         series = plan.appliances_by_id["living-room-hvac"].points
         self.assertEqual(len(series), 1)
-        self.assertEqual(series[0].energy_kwh, 0.575)
+        self.assertEqual(series[0].energy_kwh, 0.2)
         self.assertEqual(series[0].mode, "heat")
         self.assertEqual(series[0].projection_method, "fixed")
         self.assertEqual(
             [(point.slot_id, point.energy_kwh) for point in plan.demand_points],
-            [
-                ("2026-03-20T21:00:00+01:00", 0.2),
-                ("2026-03-20T21:15:00+01:00", 0.375),
-            ],
+            [("2026-03-20T21:00:00+01:00", 0.2)],
         )
 
     def test_climate_off_produces_no_projection(self) -> None:
@@ -785,7 +783,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
         series = plan.appliances_by_id["living-room-hvac"].points
         self.assertEqual(len(series), 1)
-        self.assertEqual(series[0].energy_kwh, 0.345)
+        self.assertEqual(series[0].energy_kwh, 0.12)
         self.assertEqual(series[0].mode, "cool")
         self.assertEqual(series[0].projection_method, "history_average")
 
@@ -812,7 +810,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
 
         series = plan.appliances_by_id["living-room-hvac"].points
         self.assertEqual(len(series), 1)
-        self.assertEqual(series[0].energy_kwh, 0.575)
+        self.assertEqual(series[0].energy_kwh, 0.2)
         self.assertEqual(series[0].mode, "heat")
         self.assertEqual(series[0].projection_method, "fixed_fallback")
 
@@ -916,16 +914,16 @@ def _make_solar_forecast_for_soc_test() -> dict:
 
 
 def _six_hour_schedule(vehicle_id: str, mode: str, extra: dict | None = None) -> ScheduleDocument:
-    """Six consecutive 30-min schedule slots starting at 10:00 (= 3 hours total)."""
+    """Three consecutive hours of schedule slots starting at 10:00."""
     action: dict = {"charge": True, "vehicleId": vehicle_id, "useMode": mode}
     if extra:
         action.update(extra)
-    slot_starts = [
-        f"2026-03-20T{h:02d}:{m:02d}:00+01:00"
-        for h, m in [
-            (10, 0), (10, 30), (11, 0), (11, 30), (12, 0), (12, 30),
-        ]
-    ]
+    cursor = datetime.fromisoformat("2026-03-20T10:00:00+01:00")
+    end = datetime.fromisoformat("2026-03-20T13:00:00+01:00")
+    slot_starts = []
+    while cursor < end:
+        slot_starts.append(cursor.isoformat(timespec="seconds"))
+        cursor += timedelta(minutes=SCHEDULE_SLOT_MINUTES)
     return ScheduleDocument(
         slots={slot_id: build_controllable_actions(appliances={"garage-ev": action}) for slot_id in slot_starts}
     )
@@ -943,8 +941,8 @@ class EvChargerProjectionSoCCapTests(unittest.TestCase):
 
     def test_fast_mode_energy_capped_at_target_soc(self) -> None:
         # 50% current SoC, 90% target → 25.6 kWh remaining
-        # Fast mode: 11 kW charger → 2.75 kWh per 15-min slice, 5.5 kWh per 30-min slot
-        # 25.6 / 5.5 = 4.65 slots → slots 1-4 full (22 kWh), slot 5 partial (3.6 kWh), slot 6 zero
+        # Fast mode: 11 kW charger → 2.75 kWh per 15-min slot
+        # 25.6 / 2.75 = 9.3 slots → slots 1-9 full (24.75 kWh), slot 10 partial
         registry = _registry_with_charge_limit()
         hass = _FakeHass({
             "sensor.kona_soc": _FakeState("50"),
@@ -960,13 +958,11 @@ class EvChargerProjectionSoCCapTests(unittest.TestCase):
         )
 
         series = plan.appliances_by_id["garage-ev"].points
-        # Only 5 slots should appear (slot 6 has zero capacity left)
-        self.assertEqual(len(series), 5)
-        self.assertEqual(series[0].energy_kwh, 5.5)
-        self.assertEqual(series[1].energy_kwh, 5.5)
-        self.assertEqual(series[2].energy_kwh, 5.5)
-        self.assertEqual(series[3].energy_kwh, 5.5)
-        self.assertEqual(series[4].energy_kwh, round(25.6 - 22.0, 4))  # 3.6
+        # Only 10 slots should appear; the rest have zero capacity left.
+        self.assertEqual(len(series), 10)
+        for index in range(9):
+            self.assertEqual(series[index].energy_kwh, 2.75)
+        self.assertEqual(series[9].energy_kwh, round(25.6 - 9 * 2.75, 4))  # 0.85
 
         total = sum(p.energy_kwh for p in series)
         self.assertAlmostEqual(total, 25.6, places=4)
@@ -1088,7 +1084,7 @@ class EvChargerProjectionSoCCapTests(unittest.TestCase):
         self.assertEqual(plan.demand_points, ())
 
     def test_unavailable_soc_disables_capping(self) -> None:
-        # When SoC entity is unavailable, projection runs uncapped (all 6 slots)
+        # When SoC entity is unavailable, projection runs uncapped (every slot)
         registry = _registry_with_charge_limit()
         hass = _FakeHass({
             "sensor.kona_soc": _FakeState("unavailable"),
@@ -1104,7 +1100,7 @@ class EvChargerProjectionSoCCapTests(unittest.TestCase):
         )
 
         series = plan.appliances_by_id["garage-ev"].points
-        self.assertEqual(len(series), 6)
+        self.assertEqual(len(series), 12)
 
     def test_no_charge_limit_entity_caps_at_100_pct(self) -> None:
         # Vehicle with no charge_limit_entity_id: caps at 100%
@@ -1149,7 +1145,8 @@ class EvChargerProjectionSoCCapTests(unittest.TestCase):
         )
 
         series = plan.appliances_by_id["garage-ev"].points
-        self.assertEqual(len(series), 1)
+        # 3.2 kWh at 2.75 kWh per slot: one full slot and one partial.
+        self.assertEqual(len(series), 2)
         total = sum(p.energy_kwh for p in series)
         self.assertAlmostEqual(total, 3.2, places=4)
 

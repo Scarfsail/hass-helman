@@ -202,11 +202,11 @@ Startup/reload currently has one extra implementation detail beyond the trigger 
 
 Automation should not define its own writable window. It operates inside the same schedule boundaries that already exist:
 
-- only schedule positions defined by the existing scheduler model, whose slot duration is controlled by `SCHEDULE_SLOT_MINUTES`; automation logic must derive slot boundaries from that constant and must not hard-code 30-minute slots
+- only schedule positions defined by the existing scheduler model, whose slot duration is controlled by `SCHEDULE_SLOT_MINUTES`; automation logic must derive slot boundaries from that constant and must not hard-code a slot length
 - only within the rolling scheduling horizon from `now`
 - only values that pass the existing schedule and appliance normalization rules
 
-The current code happens to use `SCHEDULE_SLOT_MINUTES=30` while forecast inputs are rebuilt on canonical `FORECAST_CANONICAL_GRANULARITY_MINUTES=15` buckets, but the architecture intentionally treats authored schedule slot size as constant-driven rather than fixed. When an optimizer reasons about one authored schedule slot against forecast buckets, it should derive the covered forecast buckets from `SCHEDULE_SLOT_MINUTES` and the canonical forecast granularity instead of assuming that one authored slot is always two 15-minute buckets.
+`SCHEDULE_SLOT_MINUTES` and `FORECAST_CANONICAL_GRANULARITY_MINUTES` are both 15, so one authored slot is one forecast bucket. Optimizers should still derive the covered buckets from those constants — `slot_bucket_starts` is the one place that mapping lives — rather than reaching for a slot start directly.
 
 The automation run should therefore be understood as "produce a candidate schedule update, then let the existing schedule rules accept or reject it".
 
@@ -386,7 +386,7 @@ That demand profile should come from one shared helper next to the existing proj
 
 If that helper depends on recorder-backed history data, the runner/framework should resolve those inputs before the optimizer decision step and pass the helper already-resolved data. The helper must work for candidate appliances that are not yet scheduled, not only for appliances already present in the current schedule. The optimizer itself should not perform async I/O.
 
-For each authored schedule slot sized by `SCHEDULE_SLOT_MINUTES`, the optimizer should evaluate all covered `FORECAST_CANONICAL_GRANULARITY_MINUTES` forecast buckets and write the slot only if **every** covered bucket satisfies the buffered surplus requirement. This keeps slot mapping derived from the same scheduler and forecast constants the rest of the backend uses rather than assuming a fixed 30-minute slot shape.
+For each authored schedule slot sized by `SCHEDULE_SLOT_MINUTES`, the optimizer should evaluate all covered `FORECAST_CANONICAL_GRANULARITY_MINUTES` forecast buckets and write the slot only if **every** covered bucket satisfies the buffered surplus requirement. This keeps slot mapping derived from the same scheduler and forecast constants the rest of the backend uses rather than assuming a fixed slot shape.
 
 ## Suggested config shape
 

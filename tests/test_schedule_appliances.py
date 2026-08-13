@@ -70,6 +70,7 @@ from custom_components.helman.appliances import (
     ClimateApplianceRuntime,
     build_appliances_runtime_registry,
 )
+from custom_components.helman.const import SCHEDULE_SLOT_MINUTES
 from custom_components.helman.scheduling.schedule import (
     ScheduleActionError,
     ScheduleDocument,
@@ -576,7 +577,7 @@ class ScheduleApplianceTests(unittest.TestCase):
         doc = schedule_document_from_dict(
             {
                 "executionEnabled": False,
-                "slotMinutes": 30,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "garage-ev": {
@@ -595,7 +596,7 @@ class ScheduleApplianceTests(unittest.TestCase):
             schedule_document_to_dict(doc),
             {
                 "executionEnabled": False,
-                "slotMinutes": 30,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "garage-ev": {

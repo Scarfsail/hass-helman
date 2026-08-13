@@ -69,6 +69,7 @@ _install_import_stubs()
 from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_ACTION_NORMAL,
     SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_SLOT_MINUTES,
 )
 from custom_components.helman.automation.ownership import (  # noqa: E402
     merge_automation_result,
@@ -124,7 +125,7 @@ class StripAutomationOwnedActionsTests(unittest.TestCase):
             schedule_document_to_dict(stripped),
             {
                 "executionEnabled": True,
-                "slotMinutes": 30,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     SLOT_ID: {
                         "boiler": {"on": True, "setBy": "user"},

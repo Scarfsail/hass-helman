@@ -573,9 +573,14 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator._async_evaluate_optimizer_conditions.assert_not_awaited()
         coordinator._automation_triggers.request_debounced.assert_not_awaited()
 
-    async def test_normalize_schedule_document_resets_legacy_schedule_without_slot_minutes(
+    async def test_normalize_schedule_document_keeps_legacy_schedule_without_slot_minutes(
         self,
     ) -> None:
+        """A pre-``slotMinutes`` document was written on a 15-minute grid.
+
+        That is the grid again, so such a document is compatible and is kept --
+        only re-stamped with the field it predates.
+        """
         coordinator, storage, _ = self._build_coordinator(
             inject_slot_minutes=False,
             schedule_document={
@@ -593,7 +598,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
-                "slots": {},
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
             },
         )
 

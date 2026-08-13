@@ -11,8 +11,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
-NEXT_SLOT_ID = "2026-03-20T21:30:00+01:00"
-THIRD_SLOT_ID = "2026-03-20T22:00:00+01:00"
+NEXT_SLOT_ID = "2026-03-20T21:15:00+01:00"
+THIRD_SLOT_ID = "2026-03-20T21:30:00+01:00"
+#: The start of the hour after ``CURRENT_SLOT_ID``'s -- where an hourly price
+#: point's coverage ends.
+NEXT_HOUR_ID = "2026-03-20T22:00:00+01:00"
 
 def _install_import_stubs() -> None:
     custom_components_pkg = sys.modules.get("custom_components")
@@ -58,6 +61,7 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.config import OptimizerInstanceConfig  # noqa: E402
+from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.automation.optimizers.export_price import (  # noqa: E402
     ExportPriceOptimizer,
 )
@@ -79,6 +83,17 @@ from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
     run_optimizer_with_trace,
 )
+
+
+def _slot_ids(start: str, end: str) -> list[str]:
+    """Every slot id from ``start`` up to but excluding ``end``."""
+    cursor = datetime.fromisoformat(start)
+    last = datetime.fromisoformat(end)
+    ids = []
+    while cursor < last:
+        ids.append(cursor.isoformat(timespec="seconds"))
+        cursor += timedelta(minutes=SCHEDULE_SLOT_MINUTES)
+    return ids
 
 
 def _explanation(trace) -> OptimizerExplanation:
@@ -231,7 +246,7 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             schedule_document_to_dict(result),
             {
                 "executionEnabled": True,
-                "slotMinutes": 30,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "inverter": {"kind": "stop_export", "setBy": "automation"},
@@ -245,10 +260,10 @@ class ExportPriceOptimizerTests(unittest.TestCase):
         snapshot = _make_snapshot(
             schedule_document=ScheduleDocument(execution_enabled=True),
             export_price_points=[
-                {"timestamp": "2026-03-20T21:15:00+01:00", "value": -0.2},
+                {"timestamp": NEXT_SLOT_ID, "value": -0.2},
                 # Ends the step; see the note in
                 # `test_leaves_user_owned_inverter_slots_untouched`.
-                {"timestamp": NEXT_SLOT_ID, "value": 1.5},
+                {"timestamp": THIRD_SLOT_ID, "value": 1.5},
             ],
             grid_series=[
                 {
@@ -268,9 +283,11 @@ class ExportPriceOptimizerTests(unittest.TestCase):
             schedule_document_to_dict(result),
             {
                 "executionEnabled": True,
-                "slotMinutes": 30,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
-                    CURRENT_SLOT_ID: {
+                    # The negative price sits in the *next* slot, which is also
+                    # the one with no expected export of its own.
+                    NEXT_SLOT_ID: {
                         "inverter": {"kind": "stop_export", "setBy": "automation"},
                     }
                 },
@@ -382,13 +399,14 @@ class ExportPriceOptimizerTests(unittest.TestCase):
 
 
 class ExportPriceStepFunctionTests(unittest.TestCase):
-    """The feed publishes hourly points; slots are half-hourly.
+    """The feed publishes hourly points; slots are quarter-hourly.
 
     The mask used to mark the slot each below-threshold *point* landed in and
-    nothing else, so an hourly feed protected ``21:00`` and left ``21:30``
-    exporting into the same negative-priced hour. Prices are a step function:
-    a bucket takes the most recent point at or before it.
+    nothing else, so an hourly feed protected ``21:00`` and left the rest of the
+    hour exporting into the same negative price. Prices are a step function: a
+    bucket takes the most recent point at or before it.
     """
+
 
     def _stop_export_slot_ids(
         self,
@@ -411,27 +429,27 @@ class ExportPriceStepFunctionTests(unittest.TestCase):
             if slot["inverter"].get("kind") == "stop_export"
         )
 
-    def test_an_hourly_point_covers_both_slots_of_its_hour(self) -> None:
+    def test_an_hourly_point_covers_every_slot_of_its_hour(self) -> None:
         self.assertEqual(
             self._stop_export_slot_ids(
                 export_price_points=[
                     {"timestamp": CURRENT_SLOT_ID, "value": -0.1},
-                    {"timestamp": THIRD_SLOT_ID, "value": 1.5},
+                    {"timestamp": NEXT_HOUR_ID, "value": 1.5},
                 ]
             ),
-            [CURRENT_SLOT_ID, NEXT_SLOT_ID],
+            _slot_ids(CURRENT_SLOT_ID, NEXT_HOUR_ID),
         )
 
-    def test_a_point_mid_slot_does_not_reach_back_over_the_slot_start(self) -> None:
-        """The step runs forwards only, so 21:00's bucket stays uncovered."""
+    def test_a_point_does_not_reach_back_over_earlier_slots(self) -> None:
+        """The step runs forwards only, so 21:00's and 21:15's stay uncovered."""
         self.assertEqual(
             self._stop_export_slot_ids(
                 export_price_points=[
-                    {"timestamp": "2026-03-20T21:30:00+01:00", "value": -0.1},
-                    {"timestamp": "2026-03-20T22:00:00+01:00", "value": 1.5},
+                    {"timestamp": NEXT_SLOT_ID, "value": -0.1},
+                    {"timestamp": NEXT_HOUR_ID, "value": 1.5},
                 ]
             ),
-            [NEXT_SLOT_ID],
+            _slot_ids(NEXT_SLOT_ID, NEXT_HOUR_ID),
         )
 
     def test_the_last_price_carries_to_the_end_of_its_day_and_no_further(self) -> None:
@@ -442,14 +460,9 @@ class ExportPriceStepFunctionTests(unittest.TestCase):
         """
         self.assertEqual(
             self._stop_export_slot_ids(
-                export_price_points=[{"timestamp": THIRD_SLOT_ID, "value": -0.1}]
+                export_price_points=[{"timestamp": NEXT_HOUR_ID, "value": -0.1}]
             ),
-            [
-                "2026-03-20T22:00:00+01:00",
-                "2026-03-20T22:30:00+01:00",
-                "2026-03-20T23:00:00+01:00",
-                "2026-03-20T23:30:00+01:00",
-            ],
+            _slot_ids(NEXT_HOUR_ID, "2026-03-21T00:00:00+01:00"),
         )
 
     def test_current_price_alone_still_qualifies_the_slot_in_progress(self) -> None:
@@ -658,7 +671,10 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         slots = _slots_by_id(explanation)
         gate = _gate(slots[CURRENT_SLOT_ID], "stop_export_supported")
         self.assertEqual(gate.state, "false")
-        self.assertEqual(gate.params["skippedSlots"], 6)
+        self.assertEqual(
+            gate.params["skippedSlots"],
+            len(_slot_ids(CURRENT_SLOT_ID, "2026-03-21T00:00:00+01:00")),
+        )
         self.assertEqual(slots[CURRENT_SLOT_ID].verdict, "skip")
 
 

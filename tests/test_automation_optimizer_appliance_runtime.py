@@ -77,6 +77,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime  # noqa: E402
 from custom_components.helman.appliances.generic_appliance import GenericApplianceRuntime  # noqa: E402
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
@@ -145,6 +146,25 @@ def _slot_id(hour: int, minute: int = 0) -> str:
     return _at(hour, minute).isoformat(timespec="seconds")
 
 
+#: What one slot of running draws. The self-sustainability scenarios are
+#: calibrated against this rather than against an hourly rate, so they keep
+#: their meaning whatever a slot is worth.
+SLOT_DRAW_KWH = 0.2
+#: How many schedule slots make up an hour of runtime.
+SLOTS_PER_HOUR = 60 // SCHEDULE_SLOT_MINUTES
+#: The daily-minimum budget that asks for exactly one slot, whatever a slot is.
+ONE_SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
+
+
+def _hour_slots(*hours: int) -> set[str]:
+    """Every schedule slot of each named hour."""
+    return {
+        _slot_id(hour, minute)
+        for hour in hours
+        for minute in range(0, 60, SCHEDULE_SLOT_MINUTES)
+    }
+
+
 def _generic(appliance_id: str = "pool-pump"):
     return GenericApplianceRuntime(
         id=appliance_id,
@@ -176,7 +196,7 @@ def _export_points(cheap_slots: set[str]) -> list[dict[str, object]]:
         points.append(
             {"timestamp": slot_id, "value": 1.0 if slot_id in cheap_slots else 5.0}
         )
-        cursor += timedelta(minutes=30)
+        cursor += timedelta(minutes=SCHEDULE_SLOT_MINUTES)
     return points
 
 
@@ -194,7 +214,10 @@ def _soc_series(
     series: list[dict[str, object]] = []
     cursor = _at(8)
     while cursor < _at(18):
-        slot_id = _slot_id(cursor.hour, (cursor.minute // 30) * 30)
+        slot_id = _slot_id(
+            cursor.hour,
+            (cursor.minute // SCHEDULE_SLOT_MINUTES) * SCHEDULE_SLOT_MINUTES,
+        )
         series.append(
             {
                 "timestamp": cursor.isoformat(timespec="seconds"),
@@ -219,7 +242,10 @@ def _surplus_series(
     series: list[dict[str, object]] = []
     cursor = _at(8)
     while cursor < _at(18):
-        slot_id = _slot_id(cursor.hour, (cursor.minute // 30) * 30)
+        slot_id = _slot_id(
+            cursor.hour,
+            (cursor.minute // SCHEDULE_SLOT_MINUTES) * SCHEDULE_SLOT_MINUTES,
+        )
         series.append(
             {
                 "timestamp": cursor.isoformat(timespec="seconds"),
@@ -323,7 +349,6 @@ def _grid_charge_overlay(*, first_bucket: datetime, buckets: int):
     return ScheduleForecastOverlay(
         horizon_start=REFERENCE_TIME,
         horizon_end=REFERENCE_TIME + timedelta(hours=48),
-        canonical_slot_minutes=15,
         slots=tuple(
             ScheduleSlot(
                 id=(first_bucket + timedelta(minutes=15 * index)).isoformat(
@@ -491,7 +516,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
     def test_places_cheapest_export_slots(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
@@ -506,7 +531,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
     def test_places_candidate_actions_when_condition_not_met(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
@@ -529,7 +554,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
     def test_manual_runtime_reduces_remaining_budget(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
@@ -540,12 +565,14 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
             ),
             cfg,
         )
-        # remaining 0.5h -> 1 slot only, the cheapest.
-        self.assertEqual(len(_placed_slots(result, appliance.id)), 1)
+        # remaining 0.5h -> half an hour's worth of slots, the cheapest.
+        self.assertEqual(
+            len(_placed_slots(result, appliance.id)), SLOTS_PER_HOUR // 2
+        )
 
     # --- in-flight run commitment -------------------------------------------
     #
-    # Shared setup: it is 12:20, the appliance has been running in the 12:00
+    # Shared setup: it is 12:10, the appliance has been running in the 12:00
     # slot, and 12:00 is the *most expensive* slot of the window. Ranking alone
     # therefore drops it and the appliance is switched off mid-run.
 
@@ -553,12 +580,12 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         # Enough cheap slots that ranking never has to reach back to 12:00 on
         # the chronological tie-break — the only thing that may place it is the
         # promotion under test.
-        cheap = {_slot_id(14, 0), _slot_id(14, 30), _slot_id(15, 0), _slot_id(15, 30)}
+        cheap = _hour_slots(14, 15)
         return _make_snapshot(
             appliance=appliance,
             export_points=_export_points(cheap),
             runtime_by_date={appliance.id: {DAY: done}},
-            now=_at(12, 20) if now is None else now,
+            now=_at(12, 10) if now is None else now,
             appliance_active_by_id={appliance.id: active},
         )
 
@@ -596,10 +623,11 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
             ),
             appliance.id,
         )
-        # remaining 1.5h -> 3 slots either way; the running slot takes the seat
-        # of the priciest one the idle plan had chosen.
-        self.assertEqual(len(idle), 3)
-        self.assertEqual(len(running), 3)
+        # remaining 1.5h either way; the running slot takes the seat of the
+        # priciest one the idle plan had chosen.
+        expected = int(1.5 * SLOTS_PER_HOUR)
+        self.assertEqual(len(idle), expected)
+        self.assertEqual(len(running), expected)
         self.assertEqual(set(running) - set(idle), {_slot_id(12, 0)})
         self.assertEqual(len(set(idle) - set(running)), 1)
 
@@ -682,7 +710,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
             run_when=["surplus", "tight"],
             max_consecutive_skips=1,
         )
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
@@ -707,7 +735,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
             {"timestamp": _at(10, 0).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
             {"timestamp": _at(10, 15).isoformat(timespec="seconds"), "availableSurplusKwh": 5.0},
         ]
-        export_points = _export_points({_slot_id(12, 0), _slot_id(12, 30)})
+        export_points = _export_points(_hour_slots(12))
         result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
@@ -721,11 +749,11 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         )
         # min_hours 1 -> 2 slots; both cheapest slots, not the covered 10:00.
         placed = _placed_slots(result, appliance.id)
-        self.assertEqual(set(placed), {_slot_id(12, 0), _slot_id(12, 30)})
+        self.assertEqual(set(placed), _hour_slots(12))
 
     def test_coverage_breaks_ties_between_equal_priced_slots(self) -> None:
         appliance = _generic()
-        cfg = _config(appliance_id=appliance.id, min_hours_per_day=0.5)
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=ONE_SLOT_HOURS)
         # slots 11:00 and 13:00 share the cheapest export price; only 13:00 is
         # solar-covered. With one slot needed, coverage breaks the tie in favour
         # of 13:00 even though 11:00 is earlier.
@@ -755,8 +783,8 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         # the slot being executed could never be found solar-covered. Every
         # other test here uses an aligned reference time, which hides it.
         appliance = _generic()
-        cfg = _config(appliance_id=appliance.id, min_hours_per_day=0.5)
-        now = _at(12, 20).replace(microsecond=183921)
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=ONE_SLOT_HOURS)
+        now = _at(12, 10).replace(microsecond=183921)
         # 12:00 (in progress) and 14:00 share the cheapest price; both are
         # covered, so the chronological tie-break must hand it to 12:00.
         grid_series = [{"timestamp": now.isoformat(), "availableSurplusKwh": 5.0}]
@@ -782,7 +810,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
     def test_leaves_user_owned_appliance_slot_untouched(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         schedule_document = ScheduleDocument(
             execution_enabled=True,
             slots={
@@ -803,14 +831,14 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         )
         placed = _placed_slots(result, appliance.id)
         self.assertNotIn(_slot_id(12, 0), placed)
-        self.assertEqual(len(placed), 2)
+        self.assertEqual(len(placed), SLOTS_PER_HOUR)
 
     def test_climate_appliance_writes_mode_action(self) -> None:
         appliance = _climate()
         cfg = _config(
             appliance_id=appliance.id, min_hours_per_day=1, climate_mode="heat"
         )
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         result = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         ).optimize(
@@ -827,7 +855,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
         snapshot = _make_snapshot(
             appliance=appliance,
-            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+            export_points=_export_points(_hour_slots(12)),
         )
         before = deepcopy(snapshot.schedule.slots)
         build_appliance_runtime_optimizer(
@@ -847,7 +875,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
 
     def test_only_slots_below_the_threshold_are_placeable(self) -> None:
         appliance = _generic()
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         # 3h of deficit wants 6 slots, but only 2 clear the threshold. Without
         # the filter the ranking would happily take four 5.0 slots as well.
         cfg = _config(
@@ -873,16 +901,16 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         )
         snapshot = _make_snapshot(
             appliance=appliance,
-            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+            export_points=_export_points(_hour_slots(12)),
         )
 
         placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
 
-        self.assertEqual(len(placed), 6)
+        self.assertEqual(len(placed), 3 * SLOTS_PER_HOUR)
 
     def test_a_day_short_on_eligible_slots_still_places_what_it_can(self) -> None:
         appliance = _generic()
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         cfg = _config(
             appliance_id=appliance.id,
             min_hours_per_day=3,
@@ -914,7 +942,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         )
         snapshot = _make_snapshot(
             appliance=appliance,
-            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+            export_points=_export_points(_hour_slots(12)),
             # Yesterday also fell short, so today is one skip past the limit.
             runtime_by_date={appliance.id: {DAY - timedelta(days=1): 0.0}},
         )
@@ -922,7 +950,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
 
         # Forced: the full 3h, over the whole window, past the threshold.
-        self.assertEqual(len(placed), 6)
+        self.assertEqual(len(placed), 3 * SLOTS_PER_HOUR)
 
     def test_a_wholly_priced_out_day_is_explained_not_crashed(self) -> None:
         """Regression: a slot condition can empty a whole day, not just a run_when.
@@ -1009,7 +1037,7 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         earliest slot — and placement is confined to that group's own slots.
         """
         appliance = _generic()
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         cfg = _config(
             appliance_id=appliance.id,
             groups=[
@@ -1050,7 +1078,7 @@ class SolarCoverageConditionTests(unittest.TestCase):
     def _config_with(self, appliance, threshold: float, **kwargs):
         return _config(
             appliance_id=appliance.id,
-            min_hours_per_day=0.5,
+            min_hours_per_day=ONE_SLOT_HOURS,
             max_consecutive_skips=1,
             groups=[{"run_when": ["tight"], "min_solar_coverage_pct": threshold}],
             **kwargs,
@@ -1071,29 +1099,6 @@ class SolarCoverageConditionTests(unittest.TestCase):
 
         # 81 % clears an 80 % floor; 79 % does not.
         self.assertEqual(set(placed), {_slot_id(12, 0)})
-
-    def test_every_bucket_of_the_slot_must_clear(self) -> None:
-        appliance = _generic()
-        cfg = self._config_with(appliance, 80)
-        # 13:00's first bucket is drenched and its second is thin. Sampling one
-        # end would authorise the slot on a value that holds for half of it.
-        series = _surplus_series({})
-        by_timestamp = {entry["timestamp"]: entry for entry in series}
-        by_timestamp[_at(13, 0).isoformat(timespec="seconds")][
-            "availableSurplusKwh"
-        ] = 0.2
-        by_timestamp[_at(13, 15).isoformat(timespec="seconds")][
-            "availableSurplusKwh"
-        ] = 0.079
-        snapshot = _make_snapshot(
-            appliance=appliance,
-            when_active={appliance.id: 0.4},
-            grid_series=series,
-        )
-
-        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
-
-        self.assertEqual(placed, {})
 
     def test_a_slot_clearing_in_every_bucket_is_taken(self) -> None:
         appliance = _generic()
@@ -1188,7 +1193,7 @@ class SolarCoverageConditionTests(unittest.TestCase):
         appliance = _generic()
         cfg = _config(
             appliance_id=appliance.id,
-            min_hours_per_day=0.5,
+            min_hours_per_day=ONE_SLOT_HOURS,
             groups=[{"run_when": ["tight"]}],
         )
         snapshot = _make_snapshot(appliance=appliance)
@@ -1246,7 +1251,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         kwargs.setdefault("battery_series", _morning_dip_series())
         return _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_state=BATTERY,
             battery_params=BATTERY_PARAMS,
             **kwargs,
@@ -1263,7 +1268,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
     ):
         params: dict[str, object] = {
             "daily_minimum": {
-                "min_hours_per_day": kwargs.pop("min_hours_per_day", 0.5),
+                "min_hours_per_day": kwargs.pop("min_hours_per_day", ONE_SLOT_HOURS),
                 "max_consecutive_skips": kwargs.pop("max_consecutive_skips", 1),
             },
             "window": {"start": window_start, "end": "18:00"},
@@ -1364,8 +1369,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         trough, which costs nothing.
         """
         appliance = _generic()
-        # 1 h of runtime = 2 slots; 08:00 and 08:30 are the cheapest and both
-        # sit before the trough.
+        # 1 h of runtime; the cheapest slots all sit before the trough.
         cfg = self._config_with(appliance, min_hours_per_day=1)
         snapshot = self._snapshot(
             appliance,
@@ -1380,7 +1384,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
 
         placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
 
-        self.assertEqual(len(placed), 2)
+        self.assertEqual(len(placed), SLOTS_PER_HOUR)
         self.assertIn(_slot_id(8, 0), placed)
         # The second-cheapest slot is the one the combined trajectory rejects.
         self.assertNotIn(_slot_id(8, 30), placed)
@@ -1589,7 +1593,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         cfg = self._config_with(appliance)
         snapshot = _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_params=BATTERY_PARAMS,
             battery_series=_morning_dip_series(),
         )
@@ -1602,7 +1606,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         cfg = self._config_with(appliance)
         snapshot = _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_state=BATTERY,
             # The discharge half used to be absent from every snapshot; without
             # it there is no simulation to run.
@@ -1622,7 +1626,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         cfg = self._config_with(appliance)
         snapshot = _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_state=BATTERY,
             battery_params=BATTERY_PARAMS,
             battery_series=_morning_dip_series(),
@@ -1766,7 +1770,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
             target={"controllable_id": appliance.id},
             params={
                 "daily_minimum": {
-                    "min_hours_per_day": 0.5,
+                    "min_hours_per_day": ONE_SLOT_HOURS,
                     "max_consecutive_skips": 1,
                 },
                 "window": {"start": "06:00", "end": "18:00"},
@@ -1786,7 +1790,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         cfg = self._config(appliance)
         snapshot = _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_state=BATTERY,
             battery_params=BATTERY_PARAMS,
             battery_series=_curtailed_solar_series(),
@@ -1832,7 +1836,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         """The evening slot is cheapest, so ranking reaches it first."""
         return _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_state=BATTERY,
             battery_params=BATTERY_PARAMS,
             battery_series=_curtailed_solar_series(),
@@ -1889,7 +1893,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         )
         snapshot = _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_state=BATTERY,
             battery_params=BATTERY_PARAMS,
             # No sun at all; the battery is filled from the grid at 14:00.
@@ -1924,7 +1928,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         )
         snapshot = _make_snapshot(
             appliance=appliance,
-            when_active={appliance.id: 0.4},
+            when_active={appliance.id: SLOT_DRAW_KWH / ONE_SLOT_HOURS},
             battery_state=BATTERY,
             battery_params=BATTERY_PARAMS,
             battery_series=_morning_dip_series(trough_kwh=1.6),
@@ -2043,7 +2047,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
     def test_placement_and_ranking_gates_and_contract(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         optimizer = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         )
@@ -2070,14 +2074,14 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         self.assertEqual(remaining.state, "true")
         self.assertEqual(remaining.params["minHours"], 1)
         self.assertEqual(remaining.params["doneHours"], 0.0)
-        self.assertEqual(remaining.params["slotsNeeded"], 2)
+        self.assertEqual(remaining.params["slotsNeeded"], SLOTS_PER_HOUR)
         self.assertEqual(_gate(placed, "placement_capacity").state, "true")
         # Forced runs are the exception, so the override gate is absent here.
         self.assertIsNone(_gate(placed, "consecutive_skip_override"))
         rank = _gate(placed, "cheapest_rank")
         self.assertEqual(rank.state, "true")
         self.assertEqual(rank.params["rank"], 1)
-        self.assertEqual(rank.params["slotsNeeded"], 2)
+        self.assertEqual(rank.params["slotsNeeded"], SLOTS_PER_HOUR)
 
         # The ranking is an ordinal: a slot that lost carries its position, not
         # a truth value dressed up as a reason code.
@@ -2085,7 +2089,8 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         loser_rank = _gate(loser, "cheapest_rank")
         self.assertEqual(loser_rank.state, "false")
         self.assertGreater(loser_rank.params["rank"], loser_rank.params["slotsNeeded"])
-        self.assertEqual(loser_rank.params["rankOf"], 20)  # 08:00..17:30
+        # The whole 08:00-18:00 window is ranked.
+        self.assertEqual(loser_rank.params["rankOf"], 10 * SLOTS_PER_HOUR)
         self.assertEqual(loser.verdict, "skip")
         # Outside the window it never reached the ranking at all.
         outside = slots[_slot_id(6, 0)]
@@ -2108,7 +2113,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         )
         snapshot = _make_snapshot(
             appliance=appliance,
-            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+            export_points=_export_points(_hour_slots(12)),
         )
 
         _result, trace = run_optimizer_with_trace(
@@ -2184,7 +2189,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         )
         snapshot = _make_snapshot(
             appliance=appliance,
-            export_points=_export_points({_slot_id(12, 0), _slot_id(12, 30)}),
+            export_points=_export_points(_hour_slots(12)),
             classification="deficit",
             runtime_by_date={appliance.id: {DAY - timedelta(days=1): 0.0}},
         )
@@ -2206,7 +2211,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
     def test_a_user_owned_slot_never_reaches_the_ranking(self) -> None:
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         optimizer = build_appliance_runtime_optimizer(
             cfg, appliance_registry=AppliancesRuntimeRegistry.from_appliances((appliance,))
         )
@@ -2302,7 +2307,7 @@ class UncappedModeTests(unittest.TestCase):
 
         self.assertEqual(
             set(placed),
-            {_slot_id(8, 0), _slot_id(8, 30), _slot_id(9, 0), _slot_id(9, 30)},
+            _hour_slots(8, 9),
         )
 
     def test_the_writer_veto_is_the_ownership_node_without_a_cap(self) -> None:
@@ -2346,7 +2351,7 @@ class UncappedModeTests(unittest.TestCase):
 
         placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
 
-        self.assertEqual(set(placed), {_slot_id(12, 0), _slot_id(12, 30)})
+        self.assertEqual(set(placed), _hour_slots(12))
 
     def test_delivered_runtime_does_not_shrink_the_placement(self) -> None:
         appliance = _generic()
@@ -2361,7 +2366,7 @@ class UncappedModeTests(unittest.TestCase):
 
         placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
 
-        self.assertEqual(set(placed), {_slot_id(8, 0), _slot_id(8, 30)})
+        self.assertEqual(set(placed), _hour_slots(8))
 
     def test_a_day_no_group_matches_places_nothing(self) -> None:
         appliance = _generic()
@@ -2420,7 +2425,7 @@ class UncappedModeTests(unittest.TestCase):
         cfg = _uncapped_config(
             appliance_id=appliance.id, groups=[{"max_run_price": 2.0}]
         )
-        cheap = {_slot_id(12, 0), _slot_id(12, 30)}
+        cheap = _hour_slots(12)
         snapshot = _make_snapshot(
             appliance=appliance, export_points=_export_points(cheap)
         )

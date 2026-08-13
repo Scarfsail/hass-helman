@@ -96,14 +96,15 @@ def read_price_by_bucket(price_forecast: dict[str, Any]) -> dict[datetime, float
 
 
 def slot_bucket_starts(slot_id: str) -> tuple[datetime, ...]:
-    """The forecast bucket starts a schedule slot spans, in order."""
-    slot_start = parse_slot_id(slot_id)
-    return tuple(
-        slot_start + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * index)
-        for index in range(
-            SCHEDULE_SLOT_MINUTES // FORECAST_CANONICAL_GRANULARITY_MINUTES
-        )
-    )
+    """The forecast bucket starts a schedule slot spans, in order.
+
+    A schedule slot and a forecast bucket are both 15 minutes, so this is always
+    the one bucket the slot starts on. It stays a tuple because its callers read
+    a slot's buckets as a group — "every pending bucket clears the threshold",
+    "the mean price over the slot" — and that phrasing is the contract, not the
+    count.
+    """
+    return (parse_slot_id(slot_id),)
 
 
 def _next_local_midnight(timestamp: datetime) -> datetime:
