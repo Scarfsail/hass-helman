@@ -13,7 +13,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_GRANULARITY_OPTIONS,
+    FORECAST_CANONICAL_RESOLUTION,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
@@ -27,7 +27,6 @@ from .consumption_forecast_profiles import (
 )
 from .consumption_forecast_statistics import ForecastBand
 from .controllables.config import read_deferrable_consumers
-from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import (
     TodaySlotEnergyReader,
     get_local_current_slot_start,
@@ -51,10 +50,6 @@ class ConsumptionForecastBuilder:
     _CANONICAL_GRANULARITY_MINUTES = FORECAST_CANONICAL_GRANULARITY_MINUTES
     _SLOTS_PER_HOUR = 60 // _CANONICAL_GRANULARITY_MINUTES
     _SLOTS_PER_DAY = 24 * _SLOTS_PER_HOUR
-    _MAX_ALIGNMENT_PADDING_SLOTS = (
-        max(FORECAST_GRANULARITY_OPTIONS) // _CANONICAL_GRANULARITY_MINUTES
-    ) - 1
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -75,7 +70,6 @@ class ConsumptionForecastBuilder:
         trained_at: str | None = None,
         last_outcome: str | None = None,
         forecast_days: int = MAX_FORECAST_DAYS,
-        padding_slots: int = 0,
     ) -> dict[str, Any]:
         """Assemble the payload from an already-fitted profile.
 
@@ -108,11 +102,8 @@ class ConsumptionForecastBuilder:
             consumers_config=consumers_config,
         )
         local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
-        canonical_resolution = get_forecast_resolution(
-            self._CANONICAL_GRANULARITY_MINUTES
-        )
+        canonical_resolution = FORECAST_CANONICAL_RESOLUTION
         horizon_hours = forecast_days * 24
-        alignment_padding_slots = max(0, padding_slots)
 
         if total_energy_entity_id is None or profile is None:
             return self._make_payload(
@@ -126,7 +117,6 @@ class ConsumptionForecastBuilder:
                 horizon_hours=horizon_hours,
                 source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
                 forecast_days_available=forecast_days,
-                alignment_padding_slots=alignment_padding_slots,
                 trained_at=trained_at,
                 last_outcome=last_outcome,
             )
@@ -148,7 +138,6 @@ class ConsumptionForecastBuilder:
                 consumers_config=consumers_config,
                 local_now=local_now,
                 forecast_days=forecast_days,
-                alignment_padding_slots=alignment_padding_slots,
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
@@ -167,7 +156,6 @@ class ConsumptionForecastBuilder:
         consumers_config: list[dict[str, Any]],
         actual_history: list[dict[str, Any]],
         forecast_days: int,
-        alignment_padding_slots: int,
         training_window_days: int,
         min_history_days: int,
         config_fingerprint: str,
@@ -198,7 +186,6 @@ class ConsumptionForecastBuilder:
                 horizon_hours=horizon_hours,
                 source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
                 forecast_days_available=forecast_days,
-                alignment_padding_slots=alignment_padding_slots,
                 trained_at=trained_at,
                 last_outcome=last_outcome,
             )
@@ -236,7 +223,6 @@ class ConsumptionForecastBuilder:
             consumers_config=consumers_config,
             consumer_bands=profile.consumers,
             forecast_days=forecast_days,
-            padding_slots=alignment_padding_slots,
         )
 
         return self._make_payload(
@@ -253,7 +239,6 @@ class ConsumptionForecastBuilder:
             horizon_hours=horizon_hours,
             source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=forecast_days,
-            alignment_padding_slots=alignment_padding_slots,
             trained_at=trained_at,
             last_outcome=last_outcome,
         )
@@ -445,12 +430,11 @@ class ConsumptionForecastBuilder:
         consumers_config: list[dict[str, Any]],
         consumer_bands: dict[str, list[ForecastBand]],
         forecast_days: int,
-        padding_slots: int,
     ) -> list[dict[str, Any]]:
         series: list[dict[str, Any]] = []
         slot_duration = timedelta(minutes=self._CANONICAL_GRANULARITY_MINUTES)
         forecast_start_utc = dt_util.as_utc(current_slot_start) + slot_duration
-        total_slots = (forecast_days * self._SLOTS_PER_DAY) + max(0, padding_slots)
+        total_slots = forecast_days * self._SLOTS_PER_DAY
         for index in range(total_slots):
             forecast_dt = dt_util.as_local(
                 forecast_start_utc + (slot_duration * index)
@@ -476,7 +460,6 @@ class ConsumptionForecastBuilder:
         horizon_hours: int,
         source_granularity_minutes: int,
         forecast_days_available: int,
-        alignment_padding_slots: int = 0,
         history_days: int = 0,
         model: str | None = None,
         config_fingerprint: str | None = None,
@@ -501,7 +484,6 @@ class ConsumptionForecastBuilder:
             "series": series if series is not None else [],
             "sourceGranularityMinutes": source_granularity_minutes,
             "forecastDaysAvailable": forecast_days_available,
-            "alignmentPaddingSlots": alignment_padding_slots,
             # When the profile behind this payload was fitted and how that fit
             # went. `build_house_forecast_response` copies unknown keys through
             # and `_has_matching_forecast_snapshot` does not compare them, so

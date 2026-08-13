@@ -66,18 +66,16 @@ config.
 
 `helman/get_forecast` accepts these optional forecast parameters:
 
-- `granularity`: `15 | 30 | 60` — default `60`
 - `forecast_days`: integer `1..14` — default `7`
 
-The house section always comes from the same canonical 15-minute snapshot. The requested `granularity` only changes the returned bucket size.
+Every response is on the canonical 15-minute grid. There is no granularity parameter: the house section comes from the canonical snapshot and is returned at its own resolution.
 
 ## What the feature provides
 
 - predicted house consumption in `kWh`
 - one `nonDeferrable` band plus optional per-consumer `deferrableConsumers`
 - `currentSlot`, `actualHistory`, and future `series`
-- `resolution` and `horizonHours` fields that match the returned payload granularity
-- `15`, `30`, or `60` minute responses aggregated from one canonical backend model
+- `resolution` (always `quarter_hour`) and `horizonHours` fields
 
 ## Runtime behavior
 
@@ -87,16 +85,12 @@ The house section always comes from the same canonical 15-minute snapshot. The r
 - The backend snapshot covers up to `14` days and refreshes every `15` minutes.
 - The latest snapshot is cached in the coordinator and persisted in Home Assistant storage.
 - On startup, the persisted snapshot is loaded immediately. Stale or incompatible snapshots are rebuilt in the background.
-- The response layer aggregates canonical 15-minute data back to the requested `15` / `30` / `60` minute payload.
 
 ### Bucket semantics
 
-- `currentSlot` represents the **current returned bucket**.
-  - for `granularity=15`, this is the current quarter-hour slot
-  - for `granularity=30`, this is the current half-hour bucket
-  - for `granularity=60`, this is the current hour bucket
+- `currentSlot` is the current quarter-hour slot.
 - `series` starts **after** `currentSlot`.
-- `actualHistory` contains only **completed past buckets** and uses the same granularity as the returned response.
+- `actualHistory` contains only **completed past slots**.
 
 ## Forecast statuses
 
@@ -161,13 +155,13 @@ The house forecast is returned from `helman/get_forecast` under `house_consumpti
 Key points:
 
 - `currentSlot` replaced the older `currentHour` name.
-- `resolution` reflects the returned payload granularity (`quarter_hour`, `half_hour`, or `hour`).
+- `resolution` is always `quarter_hour`.
 - `horizonHours` reflects the requested `forecast_days`.
 - The backend still does **not** return `total` or `deferrableTotal`; the frontend derives them from the normalized payload.
 
 ## Frontend compatibility
 
-- `hass-helman-card` currently requests `granularity: 60` and `forecast_days: 7`.
+- `hass-helman-card` currently requests `forecast_days: 7`.
 - The UI remains hour-oriented for now even though the backend snapshot is canonical 15-minute data.
 - Quarter-hour rendering is intentionally a separate frontend follow-up.
 

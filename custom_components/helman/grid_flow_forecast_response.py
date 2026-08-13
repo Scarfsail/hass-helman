@@ -4,13 +4,10 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
-from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
-from .forecast_aggregation import (
-    aggregate_grid_flow_series,
-    get_aggregation_group_size,
-    get_forecast_resolution,
+from .const import (
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    FORECAST_CANONICAL_RESOLUTION,
 )
-from .slot_series_response import build_started_slot_series
 
 _INTERNAL_SNAPSHOT_FIELDS = {
     "sourceGranularityMinutes",
@@ -21,27 +18,15 @@ _INTERNAL_SNAPSHOT_FIELDS = {
 def build_grid_flow_forecast_response(
     snapshot: dict[str, Any],
     *,
-    granularity: int,
     forecast_days: int,
 ) -> dict[str, Any]:
-    source_granularity_minutes = snapshot.get(
-        "sourceGranularityMinutes",
-        FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    )
-    if not isinstance(source_granularity_minutes, int):
-        source_granularity_minutes = FORECAST_CANONICAL_GRANULARITY_MINUTES
-
-    group_size = get_aggregation_group_size(
-        source_granularity_minutes=source_granularity_minutes,
-        target_granularity_minutes=granularity,
-    )
     response = {
         key: deepcopy(value)
         for key, value in snapshot.items()
         if key not in _INTERNAL_SNAPSHOT_FIELDS
         and key not in {"series", "resolution", "horizonHours"}
     }
-    response["resolution"] = get_forecast_resolution(granularity)
+    response["resolution"] = FORECAST_CANONICAL_RESOLUTION
     response["horizonHours"] = forecast_days * 24
     response["series"] = []
 
@@ -52,16 +37,12 @@ def build_grid_flow_forecast_response(
     if started_at is None:
         return response
 
-    target_count = forecast_days * 24 * 60 // granularity
+    target_count = (
+        forecast_days * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
+    )
     response["series"] = [
         _build_public_entry(entry)
-        for entry in build_started_slot_series(
-            raw_entries=_merge_baseline_series(snapshot),
-            started_at=started_at,
-            granularity=granularity,
-            group_size=group_size,
-            aggregate_entries=aggregate_grid_flow_series,
-        )[:target_count]
+        for entry in _merge_baseline_series(snapshot)[:target_count]
     ]
     return response
 

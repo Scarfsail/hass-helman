@@ -44,7 +44,6 @@ import {
 } from "../model/schedule-normalizer";
 import {
     buildSlotForecastMap,
-    deriveScheduleForecastParams,
     EMPTY_SLOT_FORECAST_MAP,
     type SlotForecastMap,
 } from "../model/slot-forecast-model";
@@ -154,7 +153,6 @@ export class SchedulingDayEditorHost extends LitElement {
     private _appliancesRequested = false;
     private _entitiesRequested = false;
     private _forecastLoader: ForecastLoader | null = null;
-    private _forecastLoaderKey: string | null = null;
     private _projectionLoadGeneration = 0;
     /** An editor has been asked for, so the day is worth keeping complete. */
     private _opened = false;
@@ -530,16 +528,12 @@ export class SchedulingDayEditorHost extends LitElement {
             return;
         }
 
-        const params = deriveScheduleForecastParams(schedule.slots);
-        if (params === null) {
+        // Nothing to draw a forecast against until the schedule has slots.
+        if (schedule.slots.length === 0) {
             return;
         }
 
-        const key = `${params.granularity}:${params.forecastDays ?? ""}`;
-        if (this._forecastLoader === null || this._forecastLoaderKey !== key) {
-            this._forecastLoader = new ForecastLoader(params.granularity, params.forecastDays ?? null);
-            this._forecastLoaderKey = key;
-        }
+        this._forecastLoader ??= new ForecastLoader();
 
         try {
             const forecast = await this._forecastLoader.load(hass);

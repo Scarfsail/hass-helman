@@ -37,7 +37,7 @@ The field is exposed on `grid.series[]`:
 - present on effective `grid.series[]`
 - not exposed on `battery_capacity.series[]`
 - not exposed on nested grid `baseline` entries in v1
-- follows the requested forecast granularity the same way as other grid energy fields
+- is on the canonical 15-minute grid, like the other grid energy fields
 
 ## Meaning of each related field
 

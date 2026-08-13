@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import contextlib
-import importlib
 import sys
 import types
 import unittest
@@ -95,43 +93,6 @@ def _expected_canonical_slot_count() -> int:
     return (SCHEDULE_HORIZON_HOURS * 60) // FORECAST_CANONICAL_GRANULARITY_MINUTES
 
 
-@contextlib.contextmanager
-def _reloaded_schedule_modules(*, schedule_slot_minutes: int):
-    _install_import_stubs()
-    const_module = importlib.import_module("custom_components.helman.const")
-    original_slot_minutes = const_module.SCHEDULE_SLOT_MINUTES
-    original_schedule_module = sys.modules.get(
-        "custom_components.helman.scheduling.schedule"
-    )
-    original_overlay_module = sys.modules.get(
-        "custom_components.helman.scheduling.forecast_overlay"
-    )
-
-    try:
-        const_module.SCHEDULE_SLOT_MINUTES = schedule_slot_minutes
-        sys.modules.pop("custom_components.helman.scheduling.schedule", None)
-        sys.modules.pop("custom_components.helman.scheduling.forecast_overlay", None)
-        schedule_module = importlib.import_module(
-            "custom_components.helman.scheduling.schedule"
-        )
-        overlay_module = importlib.import_module(
-            "custom_components.helman.scheduling.forecast_overlay"
-        )
-        yield schedule_module, overlay_module
-    finally:
-        const_module.SCHEDULE_SLOT_MINUTES = original_slot_minutes
-        sys.modules.pop("custom_components.helman.scheduling.schedule", None)
-        sys.modules.pop("custom_components.helman.scheduling.forecast_overlay", None)
-        if original_schedule_module is not None:
-            sys.modules["custom_components.helman.scheduling.schedule"] = (
-                original_schedule_module
-            )
-        if original_overlay_module is not None:
-            sys.modules["custom_components.helman.scheduling.forecast_overlay"] = (
-                original_overlay_module
-            )
-
-
 class ScheduleForecastOverlayTests(unittest.TestCase):
     def test_overlay_materializes_full_canonical_horizon(self) -> None:
         overlay = build_schedule_forecast_overlay(
@@ -146,7 +107,8 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
             SCHEDULE_ACTION_EMPTY,
         )
 
-    def test_overlay_expands_stop_action_across_coarser_schedule_slot(self) -> None:
+    def test_overlay_places_an_action_on_its_own_slot_only(self) -> None:
+        """One schedule slot is one forecast bucket, so nothing spills forward."""
         current_slot_start = build_horizon_start(REFERENCE_TIME)
         overlay = build_schedule_forecast_overlay(
             schedule_document=ScheduleDocument(
@@ -169,17 +131,10 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
                 current_slot_start
                 + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
             ).kind,
-            SCHEDULE_ACTION_STOP_CHARGING,
-        )
-        self.assertEqual(
-            overlay.lookup_action(
-                current_slot_start
-                + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * 2)
-            ).kind,
             SCHEDULE_ACTION_EMPTY,
         )
 
-    def test_overlay_preserves_target_actions_in_canonical_windows(self) -> None:
+    def test_overlay_preserves_target_soc_on_target_actions(self) -> None:
         current_slot_start = build_horizon_start(REFERENCE_TIME)
         overlay = build_schedule_forecast_overlay(
             schedule_document=ScheduleDocument(
@@ -194,16 +149,10 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        first_window = overlay.lookup_action(current_slot_start)
-        second_window = overlay.lookup_action(
-            current_slot_start
-            + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
-        )
+        action = overlay.lookup_action(current_slot_start)
 
-        self.assertEqual(first_window.kind, SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
-        self.assertEqual(first_window.target_soc, 80)
-        self.assertEqual(second_window.kind, SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
-        self.assertEqual(second_window.target_soc, 80)
+        self.assertEqual(action.kind, SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
+        self.assertEqual(action.target_soc, 80)
 
     def test_overlay_materializes_actions_regardless_of_execution_flag(self) -> None:
         """The builder never reads ``execution_enabled``.
@@ -258,36 +207,6 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
             overlay.lookup_action(first_slot_start).kind,
             SCHEDULE_ACTION_EMPTY,
         )
-
-    def test_overlay_uses_direct_lookup_when_granularities_match(self) -> None:
-        with _reloaded_schedule_modules(
-            schedule_slot_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES
-        ) as (schedule_module, overlay_module):
-            current_slot_start = schedule_module.build_horizon_start(REFERENCE_TIME)
-            overlay = overlay_module.build_schedule_forecast_overlay(
-                schedule_document=schedule_module.ScheduleDocument(
-                    execution_enabled=True,
-                    slots={
-                        current_slot_start.isoformat(timespec="seconds"): schedule_module.ScheduleAction(
-                            kind=SCHEDULE_ACTION_STOP_CHARGING
-                        )
-                    },
-                ),
-                reference_time=REFERENCE_TIME,
-            )
-
-            self.assertEqual(len(overlay.slots), _expected_canonical_slot_count())
-            self.assertEqual(
-                overlay.lookup_action(current_slot_start).kind,
-                SCHEDULE_ACTION_STOP_CHARGING,
-            )
-            self.assertEqual(
-                overlay.lookup_action(
-                    current_slot_start
-                    + timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
-                ).kind,
-                SCHEDULE_ACTION_EMPTY,
-            )
 
 
 class ScheduleActionResolutionTests(unittest.TestCase):

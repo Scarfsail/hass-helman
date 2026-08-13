@@ -55,6 +55,7 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.config import OptimizerInstanceConfig  # noqa: E402
+from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.automation.day_context import (  # noqa: E402
     DayContext,
 )
@@ -100,7 +101,8 @@ def _slot_id(hour: int, minute: int) -> str:
 
 
 def _surplus_series() -> list[dict[str, object]]:
-    # 1 kWh surplus per 30-min slot from 10:00 to 13:30 (8 slots -> 8 kWh).
+    # 2 kWh of surplus per hour from 10:00 to 14:00 -> 8 kWh, on the canonical
+    # 15-minute forecast grid.
     series = []
     cursor = datetime(2026, 7, 10, 10, 0, tzinfo=TZ)
     end = datetime(2026, 7, 10, 14, 0, tzinfo=TZ)
@@ -108,12 +110,12 @@ def _surplus_series() -> list[dict[str, object]]:
         series.append(
             {
                 "timestamp": cursor.isoformat(timespec="seconds"),
-                "solarKwh": 1.0,
+                "solarKwh": 0.5,
                 "baselineHouseKwh": 0.0,
-                "durationHours": 0.5,
+                "durationHours": 0.25,
             }
         )
-        cursor += timedelta(minutes=30)
+        cursor += timedelta(minutes=SCHEDULE_SLOT_MINUTES)
     return series
 
 
@@ -258,8 +260,8 @@ def _held_slot_ids(result: ScheduleDocument) -> set[str]:
 
 class ChargeHoldOptimizerTests(unittest.TestCase):
     def test_releases_the_cheapest_slots_that_cover_the_need(self) -> None:
-        # 4 kWh needed, 1 kWh per slot: the four cheapest surplus slots are
-        # 13:00/13:30 (1.0) and 12:00/12:30 (2.0). Everything else in the window
+        # 4 kWh needed, 0.5 kWh per slot: the eight cheapest surplus slots are
+        # 13:00-13:45 (1.0) and 12:00-12:45 (2.0). Everything else in the window
         # is held, including the dearer surplus slots *after* the window start.
         result = build_charge_hold_optimizer(_make_config()).optimize(
             _make_snapshot(day_context=_day_context()), _make_config()
@@ -267,8 +269,11 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         held = _held_slot_ids(result)
         self.assertEqual(
             held,
-            {_slot_id(hour, minute) for hour in range(6, 10) for minute in (0, 30)}
-            | {_slot_id(10, 0), _slot_id(10, 30), _slot_id(11, 0), _slot_id(11, 30)},
+            {
+                _slot_id(hour, minute)
+                for hour in range(6, 12)
+                for minute in (0, 15, 30, 45)
+            },
         )
         self.assertNotIn(_slot_id(5, 30), held)
 
@@ -403,14 +408,14 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         self.assertEqual(_held_slot_ids(result), set())
 
     def test_the_hold_ends_where_the_charge_set_reaches_target(self) -> None:
-        # 4 kWh need, 1 kWh per slot: the cheapest four are 13:00/13:30 (1.0)
-        # and 12:00/12:30 (2.0), so the target is reached at 13:30. Nothing from
-        # there on is held, and the held set is exactly the run before it.
+        # 4 kWh need, 0.5 kWh per slot: the cheapest eight are 13:00-13:45
+        # (1.0) and 12:00-12:45 (2.0), so the charge set opens at 12:00. Nothing
+        # from there on is held, and the held set is exactly the run before it.
         result = build_charge_hold_optimizer(_make_config()).optimize(
             _make_snapshot(day_context=_day_context()), _make_config()
         )
         held = _held_slot_ids(result)
-        self.assertEqual(max(held), _slot_id(11, 30))
+        self.assertEqual(max(held), _slot_id(11, 45))
         self.assertNotIn(_slot_id(13, 30), held)
 
     def test_slots_after_target_are_freed_even_without_surplus(self) -> None:
@@ -434,16 +439,17 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
             _make_config(window_end="14:00"),
         )
         held = _held_slot_ids(result)
-        # 10:00-11:30 is 4 kWh of surplus and covers the need exactly, so the
-        # target lands at 11:30 and the surplus-less rest of the window is free.
-        self.assertEqual(max(held), _slot_id(9, 30))
+        # 10:00-11:45 is 4 kWh of surplus and covers the need exactly, so the
+        # target lands at 11:45 and the surplus-less rest of the window is free.
+        self.assertEqual(max(held), _slot_id(9, 45))
         self.assertNotIn(_slot_id(12, 0), held)
         self.assertNotIn(_slot_id(13, 30), held)
 
     def test_need_is_measured_from_the_forecast_soc_at_the_window_start(self) -> None:
         # The battery reads 60% now but the forecast has it down to 30% by the
         # time the window opens, so the need is 7 kWh rather than 4 — and the
-        # charge set grows from the four cheapest slots to the seven cheapest.
+        # charge set grows from the eight cheapest slots to the fourteen
+        # cheapest.
         # Sizing this off the run-time reading is what held 10:00–11:30 while
         # the battery was still 30 points short.
         result = build_charge_hold_optimizer(_make_config()).optimize(
@@ -457,8 +463,12 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         held = _held_slot_ids(result)
         self.assertEqual(
             held,
-            {_slot_id(hour, minute) for hour in range(6, 10) for minute in (0, 30)}
-            | {_slot_id(10, 30)},
+            {
+                _slot_id(hour, minute)
+                for hour in range(6, 10)
+                for minute in (0, 15, 30, 45)
+            }
+            | {_slot_id(10, 30), _slot_id(10, 45)},
         )
 
     def test_a_forecast_soc_above_the_reading_shrinks_the_charge_set(self) -> None:
@@ -546,11 +556,11 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         self.assertEqual(_gate(held, "hold_window").state, "true")
         self.assertEqual(_gate(held, "hold_room").state, "true")
         rank = _gate(held, "cheapest_rank")
-        # 10:00 is the dearest surplus slot of the day: last of the eight, and
-        # it lost to a marginal price of 2.0.
+        # 10:00 opens the dearest hour of the day, so it ranks below every
+        # cheaper slot and lost to a marginal price of 2.0.
         self.assertEqual(rank.state, "true")
-        self.assertEqual(rank.params["rank"], 7)
-        self.assertEqual(rank.params["rankOf"], 8)
+        self.assertEqual(rank.params["rank"], 13)
+        self.assertEqual(rank.params["rankOf"], 16)
         self.assertEqual(rank.params["price"], 4.0)
         self.assertEqual(rank.params["marginalPrice"], 2.0)
         # It supplies none of the need, so it is quoted no running total.
@@ -573,7 +583,7 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         rank = _gate(released, "cheapest_rank")
         self.assertEqual(rank.state, "false")
         self.assertEqual(rank.params["rank"], 1)  # cheapest slot of the day
-        self.assertEqual(rank.params["cumulativeKwh"], 1.0)
+        self.assertEqual(rank.params["cumulativeKwh"], 0.5)
         self.assertEqual(rank.params["thresholdKwh"], 4.0)
 
         # A window slot with no surplus takes no rank at all — it is held for

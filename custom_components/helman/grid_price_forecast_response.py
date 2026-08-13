@@ -14,7 +14,6 @@ _PRICE_CHANNEL_FIELDS = (
 def build_grid_price_forecast_response(
     snapshot: dict[str, Any],
     *,
-    granularity: int,
     forecast_days: int,
 ) -> dict[str, Any]:
     response: dict[str, Any] = {}
@@ -28,7 +27,6 @@ def build_grid_price_forecast_response(
         response.update(
             build_price_channel_response(
                 _read_channel(snapshot.get(channel_key)),
-                granularity=granularity,
                 forecast_days=forecast_days,
                 unit_field=unit_field,
                 current_price_field=current_price_field,

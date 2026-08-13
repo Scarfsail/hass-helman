@@ -374,7 +374,7 @@ from custom_components.helman.automation.snapshot import (
 )
 from custom_components.helman.automation.compute_inputs import ComputeInputs
 from custom_components.helman.battery_state import BatteryEntityConfig, BatteryLiveState
-from custom_components.helman.const import DOMAIN, MAX_FORECAST_DAYS
+from custom_components.helman.const import DOMAIN, MAX_FORECAST_DAYS, SCHEDULE_SLOT_MINUTES
 from custom_components.helman.coordinator import HelmanCoordinator
 from custom_components.helman import coordinator as coordinator_module
 from custom_components.helman.automation import pipeline as pipeline_module
@@ -1052,7 +1052,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             schedule_document_to_dict(result.snapshot.schedule),
             {
                 "executionEnabled": True,
-                "slotMinutes": 30,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
                         "boiler": {"on": True, "setBy": "user"},
@@ -1105,7 +1105,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             schedule_document_to_dict(coordinator.saved_documents[0]),
             {
                 "executionEnabled": True,
-                "slotMinutes": 30,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {},
             },
         )

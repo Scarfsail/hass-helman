@@ -220,7 +220,7 @@ Suggested persisted shape:
 ```json
 {
   "executionEnabled": false,
-  "slotMinutes": 30,
+  "slotMinutes": 15,
   "slots": {
     "2026-03-20T21:00:00+01:00": {
       "inverter": {

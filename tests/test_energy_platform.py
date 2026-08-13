@@ -64,19 +64,30 @@ class _FakeHass:
 class _FakeCoordinator:
     def __init__(self, forecast: dict | None = None) -> None:
         self.calls: list[dict[str, int]] = []
+        # Canonical 15-minute points: two whole hours, then a partial tail
+        # (two quarters of 12:00) that must not be reported as an hour, plus
+        # malformed entries that are skipped rather than raised on.
         self._forecast = forecast or {
             "solar": {
                 "points": [
-                    {"timestamp": "2026-04-29T10:00:00+02:00", "value": 1250.25},
+                    {"timestamp": "2026-04-29T10:00:00+02:00", "value": 300.0},
+                    {"timestamp": "2026-04-29T10:15:00+02:00", "value": 300.0},
+                    {"timestamp": "2026-04-29T10:30:00+02:00", "value": 325.25},
+                    {"timestamp": "2026-04-29T10:45:00+02:00", "value": 325.0},
                     {"timestamp": "2026-04-29T11:00:00+02:00", "value": 0},
+                    {"timestamp": "2026-04-29T11:15:00+02:00", "value": 0},
+                    {"timestamp": "2026-04-29T11:30:00+02:00", "value": 0},
+                    {"timestamp": "2026-04-29T11:45:00+02:00", "value": 0},
                     {"timestamp": "2026-04-29T12:00:00+02:00", "value": "bad"},
                     {"timestamp": None, "value": 500},
+                    {"timestamp": "2026-04-29T12:15:00+02:00", "value": 10.0},
+                    {"timestamp": "2026-04-29T12:30:00+02:00", "value": 10.0},
                 ],
             },
         }
 
-    async def get_forecast(self, *, granularity: int, forecast_days: int) -> dict:
-        self.calls.append({"granularity": granularity, "forecast_days": forecast_days})
+    async def get_forecast(self, *, forecast_days: int) -> dict:
+        self.calls.append({"forecast_days": forecast_days})
         return self._forecast
 
 
@@ -91,7 +102,9 @@ class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self.energy.async_get_solar_forecast(hass, "entry-1")
 
-        self.assertEqual(coordinator.calls, [{"granularity": 60, "forecast_days": 14}])
+        self.assertEqual(coordinator.calls, [{"forecast_days": 14}])
+        # 300 + 300 + 325.25 + 325 = 1250.25 for the 10:00 hour; the two
+        # surviving 12:00 quarters are half an hour and are dropped.
         self.assertEqual(
             result,
             {
@@ -111,7 +124,9 @@ class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
                     ],
                     "adjustedPoints": [
                         {"timestamp": "2026-04-29T10:00:00+02:00", "value": 900.5},
-                        {"timestamp": "2026-04-29T11:00:00+02:00", "value": 0},
+                        {"timestamp": "2026-04-29T10:15:00+02:00", "value": 0},
+                        {"timestamp": "2026-04-29T10:30:00+02:00", "value": 0},
+                        {"timestamp": "2026-04-29T10:45:00+02:00", "value": 0},
                     ],
                 },
             }
@@ -123,13 +138,50 @@ class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             result,
-            {
-                "wh_hours": {
-                    "2026-04-29T10:00:00+02:00": 900.5,
-                    "2026-04-29T11:00:00+02:00": 0,
-                }
-            },
+            {"wh_hours": {"2026-04-29T10:00:00+02:00": 900.5}},
         )
+
+    async def test_an_hour_missing_slots_is_dropped_rather_than_reported_short(self) -> None:
+        """A series starting mid-hour must not label a partial sum as an hour.
+
+        Grouping by position would have summed 10:15-11:00 and keyed it 10:15;
+        grouping by each point's own hour drops that hour and keeps the whole
+        one after it.
+        """
+        coordinator = _FakeCoordinator(
+            {
+                "solar": {
+                    "points": [
+                        {"timestamp": "2026-04-29T10:15:00+02:00", "value": 100.0},
+                        {"timestamp": "2026-04-29T10:30:00+02:00", "value": 100.0},
+                        {"timestamp": "2026-04-29T10:45:00+02:00", "value": 100.0},
+                        {"timestamp": "2026-04-29T11:00:00+02:00", "value": 25.0},
+                        {"timestamp": "2026-04-29T11:15:00+02:00", "value": 25.0},
+                        {"timestamp": "2026-04-29T11:30:00+02:00", "value": 25.0},
+                        {"timestamp": "2026-04-29T11:45:00+02:00", "value": 25.0},
+                    ],
+                },
+            }
+        )
+        entry = _FakeConfigEntry("entry-1", "helman")
+        hass = _FakeHass(coordinator, {"entry-1": entry})
+
+        result = await self.energy.async_get_solar_forecast(hass, "entry-1")
+
+        self.assertEqual(
+            result,
+            {"wh_hours": {"2026-04-29T11:00:00+02:00": 100.0}},
+        )
+
+    async def test_every_key_is_the_start_of_its_own_hour(self) -> None:
+        coordinator = _FakeCoordinator()
+        entry = _FakeConfigEntry("entry-1", "helman")
+        hass = _FakeHass(coordinator, {"entry-1": entry})
+
+        result = await self.energy.async_get_solar_forecast(hass, "entry-1")
+
+        for timestamp in result["wh_hours"]:
+            self.assertTrue(timestamp.endswith(":00:00+02:00"), timestamp)
 
     async def test_get_solar_forecast_returns_none_for_unknown_entry(self) -> None:
         coordinator = _FakeCoordinator()

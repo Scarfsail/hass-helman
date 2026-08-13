@@ -24,9 +24,9 @@ from .battery_state import (
 from .const import (
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    FORECAST_CANONICAL_RESOLUTION,
     MAX_FORECAST_DAYS,
 )
-from .forecast_aggregation import get_forecast_resolution
 from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import EMPTY_SCHEDULE_ACTION
 
@@ -586,9 +586,7 @@ class BatteryCapacityForecastBuilder:
             "generatedAt": dt_util.now().isoformat(),
             "startedAt": started_at.isoformat() if started_at is not None else None,
             "unit": "kWh",
-            "resolution": get_forecast_resolution(
-                FORECAST_CANONICAL_GRANULARITY_MINUTES
-            ),
+            "resolution": FORECAST_CANONICAL_RESOLUTION,
             "horizonHours": horizon_hours,
             "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
             "model": model,

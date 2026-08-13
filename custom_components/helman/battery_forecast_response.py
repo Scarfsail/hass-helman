@@ -6,19 +6,15 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
+from .const import (
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    FORECAST_CANONICAL_RESOLUTION,
+)
 from .forecast_series_fields import (
     BATTERY_PUBLIC_SERIES_FIELDS,
     project_series_fields,
 )
-from .forecast_aggregation import (
-    aggregate_battery_history_entries,
-    aggregate_battery_series,
-    get_aggregation_group_size,
-    get_forecast_resolution,
-)
 from .recorder_hourly_series import get_local_current_slot_start
-from .slot_series_response import build_started_slot_series
 
 _INTERNAL_SNAPSHOT_FIELDS = {
     "sourceGranularityMinutes",
@@ -29,20 +25,15 @@ _INTERNAL_SNAPSHOT_FIELDS = {
 def build_battery_forecast_response(
     snapshot: dict[str, Any],
     *,
-    granularity: int,
     forecast_days: int,
 ) -> dict[str, Any]:
-    group_size = get_aggregation_group_size(
-        source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        target_granularity_minutes=granularity,
-    )
     response = {
         key: deepcopy(value)
         for key, value in snapshot.items()
         if key not in _INTERNAL_SNAPSHOT_FIELDS
         and key not in {"series", "actualHistory", "resolution", "horizonHours"}
     }
-    response["resolution"] = get_forecast_resolution(granularity)
+    response["resolution"] = FORECAST_CANONICAL_RESOLUTION
     response["horizonHours"] = forecast_days * 24
     response["actualHistory"] = []
     response["series"] = []
@@ -54,73 +45,45 @@ def build_battery_forecast_response(
     if started_at is None:
         return response
 
-    target_count = forecast_days * 24 * 60 // granularity
-    response["series"] = _build_series(
-        snapshot=snapshot,
-        started_at=started_at,
-        granularity=granularity,
-        group_size=group_size,
+    target_count = (
+        forecast_days * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
+    )
+    response["series"] = project_series_fields(
+        _read_entries(snapshot.get("series")),
+        BATTERY_PUBLIC_SERIES_FIELDS,
     )[:target_count]
     response["actualHistory"] = _build_actual_history(
         snapshot=snapshot,
         started_at=started_at,
-        granularity=granularity,
-        group_size=group_size,
     )
     return response
-
-
-def _build_series(
-    *,
-    snapshot: dict[str, Any],
-    started_at: datetime,
-    granularity: int,
-    group_size: int,
-) -> list[dict[str, Any]]:
-    return project_series_fields(
-        build_started_slot_series(
-            raw_entries=snapshot.get("series"),
-            started_at=started_at,
-            granularity=granularity,
-            group_size=group_size,
-            aggregate_entries=aggregate_battery_series,
-        ),
-        BATTERY_PUBLIC_SERIES_FIELDS,
-    )
 
 
 def _build_actual_history(
     *,
     snapshot: dict[str, Any],
     started_at: datetime,
-    granularity: int,
-    group_size: int,
 ) -> list[dict[str, Any]]:
-    raw_history = _read_entries(snapshot.get("actualHistory"))
-    current_bucket_start = get_local_current_slot_start(
-        started_at,
-        interval_minutes=granularity,
+    """History strictly before the slot the run started in.
+
+    Floored to the slot rather than cut at ``started_at`` itself: the slot in
+    progress belongs to the series, so an entry stamped at its start must not
+    also appear as history.
+    """
+    current_slot_start_utc = dt_util.as_utc(
+        get_local_current_slot_start(
+            started_at,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        )
     )
-    current_bucket_start_utc = dt_util.as_utc(current_bucket_start)
-    filtered_entries = [
+    return [
         entry
-        for entry in raw_history
+        for entry in _read_entries(snapshot.get("actualHistory"))
         if (
             (timestamp := _parse_timestamp(entry.get("timestamp"))) is not None
-            and dt_util.as_utc(timestamp) < current_bucket_start_utc
+            and dt_util.as_utc(timestamp) < current_slot_start_utc
         )
     ]
-
-    if group_size == 1:
-        return filtered_entries
-
-    complete_length = len(filtered_entries) - (len(filtered_entries) % group_size)
-    if complete_length <= 0:
-        return []
-    return aggregate_battery_history_entries(
-        filtered_entries[:complete_length],
-        group_size=group_size,
-    )
 
 
 def _read_entries(raw_value: Any) -> list[dict[str, Any]]:

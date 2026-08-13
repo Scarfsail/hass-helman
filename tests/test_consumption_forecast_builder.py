@@ -244,11 +244,10 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 actual_history=[],
                 forecast_days=forecast_days,
-                alignment_padding_slots=0,
                 training_window_days=56,
                 min_history_days=14,
                 config_fingerprint="fingerprint",
-                canonical_resolution=consumption_module.get_forecast_resolution(15),
+                canonical_resolution=consumption_module.FORECAST_CANONICAL_RESOLUTION,
                 horizon_hours=forecast_days * 24,
             )
 

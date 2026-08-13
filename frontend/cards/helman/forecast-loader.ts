@@ -1,5 +1,5 @@
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import type { ForecastGranularity, ForecastPayload, GetForecastRequest } from "../helman-api";
+import type { ForecastPayload, GetForecastRequest } from "../helman-api";
 
 /**
  * A burst-coalescing fuse, not a polling policy. Nothing calls `load()` on a
@@ -29,10 +29,7 @@ export class ForecastLoader {
     private _payloadHourKey: string | null = null;
     private _fetchedAt = 0;
 
-    constructor(
-        private readonly _granularity: ForecastGranularity,
-        private readonly _forecastDays?: number | null,
-    ) {}
+    constructor(private readonly _forecastDays?: number | null) {}
 
     load(hass: HomeAssistant): Promise<ForecastPayload> {
         const now = new Date();
@@ -52,7 +49,6 @@ export class ForecastLoader {
 
         const requestMessage: GetForecastRequest = {
             type: "helman/get_forecast",
-            granularity: this._granularity,
         };
         if (this._forecastDays !== null && this._forecastDays !== undefined) {
             requestMessage.forecast_days = this._forecastDays;

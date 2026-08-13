@@ -55,6 +55,7 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.automation.config import OptimizerInstanceConfig  # noqa: E402
+from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.automation.day_context import (  # noqa: E402
     DayContext,
     ImportBand,
@@ -361,7 +362,8 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
         rank = _gate(loser, "cheapest_rank")
         self.assertEqual(rank.state, "false")
         self.assertGreater(rank.params["rank"], rank.params["slotsNeeded"])
-        self.assertEqual(rank.params["rankOf"], 4)  # 06:00..07:30
+        # The whole 06:00-08:00 window is ranked.
+        self.assertEqual(rank.params["rankOf"], 2 * (60 // SCHEDULE_SLOT_MINUTES))
         self.assertEqual(rank.params["chosenPrice"], 1.0)
         # Everything upstream of the ranking still passed for this slot.
         self.assertEqual(_gate(loser, "charge_needed").state, "true")

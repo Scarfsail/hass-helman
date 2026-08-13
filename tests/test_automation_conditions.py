@@ -16,8 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 SLOT_0 = "2026-03-20T21:00:00+01:00"
-SLOT_1 = "2026-03-20T21:30:00+01:00"
-SLOT_2 = "2026-03-20T22:00:00+01:00"
+SLOT_1 = "2026-03-20T21:15:00+01:00"
+SLOT_2 = "2026-03-20T21:30:00+01:00"
 
 
 def _install_import_stubs() -> None:
@@ -62,6 +62,10 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from custom_components.helman.const import (  # noqa: E402
+    SCHEDULE_HORIZON_HOURS,
+    SCHEDULE_SLOT_MINUTES,
+)
 from custom_components.helman.automation.conditions import (  # noqa: E402
     build_eligibility,
     build_group_explanations,
@@ -111,6 +115,8 @@ def _config(*groups):
 # SLOT_0 is cheap enough for either group; SLOT_1 only for the looser one;
 # SLOT_2 for neither.
 _PRICES = {SLOT_0: -1.0, SLOT_1: 0.5, SLOT_2: 5.0}
+
+_HORIZON_SLOT_COUNT = SCHEDULE_HORIZON_HOURS * 60 // SCHEDULE_SLOT_MINUTES
 
 
 class OrEvaluationTests(unittest.TestCase):
@@ -241,6 +247,11 @@ class MaxRunPriceConditionTests(unittest.TestCase):
     """``max_run_price`` (issue #5) — permission to consume needs *every*
     bucket a slot spans to clear the threshold, the opposite of
     ``when_price_below``'s any-bucket reading for ``export_price``.
+
+    A slot spans exactly one bucket now that both are 15 minutes, so what the
+    two readings still disagree about is the slot in progress: ``max_run_price``
+    drops a slot whose buckets have all elapsed and lets the live price govern
+    the one that has not.
     """
 
     @staticmethod
@@ -299,7 +310,7 @@ class MaxRunPriceConditionTests(unittest.TestCase):
             conditions=[{"max_run_price": threshold}],
         )
 
-    def test_a_slot_qualifies_when_both_buckets_clear_the_threshold(self) -> None:
+    def test_a_slot_qualifies_when_its_bucket_clears_the_threshold(self) -> None:
         eligibility = build_eligibility(
             self._snapshot_with_price_points(
                 {
@@ -312,11 +323,9 @@ class MaxRunPriceConditionTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(eligibility.at(SLOT_0))
-        self.assertIsNone(eligibility.at(SLOT_1))
+        self.assertIsNone(eligibility.at(SLOT_2))
 
-    def test_one_expensive_bucket_sinks_the_slot(self) -> None:
-        # `when_price_below`'s any-bucket reading would have let this slot
-        # through on its cheap first half; `max_run_price` must not.
+    def test_an_expensive_slot_is_not_eligible(self) -> None:
         eligibility = build_eligibility(
             self._snapshot_with_price_points(
                 {
@@ -328,7 +337,8 @@ class MaxRunPriceConditionTests(unittest.TestCase):
             self._config(2.0),
         )
 
-        self.assertIsNone(eligibility.at(SLOT_0))
+        self.assertIsNotNone(eligibility.at(SLOT_0))
+        self.assertIsNone(eligibility.at(SLOT_1))
 
     def test_the_threshold_is_exclusive(self) -> None:
         eligibility = build_eligibility(
@@ -348,9 +358,9 @@ class MaxRunPriceConditionTests(unittest.TestCase):
 
         self.assertIsNone(eligibility.at(SLOT_0))
 
-    def test_elapsed_buckets_are_skipped(self) -> None:
-        # The bucket containing `now` is 21:15; 21:00 has already elapsed at
-        # an expensive price. Only buckets still to come can be gated.
+    def test_an_elapsed_slot_is_skipped_and_the_one_in_progress_is_gated(self) -> None:
+        # `now` sits inside 21:15; 21:00 has already run out at an expensive
+        # price. Only slots with a bucket still to come can be gated at all.
         eligibility = build_eligibility(
             self._snapshot_with_price_points(
                 {
@@ -363,7 +373,8 @@ class MaxRunPriceConditionTests(unittest.TestCase):
             self._config(2.0),
         )
 
-        self.assertIsNotNone(eligibility.at(SLOT_0))
+        self.assertIsNone(eligibility.at(SLOT_0))
+        self.assertIsNotNone(eligibility.at(SLOT_1))
 
     def test_current_price_overrides_a_stale_forecast_point_for_the_live_bucket(
         self,
@@ -404,7 +415,10 @@ class MaxRunPriceConditionTests(unittest.TestCase):
 class MinSocConditionTests(unittest.TestCase):
     """A slot passes only when *every* bucket it spans clears the threshold.
 
-    Slots are 30 minutes and forecast buckets 15, so each slot spans two.
+    Slots and forecast buckets are both 15 minutes, so each slot spans exactly
+    one and the rule reduces to "this slot's own SoC clears it". A slot with no
+    bucket left to gate -- elapsed, or past the end of the forecast -- fails
+    closed rather than passing vacuously.
     """
 
     @staticmethod
@@ -460,7 +474,7 @@ class MinSocConditionTests(unittest.TestCase):
             conditions=[{"min_soc_pct": threshold}],
         )
 
-    def test_a_slot_qualifies_when_both_buckets_clear_the_threshold(self) -> None:
+    def test_a_slot_qualifies_when_its_bucket_clears_the_threshold(self) -> None:
         eligibility = build_eligibility(
             self._snapshot_with_soc(
                 {
@@ -474,17 +488,13 @@ class MinSocConditionTests(unittest.TestCase):
         )
 
         self.assertIsNone(eligibility.at(SLOT_0))
-        self.assertIsNotNone(eligibility.at(SLOT_1))
+        self.assertIsNone(eligibility.at(SLOT_1))
+        self.assertIsNotNone(eligibility.at(SLOT_2))
 
-    def test_the_slot_in_progress_survives_once_its_first_bucket_has_elapsed(
-        self,
-    ) -> None:
-        # The battery forecast starts at the bucket containing `now`, so once
-        # `now` passes a slot's midpoint the slot's first bucket is in the past
-        # and absent from the series. "Every bucket clears the threshold" must
-        # not read that absence as a failure: the slot is executing, its first
-        # bucket is history, and the only buckets that can still be gated are
-        # the ones still to come.
+    def test_the_slot_in_progress_is_gated_on_its_own_bucket(self) -> None:
+        # The battery forecast starts at the bucket containing `now`, so a slot
+        # that has fully elapsed is absent from the series and has nothing left
+        # to gate; the slot in progress is gated on the bucket it is inside.
         eligibility = build_eligibility(
             self._snapshot_with_soc(
                 {
@@ -498,9 +508,10 @@ class MinSocConditionTests(unittest.TestCase):
             self._config(70.0),
         )
 
-        self.assertIsNotNone(eligibility.at(SLOT_0))
+        self.assertIsNone(eligibility.at(SLOT_0))
+        self.assertIsNotNone(eligibility.at(SLOT_1))
 
-    def test_one_failing_bucket_sinks_the_slot(self) -> None:
+    def test_a_slot_below_the_threshold_is_not_eligible(self) -> None:
         eligibility = build_eligibility(
             self._snapshot_with_soc(
                 {
@@ -511,7 +522,8 @@ class MinSocConditionTests(unittest.TestCase):
             self._config(70.0),
         )
 
-        self.assertIsNone(eligibility.at(SLOT_0))
+        self.assertIsNotNone(eligibility.at(SLOT_0))
+        self.assertIsNone(eligibility.at(SLOT_1))
 
     def test_the_threshold_is_inclusive(self) -> None:
         eligibility = build_eligibility(
@@ -526,13 +538,14 @@ class MinSocConditionTests(unittest.TestCase):
 
         self.assertIsNotNone(eligibility.at(SLOT_0))
 
-    def test_a_missing_bucket_fails_closed(self) -> None:
+    def test_a_slot_without_a_forecast_bucket_fails_closed(self) -> None:
         eligibility = build_eligibility(
             self._snapshot_with_soc({"2026-03-20T21:00:00+01:00": 88.0}),
             self._config(70.0),
         )
 
-        self.assertIsNone(eligibility.at(SLOT_0))
+        self.assertIsNotNone(eligibility.at(SLOT_0))
+        self.assertIsNone(eligibility.at(SLOT_1))
 
     def test_a_forecast_short_of_the_horizon_voids_the_run(self) -> None:
         # Not "nothing matched": an empty mask would silently clear the
@@ -572,7 +585,7 @@ class GroupExplanationTests(unittest.TestCase):
         config = _config({"when_price_below": 0.0}, {"when_price_below": 1.0})
         explanations = self._explanations(_snapshot(prices=_PRICES), config)
 
-        self.assertEqual(len(explanations), 96)
+        self.assertEqual(len(explanations), _HORIZON_SLOT_COUNT)
         for slot_id, groups in explanations.items():
             with self.subTest(slot_id=slot_id):
                 self.assertEqual([group.index for group in groups], [0, 1])

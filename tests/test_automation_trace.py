@@ -71,17 +71,27 @@ from custom_components.helman.automation.trace import (  # noqa: E402
     aggregate_series_to_slots,
     price_points_to_slots,
 )
+from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.scheduling.schedule import format_slot_id  # noqa: E402
 
 
 def _slot_ids(count: int, *, start_hour: int = 6) -> list[str]:
     base = datetime(2026, 7, 12, start_hour, 0, tzinfo=TZ)
-    return [format_slot_id(base + timedelta(minutes=30 * i)) for i in range(count)]
+    return [
+        format_slot_id(base + timedelta(minutes=SCHEDULE_SLOT_MINUTES * i))
+        for i in range(count)
+    ]
 
 
 class AggregateSeriesToSlotsTests(unittest.TestCase):
-    def test_sums_energy_and_takes_end_of_slot_soc(self) -> None:
-        slots = _slot_ids(2)  # 06:00, 06:30
+    def test_each_bucket_lands_on_its_own_slot(self) -> None:
+        """A slot and a forecast bucket are both 15 minutes, so the map is 1:1.
+
+        The regression this guards: the flooring used to be hard-coded to 30
+        minutes, which folded two buckets into every even slot -- doubling its
+        energy -- and left every odd slot with nothing.
+        """
+        slots = _slot_ids(3)  # 06:00, 06:15, 06:30
         base = datetime(2026, 7, 12, 6, 0, tzinfo=TZ)
         series = [
             {"timestamp": (base).isoformat(), "solarKwh": 0.1, "socPct": 40.0},
@@ -99,10 +109,33 @@ class AggregateSeriesToSlotsTests(unittest.TestCase):
         result = aggregate_series_to_slots(
             series, slots, sum_fields=("solarKwh",), last_fields=("socPct",)
         )
-        self.assertAlmostEqual(result["solarKwh"][0], 0.3)  # 0.1 + 0.2
-        self.assertEqual(result["socPct"][0], 42.0)  # end of slot
-        self.assertAlmostEqual(result["solarKwh"][1], 0.5)
-        self.assertEqual(result["socPct"][1], 50.0)
+        self.assertAlmostEqual(result["solarKwh"][0], 0.1)
+        self.assertEqual(result["socPct"][0], 40.0)
+        self.assertAlmostEqual(result["solarKwh"][1], 0.2)
+        self.assertEqual(result["socPct"][1], 42.0)
+        self.assertAlmostEqual(result["solarKwh"][2], 0.5)
+        self.assertEqual(result["socPct"][2], 50.0)
+
+    def test_a_finer_bucket_still_sums_into_its_slot(self) -> None:
+        """The sum/last reduction is the contract, not the 1:1 count.
+
+        A feed publishing below the slot length must still fold into one slot.
+        """
+        slots = _slot_ids(1)
+        base = datetime(2026, 7, 12, 6, 0, tzinfo=TZ)
+        series = [
+            {"timestamp": base.isoformat(), "solarKwh": 0.1, "socPct": 40.0},
+            {
+                "timestamp": (base + timedelta(minutes=5)).isoformat(),
+                "solarKwh": 0.2,
+                "socPct": 42.0,
+            },
+        ]
+        result = aggregate_series_to_slots(
+            series, slots, sum_fields=("solarKwh",), last_fields=("socPct",)
+        )
+        self.assertAlmostEqual(result["solarKwh"][0], 0.3)
+        self.assertEqual(result["socPct"][0], 42.0)
 
     def test_slots_past_coverage_are_none(self) -> None:
         slots = _slot_ids(3)
@@ -121,14 +154,15 @@ class AggregateSeriesToSlotsTests(unittest.TestCase):
 
 class PricePointsToSlotsTests(unittest.TestCase):
     def test_step_function_carries_last_price_forward(self) -> None:
-        slots = _slot_ids(3)  # 06:00, 06:30, 07:00
+        # Enough slots to reach past the second point's hour.
+        slots = _slot_ids(60 // SCHEDULE_SLOT_MINUTES + 1)
         base = datetime(2026, 7, 12, 6, 0, tzinfo=TZ)
         points = [
             {"timestamp": base.isoformat(), "value": 2.0},
             {"timestamp": (base + timedelta(hours=1)).isoformat(), "value": 3.0},
         ]
         result = price_points_to_slots(points, slots)
-        self.assertEqual(result, [2.0, 2.0, 3.0])
+        self.assertEqual(result, [2.0] * (60 // SCHEDULE_SLOT_MINUTES) + [3.0])
 
     def test_missing_points_are_none(self) -> None:
         self.assertEqual(price_points_to_slots(None, _slot_ids(2)), [None, None])

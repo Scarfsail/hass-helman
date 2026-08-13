@@ -13,7 +13,6 @@ import {
 import { buildScheduleTimelineModel } from "../shared/schedule/model/schedule-timeline-builder";
 import {
     buildSlotForecastMap,
-    deriveScheduleForecastParams,
     EMPTY_SLOT_FORECAST_MAP,
     type SlotForecastMap,
 } from "../shared/schedule/model/slot-forecast-model";
@@ -178,7 +177,6 @@ export class HelmanSolarDayPills extends LitElement {
     private _scheduleOwner?: SharedScheduleOwner;
     private _unsubscribeOwner?: () => void;
     private _forecastLoader: ForecastLoader | null = null;
-    private _forecastLoaderKey: string | null = null;
 
     private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
@@ -337,8 +335,8 @@ export class HelmanSolarDayPills extends LitElement {
         const scheduleChanged = snapshot.schedule !== this._ownerSnapshot.schedule;
         this._ownerSnapshot = snapshot;
         if (scheduleChanged && snapshot.schedule !== null) {
-            // The forecast is what fills the gauges, and it is only requestable
-            // once the schedule has told us its granularity and horizon.
+            // The forecast is what fills the gauges, and there is nothing to
+            // draw it against until the schedule has slots.
             void this._loadForecast();
         }
     }
@@ -350,16 +348,12 @@ export class HelmanSolarDayPills extends LitElement {
             return;
         }
 
-        const params = deriveScheduleForecastParams(schedule.slots);
-        if (params === null) {
+        // Nothing to draw a forecast against until the schedule has slots.
+        if (schedule.slots.length === 0) {
             return;
         }
 
-        const key = `${params.granularity}:${params.forecastDays ?? ""}`;
-        if (this._forecastLoader === null || this._forecastLoaderKey !== key) {
-            this._forecastLoader = new ForecastLoader(params.granularity, params.forecastDays ?? null);
-            this._forecastLoaderKey = key;
-        }
+        this._forecastLoader ??= new ForecastLoader();
 
         try {
             const forecast = await this._forecastLoader.load(hass);
