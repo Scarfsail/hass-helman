@@ -34,6 +34,6 @@ Existing import/export flow fields keep their current meaning. `availableSurplus
 - `currentImportPrice` mirrors `currentExportPrice`, but for import tariff.
 - `importPriceUnit` mirrors `exportPriceUnit`.
 - `importPricePoints[]` mirrors `exportPricePoints[]`.
-- Values follow requested forecast granularity (`15` / `30` / `60` min).
+- Values are on the canonical 15-minute grid.
 - Aggregated buckets can average across a tariff switch.
 - If import prices are not configured, `currentImportPrice` / `importPriceUnit` are `null` and `importPricePoints[]` is empty.

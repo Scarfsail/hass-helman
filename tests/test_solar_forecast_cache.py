@@ -361,7 +361,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
             with _patched_forecast_response_builders(coordinator_module):
                 result = await coordinator.get_forecast(
-                    granularity=60, forecast_days=7
+                    forecast_days=7
                 )
 
             coordinator._async_refresh_forecast.assert_not_awaited()
@@ -403,7 +403,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             )
 
             with _patched_forecast_response_builders(coordinator_module):
-                result = await coordinator.get_forecast(granularity=60, forecast_days=7)
+                result = await coordinator.get_forecast(forecast_days=7)
 
             # No solar snapshot at all is "never built", not "stale": the
             # unavailable status already says so, and a banner on top of it
@@ -482,7 +482,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
                     with _patched_forecast_response_builders(coordinator_module):
                         result = await coordinator.get_forecast(
-                            granularity=60, forecast_days=7
+                            forecast_days=7
                         )
 
                     for half in ("solar", "house_consumption"):
@@ -702,7 +702,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                     create=True,
                 ),
             ):
-                result = await coordinator.get_forecast(granularity=60, forecast_days=7)
+                result = await coordinator.get_forecast(forecast_days=7)
 
             self.assertEqual(result["solar"]["points"][0]["value"], 1250.25)
             self.assertEqual(result["solar"]["adjustedPoints"][0]["value"], 900.5)
@@ -972,7 +972,7 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
 
             with _patched_forecast_response_builders(coordinator_module):
                 result = await coordinator.get_forecast(
-                    granularity=60, forecast_days=7
+                    forecast_days=7
                 )
 
             self.assertEqual(result["solar"]["points"][0]["value"], 1200.0)

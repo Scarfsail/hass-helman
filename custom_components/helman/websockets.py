@@ -8,19 +8,13 @@ from .const import (
     CONFIG_DOCUMENT_VERSION,
     DATA_CHANGED_KIND_CONFIG,
     DEFAULT_FORECAST_DAYS,
-    DEFAULT_FORECAST_GRANULARITY_MINUTES,
     DOMAIN,
     EVENT_DATA_CHANGED,
-    FORECAST_GRANULARITY_OPTIONS,
     MAX_FORECAST_DAYS,
     SCHEDULE_ACTION_KINDS,
 )
 from .automation.spec import OPTIMIZER_SPECS
 from .config_validation import validate_config_document
-from .forecast_request import (
-    ForecastRequestNotSupportedError,
-    ensure_supported_forecast_request,
-)
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_day_aggregates,
     ws_get_solar_bias_inspector,
@@ -49,9 +43,6 @@ SET_SCHEDULE_REQUEST_SCHEMA = vol.Schema(
 )
 GET_FORECAST_REQUEST_FIELDS = {
     vol.Required("type"): "helman/get_forecast",
-    vol.Optional("granularity", default=DEFAULT_FORECAST_GRANULARITY_MINUTES): (
-        lambda value: _validate_forecast_granularity(value)
-    ),
     vol.Optional("forecast_days", default=DEFAULT_FORECAST_DAYS): (
         lambda value: _validate_forecast_days(value)
     ),
@@ -60,17 +51,6 @@ GET_FORECAST_REQUEST_SCHEMA = vol.Schema(
     GET_FORECAST_REQUEST_FIELDS,
     extra=vol.PREVENT_EXTRA,
 )
-
-
-def _validate_forecast_granularity(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise vol.Invalid("granularity must be an integer")
-    if value not in FORECAST_GRANULARITY_OPTIONS:
-        raise vol.Invalid(
-            "granularity must be one of "
-            + ", ".join(str(option) for option in FORECAST_GRANULARITY_OPTIONS)
-        )
-    return value
 
 
 def _validate_schedule_date(value: object) -> str:
@@ -541,18 +521,7 @@ async def ws_get_forecast(
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
 
-    try:
-        ensure_supported_forecast_request(
-            granularity=msg["granularity"],
-            forecast_days=msg["forecast_days"],
-        )
-        forecast = await coordinator.get_forecast(
-            granularity=msg["granularity"],
-            forecast_days=msg["forecast_days"],
-        )
-    except ForecastRequestNotSupportedError as err:
-        connection.send_error(msg["id"], "not_supported", str(err))
-        return
+    forecast = await coordinator.get_forecast(forecast_days=msg["forecast_days"])
     connection.send_result(msg["id"], forecast)
 
 

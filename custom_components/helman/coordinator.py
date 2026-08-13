@@ -91,8 +91,8 @@ from .const import (
     DATA_CHANGED_KIND_SOLAR_BIAS,
     DEFAULT_FORECAST_DAYS,
     EVENT_DATA_CHANGED,
-    DEFAULT_FORECAST_GRANULARITY_MINUTES,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    FORECAST_CANONICAL_RESOLUTION,
     FORECAST_STALE_AFTER_SECONDS,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
@@ -110,9 +110,7 @@ from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
     profile_from_dict,
 )
-from .forecast_aggregation import get_forecast_resolution
 from .forecast_builder import HelmanForecastBuilder
-from .forecast_request import ensure_supported_forecast_request
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_builder import GridPriceForecastBuilder
@@ -1341,12 +1339,6 @@ class HelmanCoordinator:
         if self._cached_forecast.get("forecastDaysAvailable") != MAX_FORECAST_DAYS:
             return False
 
-        if (
-            self._cached_forecast.get("alignmentPaddingSlots")
-            != ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS
-        ):
-            return False
-
         status = self._cached_forecast.get("status")
         if total_energy_entity_id is None:
             return status == "not_configured"
@@ -1370,7 +1362,6 @@ class HelmanCoordinator:
         # nothing with ``raw_solar`` and needs no copy of its own.
         snapshot = build_solar_forecast_response(
             raw_solar,
-            granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days=MAX_FORECAST_DAYS,
         )
         raw_points = snapshot.get("points", []) or []
@@ -1399,18 +1390,13 @@ class HelmanCoordinator:
     async def get_forecast(
         self,
         *,
-        granularity: int = DEFAULT_FORECAST_GRANULARITY_MINUTES,
         forecast_days: int = DEFAULT_FORECAST_DAYS,
     ) -> dict:
-        """Return the current forecast response.
+        """Return the current forecast response, on the canonical 15-min grid.
 
         Increment 2 makes schedule state part of battery forecast dependencies
         while keeping the external battery response unchanged.
         """
-        ensure_supported_forecast_request(
-            granularity=granularity,
-            forecast_days=forecast_days,
-        )
         request_now = dt_util.now()
         canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
             reference_time=request_now
@@ -1430,7 +1416,6 @@ class HelmanCoordinator:
 
         solar_response = build_solar_forecast_response(
             canonical_solar_forecast,
-            granularity=granularity,
             forecast_days=forecast_days,
             corrected_points=canonical_solar_forecast.get("correctedPoints"),
         )
@@ -1465,7 +1450,6 @@ class HelmanCoordinator:
         )
         result["house_consumption"] = build_house_forecast_response(
             pipeline.adjusted_house_forecast,
-            granularity=granularity,
             forecast_days=forecast_days,
         )
         # Read off the canonical snapshot, not the adjusted view the pipeline
@@ -1478,7 +1462,6 @@ class HelmanCoordinator:
         canonical_battery_forecast = pipeline.battery_forecast
         grid_price_response = build_grid_price_forecast_response(
             raw_grid_price_forecast,
-            granularity=granularity,
             forecast_days=forecast_days,
         )
         canonical_grid_flow_forecast = build_grid_flow_forecast_snapshot(
@@ -1487,14 +1470,12 @@ class HelmanCoordinator:
         result["grid"] = _merge_grid_forecast_responses(
             grid_flow_response=build_grid_flow_forecast_response(
                 canonical_grid_flow_forecast,
-                granularity=granularity,
                 forecast_days=forecast_days,
             ),
             grid_price_response=grid_price_response,
         )
         result["battery_capacity"] = build_battery_forecast_response(
             canonical_battery_forecast,
-            granularity=granularity,
             forecast_days=forecast_days,
         )
         return result
@@ -1549,13 +1530,10 @@ class HelmanCoordinator:
             training_window_days=training_window_days,
             min_history_days=min_history_days,
             config_fingerprint=config_fingerprint,
-            resolution=get_forecast_resolution(
-                FORECAST_CANONICAL_GRANULARITY_MINUTES
-            ),
+            resolution=FORECAST_CANONICAL_RESOLUTION,
             horizon_hours=MAX_FORECAST_DAYS * 24,
             source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=MAX_FORECAST_DAYS,
-            alignment_padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
             trained_at=self._house_profile_trained_at,
             last_outcome=self._house_profile_last_outcome,
         )
@@ -2354,7 +2332,6 @@ class HelmanCoordinator:
                 trained_at=self._house_profile_trained_at,
                 last_outcome=self._house_profile_last_outcome,
                 forecast_days=MAX_FORECAST_DAYS,
-                padding_slots=ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS,
             )
             # One HelmanForecastBuilder.build() per refresh: its solar half
             # feeds the canonical snapshot, its grid half the automation bundle.
@@ -2516,16 +2493,14 @@ class HelmanCoordinator:
         if solar_forecast is None:
             solar_forecast = build_solar_forecast_response(
                 raw_forecast["solar"],
-                granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-                forecast_days=MAX_FORECAST_DAYS,
+                    forecast_days=MAX_FORECAST_DAYS,
             )
         return AutomationInputBundle(
             original_house_forecast=deepcopy(house_forecast),
             solar_forecast=_build_corrected_solar_forecast_view(solar_forecast),
             grid_price_forecast=build_grid_price_forecast_response(
                 raw_forecast["grid"],
-                granularity=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-                forecast_days=MAX_FORECAST_DAYS,
+                    forecast_days=MAX_FORECAST_DAYS,
             ),
             when_active_hourly_energy_kwh_by_appliance_id=(
                 self._resolve_when_active_hourly_energy_kwh_by_appliance_id()

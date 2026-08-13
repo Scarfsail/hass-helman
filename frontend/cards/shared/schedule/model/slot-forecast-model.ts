@@ -1,15 +1,12 @@
 import type {
     BatteryCapacityForecastDTO,
     ForecastPointDTO,
-    ForecastGranularity,
     ForecastPayload,
     GridForecastDTO,
-    ScheduleSlotDTO,
     SolarForecastDTO,
 } from "../../../helman-api";
 import { getEffectiveSolarForecastPoints } from "../../../helman-api";
 import type { ScheduleDisplaySlot } from "../schedule-types";
-import { deriveScheduleGranularityMinutes } from "./schedule-time";
 
 export interface SlotForecastPoint {
     socPct: number | null;
@@ -73,24 +70,7 @@ export const EMPTY_SLOT_FORECAST_PROJECTION: SlotForecastProjection = {
     currentPrice: null,
 };
 
-export interface ScheduleForecastParams {
-    granularity: ForecastGranularity;
-    forecastDays?: number;
-}
-
 const FORECAST_AVAILABLE_STATUSES = new Set(["available", "partial"]);
-export function deriveScheduleForecastParams(
-    slotDtos: readonly ScheduleSlotDTO[],
-): ScheduleForecastParams | null {
-    const granularity = deriveScheduleGranularityMinutes(slotDtos.map((slot) => slot.id));
-    if (granularity === null) {
-        return null;
-    }
-
-    return {
-        granularity,
-    };
-}
 
 export function buildSlotForecastMap(
     forecast: ForecastPayload | null,

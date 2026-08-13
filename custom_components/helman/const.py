@@ -75,8 +75,10 @@ HOUSE_FORECAST_LOWER_PERCENTILE = 0.10
 HOUSE_FORECAST_UPPER_PERCENTILE = 0.90
 HOUSE_FORECAST_MODEL_ID = "hour_of_week_winsorized_mean"
 FORECAST_CANONICAL_GRANULARITY_MINUTES = 15
-FORECAST_GRANULARITY_OPTIONS = (15, 30, 60)
-DEFAULT_FORECAST_GRANULARITY_MINUTES = 60
+#: How the canonical grid names itself in every forecast payload's
+#: ``resolution`` field. Kept next to the granularity it describes: the two
+#: must move together.
+FORECAST_CANONICAL_RESOLUTION = "quarter_hour"
 DEFAULT_FORECAST_DAYS = 7
 MAX_FORECAST_DAYS = 14
 # When the forecast payload starts reporting itself as stale. The rebuild runs

@@ -1,5 +1,4 @@
 import type {
-    ForecastGranularity,
     RuntimeActionKind,
     RuntimeOutcome,
     ScheduleApplianceActionDTO,
@@ -8,6 +7,7 @@ import type {
     ScheduleRuntimeReason,
     ScheduleSetBy as ScheduleSetByDTO,
 } from "../../helman-api";
+import type { ScheduleGranularityMinutes } from "./model/schedule-time";
 
 type WithoutSetBy<TValue> = TValue extends unknown ? Omit<TValue, "setBy"> : never;
 
@@ -212,7 +212,7 @@ export interface NormalizedScheduleModel {
     slots: ScheduleSlot[];
     currentSlotId: string | null;
     currentDayKey: string | null;
-    granularityMinutes: ForecastGranularity | null;
+    granularityMinutes: ScheduleGranularityMinutes | null;
 }
 
 export interface ScheduleSlotPatch {

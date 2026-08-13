@@ -95,7 +95,7 @@ class _FakeDtUtil:
 
 _install_import_stubs()
 
-from custom_components.helman import house_forecast_response, recorder_hourly_series  # noqa: E402
+from custom_components.helman import house_forecast_response  # noqa: E402
 
 
 def _make_house_entry(
@@ -193,23 +193,15 @@ class HouseForecastResponseTests(unittest.TestCase):
             "dt_util",
             _FakeDtUtil,
         )
-        cls._recorder_dt_patcher = patch.object(
-            recorder_hourly_series,
-            "dt_util",
-            _FakeDtUtil,
-        )
         cls._house_dt_patcher.start()
-        cls._recorder_dt_patcher.start()
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls._house_dt_patcher.stop()
-        cls._recorder_dt_patcher.stop()
 
     def test_quarter_hour_response_keeps_canonical_series_length(self) -> None:
         response = house_forecast_response.build_house_forecast_response(
             _make_canonical_snapshot(),
-            granularity=15,
             forecast_days=1,
         )
 
@@ -218,37 +210,6 @@ class HouseForecastResponseTests(unittest.TestCase):
         self.assertEqual(len(response["series"]), 96)
         self.assertEqual(response["series"][0]["timestamp"], "2026-03-20T21:30:00+01:00")
         self.assertEqual(len(response["actualHistory"]), 5)
-
-    def test_hourly_response_aggregates_current_slot_series_and_history(self) -> None:
-        response = house_forecast_response.build_house_forecast_response(
-            _make_canonical_snapshot(),
-            granularity=60,
-            forecast_days=1,
-        )
-
-        self.assertEqual(response["resolution"], "hour")
-        self.assertEqual(response["horizonHours"], 24)
-        self.assertEqual(response["currentSlot"]["timestamp"], "2026-03-20T21:00:00+01:00")
-        self.assertEqual(response["currentSlot"]["nonDeferrable"]["value"], 4.0)
-        self.assertEqual(response["currentSlot"]["deferrableConsumers"][0]["value"], 2.0)
-        self.assertEqual(len(response["series"]), 24)
-        self.assertEqual(response["series"][0]["timestamp"], "2026-03-20T22:00:00+01:00")
-        self.assertEqual(response["series"][0]["nonDeferrable"]["value"], 8.0)
-        self.assertEqual(response["series"][0]["deferrableConsumers"][0]["value"], 4.0)
-        self.assertEqual(response["actualHistory"], [
-            {
-                "timestamp": "2026-03-20T20:00:00+01:00",
-                "nonDeferrable": {"value": 1.0},
-                "deferrableConsumers": [
-                    {
-                        "entityId": "sensor.washer_energy",
-                        "label": "Washer",
-                        "value": 0.5,
-                    }
-                ],
-            }
-        ])
-
 
 if __name__ == "__main__":
     unittest.main()

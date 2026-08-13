@@ -92,7 +92,7 @@ class _FakeDtUtil:
 
 _install_import_stubs()
 
-from custom_components.helman import grid_flow_forecast_response, slot_series_response  # noqa: E402
+from custom_components.helman import grid_flow_forecast_response  # noqa: E402
 
 
 def _make_snapshot(*, include_baseline: bool = True, schedule_adjusted: bool = True) -> dict:
@@ -207,23 +207,9 @@ def _make_snapshot(*, include_baseline: bool = True, schedule_adjusted: bool = T
 
 
 class GridFlowForecastResponseTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._grid_dt_patcher = patch.object(
-            slot_series_response,
-            "dt_util",
-            _FakeDtUtil,
-        )
-        cls._grid_dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._grid_dt_patcher.stop()
-
     def test_quarter_hour_response_keeps_canonical_entries_and_nested_baseline(self) -> None:
         response = grid_flow_forecast_response.build_grid_flow_forecast_response(
             _make_snapshot(),
-            granularity=15,
             forecast_days=1,
         )
 
@@ -240,41 +226,9 @@ class GridFlowForecastResponseTests(unittest.TestCase):
             },
         )
 
-    def test_hourly_response_aggregates_partial_first_bucket_and_baseline(self) -> None:
-        response = grid_flow_forecast_response.build_grid_flow_forecast_response(
-            _make_snapshot(),
-            granularity=60,
-            forecast_days=1,
-        )
-
-        self.assertEqual(len(response["series"]), 2)
-        self.assertEqual(response["series"][0]["timestamp"], "2026-03-20T21:20:00+01:00")
-        self.assertAlmostEqual(response["series"][0]["durationHours"], 2 / 3, places=4)
-        self.assertAlmostEqual(response["series"][0]["importedFromGridKwh"], 0.2, places=4)
-        self.assertAlmostEqual(response["series"][0]["exportedToGridKwh"], 0.1, places=4)
-        self.assertAlmostEqual(response["series"][0]["availableSurplusKwh"], 0.2, places=4)
-        self.assertEqual(
-            response["series"][0]["baseline"],
-            {
-                "importedFromGridKwh": 0.4,
-                "exportedToGridKwh": 0.1,
-            },
-        )
-        self.assertEqual(response["series"][1]["timestamp"], "2026-03-20T22:00:00+01:00")
-        self.assertEqual(response["series"][1]["durationHours"], 1.0)
-        self.assertAlmostEqual(response["series"][1]["availableSurplusKwh"], 0.3, places=4)
-        self.assertEqual(
-            response["series"][1]["baseline"],
-            {
-                "importedFromGridKwh": 0.5,
-                "exportedToGridKwh": 0.3,
-            },
-        )
-
     def test_scheduler_context_without_adjustment_still_emits_baseline(self) -> None:
         response = grid_flow_forecast_response.build_grid_flow_forecast_response(
             _make_snapshot(schedule_adjusted=False),
-            granularity=15,
             forecast_days=1,
         )
 
@@ -292,7 +246,6 @@ class GridFlowForecastResponseTests(unittest.TestCase):
     def test_response_omits_baseline_without_schedule_context(self) -> None:
         response = grid_flow_forecast_response.build_grid_flow_forecast_response(
             _make_snapshot(include_baseline=False),
-            granularity=15,
             forecast_days=1,
         )
 

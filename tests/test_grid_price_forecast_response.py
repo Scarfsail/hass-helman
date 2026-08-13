@@ -85,7 +85,7 @@ class GridPriceForecastResponseTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._dt_patcher.stop()
 
-    def test_half_hour_response_shapes_export_and_import_prices(self) -> None:
+    def test_response_shapes_export_and_import_prices_on_the_canonical_grid(self) -> None:
         response = grid_price_forecast_response.build_grid_price_forecast_response(
             {
                 "export": {
@@ -127,28 +127,30 @@ class GridPriceForecastResponseTests(unittest.TestCase):
                     ],
                 },
             },
-            granularity=30,
             forecast_days=1,
         )
 
         self.assertEqual(response["exportPriceUnit"], "CZK/kWh")
         self.assertEqual(response["currentExportPrice"], 2.5)
+        # A price is repeated onto the quarters of its hour, never split.
         self.assertEqual(
-            response["exportPricePoints"],
-            [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 100.0},
-                {"timestamp": "2026-03-20T21:30:00+01:00", "value": 100.0},
-                {"timestamp": "2026-03-20T22:00:00+01:00", "value": 120.0},
-                {"timestamp": "2026-03-20T22:30:00+01:00", "value": 120.0},
-            ],
+            [point["value"] for point in response["exportPricePoints"]],
+            [100.0] * 4 + [120.0] * 4,
+        )
+        self.assertEqual(
+            response["exportPricePoints"][1]["timestamp"],
+            "2026-03-20T21:15:00+01:00",
         )
         self.assertEqual(response["importPriceUnit"], "CZK/kWh")
         self.assertEqual(response["currentImportPrice"], 6.5)
+        # Already canonical: passed through untouched.
         self.assertEqual(
             response["importPricePoints"],
             [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 6.0},
+                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 5.0},
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 7.0},
                 {"timestamp": "2026-03-20T21:30:00+01:00", "value": 7.0},
+                {"timestamp": "2026-03-20T21:45:00+01:00", "value": 7.0},
             ],
         )
 
@@ -173,7 +175,6 @@ class GridPriceForecastResponseTests(unittest.TestCase):
                     "points": [],
                 },
             },
-            granularity=60,
             forecast_days=1,
         )
 

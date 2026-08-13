@@ -101,9 +101,8 @@ export type ForecastStatus =
     | "partial"
     | "available";
 
-export type ForecastGranularity = 15 | 30 | 60;
-
-export type ForecastResolution = "quarter_hour" | "half_hour" | "hour";
+/** Every forecast payload is on the canonical 15-minute grid. */
+export type ForecastResolution = "quarter_hour";
 
 export interface ForecastPointDTO {
     timestamp: string;
@@ -293,7 +292,6 @@ export interface ForecastPayload {
 
 export interface GetForecastRequest {
     type: "helman/get_forecast";
-    granularity?: ForecastGranularity;
     forecast_days?: number;
 }
 

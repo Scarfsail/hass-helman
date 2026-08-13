@@ -446,39 +446,12 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
             "model": HOUSE_FORECAST_MODEL_ID,
             "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
             "forecastDaysAvailable": MAX_FORECAST_DAYS,
-            "alignmentPaddingSlots": 3,
             "currentSlot": {
                 "timestamp": "2026-03-20T21:15:00+01:00",
             },
         }
 
         self.assertTrue(
-            coordinator._has_matching_forecast_snapshot(
-                total_energy_entity_id="sensor.house_total",
-                training_window_days=56,
-                min_history_days=14,
-                config_fingerprint="abc123",
-            )
-        )
-
-    def test_has_matching_forecast_snapshot_rejects_missing_alignment_padding(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
-        coordinator._cached_forecast = {
-            "status": "available",
-            "actualHistory": [],
-            "trainingWindowDays": 56,
-            "requiredHistoryDays": 14,
-            "configFingerprint": "abc123",
-            "model": HOUSE_FORECAST_MODEL_ID,
-            "sourceGranularityMinutes": FORECAST_CANONICAL_GRANULARITY_MINUTES,
-            "forecastDaysAvailable": MAX_FORECAST_DAYS,
-            "alignmentPaddingSlots": 0,
-            "currentSlot": {
-                "timestamp": "2026-03-20T21:15:00+01:00",
-            },
-        }
-
-        self.assertFalse(
             coordinator._has_matching_forecast_snapshot(
                 total_energy_entity_id="sensor.house_total",
                 training_window_days=56,

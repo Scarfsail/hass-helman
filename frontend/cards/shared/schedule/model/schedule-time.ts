@@ -1,4 +1,3 @@
-import type { ForecastGranularity } from "../../../helman-api";
 import { getCachedLocalDateTimeDescriptor } from "../../../shared/local-date-time-descriptor-cache";
 
 const TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
@@ -21,6 +20,9 @@ const MAX_DAY_LABEL_CACHE_SIZE = 512;
  * function of the pair.
  */
 let DAY_STEP_MEMO: { dayKey: string; next: string; previous: string } | null = null;
+/** Slot spacings the planner knows how to lay out rows for. */
+export type ScheduleGranularityMinutes = 15 | 30 | 60;
+
 const VALID_SCHEDULE_GRANULARITIES = new Set<number>([15, 30, 60]);
 
 export interface ScheduleSlotLabels {
@@ -69,7 +71,7 @@ export function getScheduleSlotDayKey(slotId: string, timeZone: string): string 
 
 export function deriveScheduleGranularityMinutes(
     slotIds: readonly string[],
-): ForecastGranularity | null {
+): ScheduleGranularityMinutes | null {
     const sortedStarts = [...new Set(
         slotIds
             .map((slotId) => getScheduleSlotStartMs(slotId))
@@ -88,7 +90,7 @@ export function deriveScheduleGranularityMinutes(
             : Math.min(granularityMinutes, durationMinutes);
     }
 
-    return granularityMinutes === null ? null : granularityMinutes as ForecastGranularity;
+    return granularityMinutes === null ? null : granularityMinutes as ScheduleGranularityMinutes;
 }
 
 export function resolveScheduleSlotBoundaries(slotIds: readonly string[]): ScheduleSlotBoundary[] {

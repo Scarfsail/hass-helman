@@ -82,7 +82,7 @@ class PointForecastResponseTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._dt_patcher.stop()
 
-    def test_solar_half_hour_response_aggregates_points_and_history(self) -> None:
+    def test_solar_response_splits_an_hourly_feed_onto_the_canonical_grid(self) -> None:
         response = point_forecast_response.build_solar_forecast_response(
             {
                 "status": "available",
@@ -109,24 +109,26 @@ class PointForecastResponseTests(unittest.TestCase):
                     },
                 ],
             },
-            granularity=30,
             forecast_days=1,
         )
 
-        self.assertEqual(response["resolution"], "half_hour")
+        # 400 Wh over the 21:00 hour is 100 Wh a quarter, 800 over 22:00 is 200.
+        self.assertEqual(response["resolution"], "quarter_hour")
         self.assertEqual(response["horizonHours"], 24)
         self.assertEqual(response["points"], [
-            {"timestamp": "2026-03-20T21:00:00+01:00", "value": 200.0},
-            {"timestamp": "2026-03-20T21:30:00+01:00", "value": 200.0},
-            {"timestamp": "2026-03-20T22:00:00+01:00", "value": 400.0},
-            {"timestamp": "2026-03-20T22:30:00+01:00", "value": 400.0},
+            {"timestamp": "2026-03-20T21:00:00+01:00", "value": 100.0},
+            {"timestamp": "2026-03-20T21:15:00+01:00", "value": 100.0},
+            {"timestamp": "2026-03-20T21:30:00+01:00", "value": 100.0},
+            {"timestamp": "2026-03-20T21:45:00+01:00", "value": 100.0},
+            {"timestamp": "2026-03-20T22:00:00+01:00", "value": 200.0},
+            {"timestamp": "2026-03-20T22:15:00+01:00", "value": 200.0},
+            {"timestamp": "2026-03-20T22:30:00+01:00", "value": 200.0},
+            {"timestamp": "2026-03-20T22:45:00+01:00", "value": 200.0},
         ])
-        self.assertEqual(response["actualHistory"], [
-            {"timestamp": "2026-03-20T19:00:00+01:00", "value": 100.0},
-            {"timestamp": "2026-03-20T19:30:00+01:00", "value": 100.0},
-            {"timestamp": "2026-03-20T20:00:00+01:00", "value": 200.0},
-            {"timestamp": "2026-03-20T20:30:00+01:00", "value": 200.0},
-        ])
+        self.assertEqual(
+            [entry["value"] for entry in response["actualHistory"]],
+            [50.0] * 4 + [100.0] * 4,
+        )
 
     def test_solar_response_expands_raw_and_corrected_points_with_same_slots(self) -> None:
         response = point_forecast_response.build_solar_forecast_response(
@@ -166,7 +168,6 @@ class PointForecastResponseTests(unittest.TestCase):
                     "value": 200.0,
                 },
             ],
-            granularity=30,
             forecast_days=1,
         )
 
@@ -176,11 +177,11 @@ class PointForecastResponseTests(unittest.TestCase):
         )
         self.assertEqual(
             [point["value"] for point in response["points"]],
-            [200.0, 200.0, 400.0, 400.0],
+            [100.0] * 4 + [200.0] * 4,
         )
         self.assertEqual(
             [point["value"] for point in response["adjustedPoints"]],
-            [300.0, 300.0, 100.0, 100.0],
+            [150.0] * 4 + [50.0] * 4,
         )
         self.assertNotIn("rawPoints", response)
         self.assertNotIn("correctedPoints", response)

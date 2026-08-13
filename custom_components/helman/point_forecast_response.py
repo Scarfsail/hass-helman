@@ -6,19 +6,15 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
-from .forecast_aggregation import (
-    aggregate_averaged_points,
-    aggregate_summed_points,
-    get_aggregation_group_size,
-    get_forecast_resolution,
+from .const import (
+    FORECAST_CANONICAL_GRANULARITY_MINUTES,
+    FORECAST_CANONICAL_RESOLUTION,
 )
 
 
 def build_solar_forecast_response(
     snapshot: dict[str, Any],
     *,
-    granularity: int,
     forecast_days: int,
     corrected_points: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -30,22 +26,15 @@ def build_solar_forecast_response(
     }
     response = _build_point_forecast_response(
         public_snapshot,
-        granularity=granularity,
         forecast_days=forecast_days,
         aggregation_mode="sum",
         include_actual_history=True,
     )
     if corrected_points:
-        group_size = get_aggregation_group_size(
-            source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-            target_granularity_minutes=granularity,
-        )
-        target_count = forecast_days * 24 * 60 // granularity
         response["adjustedPoints"] = _build_points(
             corrected_points,
             aggregation_mode="sum",
-            group_size=group_size,
-            target_count=target_count,
+            target_count=_target_count(forecast_days),
         )
     return response
 
@@ -53,7 +42,6 @@ def build_solar_forecast_response(
 def build_price_channel_response(
     snapshot: dict[str, Any],
     *,
-    granularity: int,
     forecast_days: int,
     unit_field: str,
     current_price_field: str,
@@ -61,7 +49,6 @@ def build_price_channel_response(
 ) -> dict[str, Any]:
     response = _build_point_forecast_response(
         snapshot,
-        granularity=granularity,
         forecast_days=forecast_days,
         aggregation_mode="average",
         include_actual_history=False,
@@ -73,37 +60,33 @@ def build_price_channel_response(
     }
 
 
+def _target_count(forecast_days: int) -> int:
+    return forecast_days * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
+
+
 def _build_point_forecast_response(
     snapshot: dict[str, Any],
     *,
-    granularity: int,
     forecast_days: int,
     aggregation_mode: str,
     include_actual_history: bool,
 ) -> dict[str, Any]:
-    group_size = get_aggregation_group_size(
-        source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        target_granularity_minutes=granularity,
-    )
     response = {
         key: deepcopy(value)
         for key, value in snapshot.items()
         if key not in {"points", "actualHistory", "resolution", "horizonHours"}
     }
-    response["resolution"] = get_forecast_resolution(granularity)
+    response["resolution"] = FORECAST_CANONICAL_RESOLUTION
     response["horizonHours"] = forecast_days * 24
 
-    target_count = forecast_days * 24 * 60 // granularity
     response["points"] = _build_points(
         snapshot.get("points"),
         aggregation_mode=aggregation_mode,
-        group_size=group_size,
-        target_count=target_count,
+        target_count=_target_count(forecast_days),
     )
     if include_actual_history:
-        response["actualHistory"] = _build_history(
-            snapshot.get("actualHistory"),
-            group_size=group_size,
+        response["actualHistory"] = _expand_points(
+            snapshot.get("actualHistory"), expansion_mode="split"
         )
     return response
 
@@ -112,49 +95,21 @@ def _build_points(
     raw_points: Any,
     *,
     aggregation_mode: str,
-    group_size: int,
     target_count: int,
 ) -> list[dict[str, Any]]:
-    canonical_points = _expand_points(
-        raw_points,
-        expansion_mode="split" if aggregation_mode == "sum" else "repeat",
-    )
+    """The snapshot's points on the canonical grid, clipped to the horizon.
+
+    ``_expand_points`` still matters: a feed publishing coarser than canonical
+    (an hourly solar or price series) is split or repeated down onto the grid.
+    Only the reverse direction -- rolling canonical buckets up into a coarser
+    response -- is gone.
+    """
     if target_count <= 0:
         return []
-    if group_size == 1:
-        return canonical_points[:target_count]
-
-    complete_length = len(canonical_points) - (len(canonical_points) % group_size)
-    if complete_length <= 0:
-        return []
-
-    aggregate_points = (
-        aggregate_summed_points
-        if aggregation_mode == "sum"
-        else aggregate_averaged_points
-    )
-    return aggregate_points(
-        canonical_points[:complete_length],
-        group_size=group_size,
+    return _expand_points(
+        raw_points,
+        expansion_mode="split" if aggregation_mode == "sum" else "repeat",
     )[:target_count]
-
-
-def _build_history(
-    raw_history: Any,
-    *,
-    group_size: int,
-) -> list[dict[str, Any]]:
-    canonical_history = _expand_points(raw_history, expansion_mode="split")
-    if group_size == 1:
-        return canonical_history
-
-    complete_length = len(canonical_history) - (len(canonical_history) % group_size)
-    if complete_length <= 0:
-        return []
-    return aggregate_summed_points(
-        canonical_history[:complete_length],
-        group_size=group_size,
-    )
 
 
 def _expand_points(

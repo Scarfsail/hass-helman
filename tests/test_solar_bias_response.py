@@ -600,27 +600,19 @@ class SolarBiasResponseTests(unittest.TestCase):
         response = response_module.compose_solar_bias_response(
             raw_snapshot,
             adjustment_result,
-            granularity=30,
             forecast_days=1,
         )
 
         self.assertEqual(
-            response["points"],
-            [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 200.0},
-                {"timestamp": "2026-03-20T21:30:00+01:00", "value": 200.0},
-                {"timestamp": "2026-03-20T22:00:00+01:00", "value": 400.0},
-                {"timestamp": "2026-03-20T22:30:00+01:00", "value": 400.0},
-            ],
+            [point["value"] for point in response["points"]],
+            [100.0] * 4 + [200.0] * 4,
         )
         self.assertEqual(
-            response["adjustedPoints"],
-            [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 300.0},
-                {"timestamp": "2026-03-20T21:30:00+01:00", "value": 300.0},
-                {"timestamp": "2026-03-20T22:00:00+01:00", "value": 100.0},
-                {"timestamp": "2026-03-20T22:30:00+01:00", "value": 100.0},
-            ],
+            response["points"][1]["timestamp"], "2026-03-20T21:15:00+01:00"
+        )
+        self.assertEqual(
+            [point["value"] for point in response["adjustedPoints"]],
+            [150.0] * 4 + [50.0] * 4,
         )
         self.assertEqual(
             response["biasCorrection"],
@@ -673,7 +665,6 @@ class SolarBiasResponseTests(unittest.TestCase):
         response = response_module.compose_solar_bias_response(
             raw_snapshot,
             adjustment_result,
-            granularity=30,
             forecast_days=1,
         )
 
@@ -805,7 +796,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
                 create=True,
             ),
         ):
-            result = await coordinator.get_forecast(granularity=60, forecast_days=1)
+            result = await coordinator.get_forecast(forecast_days=1)
 
         coordinator._async_refresh_forecast.assert_not_awaited()
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
@@ -925,7 +916,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
                 create=True,
             ),
         ):
-            result = await coordinator.get_forecast(granularity=60, forecast_days=1)
+            result = await coordinator.get_forecast(forecast_days=1)
 
         coordinator._async_refresh_forecast.assert_not_awaited()
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(

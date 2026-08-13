@@ -874,7 +874,6 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             )
             response = battery_forecast_response.build_battery_forecast_response(
                 payload,
-                granularity=60,
                 forecast_days=1,
             )
 

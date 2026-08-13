@@ -32,10 +32,9 @@ The backend owns the simulation. The frontend only renders the returned payload.
 
 `helman/get_forecast` accepts these optional forecast parameters:
 
-- `granularity`: `15 | 30 | 60` — default `60`
 - `forecast_days`: integer `1..14` — default `7`
 
-The battery section is always simulated from one canonical 15-minute model. The returned `granularity` only changes response shaping.
+The battery section is simulated from one canonical 15-minute model and returned on that same grid.
 
 ## Current runtime behavior
 
@@ -132,10 +131,10 @@ The battery forecast is returned from `helman/get_forecast` under `battery_capac
 
 ### Response semantics
 
-- `resolution` reflects the returned payload granularity (`quarter_hour`, `half_hour`, or `hour`).
+- `resolution` is always `quarter_hour`.
 - `horizonHours` reflects the requested `forecast_days`.
 - `series` starts with the **current returned battery bucket**.
-- `actualHistory` uses the same returned granularity and only contains completed past buckets.
+- `actualHistory` only contains completed past slots.
 - `scheduleAdjusted` and `scheduleAdjustmentCoverageUntil` describe only the schedule-adjusted portion of the returned battery series.
 - `scheduleAdjustmentCoverageUntil` may be earlier than the overall `coverageUntil`.
 - `scheduleAdjustmentCoverageUntil` does **not** mean later forecast slots must equal the passive baseline; it only marks the last non-`normal` effective schedule slot.
@@ -163,7 +162,7 @@ If the required battery entities or forecast settings are missing, the section r
 
 ## Frontend compatibility
 
-- `hass-helman-card` currently stays on the hourly compatibility path and requests `granularity: 60`.
+- `hass-helman-card` requests the canonical grid; there is no granularity parameter.
 - The backend is already canonical 15-minute; direct quarter-hour UI rendering is still a separate frontend follow-up.
 
 ## Validation workflow
@@ -196,9 +195,7 @@ The repo-standard discovery command is still useful, but it is currently known t
 
 Recommended runtime validation after a Home Assistant restart:
 
-- `await getHelmanForecast({ granularity: 15, forecast_days: 1 })`
-- `await getHelmanForecast({ granularity: 30, forecast_days: 1 })`
-- `await getHelmanForecast({ granularity: 60, forecast_days: 1 })`
+- `await getHelmanForecast({ forecast_days: 1 })`
 - call the same request twice in short succession to confirm cache reuse
 
 ## Known limitations

@@ -528,20 +528,18 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
                 return_value=grid_flow_response,
             ) as build_grid_response,
         ):
-            result = await coordinator.get_forecast(granularity=60, forecast_days=1)
+            result = await coordinator.get_forecast(forecast_days=1)
 
         build_grid_price_response.assert_called_once_with(
             {
                 "export": {"status": "available", "currentPrice": 2.5},
                 "import": {"status": "available", "currentPrice": 7.0},
             },
-            granularity=60,
             forecast_days=1,
         )
         build_grid_snapshot.assert_called_once_with(canonical_battery_forecast)
         build_grid_response.assert_called_once_with(
             canonical_grid_response,
-            granularity=60,
             forecast_days=1,
         )
         coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
