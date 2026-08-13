@@ -4,14 +4,21 @@ Status: **implemented** (branch `feat/appliance-runtime-self-sustainability`). R
 [issue #3](https://github.com/Scarfsail/hass-helman/issues/3). Code anchors verified against the
 tree on 2026-07-29.
 
+Revised 2026-08-13 by [issue #99](https://github.com/Scarfsail/hass-helman/issues/99), which
+replaced the `soft`/`strict` level with a single 0–100 day budget and moved `margin_pct` from
+`params` into a condition beside it. The two words were never two points on one scale, so there was
+no way to say "the appliance may lean on the battery a little"; `0` and `100` reproduce them
+exactly. This document describes the current shape — see the config-migration section for what
+existing configs become.
+
 Make `appliance_runtime` aware of what running the appliance *does* to the house, rather than only
 of what the house looks like when the appliance is ignored.
 
 | Addition | Kind | Question it answers |
 |---|---|---|
 | `min_solar_coverage_pct` | SLOT condition (mask) | Is this slot's energy free *right now*? |
-| `ensure_self_sustainability: soft \| strict` | RUN condition, self-gating | Will running here cost me *later*? |
-| `params.self_sustainability.margin_pct` | param, overridable, default `5` | How much headroom above the inverter's reserve? |
+| `ensure_self_sustainability: 0..100` | RUN condition, self-gating | Will running here cost me *later*? |
+| `self_sustainability_margin_pct` | RUN condition, qualifier, default `5` | How much headroom above the inverter's reserve? |
 
 Assumes the shape and semantics of
 [the conditions unification](helman-optimizer-conditions-unification-implementation-plan.md) and
@@ -25,10 +32,12 @@ Assumes the shape and semantics of
 |---|---|
 | Coverage and self-sustainability stay independent | Neither subsumes the other. Coverage refuses a slot with thin sun even when the battery is full and would cover it for nothing; self-sustainability permits battery use precisely when the simulation shows it is harmless. |
 | The floor is `inverter min_soc + margin_pct`, in **percentage points** | Not a bare SoC threshold. A floor *at* `min_soc` is provably inert: `min_energy_kwh = nominal × min_soc/100` (`battery_state.py:243`), every discharge path clamps `remaining = max(min_energy_kwh, …)`, and `socPct = remaining/nominal × 100` — so the projected SoC can never reach `min_soc`, let alone breach it. Only a floor strictly above it can ever fire. |
-| Level is the condition's *value*, not a bool | One key, three states (absent / `soft` / `strict`), per group. A bool plus a separate level knob would let them contradict. |
-| `margin_pct` is a param, the level is a condition | The margin is a property of the installation; the level is a policy that varies by day type. Params are overridable per group, so the margin still can be. |
+| The budget is the condition's *value*, not a bool | One key, per group, and absent still means unconstrained. A bool plus a separate knob would let them contradict. **`0` is the strictest value, not the absent one** — every reader tests `is None`, never truthiness. |
+| Both numbers are conditions | The margin was a param, which buried it in the optimizer's general section and let its label fall back to the shared `margin_pct` string. As a condition it sits beside the budget it qualifies and is natively per-group. |
 | `ensure_self_sustainability` is **self-gating** | It couples slots — placing at 09:00 changes whether 20:00 is feasible — and `system_mask &= mask` (`evaluation.py:201`) assumes slot independence. Follows the `reserve_floor_soc` precedent (`conditions/types.py:227`, `charge_from_grid.py:180`). |
-| Strict = soft **plus** a day-balance test | A day can balance while still dipping through the floor at noon, so strict inherits the floor check rather than replacing it. |
+| The budget **inherits** the floor rather than replacing it | A day can come in under budget while still dipping through the floor at noon. The floor test runs first and unconditionally, at every budget value. |
+| The budget sums battery drain and grid import | Both are energy the sun did not provide, and which of them a placement lands on is battery physics rather than anything the optimizer picks — budgeting one would leave the other ungoverned. |
+| `100` means *unbounded*, not one battery's worth | A multi-kW appliance running a full window can exceed nominal capacity in a day, so a literal 100 % budget would still refuse placements the floor alone was meant to govern. |
 | Strict compares **both** ΔSoC and Δimport | SoC alone does not prove solar paid: grid import also leaves the battery unchanged. See "Why ΔSoC alone is not enough". |
 | `min_soc_pct` is kept | "Is the battery low *now*" is a different question from "will the plan *make* it low". |
 | Forced runs bypass self-sustainability | Consistent with today: `max_consecutive_skips` already defeats every group's conditions. The forced ranking inverts to `(covered, price)` so the run takes the least damaging slots. |
@@ -48,61 +57,59 @@ Assumes the shape and semantics of
       min_hours_per_day: 8
       max_consecutive_skips: 2
     window: { start: "08:00", end: "18:00" }
-    self_sustainability:
-      margin_pct: 5            # floor = inverter min_soc + 5pp
   conditions:
     - name: sunny
       run_when: [surplus]
       min_solar_coverage_pct: 80
-      ensure_self_sustainability: soft
+      ensure_self_sustainability: 100          # floor only
+      self_sustainability_margin_pct: 5        # floor = inverter min_soc + 5pp
     - name: tight
       run_when: [tight]
       when_price_below: 1
-      ensure_self_sustainability: strict
+      ensure_self_sustainability: 0            # the day must pay for itself
 ```
 
 `min_solar_coverage_pct` and `ensure_self_sustainability` are optional per group; **absent means
 unconstrained for that group**, never "inherit a default". A condition field carrying a schema
 default is filled into groups that never mentioned it (`fields.py:208`) — how the deleted
-`min_surplus_buffer_pct` acquired an unchosen `5` in every live config. `margin_pct` is a *param*,
-where a default is legitimate (`charge_from_grid.max_target_soc` precedent, `spec.py:225`).
+`min_surplus_buffer_pct` acquired an unchosen `5` in every live config.
 
-### The default must live on the object, not only on the member
+### The margin is the one condition that *does* carry a default
 
-```python
-F.obj(
-    "self_sustainability",
-    F.percent("margin_pct", default=5),
-    default={},                          # ← without this the member default never fires
-)
-```
+`self_sustainability_margin_pct` is deliberately the exception, because it is not a gate: it moves
+the floor that `ensure_self_sustainability`'s own test compares against. A group that asked for a
+budget but named no margin still needs one, and `5` is what it always had as a param.
 
-`read_field` returns `MISSING` for an absent field *before* descending into an object
-(`fields.py:203-210`), so a nested member's default only fires once the parent has a value. Giving
-the **object** `default={}` supplies that value, and `read_fields` then fills each member from its
-own default. Verified against the real reader:
+That makes it a **qualifier** — `ConditionType.qualifier=True` — which has two consequences the
+`min_surplus_buffer_pct` lesson demands:
 
-| Config | Resolved |
+* **No explanation column.** Nothing resolves it, so a node could only ever read `not_evaluated`,
+  on every group the default touches. `_column_keys` skips qualifiers entirely rather than emitting
+  a column with no nodes in it.
+* **It cannot satisfy the uncapped "narrows nothing" rule** (`spec.py`). It admits every slot, and
+  it is defaulted — counting it would stop that check ever firing again, for any group.
+
+Neither exclusion is by name: both read the flag, so a second qualifier inherits them.
+
+The floor is in percentage *points* above the inverter's own reserve rather than a bare SoC
+threshold. A floor *at* `min_soc` is provably inert (see the decision table), so only the margin
+gives it teeth — which is also why a margin of `0` is legal and simply never fires.
+
+### Config migration (document v10 → v11)
+
+`_unify_self_sustainability` in `automation/migration.py`, on `appliance_runtime` optimizers only:
+
+| Before | After |
 |---|---|
-| `params` omits `self_sustainability` | `{"self_sustainability": {"margin_pct": 5.0}}` |
-| `self_sustainability: {margin_pct: 12}` | `{"self_sustainability": {"margin_pct": 12.0}}` |
-| group override omits it (`partial=True`) | `{}` — inherits master, as intended |
-| group override sets `margin_pct: 20` | `{"self_sustainability": {"margin_pct": 20.0}}` |
+| `ensure_self_sustainability: strict` | `ensure_self_sustainability: 0` |
+| `ensure_self_sustainability: soft` | `ensure_self_sustainability: 100` |
+| `params.self_sustainability.margin_pct: 12` | `self_sustainability_margin_pct: 12` on every group |
+| a group override setting `margin_pct: 20` | `self_sustainability_margin_pct: 20` on that group, beating the master |
+| the feature used, no margin named anywhere | `self_sustainability_margin_pct: 5` — the old param default, written out |
+| a group that never used the feature | nothing written; the condition field's own default covers it |
 
-This is the **first defaulted object** in `spec.py` — `daily_minimum` and `window` are optional with
-no defaulted members, and `battery_first` has a defaulted member but is `required=True`. The
-mechanism is not new (it falls out of `Field.default` + `read_field`'s object branch); only its use
-is. Pin it with a test, because nothing else in the tree would catch a regression.
-
-Nesting is kept rather than flattened to `self_sustainability_margin_pct` because it matches the
-house style (`daily_minimum`, `battery_first`), reads alongside the `ensure_self_sustainability`
-condition it belongs to, and leaves room for a second member without a config break —
-`merge_params` merges objects key-by-key (`fields.py:336`), so a group overriding one member would
-still inherit the rest.
-
-The object is present on every `appliance_runtime` instance whether or not any group sets
-`ensure_self_sustainability`, and is simply unread when none does — as `max_target_soc` is on a
-`charge_from_grid` with no window to bridge. So no cross-field validation ties the two together.
+`params.self_sustainability` is removed either way, as is a group `params` override the move
+empties — an empty override renders in the editor as a group that overrides params when it does not.
 
 ---
 
@@ -151,35 +158,40 @@ gate. Unchanged.
 
 ## `ensure_self_sustainability`
 
-`ConditionType`: `scope=Scope.RUN`, `field=F.string("ensure_self_sustainability",
-required=False, choices=("soft", "strict"))`, `build_mask=_all_slots_mask`, `self_gating=True`.
-Reason codes are emitted by the optimizer, not the mask — see "Trace".
+`ConditionType`: `scope=Scope.RUN`, `field=F.percent("ensure_self_sustainability",
+required=False)`, `build_mask=_all_slots_mask`, `self_gating=True`. Reason codes are emitted by the
+optimizer, not the mask — see "Trace".
 
-**The floor**: `battery_state.min_soc + params.self_sustainability.margin_pct`, in percentage
-points. With `min_soc = 10` and `margin_pct = 5` the floor is **15%**.
+**The floor**: `battery_state.min_soc + self_sustainability_margin_pct`, in percentage points. With
+`min_soc = 10` and a margin of `5` the floor is **15%**. It is a *state* constraint over the whole
+horizon: the trajectory, **re-simulated including this appliance's own placements**, must not fall
+below it anywhere in the remaining plannable horizon. It is tested first and at every budget value.
 
-### soft — the battery never breaks the floor
+### The day budget — how much the sun did not pay for
 
-The SoC trajectory, **re-simulated including this appliance's own placements**, must not fall below
-the floor anywhere in the remaining plannable horizon.
+A *flow* constraint, scored per local date (to local midnight) against the no-appliance baseline:
 
-### strict — soft, plus the day pays for itself
+```
+budget_kwh = tolerance_pct / 100 * nominal_capacity_kwh          # tolerance_pct < 100
+spent_kwh  = max(0, -Δend_energy_kwh) + max(0, Δimported_kwh)
+reject if spent_kwh > budget_kwh + epsilon_kwh
+```
 
-Additionally, over the day the slot belongs to (to local midnight), against the no-appliance
-baseline:
+Both terms are clamped at zero, so a day ending *better* than the baseline banks nothing against a
+day ending worse. `epsilon_kwh` is `max(0.05, 0.005 × nominal)` — the two former "≈ 0" tolerances
+(0.5 pp of SoC, 0.05 kWh of import), now on the single axis the budget lives on.
 
-* **ΔSoC at the day boundary ≈ 0** — the battery is restored, and
-* **Δimport over the day ≈ 0** — no extra grid energy was bought.
+**`0` is the old `strict`**: the battery must be restored and no extra grid energy bought, which
+together mean the appliance's energy came from solar that would otherwise have been exported or
+curtailed. **`100` is the old `soft`**: the budget test is skipped and the floor alone governs.
 
-Together these mean the appliance's energy came from solar that would otherwise have been exported
-or curtailed. The battery may be drained mid-morning provided the day's sun refills it — which is
-exactly what `min_solar_coverage_pct` cannot express, since coverage is per-slot and cannot
-time-shift.
+The battery may still be drained mid-morning provided the day's sun refills it — which is exactly
+what `min_solar_coverage_pct` cannot express, since coverage is per-slot and cannot time-shift.
 
-**Consequence, intended:** energy consumed after sunset cannot be repaid by today's sun, so strict
-confines the appliance to daylight hours. Evening slots are rejected by construction.
+**Consequence, intended:** energy consumed after sunset cannot be repaid by today's sun, so a zero
+budget confines the appliance to daylight hours. Evening slots are rejected by construction.
 
-### Why ΔSoC alone is not enough
+### Why ΔSoC alone is not enough — and why import joins the same budget
 
 Grid import also leaves the battery unchanged. Concretely: `charge_from_grid` is charging to a
 target SoC; the appliance drains 1 kWh at 03:00; the charger simply imports 1 kWh more to still hit
@@ -195,8 +207,14 @@ battery running dry:
 3. `charge_to_target_soc` imports deliberately (`:889-899`);
 4. `discharge_to_target_soc` stops at the target, not the physical minimum (`:947-958`).
 
-All four appear in the baseline too, so they cancel in the delta. This is why strict must compare
+All four appear in the baseline too, so they cancel in the delta. This is why the test must compare
 against a baseline rather than test for absolute zero import.
+
+The two quantities are not alternatives the optimizer chooses between: a slot's shortfall is covered
+by the battery first, capped by `max_discharge_power_w` and floored at `min_energy_kwh`, and only the
+remainder becomes grid import (`battery_slot_simulation.py:178-205`). Which one a placement lands on
+is physics. That is why they sum into one budget rather than being tested separately — budgeting one
+would leave the other ungoverned.
 
 **Known gap:** an SoC floor cannot see import caused by case 2 — adding the appliance's load can push
 instantaneous demand above the inverter's discharge limit, forcing import with a full battery.
@@ -222,7 +240,7 @@ for local_date in day_contexts:                        # already ascending
 ```
 
 `holds()` re-simulates the horizon with every accepted slot's demand plus the candidate's, and checks
-the floor — and, under `strict`, the day-boundary deltas against `baseline`.
+the floor — and, below a budget of 100, the day's spend against `baseline`.
 
 **The day loop is already chronological.** `build_day_contexts` inserts in `sorted(solar_by_date)`
 order (`day_context.py:121`) and every hop preserves it. No change needed — but the *dependency* is
@@ -233,9 +251,9 @@ changes SoC after 18:00, which lies inside the region a 13:00 slot was checked o
 
 **Both settings are constant within a day.** Capped placement intersects the window with
 `slot_ids_owned_by(resolved.group)` (`appliance_runtime.py:375-376`), so every placeable slot of a
-day has the same owning group — hence the same level and the same resolved `margin_pct`. No
-"effective floor changes mid-day" rule is needed. **Uncapped mode** iterates `eligibility.iter_slots()`
-across groups, so it can mix: there, apply the level of the group owning the candidate, and accept
+day has the same owning group — hence the same budget and the same margin. No "effective floor
+changes mid-day" rule is needed. **Uncapped mode** iterates `eligibility.iter_slots()` across groups,
+so it can mix: there, apply the budget and margin of the group owning the candidate, and accept
 candidates in chronological order (uncapped has no ranking to order them).
 
 **Forced runs** skip `holds()` entirely but rank by `(covered, price)` instead of `(price, covered)`,
@@ -309,8 +327,8 @@ Prefer `remainingEnergyKwh` (4 dp) over `socPct × nominal_capacity_kwh` (2 dp) 
 series values are rounded on the way out (`:1082-1088`).
 
 **Horizon-end degradation is accepted.** A slot near the 48 h edge gets little forward check; day-2
-plans are continuously re-planned. For `strict`, a day whose midnight lies beyond the horizon falls
-back to the horizon end.
+plans are continuously re-planned. For the day budget, a day whose midnight lies beyond the horizon
+falls back to the horizon end.
 
 ---
 
@@ -347,7 +365,7 @@ New reason codes. **Four** registration sites, not three:
 |---|---|---|
 | `insufficient_solar_coverage` | rejected | `{requiredPct, coveragePct}` |
 | `would_break_soc_floor` | rejected | `{floor, projectedMinSoc, atSlot}` |
-| `not_solar_neutral` | rejected | `{deltaSocPct, deltaImportKwh}` — strict's day-balance test |
+| `over_battery_budget` | rejected | `{tolerancePct, budgetKwh, spentKwh, deltaSocPct, deltaImportKwh}` — the day budget. Both sides arrive summed, so the frontend compares them directly rather than re-deriving a total and re-knowing the epsilon. |
 | `soc_floor_already_breached` | rejected | `{floor, baselineMinSoc}` |
 
 `soc_floor_already_breached` is decided from the **baseline** simulated once per run: if the
@@ -387,23 +405,30 @@ so it would count by default and let an uncapped optimizer place across the whol
    forecast input, not a run-invariant parameter) and is deliberately absent from
    `snapshot_to_dict`. No behaviour change — the parity test steps the extracted simulator over
    the builder's own slot inputs and compares entry for entry.
-4. ✅ **`ensure_self_sustainability: soft`.** Greedy acceptance, baseline simulation, forced-run
-   re-ranking, `would_break_soc_floor` + `soc_floor_already_breached`. Rule 3 excludes the
-   condition via `ConditionType.self_gating` rather than by name — a self-gating condition
-   contributes an all-true mask *by definition*, so the exclusion is a property, not a list.
-5. ✅ **`ensure_self_sustainability: strict`.** The day-boundary ΔSoC/Δimport test and
-   `not_solar_neutral`. "≈ 0" resolved to the inspector's own rail epsilons — 0.5 pp of SoC
-   and 0.05 kWh of import — so a difference the UI would not render as a change cannot reject
-   a placement. Both comparisons are one-sided: ending a day *better* than the baseline is not
-   a failure.
+4. ✅ **The SoC floor.** Greedy acceptance, baseline simulation, forced-run re-ranking,
+   `would_break_soc_floor` + `soc_floor_already_breached`. Rule 3 excludes the condition via
+   `ConditionType.self_gating` rather than by name — a self-gating condition contributes an
+   all-true mask *by definition*, so the exclusion is a property, not a list.
+5. ✅ **The day budget.** Shipped first as `strict`'s ΔSoC/Δimport test, then generalised (issue
+   #99) into `ensure_self_sustainability: 0..100` with the margin moved alongside it as a
+   qualifier condition. `0` and `100` reproduce the two words exactly, which is what the migrated
+   `strict`/`soft` suites assert. Both comparisons stay one-sided: ending a day *better* than the
+   baseline is not a failure.
 
 ---
 
 ## Tests
 
-* Config surface: a config that omits `self_sustainability` entirely still resolves
-  `margin_pct: 5`; a group overriding it wins; a group that omits it inherits master. This is the
-  first defaulted object in the tree, so nothing else guards it.
+* Config surface: a group that omits the margin resolves `5`; a group setting it wins; two groups
+  may disagree; the old `params.self_sustainability` object is rejected rather than ignored; the
+  budget is a percentage and refuses `"soft"`, `150` and `-1`. Plus the falsy-zero guard: a config
+  of only `ensure_self_sustainability: 0` must build a live gate, not the null one.
+* The budget between its ends: a slot the day cannot repay is refused at `0`, taken at `100`, and
+  flips on the number alone at `1` versus `3` on a 10 kWh battery — the capability the two words
+  could not express.
+* Migration v10→v11: `strict`→`0`, `soft`→`100`; the margin resolved from master, from a group
+  override, and from neither; a group that never used the feature gets no margin written, because
+  the condition default already covers it.
 * Coverage gate: 79 % fails `min_solar_coverage_pct: 80` and 81 % passes; every bucket must clear;
   a missing surplus rail, a partial surplus rail, and a missing demand profile each raise rather than
   emptying the mask.
