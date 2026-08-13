@@ -90,6 +90,7 @@ from custom_components.helman.automation.conditions.types import (  # noqa: E402
 from custom_components.helman.automation.day_context import DayContext  # noqa: E402
 from custom_components.helman.battery_state import BatteryLiveState  # noqa: E402
 from custom_components.helman.automation.optimizers.appliance_runtime import (  # noqa: E402
+    _SelfSustainabilityGate,
     build_appliance_runtime_optimizer,
 )
 from custom_components.helman.automation.snapshot import (  # noqa: E402
@@ -1252,7 +1253,13 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         )
 
     def _config_with(
-        self, appliance, *, level="soft", margin_pct=5, window_start="06:00", **kwargs
+        self,
+        appliance,
+        *,
+        tolerance_pct=100,
+        margin_pct=5,
+        window_start="06:00",
+        **kwargs,
     ):
         params: dict[str, object] = {
             "daily_minimum": {
@@ -1261,11 +1268,11 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
             },
             "window": {"start": window_start, "end": "18:00"},
         }
-        if margin_pct is not None:
-            params["self_sustainability"] = {"margin_pct": margin_pct}
         group: dict[str, object] = {"run_when": ["tight"]}
-        if level is not None:
-            group["ensure_self_sustainability"] = level
+        if margin_pct is not None:
+            group["self_sustainability_margin_pct"] = margin_pct
+        if tolerance_pct is not None:
+            group["ensure_self_sustainability"] = tolerance_pct
         return make_optimizer_config(
             id="daily",
             kind="appliance_runtime",
@@ -1308,7 +1315,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         # The control: the same snapshot, the same ranking, no condition. The
         # gate must be the only thing that moved the placement.
         appliance = _generic()
-        cfg = self._config_with(appliance, level=None)
+        cfg = self._config_with(appliance, tolerance_pct=None)
         snapshot = self._snapshot(
             appliance,
             export_points=[
@@ -1407,7 +1414,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         # optimizer, and carries what the refusal was measured against.
         node = _node(_slots_by_id(trace)[_slot_id(8, 0)], "ensure_self_sustainability")
         self.assertEqual(node.state, "false")
-        self.assertEqual(node.value, "soft")
+        self.assertEqual(node.value, 100.0)
         self.assertEqual(node.actual["code"], "would_break_soc_floor")
         self.assertEqual(node.actual["floor"], 15.0)
         self.assertEqual(node.actual["projectedMinSoc"], 14.0)
@@ -1476,7 +1483,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
             appliance,
             max_consecutive_skips=0,
             # No group matches a deficit day, so the run is forced.
-            groups=[{"run_when": ["surplus"], "ensure_self_sustainability": "soft"}],
+            groups=[{"run_when": ["surplus"], "ensure_self_sustainability": 100}],
         )
         snapshot = self._snapshot(
             appliance,
@@ -1731,7 +1738,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         # The gate is inert without the condition, so a config that never
         # mentions it must not start raising on a snapshot with no battery.
         appliance = _generic()
-        cfg = self._config_with(appliance, level=None)
+        cfg = self._config_with(appliance, tolerance_pct=None)
         snapshot = _make_snapshot(appliance=appliance)
 
         placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
@@ -1740,12 +1747,16 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
 
 
 class StrictSelfSustainabilityTests(unittest.TestCase):
-    """``strict`` — soft, plus: did the day the slot belongs to pay for itself?
+    """A budget of ``0`` — did the day the slot belongs to pay for itself?
 
-    Over that day, to local midnight and against the no-appliance baseline, the
+    The strictest setting the one knob takes, and what ``strict`` used to mean:
+    over that day, to local midnight and against the no-appliance baseline, the
     battery must be restored *and* no extra grid energy bought. The battery may
     be drained in the morning provided the day's sun refills it, which is
     exactly what ``min_solar_coverage_pct`` cannot express.
+
+    These tests are the behaviour-preservation guard for the migration: they are
+    the old ``strict`` suite with ``0`` in place of the word.
     """
 
     def _config(self, appliance, *, groups=None):
@@ -1761,7 +1772,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
                 "window": {"start": "06:00", "end": "18:00"},
             },
             conditions=groups
-            or [{"run_when": ["tight"], "ensure_self_sustainability": "strict"}],
+            or [{"run_when": ["tight"], "ensure_self_sustainability": 0}],
         )
 
     def _optimize(self, cfg, snapshot, appliance):
@@ -1788,40 +1799,38 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         self.assertEqual(set(placed), {_slot_id(6, 0)})
 
     def test_an_evening_slot_cannot_be_repaid_and_is_refused(self) -> None:
-        """Intended consequence: strict confines the appliance to daylight."""
+        """Intended consequence: a zero budget confines it to daylight."""
         appliance = _generic()
         cfg = self._config(appliance)
-        snapshot = _make_snapshot(
-            appliance=appliance,
-            when_active={appliance.id: 0.4},
-            battery_state=BATTERY,
-            battery_params=BATTERY_PARAMS,
-            battery_series=_curtailed_solar_series(),
-            # 17:00 is the cheapest slot, so ranking reaches it first.
-            export_points=[
-                {"timestamp": _at(hour, minute).isoformat(timespec="seconds"),
-                 "value": 1.0 if (hour, minute) == (17, 0)
-                 else 2.0 if (hour, minute) == (6, 0) else 5.0}
-                for hour in range(6, 18)
-                for minute in (0, 30)
-            ],
-        )
 
-        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+        placed = _placed_slots(
+            self._optimize(cfg, self._evening_snapshot(appliance), appliance),
+            appliance.id,
+        )
 
         self.assertNotIn(_slot_id(17, 0), placed)
         self.assertEqual(set(placed), {_slot_id(6, 0)})
 
-    def test_soft_would_have_taken_the_evening_slot(self) -> None:
+    def test_an_unbounded_budget_would_have_taken_the_evening_slot(self) -> None:
         # The control: the floor alone is happy with an evening run — the
-        # battery is full and stays far above it. Only the day-balance test
-        # refuses it, which is why strict is soft *plus* something.
+        # battery is full and stays far above it. Only the day budget refuses
+        # it, which is why a budget of 0 is the floor *plus* something.
         appliance = _generic()
         cfg = self._config(
             appliance,
-            groups=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
+            groups=[{"run_when": ["tight"], "ensure_self_sustainability": 100}],
         )
-        snapshot = _make_snapshot(
+
+        placed = _placed_slots(
+            self._optimize(cfg, self._evening_snapshot(appliance), appliance),
+            appliance.id,
+        )
+
+        self.assertEqual(set(placed), {_slot_id(17, 0)})
+
+    def _evening_snapshot(self, appliance):
+        """The evening slot is cheapest, so ranking reaches it first."""
+        return _make_snapshot(
             appliance=appliance,
             when_active={appliance.id: 0.4},
             battery_state=BATTERY,
@@ -1836,9 +1845,34 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
             ],
         )
 
-        placed = _placed_slots(self._optimize(cfg, snapshot, appliance), appliance.id)
+    def test_a_budget_between_the_ends_buys_exactly_what_it_pays_for(self) -> None:
+        """The capability the two words could not express.
 
-        self.assertEqual(set(placed), {_slot_id(17, 0)})
+        The evening slot costs 0.2 kWh the day cannot repay — refused at ``0``,
+        taken at ``100``. On a 10 kWh battery a budget of 3 % is 0.3 kWh, which
+        covers it; 1 % is 0.1 kWh, which does not. So the same slot flips on the
+        number alone, with nothing else in the config changing.
+        """
+        appliance = _generic()
+        evening = _slot_id(17, 0)
+
+        for tolerance_pct, expected in ((1, False), (3, True)):
+            with self.subTest(tolerance_pct=tolerance_pct):
+                cfg = self._config(
+                    appliance,
+                    groups=[
+                        {
+                            "run_when": ["tight"],
+                            "ensure_self_sustainability": tolerance_pct,
+                        }
+                    ],
+                )
+                placed = _placed_slots(
+                    self._optimize(cfg, self._evening_snapshot(appliance), appliance),
+                    appliance.id,
+                )
+
+                self.assertEqual(evening in placed, expected)
 
     def test_a_restored_battery_paid_for_from_the_grid_still_fails(self) -> None:
         """The reason strict compares *both* deltas.
@@ -1874,7 +1908,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         actual = _node(
             _slots_by_id(trace)[_slot_id(6, 0)], "ensure_self_sustainability"
         ).actual
-        self.assertEqual(actual["code"], "not_solar_neutral")
+        self.assertEqual(actual["code"], "over_battery_budget")
         # The battery is restored exactly...
         self.assertEqual(actual["deltaSocPct"], 0.0)
         # ...and the whole 0.2 kWh came off the grid instead.
@@ -1908,7 +1942,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
 
 
 class SelfSustainabilityConfigTests(unittest.TestCase):
-    """The first defaulted *object* in the tree, so nothing else guards it."""
+    """Both numbers are per-group conditions, and one of them is defaulted."""
 
     def _config(self, *, params=None, groups=None):
         return make_optimizer_config(
@@ -1925,47 +1959,84 @@ class SelfSustainabilityConfigTests(unittest.TestCase):
             conditions=groups or [{"run_when": ["tight"]}],
         )
 
-    def test_omitting_the_object_entirely_still_resolves_the_margin(self) -> None:
-        # `read_field` returns MISSING for an absent field *before* descending
-        # into an object, so the member default only fires once the parent has a
-        # value. `default={}` on the object is what supplies it.
+    def test_a_group_that_omits_the_margin_resolves_the_default(self) -> None:
         cfg = self._config()
 
-        self.assertEqual(cfg.params["self_sustainability"], {"margin_pct": 5.0})
+        self.assertEqual(
+            cfg.conditions[0].condition_values["self_sustainability_margin_pct"],
+            5.0,
+        )
 
     def test_setting_the_margin_wins(self) -> None:
-        cfg = self._config(params={"self_sustainability": {"margin_pct": 12}})
-
-        self.assertEqual(cfg.params["self_sustainability"], {"margin_pct": 12.0})
-
-    def test_a_group_that_omits_it_inherits_the_master(self) -> None:
         cfg = self._config(
-            groups=[{"run_when": ["tight"], "params": {"window": None}}]
+            groups=[{"run_when": ["tight"], "self_sustainability_margin_pct": 12}]
         )
 
         self.assertEqual(
-            cfg.conditions[0].params["self_sustainability"], {"margin_pct": 5.0}
+            cfg.conditions[0].condition_values["self_sustainability_margin_pct"],
+            12.0,
         )
 
-    def test_a_group_can_override_the_margin(self) -> None:
+    def test_two_groups_may_carry_different_margins(self) -> None:
+        """What the move buys: the floor is a per-group policy now.
+
+        As a param it was master-plus-override, so a group could still move it —
+        but only by opening the params override form, which is where it was hard
+        to find. Two groups disagreeing is the same capability, said directly.
+        """
         cfg = self._config(
             groups=[
-                {
-                    "run_when": ["tight"],
-                    "params": {"self_sustainability": {"margin_pct": 20}},
-                }
+                {"run_when": ["tight"], "self_sustainability_margin_pct": 20},
+                {"run_when": ["surplus"], "self_sustainability_margin_pct": 2},
             ]
         )
 
         self.assertEqual(
-            cfg.conditions[0].params["self_sustainability"], {"margin_pct": 20.0}
+            [
+                group.condition_values["self_sustainability_margin_pct"]
+                for group in cfg.conditions
+            ],
+            [20.0, 2.0],
         )
 
-    def test_the_level_is_one_of_two_words(self) -> None:
-        self._config(groups=[{"ensure_self_sustainability": "soft"}])
-        self._config(groups=[{"ensure_self_sustainability": "strict"}])
+    def test_the_params_object_is_gone(self) -> None:
+        """It moved into the conditions; the old key must fail, not be ignored."""
         with self.assertRaises(AutomationConfigError):
-            self._config(groups=[{"ensure_self_sustainability": "yes"}])
+            self._config(params={"self_sustainability": {"margin_pct": 5}})
+
+    def test_the_budget_is_a_percentage_not_a_word(self) -> None:
+        self._config(groups=[{"ensure_self_sustainability": 0}])
+        self._config(groups=[{"ensure_self_sustainability": 100}])
+        for bad in ("soft", "strict", 150, -1):
+            with self.subTest(value=bad), self.assertRaises(AutomationConfigError):
+                self._config(groups=[{"ensure_self_sustainability": bad}])
+
+    def test_a_zero_budget_is_a_value_not_an_absence(self) -> None:
+        """The falsy-zero trap: 0 is the *strictest* setting, not "unset".
+
+        A reader testing truthiness would hand the strictest config a null gate
+        and place every candidate unchecked, which is the exact opposite of what
+        it asked for.
+        """
+        cfg = self._config(groups=[{"ensure_self_sustainability": 0}])
+
+        self.assertEqual(
+            cfg.conditions[0].condition_values["ensure_self_sustainability"], 0.0
+        )
+        gate = _SelfSustainabilityGate.for_run(
+            snapshot=_make_snapshot(
+                appliance=_generic(),
+                when_active={_generic().id: 0.4},
+                battery_state=BATTERY,
+                battery_params=BATTERY_PARAMS,
+                battery_series=_morning_dip_series(),
+            ),
+            config=cfg,
+            appliance_id="pool-pump",
+            demand_hourly_energy=0.4,
+        )
+
+        self.assertIsInstance(gate, _SelfSustainabilityGate)
 
 
 class DailyRuntimeTraceContractTests(unittest.TestCase):
@@ -2370,7 +2441,7 @@ class UncappedModeTests(unittest.TestCase):
         cfg = _uncapped_config(
             appliance_id=appliance.id,
             window={"start": "06:00", "end": "18:00"},
-            groups=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
+            groups=[{"run_when": ["tight"], "ensure_self_sustainability": 100}],
         )
         snapshot = _make_snapshot(
             appliance=appliance,
@@ -2417,7 +2488,19 @@ class UncappedValidationTests(unittest.TestCase):
         with self.assertRaises(AutomationConfigError):
             _uncapped_config(
                 appliance_id="pool-pump",
-                groups=[{"ensure_self_sustainability": "soft"}],
+                groups=[{"ensure_self_sustainability": 100}],
+            )
+
+    def test_the_margin_alone_does_not_narrow_the_horizon(self) -> None:
+        """It is a qualifier, and a defaulted one.
+
+        Counting it would satisfy the rule for every group ever written, since
+        the field fills itself in — the check would stop firing entirely.
+        """
+        with self.assertRaises(AutomationConfigError):
+            _uncapped_config(
+                appliance_id="pool-pump",
+                groups=[{"self_sustainability_margin_pct": 20}],
             )
 
     def test_a_solar_coverage_floor_is_enough(self) -> None:

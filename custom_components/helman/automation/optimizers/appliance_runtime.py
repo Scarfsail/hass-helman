@@ -94,11 +94,20 @@ if TYPE_CHECKING:
 
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
 
-# "≈ 0" for strict's day-balance test. Both are the epsilons the frontend
-# once used for its rail metrics: a difference the UI would not render as a
-# change is not one to reject a placement over.
-_STRICT_SOC_TOLERANCE_PCT = 0.5
-_STRICT_IMPORT_TOLERANCE_KWH = 0.05
+#: The tolerance value that switches the day budget off entirely. The top of
+#: the scale is the *absence* of the budget, not a budget of one battery's
+#: worth: a multi-kW appliance running a full window can exceed nominal capacity
+#: in a day, so a literal 100% budget would still refuse placements that the
+#: floor alone was always meant to govern.
+_UNBUDGETED_TOLERANCE_PCT = 100.0
+
+#: "≈ 0" for the day budget, in kWh. The two epsilons this replaces (0.5 pp of
+#: SoC and 0.05 kWh of import) were the ones the frontend once used for its rail
+#: metrics: a difference the UI would not render as a change is not one to
+#: reject a placement over. Both magnitudes are kept, now on the single axis the
+#: budget lives on — whichever is larger for the battery in question.
+_BUDGET_EPSILON_FLOOR_KWH = 0.05
+_BUDGET_EPSILON_CAPACITY_SHARE = 0.005
 
 # The gates this kind owns. None of them lives in ``masks_by_key``: the
 # conditions decide which *days* run and which of a day's slots are eligible,
@@ -151,15 +160,20 @@ class _DayPlan:
     #: resolve this day's ``ensure_self_sustainability`` node in the *right*
     #: group's column instead of every group's.
     group_index: int | None = None
-    #: The matched group's ``ensure_self_sustainability``, or ``None`` when it
-    #: set none — and always ``None`` on a forced run, which bypasses it as it
-    #: bypasses every other condition.
+    #: The matched group's ``ensure_self_sustainability`` day budget, or ``None``
+    #: when it set none — and always ``None`` on a forced run, which bypasses it
+    #: as it bypasses every other condition. ``0.0`` is the *strictest* budget,
+    #: so every reader tests ``is None``, never truthiness.
     #:
     #: Constant across the day by construction: capped placement intersects the
     #: window with the resolved group's own slots, so every placeable slot of a
-    #: day belongs to the same group, hence the same level and the same resolved
-    #: ``margin_pct``. No "the floor moves mid-day" rule is needed.
-    self_sustainability: str | None = None
+    #: day belongs to the same group, hence the same budget and the same margin.
+    #: No "the floor moves mid-day" rule is needed.
+    self_sustainability: float | None = None
+    #: The same group's ``self_sustainability_margin_pct``. Read only when
+    #: ``self_sustainability`` is set, which a forced run never does — so the
+    #: fallback here is inert rather than a second copy of the field's default.
+    margin_pct: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -518,13 +532,13 @@ class ApplianceRuntimeOptimizer:
                 )
                 if not inside:
                     continue
-            level = resolved.condition_value("ensure_self_sustainability")
+            tolerance_pct = resolved.condition_value("ensure_self_sustainability")
             rejection = gate.accept(
                 resolved.slot_id,
-                level=level,
-                params=resolved.params,
+                tolerance_pct=tolerance_pct,
+                margin_pct=_group_margin_pct(resolved),
             )
-            if level is not None:
+            if tolerance_pct is not None:
                 # The self-gating node's real result, which the rails leave
                 # `not_evaluated`. Order-dependent by construction: acceptance is
                 # greedy, so this is a log of what this run found when it reached
@@ -533,7 +547,7 @@ class ApplianceRuntimeOptimizer:
                     slot_ids=[resolved.slot_id],
                     key="ensure_self_sustainability",
                     state=STATE_FALSE if rejection is not None else STATE_TRUE,
-                    value=level,
+                    value=tolerance_pct,
                     actual=rejection,
                     group_index=resolved.group.index,
                 )
@@ -604,6 +618,7 @@ class ApplianceRuntimeOptimizer:
                 self_sustainability=resolved.condition_value(
                     "ensure_self_sustainability"
                 ),
+                margin_pct=_group_margin_pct(resolved),
             )
             remaining_hours = (
                 resolved.params["daily_minimum"]["min_hours_per_day"] - delivered_hours
@@ -704,9 +719,17 @@ class _SelfSustainabilityGate:
 
     When it is live, a candidate is accepted only if the horizon *re-simulated
     with every accepted placement plus this one* keeps the battery above the
-    floor. Acceptance re-checks the whole accepted set rather than the candidate
-    alone: taking an 18:00 slot changes the SoC after 18:00, which lies inside
-    the region a 13:00 slot was already checked over.
+    floor and the candidate's day stays inside its budget. Acceptance re-checks
+    the whole accepted set rather than the candidate alone: taking an 18:00 slot
+    changes the SoC after 18:00, which lies inside the region a 13:00 slot was
+    already checked over.
+
+    The two tests are deliberately different shapes. The floor is a *state*
+    constraint over the whole horizon — the projected SoC may never breach
+    ``min_soc + margin_pct`` at any point, so an evening slot can be refused for
+    a dip it causes the next morning. The budget is a *flow* constraint scored
+    per local date — how much non-solar energy the day spent that it would not
+    have spent without the appliance.
 
     The accepted set spans days, not just the day being planned, because the
     trajectory does.
@@ -738,8 +761,10 @@ class _SelfSustainabilityGate:
         appliance_id: str,
         demand_hourly_energy: float | None,
     ) -> "_SelfSustainabilityGate | _NullGate":
-        if not any(
-            group.condition_values.get("ensure_self_sustainability")
+        # `is None`, never truthiness: a budget of 0 is the *strictest* setting
+        # a group can ask for, and `if not value` would hand it a null gate.
+        if all(
+            group.condition_values.get("ensure_self_sustainability") is None
             for group in config.conditions
         ):
             return _NullGate()
@@ -771,7 +796,7 @@ class _SelfSustainabilityGate:
         if plan.self_sustainability is None:
             return ranked[:slots_needed], [], ranked[slots_needed:]
 
-        floor = self._floor_pct(plan.params)
+        floor = self._floor_pct(plan.margin_pct)
         chosen: list[tuple[float, str]] = []
         floor_rejected: list[tuple[str, dict[str, Any]]] = []
         not_reached: list[tuple[float, str]] = []
@@ -780,7 +805,7 @@ class _SelfSustainabilityGate:
                 not_reached.append((cost, slot_id))
                 continue
             reason = self._accept(
-                slot_id, floor=floor, level=plan.self_sustainability
+                slot_id, floor=floor, tolerance_pct=plan.self_sustainability
             )
             if reason is None:
                 chosen.append((cost, slot_id))
@@ -789,21 +814,26 @@ class _SelfSustainabilityGate:
         return chosen, floor_rejected, not_reached
 
     def accept(
-        self, slot_id: str, *, level: str | None, params: dict[str, Any]
+        self, slot_id: str, *, tolerance_pct: float | None, margin_pct: float
     ) -> dict[str, Any] | None:
         """Uncapped acceptance of one slot. ``None`` accepts; a reason rejects.
 
         Uncapped mode iterates ``eligibility.iter_slots()`` across groups, so
-        unlike capped placement the level and the margin can change from slot to
-        slot; both come from the group owning the candidate. Candidates arrive
-        in horizon order, which is the ordering the coupled constraint needs.
+        unlike capped placement the budget and the margin can change from slot
+        to slot; both come from the group owning the candidate. Candidates
+        arrive in horizon order, which is the ordering the coupled constraint
+        needs.
         """
-        if level is None:
+        if tolerance_pct is None:
             return None
-        return self._accept(slot_id, floor=self._floor_pct(params), level=level)
+        return self._accept(
+            slot_id,
+            floor=self._floor_pct(margin_pct),
+            tolerance_pct=tolerance_pct,
+        )
 
     def _accept(
-        self, slot_id: str, *, floor: float, level: str
+        self, slot_id: str, *, floor: float, tolerance_pct: float
     ) -> dict[str, Any] | None:
         baseline = self._simulator.baseline
         if baseline.min_soc_pct < floor:
@@ -828,41 +858,55 @@ class _SelfSustainabilityGate:
                 "projectedMinSoc": round(trajectory.min_soc_pct, 2),
                 "atSlot": trajectory.min_soc_at,
             }
-        if level == "strict":
-            # Strict *inherits* the floor rather than replacing it: a day can
-            # balance while still dipping through the floor at noon.
-            unbalanced = self._day_imbalance(slot_id, trajectory, baseline)
-            if unbalanced is not None:
-                return unbalanced
+        if tolerance_pct < _UNBUDGETED_TOLERANCE_PCT:
+            # The budget *inherits* the floor rather than replacing it: a day can
+            # come in under budget while still dipping through the floor at noon.
+            over = self._over_budget(
+                slot_id, trajectory, baseline, tolerance_pct=tolerance_pct
+            )
+            if over is not None:
+                return over
         self._accepted_demand = candidate_demand
         return None
 
-    def _day_imbalance(
+    def _over_budget(
         self,
         slot_id: str,
         trajectory: "Trajectory",
         baseline: "Trajectory",
+        *,
+        tolerance_pct: float,
     ) -> dict[str, Any] | None:
-        """Strict's extra test: did the day the slot belongs to pay for itself?
+        """Did the slot's day spend more non-solar energy than it may?
 
-        Over that day, to local midnight and against the no-appliance baseline,
-        the battery must be restored *and* no extra grid energy bought. Together
-        those mean the appliance's energy came from solar that would otherwise
-        have been exported or curtailed. The battery may be drained mid-morning
-        provided the day's sun refills it — which is exactly what
-        ``min_solar_coverage_pct`` cannot express, being per-slot and unable to
-        time-shift.
+        Scored over that local date, to local midnight and against the
+        no-appliance baseline. What the day *spent* is the battery it ends lower
+        than it otherwise would have, plus the grid energy it bought that it
+        otherwise would not have:
 
-        **Why SoC alone is not enough.** Grid import also leaves the battery
-        unchanged: ``charge_from_grid`` charging to a target simply imports one
-        more kWh to still hit it, so end-of-day SoC is identical and the
-        appliance ran on imported energy.
+            spent = max(0, -Δend_energy) + max(0, Δimport)
 
-        **Consequence, intended:** energy consumed after sunset cannot be repaid
-        by today's sun, so strict confines the appliance to daylight hours.
+        **Why both terms, and why they add.** They are the same quantity seen
+        twice — energy the sun did not provide. Draining the battery and buying
+        from the grid are not alternatives the optimizer picks between: a slot's
+        shortfall is covered by the battery first, and by the grid only once the
+        battery is empty or power-limited (``battery_slot_simulation``). Which
+        one a placement lands on is physics, so budgeting only one of them would
+        leave the other ungoverned. In particular SoC alone is not enough:
+        ``charge_from_grid`` charging to a target simply imports one more kWh to
+        still hit it, leaving end-of-day SoC identical while the appliance ran on
+        imported energy.
 
-        Both comparisons are one-sided. Ending the day *better* than the
-        baseline is not a failure, it just cannot happen often.
+        Both terms are clamped at zero, so a day that ends *better* than the
+        baseline banks nothing against a day that ends worse.
+
+        At ``tolerance_pct`` 0 this is the old ``strict``: the battery must be
+        restored and no extra grid energy bought. Its intended consequence
+        survives — energy consumed after sunset cannot be repaid by today's sun,
+        so a zero budget confines the appliance to daylight hours. The battery
+        may still be drained mid-morning provided the day's sun refills it, which
+        is exactly what ``min_solar_coverage_pct`` cannot express, being per-slot
+        and unable to time-shift.
         """
         local_date = parse_slot_id(slot_id).date()
         nominal_capacity_kwh = self._nominal_capacity_kwh()
@@ -871,18 +915,26 @@ class _SelfSustainabilityGate:
         delta_energy_kwh = trajectory.end_energy_kwh_by_date.get(
             local_date, 0.0
         ) - baseline.end_energy_kwh_by_date.get(local_date, 0.0)
-        delta_soc_pct = delta_energy_kwh / nominal_capacity_kwh * 100
         delta_import_kwh = trajectory.imported_kwh_by_date.get(
             local_date, 0.0
         ) - baseline.imported_kwh_by_date.get(local_date, 0.0)
-        if (
-            -delta_soc_pct <= _STRICT_SOC_TOLERANCE_PCT
-            and delta_import_kwh <= _STRICT_IMPORT_TOLERANCE_KWH
-        ):
+        spent_kwh = max(0.0, -delta_energy_kwh) + max(0.0, delta_import_kwh)
+        budget_kwh = tolerance_pct / 100 * nominal_capacity_kwh
+        epsilon_kwh = max(
+            _BUDGET_EPSILON_FLOOR_KWH,
+            _BUDGET_EPSILON_CAPACITY_SHARE * nominal_capacity_kwh,
+        )
+        if spent_kwh <= budget_kwh + epsilon_kwh:
             return None
         return {
-            "code": "not_solar_neutral",
-            "deltaSocPct": round(delta_soc_pct, 2),
+            "code": "over_battery_budget",
+            "tolerancePct": round(tolerance_pct, 2),
+            "budgetKwh": round(budget_kwh, 3),
+            "spentKwh": round(spent_kwh, 3),
+            # The two halves of the spend, kept because they are what makes a
+            # refusal readable: "it ended the day 8% lower" and "it bought
+            # 2 kWh" are different stories with the same total.
+            "deltaSocPct": round(delta_energy_kwh / nominal_capacity_kwh * 100, 2),
             "deltaImportKwh": round(delta_import_kwh, 3),
         }
 
@@ -891,14 +943,14 @@ class _SelfSustainabilityGate:
         assert battery_state is not None  # build_horizon_simulator guarantees it
         return battery_state.nominal_capacity_kwh
 
-    def _floor_pct(self, params: dict[str, Any]) -> float:
+    def _floor_pct(self, margin_pct: float) -> float:
         # In percentage *points* above the inverter's own reserve. A floor at
         # `min_soc` is provably inert: every discharge path clamps `remaining`
         # to `min_energy_kwh`, so the projected SoC can never reach `min_soc`,
         # let alone breach it. Only the margin gives the floor teeth.
         battery_state = self._snapshot.context.battery_state
         assert battery_state is not None  # build_horizon_simulator guarantees it
-        return battery_state.min_soc + _margin_pct(params)
+        return battery_state.min_soc + margin_pct
 
     def _slot_demand(self, slot_id: str) -> dict[datetime, float]:
         cached = self._demand_cache.get(slot_id)
@@ -936,9 +988,22 @@ class _NullGate:
         return ranked[:slots_needed], [], ranked[slots_needed:]
 
     def accept(
-        self, slot_id: str, *, level: str | None, params: dict[str, Any]
+        self, slot_id: str, *, tolerance_pct: float | None, margin_pct: float
     ) -> dict[str, Any] | None:
         return None
+
+
+def _group_margin_pct(resolved: Any) -> float:
+    """The owning group's SoC floor margin, in points above ``min_soc``.
+
+    Takes anything exposing ``condition_value`` — a ``SlotEligibility`` on the
+    uncapped path, a day resolution on the capped one — because both resolve it
+    from the same group. The condition field carries a default, so a matched
+    group always has one; there is no "the config omitted it" case to cover.
+    """
+    value = resolved.condition_value("self_sustainability_margin_pct")
+    assert value is not None  # defaulted by the condition field
+    return float(value)
 
 
 def _merge_demand(
@@ -948,10 +1013,6 @@ def _merge_demand(
     for bucket_start, energy_kwh in extra.items():
         merged[bucket_start] = merged.get(bucket_start, 0.0) + energy_kwh
     return merged
-
-
-def _margin_pct(params: dict[str, Any]) -> float:
-    return (params.get("self_sustainability") or {}).get("margin_pct", 0.0)
 
 
 def _horizon_slots_by_date(slot_ids: tuple[str, ...]) -> dict[date, list[str]]:
@@ -1062,8 +1123,8 @@ def _resolve_self_sustainability(
     accepted before it. This is a log of what this run found, not a function of
     the slot.
     """
-    level = plan.self_sustainability
-    if level is None or plan.group_index is None:
+    tolerance_pct = plan.self_sustainability
+    if tolerance_pct is None or plan.group_index is None:
         return
     accepted = [slot_id for _cost, slot_id in chosen]
     if accepted:
@@ -1071,7 +1132,7 @@ def _resolve_self_sustainability(
             slot_ids=accepted,
             key="ensure_self_sustainability",
             state=STATE_TRUE,
-            value=level,
+            value=tolerance_pct,
             group_index=plan.group_index,
         )
     for slot_id, detail in floor_rejected:
@@ -1079,7 +1140,7 @@ def _resolve_self_sustainability(
             slot_ids=[slot_id],
             key="ensure_self_sustainability",
             state=STATE_FALSE,
-            value=level,
+            value=tolerance_pct,
             # Per slot: the projected minimum and where it falls are what make
             # the refusal readable, and they differ slot by slot.
             actual=detail,

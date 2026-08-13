@@ -610,7 +610,7 @@ class ConditionMatrixTests(unittest.TestCase):
     def test_a_self_gating_condition_is_not_evaluated_not_true(self) -> None:
         slots = self._record(
             self._appliance_config(
-                {"run_when": ["tight"], "ensure_self_sustainability": "strict"}
+                {"run_when": ["tight"], "ensure_self_sustainability": 0}
             ),
             self._snapshot(day_classification="tight"),
         )

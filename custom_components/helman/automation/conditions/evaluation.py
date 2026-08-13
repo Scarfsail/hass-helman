@@ -187,7 +187,7 @@ class Eligibility:
         group = self.groups[0]
         for key, value in group.condition_values.items():
             condition = CONDITION_TYPES[key]
-            if condition.self_gating:
+            if condition.self_gating or condition.qualifier:
                 continue
             if slot_id not in group.masks_by_key[key]:
                 return (condition.key, value)
@@ -262,7 +262,9 @@ def _condition_column_keys(
     keys: list[str] = []
     for group in groups:
         for key in group.condition_values:
-            if key not in keys:
+            # A qualifier configures another condition's test rather than being
+            # one, so it gets no column at all — not an empty one.
+            if key not in keys and not CONDITION_TYPES[key].qualifier:
                 keys.append(key)
     return tuple(keys)
 

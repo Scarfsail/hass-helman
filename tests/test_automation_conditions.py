@@ -671,7 +671,7 @@ class GroupExplanationTests(unittest.TestCase):
             kind="appliance_runtime",
             target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
-            conditions=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
+            conditions=[{"run_when": ["tight"], "ensure_self_sustainability": 100}],
         )
         explanations = self._explanations(_snapshot(prices=_PRICES), config)
 
@@ -683,7 +683,40 @@ class GroupExplanationTests(unittest.TestCase):
             if node.key == "ensure_self_sustainability"
         )
         self.assertEqual(node.state, "not_evaluated")
-        self.assertEqual(node.value, "soft")
+        self.assertEqual(node.value, 100.0)
+
+    def test_a_qualifier_gets_no_node_at_all(self) -> None:
+        """`self_sustainability_margin_pct` configures a test, it is not one.
+
+        And it is defaulted, so every group carries it. A node could only ever
+        read `not_evaluated` — nothing resolves it — which would put an
+        unresolvable block on every group in the inspector.
+        """
+        config = make_optimizer_config(
+            id="runtime",
+            kind="appliance_runtime",
+            target={"controllable_id": "pool"},
+            params={"window": {"start": "00:00", "end": "23:30"}},
+            conditions=[
+                {
+                    "run_when": ["tight"],
+                    "ensure_self_sustainability": 0,
+                    "self_sustainability_margin_pct": 20,
+                }
+            ],
+        )
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        self.assertEqual(
+            config.conditions[0].condition_values[
+                "self_sustainability_margin_pct"
+            ],
+            20.0,
+        )
+        self.assertNotIn(
+            "self_sustainability_margin_pct",
+            {node.key for node in explanations[SLOT_0][0].conditions},
+        )
 
     def test_condition_scope_is_carried_onto_the_node(self) -> None:
         config = make_optimizer_config(
@@ -852,6 +885,7 @@ class SpecInvariantTests(unittest.TestCase):
                 "min_soc_pct",
                 "min_solar_coverage_pct",
                 "ensure_self_sustainability",
+                "self_sustainability_margin_pct",
             ),
         )
 

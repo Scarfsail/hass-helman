@@ -534,6 +534,114 @@ def _migrate_v9_to_v10(document: dict[str, Any]) -> tuple[dict[str, Any], list[s
     return (document, [])
 
 
+#: The default the ``self_sustainability_margin_pct`` condition field carries.
+#: Spelled out here rather than imported: a migration must keep writing what
+#: version 10 meant even if the field's default moves later.
+_V10_MARGIN_PCT_DEFAULT = 5
+
+
+def _migrate_v10_to_v11(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    return _migrate_optimizers(document, _unify_self_sustainability)
+
+
+def _unify_self_sustainability(optimizer: dict[str, Any]) -> dict[str, Any]:
+    """``soft``/``strict`` become one number, and the margin joins it.
+
+    Two changes to the same feature, so one step.
+
+    The level was two settings that were never two points on one scale: ``soft``
+    tested only the SoC floor, ``strict`` added a per-day balance test. They
+    become a single budget — the share of nominal battery capacity the appliance
+    may spend per day on energy the sun did not provide. ``strict`` is that
+    budget at ``0``; ``soft`` is it switched off, which is ``100``.
+
+    The margin moves from ``params.self_sustainability.margin_pct`` into each
+    group as ``self_sustainability_margin_pct``. It was a param resolved as
+    master-plus-override, so each group takes what it resolved *before* the
+    move: its own override, else the master value, else the old default.
+
+    It is written only where it ever meant anything — a group that asked for a
+    budget, or an optimizer that spelled the margin out. Everywhere else the key
+    is left off and the condition field's own default supplies it, because
+    stamping ``5`` onto every group of every appliance would be noise the user
+    did not write and would have to read past.
+
+    **A named master margin is written onto every group, including ones with no
+    budget; an unnamed one is not.** The asymmetry is deliberate, and it is the
+    difference between a number the user wrote and a default they never saw. A
+    master ``margin_pct: 12`` genuinely *was* what all three groups of a
+    three-group optimizer resolved, so dropping it from the two without a budget
+    would mean a group that gains one later silently runs on ``5`` instead of
+    the 12 the config has said all along. Carrying a value nobody typed would
+    have no such meaning to preserve.
+    """
+    if optimizer.get("kind") != "appliance_runtime":
+        return optimizer
+
+    conditions = optimizer.get("conditions")
+    if not isinstance(conditions, list):
+        # Nothing to move the margin *onto*, and a malformed or absent
+        # `conditions` is the reader's to reject — replacing it with `[]` here
+        # would launder it into a valid config that silently means "no groups".
+        # Same bail as `_rename_appliance_runtime_price_condition`.
+        return optimizer
+
+    params = optimizer.get("params")
+    params = dict(params) if isinstance(params, Mapping) else {}
+    master_margin = _margin_from(params)
+
+    rebuilt: list[Any] = []
+    for group in conditions:
+        if not isinstance(group, Mapping):
+            rebuilt.append(group)
+            continue
+        group = dict(group)
+        level = group.get("ensure_self_sustainability")
+        if level == "strict":
+            group["ensure_self_sustainability"] = 0
+        elif level == "soft":
+            group["ensure_self_sustainability"] = 100
+
+        override = group.get("params")
+        override = dict(override) if isinstance(override, Mapping) else None
+        group_margin = _margin_from(override or {})
+        resolved_margin = (
+            group_margin if group_margin is not None else master_margin
+        )
+        if resolved_margin is not None:
+            group["self_sustainability_margin_pct"] = resolved_margin
+        elif level in ("soft", "strict"):
+            # The group used the feature but never named a margin, so it ran on
+            # the old param default. Say it out loud rather than trusting two
+            # defaults in different modules to stay equal.
+            group["self_sustainability_margin_pct"] = _V10_MARGIN_PCT_DEFAULT
+        if override is not None:
+            override.pop("self_sustainability", None)
+            # An override that held nothing else is dropped rather than left as
+            # an empty object: `read_fields` would accept it, but it would show
+            # in the editor as a group that overrides params when it does not.
+            if override:
+                group["params"] = override
+            else:
+                group.pop("params", None)
+        rebuilt.append(group)
+
+    params.pop("self_sustainability", None)
+    # `params` is left in place even when this empties it: an optimizer without
+    # the key and one with an empty object read identically, and earlier steps
+    # already produce the empty form.
+    return {**optimizer, "params": params, "conditions": rebuilt}
+
+
+def _margin_from(params: Mapping[str, Any]) -> Any:
+    """``params.self_sustainability.margin_pct``, or ``None`` when unset."""
+    block = params.get("self_sustainability")
+    if not isinstance(block, Mapping):
+        return None
+    margin = block.get("margin_pct")
+    return margin if isinstance(margin, (int, float)) else None
+
+
 def _house_forecast_block(document: dict[str, Any]) -> Any:
     """``power_devices.house.forecast``, or ``None`` if the path is not there."""
     power_devices = document.get("power_devices")
@@ -591,6 +699,7 @@ _MIGRATIONS = {
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
     9: _migrate_v9_to_v10,
+    10: _migrate_v10_to_v11,
 }
 
 

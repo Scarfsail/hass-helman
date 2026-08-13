@@ -109,6 +109,12 @@ class ConditionType:
     #: actuals to report. Call through :func:`evaluate_mask`, never directly.
     build_mask: Callable[[MaskInputs], "frozenset[str] | MaskResult"]
     self_gating: bool = False
+    #: This entry configures *another* condition's test rather than being one.
+    #: It admits every slot, resolves nothing, and gets no node in the
+    #: explanation — a block that could only ever read "not evaluated" is noise
+    #: on every group that carries the default. It lives among the conditions
+    #: because that is where the knob it qualifies lives, not because it gates.
+    qualifier: bool = False
     #: Localization key for the condition's human label, used by the explanation
     #: UI. Defaults to ``automation.condition.<key>``; a field rather than a
     #: derived property so a type can point elsewhere without a special case.
@@ -459,19 +465,40 @@ CONDITION_TYPES: dict[str, ConditionType] = {
         # from there rather than from here — a mask cannot say *which* placement
         # broke the floor.
         #
-        # The level is the condition's value rather than a bool beside a
-        # separate knob: one key, three states (absent / soft / strict), so they
-        # cannot contradict each other.
+        # The budget is the condition's value rather than a bool beside a
+        # separate knob: one key, and absent still means unconstrained.
+        #
+        # **Zero is the strictest setting, not the absent one.** Every reader
+        # must test `is None`, never truthiness — `if not value` would silently
+        # disable the gate for the config that asked for the most.
         ConditionType(
             key="ensure_self_sustainability",
             scope=Scope.RUN,
-            field=F.string(
-                "ensure_self_sustainability",
-                required=False,
-                choices=("soft", "strict"),
-            ),
+            field=F.percent("ensure_self_sustainability", required=False),
             build_mask=_all_slots_mask,
             self_gating=True,
+        ),
+        # The floor `ensure_self_sustainability` keeps above the inverter's own
+        # reserve, in percentage points. A condition rather than a param so it
+        # sits beside the budget it qualifies, and so it varies per group with
+        # the policy it belongs to.
+        #
+        # A *qualifier*, not a gate: it never admits or refuses a slot on its
+        # own, it moves the floor the budget's own test compares against. So it
+        # draws no block — `ensure_self_sustainability` reports the refusal, and
+        # a second block reading "not evaluated" beside it, on every group,
+        # would say nothing.
+        #
+        # A floor *at* min_soc is provably inert — every discharge path clamps
+        # `remaining` to `min_energy_kwh`, so the projected SoC can never reach
+        # min_soc, let alone breach it. Only a margin strictly above it gives
+        # the floor teeth, which is what the default is for.
+        ConditionType(
+            key="self_sustainability_margin_pct",
+            scope=Scope.RUN,
+            field=F.percent("self_sustainability_margin_pct", default=5),
+            build_mask=_all_slots_mask,
+            qualifier=True,
         ),
         # Self-gating: `charge_from_grid` conditions on the SoC dip over the
         # *expensive* band but writes into the *preceding cheap* band, so a mask

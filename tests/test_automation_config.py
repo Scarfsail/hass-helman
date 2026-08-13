@@ -209,9 +209,15 @@ class ConditionGroupTests(unittest.TestCase):
             }
         )
 
+        # Every defaulted condition field fills, not just `run_when`: the SoC
+        # margin carries one too, and an unused margin on a group that asked for
+        # no budget is inert.
         self.assertEqual(
             parsed.optimizers[0].conditions[0].condition_values,
-            {"run_when": DAY_CLASSIFICATIONS},
+            {
+                "run_when": DAY_CLASSIFICATIONS,
+                "self_sustainability_margin_pct": 5.0,
+            },
         )
 
     def test_a_group_cannot_override_a_non_overridable_param(self) -> None:

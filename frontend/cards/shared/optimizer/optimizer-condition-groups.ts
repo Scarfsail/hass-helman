@@ -272,9 +272,11 @@ function renderConditionWidget(
         return host.renderDayClassificationField(path, labelKey, helpKey);
     }
     // Dispatch on `choices` before type, because a choices field is a picker
-    // whatever it is made of. Falling through to the number input rendered
-    // `ensure_self_sustainability` — a string of "soft" | "strict" — as a
-    // numeric box the value could not be typed into at all.
+    // whatever it is made of — a string-valued condition would otherwise fall
+    // through to the number input and render as a box its value cannot be typed
+    // into. No condition uses it today (`ensure_self_sustainability` did, until
+    // its two words became one number), but the ordering is the invariant, not
+    // the caller.
     if (condition.field.choices?.length) {
         return host.renderOptionalSelectField(
             path,

@@ -186,13 +186,16 @@ const SINGLE_GROUP_PAYLOAD = {
                     key: "ensure_self_sustainability",
                     scope: "slot",
                     state: [["true", 1], ["false", 1]],
-                    value: [["strict", 2]],
+                    value: [[0, 2]],
                     // The overflow case, verbatim in shape: a refusal comes
                     // back as an object naming which test failed and with
                     // what, far wider than the block it has to live in.
                     actual: {
                         "1": {
-                            code: "not_solar_neutral",
+                            code: "over_battery_budget",
+                            tolerancePct: 0,
+                            budgetKwh: 0,
+                            spentKwh: 0.72,
                             deltaSocPct: -3.05,
                             deltaImportKwh: 0.42,
                         },
@@ -496,7 +499,7 @@ const LONE_GROUP_UNMATCHED_PAYLOAD = {
  * (`appliance_runtime.py:817, 827, 885`). One slot per code, plus one that
  * passed, because the passing case has no numbers at all and must not grow any.
  */
-function selfSustainabilityPayload(level = "strict") {
+function selfSustainabilityPayload(tolerancePct = 0) {
     return {
         controllableId: "appliance.pool",
         date: DATE,
@@ -526,7 +529,7 @@ function selfSustainabilityPayload(level = "strict") {
                         key: "ensure_self_sustainability",
                         scope: "slot",
                         state: [["true", 1], ["false", 3]],
-                        value: [[level, 4]],
+                        value: [[tolerancePct, 4]],
                         actual: {
                             "1": {
                                 code: "would_break_soc_floor",
@@ -540,7 +543,10 @@ function selfSustainabilityPayload(level = "strict") {
                                 baselineMinSoc: 22.1,
                             },
                             "3": {
-                                code: "not_solar_neutral",
+                                code: "over_battery_budget",
+                                tolerancePct: 0,
+                                budgetKwh: 0,
+                                spentKwh: 0.72,
                                 deltaSocPct: -3.05,
                                 deltaImportKwh: 0.42,
                             },
@@ -1097,29 +1103,28 @@ test.describe("self-sustainability says which test refused the slot", () => {
             .toContain("self_sustainability.soc_floor_already_breached");
     });
 
-    test("strict's day balance reads against the tolerance it broke", async ({ page }) => {
+    test("the day budget reads as what it spent against what it had", async ({ page }) => {
         await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
         await selectSlot(page, 3, "appliance_runtime");
 
-        // Two numbers in different units, so the face carries the one that
-        // failed, with its unit; -3.05 % is past the -0.5 % the day is allowed.
-        expect(await svgText(block(page).locator("text.comparison"))).toBe("-3.05 % < -0.50 %");
+        // Both sides arrive already summed, so the face compares them directly
+        // rather than re-deriving a total from the two deltas.
+        expect(await svgText(block(page).locator("text.comparison"))).toBe("0.72 kWh > 0 kWh");
         const title = await svgText(block(page).locator("title"));
-        expect(title).toContain("self_sustainability.not_solar_neutral");
-        // Both numbers are named, whichever one the face had room for.
+        expect(title).toContain("self_sustainability.over_battery_budget");
+        // The halves of the spend are still named, for the story behind the sum.
         expect(title).toContain("deltaImportKwh");
+        expect(title).toContain("deltaSocPct");
     });
 
-    test("a slot it accepted carries the level, and no invented numbers", async ({ page }) => {
-        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD, {
-            "scheduling.explanation.self_sustainability.level.strict": "přísný",
-        });
+    test("a slot it accepted carries the budget, and no invented numbers", async ({ page }) => {
+        await mountPanel(page, SELF_SUSTAINABILITY_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
         await expect(block(page)).toHaveAttribute("data-state", "true");
         await expect(block(page).locator("text.comparison")).toHaveCount(0);
-        // The mode, in words rather than as the config token.
-        expect(await svgText(block(page).locator("text.actual"))).toBe("přísný");
+        // The configured number, shown as itself — there is no mode to translate.
+        expect(await svgText(block(page).locator("text.actual"))).toBe("0");
     });
 
     test("a refusal vetoes the slot, not the group that configured it", async ({ page }) => {
@@ -1459,14 +1464,14 @@ test.describe("a block shows the numbers it was decided by", () => {
             .toContainText("diagram.override_detail");
     });
 
-    test("a self-gating condition shows the level the group configured", async ({ page }) => {
+    test("a self-gating condition shows the value the group configured", async ({ page }) => {
         await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         // 13:00: the node passed, so the record carries no actual at all. The
-        // configured level is what there is to show.
+        // configured budget is what there is to show.
         await selectSlot(page, 0, "appliance_runtime");
         expect(await svgText(diagram(page)
             .locator('g.block[data-key="ensure_self_sustainability"] text.actual')))
-            .toBe("strict");
+            .toBe("0");
     });
 
     test("nothing a block shows escapes the block", async ({ page }) => {
@@ -1624,7 +1629,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     test("a condition that measures nothing gets no reading invented", async ({ page }) => {
         // The self-gating pair resolves by simulation rather than by comparing
         // a number, so it records no reading in either direction. Showing the
-        // configured level alone is the whole of what is known.
+        // configured budget alone is the whole of what is known.
         await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
@@ -1632,7 +1637,7 @@ test.describe("the diagram shows the test, not only the result", () => {
             .locator('g.block[data-key="ensure_self_sustainability"]');
         await expect(block).toHaveAttribute("data-state", "true");
         await expect(block.locator("text.comparison")).toHaveCount(0);
-        expect(await svgText(block.locator("text.actual"))).toBe("strict");
+        expect(await svgText(block.locator("text.actual"))).toBe("0");
     });
 
     test("the two sides read differently, and not by colour alone", async ({ page }) => {

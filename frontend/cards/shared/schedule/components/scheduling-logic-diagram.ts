@@ -310,15 +310,11 @@ const SELF_GATING_CONDITIONS = new Set<string>([
     "reserve_floor_soc",
 ]);
 
-/** The tolerances strict allows before a day counts as not paying for itself. */
-const STRICT_SOC_TOLERANCE_PCT = 0.5;
-const STRICT_IMPORT_TOLERANCE_KWH = 0.05;
-
 /**
  * A self-sustainability refusal, as the comparison that produced it.
  *
- * Three tests, three shapes (`appliance_runtime.py:817, 827, 885`), and the
- * block face has room for exactly one line of each:
+ * Three tests, three shapes (`appliance_runtime._accept`), and the block face
+ * has room for exactly one line of each:
  *
  * - **`would_break_soc_floor`** — the horizon re-simulated *with* this slot
  *   dips below the floor. `projectedMinSoc < floor`, and `atSlot` says when,
@@ -327,11 +323,11 @@ const STRICT_IMPORT_TOLERANCE_KWH = 0.05;
  *   *without* the appliance, so nothing more is added. `baselineMinSoc <
  *   floor`. Same shape as the case above and a different cause entirely, which
  *   is the tooltip's job to keep apart.
- * - **`not_solar_neutral`** — strict's extra test: the day must end no worse
- *   off. Two one-sided comparisons against fixed tolerances, of which the face
- *   shows whichever actually failed, and the SoC side when both did. It
- *   carries its unit: unlike the pair above, the two numbers are not in the
- *   same one.
+ * - **`over_battery_budget`** — the day spent more non-solar energy than its
+ *   budget allows. `spentKwh > budgetKwh`, both already summed by the backend,
+ *   so nothing here re-derives them from the two deltas or has to know the
+ *   epsilon the comparison was made with. It carries its unit: unlike the pair
+ *   above, these are kWh rather than percent.
  *
  * Returns null for anything else, including an accepted slot -- the record
  * carries no numbers for one, and there is nothing to compare.
@@ -349,19 +345,8 @@ export function selfSustainabilityComparison(actual: unknown): LogicComparison |
             return numericComparison(at("projectedMinSoc"), "<", at("floor"));
         case "soc_floor_already_breached":
             return numericComparison(at("baselineMinSoc"), "<", at("floor"));
-        case "not_solar_neutral": {
-            const deltaSoc = at("deltaSocPct");
-            const deltaImport = at("deltaImportKwh");
-            // The SoC side reads as "the battery ended the day this much
-            // lower", so the tolerance it broke is a negative bound.
-            if (deltaSoc !== null && -deltaSoc > STRICT_SOC_TOLERANCE_PCT) {
-                return numericComparison(deltaSoc, "<", -STRICT_SOC_TOLERANCE_PCT, " %");
-            }
-            if (deltaImport !== null && deltaImport > STRICT_IMPORT_TOLERANCE_KWH) {
-                return numericComparison(deltaImport, ">", STRICT_IMPORT_TOLERANCE_KWH, " kWh");
-            }
-            return null;
-        }
+        case "over_battery_budget":
+            return numericComparison(at("spentKwh"), ">", at("budgetKwh"), " kWh");
         default:
             return null;
     }
@@ -2240,13 +2225,12 @@ export class SchedulingLogicDiagram extends LitElement {
         // showing: a gate's own `detail` (the window it tested, the ordinal it
         // placed at, the count it fell short of), the `actual` the node
         // recorded, or — for the self-gating conditions, which record no actual
-        // and have no numeric test — the level the group configured. Full
+        // and have no numeric test — the value the group configured. Full
         // params always live in the tooltip.
         const comparison = block.comparison;
         const right = comparison !== null
             ? formatComparison(comparison)
             : block.detail
-                ?? this._configuredLevel(block)
                 ?? summariseLogicValue(block.actual)
                 ?? summariseLogicValue(block.value);
         // The right-hand text gets a *cap*, and the label gets back whatever it
@@ -2271,8 +2255,7 @@ export class SchedulingLogicDiagram extends LitElement {
             block.kind === "override" ? this._text("diagram.override_detail") : "",
             fullConfigured === null
                 ? ""
-                : `${this._text("matrix.configured")}: ${
-                    this._configuredLevel(block) ?? fullConfigured}`,
+                : `${this._text("matrix.configured")}: ${fullConfigured}`,
             // The reason has already said everything the object holds, in a
             // form a person can read.
             reason !== "" || fullValue === null
@@ -2542,32 +2525,15 @@ export class SchedulingLogicDiagram extends LitElement {
     }
 
     /**
-     * A configured level said in words, where the config token is not one.
-     *
-     * `strict` and `soft` are the two settings self-sustainability takes, and
-     * the raw token is what the block has always shown. It is the only value on
-     * this drawing that is a *mode* rather than a number, so it is the only one
-     * with anything to translate.
-     */
-    private _configuredLevel(block: LogicBlock): string | null {
-        if (block.key !== SELF_SUSTAINABILITY || typeof block.value !== "string") {
-            return null;
-        }
-        const full = `${KEY_PREFIX}.self_sustainability.level.${block.value}`;
-        const translated = this.localize(full);
-        return translated === full || translated === undefined ? block.value : translated;
-    }
-
-    /**
      * Why a self-gating condition refused this slot, in words and numbers.
      *
      * Its `actual` is a *reason* rather than a reading: which of three tests
-     * failed, and what it saw (`appliance_runtime.py:817, 827, 885`). The face
-     * carries the comparison; this is where the rest goes -- most importantly
-     * `atSlot`, the hour the floor would break, which has nowhere else to be,
-     * and the difference between "this slot would break the floor" and "the
-     * floor breaks anyway, without the appliance", which the two comparisons
-     * cannot tell apart on their own.
+     * failed, and what it saw (`appliance_runtime._accept`). The face carries
+     * the comparison; this is where the rest goes -- most importantly `atSlot`,
+     * the hour the floor would break, which has nowhere else to be, and the
+     * difference between "this slot would break the floor" and "the floor
+     * breaks anyway, without the appliance", which the two comparisons cannot
+     * tell apart on their own.
      */
     private _reasonText(block: LogicBlock): string {
         const actual = block.actual;

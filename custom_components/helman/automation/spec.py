@@ -136,10 +136,13 @@ def _validate_appliance_runtime(
     # all-classifications default, so it only counts when it is narrower than
     # that — otherwise the check could never fire. A self-gating condition
     # contributes an all-true mask *by definition*, so it narrows nothing either
-    # and must not be allowed to satisfy the rule on its own.
+    # and must not be allowed to satisfy the rule on its own; a qualifier is not
+    # a test at all, and carries a default, so it would satisfy the rule for
+    # every group ever written.
     if daily_minimum is None and condition_values is not None and not window:
         narrows = any(
             not CONDITION_TYPES[key].self_gating
+            and not CONDITION_TYPES[key].qualifier
             and (key != "run_when" or set(value) != set(DAY_CLASSIFICATIONS))
             for key, value in condition_values.items()
         )
@@ -232,35 +235,17 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
                     F.time_hhmm("end"),
                     required=False,
                 ),
-                # The headroom `ensure_self_sustainability` keeps above the
-                # inverter's own reserve, in percentage points. It is a param
-                # rather than part of the condition because it describes the
-                # *installation*, while the level is a policy that varies by day
-                # type — and params stay overridable per group, so a group can
-                # still move it.
-                #
-                # `default={}` on the object is what makes the member default
-                # fire: `read_field` returns MISSING for an absent field before
-                # it ever descends, so a nested default only applies once the
-                # parent has a value. This is the first defaulted object in the
-                # tree, which is why it is pinned by a test.
-                #
-                # A floor *at* min_soc is provably inert — every discharge path
-                # clamps `remaining` to `min_energy_kwh`, so the projected SoC
-                # can never reach min_soc, let alone breach it. Only a margin
-                # strictly above it gives the floor teeth.
-                F.obj(
-                    "self_sustainability",
-                    F.percent("margin_pct", default=5),
-                    default={},
-                ),
             ),
             condition_types=(
                 "run_when",
                 "max_run_price",
                 "min_soc_pct",
                 "min_solar_coverage_pct",
+                # Adjacent, and in this order: the budget, then the floor that
+                # qualifies it. The editor renders condition fields in this
+                # order, and the two are only readable together.
                 "ensure_self_sustainability",
+                "self_sustainability_margin_pct",
             ),
             param_scope=Scope.DAY,
             validate=_validate_appliance_runtime,

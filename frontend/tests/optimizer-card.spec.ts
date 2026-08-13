@@ -67,15 +67,18 @@ const SCHEMA = {
                         default: ["surplus", "tight", "deficit"],
                     },
                 },
-                // A `choices` condition. Every condition used to be a number or
-                // a day-classification set, so the widget renderer fell through
-                // to a numeric input for anything else — which made the first
-                // string-valued condition impossible to fill in at all.
+                // A `choices` condition. The renderer dispatches on `choices`
+                // before type, because a numeric fall-through renders a picker
+                // field as a box its value cannot be typed into. No shipped
+                // condition is string-valued today — `ensure_self_sustainability`
+                // was, until its two words became one number — so the fixture
+                // carries a hypothetical one: the contract belongs to the
+                // renderer, not to whichever key happens to use it.
                 {
-                    key: "ensure_self_sustainability",
+                    key: "run_mode",
                     scope: "run",
                     field: {
-                        key: "ensure_self_sustainability",
+                        key: "run_mode",
                         type: "string",
                         required: false,
                         choices: ["soft", "strict"],
@@ -219,7 +222,7 @@ test.describe("schema-driven optimizer card", () => {
         const card = await openCard(panel);
         const field = card
             .locator(".condition-group-body > .field-grid .field")
-            .filter({ hasText: "Ensure self-sustainability" })
+            .filter({ hasText: "run_mode" })
             .first();
 
         await expect(field.locator("select")).toHaveCount(1);
@@ -233,21 +236,24 @@ test.describe("schema-driven optimizer card", () => {
         ).toEqual(["", "soft", "strict"]);
     });
 
-    test("a choices option is labelled, and falls back to the raw value", async ({
+    test("an untranslated choices option falls back to the raw value", async ({
         page,
     }) => {
+        // The translated path has no live subject: no shipped condition is
+        // string-valued any more, so there is no `editor.choices` entry to hit.
+        // What still matters is that an unknown option renders as itself rather
+        // than as a raw translation key.
         const panel = await mountEditor(page);
         const card = await openCard(panel);
         const field = card
             .locator(".condition-group-body > .field-grid .field")
-            .filter({ hasText: "Ensure self-sustainability" })
+            .filter({ hasText: "run_mode" })
             .first();
 
         const labels = await field
             .locator("select option")
             .evaluateAll((options) => options.map((option) => option.textContent));
-        expect(labels[1]).toContain("Soft");
-        expect(labels[2]).toContain("Strict");
+        expect(labels.slice(1)).toEqual(["soft", "strict"]);
     });
 
     test("a group's override shows the inherited value as a placeholder", async ({
