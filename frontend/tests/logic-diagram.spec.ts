@@ -186,13 +186,16 @@ const SINGLE_GROUP_PAYLOAD = {
                     key: "ensure_self_sustainability",
                     scope: "slot",
                     state: [["true", 1], ["false", 1]],
-                    value: [["strict", 2]],
+                    value: [[0, 2]],
                     // The overflow case, verbatim in shape: a refusal comes
                     // back as an object naming which test failed and with
                     // what, far wider than the block it has to live in.
                     actual: {
                         "1": {
-                            code: "not_solar_neutral",
+                            code: "over_battery_budget",
+                            tolerancePct: 0,
+                            budgetKwh: 0,
+                            spentKwh: 0.72,
                             deltaSocPct: -3.05,
                             deltaImportKwh: 0.42,
                         },
@@ -1461,14 +1464,14 @@ test.describe("a block shows the numbers it was decided by", () => {
             .toContainText("diagram.override_detail");
     });
 
-    test("a self-gating condition shows the level the group configured", async ({ page }) => {
+    test("a self-gating condition shows the value the group configured", async ({ page }) => {
         await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         // 13:00: the node passed, so the record carries no actual at all. The
-        // configured level is what there is to show.
+        // configured budget is what there is to show.
         await selectSlot(page, 0, "appliance_runtime");
         expect(await svgText(diagram(page)
             .locator('g.block[data-key="ensure_self_sustainability"] text.actual')))
-            .toBe("strict");
+            .toBe("0");
     });
 
     test("nothing a block shows escapes the block", async ({ page }) => {
@@ -1626,7 +1629,7 @@ test.describe("the diagram shows the test, not only the result", () => {
     test("a condition that measures nothing gets no reading invented", async ({ page }) => {
         // The self-gating pair resolves by simulation rather than by comparing
         // a number, so it records no reading in either direction. Showing the
-        // configured level alone is the whole of what is known.
+        // configured budget alone is the whole of what is known.
         await mountPanel(page, SINGLE_GROUP_PAYLOAD);
         await selectSlot(page, 0, "appliance_runtime");
 
@@ -1634,7 +1637,7 @@ test.describe("the diagram shows the test, not only the result", () => {
             .locator('g.block[data-key="ensure_self_sustainability"]');
         await expect(block).toHaveAttribute("data-state", "true");
         await expect(block.locator("text.comparison")).toHaveCount(0);
-        expect(await svgText(block.locator("text.actual"))).toBe("strict");
+        expect(await svgText(block.locator("text.actual"))).toBe("0");
     });
 
     test("the two sides read differently, and not by colour alone", async ({ page }) => {
