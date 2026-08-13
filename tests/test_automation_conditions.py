@@ -671,7 +671,7 @@ class GroupExplanationTests(unittest.TestCase):
             kind="appliance_runtime",
             target={"controllable_id": "pool"},
             params={"window": {"start": "00:00", "end": "23:30"}},
-            conditions=[{"run_when": ["tight"], "ensure_self_sustainability": "soft"}],
+            conditions=[{"run_when": ["tight"], "ensure_self_sustainability": 100}],
         )
         explanations = self._explanations(_snapshot(prices=_PRICES), config)
 
@@ -683,7 +683,7 @@ class GroupExplanationTests(unittest.TestCase):
             if node.key == "ensure_self_sustainability"
         )
         self.assertEqual(node.state, "not_evaluated")
-        self.assertEqual(node.value, "soft")
+        self.assertEqual(node.value, 100.0)
 
     def test_condition_scope_is_carried_onto_the_node(self) -> None:
         config = make_optimizer_config(
@@ -852,6 +852,7 @@ class SpecInvariantTests(unittest.TestCase):
                 "min_soc_pct",
                 "min_solar_coverage_pct",
                 "ensure_self_sustainability",
+                "self_sustainability_margin_pct",
             ),
         )
 

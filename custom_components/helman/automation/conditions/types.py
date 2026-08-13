@@ -459,17 +459,35 @@ CONDITION_TYPES: dict[str, ConditionType] = {
         # from there rather than from here — a mask cannot say *which* placement
         # broke the floor.
         #
-        # The level is the condition's value rather than a bool beside a
-        # separate knob: one key, three states (absent / soft / strict), so they
-        # cannot contradict each other.
+        # The budget is the condition's value rather than a bool beside a
+        # separate knob: one key, and absent still means unconstrained.
+        #
+        # **Zero is the strictest setting, not the absent one.** Every reader
+        # must test `is None`, never truthiness — `if not value` would silently
+        # disable the gate for the config that asked for the most.
         ConditionType(
             key="ensure_self_sustainability",
             scope=Scope.RUN,
-            field=F.string(
-                "ensure_self_sustainability",
-                required=False,
-                choices=("soft", "strict"),
-            ),
+            field=F.percent("ensure_self_sustainability", required=False),
+            build_mask=_all_slots_mask,
+            self_gating=True,
+        ),
+        # The floor `ensure_self_sustainability` keeps above the inverter's own
+        # reserve, in percentage points. A condition rather than a param so it
+        # sits beside the budget it qualifies, and so it varies per group with
+        # the policy it belongs to.
+        #
+        # Read by value like `reserve_floor_soc`, never as a mask: it qualifies
+        # the same coupled simulation, so it cannot answer per slot either.
+        #
+        # A floor *at* min_soc is provably inert — every discharge path clamps
+        # `remaining` to `min_energy_kwh`, so the projected SoC can never reach
+        # min_soc, let alone breach it. Only a margin strictly above it gives
+        # the floor teeth, which is what the default is for.
+        ConditionType(
+            key="self_sustainability_margin_pct",
+            scope=Scope.RUN,
+            field=F.percent("self_sustainability_margin_pct", default=5),
             build_mask=_all_slots_mask,
             self_gating=True,
         ),

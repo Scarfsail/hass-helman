@@ -922,5 +922,161 @@ class DeferrableConsumerDerivationTests(unittest.TestCase):
         )
 
 
+class SelfSustainabilityUnificationTests(unittest.TestCase):
+    """v10->v11: the level becomes a budget, and the margin joins the group.
+
+    ``soft``/``strict`` were never two points on one scale — ``soft`` tested the
+    SoC floor, ``strict`` added a per-day balance test — so they collapse onto a
+    budget whose ends reproduce them: ``strict`` is that budget at ``0``,
+    ``soft`` is it switched off at ``100``.
+    """
+
+    @staticmethod
+    def _migrate_from_v10(optimizer):
+        document = {**_document(optimizer), "config_version": 10}
+        migrated, ids = migrate_config_document(document)
+        return migrated["automation"]["optimizers"][0], ids
+
+    @staticmethod
+    def _runtime(*, params=None, conditions):
+        optimizer = {
+            "id": "runtime",
+            "kind": "appliance_runtime",
+            "target": {"controllable_id": "pool"},
+            "conditions": conditions,
+        }
+        if params is not None:
+            optimizer["params"] = params
+        return optimizer
+
+    def test_strict_becomes_a_zero_budget(self) -> None:
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(
+                conditions=[
+                    {"run_when": ALL_DAYS, "ensure_self_sustainability": "strict"}
+                ]
+            )
+        )
+
+        self.assertEqual(
+            migrated["conditions"][0]["ensure_self_sustainability"], 0
+        )
+
+    def test_soft_becomes_an_unbounded_budget(self) -> None:
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(
+                conditions=[
+                    {"run_when": ALL_DAYS, "ensure_self_sustainability": "soft"}
+                ]
+            )
+        )
+
+        self.assertEqual(
+            migrated["conditions"][0]["ensure_self_sustainability"], 100
+        )
+
+    def test_the_master_margin_lands_on_every_group(self) -> None:
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(
+                params={"self_sustainability": {"margin_pct": 12}},
+                conditions=[
+                    {"run_when": ALL_DAYS, "ensure_self_sustainability": "soft"},
+                    {"run_when": ["tight"]},
+                ],
+            )
+        )
+
+        self.assertEqual(
+            [
+                group["self_sustainability_margin_pct"]
+                for group in migrated["conditions"]
+            ],
+            [12, 12],
+        )
+        self.assertNotIn("self_sustainability", migrated["params"])
+
+    def test_a_group_override_beats_the_master(self) -> None:
+        """The override resolved first as a param; it must still resolve first."""
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(
+                params={"self_sustainability": {"margin_pct": 12}},
+                conditions=[
+                    {
+                        "run_when": ALL_DAYS,
+                        "ensure_self_sustainability": "strict",
+                        "params": {"self_sustainability": {"margin_pct": 20}},
+                    }
+                ],
+            )
+        )
+
+        group = migrated["conditions"][0]
+        self.assertEqual(group["self_sustainability_margin_pct"], 20)
+        # The override held nothing else, so it goes rather than lingering as an
+        # empty object the editor would render as "this group overrides params".
+        self.assertNotIn("params", group)
+
+    def test_an_override_keeping_other_params_survives(self) -> None:
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(
+                conditions=[
+                    {
+                        "run_when": ALL_DAYS,
+                        "ensure_self_sustainability": "soft",
+                        "params": {
+                            "self_sustainability": {"margin_pct": 20},
+                            "window": {"start": "09:00", "end": "17:00"},
+                        },
+                    }
+                ],
+            )
+        )
+
+        group = migrated["conditions"][0]
+        self.assertEqual(group["self_sustainability_margin_pct"], 20)
+        self.assertEqual(
+            group["params"], {"window": {"start": "09:00", "end": "17:00"}}
+        )
+
+    def test_a_user_of_the_feature_without_a_margin_gets_the_old_default(self) -> None:
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(
+                conditions=[
+                    {"run_when": ALL_DAYS, "ensure_self_sustainability": "strict"}
+                ]
+            )
+        )
+
+        self.assertEqual(
+            migrated["conditions"][0]["self_sustainability_margin_pct"], 5
+        )
+
+    def test_a_group_that_never_used_the_feature_gets_no_margin_written(self) -> None:
+        """The condition field's default covers it; writing 5 would be noise."""
+        migrated, _ids = self._migrate_from_v10(
+            self._runtime(conditions=[{"run_when": ALL_DAYS}])
+        )
+
+        self.assertEqual(migrated["conditions"][0], {"run_when": ALL_DAYS})
+
+    def test_other_kinds_are_untouched(self) -> None:
+        migrated, _ids = self._migrate_from_v10(
+            {
+                "id": "grid",
+                "kind": "charge_from_grid",
+                "params": {"margin_pct": 10},
+                "conditions": [{"reserve_floor_soc": 30}],
+            }
+        )
+
+        self.assertEqual(migrated["params"], {"margin_pct": 10})
+        self.assertEqual(migrated["conditions"][0], {"reserve_floor_soc": 30})
+
+    def test_migrating_to_the_current_version_covers_this_step(self) -> None:
+        migrated, _ids = migrate_config_document(_document())
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 11)
+
+
 if __name__ == "__main__":
     unittest.main()
