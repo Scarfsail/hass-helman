@@ -453,7 +453,10 @@
         "baselineMinSoc": "minimum SoC bez spotřebiče (%)",
         "atSlot": "kdy",
         "deltaSocPct": "rozdíl SoC na konci dne (%)",
-        "deltaImportKwh": "nákup ze sítě navíc (kWh)"
+        "deltaImportKwh": "nákup ze sítě navíc (kWh)",
+        "tolerancePct": "denní tolerance (% kapacity)",
+        "budgetKwh": "denní limit (kWh)",
+        "spentKwh": "spotřebováno mimo slunce (kWh)"
       },
       "status": {
         "skipped": "Přeskočeno",
@@ -506,16 +509,12 @@
         "slot_available": "Slot, se kterým optimalizátor vůbec může počítat — sloty nastavené uživatelem se vyřazují ještě před výběrem, takže se do nich neplánuje.",
         "daily_minimum_remaining": "Kolik hodin denního minima je za tímto slotem: co spotřebič dnes už odběhl podle měřené historie plus to, co má plán naplánováno před tímto slotem. Samotné rozhodnutí padlo jednou pro celý den — brána říká, že den ještě nějaké hodiny dlužil, a podle toho se vybral počet slotů.",
         "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot. U držení nabíjení je to obráceně: splněno = slot v žebříčku neuspěl, levnější sloty už potřebu pokryjí a přebytek se tady vyplatí spíš prodat.",
-        "ensure_self_sustainability": "Co běh spotřebiče udělá s baterií: horizont se přepočítá s tímto slotem navíc a porovná se s průběhem bez spotřebiče. Měkký režim hlídá jen podlahu SoC, přísný navíc chce, aby se den zaplatil sám. Vyhodnocuje se postupně v pořadí podle ceny, takže výsledek závisí i na tom, které sloty byly přijaty před tímto."
+        "ensure_self_sustainability": "Co běh spotřebiče udělá s baterií: horizont se přepočítá s tímto slotem navíc a porovná se s průběhem bez spotřebiče. Nastavené číslo je denní limit energie, kterou nedodalo slunce — vybitá baterie i nákup ze sítě se sčítají. 0 znamená, že se den musí zaplatit sám, 100 limit vypíná a hlídá se jen podlaha SoC. Vyhodnocuje se postupně v pořadí podle ceny, takže výsledek závisí i na tom, které sloty byly přijaty před tímto."
       },
       "self_sustainability": {
         "would_break_soc_floor": "S tímto slotem by baterie klesla pod nastavenou podlahu",
         "soc_floor_already_breached": "Baterie klesá pod podlahu i bez spotřebiče, takže se nepřidává nic dalšího — příčinou není tento spotřebič",
-        "not_solar_neutral": "Přísný režim: den se musí zaplatit sám. S tímto slotem by baterie skončila den níž nebo by se navíc nakoupilo ze sítě (tolerance 0,5 % a 0,05 kWh)",
-        "level": {
-          "soft": "měkký",
-          "strict": "přísný"
-        }
+        "over_battery_budget": "S tímto slotem by den spotřeboval víc energie mimo slunce, než dovoluje denní limit — započítá se jak baterie, která by den skončila níž, tak nákup ze sítě navíc"
       }
     }
   },

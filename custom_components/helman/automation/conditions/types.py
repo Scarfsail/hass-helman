@@ -109,6 +109,12 @@ class ConditionType:
     #: actuals to report. Call through :func:`evaluate_mask`, never directly.
     build_mask: Callable[[MaskInputs], "frozenset[str] | MaskResult"]
     self_gating: bool = False
+    #: This entry configures *another* condition's test rather than being one.
+    #: It admits every slot, resolves nothing, and gets no node in the
+    #: explanation — a block that could only ever read "not evaluated" is noise
+    #: on every group that carries the default. It lives among the conditions
+    #: because that is where the knob it qualifies lives, not because it gates.
+    qualifier: bool = False
     #: Localization key for the condition's human label, used by the explanation
     #: UI. Defaults to ``automation.condition.<key>``; a field rather than a
     #: derived property so a type can point elsewhere without a special case.
@@ -477,8 +483,11 @@ CONDITION_TYPES: dict[str, ConditionType] = {
         # sits beside the budget it qualifies, and so it varies per group with
         # the policy it belongs to.
         #
-        # Read by value like `reserve_floor_soc`, never as a mask: it qualifies
-        # the same coupled simulation, so it cannot answer per slot either.
+        # A *qualifier*, not a gate: it never admits or refuses a slot on its
+        # own, it moves the floor the budget's own test compares against. So it
+        # draws no block — `ensure_self_sustainability` reports the refusal, and
+        # a second block reading "not evaluated" beside it, on every group,
+        # would say nothing.
         #
         # A floor *at* min_soc is provably inert — every discharge path clamps
         # `remaining` to `min_energy_kwh`, so the projected SoC can never reach
@@ -489,7 +498,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.RUN,
             field=F.percent("self_sustainability_margin_pct", default=5),
             build_mask=_all_slots_mask,
-            self_gating=True,
+            qualifier=True,
         ),
         # Self-gating: `charge_from_grid` conditions on the SoC dip over the
         # *expensive* band but writes into the *preceding cheap* band, so a mask

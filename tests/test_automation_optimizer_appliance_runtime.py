@@ -2491,6 +2491,18 @@ class UncappedValidationTests(unittest.TestCase):
                 groups=[{"ensure_self_sustainability": 100}],
             )
 
+    def test_the_margin_alone_does_not_narrow_the_horizon(self) -> None:
+        """It is a qualifier, and a defaulted one.
+
+        Counting it would satisfy the rule for every group ever written, since
+        the field fills itself in — the check would stop firing entirely.
+        """
+        with self.assertRaises(AutomationConfigError):
+            _uncapped_config(
+                appliance_id="pool-pump",
+                groups=[{"self_sustainability_margin_pct": 20}],
+            )
+
     def test_a_solar_coverage_floor_is_enough(self) -> None:
         # It gates slots, so it narrows the horizon like any other condition.
         _uncapped_config(

@@ -136,10 +136,13 @@ def _validate_appliance_runtime(
     # all-classifications default, so it only counts when it is narrower than
     # that — otherwise the check could never fire. A self-gating condition
     # contributes an all-true mask *by definition*, so it narrows nothing either
-    # and must not be allowed to satisfy the rule on its own.
+    # and must not be allowed to satisfy the rule on its own; a qualifier is not
+    # a test at all, and carries a default, so it would satisfy the rule for
+    # every group ever written.
     if daily_minimum is None and condition_values is not None and not window:
         narrows = any(
             not CONDITION_TYPES[key].self_gating
+            and not CONDITION_TYPES[key].qualifier
             and (key != "run_when" or set(value) != set(DAY_CLASSIFICATIONS))
             for key, value in condition_values.items()
         )
