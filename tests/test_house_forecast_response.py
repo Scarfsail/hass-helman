@@ -178,7 +178,6 @@ def _make_canonical_snapshot() -> dict:
         "configFingerprint": "abc123",
         "sourceGranularityMinutes": 15,
         "forecastDaysAvailable": 1,
-        "alignmentPaddingSlots": 3,
         "currentSlot": current_slot,
         "actualHistory": actual_history,
         "series": series,

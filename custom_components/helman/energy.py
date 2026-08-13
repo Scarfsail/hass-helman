@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -40,34 +41,46 @@ async def async_get_solar_forecast(
 
 
 def _to_hourly(points: Any) -> list[tuple[str, float]]:
-    """Sum the canonical points into whole hours, dropping a partial tail.
+    """Sum the canonical points into whole hours, keyed by the hour they fall in.
 
-    A trailing group short of a full hour would report an hour's production
-    from part of one, so it is left out rather than understated. Malformed
-    points are skipped rather than raised on, which is what the aggregation
-    this replaced did when it read its input.
+    Grouped by each point's own hour rather than by position, so a series that
+    starts off the hour or has a gap cannot produce a bucket that straddles two
+    hours while being labelled as one. An hour missing any of its slots is left
+    out rather than reported short.
+
+    Malformed points are skipped rather than raised on: the pipeline this
+    replaces dropped them in ``_read_points`` before it ever aggregated, and a
+    single bad point should not take the Energy dashboard down with it.
     """
     if not isinstance(points, list):
         return []
-    usable = [
-        (timestamp, float(value))
-        for point in points
-        if isinstance(point, dict)
-        and isinstance(timestamp := point.get("timestamp"), str)
-        and not isinstance(value := point.get("value"), bool)
-        and isinstance(value, (int, float))
-    ]
-    complete_length = len(usable) - (len(usable) % _CANONICAL_SLOTS_PER_HOUR)
+
+    by_hour: dict[str, list[float]] = {}
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        timestamp = point.get("timestamp")
+        value = point.get("value")
+        if not isinstance(timestamp, str) or isinstance(value, bool):
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        hour_start = _floor_to_hour(timestamp)
+        if hour_start is None:
+            continue
+        by_hour.setdefault(hour_start, []).append(float(value))
+
     return [
-        (
-            usable[start][0],
-            round(
-                sum(
-                    value
-                    for _, value in usable[start : start + _CANONICAL_SLOTS_PER_HOUR]
-                ),
-                4,
-            ),
-        )
-        for start in range(0, complete_length, _CANONICAL_SLOTS_PER_HOUR)
+        (hour_start, round(sum(values), 4))
+        for hour_start, values in by_hour.items()
+        if len(values) == _CANONICAL_SLOTS_PER_HOUR
     ]
+
+
+def _floor_to_hour(timestamp: str) -> str | None:
+    """``timestamp`` floored to its own hour, in the form the dashboard keys on."""
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return None
+    return parsed.replace(minute=0, second=0, microsecond=0).isoformat()

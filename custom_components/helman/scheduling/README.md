@@ -45,10 +45,6 @@ Not implemented yet:
 
 The only slot-duration setting is `SCHEDULE_SLOT_MINUTES` in `custom_components/helman/const.py`.
 
-Technical constraint:
-
-- `SCHEDULE_SLOT_MINUTES` must be a positive divisor of `60`
-
 Persistence behavior:
 
 - persisted schedule documents store the slot duration that was active when they were written

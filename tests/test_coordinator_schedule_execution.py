@@ -675,9 +675,39 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_normalize_schedule_document_resets_incompatible_slot_minutes(
         self,
     ) -> None:
+        """The slots go; the execution switch is a preference and survives.
+
+        Dropping it would silently stop the automation on the first startup
+        after a slot-duration change.
+        """
         coordinator, storage, _ = self._build_coordinator(
             schedule_document={
                 "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES * 2,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+
+        with self.assertLogs("custom_components.helman.coordinator", level="WARNING"):
+            await coordinator._async_normalize_schedule_document()
+
+        self.assertEqual(
+            storage.schedule_document,
+            {
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+        )
+
+    async def test_normalize_schedule_document_keeps_execution_off_when_it_was_off(
+        self,
+    ) -> None:
+        coordinator, storage, _ = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES * 2,
                 "slots": {
                     CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),

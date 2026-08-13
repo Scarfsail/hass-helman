@@ -141,6 +141,48 @@ class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
             {"wh_hours": {"2026-04-29T10:00:00+02:00": 900.5}},
         )
 
+    async def test_an_hour_missing_slots_is_dropped_rather_than_reported_short(self) -> None:
+        """A series starting mid-hour must not label a partial sum as an hour.
+
+        Grouping by position would have summed 10:15-11:00 and keyed it 10:15;
+        grouping by each point's own hour drops that hour and keeps the whole
+        one after it.
+        """
+        coordinator = _FakeCoordinator(
+            {
+                "solar": {
+                    "points": [
+                        {"timestamp": "2026-04-29T10:15:00+02:00", "value": 100.0},
+                        {"timestamp": "2026-04-29T10:30:00+02:00", "value": 100.0},
+                        {"timestamp": "2026-04-29T10:45:00+02:00", "value": 100.0},
+                        {"timestamp": "2026-04-29T11:00:00+02:00", "value": 25.0},
+                        {"timestamp": "2026-04-29T11:15:00+02:00", "value": 25.0},
+                        {"timestamp": "2026-04-29T11:30:00+02:00", "value": 25.0},
+                        {"timestamp": "2026-04-29T11:45:00+02:00", "value": 25.0},
+                    ],
+                },
+            }
+        )
+        entry = _FakeConfigEntry("entry-1", "helman")
+        hass = _FakeHass(coordinator, {"entry-1": entry})
+
+        result = await self.energy.async_get_solar_forecast(hass, "entry-1")
+
+        self.assertEqual(
+            result,
+            {"wh_hours": {"2026-04-29T11:00:00+02:00": 100.0}},
+        )
+
+    async def test_every_key_is_the_start_of_its_own_hour(self) -> None:
+        coordinator = _FakeCoordinator()
+        entry = _FakeConfigEntry("entry-1", "helman")
+        hass = _FakeHass(coordinator, {"entry-1": entry})
+
+        result = await self.energy.async_get_solar_forecast(hass, "entry-1")
+
+        for timestamp in result["wh_hours"]:
+            self.assertTrue(timestamp.endswith(":00:00+02:00"), timestamp)
+
     async def test_get_solar_forecast_returns_none_for_unknown_entry(self) -> None:
         coordinator = _FakeCoordinator()
         hass = _FakeHass(coordinator, {})

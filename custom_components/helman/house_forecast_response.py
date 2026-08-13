@@ -14,7 +14,6 @@ from .const import (
 _INTERNAL_SNAPSHOT_FIELDS = {
     "sourceGranularityMinutes",
     "forecastDaysAvailable",
-    "alignmentPaddingSlots",
 }
 
 

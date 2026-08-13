@@ -35,9 +35,6 @@ def _make_matching_house_snapshot(
             coordinator_module.FORECAST_CANONICAL_GRANULARITY_MINUTES
         ),
         "forecastDaysAvailable": coordinator_module.MAX_FORECAST_DAYS,
-        "alignmentPaddingSlots": (
-            coordinator_module.ConsumptionForecastBuilder._MAX_ALIGNMENT_PADDING_SLOTS
-        ),
     }
 
 

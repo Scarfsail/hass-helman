@@ -1658,12 +1658,23 @@ class HelmanCoordinator:
                 appliances_registry=self._appliances_registry,
             )
         except ScheduleError as err:
+            # The slots are what became incompatible; whether the user had
+            # execution switched on is a preference, not slot data, and losing
+            # it would silently stop the automation after an upgrade.
+            execution_enabled = (
+                raw_document.get("executionEnabled")
+                if isinstance(raw_document, Mapping)
+                else None
+            )
             _LOGGER.warning(
-                "Resetting persisted schedule data because it is invalid or "
-                "does not match the configured slot duration: %s",
+                "Resetting persisted schedule slots because they are invalid or "
+                "do not match the configured slot duration (execution stays %s): %s",
+                "on" if execution_enabled is True else "off",
                 err,
             )
-            await self._save_schedule_document(ScheduleDocument())
+            await self._save_schedule_document(
+                ScheduleDocument(execution_enabled=execution_enabled is True)
+            )
             return
 
         if schedule_document_to_dict(schedule_document) != raw_document:
@@ -2493,14 +2504,14 @@ class HelmanCoordinator:
         if solar_forecast is None:
             solar_forecast = build_solar_forecast_response(
                 raw_forecast["solar"],
-                    forecast_days=MAX_FORECAST_DAYS,
+                forecast_days=MAX_FORECAST_DAYS,
             )
         return AutomationInputBundle(
             original_house_forecast=deepcopy(house_forecast),
             solar_forecast=_build_corrected_solar_forecast_view(solar_forecast),
             grid_price_forecast=build_grid_price_forecast_response(
                 raw_forecast["grid"],
-                    forecast_days=MAX_FORECAST_DAYS,
+                forecast_days=MAX_FORECAST_DAYS,
             ),
             when_active_hourly_energy_kwh_by_appliance_id=(
                 self._resolve_when_active_hourly_energy_kwh_by_appliance_id()

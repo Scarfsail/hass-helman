@@ -335,8 +335,8 @@ export class HelmanSolarDayPills extends LitElement {
         const scheduleChanged = snapshot.schedule !== this._ownerSnapshot.schedule;
         this._ownerSnapshot = snapshot;
         if (scheduleChanged && snapshot.schedule !== null) {
-            // The forecast is what fills the gauges, and it is only requestable
-            // once the schedule has told us its granularity and horizon.
+            // The forecast is what fills the gauges, and there is nothing to
+            // draw it against until the schedule has slots.
             void this._loadForecast();
         }
     }
