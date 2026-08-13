@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..point_forecast_response import build_solar_forecast_response
 from .models import SolarBiasAdjustmentResult
 
 
@@ -44,20 +43,3 @@ def build_bias_correction_payload(
         "explainability": explainability_payload,
     }
 
-
-def compose_solar_bias_response(
-    raw_snapshot: dict[str, Any],
-    adjustment_result: SolarBiasAdjustmentResult,
-    forecast_days: int,
-) -> dict[str, Any]:
-    response = build_solar_forecast_response(
-        raw_snapshot,
-        forecast_days=forecast_days,
-        corrected_points=(
-            adjustment_result.adjusted_points
-            if adjustment_result.effective_variant == "adjusted"
-            else None
-        ),
-    )
-    response["biasCorrection"] = build_bias_correction_payload(adjustment_result)
-    return response

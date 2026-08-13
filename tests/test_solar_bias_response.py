@@ -562,28 +562,14 @@ class SolarBiasResponseTests(unittest.TestCase):
             "custom_components.helman.solar_bias_correction.models"
         )
 
-    def test_compose_response_keeps_raw_points_and_adds_adjusted_points(self) -> None:
+    def test_payload_reports_an_applied_correction_with_its_explainability(self) -> None:
+        """The shape the card reads off ``solar.biasCorrection``."""
         response_module = self._import_response_module()
         models = self._import_models_module()
-        raw_snapshot = {
-            "status": "available",
-            "unit": "Wh",
-            "remainingTodayEnergyEntityId": "sensor.remaining_today_energy",
-            "points": [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 400.0},
-                {"timestamp": "2026-03-20T22:00:00+01:00", "value": 800.0},
-            ],
-            "actualHistory": [
-                {"timestamp": "2026-03-20T20:00:00+01:00", "value": 200.0},
-            ],
-        }
         adjustment_result = models.SolarBiasAdjustmentResult(
             status="applied",
             effective_variant="adjusted",
-            adjusted_points=[
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 600.0},
-                {"timestamp": "2026-03-20T22:00:00+01:00", "value": 200.0},
-            ],
+            adjusted_points=[],
             explainability=models.SolarBiasExplainability(
                 fallback_reason=None,
                 trained_at="2026-03-20T03:00:00+01:00",
@@ -597,25 +583,10 @@ class SolarBiasResponseTests(unittest.TestCase):
             ),
         )
 
-        response = response_module.compose_solar_bias_response(
-            raw_snapshot,
-            adjustment_result,
-            forecast_days=1,
-        )
+        payload = response_module.build_bias_correction_payload(adjustment_result)
 
         self.assertEqual(
-            [point["value"] for point in response["points"]],
-            [100.0] * 4 + [200.0] * 4,
-        )
-        self.assertEqual(
-            response["points"][1]["timestamp"], "2026-03-20T21:15:00+01:00"
-        )
-        self.assertEqual(
-            [point["value"] for point in response["adjustedPoints"]],
-            [150.0] * 4 + [50.0] * 4,
-        )
-        self.assertEqual(
-            response["biasCorrection"],
+            payload,
             {
                 "status": "applied",
                 "effectiveVariant": "adjusted",
@@ -633,22 +604,16 @@ class SolarBiasResponseTests(unittest.TestCase):
                 },
             },
         )
-    def test_compose_response_mirrors_raw_points_for_raw_variant_and_surfaces_fallback_reason(self) -> None:
+
+    def test_payload_surfaces_the_fallback_reason_and_error_when_training_failed(
+        self,
+    ) -> None:
         response_module = self._import_response_module()
         models = self._import_models_module()
-        raw_snapshot = {
-            "status": "available",
-            "unit": "Wh",
-            "points": [
-                {"timestamp": "2026-03-20T21:00:00+01:00", "value": 400.0},
-                {"timestamp": "2026-03-20T22:00:00+01:00", "value": 800.0},
-            ],
-            "actualHistory": [],
-        }
         adjustment_result = models.SolarBiasAdjustmentResult(
             status="training_failed",
             effective_variant="raw",
-            adjusted_points=deepcopy(raw_snapshot["points"]),
+            adjusted_points=[],
             explainability=models.SolarBiasExplainability(
                 fallback_reason="profile_unavailable",
                 trained_at="2026-03-20T03:00:00+01:00",
@@ -662,23 +627,62 @@ class SolarBiasResponseTests(unittest.TestCase):
             ),
         )
 
-        response = response_module.compose_solar_bias_response(
-            raw_snapshot,
-            adjustment_result,
-            forecast_days=1,
+        payload = response_module.build_bias_correction_payload(adjustment_result)
+
+        self.assertEqual(payload["status"], "training_failed")
+        self.assertEqual(payload["effectiveVariant"], "raw")
+        self.assertEqual(
+            payload["explainability"]["fallbackReason"], "profile_unavailable"
+        )
+        self.assertEqual(payload["explainability"]["error"], "boom")
+
+    def test_payload_omits_error_when_there_was_none(self) -> None:
+        """``error`` is only present when there is one to report."""
+        response_module = self._import_response_module()
+        models = self._import_models_module()
+        adjustment_result = models.SolarBiasAdjustmentResult(
+            status="applied",
+            effective_variant="adjusted",
+            adjusted_points=[],
+            explainability=models.SolarBiasExplainability(
+                fallback_reason=None,
+                trained_at=None,
+                usable_days=1,
+                dropped_days=0,
+                omitted_slot_count=0,
+                factor_min=None,
+                factor_max=None,
+                factor_median=None,
+                error=None,
+            ),
         )
 
-        self.assertNotIn("adjustedPoints", response)
-        self.assertEqual(response["biasCorrection"]["status"], "training_failed")
-        self.assertEqual(response["biasCorrection"]["effectiveVariant"], "raw")
-        self.assertNotIn("rawPoints", response)
-        self.assertEqual(
-            response["biasCorrection"]["explainability"]["fallbackReason"],
-            "profile_unavailable",
+        payload = response_module.build_bias_correction_payload(adjustment_result)
+
+        self.assertNotIn("error", payload["explainability"])
+
+    def test_payload_falls_back_to_zeroes_without_explainability(self) -> None:
+        response_module = self._import_response_module()
+        models = self._import_models_module()
+        adjustment_result = models.SolarBiasAdjustmentResult(
+            status="unavailable",
+            effective_variant="raw",
+            adjusted_points=[],
+            explainability=None,
         )
+
+        payload = response_module.build_bias_correction_payload(adjustment_result)
+
         self.assertEqual(
-            response["biasCorrection"]["explainability"]["error"],
-            "boom",
+            payload["explainability"],
+            {
+                "fallbackReason": None,
+                "trainedAt": None,
+                "usableDays": 0,
+                "droppedDays": 0,
+                "omittedSlotCount": 0,
+                "factorSummary": {"min": None, "max": None, "median": None},
+            },
         )
 
 
