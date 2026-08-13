@@ -200,6 +200,23 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
+            }
+        }
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+
+    def test_slot_invalidation_accepts_a_document_still_carrying_the_retired_key(
+        self,
+    ) -> None:
+        """Curtailment stopped reading `export_enabled_entity_id` (issue #71).
+        A stored document that still carries it must load, not error — the load
+        migration is what removes it."""
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "slot_invalidation": {
+                "max_battery_soc_percent": 87,
                 "export_enabled_entity_id": "switch.export_enabled",
             }
         }
@@ -208,30 +225,9 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
         self.assertTrue(report.valid)
 
-    def test_slot_invalidation_rejects_partial_config_when_soc_missing(self) -> None:
+    def test_slot_invalidation_requires_grid_power_entity(self) -> None:
         config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "slot_invalidation": {
-                "export_enabled_entity_id": "switch.export_enabled",
-            }
-        }
-
-        report = validate_config_document(config)
-
-        self.assertFalse(report.valid)
-        self.assertTrue(
-            any(
-                issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation"
-                and issue.code == "incomplete_slot_invalidation"
-                for issue in report.errors
-            )
-        )
-
-    def test_slot_invalidation_rejects_partial_config_when_export_entity_missing(
-        self,
-    ) -> None:
-        config = _valid_config()
+        config["power_devices"]["grid"]["entities"]["power"] = "   "
         config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
@@ -244,8 +240,50 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation"
-                and issue.code == "incomplete_slot_invalidation"
+                == "power_devices.solar.forecast.bias_correction.slot_invalidation.max_battery_soc_percent"
+                and issue.code == "missing_prerequisite"
+                for issue in report.errors
+            )
+        )
+
+    def test_slot_invalidation_rejects_ratio_above_one(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "slot_invalidation": {
+                "max_battery_soc_percent": 87,
+                "curtailment_max_actual_forecast_ratio": 1.5,
+            }
+        }
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path
+                == "power_devices.solar.forecast.bias_correction.slot_invalidation.curtailment_max_actual_forecast_ratio"
+                and issue.code == "invalid_range"
+                for issue in report.errors
+            )
+        )
+
+    def test_slot_invalidation_rejects_negative_export_deadband(self) -> None:
+        config = _valid_config()
+        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
+            "slot_invalidation": {
+                "max_battery_soc_percent": 87,
+                "curtailment_max_export_w": -5,
+            }
+        }
+
+        report = validate_config_document(config)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(
+            any(
+                issue.path
+                == "power_devices.solar.forecast.bias_correction.slot_invalidation.curtailment_max_export_w"
+                and issue.code == "invalid_range"
                 for issue in report.errors
             )
         )
@@ -255,7 +293,6 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": True,
-                "export_enabled_entity_id": "switch.export_enabled",
             }
         }
 
@@ -276,7 +313,6 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 0,
-                "export_enabled_entity_id": "switch.export_enabled",
             }
         }
 
@@ -292,34 +328,12 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
             )
         )
 
-    def test_slot_invalidation_rejects_malformed_export_enabled_entity_id(self) -> None:
-        config = _valid_config()
-        config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
-            "slot_invalidation": {
-                "max_battery_soc_percent": 87,
-                "export_enabled_entity_id": "bad entity id",
-            }
-        }
-
-        report = validate_config_document(config)
-
-        self.assertFalse(report.valid)
-        self.assertTrue(
-            any(
-                issue.path
-                == "power_devices.solar.forecast.bias_correction.slot_invalidation.export_enabled_entity_id"
-                and issue.code == "invalid_entity_id"
-                for issue in report.errors
-            )
-        )
-
     def test_slot_invalidation_requires_battery_capacity_entity(self) -> None:
         config = _valid_config()
         config["power_devices"]["battery"]["entities"]["capacity"] = "   "
         config["power_devices"]["solar"]["forecast"]["bias_correction"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
-                "export_enabled_entity_id": "switch.export_enabled",
             }
         }
 

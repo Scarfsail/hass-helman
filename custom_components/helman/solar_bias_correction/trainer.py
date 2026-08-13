@@ -22,7 +22,7 @@ _DAY_RATIO_MIN = 0.05
 _DAY_RATIO_MAX = 5.0
 _SLOT_FORECAST_SUM_FLOOR_WH = 50.0
 _ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
-_ALGORITHM_VERSION = "configurable_aggregation_v1+15min_v1"
+_ALGORITHM_VERSION = "configurable_aggregation_v1+15min_v1+curtailment_inference_v1"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -41,8 +41,10 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
         f"aggregation_method={cfg.aggregation_method};"
         "slot_invalidation_max_battery_soc_percent="
         f"{cfg.slot_invalidation_max_battery_soc_percent};"
-        "slot_invalidation_export_enabled_entity_id="
-        f"{cfg.slot_invalidation_export_enabled_entity_id};"
+        "slot_invalidation_curtailment_max_export_w="
+        f"{cfg.slot_invalidation_curtailment_max_export_w};"
+        "slot_invalidation_curtailment_max_actual_forecast_ratio="
+        f"{cfg.slot_invalidation_curtailment_max_actual_forecast_ratio};"
         "slot_invalidation_data_glitch_max_slot_wh="
         f"{cfg.slot_invalidation_data_glitch_max_slot_wh};"
         "slot_invalidation_data_glitch_min_neighbour_forecast_wh="

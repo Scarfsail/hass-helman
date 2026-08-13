@@ -363,13 +363,19 @@ def test_fingerprint_depends_on_slot_invalidation_config():
     cfg1 = make_cfg()
     cfg2 = make_cfg()
     cfg2.slot_invalidation_max_battery_soc_percent = 97.0
-    cfg2.slot_invalidation_export_enabled_entity_id = "binary_sensor.export_enabled"
     cfg3 = make_cfg()
     cfg3.slot_invalidation_max_battery_soc_percent = 95.0
-    cfg3.slot_invalidation_export_enabled_entity_id = "binary_sensor.export_enabled"
+    cfg4 = make_cfg()
+    cfg4.slot_invalidation_max_battery_soc_percent = 97.0
+    cfg4.slot_invalidation_curtailment_max_export_w = 150.0
+    cfg5 = make_cfg()
+    cfg5.slot_invalidation_max_battery_soc_percent = 97.0
+    cfg5.slot_invalidation_curtailment_max_actual_forecast_ratio = 0.5
 
     assert trainer.compute_fingerprint(cfg1) != trainer.compute_fingerprint(cfg2)
     assert trainer.compute_fingerprint(cfg2) != trainer.compute_fingerprint(cfg3)
+    assert trainer.compute_fingerprint(cfg2) != trainer.compute_fingerprint(cfg4)
+    assert trainer.compute_fingerprint(cfg2) != trainer.compute_fingerprint(cfg5)
 
 
 def test_fingerprint_format():
@@ -402,7 +408,7 @@ def test_compute_fingerprint_includes_algorithm_version():
     fp = trainer.compute_fingerprint(cfg)
     assert fp.startswith("sha256:")
     expected_payload = (
-        "algo=configurable_aggregation_v1+15min_v1;"
+        "algo=configurable_aggregation_v1+15min_v1+curtailment_inference_v1;"
         f"min_history_days={cfg.min_history_days};"
         f"clamp_min={cfg.clamp_min};"
         f"clamp_max={cfg.clamp_max};"
@@ -410,8 +416,10 @@ def test_compute_fingerprint_includes_algorithm_version():
         f"aggregation_method={cfg.aggregation_method};"
         "slot_invalidation_max_battery_soc_percent="
         f"{cfg.slot_invalidation_max_battery_soc_percent};"
-        "slot_invalidation_export_enabled_entity_id="
-        f"{cfg.slot_invalidation_export_enabled_entity_id};"
+        "slot_invalidation_curtailment_max_export_w="
+        f"{cfg.slot_invalidation_curtailment_max_export_w};"
+        "slot_invalidation_curtailment_max_actual_forecast_ratio="
+        f"{cfg.slot_invalidation_curtailment_max_actual_forecast_ratio};"
         "slot_invalidation_data_glitch_max_slot_wh="
         f"{cfg.slot_invalidation_data_glitch_max_slot_wh};"
         "slot_invalidation_data_glitch_min_neighbour_forecast_wh="

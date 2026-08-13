@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
 import logging
 from typing import Any
@@ -160,17 +159,34 @@ async def _load_invalidated_slots_for_window(
     if not forecast_slot_starts_by_date:
         return {}
 
-    curtailment = await _load_curtailment_invalidations(
-        hass,
-        cfg,
-        forecast_slot_starts_by_date,
-        slot_keys_by_date,
-    )
-    data_glitch = await _load_data_glitch_invalidations(
+    # Resolved before anything is read: a curtailment run that cannot resolve
+    # its entities needs no forecast window either.
+    curtailment_entities = _resolve_curtailment_entities(hass, cfg)
+
+    # Both layers test actuals against the forecast as it was published at the
+    # start of each day, so the window is read once and shared.
+    forecast_slot_wh_by_date = await _load_historical_forecast_window(
         hass,
         cfg,
         slot_actuals_by_date,
         local_now=local_now,
+        curtailment_entities=curtailment_entities,
+    )
+
+    curtailment = await _load_curtailment_invalidations(
+        hass,
+        cfg,
+        curtailment_entities,
+        slot_actuals_by_date,
+        forecast_slot_wh_by_date,
+        forecast_slot_starts_by_date,
+        slot_keys_by_date,
+    )
+    data_glitch = _load_data_glitch_invalidations(
+        hass,
+        cfg,
+        slot_actuals_by_date,
+        forecast_slot_wh_by_date,
     )
     return _union_invalidations(curtailment, data_glitch)
 
@@ -187,21 +203,91 @@ def _union_invalidations(
     return merged
 
 
-async def _load_curtailment_invalidations(
+def _resolve_curtailment_entities(
     hass: HomeAssistant,
     cfg: BiasConfig,
-    forecast_slot_starts_by_date: dict[str, list[datetime]],
-    slot_keys_by_date: dict[str, list[str]],
-) -> dict[str, set[str]]:
-    max_battery_soc_percent = cfg.slot_invalidation_max_battery_soc_percent
-    export_entity_id = _read_entity_id(cfg.slot_invalidation_export_enabled_entity_id)
-    if max_battery_soc_percent is None or export_entity_id is None:
-        return {}
+) -> tuple[str, str] | None:
+    """``(battery SoC entity, grid power entity)`` when curtailment can run.
+
+    None when the SoC threshold is unset — the rule is off — or when either
+    sensor is missing from the runtime config, which is worth a warning: the
+    user asked for curtailment invalidation and is not getting it.
+    """
+    if cfg.slot_invalidation_max_battery_soc_percent is None:
+        return None
 
     soc_entity_id = _read_battery_soc_entity_id_from_runtime_config(hass)
     if soc_entity_id is None:
         _LOGGER.warning(
             "Solar bias slot invalidation is configured, but power_devices.battery.entities.capacity is unavailable at runtime; skipping curtailment invalidation for this training window"
+        )
+        return None
+
+    grid_power_entity_id = _read_grid_power_entity_id_from_runtime_config(hass)
+    if grid_power_entity_id is None:
+        _LOGGER.warning(
+            "Solar bias slot invalidation is configured, but power_devices.grid.entities.power is unavailable at runtime; skipping curtailment invalidation for this training window"
+        )
+        return None
+
+    return (soc_entity_id, grid_power_entity_id)
+
+
+async def _load_historical_forecast_window(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    slot_actuals_by_date: dict[str, dict[str, float]],
+    *,
+    local_now: datetime,
+    curtailment_entities: tuple[str, str] | None,
+) -> dict[str, dict[str, float]]:
+    """Per-slot forecast as published at the start of each day in the window.
+
+    Read only when a rule actually needs it: curtailment's underdelivery test
+    and the data-glitch zero-with-neighbour rule. Neither on means one recorder
+    query per training day for nothing.
+    """
+    needed = (
+        curtailment_entities is not None
+        or cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh > 0
+    )
+    if not needed:
+        return {}
+
+    forecast_slot_wh_by_date: dict[str, dict[str, float]] = {}
+    for day in sorted(slot_actuals_by_date):
+        try:
+            target_date = date.fromisoformat(day)
+        except ValueError:
+            continue
+        day_forecast = await load_historical_per_slot_forecast(
+            hass,
+            cfg,
+            target_date,
+            local_now=local_now,
+        )
+        if day_forecast:
+            forecast_slot_wh_by_date[day] = day_forecast
+    return forecast_slot_wh_by_date
+
+
+async def _load_curtailment_invalidations(
+    hass: HomeAssistant,
+    cfg: BiasConfig,
+    curtailment_entities: tuple[str, str] | None,
+    slot_actuals_by_date: dict[str, dict[str, float]],
+    forecast_slot_wh_by_date: dict[str, dict[str, float]],
+    forecast_slot_starts_by_date: dict[str, list[datetime]],
+    slot_keys_by_date: dict[str, list[str]],
+) -> dict[str, set[str]]:
+    max_battery_soc_percent = cfg.slot_invalidation_max_battery_soc_percent
+    if curtailment_entities is None or max_battery_soc_percent is None:
+        return {}
+    soc_entity_id, grid_power_entity_id = curtailment_entities
+
+    if not forecast_slot_wh_by_date:
+        _LOGGER.warning(
+            "Solar bias slot invalidation is configured, but no historical per-slot forecast is available for the training window; curtailment invalidation cannot tell clipping from a cloudy slot and is skipped"
         )
         return {}
 
@@ -219,32 +305,35 @@ async def _load_curtailment_invalidations(
         soc_entity_id,
         window_start_utc,
         window_end_utc,
-        parser=_parse_numeric_state_value,
     )
-    export_samples_utc = await _load_state_samples_for_entity(
+    grid_power_samples_utc = await _load_state_samples_for_entity(
         hass,
-        export_entity_id,
+        grid_power_entity_id,
         window_start_utc,
         window_end_utc,
-        parser=_parse_bool_state_value,
     )
     return compute_invalidated_slots_for_window(
         InvalidationInputs(
             max_battery_soc_percent=max_battery_soc_percent,
+            max_export_w=cfg.slot_invalidation_curtailment_max_export_w,
+            max_actual_forecast_ratio=(
+                cfg.slot_invalidation_curtailment_max_actual_forecast_ratio
+            ),
             soc_samples_utc=soc_samples_utc,
-            export_samples_utc=export_samples_utc,
+            grid_power_samples_utc=grid_power_samples_utc,
+            slot_actuals_by_date=slot_actuals_by_date,
+            forecast_slot_wh_by_date=forecast_slot_wh_by_date,
             forecast_slot_starts_by_date=forecast_slot_starts_by_date,
             slot_keys_by_date=slot_keys_by_date,
         )
     )
 
 
-async def _load_data_glitch_invalidations(
+def _load_data_glitch_invalidations(
     hass: HomeAssistant,
     cfg: BiasConfig,
     slot_actuals_by_date: dict[str, dict[str, float]],
-    *,
-    local_now: datetime,
+    forecast_slot_wh_by_date: dict[str, dict[str, float]],
 ) -> dict[str, set[str]]:
     max_slot_wh = _resolve_data_glitch_max_slot_wh(hass, cfg)
     min_neighbour_forecast_wh = (
@@ -255,25 +344,14 @@ async def _load_data_glitch_invalidations(
     if max_slot_wh is None and min_neighbour_forecast_wh <= 0:
         return {}
 
-    forecast_slot_wh_by_date: dict[str, dict[str, float]] = {}
-    if min_neighbour_forecast_wh > 0:
-        for day in sorted(slot_actuals_by_date):
-            try:
-                target_date = date.fromisoformat(day)
-            except ValueError:
-                continue
-            day_forecast = await load_historical_per_slot_forecast(
-                hass,
-                cfg,
-                target_date,
-                local_now=local_now,
-            )
-            if day_forecast:
-                forecast_slot_wh_by_date[day] = day_forecast
-
     return compute_data_glitch_invalidations(
         slot_actuals_by_date=slot_actuals_by_date,
-        forecast_slot_wh_by_date=forecast_slot_wh_by_date,
+        # Rule (3) is the only one that reads the forecast, and a zero floor
+        # turns it off; the shared window may still have been read for
+        # curtailment.
+        forecast_slot_wh_by_date=(
+            forecast_slot_wh_by_date if min_neighbour_forecast_wh > 0 else {}
+        ),
         max_slot_wh=max_slot_wh,
         min_neighbour_forecast_wh=min_neighbour_forecast_wh,
         backfill_max_minutes=backfill_max_minutes,
@@ -316,6 +394,19 @@ def _read_solar_max_power_from_runtime_config(hass: HomeAssistant) -> float | No
 
 
 def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str | None:
+    return _read_device_entity_id_from_runtime_config(hass, "battery", "capacity")
+
+
+def _read_grid_power_entity_id_from_runtime_config(hass: HomeAssistant) -> str | None:
+    """The signed grid power sensor — positive is export, negative is import."""
+    return _read_device_entity_id_from_runtime_config(hass, "grid", "power")
+
+
+def _read_device_entity_id_from_runtime_config(
+    hass: HomeAssistant,
+    device: str,
+    entity_key: str,
+) -> str | None:
     runtime_config = getattr(
         hass.data.get(DOMAIN, {}).get("coordinator"),
         "config",
@@ -324,11 +415,11 @@ def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str 
     if not isinstance(runtime_config, dict):
         return None
 
-    battery_config = runtime_config.get("power_devices", {}).get("battery", {})
-    entities = battery_config.get("entities", {})
+    device_config = runtime_config.get("power_devices", {}).get(device, {})
+    entities = device_config.get("entities", {})
     if not isinstance(entities, dict):
         return None
-    return _read_entity_id(entities.get("capacity"))
+    return _read_entity_id(entities.get(entity_key))
 
 
 def _build_day_grid_slot_inputs(
@@ -337,9 +428,9 @@ def _build_day_grid_slot_inputs(
 ) -> tuple[dict[str, list[datetime]], dict[str, list[str]]]:
     """Produce the full 15-minute slot grid for every day in the window.
 
-    Slot invalidation is a property of physical state (battery SoC + export
-    switch); it must be evaluated on every slot of the day, independent of
-    whether the historical forecast happens to publish that slot.
+    Curtailment is inferred from physical state (battery SoC and grid export)
+    read over the whole day, so the grid is the day's own 96 slots rather than
+    whatever slots the historical forecast happens to publish.
     """
     local_tz = ZoneInfo(str(hass.config.time_zone))
     slot_starts_by_date: dict[str, list[datetime]] = {}
@@ -402,8 +493,6 @@ async def _load_state_samples_for_entity(
     entity_id: str,
     utc_start: datetime,
     utc_end: datetime,
-    *,
-    parser: Callable[[Any], float | bool | None],
 ) -> list[StateSample]:
     if state_changes_during_period is None:
         return []
@@ -425,6 +514,14 @@ async def _load_state_samples_for_entity(
         )
     )
     states = history.get(entity_id) or history.get(entity_id.lower()) or []
+    if not states:
+        # A configured entity the recorder knows nothing about — typically one
+        # that was renamed or deleted while the config kept pointing at it.
+        # Without this the rule that reads it degrades to a silent no-op.
+        _LOGGER.warning(
+            "No recorder history for %s over the solar bias training window; the rules reading it cannot fire",
+            entity_id,
+        )
 
     samples: list[StateSample] = []
     for state in states:
@@ -438,7 +535,7 @@ async def _load_state_samples_for_entity(
         samples.append(
             StateSample(
                 timestamp=dt_util.as_utc(timestamp),
-                value=parser(getattr(state, "state", None)),
+                value=_parse_numeric_state_value(getattr(state, "state", None)),
             )
         )
     return samples
@@ -457,18 +554,6 @@ def _parse_numeric_state_value(raw_value: Any) -> float | None:
             return float(value_text)
         except ValueError:
             return None
-    return None
-
-
-def _parse_bool_state_value(raw_value: Any) -> bool | None:
-    if isinstance(raw_value, bool):
-        return raw_value
-    if isinstance(raw_value, str):
-        value_text = raw_value.strip().lower()
-        if value_text in {"on", "true", "1"}:
-            return True
-        if value_text in {"off", "false", "0"}:
-            return False
     return None
 
 

@@ -13,6 +13,8 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS,
     SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD,
     SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS,
+    SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W,
+    SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO,
 )
 
 
@@ -31,7 +33,12 @@ class BiasConfig:
         SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS
     )
     slot_invalidation_max_battery_soc_percent: float | None = None
-    slot_invalidation_export_enabled_entity_id: str | None = None
+    slot_invalidation_curtailment_max_export_w: float = (
+        SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W
+    )
+    slot_invalidation_curtailment_max_actual_forecast_ratio: float = (
+        SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO
+    )
     slot_invalidation_data_glitch_max_slot_wh: float | None = None
     slot_invalidation_data_glitch_min_neighbour_forecast_wh: float = 200.0
     slot_invalidation_data_glitch_backfill_max_minutes: int = 120
@@ -468,6 +475,12 @@ def training_explainability_to_payload(
     }
 
 
+def _read_number(raw_value: Any, default: float) -> float:
+    if isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+        return float(raw_value)
+    return default
+
+
 def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     forecast = (
         config.get("power_devices", {}).get("solar", {}).get("forecast", {})
@@ -524,12 +537,14 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     ):
         slot_invalidation_max_battery_soc_percent = float(max_battery_soc_percent)
 
-    export_enabled_entity_id = slot_invalidation.get("export_enabled_entity_id")
-    slot_invalidation_export_enabled_entity_id = None
-    if isinstance(export_enabled_entity_id, str):
-        export_enabled_entity_id = export_enabled_entity_id.strip()
-        if export_enabled_entity_id:
-            slot_invalidation_export_enabled_entity_id = export_enabled_entity_id
+    curtailment_max_export_w = _read_number(
+        slot_invalidation.get("curtailment_max_export_w"),
+        SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W,
+    )
+    curtailment_max_actual_forecast_ratio = _read_number(
+        slot_invalidation.get("curtailment_max_actual_forecast_ratio"),
+        SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO,
+    )
 
     glitch_max_slot_wh = slot_invalidation.get("data_glitch_max_slot_wh")
     slot_invalidation_data_glitch_max_slot_wh: float | None = None
@@ -570,8 +585,9 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         slot_invalidation_max_battery_soc_percent=(
             slot_invalidation_max_battery_soc_percent
         ),
-        slot_invalidation_export_enabled_entity_id=(
-            slot_invalidation_export_enabled_entity_id
+        slot_invalidation_curtailment_max_export_w=curtailment_max_export_w,
+        slot_invalidation_curtailment_max_actual_forecast_ratio=(
+            curtailment_max_actual_forecast_ratio
         ),
         slot_invalidation_data_glitch_max_slot_wh=(
             slot_invalidation_data_glitch_max_slot_wh

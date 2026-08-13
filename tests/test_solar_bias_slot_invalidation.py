@@ -48,15 +48,32 @@ def _dt(hour: int, minute: int) -> datetime:
 def _inputs(
     *,
     max_battery_soc_percent: float = 85.0,
+    max_export_w: float = 50.0,
+    max_actual_forecast_ratio: float = 0.8,
     soc_samples_utc: list[StateSample] | None = None,
-    export_samples_utc: list[StateSample] | None = None,
+    grid_power_samples_utc: list[StateSample] | None = None,
+    slot_actuals_by_date: dict[str, dict[str, float]] | None = None,
+    forecast_slot_wh_by_date: dict[str, dict[str, float]] | None = None,
     forecast_slot_starts_by_date: dict[str, list[datetime]] | None = None,
     slot_keys_by_date: dict[str, list[str]] | None = None,
 ) -> InvalidationInputs:
     return InvalidationInputs(
         max_battery_soc_percent=max_battery_soc_percent,
+        max_export_w=max_export_w,
+        max_actual_forecast_ratio=max_actual_forecast_ratio,
         soc_samples_utc=soc_samples_utc or [],
-        export_samples_utc=export_samples_utc or [],
+        grid_power_samples_utc=grid_power_samples_utc or [],
+        slot_actuals_by_date=(
+            slot_actuals_by_date
+            if slot_actuals_by_date is not None
+            # Underdelivering by default: 200 Wh against a 1000 Wh forecast.
+            else {"2026-04-15": {"12:00": 200.0, "12:15": 200.0, "23:45": 200.0}}
+        ),
+        forecast_slot_wh_by_date=(
+            forecast_slot_wh_by_date
+            if forecast_slot_wh_by_date is not None
+            else {"2026-04-15": {"12:00": 1000.0, "12:15": 1000.0, "23:45": 1000.0}}
+        ),
         forecast_slot_starts_by_date=forecast_slot_starts_by_date
         or {"2026-04-15": [_dt(12, 0)]},
         slot_keys_by_date=slot_keys_by_date or {"2026-04-15": ["12:00"]},
@@ -69,23 +86,23 @@ def test_returns_empty_when_no_inputs_are_available() -> None:
             forecast_slot_starts_by_date={},
             slot_keys_by_date={},
             soc_samples_utc=[],
-            export_samples_utc=[],
+            grid_power_samples_utc=[],
         )
     )
 
     assert invalidated == {}
 
 
-def test_invalidates_when_soc_reaches_threshold_and_export_turns_off() -> None:
+def test_invalidates_when_battery_full_nothing_exported_and_slot_underdelivers() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
             soc_samples_utc=[
                 StateSample(timestamp=_dt(12, 0), value=84.0),
                 StateSample(timestamp=_dt(12, 10), value=88.0),
             ],
-            export_samples_utc=[
-                StateSample(timestamp=_dt(12, 0), value=True),
-                StateSample(timestamp=_dt(12, 5), value=False),
+            grid_power_samples_utc=[
+                StateSample(timestamp=_dt(12, 0), value=-900.0),  # importing
+                StateSample(timestamp=_dt(12, 5), value=12.0),
             ],
         )
     )
@@ -93,11 +110,30 @@ def test_invalidates_when_soc_reaches_threshold_and_export_turns_off() -> None:
     assert invalidated == {"2026-04-15": {"12:00"}}
 
 
-def test_does_not_invalidate_when_export_stays_on() -> None:
+def test_does_not_invalidate_when_the_slot_exported() -> None:
+    """The clearest disproof of clipping: the energy had somewhere to go."""
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
             soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
-            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=True)],
+            grid_power_samples_utc=[
+                StateSample(timestamp=_dt(12, 0), value=10.0),
+                StateSample(timestamp=_dt(12, 5), value=2400.0),
+            ],
+        )
+    )
+
+    assert invalidated == {}
+
+
+def test_does_not_invalidate_cloudy_full_battery_slot_that_tracks_its_forecast() -> None:
+    """Battery full, house eating everything, nothing exported — but the slot
+    produced what was predicted for it, so nothing was clipped."""
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=99.0)],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(12, 0), value=0.0)],
+            slot_actuals_by_date={"2026-04-15": {"12:00": 950.0}},
+            forecast_slot_wh_by_date={"2026-04-15": {"12:00": 1000.0}},
         )
     )
 
@@ -108,44 +144,93 @@ def test_does_not_invalidate_when_soc_is_missing() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
             soc_samples_utc=[],
-            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=False)],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(12, 0), value=0.0)],
         )
     )
 
     assert invalidated == {}
 
 
-def test_does_not_invalidate_when_export_state_is_unknown() -> None:
+def test_does_not_invalidate_when_grid_power_is_unknown() -> None:
+    """No grid reading is no evidence, not evidence of no export."""
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
             soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
-            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=None)],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(12, 0), value=None)],
         )
     )
 
     assert invalidated == {}
 
 
-def test_invalidates_when_export_turns_off_even_with_unknown_sample() -> None:
+def test_does_not_invalidate_when_the_day_has_no_historical_forecast() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
             soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
-            export_samples_utc=[
-                StateSample(timestamp=_dt(12, 0), value=False),
-                StateSample(timestamp=_dt(12, 5), value=None),
-                StateSample(timestamp=_dt(12, 10), value=False),
-            ],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(12, 0), value=0.0)],
+            forecast_slot_wh_by_date={},
+        )
+    )
+
+    assert invalidated == {}
+
+
+def test_does_not_invalidate_a_slot_the_actuals_never_recorded() -> None:
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(12, 0), value=0.0)],
+            slot_actuals_by_date={"2026-04-15": {"13:00": 200.0}},
+        )
+    )
+
+    assert invalidated == {}
+
+
+def test_export_deadband_tolerates_a_trickle() -> None:
+    """A few watts leaking out is measurement noise, not an export path."""
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            max_export_w=50.0,
+            soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(12, 0), value=49.0)],
         )
     )
 
     assert invalidated == {"2026-04-15": {"12:00"}}
 
 
-def test_uses_left_edge_inheritance_for_soc_and_export_state() -> None:
+def test_uses_left_edge_inheritance_for_soc_and_grid_power() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
             soc_samples_utc=[StateSample(timestamp=_dt(11, 55), value=91.0)],
-            export_samples_utc=[StateSample(timestamp=_dt(11, 59), value=False)],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(11, 59), value=-300.0)],
+        )
+    )
+
+    assert invalidated == {"2026-04-15": {"12:00"}}
+
+
+def test_unknown_blip_does_not_overwrite_known_grid_power_carry() -> None:
+    """Regression: in live recorder data the modbus sensors drop to `unknown`
+    for tens of milliseconds. The carry into a later slot must remain the last
+    known reading, so the slot still invalidates."""
+    invalidated = compute_invalidated_slots_for_window(
+        _inputs(
+            soc_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 11, 0, tzinfo=TZ), value=100.0),
+            ],
+            grid_power_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 9, 0, tzinfo=TZ), value=-40.0),
+                StateSample(
+                    timestamp=datetime(2026, 4, 15, 11, 38, 15, tzinfo=TZ),
+                    value=None,  # unknown blip
+                ),
+                StateSample(
+                    timestamp=datetime(2026, 4, 15, 11, 39, 24, tzinfo=TZ),
+                    value=-35.0,
+                ),
+            ],
         )
     )
 
@@ -159,9 +244,9 @@ def test_sample_at_slot_end_applies_to_next_slot_only() -> None:
                 StateSample(timestamp=_dt(12, 0), value=90.0),
                 StateSample(timestamp=_dt(12, 15), value=90.0),
             ],
-            export_samples_utc=[
-                StateSample(timestamp=_dt(12, 0), value=True),
-                StateSample(timestamp=_dt(12, 15), value=False),
+            grid_power_samples_utc=[
+                StateSample(timestamp=_dt(12, 0), value=3000.0),
+                StateSample(timestamp=_dt(12, 15), value=0.0),
             ],
             forecast_slot_starts_by_date={"2026-04-15": [_dt(12, 0), _dt(12, 15)]},
             slot_keys_by_date={"2026-04-15": ["12:00", "12:15"]},
@@ -175,34 +260,7 @@ def test_sample_at_slot_start_applies_to_current_slot() -> None:
     invalidated = compute_invalidated_slots_for_window(
         _inputs(
             soc_samples_utc=[StateSample(timestamp=_dt(12, 0), value=90.0)],
-            export_samples_utc=[StateSample(timestamp=_dt(12, 0), value=False)],
-        )
-    )
-
-    assert invalidated == {"2026-04-15": {"12:00"}}
-
-
-def test_unknown_blip_does_not_overwrite_known_export_carry() -> None:
-    """Regression: in live recorder data the export switch sometimes flickers
-    `off → unknown → off` within tens of milliseconds. The carry into a later
-    slot must remain `False`, so the slot still invalidates when SoC peaks
-    above the threshold."""
-    invalidated = compute_invalidated_slots_for_window(
-        _inputs(
-            soc_samples_utc=[
-                StateSample(timestamp=datetime(2026, 4, 15, 11, 0, tzinfo=TZ), value=100.0),
-            ],
-            export_samples_utc=[
-                StateSample(timestamp=datetime(2026, 4, 15, 9, 0, tzinfo=TZ), value=False),
-                StateSample(
-                    timestamp=datetime(2026, 4, 15, 11, 38, 15, tzinfo=TZ),
-                    value=None,  # unknown blip
-                ),
-                StateSample(
-                    timestamp=datetime(2026, 4, 15, 11, 39, 24, tzinfo=TZ),
-                    value=False,
-                ),
-            ],
+            grid_power_samples_utc=[StateSample(timestamp=_dt(12, 0), value=0.0)],
         )
     )
 
@@ -211,10 +269,10 @@ def test_unknown_blip_does_not_overwrite_known_export_carry() -> None:
 
 def test_sub_second_transition_at_slot_boundary_starts_new_state() -> None:
     """Regression: a transition timestamped a few hundred milliseconds after
-    the slot start (e.g. `14:00:00.220215`) should be treated as the new
-    state for that slot, not as an in-window addition stacked on top of the
-    previous-slot carry. Otherwise a slot whose actual export was `on`
-    throughout invalidates spuriously because of the carried `False`."""
+    the slot start (e.g. `14:00:00.220215`) is the new state for that slot, not
+    an in-window addition stacked on the previous-slot carry. The 14:00 slot
+    still carries a no-export reading and so invalidates; 14:15 has been
+    exporting for a full 15 minutes by the time it starts."""
     slot_start = datetime(2026, 4, 15, 14, 0, tzinfo=TZ)
     slot_start_plus = datetime(2026, 4, 15, 14, 0, 0, 220215, tzinfo=TZ)
     next_slot_start = datetime(2026, 4, 15, 14, 15, tzinfo=TZ)
@@ -224,10 +282,12 @@ def test_sub_second_transition_at_slot_boundary_starts_new_state() -> None:
             soc_samples_utc=[
                 StateSample(timestamp=datetime(2026, 4, 15, 12, 0, tzinfo=TZ), value=100.0),
             ],
-            export_samples_utc=[
-                StateSample(timestamp=datetime(2026, 4, 15, 9, 0, tzinfo=TZ), value=False),
-                StateSample(timestamp=slot_start_plus, value=True),
+            grid_power_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 9, 0, tzinfo=TZ), value=0.0),
+                StateSample(timestamp=slot_start_plus, value=2500.0),
             ],
+            slot_actuals_by_date={"2026-04-15": {"14:00": 200.0, "14:15": 200.0}},
+            forecast_slot_wh_by_date={"2026-04-15": {"14:00": 1000.0, "14:15": 1000.0}},
             forecast_slot_starts_by_date={
                 "2026-04-15": [slot_start, next_slot_start],
             },
@@ -235,10 +295,9 @@ def test_sub_second_transition_at_slot_boundary_starts_new_state() -> None:
         )
     )
 
-    # 14:00 still has a carried `False` followed by a same-slot `True`, so it
-    # invalidates (one False is enough). The 14:15 slot must NOT invalidate:
-    # by the time it starts the export switch has been `on` for 14m 59s.
-    assert invalidated == {"2026-04-15": {"14:00"}}
+    # 14:00's peak export is the in-slot 2500 W, so it does NOT invalidate
+    # either — the peak is taken over the carry and every in-window sample.
+    assert invalidated == {}
 
 
 def test_final_slot_uses_next_day_boundary_for_slot_end() -> None:
@@ -247,9 +306,9 @@ def test_final_slot_uses_next_day_boundary_for_slot_end() -> None:
             soc_samples_utc=[
                 StateSample(timestamp=datetime(2026, 4, 15, 23, 45, tzinfo=TZ), value=90.0)
             ],
-            export_samples_utc=[
-                StateSample(timestamp=datetime(2026, 4, 15, 23, 45, tzinfo=TZ), value=True),
-                StateSample(timestamp=datetime(2026, 4, 15, 23, 59, tzinfo=TZ), value=False),
+            grid_power_samples_utc=[
+                StateSample(timestamp=datetime(2026, 4, 15, 23, 45, tzinfo=TZ), value=-100.0),
+                StateSample(timestamp=datetime(2026, 4, 15, 23, 59, tzinfo=TZ), value=0.0),
             ],
             forecast_slot_starts_by_date={
                 "2026-04-15": [datetime(2026, 4, 15, 23, 45, tzinfo=TZ)]

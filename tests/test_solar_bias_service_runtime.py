@@ -77,7 +77,6 @@ class _DummyStore:
 def _make_cfg(
     *,
     slot_invalidation_max_battery_soc_percent: float | None = None,
-    slot_invalidation_export_enabled_entity_id: str | None = None,
 ) -> models.BiasConfig:
     return models.BiasConfig(
         enabled=True,
@@ -90,9 +89,6 @@ def _make_cfg(
         total_energy_entity_id=None,
         slot_invalidation_max_battery_soc_percent=(
             slot_invalidation_max_battery_soc_percent
-        ),
-        slot_invalidation_export_enabled_entity_id=(
-            slot_invalidation_export_enabled_entity_id
         ),
         max_training_window_days=90,
     )
@@ -274,7 +270,6 @@ def test_get_status_payload_reports_slot_invalidation_enabled():
         _DummyStore(),
         _make_cfg(
             slot_invalidation_max_battery_soc_percent=97.0,
-            slot_invalidation_export_enabled_entity_id="binary_sensor.export_enabled",
         ),
     )
 

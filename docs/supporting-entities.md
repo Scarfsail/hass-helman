@@ -12,9 +12,10 @@ Scope: only user-created helpers are documented here. Entities that other integr
 solar forecast, spot prices, per-circuit sub-meters, appliance switches and climates, vehicle
 telemetry — are out of scope; install the integration and point the config at whatever it produces.
 
-> Also not covered: `switch.solax_export_enabled` (solar bias-correction curtailment detection). That
-> mechanism is being reworked to remove the dependency entirely — see
-> [issue #71](https://github.com/Scarfsail/hass-helman/issues/71).
+> No longer needed: `switch.solax_export_enabled`. Solar bias correction used to ask for a boolean
+> helper reporting whether export was allowed; it now infers curtailment from the battery SoC and
+> signed grid power sensors it already reads (§3), so there is nothing to build
+> ([issue #71](https://github.com/Scarfsail/hass-helman/issues/71)).
 
 ## About the examples
 
@@ -206,7 +207,9 @@ default that is *lower* than reality would let helman plan a discharge the inver
 wants a single signed value. Verified against the live sensor: `5518 − 0 = 5518 W`, exact match.
 
 **Used in helman at** `power_devices.grid.entities.power` — grid flow direction and magnitude on the
-card, and the import/export term of the live balance. The daily counters beside it
+card, and the import/export term of the live balance. Solar bias correction reads it as well: a slot
+with the battery full and no export leaving the house is one where the inverter was throttling PV,
+which is how curtailed slots are kept out of the training set. The daily counters beside it
 (`today_import` / `today_export`) are inverter-native and need no helper.
 
 ```yaml

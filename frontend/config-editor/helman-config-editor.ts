@@ -1399,19 +1399,33 @@ export class HelmanConfigEditorPanel
                               "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
                               { min: 0, max: 100, suffix: "%" },
                             )}
-                            ${this._renderOptionalEntityField(
+                            ${this._renderOptionalNumberField(
                               [
                                 "power_devices",
                                 "solar",
                                 "forecast",
                                 "bias_correction",
                                 "slot_invalidation",
-                                "export_enabled_entity_id",
+                                "curtailment_max_export_w",
                               ],
-                              "editor.fields.bias_correction_slot_invalidation_export_enabled_entity_id",
-                              ["binary_sensor", "input_boolean", "switch"],
-                              undefined,
-                              "editor.help.bias_correction_slot_invalidation_export_enabled_entity_id",
+                              "editor.fields.bias_correction_slot_invalidation_curtailment_max_export_w",
+                              "editor.helpers.bias_correction_slot_invalidation_curtailment_max_export_w",
+                              "editor.help.bias_correction_slot_invalidation_curtailment_max_export_w",
+                              { min: 0, suffix: "W" },
+                            )}
+                            ${this._renderOptionalNumberField(
+                              [
+                                "power_devices",
+                                "solar",
+                                "forecast",
+                                "bias_correction",
+                                "slot_invalidation",
+                                "curtailment_max_actual_forecast_ratio",
+                              ],
+                              "editor.fields.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
+                              "editor.helpers.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
+                              "editor.help.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
+                              { min: 0, max: 1 },
                             )}
                             ${this._renderOptionalNumberField(
                               [

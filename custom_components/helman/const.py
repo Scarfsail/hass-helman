@@ -29,7 +29,7 @@ DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
 
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
-CONFIG_DOCUMENT_VERSION = 11
+CONFIG_DOCUMENT_VERSION = 12
 
 DAY_CLASSIFICATIONS = (
     DAY_CLASSIFICATION_SURPLUS,
@@ -116,3 +116,8 @@ SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS = 5
 SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD = "ratio_of_sums"
 SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS = 2
 SOLAR_BIAS_AGGREGATION_METHODS = ("ratio_of_sums", "trimmed_mean")
+# Curtailment inference: how much export still counts as "nothing went out"
+# (a deadband around zero, not a real export), and how far below the day's own
+# forecast a slot must land before the shortfall reads as clipping.
+SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W = 50.0
+SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO = 0.8

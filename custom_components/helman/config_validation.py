@@ -529,23 +529,7 @@ def _validate_solar_config(
             max_battery_soc_percent = slot_invalidation_map.get(
                 "max_battery_soc_percent"
             )
-            export_enabled_entity_id = slot_invalidation_map.get(
-                "export_enabled_entity_id"
-            )
             max_battery_soc_present = _has_value(max_battery_soc_percent)
-            export_enabled_entity_present = _has_value(export_enabled_entity_id)
-
-            if max_battery_soc_present != export_enabled_entity_present:
-                report.add_error(
-                    section=section,
-                    path=slot_invalidation_path,
-                    code="incomplete_slot_invalidation",
-                    message=(
-                        f"{slot_invalidation_path}.max_battery_soc_percent and "
-                        f"{slot_invalidation_path}.export_enabled_entity_id must be "
-                        "configured together"
-                    ),
-                )
 
             if max_battery_soc_present:
                 if isinstance(max_battery_soc_percent, bool) or not isinstance(
@@ -571,12 +555,19 @@ def _validate_solar_config(
                         ),
                     )
 
-            if export_enabled_entity_present:
-                _validate_optional_entity_id(
-                    report,
-                    section,
-                    f"{slot_invalidation_path}.export_enabled_entity_id",
-                    export_enabled_entity_id,
+            # Curtailment inference reads the signed grid power sensor to tell
+            # "battery full and nothing exported" from "battery full and
+            # exporting". Only required once the SoC threshold turns the rule
+            # on — the data-glitch rules below never look at the grid.
+            if max_battery_soc_present and not _has_grid_power_entity(config):
+                report.add_error(
+                    section=section,
+                    path=f"{slot_invalidation_path}.max_battery_soc_percent",
+                    code="missing_prerequisite",
+                    message=(
+                        f"{slot_invalidation_path}.max_battery_soc_percent requires "
+                        "power_devices.grid.entities.power"
+                    ),
                 )
 
             if not _has_battery_capacity_entity(config):
@@ -591,6 +582,7 @@ def _validate_solar_config(
                 )
 
             for key in (
+                "curtailment_max_export_w",
                 "data_glitch_max_slot_wh",
                 "data_glitch_min_neighbour_forecast_wh",
             ):
@@ -615,6 +607,32 @@ def _validate_solar_config(
                         code="invalid_range",
                         message=(
                             f"{slot_invalidation_path}.{key} must be >= 0"
+                        ),
+                    )
+
+            ratio_value = slot_invalidation_map.get(
+                "curtailment_max_actual_forecast_ratio"
+            )
+            ratio_path = (
+                f"{slot_invalidation_path}.curtailment_max_actual_forecast_ratio"
+            )
+            if ratio_value is not None:
+                if isinstance(ratio_value, bool) or not isinstance(
+                    ratio_value, (int, float)
+                ):
+                    report.add_error(
+                        section=section,
+                        path=ratio_path,
+                        code="invalid_type",
+                        message=f"{ratio_path} must be a number",
+                    )
+                elif not (0 < ratio_value <= 1):
+                    report.add_error(
+                        section=section,
+                        path=ratio_path,
+                        code="invalid_range",
+                        message=(
+                            f"{ratio_path} must be greater than 0 and at most 1"
                         ),
                     )
 
@@ -1599,16 +1617,28 @@ def _has_value(value: object) -> bool:
 
 
 def _has_battery_capacity_entity(config: Mapping[str, Any]) -> bool:
+    return _has_device_entity(config, "battery", "capacity")
+
+
+def _has_grid_power_entity(config: Mapping[str, Any]) -> bool:
+    return _has_device_entity(config, "grid", "power")
+
+
+def _has_device_entity(
+    config: Mapping[str, Any],
+    device: str,
+    entity_key: str,
+) -> bool:
     power_devices = config.get("power_devices")
     if not isinstance(power_devices, Mapping):
         return False
 
-    battery = power_devices.get("battery")
-    if not isinstance(battery, Mapping):
+    device_config = power_devices.get(device)
+    if not isinstance(device_config, Mapping):
         return False
 
-    entities = battery.get("entities")
+    entities = device_config.get("entities")
     if not isinstance(entities, Mapping):
         return False
 
-    return _has_value(entities.get("capacity"))
+    return _has_value(entities.get(entity_key))
