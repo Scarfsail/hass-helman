@@ -154,7 +154,7 @@
       "optimizer_enabled": "Enabled",
       "optimizer_target": "Target controllable",
       "when_price_below": "When price below",
-      "max_run_price": "Max run price",
+      "max_run_price": "Max slot price to run",
       "appliance_id": "Appliance id",
       "controllable_id": "Controllable id",
       "controllable_name": "Controllable name",

@@ -154,7 +154,7 @@
       "optimizer_enabled": "Povoleno",
       "optimizer_target": "Cílový ovládaný prvek",
       "when_price_below": "Když je cena pod",
-      "max_run_price": "Max. cena pro běh",
+      "max_run_price": "Max. cena slotu pro běh",
       "appliance_id": "Spotřebič",
       "controllable_id": "ID ovládaného prvku",
       "controllable_name": "Název ovládaného prvku",
