@@ -191,10 +191,10 @@ When Helman schedules an appliance (`appliance_runtime`), it can ask what runnin
 battery rather than only what the house looks like without it. Two numbers on each condition group
 control that, and they answer different questions.
 
-**Self-sustainability budget %** (`ensure_self_sustainability`) — how much of the battery's capacity
-the appliance may spend per day on energy the sun did not provide. Helman re-simulates the whole
-48-hour horizon with the appliance's runs included and compares it against the same horizon without
-them. Whatever the runs cost is added up and must fit the budget:
+**Self-sustainability tolerance %** (`ensure_self_sustainability`) — how much of the battery's
+capacity the appliance may spend per day on energy the sun did not provide. Helman re-simulates the
+whole 48-hour horizon with the appliance's runs included and compares it against the same horizon
+without them. Whatever the runs cost is added up and must fit the tolerance:
 
 ```
 spent = (battery the day ends lower than it otherwise would have) + (extra grid energy bought)
@@ -203,33 +203,34 @@ spent = (battery the day ends lower than it otherwise would have) + (extra grid 
 Three things about that sum are worth knowing before you pick a value.
 
 - **It is measured against the forecast without the appliance, not against a full battery.** If the
-  day was going to end at 55 % anyway, a budget of 10 % of capacity permits it to end near 45 %.
+  day was going to end at 55 % anyway, a tolerance of 10 % of capacity permits it to end near 45 %.
 - **Battery and grid count equally.** A cloudy day where the appliance ends on the same state of
-  charge but imported 2 kWh has spent as much of the budget as one where it took 2 kWh out of the
+  charge but imported 2 kWh has spent as much of the tolerance as one where it took 2 kWh out of the
   battery. Helman does not choose between them: a shortfall is covered by the battery first, and by
   the grid only once the battery is empty or too slow to keep up. Which one you get is battery
-  physics, not policy — so the budget governs both.
+  physics, not policy — so the tolerance governs both.
 - **It is a ceiling, not a target.** A run placed in midday surplus that would otherwise have been
   exported can cost nothing at all.
 
 `0` means the day must pay for itself entirely from the sun, which in practice confines the
 appliance to daylight hours — though it may still dip the battery deeply at noon as long as the
-afternoon refills it, because the budget is about where the day *lands*, not how it swings on the
-way. `100` switches the budget off. In between is a real allowance: on a 20 kWh battery, `10` is
+afternoon refills it, because the tolerance is about where the day *lands*, not how it swings on
+the way. `100` switches it off. In between is a real allowance: on a 20 kWh battery, `10` is
 2 kWh a day. Higher values are more permissive, and because the unit is a share of the *whole*
 battery while a single run is a few kWh, the useful settings bunch up at the bottom of the range.
 Leave it empty to ignore the battery impact entirely.
 
-**SoC reserve %** (`self_sustainability_margin_pct`, default `5`) — a hard floor the projected
-battery must never cross, in percentage points above the inverter's own minimum SoC. With an
-inverter minimum of 10 % and a reserve of 5, the forecast may never drop below 15 %.
+**Required reserve above min SoC %** (`self_sustainability_margin_pct`, default `5`) — a hard
+floor the projected battery must never cross, in percentage points above the inverter's own
+minimum SoC. With an inverter minimum of 10 % and a reserve of 5, the forecast may never drop
+below 15 %.
 
-The reserve is not a weaker version of the budget; the two bite at opposite ends. The reserve is
+The reserve is not a weaker version of the tolerance; the two bite at opposite ends. The reserve is
 about the battery's worst *moment* and applies across the whole 48-hour horizon, so an evening run
 can be refused for a dip it would cause the next morning — it bites when the battery is already low.
-The budget is about *how much* is spent and is scored per day — it bites when the battery is full
-and there is headroom to burn. Both apply at every budget value, including `0`: a day can balance
-overall and still dip too low at noon.
+The tolerance is about *how much* is spent and is scored per day — it bites when the battery is
+full and there is headroom to burn. Both apply at every tolerance value, including `0`: a day can
+balance overall and still dip too low at noon.
 
 A slot that fails either test is skipped and the next candidate is tried, so a constrained day
 usually runs fewer hours rather than not running at all. If the battery is projected below the floor
