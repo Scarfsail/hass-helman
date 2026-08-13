@@ -22,6 +22,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from homeassistant.util import dt as dt_util
 
+from ..const import SCHEDULE_SLOT_MINUTES
 from ..scheduling.schedule import (
     SCHEDULE_SLOT_DURATION,
     format_slot_id,
@@ -703,10 +704,10 @@ def _read_float(value: Any) -> float | None:
 def _slot_id_for_timestamp(
     timestamp: datetime, slot_id_set: frozenset[str]
 ) -> str | None:
-    """Floor ``timestamp`` to its 30-min schedule slot boundary."""
+    """Floor ``timestamp`` to its schedule slot boundary."""
     local = dt_util.as_local(timestamp)
     floored = local.replace(
-        minute=(local.minute // 30) * 30,
+        minute=(local.minute // SCHEDULE_SLOT_MINUTES) * SCHEDULE_SLOT_MINUTES,
         second=0,
         microsecond=0,
     )
@@ -721,7 +722,7 @@ def aggregate_series_to_slots(
     sum_fields: Sequence[str] = (),
     last_fields: Sequence[str] = (),
 ) -> dict[str, list[float | None]]:
-    """Reduce 15-min canonical forecast buckets to 30-min schedule slots.
+    """Reduce canonical forecast buckets to schedule slots.
 
     ``sum_fields`` are summed across the covering buckets (energies);
     ``last_fields`` take the end-of-slot value (SoC trajectory). Slots past
