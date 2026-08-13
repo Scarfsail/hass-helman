@@ -894,9 +894,9 @@ test.describe("solar inspector house composition", () => {
  */
 
 const HOUSE_FILL = "#a855f7"; // HOUSE_COLOR
-const DEFERRABLE_FILL = "#e2c6fc"; // DEFERRABLE_HOUSE_COLOR, blended from it
-// nodeAccentColor's alpha, applied to the deferrable shade.
-const DEFERRABLE_TINT = "#e2c6fc60";
+const DEFERRABLE_FILL = "#c084fc"; // DEFERRABLE_HOUSE_COLOR, purple-300
+// The box tint's alpha, applied to the deferrable shade.
+const DEFERRABLE_TINT = "#c084fc90";
 
 const MIXED_APPLIANCES: Appliance[] = [
     {

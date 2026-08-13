@@ -200,7 +200,16 @@ export class PowerDevice extends LitElement {
         // own — only the lighter house shade, so deferrable load reads as its own
         // quantity against the section tint it would otherwise inherit. This is the
         // single place that decision is made, for every card that draws these boxes.
-        const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '60') : undefined);
+        //
+        // Carried at a heavier alpha than nodeAccentColor's '60', deliberately: the
+        // .deviceContent mix below premultiplies alpha, so at '60' only ~13% of the
+        // tint reaches the surface and the box lands within a few levels of
+        // luminance of a plain house child — the whole point of the lighter shade,
+        // erased. '90' puts it clearly above the section tint without shouting;
+        // these boxes also fill the inspector's house-breakdown panel, which brings
+        // a house wash and a border of its own, and a stack of them there reads as
+        // highlighted rather than merely lighter if the tint goes much past this.
+        const tintColor = nodeColor ?? (device.deferrable ? withAlpha(DEFERRABLE_HOUSE_COLOR, '90') : undefined);
         const historyBarColor = tintColor ?? 'rgba(var(--rgb-accent-color), 0.13)';
         const deviceContent = html`
                 <div class="border deviceContent ${isOff ? 'is-off' : ''}" style=${styleMap({

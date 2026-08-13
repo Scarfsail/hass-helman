@@ -19,9 +19,10 @@ const BUNDLE = resolve(
     "../../custom_components/helman/frontend_compiled/helman-card.js",
 );
 
-// DEFERRABLE_HOUSE_COLOR under nodeAccentColor's alpha — the same value the
-// inspector's composition panel paints its shiftable rows with.
-const DEFERRABLE_TINT = "#e2c6fc60";
+// DEFERRABLE_HOUSE_COLOR — the same shade the inspector's composition panel
+// paints its shiftable rows with — at the heavier alpha the box tint needs to
+// survive .deviceContent's color-mix. See power-device.ts.
+const DEFERRABLE_TINT = "#c084fc90";
 
 // The authorship hooks the scheduling UI already owns; the badge reads exactly
 // these, so a theme override moves band, chip and badge together.

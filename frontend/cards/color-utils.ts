@@ -19,14 +19,20 @@ export const HOUSE_COLOR = '#a855f7'; // purple-500
  * Deferrable consumption is still house consumption, so it must read as a shade
  * of the house colour rather than a hue of its own — the band stacked on top of
  * the non-deferrable one, the tinted rows in the inspector's composition panel
- * and the power card's deferrable children are all the same quantity. Derived
- * from HOUSE_COLOR rather than written out, so it cannot drift out of the family,
- * and defined here once: every card imports this and never re-derives it.
+ * and the power card's deferrable children are all the same quantity. Defined
+ * here once: every card imports this and never re-derives it.
+ *
+ * Written out as purple-300 (HOUSE_COLOR is purple-500) rather than blended
+ * towards white, which is what this used to be. Lightening in sRGB buys
+ * lightness by pulling R and G up towards B, i.e. it *desaturates*: the old
+ * 1:2 white blend (#e2c6fc) had an R-G spread of 28 against purple-500's 83.
+ * That reads fine as an opaque chart fill, but the power card paints its tint
+ * through `color-mix(tint 35%, #050505)` with an already-translucent colour, so
+ * roughly 13% of the tint survives — enough to carry hue, never enough to carry
+ * lightness. A pale, near-hueless lavender therefore came out grey. Staying on
+ * the Tailwind ramp keeps the shade genuinely lighter *and* keeps the purple.
  */
-export const DEFERRABLE_HOUSE_COLOR = blendHex([
-    { hex: HOUSE_COLOR, weight: 1 },
-    { hex: '#ffffff', weight: 2 },
-]); // #e2c6fc
+export const DEFERRABLE_HOUSE_COLOR = '#c084fc'; // purple-300
 
 /** Which way the grid is flowing. Distinct from GRID_COLOR, which is the node itself. */
 export const GRID_IMPORT_COLOR = '#2563eb'; // blue-600
