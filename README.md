@@ -106,8 +106,9 @@ Common optional fields (house tree disambiguation):
 
 - `power_devices.house`: `unmeasured_power_title`; `entities.power`, `entities.today_energy`.
   House consumption forecast uses a separate config surface — see "House consumption forecast" below.
-- `power_devices.grid`: `entities.power` (positive import, negative export),
-  `entities.today_export`, `entities.today_import`.
+- `power_devices.grid`: `entities.power` (positive export, negative import),
+  `entities.today_export`, `entities.today_import`. Solar bias correction reads the signed power
+  sensor too, to tell a clipped slot from an exporting one.
 - `power_devices.battery`: `entities.power`, `entities.capacity` (% SoC), `entities.min_soc`,
   `entities.max_soc`, `entities.remaining_energy` (Wh). When enough fields are present and current
   power is significant, the card shows target SoC, ETA time, and wall clock time.

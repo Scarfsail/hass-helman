@@ -142,7 +142,7 @@ def test_legacy_training_window_days_is_still_accepted_as_fallback():
     assert bias.max_training_window_days == 30
 
 
-def test_slot_invalidation_fields_default_to_none_when_absent():
+def test_slot_invalidation_fields_default_when_absent():
     config = {
         "power_devices": {
             "solar": {
@@ -156,7 +156,8 @@ def test_slot_invalidation_fields_default_to_none_when_absent():
     bias = read_bias_config(config)
 
     assert bias.slot_invalidation_max_battery_soc_percent is None
-    assert bias.slot_invalidation_export_enabled_entity_id is None
+    assert bias.slot_invalidation_curtailment_max_export_w == 50.0
+    assert bias.slot_invalidation_curtailment_max_actual_forecast_ratio == 0.8
 
 
 def test_slot_invalidation_fields_are_parsed_when_present():
@@ -167,7 +168,8 @@ def test_slot_invalidation_fields_are_parsed_when_present():
                     "bias_correction": {
                         "slot_invalidation": {
                             "max_battery_soc_percent": 87,
-                            "export_enabled_entity_id": "  switch.export_enabled  ",
+                            "curtailment_max_export_w": 120,
+                            "curtailment_max_actual_forecast_ratio": 0.6,
                         }
                     },
                 }
@@ -178,10 +180,8 @@ def test_slot_invalidation_fields_are_parsed_when_present():
     bias = read_bias_config(config)
 
     assert bias.slot_invalidation_max_battery_soc_percent == 87.0
-    assert (
-        bias.slot_invalidation_export_enabled_entity_id
-        == "switch.export_enabled"
-    )
+    assert bias.slot_invalidation_curtailment_max_export_w == 120.0
+    assert bias.slot_invalidation_curtailment_max_actual_forecast_ratio == 0.6
 
 
 def test_trainer_sample_has_slot_forecast_wh_field():

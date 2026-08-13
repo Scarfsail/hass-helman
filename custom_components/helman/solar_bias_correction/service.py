@@ -286,10 +286,10 @@ class SolarBiasCorrectionService:
         }
 
     def _is_slot_invalidation_enabled(self) -> bool:
-        return (
-            self._cfg.slot_invalidation_max_battery_soc_percent is not None
-            and bool(self._cfg.slot_invalidation_export_enabled_entity_id)
-        )
+        # The SoC threshold is the whole switch since curtailment stopped
+        # needing an entity of its own — everything else it reads has a default
+        # or comes from the power devices already configured.
+        return self._cfg.slot_invalidation_max_battery_soc_percent is not None
 
     def get_profile_payload(self) -> dict[str, Any] | None:
         if not self._has_usable_profile():

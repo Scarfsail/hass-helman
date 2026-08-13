@@ -642,6 +642,44 @@ def _margin_from(params: Mapping[str, Any]) -> Any:
     return margin if isinstance(margin, (int, float)) else None
 
 
+def _migrate_v11_to_v12(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Drop the retired ``slot_invalidation.export_enabled_entity_id``.
+
+    Curtailment is inferred now — battery full, nothing exported, and the slot
+    underdelivering against its own forecast — from entities the installation
+    already declares. The boolean the user had to hand-build is gone, and with
+    it the failure this step exists to clean up after: the entity behind it
+    could vanish while the config kept naming it, which silently turned the
+    whole rule into a no-op.
+
+    Nothing replaces it in the document. The two thresholds the inference reads
+    have defaults, so a config that says nothing gets the working behaviour.
+    """
+    bias = _bias_correction_block(document)
+    if not isinstance(bias, dict):
+        return (document, [])
+    slot_invalidation = bias.get("slot_invalidation")
+    if not isinstance(slot_invalidation, dict):
+        return (document, [])
+    slot_invalidation.pop("export_enabled_entity_id", None)
+    return (document, [])
+
+
+def _bias_correction_block(document: dict[str, Any]) -> Any:
+    """``power_devices.solar.forecast.bias_correction``, or None."""
+    power_devices = document.get("power_devices")
+    if not isinstance(power_devices, dict):
+        return None
+    solar = power_devices.get("solar")
+    if not isinstance(solar, dict):
+        return None
+    forecast = solar.get("forecast")
+    if not isinstance(forecast, dict):
+        return None
+    bias = forecast.get("bias_correction")
+    return bias if isinstance(bias, dict) else None
+
+
 def _house_forecast_block(document: dict[str, Any]) -> Any:
     """``power_devices.house.forecast``, or ``None`` if the path is not there."""
     power_devices = document.get("power_devices")
@@ -700,6 +738,7 @@ _MIGRATIONS = {
     8: _migrate_v8_to_v9,
     9: _migrate_v9_to_v10,
     10: _migrate_v10_to_v11,
+    11: _migrate_v11_to_v12,
 }
 
 

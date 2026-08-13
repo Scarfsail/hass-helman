@@ -7,14 +7,26 @@ from datetime import date, datetime, timedelta, timezone
 @dataclass(frozen=True)
 class StateSample:
     timestamp: datetime
-    value: float | bool | None
+    value: float | None
 
 
 @dataclass(frozen=True)
 class InvalidationInputs:
+    """Everything the curtailment test reads, in UTC.
+
+    ``grid_power_samples_utc`` carries ``power_devices.grid.entities.power``
+    with its house convention: **positive is export**, negative is import (see
+    ``tree_builder``, which reads the grid node's export side as the positive
+    part). The test only ever looks at the positive side.
+    """
+
     max_battery_soc_percent: float
+    max_export_w: float
+    max_actual_forecast_ratio: float
     soc_samples_utc: list[StateSample]
-    export_samples_utc: list[StateSample]
+    grid_power_samples_utc: list[StateSample]
+    slot_actuals_by_date: dict[str, dict[str, float]]
+    forecast_slot_wh_by_date: dict[str, dict[str, float]]
     forecast_slot_starts_by_date: dict[str, list[datetime]]
     slot_keys_by_date: dict[str, list[str]]
 
@@ -22,17 +34,44 @@ class InvalidationInputs:
 def compute_invalidated_slots_for_window(
     inputs: InvalidationInputs,
 ) -> dict[str, set[str]]:
+    """Infer inverter clipping from what the installation already measures.
+
+    A slot is curtailed when all three hold:
+
+    1. **Peak battery SoC >= the configured threshold** — there is nowhere left
+       to put the energy.
+    2. **Peak grid export <= ``max_export_w``** — and nothing went out either,
+       so the only remaining sink is the house.
+    3. **Actual <= ``max_actual_forecast_ratio`` x the historical per-slot
+       forecast** — the slot underdelivered against what was predicted for it
+       at the start of that day.
+
+    Battery full plus no export plus underdelivery means the inverter was
+    throttling PV, which is what the retired ``export_enabled_entity_id``
+    boolean was a proxy for. Rule (3) is what keeps a cloudy full-battery slot
+    with a hungry house out of the set: there the house absorbs everything, so
+    (1) and (2) both hold, but actual tracks forecast.
+
+    Every rule needs positive evidence: a slot with no SoC reading, no grid
+    reading, no forecast, or no actual is left alone rather than invalidated.
+    """
     if not inputs.forecast_slot_starts_by_date:
         return {}
 
     soc_samples = sorted(inputs.soc_samples_utc, key=lambda sample: sample.timestamp)
-    export_samples = sorted(inputs.export_samples_utc, key=lambda sample: sample.timestamp)
+    grid_samples = sorted(
+        inputs.grid_power_samples_utc, key=lambda sample: sample.timestamp
+    )
     invalidated_slots_by_date: dict[str, set[str]] = {}
 
     for day in sorted(inputs.forecast_slot_starts_by_date):
         slot_starts = inputs.forecast_slot_starts_by_date.get(day, [])
         slot_keys = inputs.slot_keys_by_date.get(day, [])
         if len(slot_starts) != len(slot_keys):
+            continue
+        day_actuals = inputs.slot_actuals_by_date.get(day, {})
+        day_forecast = inputs.forecast_slot_wh_by_date.get(day, {})
+        if not day_actuals or not day_forecast:
             continue
 
         invalidated_slots: set[str] = set()
@@ -47,13 +86,22 @@ def compute_invalidated_slots_for_window(
             if peak_soc is None or peak_soc < inputs.max_battery_soc_percent:
                 continue
 
-            export_values = _segment_values(
-                export_samples,
+            peak_export_w = _peak_numeric_value(
+                grid_samples,
                 slot_start=slot_start,
                 slot_end=slot_end,
             )
-            if any(value is False for value in export_values):
-                invalidated_slots.add(slot_key)
+            if peak_export_w is None or peak_export_w > inputs.max_export_w:
+                continue
+
+            forecast_wh = day_forecast.get(slot_key)
+            actual_wh = day_actuals.get(slot_key)
+            if forecast_wh is None or forecast_wh <= 0 or actual_wh is None:
+                continue
+            if actual_wh > forecast_wh * inputs.max_actual_forecast_ratio:
+                continue
+
+            invalidated_slots.add(slot_key)
 
         if invalidated_slots:
             invalidated_slots_by_date[day] = invalidated_slots
@@ -83,11 +131,7 @@ def _peak_numeric_value(
     slot_end: datetime,
 ) -> float | None:
     values = _segment_values(samples, slot_start=slot_start, slot_end=slot_end)
-    numeric_values = [
-        float(value)
-        for value in values
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-    ]
+    numeric_values = [float(value) for value in values if value is not None]
     if not numeric_values:
         return None
     return max(numeric_values)
@@ -98,18 +142,20 @@ def _segment_values(
     *,
     slot_start: datetime,
     slot_end: datetime,
-) -> list[float | bool | None]:
+) -> list[float | None]:
     """Return the values that describe the slot's state.
 
     Slot half-open as [slot_start, slot_end). A sample exactly at slot_start
-    is treated as the first in-window sample (the new state takes effect at
-    that instant), not as the carry from the previous slot. The carry is the
-    most recent KNOWN sample with timestamp < slot_start; transient
-    None values (HA `unknown`/`unavailable`) before slot_start are ignored
-    so a sub-second blip cannot wipe out the last known state.
+    replaces the carry rather than joining it: the new state takes effect at
+    that instant, so the previous slot's value never described any part of
+    this one. The carry is the most recent KNOWN sample with timestamp <
+    slot_start; transient None values (HA `unknown`/`unavailable`) before
+    slot_start are ignored so a sub-second blip cannot wipe out the last known
+    state. A sample a fraction of a second *after* slot_start does not replace
+    it — the carry did describe that fraction.
     """
-    values: list[float | bool | None] = []
-    current_value: float | bool | None = None
+    values: list[float | None] = []
+    current_value: float | None = None
 
     for sample in samples:
         if sample.timestamp < slot_start:
@@ -118,7 +164,7 @@ def _segment_values(
             continue
         if sample.timestamp >= slot_end:
             break
-        if not values:
+        if not values and sample.timestamp > slot_start:
             values.append(current_value)
         values.append(sample.value)
 

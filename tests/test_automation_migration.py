@@ -1116,5 +1116,59 @@ class SelfSustainabilityUnificationTests(unittest.TestCase):
         self.assertGreaterEqual(CONFIG_DOCUMENT_VERSION, 11)
 
 
+class ExportEnabledEntityRetirementTests(unittest.TestCase):
+    """v11 -> v12: curtailment is inferred, so the boolean entity key goes."""
+
+    @staticmethod
+    def _migrate_from_v11(slot_invalidation):
+        document = {
+            **_document(),
+            "config_version": 11,
+            "power_devices": {
+                "solar": {
+                    "forecast": {
+                        "bias_correction": {
+                            "min_history_days": 10,
+                            "slot_invalidation": slot_invalidation,
+                        }
+                    }
+                }
+            },
+        }
+        migrated, _ids = migrate_config_document(document)
+        return migrated["power_devices"]["solar"]["forecast"]["bias_correction"]
+
+    def test_the_retired_key_is_dropped(self) -> None:
+        bias = self._migrate_from_v11(
+            {
+                "max_battery_soc_percent": 97,
+                "export_enabled_entity_id": "switch.solax_export_enabled",
+            }
+        )
+
+        self.assertEqual(bias["slot_invalidation"], {"max_battery_soc_percent": 97})
+
+    def test_the_rest_of_the_block_is_left_alone(self) -> None:
+        bias = self._migrate_from_v11(
+            {
+                "max_battery_soc_percent": 97,
+                "data_glitch_backfill_max_minutes": 90,
+            }
+        )
+
+        self.assertEqual(
+            bias["slot_invalidation"],
+            {"max_battery_soc_percent": 97, "data_glitch_backfill_max_minutes": 90},
+        )
+        self.assertEqual(bias["min_history_days"], 10)
+
+    def test_a_document_without_the_block_survives(self) -> None:
+        migrated, _ids = migrate_config_document(
+            {**_document(), "config_version": 11}
+        )
+
+        self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+
+
 if __name__ == "__main__":
     unittest.main()

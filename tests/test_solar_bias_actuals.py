@@ -151,7 +151,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         cfg = SimpleNamespace(
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=None,
-            slot_invalidation_export_enabled_entity_id=None,
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
             slot_invalidation_data_glitch_max_slot_wh=None,
             slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
             slot_invalidation_data_glitch_backfill_max_minutes=120,
@@ -191,7 +192,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
                                     "entities": {
                                         "capacity": "sensor.battery_soc",
                                     }
-                                }
+                                },
+                                "grid": {"entities": {"power": "sensor.grid_power"}},
                             }
                         }
                     )
@@ -202,7 +204,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         cfg = SimpleNamespace(
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
-            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
             slot_invalidation_data_glitch_max_slot_wh=None,
             slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
             slot_invalidation_data_glitch_backfill_max_minutes=120,
@@ -213,6 +216,10 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(side_effect=[{"12:00": 600.0, "12:15": 400.0}, {"23:45": 50.0}]),
+        ), patch.object(
+            actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(return_value={"12:00": 900.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -247,7 +254,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         cfg = SimpleNamespace(
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
-            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
             slot_invalidation_data_glitch_max_slot_wh=None,
             slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
             slot_invalidation_data_glitch_backfill_max_minutes=120,
@@ -257,6 +265,10 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(return_value={"12:00": 600.0}),
+        ), patch.object(
+            actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(return_value={"12:00": 900.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
@@ -279,7 +291,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         cfg = SimpleNamespace(
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
-            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
             slot_invalidation_data_glitch_max_slot_wh=None,
             slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
             slot_invalidation_data_glitch_backfill_max_minutes=120,
@@ -296,7 +309,9 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             any("battery" in message and "slot invalidation" in message for message in captured_logs.output)
         )
 
-    async def test_load_actuals_window_uses_capacity_entity_without_soc_bounds(self) -> None:
+    async def test_load_actuals_window_skips_invalidation_when_grid_power_entity_is_missing(self) -> None:
+        """Curtailment cannot tell a clipped slot from an exporting one without
+        the grid sensor, so it stands down and says so."""
         hass = SimpleNamespace(
             data={
                 "helman": {
@@ -304,9 +319,7 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
                         config={
                             "power_devices": {
                                 "battery": {
-                                    "entities": {
-                                        "capacity": "sensor.battery_soc",
-                                    }
+                                    "entities": {"capacity": "sensor.battery_soc"}
                                 }
                             }
                         }
@@ -318,7 +331,8 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         cfg = SimpleNamespace(
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
-            slot_invalidation_export_enabled_entity_id="switch.export_enabled",
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
             slot_invalidation_data_glitch_max_slot_wh=None,
             slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
             slot_invalidation_data_glitch_backfill_max_minutes=120,
@@ -328,6 +342,70 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             actuals,
             "_read_day_slot_actuals",
             AsyncMock(return_value={"12:00": 600.0}),
+        ), patch.object(
+            actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(return_value={"12:00": 900.0}),
+        ) as load_forecast, patch.object(
+            actuals,
+            "_load_state_samples_for_entity",
+            AsyncMock(),
+        ) as load_state_samples, patch.object(
+            actuals,
+            "compute_invalidated_slots_for_window",
+        ) as compute_invalidated, self.assertLogs(
+            actuals.__name__, level="WARNING"
+        ) as captured_logs:
+            window = await actuals.load_actuals_window(hass, cfg, days=1)
+
+        self.assertEqual(window.invalidated_slots_by_date, {})
+        load_state_samples.assert_not_awaited()
+        compute_invalidated.assert_not_called()
+        # Nothing needs the forecast once curtailment has stood down and the
+        # data-glitch neighbour rule is off.
+        load_forecast.assert_not_awaited()
+        self.assertTrue(
+            any("grid.entities.power" in message for message in captured_logs.output)
+        )
+
+    async def test_load_actuals_window_uses_capacity_entity_without_soc_bounds(self) -> None:
+        hass = SimpleNamespace(
+            data={
+                "helman": {
+                    "coordinator": SimpleNamespace(
+                        config={
+                            "power_devices": {
+                                "battery": {
+                                    "entities": {
+                                        "capacity": "sensor.battery_soc",
+                                    }
+                                },
+                                "grid": {"entities": {"power": "sensor.grid_power"}},
+                            }
+                        }
+                    )
+                }
+            },
+            config=SimpleNamespace(time_zone="UTC"),
+        )
+        cfg = SimpleNamespace(
+            total_energy_entity_id="sensor.solax_total_solar_energy",
+            slot_invalidation_max_battery_soc_percent=87.0,
+            slot_invalidation_curtailment_max_export_w=50.0,
+            slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
+            slot_invalidation_data_glitch_max_slot_wh=None,
+            slot_invalidation_data_glitch_min_neighbour_forecast_wh=0.0,
+            slot_invalidation_data_glitch_backfill_max_minutes=120,
+        )
+
+        with patch.object(actuals, "datetime", _FixedDateTime), patch.object(
+            actuals,
+            "_read_day_slot_actuals",
+            AsyncMock(return_value={"12:00": 600.0}),
+        ), patch.object(
+            actuals,
+            "load_historical_per_slot_forecast",
+            AsyncMock(return_value={"12:00": 900.0}),
         ), patch.object(
             actuals,
             "_load_state_samples_for_entity",
