@@ -58,13 +58,16 @@ import {
 /**
  * The roster of tracks: every controllable entity whose lane can be authored.
  *
- * Ordered inverter first and then by name rather than by what happens to be
- * running, because these are stacked timelines -- a row that moves between
- * refreshes is a row nobody can point at.
+ * Ordered the way the controllables are written in the configuration rather
+ * than by name or by what happens to be running, because these are stacked
+ * timelines -- a row that moves between refreshes is a row nobody can point at,
+ * and the order the user wrote is the one they already have in their head.
  *
- * The inverter's place is an explicit sort on which controllable a lane is,
- * not a by-product of how the lanes were gathered: they now come from one flat
- * roster keyed by controllable id, so nothing else would keep it at the top.
+ * The roster the backend serves is that configuration order (the inverter
+ * first, then the appliances as configured), so the order is an explicit sort
+ * on each lane's place in it: the statuses arrive sorted by what is running,
+ * and lanes are gathered from one flat roster keyed by controllable id, so
+ * nothing else would carry the configuration's order through.
  */
 export function buildEntityScheduleLanes({
     statuses,
@@ -72,15 +75,16 @@ export function buildEntityScheduleLanes({
     appliances,
     actualHistory,
     slotDurationMs,
-    locale,
 }: {
     statuses: readonly ControllableEntityStatus[];
     controllableEntities: readonly ControllableEntityDTO[];
     appliances: readonly ScheduleApplianceMetadata[];
     actualHistory: Readonly<Record<string, EntityActualHistorySlotDTO[]>>;
     slotDurationMs: number;
-    locale: string;
 }): EntityScheduleLane[] {
+    const configOrder = new Map<string, number>(
+        controllableEntities.map((entity, index): [string, number] => [entity.entityId, index]),
+    );
     return statuses
         .flatMap((status) => {
             const target = status.scheduleTarget;
@@ -109,15 +113,8 @@ export function buildEntityScheduleLanes({
                 }),
             }];
         })
-        .sort((left, right) => {
-            const leftIsInverter = isInverterScheduleTarget(left.target);
-            const rightIsInverter = isInverterScheduleTarget(right.target);
-            if (leftIsInverter !== rightIsInverter) {
-                return leftIsInverter ? -1 : 1;
-            }
-
-            return left.name.localeCompare(right.name, locale);
-        });
+        .sort((left, right) => (configOrder.get(left.entityId) ?? Number.MAX_SAFE_INTEGER)
+            - (configOrder.get(right.entityId) ?? Number.MAX_SAFE_INTEGER));
 }
 
 /**

@@ -95,7 +95,7 @@ export interface ControllableEntityStatus {
 
 /**
  * Every entity Helman can drive, with its live state and its next scheduled
- * change, non-normal ones first.
+ * change, in the order the configuration lists them.
  *
  * The controllable set only changes with the config, so it is fetched once;
  * this resolves it against live `hass.states` on every update, which is what
@@ -143,8 +143,8 @@ export function buildControllableEntityStatuses({
             ? null
             : appliancesByEntityId.get(entity.entityId) ?? null;
         const isAvailable = !UNAVAILABLE_STATES.has(stateObj.state);
-        // An entity nobody can read is not "running", so it sorts with the ones
-        // at rest rather than pushing itself to the top of the list.
+        // An entity nobody can read is not "running", so it counts as at rest
+        // rather than as doing something.
         const isNormal = !isAvailable || stateObj.state === entity.normalState;
         const current = isAvailable
             ? _buildLiveStateView({
@@ -197,9 +197,11 @@ export function buildControllableEntityStatuses({
         });
     }
 
-    // Whatever is doing something comes first: the list answers "what is on
-    // right now?" before it answers "what else could be".
-    return statuses.sort((left, right) => Number(left.isNormal) - Number(right.isNormal));
+    // Left in the roster's own order, which is the order the controllables were
+    // configured in: the surfaces that draw them are stacked timelines, and they
+    // want a row that stays where the user put it rather than one that jumps as
+    // things switch on and off.
+    return statuses;
 }
 
 function _resolveScheduleTarget(

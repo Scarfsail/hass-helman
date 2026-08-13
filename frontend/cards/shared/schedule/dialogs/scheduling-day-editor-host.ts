@@ -634,7 +634,6 @@ export class SchedulingDayEditorHost extends LitElement {
             appliances: this._appliances,
             actualHistory: this._actualHistory,
             slotDurationMs: (this._normalized.granularityMinutes ?? 60) * 60_000,
-            locale: this._locale,
         });
         this._days = buildEntityScheduleDays({
             slots: this._dayView.slots,
