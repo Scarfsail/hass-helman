@@ -11,8 +11,12 @@ from homeassistant.util import dt as dt_util
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .recorder_hourly_series import query_slot_energy_changes
+from .solar_forecast_grid import SLOTS_PER_HOUR, split_hour_by_weights
 
 _LOGGER = logging.getLogger(__name__)
+
+#: Canonical slots in a day without a DST transition.
+_SLOTS_PER_NORMAL_DAY = 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
 
 
 class HelmanForecastBuilder:
@@ -52,7 +56,7 @@ class HelmanForecastBuilder:
         entities_with_points = 0
         for index, entity_id in enumerate(daily_entity_ids):
             expected_date = today + timedelta(days=index)
-            entity_points = self._extract_hourly_solar_points(entity_id, expected_date)
+            entity_points = self._extract_solar_points(entity_id, expected_date)
             if entity_points:
                 entities_with_points += 1
             points_with_sort_keys.extend(entity_points)
@@ -126,39 +130,41 @@ class HelmanForecastBuilder:
             for slot_start, value_kwh in sorted(values_by_slot.items())
         ]
 
-    def _extract_hourly_solar_points(
+    def _extract_solar_points(
         self, entity_id: str, expected_date: date
     ) -> list[tuple[datetime, dict[str, Any]]]:
         state = self._get_state(entity_id)
         if state is None:
             return []
 
-        wh_period = state.attributes.get("wh_period")
-        if not isinstance(wh_period, dict):
+        values = self._read_canonical_solar_values(state)
+        if not values:
             return []
 
-        parsed_points: list[tuple[datetime, float]] = []
-        for raw_key, raw_value in wh_period.items():
-            value = self._parse_float(raw_value)
-            if value is None:
-                continue
-
-            parsed_timestamp = self._parse_attribute_timestamp(raw_key)
-            if parsed_timestamp is None:
-                continue
-
-            parsed_points.append((parsed_timestamp, value))
-
-        if not parsed_points:
-            return []
-
-        parsed_points.sort(key=lambda item: dt_util.as_utc(item[0]))
-        expected_slots = self._build_local_hour_slots_for_date(expected_date)
+        expected_slots = self._build_local_slots_for_date(expected_date)
         if not expected_slots:
             return []
 
+        # The values are anchored positionally from local midnight, so a short
+        # or long series silently shifts or truncates the whole curve. A DST
+        # day is the one benign case: the source publishes a normal 24-hour
+        # series and the local axis is an hour shorter or longer, which the
+        # positional anchor is there to absorb.
+        if len(values) not in (len(expected_slots), _SLOTS_PER_NORMAL_DAY):
+            _LOGGER.warning(
+                "Solar forecast for %s on %s has %d values for %d slots; "
+                "anchoring from local midnight will %s",
+                entity_id,
+                expected_date,
+                len(values),
+                len(expected_slots),
+                "truncate it"
+                if len(values) > len(expected_slots)
+                else "leave the end of the day uncovered",
+            )
+
         points: list[tuple[datetime, dict[str, Any]]] = []
-        for slot_start, (_, value) in zip(expected_slots, parsed_points):
+        for slot_start, value in zip(expected_slots, values):
             points.append(
                 (
                     slot_start,
@@ -171,7 +177,73 @@ class HelmanForecastBuilder:
 
         return points
 
-    def _build_local_hour_slots_for_date(self, expected_date: date) -> list[datetime]:
+    def _read_canonical_solar_values(self, state) -> list[float]:
+        """Return the day's Wh values on the canonical grid, in chronological order.
+
+        Prefers the source's own 15-minute series. When only the hourly series
+        is published, each hour is split across its four slots using the
+        upstream ``watts`` samples, so the intra-hour shape survives.
+
+        Values are returned positionally rather than keyed by their source
+        timestamps: those offsets go stale across a DST change and would shift a
+        whole day by an hour (see ``b62ac2d``). ``_extract_solar_points``
+        re-anchors them onto the expected local axis instead.
+        """
+        attributes = getattr(state, "attributes", {})
+        if not isinstance(attributes, dict):
+            return []
+
+        quarter_hourly = self._read_sorted_series(attributes.get("wh_period_15m"))
+        if quarter_hourly:
+            return quarter_hourly
+
+        hourly = self._read_sorted_series(attributes.get("wh_period"))
+        if not hourly:
+            return []
+
+        watts = self._read_sorted_series(attributes.get("watts"))
+        return self._expand_hourly_values(hourly, watts)
+
+    def _read_sorted_series(self, raw_series: Any) -> list[float]:
+        """Parse a ``{timestamp: value}`` attribute into values ordered by time."""
+        if not isinstance(raw_series, dict):
+            return []
+
+        parsed: list[tuple[datetime, float]] = []
+        for raw_key, raw_value in raw_series.items():
+            value = self._parse_float(raw_value)
+            if value is None:
+                continue
+
+            parsed_timestamp = self._parse_attribute_timestamp(raw_key)
+            if parsed_timestamp is None:
+                continue
+
+            parsed.append((parsed_timestamp, value))
+
+        parsed.sort(key=lambda item: dt_util.as_utc(item[0]))
+        return [value for _, value in parsed]
+
+    @staticmethod
+    def _expand_hourly_values(hourly: list[float], watts: list[float]) -> list[float]:
+        """Expand hourly Wh onto the canonical grid, weighted by ``watts``.
+
+        ``watts`` is consumed positionally, four samples per hour, for the same
+        reason the values themselves are. An hour without a full set of samples
+        falls back to an even split, which ``split_hour_by_weights`` produces
+        from all-zero weights.
+        """
+        expanded: list[float] = []
+        for index, hour_wh in enumerate(hourly):
+            start = index * SLOTS_PER_HOUR
+            sub_weights = watts[start : start + SLOTS_PER_HOUR]
+            if len(sub_weights) != SLOTS_PER_HOUR:
+                sub_weights = [0.0] * SLOTS_PER_HOUR
+            expanded.extend(split_hour_by_weights(hour_wh, sub_weights))
+
+        return expanded
+
+    def _build_local_slots_for_date(self, expected_date: date) -> list[datetime]:
         local_start = datetime.combine(expected_date, time.min, tzinfo=self._local_tz)
         local_end = datetime.combine(
             expected_date + timedelta(days=1),
@@ -182,9 +254,10 @@ class HelmanForecastBuilder:
         slots: list[datetime] = []
         cursor_utc = dt_util.as_utc(local_start)
         end_utc = dt_util.as_utc(local_end)
+        step = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
         while cursor_utc < end_utc:
             slots.append(dt_util.as_local(cursor_utc))
-            cursor_utc += timedelta(hours=1)
+            cursor_utc += step
 
         return slots
 
