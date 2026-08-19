@@ -386,7 +386,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             ), patch.object(
                 service,
                 "_load_grid_actual_for_date",
-                AsyncMock(return_value=grid_actual or []),
+                AsyncMock(return_value=(grid_actual or [], [], [])),
             ), patch.object(
                 service,
                 "_load_battery_actual_for_date",

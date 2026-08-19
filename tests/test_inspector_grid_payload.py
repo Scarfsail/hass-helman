@@ -109,6 +109,10 @@ class TestFilterGridForecastFuture(unittest.TestCase):
     """Net grid forecast: positive is exported, negative is imported."""
 
     def _filter(self, series, local_now):
+        """The net series, which is what these cases are about."""
+        return self._filter_all(series, local_now)[0]
+
+    def _filter_all(self, series, local_now):
         return service_mod._filter_grid_forecast_future(
             {"series": series},
             target_date=date(2026, 5, 10),
@@ -159,6 +163,83 @@ class TestFilterGridForecastFuture(unittest.TestCase):
         self.assertEqual([p["wh"] for p in points], [400.0])
 
 
+class TestGridSidesSurviveSeparately(unittest.TestCase):
+    """The split money needs: a slot's two directions, not their difference."""
+
+    def _filter_all(self, series, local_now):
+        return service_mod._filter_grid_forecast_future(
+            {"series": series},
+            target_date=date(2026, 5, 10),
+            local_now=local_now,
+            timezone=PRAGUE,
+        )
+
+    def test_a_slot_that_both_imported_and_exported_keeps_both(self):
+        # The case netting destroys, and the reason this split exists: each side
+        # is billed at its own rate, so 0.4 net says nothing about what was paid.
+        net, imported, exported = self._filter_all(
+            [
+                {
+                    "timestamp": _slot(18).isoformat(),
+                    "importedFromGridKwh": 0.3,
+                    "exportedToGridKwh": 0.7,
+                }
+            ],
+            local_now=_slot(12),
+        )
+
+        self.assertEqual([p["wh"] for p in net], [400.0])
+        self.assertEqual([p["wh"] for p in imported], [300.0])
+        self.assertEqual([p["wh"] for p in exported], [700.0])
+
+    def test_each_side_is_a_positive_magnitude_of_its_own_direction(self):
+        _, imported, exported = self._filter_all(
+            [
+                {
+                    "timestamp": _slot(18).isoformat(),
+                    "importedFromGridKwh": 1.2,
+                    "exportedToGridKwh": 0.0,
+                }
+            ],
+            local_now=_slot(12),
+        )
+
+        # Net would be -1200; the side itself is not signed by direction.
+        self.assertEqual([p["wh"] for p in imported], [1200.0])
+        self.assertEqual([p["wh"] for p in exported], [0.0])
+
+
+class TestLoadGridActualSides(unittest.IsolatedAsyncioTestCase):
+    async def test_the_meters_reach_the_payload_unnetted(self):
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague"),
+            bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
+        )
+        service = service_mod.SolarBiasCorrectionService(
+            hass,
+            _DummyStore(),
+            _make_cfg(),
+            grid_import_energy_entity_id_provider=lambda: "sensor.grid_import",
+            grid_export_energy_entity_id_provider=lambda: "sensor.grid_export",
+        )
+        by_entity = {
+            "sensor.grid_import": {_slot(6): 0.3},
+            "sensor.grid_export": {_slot(6): 0.7},
+        }
+
+        async def _fake_load(entity_id, target_date, local_tz):
+            return by_entity[entity_id]
+
+        with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
+            net, imported, exported = await service._load_grid_actual_for_date(
+                date(2026, 5, 10), PRAGUE
+            )
+
+        self.assertAlmostEqual(net[0]["wh"], 400.0, places=6)
+        self.assertAlmostEqual(imported[0]["wh"], 300.0, places=6)
+        self.assertAlmostEqual(exported[0]["wh"], 700.0, places=6)
+
+
 class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
     def _make_service(self, *, import_entity="sensor.grid_import", export_entity="sensor.grid_export"):
         hass = SimpleNamespace(
@@ -184,7 +265,7 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
             return by_entity[entity_id]
 
         with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
 
         # Positive is exported to the grid, negative is imported from it.
         self.assertEqual(
@@ -204,7 +285,7 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
             return {_slot(6): 0.3}
 
         with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
 
         self.assertEqual([(p["timestamp"], p["wh"]) for p in points], [(_slot(6).isoformat(), -300.0)])
 
@@ -216,7 +297,7 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
             return {_slot(12): 0.8}
 
         with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
 
         self.assertEqual([(p["timestamp"], p["wh"]) for p in points], [(_slot(12).isoformat(), 800.0)])
 
@@ -229,7 +310,7 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
             return {}
 
         with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
 
         # The loader reports every Wh the meter recorded; the running slot is
         # dropped from the drawn series where the payload is assembled, so the
@@ -241,8 +322,10 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_empty_when_neither_meter_is_configured(self):
         service = self._make_service(import_entity=None, export_entity=None)
-        points = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
-        self.assertEqual(points, [])
+        self.assertEqual(
+            await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE),
+            ([], [], []),
+        )
 
 
 class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
@@ -275,6 +358,14 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
             {"timestamp": _slot(6).isoformat(), "wh": -300.0},
             {"timestamp": _slot(12).isoformat(), "wh": 800.0},
         ]
+        grid_import_actual = [
+            {"timestamp": _slot(6).isoformat(), "wh": 300.0},
+            {"timestamp": _slot(12).isoformat(), "wh": 0.0},
+        ]
+        grid_export_actual = [
+            {"timestamp": _slot(6).isoformat(), "wh": 0.0},
+            {"timestamp": _slot(12).isoformat(), "wh": 800.0},
+        ]
 
         old_now = service_mod.dt_util.now
         old_actuals = service_mod.load_actuals_for_day
@@ -292,7 +383,11 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
             ), patch.object(
                 service, "_load_battery_soc_actual_for_date", AsyncMock(return_value=[])
             ), patch.object(
-                service, "_load_grid_actual_for_date", AsyncMock(return_value=grid_actual)
+                service,
+                "_load_grid_actual_for_date",
+                AsyncMock(
+                    return_value=(grid_actual, grid_import_actual, grid_export_actual)
+                ),
             ):
                 payload = await service.async_get_inspector_day(TARGET_DATE)
         finally:
@@ -307,3 +402,13 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["availability"]["hasGridForecast"])
         self.assertEqual(payload["totals"]["gridActualWh"], 500.0)
         self.assertIsNone(payload["totals"]["gridForecastWh"])
+        # The two directions survive alongside the net they were netted into,
+        # which is what lets each be priced at its own rate.
+        self.assertEqual(
+            [p["valueWh"] for p in payload["series"]["gridImportActual"]], [300.0, 0.0]
+        )
+        self.assertEqual(
+            [p["valueWh"] for p in payload["series"]["gridExportActual"]], [0.0, 800.0]
+        )
+        self.assertTrue(payload["availability"]["hasGridSidesActual"])
+        self.assertFalse(payload["availability"]["hasGridSidesForecast"])

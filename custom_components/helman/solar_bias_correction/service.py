@@ -605,7 +605,7 @@ class SolarBiasCorrectionService:
         house_forecast_history_points: list[dict] = []
         house_actual_points: list[dict] = []
         battery_soc_actual_points: list[dict] = []
-        grid_actual_points: list[dict] = []
+        grid_actual_series: tuple[list[dict], list[dict], list[dict]] = ([], [], [])
         battery_actual_points: list[dict] = []
         breakdown_consumers: list[dict] = []
         consumer_slot_maps: list[dict] = []
@@ -616,7 +616,7 @@ class SolarBiasCorrectionService:
                 house_forecast_history_points,
                 house_actual_points,
                 battery_soc_actual_points,
-                grid_actual_points,
+                grid_actual_series,
                 battery_actual_points,
                 consumer_breakdown,
                 recorded_import_price_points,
@@ -654,8 +654,17 @@ class SolarBiasCorrectionService:
         drawn_battery_soc_actual_points = _drop_running_slot(
             battery_soc_actual_points, running_slot=running_slot
         )
+        grid_actual_points, grid_import_actual_points, grid_export_actual_points = (
+            grid_actual_series
+        )
         drawn_grid_actual_points = _drop_running_slot(
             grid_actual_points, running_slot=running_slot
+        )
+        drawn_grid_import_actual_points = _drop_running_slot(
+            grid_import_actual_points, running_slot=running_slot
+        )
+        drawn_grid_export_actual_points = _drop_running_slot(
+            grid_export_actual_points, running_slot=running_slot
         )
         drawn_battery_actual_points = _drop_running_slot(
             battery_actual_points, running_slot=running_slot
@@ -705,11 +714,15 @@ class SolarBiasCorrectionService:
         battery_soc_forecast_points: list[dict] = []
         grid_forecast_points: list[dict] = []
         battery_forecast_points: list[dict] = []
+        grid_import_forecast_points: list[dict] = []
+        grid_export_forecast_points: list[dict] = []
         if need_past:
             (
                 battery_soc_forecast_points,
                 grid_forecast_points,
                 battery_forecast_points,
+                grid_import_forecast_points,
+                grid_export_forecast_points,
             ) = self._recorded_battery_forecast_points(
                 target_date, cutoff=next_slot, timezone=timezone
             )
@@ -720,12 +733,15 @@ class SolarBiasCorrectionService:
                 local_now=local_now,
                 timezone=timezone,
             )
-            grid_forecast_points += _filter_grid_forecast_future(
+            future_net, future_import, future_export = _filter_grid_forecast_future(
                 battery_snapshot,
                 target_date=target_date,
                 local_now=local_now,
                 timezone=timezone,
             )
+            grid_forecast_points += future_net
+            grid_import_forecast_points += future_import
+            grid_export_forecast_points += future_export
             battery_forecast_points += _filter_battery_forecast_future(
                 battery_snapshot,
                 target_date=target_date,
@@ -813,6 +829,14 @@ class SolarBiasCorrectionService:
                 ),
                 grid_forecast=_inspector_points_from_raw(grid_forecast_points),
                 grid_actual=_inspector_points_from_raw(drawn_grid_actual_points),
+                grid_import_forecast=_inspector_points_from_raw(grid_import_forecast_points),
+                grid_export_forecast=_inspector_points_from_raw(grid_export_forecast_points),
+                grid_import_actual=_inspector_points_from_raw(
+                    drawn_grid_import_actual_points
+                ),
+                grid_export_actual=_inspector_points_from_raw(
+                    drawn_grid_export_actual_points
+                ),
                 battery_forecast=_inspector_points_from_raw(battery_forecast_points),
                 battery_actual=_inspector_points_from_raw(drawn_battery_actual_points),
                 import_price=_price_points(import_price_by_slot),
@@ -869,6 +893,12 @@ class SolarBiasCorrectionService:
                 has_battery_soc_actual=bool(drawn_battery_soc_actual_points),
                 has_grid_forecast=bool(grid_forecast_points),
                 has_grid_actual=bool(drawn_grid_actual_points),
+                has_grid_sides_forecast=bool(
+                    grid_import_forecast_points or grid_export_forecast_points
+                ),
+                has_grid_sides_actual=bool(
+                    drawn_grid_import_actual_points or drawn_grid_export_actual_points
+                ),
                 has_battery_forecast=bool(battery_forecast_points),
                 has_battery_actual=bool(drawn_battery_actual_points),
                 has_import_price=bool(import_price_by_slot),
@@ -972,24 +1002,31 @@ class SolarBiasCorrectionService:
 
     def _recorded_battery_forecast_points(
         self, target_date: date, *, cutoff: datetime | None, timezone: ZoneInfo
-    ) -> tuple[list[dict], list[dict], list[dict]]:
-        """Read archived SoC, net grid and net battery forecast slots for a day.
+    ) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
+        """Read archived SoC, grid and battery forecast slots for a day.
 
-        Returns (soc points, grid points, battery points) for slots starting
-        before cutoff, or for the whole day when cutoff is None. Days archived
-        before batteryNetWh existed yield no battery points.
+        Returns (soc, grid net, battery, grid import, grid export) points for
+        slots starting before cutoff, or for the whole day when cutoff is None.
+        A key added after a day was archived simply yields no points for it —
+        days written before batteryNetWh have no battery series, and days
+        written before the grid sides were split have the net but neither side.
         """
+        empty: tuple[list[dict], list[dict], list[dict], list[dict], list[dict]] = (
+            [], [], [], [], []
+        )
         if self._battery_forecast_history is None:
-            return [], [], []
+            return empty
         try:
             slots = self._battery_forecast_history.slots_for_day(target_date)
         except Exception:
             _LOGGER.exception("Failed to read battery forecast history for inspector")
-            return [], [], []
+            return empty
         cutoff_minutes = _minutes_into_day(cutoff, target_date)
         soc_points: list[dict] = []
         grid_points: list[dict] = []
         battery_points: list[dict] = []
+        grid_import_points: list[dict] = []
+        grid_export_points: list[dict] = []
         for slot in sorted(slots):
             minutes = _slot_to_minutes(slot)
             if minutes is None or minutes >= cutoff_minutes:
@@ -1008,12 +1045,28 @@ class SolarBiasCorrectionService:
                 grid_points.append(
                     {"timestamp": timestamp.isoformat(), "wh": float(grid_net_wh)}
                 )
+            grid_import_wh = values.get("gridImportWh")
+            if grid_import_wh is not None:
+                grid_import_points.append(
+                    {"timestamp": timestamp.isoformat(), "wh": float(grid_import_wh)}
+                )
+            grid_export_wh = values.get("gridExportWh")
+            if grid_export_wh is not None:
+                grid_export_points.append(
+                    {"timestamp": timestamp.isoformat(), "wh": float(grid_export_wh)}
+                )
             battery_net_wh = values.get("batteryNetWh")
             if battery_net_wh is not None:
                 battery_points.append(
                     {"timestamp": timestamp.isoformat(), "wh": float(battery_net_wh)}
                 )
-        return soc_points, grid_points, battery_points
+        return (
+            soc_points,
+            grid_points,
+            battery_points,
+            grid_import_points,
+            grid_export_points,
+        )
 
     async def _guarded_points(self, coro, description: str) -> list[dict]:
         """Await a series loader, degrading to an empty series if it fails.
@@ -1251,11 +1304,17 @@ class SolarBiasCorrectionService:
 
     async def _load_grid_actual_for_date(
         self, target_date: date, local_tz: ZoneInfo
-    ) -> list[dict]:
-        """Load per-15-min net grid energy for target_date.
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """Load per-15-min grid energy for target_date, as (net, imported, exported).
 
-        Positive is exported to the grid, negative is imported from it, matching
-        the sign of the grid forecast and of gridNetKwh elsewhere in the project.
+        Net is positive when exporting and negative when importing, matching the
+        sign of the grid forecast and of gridNetKwh elsewhere in the project.
+        The two sides are each a positive magnitude of their own direction.
+
+        The meters are read separately and always have been; what changed is
+        that both sides now survive the call. Netting them here discards the
+        one thing money needs — a slot can import at one rate and export at
+        another, and no rate applied to the net reproduces what was charged.
 
         Only one of the two meters needs to be configured; the missing side
         contributes zero, the same way a snapshot slot without one of the grid
@@ -1268,7 +1327,7 @@ class SolarBiasCorrectionService:
         import_entity = _entity_id(self._grid_import_energy_entity_id_provider)
         export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
         if not import_entity and not export_entity:
-            return []
+            return [], [], []
 
         async def _load(entity_id: str | None) -> dict[datetime, float]:
             if not entity_id:
@@ -1282,12 +1341,19 @@ class SolarBiasCorrectionService:
             )
         except Exception:
             _LOGGER.exception("Failed to load grid actual for inspector")
-            return []
+            return [], [], []
+        slots = imported.keys() | exported.keys()
         net_wh_by_slot = {
             slot: (exported.get(slot, 0.0) - imported.get(slot, 0.0)) * 1000.0
-            for slot in imported.keys() | exported.keys()
+            for slot in slots
         }
-        return _slot_energy_points(net_wh_by_slot, target_date)
+        import_wh_by_slot = {slot: imported.get(slot, 0.0) * 1000.0 for slot in slots}
+        export_wh_by_slot = {slot: exported.get(slot, 0.0) * 1000.0 for slot in slots}
+        return (
+            _slot_energy_points(net_wh_by_slot, target_date),
+            _slot_energy_points(import_wh_by_slot, target_date),
+            _slot_energy_points(export_wh_by_slot, target_date),
+        )
 
     async def _load_recorded_price_rail(
         self,
@@ -2514,13 +2580,21 @@ def _filter_grid_forecast_future(
     target_date: date,
     local_now: datetime,
     timezone: ZoneInfo,
-) -> list[dict]:
-    """Extract future net grid energy slots for target_date from the snapshot.
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Extract future grid energy slots for target_date from the snapshot.
 
-    Positive is exported to the grid, negative is imported from it, matching
-    gridNetKwh in the scheduling and forecast cards.
+    Returns (net, imported, exported). Net is positive when exporting and
+    negative when importing, matching gridNetKwh in the scheduling and forecast
+    cards; the two sides are each positive magnitudes of their own direction.
+
+    Both are produced because they answer different questions. The chart draws
+    one signed series and wants the net; money has to price each side at its own
+    rate, and a slot that both imported and exported cannot be recovered from
+    the net after the fact.
     """
-    points: list[dict] = []
+    net_points: list[dict] = []
+    import_points: list[dict] = []
+    export_points: list[dict] = []
     for ts_local, entry in _iter_future_snapshot_entries(
         snapshot, target_date=target_date, local_now=local_now, timezone=timezone
     ):
@@ -2528,9 +2602,13 @@ def _filter_grid_forecast_future(
         exported = entry.get("exportedToGridKwh")
         if imported is None and exported is None:
             continue
-        net_kwh = float(exported or 0.0) - float(imported or 0.0)
-        points.append({"timestamp": ts_local.isoformat(), "wh": net_kwh * 1000.0})
-    return points
+        timestamp = ts_local.isoformat()
+        imported_wh = float(imported or 0.0) * 1000.0
+        exported_wh = float(exported or 0.0) * 1000.0
+        net_points.append({"timestamp": timestamp, "wh": exported_wh - imported_wh})
+        import_points.append({"timestamp": timestamp, "wh": imported_wh})
+        export_points.append({"timestamp": timestamp, "wh": exported_wh})
+    return net_points, import_points, export_points
 
 
 def _filter_battery_forecast_future(

@@ -265,6 +265,12 @@ class SolarBiasInspectorSeries:
     battery_soc_actual: list[BatterySocPoint] = field(default_factory=list)
     grid_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
     grid_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    #: The two grid directions kept apart, alongside the signed net above. Money
+    #: prices each at its own rate, which no rate applied to the net reproduces.
+    grid_import_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    grid_export_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    grid_import_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
+    grid_export_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
     battery_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
     battery_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
     #: What the grid charged and paid per slot. Both rails span the whole day —
@@ -303,6 +309,8 @@ class SolarBiasInspectorAvailability:
     has_battery_soc_actual: bool = False
     has_grid_forecast: bool = False
     has_grid_actual: bool = False
+    has_grid_sides_forecast: bool = False
+    has_grid_sides_actual: bool = False
     has_battery_forecast: bool = False
     has_battery_actual: bool = False
     has_import_price: bool = False
@@ -381,6 +389,18 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             ],
             "gridForecast": [_inspector_point_payload(p) for p in day.series.grid_forecast],
             "gridActual": [_inspector_point_payload(p) for p in day.series.grid_actual],
+            "gridImportForecast": [
+                _inspector_point_payload(p) for p in day.series.grid_import_forecast
+            ],
+            "gridExportForecast": [
+                _inspector_point_payload(p) for p in day.series.grid_export_forecast
+            ],
+            "gridImportActual": [
+                _inspector_point_payload(p) for p in day.series.grid_import_actual
+            ],
+            "gridExportActual": [
+                _inspector_point_payload(p) for p in day.series.grid_export_actual
+            ],
             "batteryForecast": [
                 _inspector_point_payload(p) for p in day.series.battery_forecast
             ],
@@ -421,6 +441,8 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasBatterySocActual": day.availability.has_battery_soc_actual,
             "hasGridForecast": day.availability.has_grid_forecast,
             "hasGridActual": day.availability.has_grid_actual,
+            "hasGridSidesForecast": day.availability.has_grid_sides_forecast,
+            "hasGridSidesActual": day.availability.has_grid_sides_actual,
             "hasBatteryForecast": day.availability.has_battery_forecast,
             "hasBatteryActual": day.availability.has_battery_actual,
             "hasImportPrice": day.availability.has_import_price,

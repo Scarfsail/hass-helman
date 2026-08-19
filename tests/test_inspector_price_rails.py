@@ -461,7 +461,7 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
             ), patch.object(
                 service, "_load_battery_soc_actual_for_date", AsyncMock(return_value=[])
             ), patch.object(
-                service, "_load_grid_actual_for_date", AsyncMock(return_value=[])
+                service, "_load_grid_actual_for_date", AsyncMock(return_value=([], [], []))
             ), patch.object(
                 service, "_load_battery_actual_for_date", AsyncMock(return_value=[])
             ), patch.object(
