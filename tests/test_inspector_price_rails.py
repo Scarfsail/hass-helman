@@ -170,7 +170,7 @@ def _all_slots() -> list[str]:
 
 
 class TestLivePriceRail(unittest.TestCase):
-    """The forward half of a rail, as the live feed delivers it."""
+    """What the live feed delivers, laid onto the rail's own slot grid."""
 
     def test_keys_points_by_local_slot_and_drops_other_days(self):
         rail = service_mod._live_price_rail(
@@ -185,7 +185,36 @@ class TestLivePriceRail(unittest.TestCase):
             date(2026, 5, 11),
             PRAGUE,
         )
-        self.assertEqual(rail, {"10:00": 2.0, "10:15": 3.0})
+
+        # Only this day's points, and nothing before the first of them: the
+        # elapsed half of a forward-only feed stays the recorder's to answer.
+        self.assertNotIn("09:45", rail)
+        self.assertEqual(rail["10:00"], 2.0)
+        # The last point carries to the end of the day rather than stopping dead.
+        self.assertEqual(rail["10:15"], 3.0)
+        self.assertEqual(rail["23:45"], 3.0)
+
+    def test_an_hourly_feed_fills_the_quarter_hours_between_its_points(self):
+        # The sell-price entity publishes hourly. Matching only exact slots would
+        # leave three of every four empty, and the recorder would then fill them
+        # with whatever stale sample it held -- which is the sawtooth this
+        # carry-forward exists to prevent.
+        rail = service_mod._live_price_rail(
+            {
+                "points": [
+                    {"timestamp": "2026-05-11T00:00:00+02:00", "value": 3.9},
+                    {"timestamp": "2026-05-11T01:00:00+02:00", "value": 3.5},
+                ]
+            },
+            date(2026, 5, 11),
+            PRAGUE,
+        )
+
+        self.assertEqual(
+            [rail[slot] for slot in ("00:00", "00:15", "00:30", "00:45")],
+            [3.9, 3.9, 3.9, 3.9],
+        )
+        self.assertEqual([rail["01:00"], rail["01:45"]], [3.5, 3.5])
 
     def test_an_absent_channel_is_an_empty_rail(self):
         self.assertEqual(service_mod._live_price_rail(None, date(2026, 5, 11), PRAGUE), {})
@@ -481,6 +510,48 @@ class TestTodayJoinsRecorderAndLiveFeed(_PayloadCase):
         self.assertEqual(self._by_slot(export_rail)["10:15"], 1.5)
         self.assertTrue(payload["availability"]["hasImportPrice"])
         self.assertTrue(payload["availability"]["hasExportPrice"])
+
+
+class TestTodaysExportFeedBeatsTheRecorder(_PayloadCase):
+    """The bug live validation caught: elapsed hours drawn as one flat value."""
+
+    async def test_the_whole_day_feed_overrides_recorded_export_samples(self):
+        # The sell-price entity's attributes carry the settled day-ahead
+        # schedule for the *whole* day, elapsed hours included, while its
+        # recorded state is only a sample of whichever hour was current when
+        # Home Assistant happened to be running. Deferring to the recorder drew
+        # every elapsed slot at one carried value.
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(TODAY, export_from="00:00"),
+        )
+        payload = await self._payload(
+            service,
+            TODAY,
+            recorded={EXPORT_ENTITY: _rail(_all_slots(), 6.242)},
+        )
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual(set(export_rail.values()), {1.5})
+        self.assertNotIn(6.242, set(export_rail.values()))
+
+    async def test_the_recorder_still_answers_the_slots_the_feed_misses(self):
+        # A forward-only feed opened mid-morning: everything before it is the
+        # recorder's, everything from it on is the feed's.
+        service = self._make_service(
+            import_config=_import_config(),
+            price_snapshot=_live_snapshot(TODAY, export_from="10:00"),
+        )
+        payload = await self._payload(
+            service,
+            TODAY,
+            recorded={EXPORT_ENTITY: _rail(_all_slots(), 6.242)},
+        )
+
+        export_rail = self._by_slot(payload["series"]["exportPrice"])
+        self.assertEqual(export_rail["09:45"], 6.242)
+        self.assertEqual(export_rail["10:00"], 1.5)
+        self.assertEqual(export_rail["23:45"], 1.5)
 
 
 class TestElapsedDayComesFromTheRecorder(_PayloadCase):

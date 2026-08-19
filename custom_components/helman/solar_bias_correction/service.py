@@ -52,6 +52,9 @@ _LOGGER = logging.getLogger(__name__)
 # A pill row never offers more than a month of days, and the span is what sizes
 # the recorder read.
 _MAX_AGGREGATE_DAYS = 31
+#: The price rails' own grid, matching the schedule's canonical slot.
+PRICE_RAIL_SLOT_MINUTES = 15
+MINUTES_PER_DAY = 24 * 60
 
 
 class TrainingInProgressError(RuntimeError):
@@ -753,10 +756,15 @@ class SolarBiasCorrectionService:
             price_snapshot.get("import"), target_date, timezone
         ).items():
             import_price_by_slot.setdefault(slot, value)
+        # The export feed overrides the recorder rather than deferring to it.
+        # Its attribute map is the settled day-ahead schedule for the whole day,
+        # while the entity's recorded *state* is only ever a sample of whichever
+        # hour was current when Home Assistant happened to be running — sparse
+        # across any gap in uptime, and flat wherever it is sparse.
         for slot, value in _live_price_rail(
             price_snapshot.get("export"), target_date, timezone
         ).items():
-            export_price_by_slot.setdefault(slot, value)
+            export_price_by_slot[slot] = value
 
         import_price_config = self._grid_import_price_config()
         price_unit: str | None = None
@@ -2047,9 +2055,18 @@ def _live_price_rail(
 ) -> dict[str, float]:
     """The live price feed's points for one day, keyed by local ``HH:MM`` slot.
 
-    The feed starts at the slot in progress and runs forward over the whole
-    horizon, so this is the half of the rail the recorder cannot answer — and
-    for a day still ahead of the clock, the whole of it.
+    The two channels do not have the same reach, and assuming they do was a
+    bug. The import channel is built forward from the slot in progress, so it
+    answers only for what is still ahead. The export channel is the sell-price
+    entity's attribute map, which carries the whole day at its own resolution —
+    *including hours that have already elapsed* — because that is how a
+    day-ahead spot feed publishes.
+
+    Each point is carried forward across the slots that follow it until the next
+    one, so an hourly feed fills the quarter-hours between its points rather
+    than leaving three of every four empty for something coarser to guess at.
+    Slots before the feed's first point stay absent, which is what leaves the
+    elapsed half of a day to the recorder.
     """
     if not isinstance(channel, dict):
         return {}
@@ -2072,7 +2089,18 @@ def _live_price_rail(
         except (TypeError, ValueError):
             continue
         by_slot[local_timestamp.strftime("%H:%M")] = value
-    return by_slot
+    if not by_slot:
+        return {}
+
+    filled: dict[str, float] = {}
+    carried: float | None = None
+    for minutes in range(0, MINUTES_PER_DAY, PRICE_RAIL_SLOT_MINUTES):
+        label = f"{minutes // 60:02d}:{minutes % 60:02d}"
+        if label in by_slot:
+            carried = by_slot[label]
+        if carried is not None:
+            filled[label] = carried
+    return filled
 
 
 def _fill_import_rail_from_config(
