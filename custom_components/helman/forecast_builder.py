@@ -15,6 +15,9 @@ from .solar_forecast_grid import SLOTS_PER_HOUR, split_hour_by_weights
 
 _LOGGER = logging.getLogger(__name__)
 
+#: Canonical slots in a day without a DST transition.
+_SLOTS_PER_NORMAL_DAY = 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
+
 
 class HelmanForecastBuilder:
     def __init__(self, hass: HomeAssistant, config: dict) -> None:
@@ -141,6 +144,24 @@ class HelmanForecastBuilder:
         expected_slots = self._build_local_slots_for_date(expected_date)
         if not expected_slots:
             return []
+
+        # The values are anchored positionally from local midnight, so a short
+        # or long series silently shifts or truncates the whole curve. A DST
+        # day is the one benign case: the source publishes a normal 24-hour
+        # series and the local axis is an hour shorter or longer, which the
+        # positional anchor is there to absorb.
+        if len(values) not in (len(expected_slots), _SLOTS_PER_NORMAL_DAY):
+            _LOGGER.warning(
+                "Solar forecast for %s on %s has %d values for %d slots; "
+                "anchoring from local midnight will %s",
+                entity_id,
+                expected_date,
+                len(values),
+                len(expected_slots),
+                "truncate it"
+                if len(values) > len(expected_slots)
+                else "leave the end of the day uncovered",
+            )
 
         points: list[tuple[datetime, dict[str, Any]]] = []
         for slot_start, value in zip(expected_slots, values):

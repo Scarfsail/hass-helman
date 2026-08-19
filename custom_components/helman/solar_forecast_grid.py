@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-#: The quarter-hour offsets, in minutes, that make up one hour of the canonical grid.
-SUB_SLOT_OFFSETS_MIN = (0, 15, 30, 45)
+from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES
+
+#: The offsets, in minutes, that make up one hour of the canonical grid. Derived
+#: from the canonical granularity rather than hardcoded, so a change to it moves
+#: the expansion and the slot axis together instead of silently desynchronising
+#: them.
+SUB_SLOT_OFFSETS_MIN = tuple(range(0, 60, FORECAST_CANONICAL_GRANULARITY_MINUTES))
 
 #: How many canonical slots one source hour expands into.
 SLOTS_PER_HOUR = len(SUB_SLOT_OFFSETS_MIN)

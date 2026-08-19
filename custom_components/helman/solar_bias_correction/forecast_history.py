@@ -26,7 +26,15 @@ def _expand_hourly_to_15min(
     hourly_wh: dict[str, float],
     watts: dict[str, float],
 ) -> dict[str, float]:
-    """Split hourly Wh into 15-minute slots using upstream watts weighting."""
+    """Split hourly Wh into 15-minute slots using upstream watts weighting.
+
+    An hour without a full set of watts samples is dropped rather than split
+    evenly. This is deliberately stricter than the forecast builder, which
+    even-splits the same input: the builder must not lose energy from the plan,
+    whereas the trainer must not learn a bias factor from a shape it guessed.
+    A dropped hour simply leaves that slot without a forecast, which the trainer
+    already skips.
+    """
     result: dict[str, float] = {}
     for hour_key, hour_wh in hourly_wh.items():
         hour_text, _, minute_text = hour_key.partition(":")
@@ -109,12 +117,21 @@ def _read_per_slot_forecast(
     Prefers the source's own 15-minute series, which the upstream integration
     started publishing on 2026-08-19. Older recorded states carry only the
     hourly series, so those still go through the watts-weighted expansion.
+
+    The 15-minute series is only taken when it covers every hour the hourly
+    series does. ``wh_period`` is structurally a full day; the newer attribute
+    carries no such guarantee, and a partial one would otherwise become the
+    whole day's forecast. The trainer stretches its last slot to midnight
+    (``trainer._aggregate_actuals_into_forecast_slot``), so a short map would
+    weigh a full day of actuals against a sliver of forecast and poison the
+    slot factor.
     """
     quarter_hourly = _read_slot_map(attributes, "wh_period_15m", local_tz)
-    if quarter_hourly:
+    hourly = _read_slot_map(attributes, "wh_period", local_tz)
+
+    if quarter_hourly and _covers_every_hour(quarter_hourly, hourly):
         return quarter_hourly
 
-    hourly = _read_slot_map(attributes, "wh_period", local_tz)
     if not hourly:
         return {}
 
@@ -122,6 +139,34 @@ def _read_per_slot_forecast(
         hourly,
         _read_slot_map(attributes, "watts", local_tz),
     )
+
+
+def _covers_every_hour(
+    quarter_hourly: dict[str, float],
+    hourly: dict[str, float],
+) -> bool:
+    """Whether ``quarter_hourly`` has every sub-slot of every hour in ``hourly``.
+
+    With no hourly series to check against there is nothing better to fall back
+    to, so the 15-minute map is taken as-is.
+    """
+    if not hourly:
+        return True
+
+    for hour_key in hourly:
+        hour_text, _, minute_text = hour_key.partition(":")
+        try:
+            hour = int(hour_text)
+            minute = int(minute_text)
+        except ValueError:
+            continue
+        if minute != 0:
+            continue
+        for offset in SUB_SLOT_OFFSETS_MIN:
+            if f"{hour:02d}:{offset:02d}" not in quarter_hourly:
+                return False
+
+    return True
 
 
 async def load_forecast_points_for_day(
