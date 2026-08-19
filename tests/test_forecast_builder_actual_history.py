@@ -243,7 +243,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 builder,
-                "_extract_hourly_solar_points",
+                "_extract_solar_points",
                 return_value=[
                     (
                         datetime.fromisoformat("2026-03-20T22:00:00+01:00"),
@@ -266,7 +266,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             interval_minutes=15,
         )
 
-    async def test_extract_hourly_solar_points_reanchors_post_dst_stale_offset_day(self) -> None:
+    async def test_extract_solar_points_reanchors_post_dst_stale_offset_day(self) -> None:
         entity_id = "sensor.energy_production_d2"
         wh_period = {
             f"2026-03-30T{hour:02d}:00:00+01:00": float(hour)
@@ -279,17 +279,19 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
-            points = builder._extract_hourly_solar_points(entity_id, date(2026, 3, 30))
+            points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
 
-        self.assertEqual(len(points), 24)
+        self.assertEqual(len(points), 96)
         self.assertEqual(points[0][0].isoformat(), "2026-03-30T00:00:00+02:00")
         self.assertEqual(points[0][1]["timestamp"], "2026-03-30T00:00:00+02:00")
         self.assertEqual(points[0][1]["value"], 0.0)
-        self.assertEqual(points[1][0].isoformat(), "2026-03-30T01:00:00+02:00")
-        self.assertEqual(points[-1][0].isoformat(), "2026-03-30T23:00:00+02:00")
-        self.assertEqual(points[-1][1]["value"], 23.0)
+        self.assertEqual(points[1][0].isoformat(), "2026-03-30T00:15:00+02:00")
+        self.assertEqual(points[4][0].isoformat(), "2026-03-30T01:00:00+02:00")
+        self.assertEqual(points[-1][0].isoformat(), "2026-03-30T23:45:00+02:00")
+        # No watts to weight with, so each hour is split evenly across its slots.
+        self.assertAlmostEqual(points[-1][1]["value"], 23.0 / 4)
 
-    async def test_extract_hourly_solar_points_keeps_dst_gap_day_on_local_hour_axis(self) -> None:
+    async def test_extract_solar_points_keeps_dst_gap_day_on_local_slot_axis(self) -> None:
         entity_id = "sensor.energy_production_tomorrow"
         wh_period = {
             f"2026-03-29T{hour:02d}:00:00+01:00": float(hour)
@@ -302,16 +304,92 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
-            points = builder._extract_hourly_solar_points(entity_id, date(2026, 3, 29))
+            points = builder._extract_solar_points(entity_id, date(2026, 3, 29))
 
-        self.assertEqual(len(points), 23)
+        # 23 real local hours on a spring-forward day.
+        self.assertEqual(len(points), 92)
         self.assertEqual(points[0][0].isoformat(), "2026-03-29T00:00:00+01:00")
-        self.assertEqual(points[1][0].isoformat(), "2026-03-29T01:00:00+01:00")
-        self.assertEqual(points[2][0].isoformat(), "2026-03-29T03:00:00+02:00")
+        self.assertEqual(points[4][0].isoformat(), "2026-03-29T01:00:00+01:00")
+        self.assertEqual(points[8][0].isoformat(), "2026-03-29T03:00:00+02:00")
         self.assertTrue(all("T02:" not in point["timestamp"] for _, point in points))
-        self.assertEqual(points[2][1]["value"], 2.0)
-        self.assertEqual(points[-1][0].isoformat(), "2026-03-29T23:00:00+02:00")
-        self.assertEqual(points[-1][1]["value"], 22.0)
+        self.assertAlmostEqual(points[8][1]["value"], 2.0 / 4)
+        self.assertEqual(points[-1][0].isoformat(), "2026-03-29T23:45:00+02:00")
+        self.assertAlmostEqual(points[-1][1]["value"], 22.0 / 4)
+
+    async def test_extract_solar_points_prefers_the_fifteen_minute_series(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        wh_period_15m = {
+            f"2026-03-30T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+02:00": float(slot)
+            for slot in range(96)
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(
+                    attributes={
+                        "wh_period_15m": wh_period_15m,
+                        # Deliberately contradictory, to prove which one wins.
+                        "wh_period": {
+                            f"2026-03-30T{hour:02d}:00:00+02:00": 1000.0
+                            for hour in range(24)
+                        },
+                    }
+                ),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+            points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
+
+        self.assertEqual(len(points), 96)
+        self.assertEqual(points[0][1]["value"], 0.0)
+        self.assertEqual(points[1][0].isoformat(), "2026-03-30T00:15:00+02:00")
+        self.assertEqual(points[1][1]["value"], 1.0)
+        self.assertEqual(points[-1][1]["value"], 95.0)
+
+    async def test_extract_solar_points_weights_the_hourly_split_by_watts(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        wh_period = {"2026-03-30T00:00:00+02:00": 100.0}
+        # The whole hour's output lands in its third quarter.
+        watts = {
+            "2026-03-30T00:00:00+02:00": 0.0,
+            "2026-03-30T00:15:00+02:00": 0.0,
+            "2026-03-30T00:30:00+02:00": 400.0,
+            "2026-03-30T00:45:00+02:00": 0.0,
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(
+                    attributes={"wh_period": wh_period, "watts": watts}
+                ),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+            points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
+
+        self.assertEqual([point["value"] for _, point in points[:4]], [0.0, 0.0, 100.0, 0.0])
+
+    async def test_extract_solar_points_splits_evenly_without_usable_watts(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        wh_period = {"2026-03-30T00:00:00+02:00": 100.0}
+        # Only three of the hour's four samples, so the set is unusable.
+        watts = {
+            "2026-03-30T00:00:00+02:00": 10.0,
+            "2026-03-30T00:15:00+02:00": 20.0,
+            "2026-03-30T00:30:00+02:00": 30.0,
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(
+                    attributes={"wh_period": wh_period, "watts": watts}
+                ),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", _FakeDtUtil):
+            points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
+
+        self.assertEqual([point["value"] for _, point in points[:4]], [25.0, 25.0, 25.0, 25.0])
 
 
 if __name__ == "__main__":

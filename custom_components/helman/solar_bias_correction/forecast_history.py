@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..solar_forecast_grid import SUB_SLOT_OFFSETS_MIN, split_hour_by_weights
 from .models import BiasConfig, TrainerSample
 
 try:
@@ -19,8 +20,6 @@ try:
     from homeassistant.components.recorder.history import state_changes_during_period
 except Exception:  # pragma: no cover - Home Assistant API compatibility
     state_changes_during_period = None  # type: ignore[assignment]
-
-_SUB_SLOT_OFFSETS_MIN = (0, 15, 30, 45)
 
 
 def _expand_hourly_to_15min(
@@ -39,22 +38,90 @@ def _expand_hourly_to_15min(
         if minute != 0:
             continue
 
-        sub_keys = [f"{hour:02d}:{offset:02d}" for offset in _SUB_SLOT_OFFSETS_MIN]
+        sub_keys = [f"{hour:02d}:{offset:02d}" for offset in SUB_SLOT_OFFSETS_MIN]
         if not all(key in watts for key in sub_keys):
             continue
 
         sub_watts = [float(watts[key]) for key in sub_keys]
-        total_watts = sum(sub_watts)
-        if total_watts <= 0.0:
-            share = hour_wh / len(sub_keys)
-            for key in sub_keys:
-                result[key] = share
-            continue
-
-        for key, sub_watt in zip(sub_keys, sub_watts):
-            result[key] = hour_wh * sub_watt / total_watts
+        for key, value in zip(sub_keys, split_hour_by_weights(hour_wh, sub_watts)):
+            result[key] = value
 
     return result
+
+
+def _normalize_slot_key(raw_key: Any, local_tz: ZoneInfo) -> str | None:
+    """Return ``raw_key`` as a local ``HH:MM`` slot key.
+
+    Accepts a full ISO timestamp, which is what the source integration
+    publishes, or an already-normalised ``HH:MM`` key. The expansion this feeds
+    used to index ``watts`` by its raw keys, so the bare form has to keep
+    working.
+    """
+    timestamp = _parse_attribute_timestamp(raw_key, local_tz)
+    if timestamp is not None:
+        local_ts = dt_util.as_local(timestamp)
+        return f"{local_ts.hour:02d}:{local_ts.minute:02d}"
+
+    if not isinstance(raw_key, str):
+        return None
+
+    hour_text, separator, minute_text = raw_key.partition(":")
+    if not separator:
+        return None
+    try:
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        return None
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _read_slot_map(
+    attributes: dict[str, Any],
+    attribute_name: str,
+    local_tz: ZoneInfo,
+) -> dict[str, float]:
+    """Parse a ``{timestamp: value}`` attribute into a ``HH:MM`` -> value map."""
+    raw_series = attributes.get(attribute_name)
+    if not isinstance(raw_series, dict):
+        return {}
+
+    result: dict[str, float] = {}
+    for raw_key, raw_value in raw_series.items():
+        value = _parse_attribute_wh(raw_value)
+        slot_key = _normalize_slot_key(raw_key, local_tz)
+        if value is None or slot_key is None:
+            continue
+        result[slot_key] = value
+
+    return result
+
+
+def _read_per_slot_forecast(
+    attributes: dict[str, Any],
+    local_tz: ZoneInfo,
+) -> dict[str, float]:
+    """Return the day's ``HH:MM`` -> Wh map on the canonical 15-minute grid.
+
+    Prefers the source's own 15-minute series, which the upstream integration
+    started publishing on 2026-08-19. Older recorded states carry only the
+    hourly series, so those still go through the watts-weighted expansion.
+    """
+    quarter_hourly = _read_slot_map(attributes, "wh_period_15m", local_tz)
+    if quarter_hourly:
+        return quarter_hourly
+
+    hourly = _read_slot_map(attributes, "wh_period", local_tz)
+    if not hourly:
+        return {}
+
+    return _expand_hourly_to_15min(
+        hourly,
+        _read_slot_map(attributes, "watts", local_tz),
+    )
 
 
 async def load_forecast_points_for_day(
@@ -86,29 +153,12 @@ async def load_forecast_points_for_day(
     attributes = getattr(state, "attributes", {})
     if not isinstance(attributes, dict):
         return []
-    wh_period = attributes.get("wh_period")
-    if not isinstance(wh_period, dict):
-        return []
-
-    hourly_wh: dict[str, float] = {}
-    for raw_key, raw_value in wh_period.items():
-        parsed_value = _parse_attribute_wh(raw_value)
-        parsed_timestamp = _parse_attribute_timestamp(raw_key, local_tz)
-        if parsed_value is None or parsed_timestamp is None:
-            continue
-        local_ts = dt_util.as_local(parsed_timestamp)
-        slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
-        hourly_wh[slot_key] = parsed_value
-
-    if not hourly_wh:
-        return []
-
-    raw_watts = attributes.get("watts")
-    watts = raw_watts if isinstance(raw_watts, dict) else {}
-    sub_slot_wh = _expand_hourly_to_15min(hourly_wh, watts)
+    sub_slot_wh = _read_per_slot_forecast(attributes, local_tz)
     if not sub_slot_wh:
         # Fallback: split each hour evenly when upstream watts is unavailable.
-        for hour_key, hour_wh in hourly_wh.items():
+        for hour_key, hour_wh in _read_slot_map(
+            attributes, "wh_period", local_tz
+        ).items():
             hour_text, _, minute_text = hour_key.partition(":")
             try:
                 hour = int(hour_text)
@@ -117,8 +167,8 @@ async def load_forecast_points_for_day(
                 continue
             if minute != 0:
                 continue
-            share = hour_wh / len(_SUB_SLOT_OFFSETS_MIN)
-            for offset in _SUB_SLOT_OFFSETS_MIN:
+            share = hour_wh / len(SUB_SLOT_OFFSETS_MIN)
+            for offset in SUB_SLOT_OFFSETS_MIN:
                 sub_slot_wh[f"{hour:02d}:{offset:02d}"] = share
 
     points: list[tuple[datetime, dict[str, Any]]] = []
@@ -179,9 +229,11 @@ async def load_historical_per_slot_forecast(
 ) -> dict[str, float] | None:
     """Return slot_key -> Wh for the forecast as published at the start of target_date.
 
-    Reads the `wh_period` attribute from the recorder history of
-    daily_energy_entity_ids[0] (the "today" entity) as captured at start of
-    target_date (local midnight). Returns None if no usable state is available.
+    Reads the `wh_period_15m` attribute -- or `wh_period` plus `watts` on states
+    recorded before the source integration published it -- from the recorder
+    history of daily_energy_entity_ids[0] (the "today" entity) as captured at
+    start of target_date (local midnight). Returns None if no usable state is
+    available.
 
     Slot keys are HH:MM in the configured local timezone.
 
@@ -194,34 +246,8 @@ async def load_historical_per_slot_forecast(
     attributes = getattr(state, "attributes", {})
     if not isinstance(attributes, dict):
         return None
-    wh_period = attributes.get("wh_period")
-    if not isinstance(wh_period, dict):
-        return None
-    watts = attributes.get("watts")
-    if not isinstance(watts, dict):
-        return None
 
-    hourly_result: dict[str, float] = {}
-    for raw_key, raw_value in wh_period.items():
-        wh = _parse_attribute_wh(raw_value)
-        ts = _parse_attribute_timestamp(raw_key, local_tz)
-        if wh is None or ts is None:
-            continue
-        local_ts = dt_util.as_local(ts)
-        slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
-        hourly_result[slot_key] = wh
-
-    parsed_watts: dict[str, float] = {}
-    for raw_key, raw_value in watts.items():
-        watt = _parse_attribute_wh(raw_value)
-        ts = _parse_attribute_timestamp(raw_key, local_tz)
-        if watt is None or ts is None:
-            continue
-        local_ts = dt_util.as_local(ts)
-        slot_key = f"{local_ts.hour:02d}:{local_ts.minute:02d}"
-        parsed_watts[slot_key] = watt
-
-    result = _expand_hourly_to_15min(hourly_result, parsed_watts)
+    result = _read_per_slot_forecast(attributes, local_tz)
     return result if result else None
 
 

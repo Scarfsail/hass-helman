@@ -325,6 +325,107 @@ class LoadHistoricalPerSlotForecastTests(unittest.IsolatedAsyncioTestCase):
             "08:45": 900.0,
         }
 
+    async def test_prefers_the_fifteen_minute_series_over_the_hourly_expansion(self):
+        from datetime import date as date_cls
+
+        cfg = BiasConfig(
+            enabled=True,
+            min_history_days=10,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=["sensor.energy_production_today"],
+            total_energy_entity_id=None,
+        )
+
+        wh_period_15m = {
+            "2026-08-20T07:00:00+00:00": 10.0,
+            "2026-08-20T07:15:00+00:00": 20.0,
+            "2026-08-20T07:30:00+00:00": 30.0,
+            "2026-08-20T07:45:00+00:00": 40.0,
+        }
+        historical_state = SimpleNamespace(
+            state="100",
+            attributes={
+                "wh_period_15m": wh_period_15m,
+                # Contradictory hourly data, to prove which source wins.
+                "wh_period": {"2026-08-20T07:00:00+00:00": 4000.0},
+                "watts": {
+                    "2026-08-20T07:00:00+00:00": 1.0,
+                    "2026-08-20T07:15:00+00:00": 1.0,
+                    "2026-08-20T07:30:00+00:00": 1.0,
+                    "2026-08-20T07:45:00+00:00": 1.0,
+                },
+            },
+            last_updated=datetime(2026, 8, 20, 0, 5, tzinfo=TZ),
+            last_changed=datetime(2026, 8, 20, 0, 5, tzinfo=TZ),
+        )
+
+        async def fake_history(*args, **kwargs):
+            return {"sensor.energy_production_today": [historical_state]}
+
+        with patch.object(
+            forecast_history,
+            "_read_history_for_entities_with_attributes",
+            new=AsyncMock(side_effect=fake_history),
+        ):
+            result = await forecast_history.load_historical_per_slot_forecast(
+                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
+                cfg=cfg,
+                target_date=date_cls(2026, 8, 20),
+                local_now=datetime(2026, 8, 25, 10, 0, tzinfo=TZ),
+            )
+
+        assert result == {
+            "07:00": 10.0,
+            "07:15": 20.0,
+            "07:30": 30.0,
+            "07:45": 40.0,
+        }
+
+    async def test_uses_the_fifteen_minute_series_even_without_watts(self):
+        """The old watts guard must not reject a state that needs no expansion."""
+        from datetime import date as date_cls
+
+        cfg = BiasConfig(
+            enabled=True,
+            min_history_days=10,
+            training_time="03:00",
+            clamp_min=0.3,
+            clamp_max=2.0,
+            daily_energy_entity_ids=["sensor.energy_production_today"],
+            total_energy_entity_id=None,
+        )
+
+        historical_state = SimpleNamespace(
+            state="30",
+            attributes={
+                "wh_period_15m": {
+                    "2026-08-20T07:00:00+00:00": 10.0,
+                    "2026-08-20T07:15:00+00:00": 20.0,
+                }
+            },
+            last_updated=datetime(2026, 8, 20, 0, 5, tzinfo=TZ),
+            last_changed=datetime(2026, 8, 20, 0, 5, tzinfo=TZ),
+        )
+
+        async def fake_history(*args, **kwargs):
+            return {"sensor.energy_production_today": [historical_state]}
+
+        with patch.object(
+            forecast_history,
+            "_read_history_for_entities_with_attributes",
+            new=AsyncMock(side_effect=fake_history),
+        ):
+            result = await forecast_history.load_historical_per_slot_forecast(
+                hass=SimpleNamespace(config=SimpleNamespace(time_zone="UTC")),
+                cfg=cfg,
+                target_date=date_cls(2026, 8, 20),
+                local_now=datetime(2026, 8, 25, 10, 0, tzinfo=TZ),
+            )
+
+        assert result == {"07:00": 10.0, "07:15": 20.0}
+
     async def test_returns_none_when_watts_attribute_missing(self):
         from datetime import date as date_cls
 
