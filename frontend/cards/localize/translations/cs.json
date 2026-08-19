@@ -619,7 +619,11 @@
         "battery_soc": "SoC baterie",
         "import_price": "Nákupní cena",
         "export_price": "Výkupní cena"
-      }
+      },
+      "money_strip": "Náklady a výnosy ze sítě",
+      "import_cost": "Náklady na nákup",
+      "export_gain": "Výnos z prodeje",
+      "net_cost": "Čisté náklady"
     }
   },
   "forecast_health": {

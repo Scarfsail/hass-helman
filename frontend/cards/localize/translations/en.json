@@ -87,7 +87,11 @@
         "battery_soc": "Battery SoC",
         "import_price": "Import price",
         "export_price": "Export price"
-      }
+      },
+      "money_strip": "Grid cost and gain",
+      "import_cost": "Import cost",
+      "export_gain": "Export gain",
+      "net_cost": "Net cost"
     }
   },
   "house_section": {

@@ -30,7 +30,10 @@ import {
   DISCHARGE_COLOR,
   FORECAST_RAW_COLOR,
   GRID_COLOR,
+  GRID_EXPORT_COLOR,
+  GRID_IMPORT_COLOR,
   HOUSE_COLOR,
+  NEUTRAL_COLOR,
   SOLAR_COLOR,
   nodeAccentColor,
 } from "../color-utils";
@@ -54,7 +57,16 @@ import {
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
 import "./helman-solar-price-strip";
+import "./helman-solar-money-strip";
 import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-solar-price-strip";
+import {
+  buildMoneySeries,
+  currencyFromPriceUnit,
+  sumMoney,
+  EMPTY_MONEY,
+  type MoneyPoint,
+  type MoneyTotals,
+} from "./money-model";
 import "../helman/power-devices-container";
 import { DeviceNode } from "../helman/DeviceNode";
 import {
@@ -431,6 +443,15 @@ type InspectorPayload = {
      */
     importPrice: PriceRailPoint[];
     exportPrice: PriceRailPoint[];
+    /**
+     * The grid's two directions, unnetted. `gridForecast`/`gridActual` above are
+     * their signed difference, which is right for the chart and useless for
+     * money: each side is billed at its own rate.
+     */
+    gridImportForecast: InspectorPoint[];
+    gridExportForecast: InspectorPoint[];
+    gridImportActual: InspectorPoint[];
+    gridExportActual: InspectorPoint[];
   };
   totals: {
     rawWh: number | null;
@@ -556,6 +577,12 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _impactStripVisible = false;
   @state() private _socStripExpanded = true;
   @state() private _priceStripExpanded = true;
+  @state() private _moneyStripExpanded = true;
+  /** Memo for {@link _money}, keyed on payload identity. */
+  private _moneyCache: {
+    payload: InspectorDayPayload;
+    money: { actual: readonly MoneyPoint[]; forecast: readonly MoneyPoint[] };
+  } | null = null;
   @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
@@ -2073,7 +2100,88 @@ export class HelmanSolarInspector extends LitElement {
             `
           : ""}
       </div>
+      <div class="strip-block">
+        <button
+          class="strip-collapse-toggle"
+          aria-expanded=${this._moneyStripExpanded ? "true" : "false"}
+          @click=${() => { this._moneyStripExpanded = !this._moneyStripExpanded; }}
+        >
+          <span class="strip-collapse-icon ${this._moneyStripExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.money_strip")}
+        </button>
+        ${this._moneyStripExpanded
+          ? html`
+              <helman-solar-money-strip
+                .hass=${this.hass}
+                .moneyActual=${this._moneyActual(payload)}
+                .moneyForecast=${this._moneyForecast(payload)}
+                .currency=${currencyFromPriceUnit(payload.priceUnit)}
+                .date=${payload.date}
+                .timeZone=${this._haTimeZone() ?? "UTC"}
+                .selectedMinutes=${this._selectedMinutes(payload)}
+                .geometry=${{
+                  width: layout.width,
+                  marginLeft: layout.margin.left,
+                  plotWidth: layout.plotWidth,
+                  startMinutes: layout.dayStartMinutes,
+                  endMinutes: layout.dayEndMinutes,
+                }}
+                .hoverMinutes=${this._hoveredMinutes}
+                .slotMinutes=${this._slotMinutes}
+                .nowMs=${this._nowMs}
+                @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
+                  this._handleStripSlotPick(event, payload)}
+                @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
+                  this._setHoverMinutes(event.detail?.minutes ?? null)}
+                @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
+                  { this._tooltip = event.detail ?? null; }}
+              ></helman-solar-money-strip>
+            `
+          : ""}
+      </div>
     `;
+  }
+
+  /**
+   * The day's money, one vintage each, memoized on the payload that produced it.
+   *
+   * Both are derived from four series and two rails, and are read by the strip,
+   * the metric tiles and the selected-slot panel on every render — so deriving
+   * them per call would redo the same arithmetic several times a frame, and
+   * handing Lit a fresh array each time would re-render the strip along with it.
+   */
+  private _moneyActual(payload: InspectorDayPayload): readonly MoneyPoint[] {
+    return this._money(payload).actual;
+  }
+
+  private _moneyForecast(payload: InspectorDayPayload): readonly MoneyPoint[] {
+    return this._money(payload).forecast;
+  }
+
+  private _money(payload: InspectorDayPayload): {
+    actual: readonly MoneyPoint[];
+    forecast: readonly MoneyPoint[];
+  } {
+    if (this._moneyCache?.payload === payload) {
+      return this._moneyCache.money;
+    }
+    const series = payload.series;
+    const money = {
+      actual: buildMoneySeries({
+        importKwh: series.gridImportActual,
+        exportKwh: series.gridExportActual,
+        importPrice: series.importPrice,
+        exportPrice: series.exportPrice,
+      }),
+      forecast: buildMoneySeries({
+        importKwh: series.gridImportForecast,
+        exportKwh: series.gridExportForecast,
+        importPrice: series.importPrice,
+        exportPrice: series.exportPrice,
+      }),
+    };
+    this._moneyCache = { payload, money };
+    return money;
   }
 
   /** Resolve a strip click to the nearest impact slot, or clear the selection. */
@@ -2872,6 +2980,7 @@ export class HelmanSolarInspector extends LitElement {
             "batteryForecast",
             "batteryActual",
           )}
+          ${this._renderMoneyMetrics(payload, null)}
         </div>
       </div>
     `;
@@ -3035,6 +3144,7 @@ export class HelmanSolarInspector extends LitElement {
                 this._formatPrice(this._priceAtSelectionStart(this._exportPriceColumns, slots)),
               )
             : ""}
+          ${this._renderMoneyMetrics(payload, slots)}
         </div>
       </div>
       ${this._renderHouseBreakdown(houseBreakdown, slots, "actual", payload.houseUnmeasuredLabel)}
@@ -3444,6 +3554,98 @@ export class HelmanSolarInspector extends LitElement {
         <div class="metric-chips">${chips}</div>
       </button>
     `;
+  }
+
+  /**
+   * A money tile: the merged metric's shape without its legend toggle, since
+   * money is derived from the series rather than being one, and there is
+   * nothing on the chart for a click to hide.
+   */
+  private _renderMoneyMetric(
+    label: string,
+    color: string,
+    actual: { value: string; present: boolean; title: string },
+    forecast: { value: string; present: boolean; title: string },
+  ) {
+    const chipFill = (isForecast: boolean): string =>
+      isForecast
+        ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 42%, transparent) 0px, color-mix(in srgb, ${color} 42%, transparent) 3px, transparent 3px, transparent 7px)`
+        : `color-mix(in srgb, ${color} 34%, transparent)`;
+    const chip = (
+      part: { value: string; title: string },
+      isForecast: boolean,
+    ): TemplateResult => html`
+      <span
+        class="metric-value metric-chip"
+        style=${`background: ${chipFill(isForecast)};`}
+        title=${part.title}
+      >${part.value}</span>
+    `;
+    const chips: TemplateResult[] = [];
+    if (actual.present) chips.push(chip(actual, false));
+    if (forecast.present) chips.push(chip(forecast, true));
+    if (chips.length === 0) chips.push(chip(forecast, true));
+    const cardStyle = `background: color-mix(in srgb, ${color} 12%, transparent); border-left: 3px solid ${color};`;
+    return html`
+      <div class="metric-card merged" style=${cardStyle}>
+        <div class="metric-label">${label}</div>
+        <div class="metric-chips">${chips}</div>
+      </div>
+    `;
+  }
+
+  /**
+   * The three money tiles, over the whole day or a selection.
+   *
+   * A vintage with no priced slot at all shows nothing rather than a zero: a
+   * day past the recorder's reach has real exported kWh at an unknown rate, and
+   * "earned 0" would be a claim the data does not support.
+   */
+  private _renderMoneyMetrics(
+    payload: InspectorDayPayload,
+    slots: string[] | null,
+  ): TemplateResult {
+    const money = this._money(payload);
+    const currency = currencyFromPriceUnit(payload.priceUnit);
+    // The selection is on the inspector's current slot width; money is on the
+    // rails' own 15-minute grid. A 60-minute selection therefore has to claim
+    // all four quarters it spans, or its sums would count only the first.
+    const railSlots = slots === null ? null : this._railSlotsFor(slots);
+    const actual = sumMoney(money.actual, railSlots);
+    const forecast = sumMoney(money.forecast, railSlots);
+    const hasActual = money.actual.length > 0;
+    const hasForecast = money.forecast.length > 0;
+    const part = (totals: MoneyTotals, key: keyof MoneyTotals, present: boolean, title: string) => ({
+      value: present ? `${totals[key].toFixed(2)} ${currency}`.trim() : "—",
+      present,
+      title,
+    });
+    const tile = (labelKey: string, color: string, key: keyof MoneyTotals) =>
+      this._renderMoneyMetric(
+        this._t(`bias_correction.inspector.${labelKey}`),
+        color,
+        part(actual, key, hasActual, this._t("bias_correction.inspector.column_actual")),
+        part(forecast, key, hasForecast, this._t("bias_correction.inspector.column_forecast")),
+      );
+    return html`
+      ${tile("import_cost", GRID_IMPORT_COLOR, "cost")}
+      ${tile("export_gain", GRID_EXPORT_COLOR, "gain")}
+      ${tile("net_cost", NEUTRAL_COLOR, "net")}
+    `;
+  }
+
+  /** Every 15-minute rail slot covered by a selection at the current width. */
+  private _railSlotsFor(slots: readonly string[]): string[] {
+    const width = this._slotMinutes > 0 ? this._slotMinutes : 15;
+    const out: string[] = [];
+    for (const slot of slots) {
+      const start = slotToMinutes(slot);
+      if (start === null) continue;
+      for (let minutes = start; minutes < start + width; minutes += 15) {
+        out.push(minutesToSlot(minutes));
+      }
+    }
+    return out;
   }
 
   private _renderMetric(
