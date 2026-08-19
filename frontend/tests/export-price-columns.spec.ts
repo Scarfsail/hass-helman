@@ -79,6 +79,63 @@ function hourlyPoints(values: number[]): RailPoint[] {
     return points;
 }
 
+/**
+ * Mount the strip with geometry so it actually draws, and read back the rects
+ * of the first cell in document order -- which is also paint order, so the
+ * first entry is the bar drawn underneath.
+ */
+async function barsFor(
+    page: Page,
+    rails: { importPrice?: RailPoint[]; exportPrice?: RailPoint[] },
+): Promise<{ fill: string; y: number; height: number; width: number }[]> {
+    return page.evaluate(async ({ mounted, day }) => {
+        const el = document.createElement("helman-solar-price-strip") as any;
+        el.hass = { language: "en", localize: () => "", states: {} };
+        el.timeZone = "UTC";
+        el.date = day;
+        el.slotMinutes = 60;
+        el.geometry = { width: 1000, marginLeft: 0, plotWidth: 1000, startMinutes: 0, endMinutes: 60 };
+        el.nowMs = Date.parse(`${day}T23:59:00Z`);
+        el.importPrice = mounted.importPrice ?? [];
+        el.exportPrice = mounted.exportPrice ?? [];
+        el.unit = "CZK/kWh";
+        document.body.appendChild(el);
+        await el.updateComplete;
+        return [...el.shadowRoot.querySelectorAll("rect")]
+            .filter((r: any) => /--helman-(grid-|price-negative)/.test(r.style.fill || ""))
+            .map((r: any) => ({
+                fill: r.style.fill.includes("import")
+                    ? "import"
+                    : r.style.fill.includes("negative") ? "negative" : "export",
+                y: Math.round(parseFloat(r.getAttribute("y"))),
+                height: Math.round(parseFloat(r.getAttribute("height"))),
+                width: Math.round(parseFloat(r.getAttribute("width"))),
+            }));
+    }, { mounted: rails, day: DAY });
+}
+
+/** The value labels the strip drew, in document order. */
+async function labelsFor(
+    page: Page,
+    rails: { importPrice?: RailPoint[]; exportPrice?: RailPoint[] },
+): Promise<string[]> {
+    return page.evaluate(async ({ mounted, day }) => {
+        const el = document.createElement("helman-solar-price-strip") as any;
+        el.hass = { language: "en", localize: () => "", states: {} };
+        el.timeZone = "UTC";
+        el.date = day;
+        el.slotMinutes = 60;
+        el.geometry = { width: 1000, marginLeft: 0, plotWidth: 1000, startMinutes: 0, endMinutes: 60 };
+        el.nowMs = Date.parse(`${day}T23:59:00Z`);
+        el.importPrice = mounted.importPrice ?? [];
+        el.exportPrice = mounted.exportPrice ?? [];
+        el.unit = "CZK/kWh";
+        document.body.appendChild(el);
+        await el.updateComplete;
+        return [...el.shadowRoot.querySelectorAll("text")].map((t: any) => t.textContent.trim());
+    }, { mounted: rails, day: DAY });
+}
+
 test.describe("price columns", () => {
     test.beforeEach(async ({ page }) => {
         await loadCardBundle(page);
@@ -222,5 +279,92 @@ test.describe("price columns", () => {
 
         expect(widths.at(0)).toBe(4);
         expect(widths.at(-1)).toBe(1);
+    });
+    test("a cell is one full-width column, not two half-width ones", async ({ page }) => {
+        const bars = await barsFor(page, {
+            importPrice: [{ slot: "00:00", value: 7.2 }],
+            exportPrice: [{ slot: "00:00", value: 5.8 }],
+        });
+
+        expect(bars).toHaveLength(2);
+        // Both span the whole cell; neither is halved to sit beside the other.
+        expect(bars[0].width).toBe(bars[1].width);
+        expect(bars[0].width).toBeGreaterThan(900);
+    });
+
+    test("the rate further from zero is drawn under the nearer one", async ({ page }) => {
+        // The mockup's rule: what stays visible of the taller bar is exactly the
+        // spread, in the colour of the side paying it. Import is the outer rate
+        // here, so import paints first and export covers the shared stretch.
+        const bars = await barsFor(page, {
+            importPrice: [{ slot: "00:00", value: 7.2 }],
+            exportPrice: [{ slot: "00:00", value: 5.8 }],
+        });
+
+        expect(bars.map((b) => b.fill)).toEqual(["import", "export"]);
+        expect(bars[0].height).toBeGreaterThan(bars[1].height);
+    });
+
+    test("when export is the higher rate the layering swaps", async ({ page }) => {
+        const bars = await barsFor(page, {
+            importPrice: [{ slot: "00:00", value: 7.2 }],
+            exportPrice: [{ slot: "00:00", value: 8.1 }],
+        });
+
+        expect(bars.map((b) => b.fill)).toEqual(["export", "import"]);
+        expect(bars[0].height).toBeGreaterThan(bars[1].height);
+    });
+
+    test("a negative rate takes the adverse colour, not its side's", async ({ page }) => {
+        // A price that has gone upside down is worth seeing before the
+        // direction it was flowing in, so the flow colour gives way.
+        const bars = await barsFor(page, {
+            importPrice: [{ slot: "00:00", value: 7.3 }],
+            exportPrice: [{ slot: "00:00", value: -0.3 }],
+        });
+
+        expect(bars.map((b) => b.fill)).toEqual(["import", "negative"]);
+    });
+
+    test("two negative rates still layer by distance from zero", async ({ page }) => {
+        // Both draw adverse, so the ordering is what carries the meaning: the
+        // further-from-zero bar underneath, the nearer one against the axis.
+        const bars = await barsFor(page, {
+            importPrice: [{ slot: "00:00", value: -1 }],
+            exportPrice: [{ slot: "00:00", value: -3 }],
+        });
+
+        expect(bars.map((b) => b.fill)).toEqual(["negative", "negative"]);
+        expect(bars[0].height).toBeGreaterThan(bars[1].height);
+    });
+
+    test("a small negative rate gets a band of its own, not a hairline", async ({ page }) => {
+        // Scaling both sides by one shared maximum drew a lone -0.3 beside a 7.3
+        // as something too small to see or label.
+        const bars = await barsFor(page, {
+            importPrice: [{ slot: "00:00", value: 7.3 }],
+            exportPrice: [{ slot: "00:00", value: -0.3 }],
+        });
+
+        const negative = bars.find((b) => b.fill === "negative")!;
+        expect(negative.height).toBeGreaterThan(8);
+    });
+
+    test("every rate keeps a label, however short its bar", async ({ page }) => {
+        const labels = await labelsFor(page, {
+            importPrice: [{ slot: "00:00", value: 7.3 }],
+            exportPrice: [{ slot: "00:00", value: -0.3 }],
+        });
+
+        expect(labels).toContain("7.3");
+        expect(labels).toContain("-0.3");
+    });
+
+    test("a cell with only one rate still draws its column", async ({ page }) => {
+        const bars = await barsFor(page, {
+            importPrice: [{ slot: "00:00", value: 4.4 }],
+        });
+
+        expect(bars.map((b) => b.fill)).toEqual(["import"]);
     });
 });

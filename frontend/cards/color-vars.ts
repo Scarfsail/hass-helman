@@ -11,7 +11,6 @@ import {
     NEUTRAL_COLOR,
     NEUTRAL_LIGHT_COLOR,
     PRICE_NEGATIVE_COLOR,
-    PRICE_POSITIVE_COLOR,
     SELECTION_COLOR,
     SOLAR_COLOR,
 } from "./color-utils";
@@ -48,7 +47,6 @@ export const helmanColorVars = css`
         --helman-grid-import: var(--helman-theme-grid-import, ${unsafeCSS(GRID_IMPORT_COLOR)});
         --helman-grid-export: var(--helman-theme-grid-export, ${unsafeCSS(GRID_EXPORT_COLOR)});
 
-        --helman-price-positive: var(--helman-theme-price-positive, ${unsafeCSS(PRICE_POSITIVE_COLOR)});
         --helman-price-negative: var(--helman-theme-price-negative, ${unsafeCSS(PRICE_NEGATIVE_COLOR)});
 
         --helman-forecast-raw: var(--helman-theme-forecast-raw, ${unsafeCSS(FORECAST_RAW_COLOR)});

@@ -38,9 +38,12 @@ export const DEFERRABLE_HOUSE_COLOR = '#c084fc'; // purple-300
 export const GRID_IMPORT_COLOR = '#2563eb'; // blue-600
 export const GRID_EXPORT_COLOR = '#7dd3fc'; // sky-300
 
-/** Export price above/below the threshold that makes exporting worthwhile. */
-export const PRICE_POSITIVE_COLOR = '#8d6e63'; // brown-400
-export const PRICE_NEGATIVE_COLOR = '#6d4c41'; // brown-600
+/**
+ * A rate that has gone the wrong way -- a negative price, where exporting costs
+ * you rather than pays you. Overrides the flow-direction colour above, because
+ * "which way the energy went" matters less than "this one is upside down".
+ */
+export const PRICE_NEGATIVE_COLOR = '#dc2626'; // red-600
 
 /** Uncorrected forecast, drawn behind the corrected one. */
 export const FORECAST_RAW_COLOR = '#64748b'; // slate-500

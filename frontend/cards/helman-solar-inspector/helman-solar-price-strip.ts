@@ -19,6 +19,32 @@ const MINUTES_PER_DAY = 1440;
 /** The strip's own geometry; it borrows only the x scale from the chart. */
 const PRICE_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
 
+/** Ink for a label sitting on a filled bar, per that fill's lightness. */
+const INK_ON_IMPORT = "#ffffff";
+const INK_ON_EXPORT = "#0f172a";
+const INK_ON_NEGATIVE = "#ffffff";
+/** Below this bar height the inner label is written above the bar, not in it. */
+const LABEL_INSIDE_MIN_HEIGHT = 12;
+/** Share of the plot height given to rates below zero, when any day has one. */
+const NEGATIVE_BAND_SHARE = 0.3;
+
+/**
+ * A bar's fill. A negative rate takes the adverse colour whichever side it
+ * belongs to, because a price that has gone upside down is worth seeing before
+ * the direction it was flowing in.
+ */
+function _fillFor(value: number, side: "import" | "export"): string {
+    if (value < 0) return "var(--helman-price-negative)";
+    return side === "import" ? "var(--helman-grid-import)" : "var(--helman-grid-export)";
+}
+
+/** Ink that reads against a given bar's fill, or against the plot for none. */
+function _inkOn(bar: { value: number; side: "import" | "export" } | null): string {
+    if (bar === null) return "var(--secondary-text-color)";
+    if (bar.value < 0) return INK_ON_NEGATIVE;
+    return bar.side === "export" ? INK_ON_EXPORT : INK_ON_IMPORT;
+}
+
 /** One rail's sample as the day payload serves it: an `HH:MM` slot and a rate. */
 export interface PriceRailPoint {
     slot: string;
@@ -38,6 +64,14 @@ export interface PriceColumn {
  * series because the rails coalesce independently: a window-shaped import rate
  * holds for hours while a spot export price moves every quarter of one.
  */
+/** One slot's two rates, zipped so the strip can draw them as a single column. */
+interface PriceCell {
+    startMinutes: number;
+    endMinutes: number;
+    importValue: number | null;
+    exportValue: number | null;
+}
+
 export interface PriceColumnsDetail {
     importColumns: PriceColumn[];
     exportColumns: PriceColumn[];
@@ -264,17 +298,28 @@ export class HelmanSolarPriceStrip extends LitElement {
         const allColumns = [...importColumns, ...exportColumns];
         // One y-scale for both rails: they are the same unit, and the whole point
         // of drawing them together is that their heights are comparable.
-        const maxAbs = Math.max(0.0001, ...allColumns.map((column) => Math.abs(column.value)));
         const hasNegative = allColumns.some((column) => column.value < 0);
-        const zeroY = hasNegative ? padTop + innerHeight / 2 : padTop + innerHeight;
-        const scale = hasNegative ? innerHeight / 2 / maxAbs : innerHeight / maxAbs;
-        const yForValue = (value: number) => zeroY - value * scale;
+        // Each side of zero gets its own scale. Splitting the height evenly and
+        // scaling both by the larger extent would draw a lone -0.3 against a
+        // 7.3 import rate as a hairline nobody can see or label -- and "the
+        // rate went negative" is the one thing on this strip worth not missing.
+        // The bands stay fixed so the zero line does not jump between days.
+        const maxPositive = Math.max(0.0001, ...allColumns.map((c) => Math.max(0, c.value)));
+        const maxNegative = Math.max(0.0001, ...allColumns.map((c) => Math.max(0, -c.value)));
+        const negativeBand = hasNegative ? innerHeight * NEGATIVE_BAND_SHARE : 0;
+        const positiveBand = innerHeight - negativeBand;
+        const zeroY = padTop + positiveBand;
+        const yForValue = (value: number) =>
+            value >= 0
+                ? zeroY - (value / maxPositive) * positiveBand
+                : zeroY + (-value / maxNegative) * negativeBand;
         const seam = this._seamMinutes();
         const { start: windowStart, end: windowEnd } = stripWindow(geometry);
         const windowSpan = windowEnd - windowStart;
         const xForMinutes = (minutes: number) =>
             geometry.marginLeft + ((minutes - windowStart) / windowSpan) * geometry.plotWidth;
         const bandColumns = this._bandColumns(importColumns, exportColumns);
+        const cells = this._pairCells(importColumns, exportColumns);
 
         return html`
             <div class="strip-wrap">
@@ -294,7 +339,7 @@ export class HelmanSolarPriceStrip extends LitElement {
                             <rect x=${geometry.marginLeft} y="0" width=${geometry.plotWidth} height=${height}></rect>
                         </clipPath>
                     </defs>
-                    ${this._renderGuides(geometry, zeroY, yForValue, maxAbs, hasNegative)}
+                    ${this._renderGuides(geometry, zeroY, yForValue, maxPositive, maxNegative, hasNegative)}
                     ${renderSlotGridlines({
                         ticks: slotGridTicks({
                             startMinutes: windowStart,
@@ -310,15 +355,13 @@ export class HelmanSolarPriceStrip extends LitElement {
                     ${this.selectedMinutes.map((minutes) =>
                         this._renderBand(bandColumns, minutes, "selected", height, xForMinutes))}
                     <g clip-path="url(#price-plot-clip)">
-                    ${this._renderBars(importColumns, "import", { zeroY, yForValue, seam, xForMinutes })}
-                    ${this._renderBars(exportColumns, "export", { zeroY, yForValue, seam, xForMinutes })}
+                    ${this._renderPairedBars(cells, { zeroY, yForValue, seam, xForMinutes })}
                     </g>
                     ${this._renderNowMarker(xForMinutes, windowStart, windowEnd, height)}
                     <!-- The prices come after the marker so the line passes
                          behind the figure it crosses instead of through it. -->
                     <g clip-path="url(#price-plot-clip)">
-                    ${this._renderLabels(importColumns, "import", { zeroY, yForValue, height, xForMinutes })}
-                    ${this._renderLabels(exportColumns, "export", { zeroY, yForValue, height, xForMinutes })}
+                    ${this._renderPairedLabels(cells, { zeroY, yForValue, height, xForMinutes })}
                     </g>
                 </svg>
             `}
@@ -327,27 +370,64 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /**
-     * Where one rail's bar sits inside a slot cell: import on the left half,
-     * export on the right. Halving rather than overlaying or stacking keeps both
-     * values readable at their true height against the shared scale, and the two
-     * halves are the same span because both rails were bucketed onto one grid.
+     * The two rails zipped into one cell each, so a slot is drawn as a single
+     * column rather than a pair of half-width ones. A cell may hold only one of
+     * the two — a day whose export price was never recorded still draws its
+     * import rate.
      */
-    private _barSpan(
-        column: PriceColumn,
-        side: "import" | "export",
+    private _pairCells(
+        importColumns: PriceColumn[],
+        exportColumns: PriceColumn[],
+    ): PriceCell[] {
+        const slot = this._slotSpan();
+        const byStart = new Map<number, PriceCell>();
+        const put = (column: PriceColumn, side: "import" | "export") => {
+            const cell = byStart.get(column.startMinutes) ?? {
+                startMinutes: column.startMinutes,
+                endMinutes: Math.min(column.startMinutes + slot, MINUTES_PER_DAY),
+                importValue: null,
+                exportValue: null,
+            };
+            if (side === "import") cell.importValue = column.value;
+            else cell.exportValue = column.value;
+            byStart.set(column.startMinutes, cell);
+        };
+        importColumns.forEach((column) => put(column, "import"));
+        exportColumns.forEach((column) => put(column, "export"));
+        return [...byStart.values()].sort((a, b) => a.startMinutes - b.startMinutes);
+    }
+
+    /**
+     * A cell's rates in drawing order: the one further from zero first.
+     *
+     * Both bars run from the zero line to their own value across the full width
+     * of the cell. The nearer one is drawn second and covers the stretch they
+     * share, so what stays visible of the first is exactly the gap between the
+     * two rates — the spread, in the colour of whichever side is the outer one.
+     * Ordering by distance from zero rather than by value is what keeps that
+     * true once a rate goes negative: two negative rates put the nearer-zero
+     * colour against the axis, and rates of opposite sign never overlap at all,
+     * each keeping its own side of the line.
+     */
+    private _cellBars(cell: PriceCell): { value: number; side: "import" | "export" }[] {
+        const bars: { value: number; side: "import" | "export" }[] = [];
+        if (cell.importValue !== null) bars.push({ value: cell.importValue, side: "import" });
+        if (cell.exportValue !== null) bars.push({ value: cell.exportValue, side: "export" });
+        return bars.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+    }
+
+    /** A cell's full width, less a hairline so neighbours stay distinct. */
+    private _cellSpan(
+        cell: PriceCell,
         xForMinutes: (minutes: number) => number,
     ): { left: number; width: number } {
-        const cellLeft = xForMinutes(column.startMinutes);
-        const cellRight = xForMinutes(column.endMinutes);
-        const middle = (cellLeft + cellRight) / 2;
-        const left = side === "import" ? cellLeft : middle;
-        const right = side === "import" ? middle : cellRight;
+        const left = xForMinutes(cell.startMinutes);
+        const right = xForMinutes(cell.endMinutes);
         return { left: left + 0.25, width: Math.max(1, right - left - 0.5) };
     }
 
-    private _renderBars(
-        columns: PriceColumn[],
-        side: "import" | "export",
+    private _renderPairedBars(
+        cells: PriceCell[],
         ctx: {
             zeroY: number;
             yForValue: (value: number) => number;
@@ -355,29 +435,47 @@ export class HelmanSolarPriceStrip extends LitElement {
             xForMinutes: (minutes: number) => number;
         },
     ) {
-        const color = side === "import" ? "var(--helman-grid-import)" : "var(--helman-grid-export)";
-        return columns.map((column) => {
-            const valueY = ctx.yForValue(column.value);
-            const top = Math.min(ctx.zeroY, valueY);
-            const barHeight = Math.max(1, Math.abs(valueY - ctx.zeroY));
-            const { left, width } = this._barSpan(column, side, ctx.xForMinutes);
-            const future = column.startMinutes >= ctx.seam;
-            return svg`
-                <rect
-                    x=${left} y=${top}
-                    width=${width} height=${barHeight}
-                    style="fill: ${color}; stroke: ${color};"
-                    fill-opacity=${future ? 0.4 : 0.85}
-                    stroke-width=${future ? 0.9 : 0}
-                    stroke-dasharray=${future ? "2 2" : ""}
-                ></rect>
-            `;
+        return cells.map((cell) => {
+            const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
+            const future = cell.startMinutes >= ctx.seam;
+            return this._cellBars(cell).map(({ value, side }) => {
+                const color = _fillFor(value, side);
+                const valueY = ctx.yForValue(value);
+                const top = Math.min(ctx.zeroY, valueY);
+                const barHeight = Math.max(1, Math.abs(valueY - ctx.zeroY));
+                return svg`
+                    <rect
+                        x=${left} y=${top}
+                        width=${width} height=${barHeight}
+                        style="fill: ${color}; stroke: ${color};"
+                        fill-opacity=${future ? 0.4 : 0.9}
+                        stroke-width=${future ? 0.9 : 0}
+                        stroke-dasharray=${future ? "2 2" : ""}
+                    ></rect>
+                `;
+            });
         });
     }
 
-    private _renderLabels(
-        columns: PriceColumn[],
-        side: "import" | "export",
+    /**
+     * One label per rate. The outer rate is written past the end of the column
+     * in the ordinary text colour, the way a single-series bar chart labels its
+     * top. The inner one is written against a filled bar, so two things decide
+     * how it is drawn.
+     *
+     * Where: just inside its own bar's edge when that bar is tall enough to
+     * hold the digits, and just *past* that edge when it is not — which puts it
+     * over the outer rate's fill rather than dropping it, because a rate near
+     * zero still has a number worth reading, and a short bar is exactly when
+     * the reader most needs telling how short.
+     *
+     * What colour: whichever ink contrasts with the fill it ends up on, which
+     * is its own bar's when it fits inside and the outer bar's when it spills.
+     * The export fill is the lighter of the two by design, so it takes dark ink
+     * and the import fill takes white.
+     */
+    private _renderPairedLabels(
+        cells: PriceCell[],
         ctx: {
             zeroY: number;
             yForValue: (value: number) => number;
@@ -385,25 +483,43 @@ export class HelmanSolarPriceStrip extends LitElement {
             xForMinutes: (minutes: number) => number;
         },
     ) {
-        return columns.map((column) => {
-            const { left, width } = this._barSpan(column, side, ctx.xForMinutes);
-            // A half-cell is half the room the single-series strip had, so the
-            // threshold is halved with it; narrower than this and the digits
-            // would overrun into the neighbouring rail.
-            if (width < 12) {
+        return cells.map((cell) => {
+            const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
+            if (width < 16) {
                 return "";
             }
-            const valueY = ctx.yForValue(column.value);
-            const top = Math.min(ctx.zeroY, valueY);
-            // The label sits outside the bar, on the far side from zero, so it
-            // never has to fight the bar's own fill for contrast.
-            const labelY = column.value >= 0
-                ? Math.max(top - 3, 9)
-                : Math.min(top + Math.max(1, Math.abs(valueY - ctx.zeroY)) + 9, ctx.height - 2);
-            return svg`
-                <text x=${left + width / 2} y=${labelY} text-anchor="middle" font-size="9"
-                      fill="var(--secondary-text-color)">${column.value.toFixed(1)}</text>
-            `;
+            const centre = left + width / 2;
+            const bars = this._cellBars(cell);
+            return bars.map(({ value, side }, index) => {
+                const valueY = ctx.yForValue(value);
+                if (index === 0) {
+                    const y = value >= 0
+                        ? Math.max(valueY - 3, 9)
+                        : Math.min(valueY + 9, ctx.height - 2);
+                    return svg`
+                        <text x=${centre} y=${y} text-anchor="middle" font-size="9"
+                              fill="var(--secondary-text-color)">${value.toFixed(1)}</text>
+                    `;
+                }
+                const fitsInside = Math.abs(valueY - ctx.zeroY) >= LABEL_INSIDE_MIN_HEIGHT;
+                const y = value >= 0
+                    ? (fitsInside ? valueY + 9 : valueY - 3)
+                    : (fitsInside ? valueY - 3 : valueY + 9);
+                // Spilling past its own bar lands the label on the outer bar's
+                // fill -- but only when the two share a sign and therefore
+                // overlap. Rates of opposite sign sit on their own sides of
+                // zero, so a spilled label there lands on the plot itself.
+                const outer = bars[0];
+                const shareSign = value < 0 === outer.value < 0;
+                const onFill = fitsInside
+                    ? { value, side }
+                    : (shareSign ? outer : null);
+                return svg`
+                    <text x=${centre} y=${y} text-anchor="middle" font-size="9"
+                          font-weight="600" fill=${_inkOn(onFill)}
+                    >${value.toFixed(1)}</text>
+                `;
+            });
         });
     }
 
@@ -429,7 +545,8 @@ export class HelmanSolarPriceStrip extends LitElement {
         geometry: ScheduleStripGeometry,
         zeroY: number,
         yForValue: (value: number) => number,
-        maxAbs: number,
+        maxPositive: number,
+        maxNegative: number,
         hasNegative: boolean,
     ) {
         const xLeft = geometry.marginLeft;
@@ -445,12 +562,15 @@ export class HelmanSolarPriceStrip extends LitElement {
         // Labels sit in the narrow axis gutter, so they stay numeric only — the
         // unit rides along in each bar's tooltip. A unit suffix here would run
         // off the left of the viewBox and clip the value out of sight.
+        // Each guide is read off its own band's extent, so the axis states what
+        // the bars were actually scaled by rather than one shared maximum.
         return svg`
-            ${line(yForValue(maxAbs))}
-            ${label(yForValue(maxAbs), maxAbs.toFixed(1))}
+            ${line(yForValue(maxPositive))}
+            ${label(yForValue(maxPositive), maxPositive.toFixed(1))}
+            ${line(zeroY)}${label(zeroY, "0")}
             ${hasNegative
-                ? svg`${line(zeroY)}${label(zeroY, "0")}${line(yForValue(-maxAbs))}${label(yForValue(-maxAbs), `-${maxAbs.toFixed(1)}`)}`
-                : svg`${line(zeroY)}${label(zeroY, "0")}`}
+                ? svg`${line(yForValue(-maxNegative))}${label(yForValue(-maxNegative), `-${maxNegative.toFixed(1)}`)}`
+                : nothing}
         `;
     }
 
