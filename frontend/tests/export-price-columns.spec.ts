@@ -5,14 +5,17 @@ import { resolve } from "node:path";
  * How the price strip turns the day payload's two rails into drawable columns.
  *
  * The strip is fed from the inspector day payload rather than the live forecast,
- * which is what lets it draw a day that has already elapsed; each rail arrives as
- * `{slot, value}` on the schedule's 15-minute grid, which can be finer than
- * either price's own resolution. An hourly export price then arrives as four
- * equal repeats and a fixed import window as a whole morning of them, and drawing
- * one rect per sample would give hairline seams and no room for a value label. So
- * consecutive equal values coalesce, and what is worth pinning is that this is
- * value-driven and per-rail: a price that genuinely moves inside the hour still
- * gets a column per change, and the two rails never borrow each other's cells.
+ * which is what lets it draw a day that has already elapsed. Each rail arrives as
+ * `{slot, value}` on the schedule's 15-minute grid, and both are bucketed onto
+ * the inspector's *current* slot grid so that one cell holds one bar per rail,
+ * import on its left half and export on its right.
+ *
+ * That shared grid is the property worth pinning. Coalescing equal neighbours
+ * into natural cells was tried first and is what these tests exist to prevent
+ * coming back: it gives each rail its own boundaries, so a window-shaped import
+ * rate becomes one cell hours wide while a spot export price stays hourly, and
+ * the strip draws a wide backdrop with unrelated bars across it instead of a
+ * pair per slot.
  */
 
 const BUNDLE = resolve(
@@ -38,7 +41,12 @@ async function loadCardBundle(page: Page): Promise<void> {
  */
 async function railsFor(
     page: Page,
-    rails: { importPrice?: RailPoint[]; exportPrice?: RailPoint[]; unit?: string },
+    rails: {
+        importPrice?: RailPoint[];
+        exportPrice?: RailPoint[];
+        unit?: string;
+        slotMinutes?: number;
+    },
 ): Promise<Rails> {
     return page.evaluate(async ({ mounted, day }) => {
         const el = document.createElement("helman-solar-price-strip") as any;
@@ -48,6 +56,7 @@ async function railsFor(
         });
         el.timeZone = "UTC";
         el.date = day;
+        el.slotMinutes = mounted.slotMinutes ?? 15;
         el.importPrice = mounted.importPrice ?? [];
         el.exportPrice = mounted.exportPrice ?? [];
         el.unit = mounted.unit ?? "CZK/kWh";
@@ -57,11 +66,11 @@ async function railsFor(
     }, { mounted: rails, day: DAY });
 }
 
-/** Rail points every `stepMinutes` across the leading hours, one value per hour. */
-function hourlyPoints(values: number[], stepMinutes: number): RailPoint[] {
+/** Rail points every 15 minutes across the leading hours, one value per hour. */
+function hourlyPoints(values: number[]): RailPoint[] {
     const points: RailPoint[] = [];
     values.forEach((value, hour) => {
-        for (let m = 0; m < 60; m += stepMinutes) {
+        for (let m = 0; m < 60; m += 15) {
             const hh = String(hour).padStart(2, "0");
             const mm = String(m).padStart(2, "0");
             points.push({ slot: `${hh}:${mm}`, value });
@@ -75,47 +84,11 @@ test.describe("price columns", () => {
         await loadCardBundle(page);
     });
 
-    test("an hourly price on a 15-minute grid draws as one column per hour", async ({ page }) => {
-        const rails = await railsFor(page, { exportPrice: hourlyPoints([2, 5, 3], 15) });
-
-        // Not twelve quarter-hour slivers -- three hours, the last one running to
-        // the end of the day because nothing follows it.
-        expect(rails.exportColumns).toEqual([
-            { startMinutes: 0, endMinutes: 60, value: 2 },
-            { startMinutes: 60, endMinutes: 120, value: 5 },
-            { startMinutes: 120, endMinutes: 1440, value: 3 },
-        ]);
-    });
-
-    test("a price that holds across the hour is one column, not one per hour", async ({ page }) => {
-        // Coalescing is driven by the value, not by the clock: an unchanged price
-        // over two hours is one cell, which is also how it reads on the strip.
-        const rails = await railsFor(page, { exportPrice: hourlyPoints([4, 4], 60) });
-
-        expect(rails.exportColumns).toEqual([{ startMinutes: 0, endMinutes: 1440, value: 4 }]);
-    });
-
-    test("a price that moves inside the hour keeps a column per change", async ({ page }) => {
-        const rails = await railsFor(page, {
-            exportPrice: [
-                { slot: "00:00", value: 3 },
-                { slot: "00:15", value: 3 },
-                { slot: "00:30", value: 7 },
-                { slot: "00:45", value: 3 },
-            ],
-        });
-
-        expect(rails.exportColumns).toEqual([
-            { startMinutes: 0, endMinutes: 30, value: 3 },
-            { startMinutes: 30, endMinutes: 45, value: 7 },
-            { startMinutes: 45, endMinutes: 1440, value: 3 },
-        ]);
-    });
-
-    test("the two rails coalesce independently of each other", async ({ page }) => {
-        // The whole reason both rails are published rather than one merged series:
-        // a window-shaped import rate holds for hours while a spot export price
-        // moves inside them, and neither may be forced onto the other's grid.
+    test("both rails land on identical cells, whatever their own resolutions", async ({ page }) => {
+        // The regression this file exists for. A fixed import window holding all
+        // morning and a spot export price moving every quarter-hour must still
+        // produce cell-for-cell matching columns, because each cell is split in
+        // half to hold one bar from each rail.
         const rails = await railsFor(page, {
             importPrice: [
                 { slot: "00:00", value: 6 },
@@ -125,18 +98,70 @@ test.describe("price columns", () => {
             ],
             exportPrice: [
                 { slot: "00:00", value: 1 },
-                { slot: "00:15", value: 1 },
+                { slot: "00:15", value: 4 },
                 { slot: "00:30", value: 2 },
-                { slot: "00:45", value: 2 },
+                { slot: "00:45", value: 9 },
             ],
         });
 
-        expect(rails.importColumns).toEqual([
-            { startMinutes: 0, endMinutes: 1440, value: 6 },
-        ]);
+        const spans = (columns: Column[]) =>
+            columns.map((column) => [column.startMinutes, column.endMinutes]);
+        expect(spans(rails.importColumns)).toEqual(spans(rails.exportColumns));
+        expect(rails.importColumns.map((column) => column.value)).toEqual([6, 6, 6, 6]);
+        expect(rails.exportColumns.map((column) => column.value)).toEqual([1, 4, 2, 9]);
+    });
+
+    test("an unchanging price is one cell per slot, not one merged column", async ({ page }) => {
+        // The old value-driven coalescing collapsed this to a single column
+        // running to the end of the day; on the shared grid it stays four cells.
+        const rails = await railsFor(page, { exportPrice: hourlyPoints([4]) });
+
         expect(rails.exportColumns).toEqual([
-            { startMinutes: 0, endMinutes: 30, value: 1 },
-            { startMinutes: 30, endMinutes: 1440, value: 2 },
+            { startMinutes: 0, endMinutes: 15, value: 4 },
+            { startMinutes: 15, endMinutes: 30, value: 4 },
+            { startMinutes: 30, endMinutes: 45, value: 4 },
+            { startMinutes: 45, endMinutes: 60, value: 4 },
+        ]);
+    });
+
+    test("a wider slot width groups the day into fewer, wider cells", async ({ page }) => {
+        // Density is the slot-size control's business: the same three hours that
+        // draw as twelve pairs at 15 minutes draw as three at 60.
+        const rails = await railsFor(page, {
+            exportPrice: hourlyPoints([2, 5, 3]),
+            slotMinutes: 60,
+        });
+
+        expect(rails.exportColumns).toEqual([
+            { startMinutes: 0, endMinutes: 60, value: 2 },
+            { startMinutes: 60, endMinutes: 120, value: 5 },
+            { startMinutes: 120, endMinutes: 180, value: 3 },
+        ]);
+    });
+
+    test("samples sharing a grouped cell average, because a price is a rate", async ({ page }) => {
+        // Summing would be wrong here in a way that matters for P2: four
+        // quarter-hours at 2 CZK/kWh is an hour at 2, not an hour at 8.
+        const rails = await railsFor(page, {
+            exportPrice: [
+                { slot: "00:00", value: 1 },
+                { slot: "00:15", value: 2 },
+                { slot: "00:30", value: 3 },
+                { slot: "00:45", value: 6 },
+            ],
+            slotMinutes: 60,
+        });
+
+        expect(rails.exportColumns).toEqual([{ startMinutes: 0, endMinutes: 60, value: 3 }]);
+    });
+
+    test("the last cell of the day is clamped to midnight", async ({ page }) => {
+        const rails = await railsFor(page, {
+            exportPrice: [{ slot: "23:45", value: 5 }],
+        });
+
+        expect(rails.exportColumns).toEqual([
+            { startMinutes: 1425, endMinutes: 1440, value: 5 },
         ]);
     });
 
@@ -149,7 +174,7 @@ test.describe("price columns", () => {
         });
 
         expect(rails.importColumns).toEqual([
-            { startMinutes: 360, endMinutes: 1440, value: 5 },
+            { startMinutes: 360, endMinutes: 375, value: 5 },
         ]);
         expect(rails.exportColumns).toEqual([]);
         expect(rails.unit).toBe("CZK/kWh");
@@ -164,6 +189,38 @@ test.describe("price columns", () => {
             ],
         });
 
-        expect(rails.exportColumns).toEqual([{ startMinutes: 360, endMinutes: 1440, value: 1 }]);
+        expect(rails.exportColumns).toEqual([
+            { startMinutes: 360, endMinutes: 375, value: 1 },
+        ]);
+    });
+
+    test("changing the slot width republishes the columns", async ({ page }) => {
+        // The inspector's selected-slot panel reads these, so a regroup that did
+        // not re-emit would leave it quoting cells the strip no longer draws.
+        const widths = await page.evaluate(async (day) => {
+            const el = document.createElement("helman-solar-price-strip") as any;
+            const seen: number[] = [];
+            el.addEventListener("price-columns", (event: Event) => {
+                seen.push((event as CustomEvent).detail.exportColumns.length);
+            });
+            el.timeZone = "UTC";
+            el.date = day;
+            el.slotMinutes = 15;
+            el.exportPrice = [
+                { slot: "00:00", value: 1 },
+                { slot: "00:15", value: 2 },
+                { slot: "00:30", value: 3 },
+                { slot: "00:45", value: 4 },
+            ];
+            el.unit = "CZK/kWh";
+            document.body.appendChild(el);
+            await el.updateComplete;
+            el.slotMinutes = 60;
+            await el.updateComplete;
+            return seen;
+        }, DAY);
+
+        expect(widths.at(0)).toBe(4);
+        expect(widths.at(-1)).toBe(1);
     });
 });

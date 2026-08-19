@@ -125,7 +125,12 @@ export class HelmanSolarPriceStrip extends LitElement {
         // The inspector's own selected-slot panel wants this day's prices already
         // laid out on the 0..1440 timeline, which only happens here, so every
         // change that could move a value at a given minute is echoed up.
-        if (changed.has("importPrice") || changed.has("exportPrice") || changed.has("unit")) {
+        if (
+            changed.has("importPrice")
+            || changed.has("exportPrice")
+            || changed.has("unit")
+            || changed.has("slotMinutes")
+        ) {
             this._emitColumns();
         }
     }
@@ -158,18 +163,24 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /**
-     * One rail's samples laid out on the day's 0..1440 timeline.
+     * One rail's samples bucketed onto the inspector's current slot grid.
      *
-     * Consecutive samples of equal value collapse into one column. The payload's
-     * granularity is the schedule's, which can be finer than either price's own
-     * resolution — an hourly export price arrives as four equal 15-minute
-     * repeats, and a fixed import window as a whole morning of them; drawing one
-     * rect per sample would give hairline seams and no room for a value label.
-     * Coalescing restores the natural cell while still showing genuine
-     * within-the-hour variation as separate columns.
+     * Both rails use this same grid, which is the point: a cell is split in half
+     * to hold one bar per rail, so the two must agree on where cells begin or
+     * the halves belong to different spans. Coalescing equal neighbours into
+     * natural cells — an hourly export price into one column, a fixed import
+     * window into a morning-long one — was tried first and gives each rail its
+     * own grid, which draws as a wide backdrop with unrelated bars across it
+     * rather than a pair per slot.
+     *
+     * Density is therefore the slot-size control's business, not this element's:
+     * at 15 minutes the day is 96 narrow pairs, at 60 it is 24 wide ones.
+     * Several samples landing in one cell average, a price being a rate rather
+     * than a quantity to accumulate.
      */
     private _buildColumns(points: readonly PriceRailPoint[]): PriceColumn[] {
-        const raw: { minutes: number; value: number }[] = [];
+        const slot = this._slotSpan();
+        const cells = new Map<number, { total: number; count: number }>();
         for (const point of points ?? []) {
             const value = Number(point.value);
             if (!Number.isFinite(value)) {
@@ -179,21 +190,27 @@ export class HelmanSolarPriceStrip extends LitElement {
             if (minutes === null) {
                 continue;
             }
-            raw.push({ minutes, value });
-        }
-        raw.sort((a, b) => a.minutes - b.minutes);
-        const columns: PriceColumn[] = [];
-        raw.forEach((entry, index) => {
-            const next = raw[index + 1];
-            const end = next && next.minutes > entry.minutes ? next.minutes : MINUTES_PER_DAY;
-            const previous = columns[columns.length - 1];
-            if (previous && previous.value === entry.value && previous.endMinutes === entry.minutes) {
-                previous.endMinutes = end;
-                return;
+            const start = Math.floor(minutes / slot) * slot;
+            const cell = cells.get(start);
+            if (cell) {
+                cell.total += value;
+                cell.count += 1;
+            } else {
+                cells.set(start, { total: value, count: 1 });
             }
-            columns.push({ startMinutes: entry.minutes, endMinutes: end, value: entry.value });
-        });
-        return columns;
+        }
+        return [...cells.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([startMinutes, { total, count }]) => ({
+                startMinutes,
+                endMinutes: Math.min(startMinutes + slot, MINUTES_PER_DAY),
+                value: total / count,
+            }));
+    }
+
+    /** The inspector's current slot width, guarded against a nonsense value. */
+    private _slotSpan(): number {
+        return this.slotMinutes > 0 ? this.slotMinutes : 15;
     }
 
     /** Turn an `HH:MM` slot label into its minute-of-day, or null if malformed. */
@@ -310,12 +327,10 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /**
-     * Where one rail's bar sits inside a price cell: import on the left half,
-     * export on the right. Halving the cell rather than overlaying or stacking
-     * keeps both values readable at their true height against the shared scale,
-     * and keeps each rail's own column boundaries — an all-morning import window
-     * and an hourly export price are different cells, and pretending otherwise
-     * would force one of them onto the other's grid.
+     * Where one rail's bar sits inside a slot cell: import on the left half,
+     * export on the right. Halving rather than overlaying or stacking keeps both
+     * values readable at their true height against the shared scale, and the two
+     * halves are the same span because both rails were bucketed onto one grid.
      */
     private _barSpan(
         column: PriceColumn,
@@ -440,27 +455,25 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /**
-     * The cells the selection and hover bands snap to: wherever the two rails
-     * disagree on where a cell begins, the narrower one wins, so the highlight
-     * never claims more of the day than both prices actually held constant for.
+     * The cells the selection and hover bands snap to. Both rails sit on the one
+     * slot grid, so a band is simply that grid's cell — the union of the two
+     * rails' starts, since either may be missing cells the other has.
      */
     private _bandColumns(
         importColumns: PriceColumn[],
         exportColumns: PriceColumn[],
     ): PriceColumn[] {
-        if (importColumns.length === 0) return exportColumns;
-        if (exportColumns.length === 0) return importColumns;
-        const edges = new Set<number>([MINUTES_PER_DAY]);
-        for (const column of [...importColumns, ...exportColumns]) {
-            edges.add(column.startMinutes);
-            edges.add(column.endMinutes);
-        }
-        const sorted = [...edges].sort((a, b) => a - b);
-        const columns: PriceColumn[] = [];
-        for (let index = 0; index < sorted.length - 1; index += 1) {
-            columns.push({ startMinutes: sorted[index], endMinutes: sorted[index + 1], value: 0 });
-        }
-        return columns;
+        const slot = this._slotSpan();
+        const starts = new Set<number>(
+            [...importColumns, ...exportColumns].map((column) => column.startMinutes),
+        );
+        return [...starts]
+            .sort((a, b) => a - b)
+            .map((startMinutes) => ({
+                startMinutes,
+                endMinutes: Math.min(startMinutes + slot, MINUTES_PER_DAY),
+                value: 0,
+            }));
     }
 
     /**
