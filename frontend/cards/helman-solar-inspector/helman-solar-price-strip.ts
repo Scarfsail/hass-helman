@@ -2,7 +2,6 @@ import { LitElement, css, html, svg, type PropertyValues, type TemplateResult } 
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
-import type { ForecastPayload } from "../helman-api";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
@@ -20,16 +19,28 @@ const MINUTES_PER_DAY = 1440;
 /** The strip's own geometry; it borrows only the x scale from the chart. */
 const PRICE_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
 
-/** A single export-price sample placed on the selected day's timeline. */
+/** One rail's sample as the day payload serves it: an `HH:MM` slot and a rate. */
+export interface PriceRailPoint {
+    slot: string;
+    value: number;
+}
+
+/** A single price sample placed on the selected day's timeline. */
 export interface PriceColumn {
     startMinutes: number;
     endMinutes: number;
     value: number;
 }
 
-/** The day's price columns, published so the inspector can look one up by slot. */
+/**
+ * The day's price columns for both directions, published so the inspector can
+ * look either one up by slot. Kept as two sequences rather than one merged
+ * series because the rails coalesce independently: a window-shaped import rate
+ * holds for hours while a spot export price moves every quarter of one.
+ */
 export interface PriceColumnsDetail {
-    columns: PriceColumn[];
+    importColumns: PriceColumn[];
+    exportColumns: PriceColumn[];
     unit: string;
 }
 
@@ -48,23 +59,25 @@ export interface PriceTooltipContent {
 }
 
 /**
- * A horizontal strip of the grid export price across the selected inspector day,
- * aligned to the solar inspector chart's time axis and coloured to match the
- * price column on the scheduling card. Past and future samples are both shown;
- * samples past the current moment are drawn muted, echoing how the chart above
- * mutes the part of the day the actuals have not yet reached.
+ * A horizontal strip of what the grid charged and what it paid across the
+ * selected inspector day, aligned to the solar inspector chart's time axis. The
+ * two rails are drawn side by side inside each price cell, in the same
+ * import/export colours the rest of the project uses for grid direction, so the
+ * spread between them — the thing every optimizer decision turns on — reads at a
+ * glance. Samples past the current moment are drawn muted, echoing how the chart
+ * above mutes the part of the day the actuals have not yet reached.
  *
- * The export price comes straight from the live forecast payload, whose sell-price
- * entity exposes the whole day (already-elapsed hours included), so navigating to
- * today shows the day in full. Other days carry no live price data and render empty.
+ * Both rails come off the inspector day payload rather than the live forecast
+ * payload, and that is what makes the strip work on days other than today: the
+ * backend serves elapsed slots out of recorder history (and, for import, out of
+ * the window config where history cannot answer), so navigating back a week
+ * shows the prices that applied then rather than an empty strip.
  *
- * The payload is handed down by the inspector, which already holds the one the day
- * pills loaded; this element fetches nothing of its own and reacts to nothing but
- * `forecast` and `date`. `hass` is held only to read through — it is a conduit for
- * localization, never a change signal (see `../README.md`).
+ * `hass` is held only to read through — it is a conduit for localization, never
+ * a change signal (see `../README.md`).
  */
-@customElement("helman-solar-export-price-strip")
-export class HelmanSolarExportPriceStrip extends LitElement {
+@customElement("helman-solar-price-strip")
+export class HelmanSolarPriceStrip extends LitElement {
     static styles = [helmanColorVars, css`
         :host {
             display: block;
@@ -101,17 +114,18 @@ export class HelmanSolarExportPriceStrip extends LitElement {
      */
     @property({ type: Number }) public nowMs = Date.now();
 
-    /**
-     * The forecast the inspector already loaded for the day pills. Its
-     * `grid.exportPricePoints` are the only thing this element draws.
-     */
-    @property({ attribute: false }) public forecast: ForecastPayload | null = null;
+    /** What a kilowatt-hour bought from the grid cost, per slot of this day. */
+    @property({ attribute: false }) public importPrice: readonly PriceRailPoint[] = [];
+    /** What a kilowatt-hour sold to the grid earned, per slot of this day. */
+    @property({ attribute: false }) public exportPrice: readonly PriceRailPoint[] = [];
+    /** The currency-per-energy unit both rails are quoted in, e.g. `CZK/kWh`. */
+    @property({ type: String }) public unit = "";
 
     protected updated(changed: PropertyValues<this>): void {
         // The inspector's own selected-slot panel wants this day's prices already
         // laid out on the 0..1440 timeline, which only happens here, so every
         // change that could move a value at a given minute is echoed up.
-        if (changed.has("forecast") || changed.has("date")) {
+        if (changed.has("importPrice") || changed.has("exportPrice") || changed.has("unit")) {
             this._emitColumns();
         }
     }
@@ -120,7 +134,11 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     private _emitColumns(): void {
         this.dispatchEvent(
             new CustomEvent<PriceColumnsDetail>("price-columns", {
-                detail: { columns: this._buildColumns(), unit: this.forecast?.grid.exportPriceUnit ?? "" },
+                detail: {
+                    importColumns: this._buildColumns(this.importPrice),
+                    exportColumns: this._buildColumns(this.exportPrice),
+                    unit: this.unit,
+                },
                 bubbles: true,
                 composed: true,
             }),
@@ -131,36 +149,37 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         if (!this.hass || this.geometry === null) {
             return nothing;
         }
-        const columns = this._buildColumns();
-        if (columns.length === 0) {
+        const importColumns = this._buildColumns(this.importPrice);
+        const exportColumns = this._buildColumns(this.exportPrice);
+        if (importColumns.length === 0 && exportColumns.length === 0) {
             return nothing;
         }
-        return this._renderStrip(columns, this.geometry);
+        return this._renderStrip(importColumns, exportColumns, this.geometry);
     }
 
     /**
-     * Export-price samples that fall on the selected day, on its 0..1440 timeline.
+     * One rail's samples laid out on the day's 0..1440 timeline.
      *
      * Consecutive samples of equal value collapse into one column. The payload's
-     * granularity is the schedule's, which can be finer than the price's own
-     * resolution — an hourly price delivered on a 15-minute grid arrives as four
-     * equal repeats, and would otherwise draw as four hairline-seamed rects too
-     * narrow to carry their value label. Coalescing restores the hourly cell while
-     * still showing genuine within-the-hour variation as separate columns.
+     * granularity is the schedule's, which can be finer than either price's own
+     * resolution — an hourly export price arrives as four equal 15-minute
+     * repeats, and a fixed import window as a whole morning of them; drawing one
+     * rect per sample would give hairline seams and no room for a value label.
+     * Coalescing restores the natural cell while still showing genuine
+     * within-the-hour variation as separate columns.
      */
-    private _buildColumns(): PriceColumn[] {
-        const points = this.forecast?.grid.exportPricePoints ?? [];
+    private _buildColumns(points: readonly PriceRailPoint[]): PriceColumn[] {
         const raw: { minutes: number; value: number }[] = [];
-        for (const point of points) {
+        for (const point of points ?? []) {
             const value = Number(point.value);
             if (!Number.isFinite(value)) {
                 continue;
             }
-            const parts = getScheduleLocalTimeParts(point.timestamp, this.timeZone);
-            if (parts === null || parts.dayKey !== this.date) {
+            const minutes = this._slotToMinutes(point.slot);
+            if (minutes === null) {
                 continue;
             }
-            raw.push({ minutes: parts.hour * 60 + parts.minute, value });
+            raw.push({ minutes, value });
         }
         raw.sort((a, b) => a.minutes - b.minutes);
         const columns: PriceColumn[] = [];
@@ -175,6 +194,23 @@ export class HelmanSolarExportPriceStrip extends LitElement {
             columns.push({ startMinutes: entry.minutes, endMinutes: end, value: entry.value });
         });
         return columns;
+    }
+
+    /** Turn an `HH:MM` slot label into its minute-of-day, or null if malformed. */
+    private _slotToMinutes(slot: unknown): number | null {
+        if (typeof slot !== "string") {
+            return null;
+        }
+        const [hourText, minuteText] = slot.split(":");
+        const hour = Number(hourText);
+        const minute = Number(minuteText);
+        if (!Number.isInteger(hour) || !Number.isInteger(minute)) {
+            return null;
+        }
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+            return null;
+        }
+        return hour * 60 + minute;
     }
 
     /**
@@ -201,20 +237,27 @@ export class HelmanSolarExportPriceStrip extends LitElement {
         return this.date < now.dayKey ? MINUTES_PER_DAY : 0;
     }
 
-    private _renderStrip(columns: PriceColumn[], geometry: ScheduleStripGeometry): TemplateResult {
+    private _renderStrip(
+        importColumns: PriceColumn[],
+        exportColumns: PriceColumn[],
+        geometry: ScheduleStripGeometry,
+    ): TemplateResult {
         const { height, padTop, padBottom } = PRICE_STRIP;
         const innerHeight = height - padTop - padBottom;
-        const maxAbs = Math.max(0.0001, ...columns.map((column) => Math.abs(column.value)));
-        const hasNegative = columns.some((column) => column.value < 0);
+        const allColumns = [...importColumns, ...exportColumns];
+        // One y-scale for both rails: they are the same unit, and the whole point
+        // of drawing them together is that their heights are comparable.
+        const maxAbs = Math.max(0.0001, ...allColumns.map((column) => Math.abs(column.value)));
+        const hasNegative = allColumns.some((column) => column.value < 0);
         const zeroY = hasNegative ? padTop + innerHeight / 2 : padTop + innerHeight;
         const scale = hasNegative ? innerHeight / 2 / maxAbs : innerHeight / maxAbs;
         const yForValue = (value: number) => zeroY - value * scale;
         const seam = this._seamMinutes();
-        const unit = this.forecast?.grid.exportPriceUnit ?? "";
         const { start: windowStart, end: windowEnd } = stripWindow(geometry);
         const windowSpan = windowEnd - windowStart;
         const xForMinutes = (minutes: number) =>
             geometry.marginLeft + ((minutes - windowStart) / windowSpan) * geometry.plotWidth;
+        const bandColumns = this._bandColumns(importColumns, exportColumns);
 
         return html`
             <div class="strip-wrap">
@@ -222,15 +265,15 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                 <svg
                     viewBox="0 0 ${geometry.width} ${height}"
                     role="img"
-                    aria-label=${this._t("bias_correction.inspector.export_price_strip")}
+                    aria-label=${this._t("bias_correction.inspector.price_strip")}
                     style="cursor: pointer;"
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
                     @mousemove=${(event: MouseEvent) =>
-                        this._handleHover(event, geometry, columns, unit)}
+                        this._handleHover(event, geometry, importColumns, exportColumns)}
                     @mouseleave=${() => { this._emitHover(null); this._emitTooltip(null); }}
                 >
                     <defs>
-                        <clipPath id="export-price-plot-clip">
+                        <clipPath id="price-plot-clip">
                             <rect x=${geometry.marginLeft} y="0" width=${geometry.plotWidth} height=${height}></rect>
                         </clipPath>
                     </defs>
@@ -246,61 +289,107 @@ export class HelmanSolarExportPriceStrip extends LitElement {
                         top: 0,
                         bottom: height,
                     })}
-                    ${this._renderBand(columns, this.hoverMinutes, "hover", height, xForMinutes)}
+                    ${this._renderBand(bandColumns, this.hoverMinutes, "hover", height, xForMinutes)}
                     ${this.selectedMinutes.map((minutes) =>
-                        this._renderBand(columns, minutes, "selected", height, xForMinutes))}
-                    <g clip-path="url(#export-price-plot-clip)">
-                    ${columns.map((column) => {
-                        const positive = column.value >= 0;
-                        const color = positive
-                            ? "var(--helman-price-positive)"
-                            : "var(--helman-price-negative)";
-                        const valueY = yForValue(column.value);
-                        const top = Math.min(zeroY, valueY);
-                        const barHeight = Math.max(1, Math.abs(valueY - zeroY));
-                        const left = xForMinutes(column.startMinutes);
-                        const right = xForMinutes(column.endMinutes);
-                        const width = Math.max(1, right - left - 0.5);
-                        const future = column.startMinutes >= seam;
-                        return svg`
-                            <rect
-                                x=${left + 0.25} y=${top}
-                                width=${width} height=${barHeight}
-                                style="fill: ${color}; stroke: ${color};"
-                                fill-opacity=${future ? 0.4 : 0.85}
-                                stroke-width=${future ? 0.9 : 0}
-                                stroke-dasharray=${future ? "2 2" : ""}
-                            ></rect>
-                        `;
-                    })}
+                        this._renderBand(bandColumns, minutes, "selected", height, xForMinutes))}
+                    <g clip-path="url(#price-plot-clip)">
+                    ${this._renderBars(importColumns, "import", { zeroY, yForValue, seam, xForMinutes })}
+                    ${this._renderBars(exportColumns, "export", { zeroY, yForValue, seam, xForMinutes })}
                     </g>
                     ${this._renderNowMarker(xForMinutes, windowStart, windowEnd, height)}
                     <!-- The prices come after the marker so the line passes
                          behind the figure it crosses instead of through it. -->
-                    <g clip-path="url(#export-price-plot-clip)">
-                    ${columns.map((column) => {
-                        const left = xForMinutes(column.startMinutes);
-                        const width = Math.max(1, xForMinutes(column.endMinutes) - left - 0.5);
-                        if (width < 18) {
-                            return "";
-                        }
-                        const valueY = yForValue(column.value);
-                        const top = Math.min(zeroY, valueY);
-                        // The label sits outside the bar, on the far side from zero,
-                        // so it never has to fight the bar's own fill for contrast.
-                        const labelY = column.value >= 0
-                            ? Math.max(top - 3, 9)
-                            : Math.min(top + Math.max(1, Math.abs(valueY - zeroY)) + 9, height - 2);
-                        return svg`
-                            <text x=${left + width / 2} y=${labelY} text-anchor="middle" font-size="9"
-                                  fill="var(--secondary-text-color)">${column.value.toFixed(1)}</text>
-                        `;
-                    })}
+                    <g clip-path="url(#price-plot-clip)">
+                    ${this._renderLabels(importColumns, "import", { zeroY, yForValue, height, xForMinutes })}
+                    ${this._renderLabels(exportColumns, "export", { zeroY, yForValue, height, xForMinutes })}
                     </g>
                 </svg>
             `}
             </div>
         `;
+    }
+
+    /**
+     * Where one rail's bar sits inside a price cell: import on the left half,
+     * export on the right. Halving the cell rather than overlaying or stacking
+     * keeps both values readable at their true height against the shared scale,
+     * and keeps each rail's own column boundaries — an all-morning import window
+     * and an hourly export price are different cells, and pretending otherwise
+     * would force one of them onto the other's grid.
+     */
+    private _barSpan(
+        column: PriceColumn,
+        side: "import" | "export",
+        xForMinutes: (minutes: number) => number,
+    ): { left: number; width: number } {
+        const cellLeft = xForMinutes(column.startMinutes);
+        const cellRight = xForMinutes(column.endMinutes);
+        const middle = (cellLeft + cellRight) / 2;
+        const left = side === "import" ? cellLeft : middle;
+        const right = side === "import" ? middle : cellRight;
+        return { left: left + 0.25, width: Math.max(1, right - left - 0.5) };
+    }
+
+    private _renderBars(
+        columns: PriceColumn[],
+        side: "import" | "export",
+        ctx: {
+            zeroY: number;
+            yForValue: (value: number) => number;
+            seam: number;
+            xForMinutes: (minutes: number) => number;
+        },
+    ) {
+        const color = side === "import" ? "var(--helman-grid-import)" : "var(--helman-grid-export)";
+        return columns.map((column) => {
+            const valueY = ctx.yForValue(column.value);
+            const top = Math.min(ctx.zeroY, valueY);
+            const barHeight = Math.max(1, Math.abs(valueY - ctx.zeroY));
+            const { left, width } = this._barSpan(column, side, ctx.xForMinutes);
+            const future = column.startMinutes >= ctx.seam;
+            return svg`
+                <rect
+                    x=${left} y=${top}
+                    width=${width} height=${barHeight}
+                    style="fill: ${color}; stroke: ${color};"
+                    fill-opacity=${future ? 0.4 : 0.85}
+                    stroke-width=${future ? 0.9 : 0}
+                    stroke-dasharray=${future ? "2 2" : ""}
+                ></rect>
+            `;
+        });
+    }
+
+    private _renderLabels(
+        columns: PriceColumn[],
+        side: "import" | "export",
+        ctx: {
+            zeroY: number;
+            yForValue: (value: number) => number;
+            height: number;
+            xForMinutes: (minutes: number) => number;
+        },
+    ) {
+        return columns.map((column) => {
+            const { left, width } = this._barSpan(column, side, ctx.xForMinutes);
+            // A half-cell is half the room the single-series strip had, so the
+            // threshold is halved with it; narrower than this and the digits
+            // would overrun into the neighbouring rail.
+            if (width < 12) {
+                return "";
+            }
+            const valueY = ctx.yForValue(column.value);
+            const top = Math.min(ctx.zeroY, valueY);
+            // The label sits outside the bar, on the far side from zero, so it
+            // never has to fight the bar's own fill for contrast.
+            const labelY = column.value >= 0
+                ? Math.max(top - 3, 9)
+                : Math.min(top + Math.max(1, Math.abs(valueY - ctx.zeroY)) + 9, ctx.height - 2);
+            return svg`
+                <text x=${left + width / 2} y=${labelY} text-anchor="middle" font-size="9"
+                      fill="var(--secondary-text-color)">${column.value.toFixed(1)}</text>
+            `;
+        });
     }
 
     /**
@@ -351,8 +440,32 @@ export class HelmanSolarExportPriceStrip extends LitElement {
     }
 
     /**
+     * The cells the selection and hover bands snap to: wherever the two rails
+     * disagree on where a cell begins, the narrower one wins, so the highlight
+     * never claims more of the day than both prices actually held constant for.
+     */
+    private _bandColumns(
+        importColumns: PriceColumn[],
+        exportColumns: PriceColumn[],
+    ): PriceColumn[] {
+        if (importColumns.length === 0) return exportColumns;
+        if (exportColumns.length === 0) return importColumns;
+        const edges = new Set<number>([MINUTES_PER_DAY]);
+        for (const column of [...importColumns, ...exportColumns]) {
+            edges.add(column.startMinutes);
+            edges.add(column.endMinutes);
+        }
+        const sorted = [...edges].sort((a, b) => a - b);
+        const columns: PriceColumn[] = [];
+        for (let index = 0; index < sorted.length - 1; index += 1) {
+            columns.push({ startMinutes: sorted[index], endMinutes: sorted[index + 1], value: 0 });
+        }
+        return columns;
+    }
+
+    /**
      * The blue selection or orange hover band. A minute falls inside one price
-     * sample, and the band covers that whole sample — so an hour-long price cell
+     * cell, and the band covers that whole cell — so an hour-long price cell
      * reads as the full hour, not the finer slot the minute came from.
      */
     private _renderBand(
@@ -406,43 +519,74 @@ export class HelmanSolarExportPriceStrip extends LitElement {
 
     /**
      * Report the hovered minute-of-day so the inspector can echo it everywhere,
-     * and the popup content. The whole column's slot counts as "on" it, not just
-     * its own bar height -- a single-series bar has nothing else there to
-     * disambiguate, so a value near zero would otherwise leave almost no
-     * pointable area.
+     * and the popup content. The whole cell's slot counts as "on" it, not just
+     * either bar's own height -- a value near zero would otherwise leave almost
+     * no pointable area, and both rails are wanted at once anyway: the spread
+     * between them is what the reader came for.
      */
     private _handleHover(
         event: MouseEvent,
         geometry: ScheduleStripGeometry,
-        columns: PriceColumn[],
-        unit: string,
+        importColumns: PriceColumn[],
+        exportColumns: PriceColumn[],
     ): void {
         const svgEl = event.currentTarget as SVGSVGElement;
         const rect = svgEl.getBoundingClientRect();
         const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
         const minutes = stripMinutesForSvgX(geometry, svgX);
-        const column = minutes === null
-            ? undefined
-            : columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
-        if (minutes === null || !column) {
+        const at = (columns: PriceColumn[]) =>
+            minutes === null
+                ? undefined
+                : columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
+        const importColumn = at(importColumns);
+        const exportColumn = at(exportColumns);
+        if (minutes === null || (!importColumn && !exportColumn)) {
             this._emitHover(null);
             this._emitTooltip(null);
             return;
+        }
+        // The title names the tighter of the two cells, so it describes the span
+        // the highlight actually covers rather than the looser rail's window.
+        const titleColumn = this._narrower(importColumn, exportColumn);
+        const rows: PriceTooltipContent["rows"] = [];
+        if (importColumn) {
+            rows.push(this._priceRow("import_price", importColumn.value));
+        }
+        if (exportColumn) {
+            rows.push(this._priceRow("export_price", exportColumn.value));
         }
         this._emitHover(minutes);
         this._emitTooltip({
             x: event.clientX,
             y: event.clientY,
-            title: `${this._formatMinutes(column.startMinutes)} – ${this._formatMinutes(column.endMinutes)}`,
+            title: titleColumn
+                ? `${this._formatMinutes(titleColumn.startMinutes)} – ${this._formatMinutes(titleColumn.endMinutes)}`
+                : undefined,
             hasActual: false,
-            rows: [
-                {
-                    label: this._t("bias_correction.inspector.export_price"),
-                    actual: null,
-                    forecast: { value: `${column.value.toFixed(1)} ${unit}`.trim() },
-                },
-            ],
+            rows,
         });
+    }
+
+    private _narrower(
+        first: PriceColumn | undefined,
+        second: PriceColumn | undefined,
+    ): PriceColumn | undefined {
+        if (!first) return second;
+        if (!second) return first;
+        const firstSpan = first.endMinutes - first.startMinutes;
+        const secondSpan = second.endMinutes - second.startMinutes;
+        return secondSpan < firstSpan ? second : first;
+    }
+
+    private _priceRow(key: "import_price" | "export_price", value: number): PriceTooltipContent["rows"][number] {
+        const color = key === "import_price"
+            ? "var(--helman-grid-import)"
+            : "var(--helman-grid-export)";
+        return {
+            label: this._t(`bias_correction.inspector.${key}`),
+            actual: null,
+            forecast: { value: `${value.toFixed(1)} ${this.unit}`.trim(), color },
+        };
     }
 
     private _emitHover(minutes: number | null): void {
@@ -481,6 +625,6 @@ export class HelmanSolarExportPriceStrip extends LitElement {
 
 declare global {
     interface HTMLElementTagNameMap {
-        "helman-solar-export-price-strip": HelmanSolarExportPriceStrip;
+        "helman-solar-price-strip": HelmanSolarPriceStrip;
     }
 }

@@ -9,7 +9,7 @@
     "helman-solar-inspector",
     "helman-solar-day-pills",
     "helman-solar-schedule-band-strip",
-    "helman-solar-export-price-strip",
+    "helman-solar-price-strip",
     "helman-forecast-health-banner",
     "helman-power-history-bars",
     "power-device",

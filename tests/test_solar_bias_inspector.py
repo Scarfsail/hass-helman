@@ -146,6 +146,8 @@ def test_inspector_day_serializes_frontend_contract():
             "gridActual": [],
             "batteryForecast": [],
             "batteryActual": [],
+            "importPrice": [],
+            "exportPrice": [],
         },
         "totals": {
             "rawWh": 420.0,
@@ -174,8 +176,11 @@ def test_inspector_day_serializes_frontend_contract():
             "hasGridActual": False,
             "hasBatteryForecast": False,
             "hasBatteryActual": False,
+            "hasImportPrice": False,
+            "hasExportPrice": False,
         },
         "houseUnmeasuredLabel": None,
+        "priceUnit": None,
         "batterySocBounds": [],
         "trainingExplainability": None,
     }
@@ -692,6 +697,8 @@ def test_inspector_day_applies_current_profile_and_totals():
         "hasGridActual": False,
         "hasBatteryForecast": False,
         "hasBatteryActual": False,
+        "hasImportPrice": False,
+        "hasExportPrice": False,
     }
     assert payload["series"]["raw"] == [
         {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 25.0},

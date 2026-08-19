@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..const import GRID_IMPORT_PRICE_ENTITY_ID
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
 from .forecast_history import load_forecast_points_for_day, load_trainer_samples
@@ -34,6 +35,7 @@ from .models import (
     SolarBiasInspectorSeries,
     SolarBiasInspectorTotals,
     SolarBiasMetadata,
+    SolarBiasPricePoint,
     SolarBiasProfile,
     SolarBiasSlotExplainability,
     SolarBiasTrainingExplainability,
@@ -84,6 +86,9 @@ class SolarBiasCorrectionService:
         grid_export_energy_entity_id_provider=None,
         battery_charge_energy_entity_id_provider=None,
         battery_discharge_energy_entity_id_provider=None,
+        grid_export_price_entity_id_provider=None,
+        grid_import_price_config_provider=None,
+        grid_price_snapshot_provider=None,
     ) -> None:
         self._hass = hass
         self._store = store
@@ -111,6 +116,9 @@ class SolarBiasCorrectionService:
         self._battery_discharge_energy_entity_id_provider = (
             battery_discharge_energy_entity_id_provider
         )
+        self._grid_export_price_entity_id_provider = grid_export_price_entity_id_provider
+        self._grid_import_price_config_provider = grid_import_price_config_provider
+        self._grid_price_snapshot_provider = grid_price_snapshot_provider
         self._profile: SolarBiasProfile | None = None
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
         self._explainability: SolarBiasTrainingExplainability | None = None
@@ -530,6 +538,14 @@ class SolarBiasCorrectionService:
         )
         need_past = target_date <= today
         need_future = target_date >= today
+        # How far the price recorder reads go: to the end of an elapsed day, and
+        # on today only as far as the slot in progress, whose start already
+        # carries the rate that applies to it. Everything past that is the live
+        # feed's to fill, so the two halves meet without overlapping.
+        price_history_end = next_slot or (
+            datetime.combine(target_date, time(0, 0), tzinfo=timezone)
+            + timedelta(days=1)
+        )
 
         # Independent recorder/snapshot reads, so overlap them rather than
         # awaiting in turn.
@@ -556,6 +572,24 @@ class SolarBiasCorrectionService:
                     "battery actual",
                 ),
                 self._load_house_consumer_breakdown_for_date(target_date, timezone),
+                self._guarded_points(
+                    self._load_recorded_price_rail(
+                        GRID_IMPORT_PRICE_ENTITY_ID,
+                        target_date,
+                        timezone,
+                        local_end=price_history_end,
+                    ),
+                    "import price history",
+                ),
+                self._guarded_points(
+                    self._load_recorded_price_rail(
+                        self._grid_export_price_entity_id(),
+                        target_date,
+                        timezone,
+                        local_end=price_history_end,
+                    ),
+                    "export price history",
+                ),
             ]
             if need_past
             else []
@@ -572,6 +606,8 @@ class SolarBiasCorrectionService:
         battery_actual_points: list[dict] = []
         breakdown_consumers: list[dict] = []
         consumer_slot_maps: list[dict] = []
+        recorded_import_price_points: list[dict] = []
+        recorded_export_price_points: list[dict] = []
         if need_past:
             (
                 house_forecast_history_points,
@@ -580,7 +616,9 @@ class SolarBiasCorrectionService:
                 grid_actual_points,
                 battery_actual_points,
                 consumer_breakdown,
-            ) = gathered[:6]
+                recorded_import_price_points,
+                recorded_export_price_points,
+            ) = gathered[:8]
             breakdown_consumers, consumer_slot_maps = consumer_breakdown
         battery_snapshot = gathered[-1] if need_future else None
 
@@ -692,6 +730,47 @@ class SolarBiasCorrectionService:
                 timezone=timezone,
             )
 
+        # --- Price rails ---
+        # One rail per direction, spanning the whole day. Elapsed slots come
+        # from the recorder — the import sensor Helman publishes, and the
+        # configured sell-price entity, which has always recorded itself — and
+        # slots the clock has not reached come from the live feed. The import
+        # side then fills whatever is still empty from the window config, which
+        # is derivable for any minute of any date; that is what makes the rail
+        # whole on days that predate the sensor, and on the stretch past
+        # recorder retention. It is a per-slot fill rather than a per-day
+        # branch, because the ship day and the retention edge are each covered
+        # in part: filling by day would either blank half a rail or overwrite a
+        # day of recorded truth with today's tariff.
+        import_price_by_slot: dict[str, float] = {
+            point["slot"]: point["value"] for point in recorded_import_price_points
+        }
+        export_price_by_slot: dict[str, float] = {
+            point["slot"]: point["value"] for point in recorded_export_price_points
+        }
+        price_snapshot = self._grid_price_snapshot() if need_future else {}
+        for slot, value in _live_price_rail(
+            price_snapshot.get("import"), target_date, timezone
+        ).items():
+            import_price_by_slot.setdefault(slot, value)
+        for slot, value in _live_price_rail(
+            price_snapshot.get("export"), target_date, timezone
+        ).items():
+            export_price_by_slot.setdefault(slot, value)
+
+        import_price_config = self._grid_import_price_config()
+        price_unit: str | None = None
+        if import_price_config is not None:
+            price_unit = import_price_config.unit
+            _fill_import_rail_from_config(
+                import_price_by_slot, import_price_config.windows
+            )
+        if price_unit is None:
+            export_channel = price_snapshot.get("export")
+            if isinstance(export_channel, dict):
+                unit = export_channel.get("unit")
+                price_unit = unit if isinstance(unit, str) and unit else None
+
         day = SolarBiasInspectorDay(
             date=target_date.isoformat(),
             timezone=str(self._hass.config.time_zone),
@@ -722,6 +801,8 @@ class SolarBiasCorrectionService:
                 grid_actual=_inspector_points_from_raw(drawn_grid_actual_points),
                 battery_forecast=_inspector_points_from_raw(battery_forecast_points),
                 battery_actual=_inspector_points_from_raw(drawn_battery_actual_points),
+                import_price=_price_points(import_price_by_slot),
+                export_price=_price_points(export_price_by_slot),
             ),
             totals=SolarBiasInspectorTotals(
                 raw_wh=_sum_point_values(raw_points) if raw_points else None,
@@ -776,6 +857,8 @@ class SolarBiasCorrectionService:
                 has_grid_actual=bool(drawn_grid_actual_points),
                 has_battery_forecast=bool(battery_forecast_points),
                 has_battery_actual=bool(drawn_battery_actual_points),
+                has_import_price=bool(import_price_by_slot),
+                has_export_price=bool(export_price_by_slot),
             ),
             is_today=target_date == today,
             is_future=target_date > today,
@@ -784,6 +867,7 @@ class SolarBiasCorrectionService:
                 target_date, timezone, need_past=need_past
             ),
             house_unmeasured_label=self._house_unmeasured_label(),
+            price_unit=price_unit,
         )
         return inspector_day_to_payload(day)
 
@@ -1190,6 +1274,82 @@ class SolarBiasCorrectionService:
             for slot in imported.keys() | exported.keys()
         }
         return _slot_energy_points(net_wh_by_slot, target_date)
+
+    async def _load_recorded_price_rail(
+        self,
+        entity_id: str | None,
+        target_date: date,
+        local_tz: ZoneInfo,
+        *,
+        local_end: datetime,
+    ) -> list[dict]:
+        """A price entity's recorder history sampled onto the day's slots.
+
+        A price is a rate that only writes a new state when it changes, so a
+        slot takes the last state at or before its start and the sampler carries
+        it forward across the slots in between. Slots the entity has no reading
+        for at all — before it existed, or past recorder retention — are simply
+        absent; the caller decides whether it has anything better to put there.
+        """
+        if not entity_id:
+            return []
+        from ..recorder_hourly_series import (
+            query_slot_boundary_state_values_for_range,
+        )
+
+        local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
+        by_boundary = await query_slot_boundary_state_values_for_range(
+            self._hass,
+            entity_id,
+            local_start=local_start,
+            local_end=local_end,
+            interval_minutes=15,
+        )
+        return [
+            {"slot": dt_util.as_local(boundary).strftime("%H:%M"), "value": float(value)}
+            for boundary, value in sorted(by_boundary.items())
+        ]
+
+    def _grid_export_price_entity_id(self) -> str | None:
+        """The configured sell-price entity, read for its recorder history.
+
+        No Helman mirror of it exists on purpose: it is already an ordinary
+        recorded sensor, so its past is on disk for days that elapsed long
+        before this feature shipped.
+        """
+        if self._grid_export_price_entity_id_provider is None:
+            return None
+        try:
+            return self._grid_export_price_entity_id_provider()
+        except Exception:
+            _LOGGER.exception("Failed to read the grid export price entity id")
+            return None
+
+    def _grid_import_price_config(self):
+        """The validated import-price window table, or None when unconfigured.
+
+        Invalid config is treated as absent rather than raised: the inspector
+        renders whatever it can, and the config editor is where a broken window
+        table gets reported.
+        """
+        if self._grid_import_price_config_provider is None:
+            return None
+        try:
+            return self._grid_import_price_config_provider()
+        except Exception:
+            _LOGGER.exception("Failed to read the grid import price config")
+            return None
+
+    def _grid_price_snapshot(self) -> dict[str, Any]:
+        """The live price feed, whose points start at the slot in progress."""
+        if self._grid_price_snapshot_provider is None:
+            return {}
+        try:
+            snapshot = self._grid_price_snapshot_provider()
+        except Exception:
+            _LOGGER.exception("Failed to read the live grid price snapshot")
+            return {}
+        return snapshot if isinstance(snapshot, dict) else {}
 
     async def _load_battery_actual_for_date(
         self, target_date: date, local_tz: ZoneInfo
@@ -1861,6 +2021,85 @@ def _house_forecast_current_slot_points(
     except (TypeError, ValueError):
         return []
     return [{"timestamp": ts_raw, "wh": wh}]
+
+
+def _live_price_rail(
+    channel: Any,
+    target_date: date,
+    timezone: ZoneInfo,
+) -> dict[str, float]:
+    """The live price feed's points for one day, keyed by local ``HH:MM`` slot.
+
+    The feed starts at the slot in progress and runs forward over the whole
+    horizon, so this is the half of the rail the recorder cannot answer — and
+    for a day still ahead of the clock, the whole of it.
+    """
+    if not isinstance(channel, dict):
+        return {}
+    by_slot: dict[str, float] = {}
+    for point in channel.get("points") or []:
+        if not isinstance(point, dict):
+            continue
+        raw_timestamp = point.get("timestamp")
+        if not isinstance(raw_timestamp, str):
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw_timestamp)
+        except ValueError:
+            continue
+        local_timestamp = parsed.astimezone(timezone)
+        if local_timestamp.date() != target_date:
+            continue
+        try:
+            value = float(point.get("value"))
+        except (TypeError, ValueError):
+            continue
+        by_slot[local_timestamp.strftime("%H:%M")] = value
+    return by_slot
+
+
+def _fill_import_rail_from_config(
+    by_slot: dict[str, float],
+    windows,
+) -> None:
+    """Price every slot the rail is still missing straight from the window table.
+
+    In place and per slot, never per day: the day the import sensor ships and
+    the day recorder retention runs out are each covered in part, so anything
+    coarser would either blank the covered half or overwrite recorded truth with
+    today's tariff.
+
+    Imported lazily, like the other cross-module helpers here — the builder
+    module pulls in Home Assistant's core, which several importers of this
+    module deliberately do without.
+    """
+    from ..grid_price_forecast_builder import (
+        GridImportPriceConfigError,
+        lookup_grid_import_price,
+    )
+
+    for slot_index in range(96):
+        minute_of_day = slot_index * 15
+        slot = f"{minute_of_day // 60:02d}:{minute_of_day % 60:02d}"
+        if slot in by_slot:
+            continue
+        try:
+            by_slot[slot] = lookup_grid_import_price(
+                windows=windows,
+                minute_of_day=minute_of_day,
+            )
+        except GridImportPriceConfigError:
+            _LOGGER.debug(
+                "No import price window covers %s; leaving the slot empty", slot
+            )
+
+
+def _price_points(by_slot: dict[str, float]) -> list[SolarBiasPricePoint]:
+    """Order a slot-keyed rail into the payload's drawable sequence."""
+    return [
+        SolarBiasPricePoint(slot=slot, value=value)
+        for slot, value in sorted(by_slot.items())
+    ]
 
 
 def _current_slot_start(local_now: datetime) -> datetime:

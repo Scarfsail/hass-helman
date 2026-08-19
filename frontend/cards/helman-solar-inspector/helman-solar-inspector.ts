@@ -53,8 +53,8 @@ import {
   type SolarInspectorDayAggregateRow,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
-import "./helman-solar-export-price-strip";
-import type { PriceColumn, PriceColumnsDetail } from "./helman-solar-export-price-strip";
+import "./helman-solar-price-strip";
+import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-solar-price-strip";
 import "../helman/power-devices-container";
 import { DeviceNode } from "../helman/DeviceNode";
 import {
@@ -222,6 +222,13 @@ type StrokeStyle = { width: number; opacity: number };
 const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
 
 const MINUTES_PER_DAY = 1440;
+
+/**
+ * The stand-in for a rail an older payload does not carry. A shared frozen array
+ * rather than a fresh `[]` per render: the strip's properties are compared by
+ * identity, and a new empty array every time would make it re-render for nothing.
+ */
+const EMPTY_PRICE_RAIL: readonly PriceRailPoint[] = Object.freeze([]);
 
 /** The SoC strip's own geometry; it borrows only the x scale from the chart. */
 const SOC_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
@@ -417,6 +424,13 @@ type InspectorPayload = {
     gridActual: InspectorPoint[];
     batteryForecast: InspectorPoint[];
     batteryActual: InspectorPoint[];
+    /**
+     * What the grid charged and paid per slot. Unlike the forecast/actual pairs
+     * above, each rail already spans the whole day: the backend joins recorder
+     * history behind the clock with the live feed ahead of it.
+     */
+    importPrice: PriceRailPoint[];
+    exportPrice: PriceRailPoint[];
   };
   totals: {
     rawWh: number | null;
@@ -443,6 +457,8 @@ type InspectorPayload = {
     hasGridActual: boolean;
     hasBatteryForecast: boolean;
     hasBatteryActual: boolean;
+    hasImportPrice: boolean;
+    hasExportPrice: boolean;
   };
   /**
    * The power card's configured title for unmetered load, reused so the
@@ -452,6 +468,8 @@ type InspectorPayload = {
   houseUnmeasuredLabel: string | null;
   /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
   batterySocBounds: SocBoundsPoint[];
+  /** The currency-per-energy unit both price rails are quoted in. */
+  priceUnit: string | null;
   trainingExplainability: TrainingExplainability | null;
 };
 
@@ -525,9 +543,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _error = "";
   /**
    * The forecast payload the day pills fetched. It backs the health banner —
-   * the card's only view of how fresh the forecast behind the pills is — and it
-   * is handed to the export-price strip, which draws its prices out of it rather
-   * than fetching the same payload a second time.
+   * the card's only view of how fresh the forecast behind the pills is.
    */
   @state() private _forecast: ForecastPayload | null = null;
   /**
@@ -539,7 +555,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _trainingTableCollapsed = true;
   @state() private _impactStripVisible = false;
   @state() private _socStripExpanded = true;
-  @state() private _exportPriceStripExpanded = true;
+  @state() private _priceStripExpanded = true;
   @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
@@ -554,11 +570,13 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _tooltip: TooltipContent | null = null;
   /**
-   * The selected day's export-price columns, echoed up from the price strip --
-   * the only place that loads them -- so the selected-slot panel can show a
-   * price for the slot even while the strip itself is collapsed or off-screen.
+   * The selected day's price columns, echoed up from the price strip -- the only
+   * place that lays the rails out on the timeline -- so the selected-slot panel
+   * can show both prices for the slot even while the strip itself is collapsed
+   * or off-screen.
    */
-  @state() private _priceColumns: PriceColumn[] = [];
+  @state() private _importPriceColumns: PriceColumn[] = [];
+  @state() private _exportPriceColumns: PriceColumn[] = [];
   @state() private _priceUnit = "";
   /**
    * The shared schedule owner's state, for the execution switch in the
@@ -1413,7 +1431,7 @@ export class HelmanSolarInspector extends LitElement {
             ${this._lastLayoutForStrip && this._socBars(view).length
               ? this._renderSocSection(view, this._lastLayoutForStrip)
               : ""}
-            ${this._renderExportPriceStrip(view, layout)}
+            ${this._renderPriceStrip(view, layout)}
             ${this._renderScheduleActionsStrip(view, layout)}
             ${this._impactStripVisible && this._lastLayoutForStrip
               ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
@@ -2007,24 +2025,26 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  /** The export-price strip, behind a collapse toggle that starts expanded. */
-  private _renderExportPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
+  /** The two-rail price strip, behind a collapse toggle that starts expanded. */
+  private _renderPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
     return html`
       <div class="strip-section">
         <button
           class="strip-collapse-toggle"
           type="button"
-          aria-expanded=${this._exportPriceStripExpanded ? "true" : "false"}
-          @click=${() => { this._exportPriceStripExpanded = !this._exportPriceStripExpanded; }}
+          aria-expanded=${this._priceStripExpanded ? "true" : "false"}
+          @click=${() => { this._priceStripExpanded = !this._priceStripExpanded; }}
         >
-          <span class="strip-collapse-icon ${this._exportPriceStripExpanded ? "expanded" : ""}">▶</span>
-          ${this._t("bias_correction.inspector.export_price_strip")}
+          <span class="strip-collapse-icon ${this._priceStripExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.price_strip")}
         </button>
-        ${this._exportPriceStripExpanded
+        ${this._priceStripExpanded
           ? html`
-              <helman-solar-export-price-strip
+              <helman-solar-price-strip
                 .hass=${this.hass}
-                .forecast=${this._forecast}
+                .importPrice=${payload.series.importPrice ?? EMPTY_PRICE_RAIL}
+                .exportPrice=${payload.series.exportPrice ?? EMPTY_PRICE_RAIL}
+                .unit=${payload.priceUnit ?? ""}
                 .date=${payload.date}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
                 .selectedMinutes=${this._selectedMinutes(payload)}
@@ -2045,10 +2065,11 @@ export class HelmanSolarInspector extends LitElement {
                 @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
                   { this._tooltip = event.detail ?? null; }}
                 @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
-                  this._priceColumns = event.detail.columns;
+                  this._importPriceColumns = event.detail.importColumns;
+                  this._exportPriceColumns = event.detail.exportColumns;
                   this._priceUnit = event.detail.unit;
                 }}
-              ></helman-solar-export-price-strip>
+              ></helman-solar-price-strip>
             `
           : ""}
       </div>
@@ -3002,10 +3023,16 @@ export class HelmanSolarInspector extends LitElement {
             "batteryForecast",
             "batteryActual",
           )}
-          ${this._priceColumns.length
+          ${this._importPriceColumns.length
+            ? this._renderMetric(
+                this._t("bias_correction.inspector.merged.import_price"),
+                this._formatPrice(this._priceAtSelectionStart(this._importPriceColumns, slots)),
+              )
+            : ""}
+          ${this._exportPriceColumns.length
             ? this._renderMetric(
                 this._t("bias_correction.inspector.merged.export_price"),
-                this._formatPrice(this._priceAtSelectionStart(slots)),
+                this._formatPrice(this._priceAtSelectionStart(this._exportPriceColumns, slots)),
               )
             : ""}
         </div>
@@ -3966,11 +3993,14 @@ export class HelmanSolarInspector extends LitElement {
    * The price the selection opens on -- a rate, not an energy, so it is read at
    * the first slot rather than summed, the same rule the SoC box follows.
    */
-  private _priceAtSelectionStart(slots: readonly string[]): number | null {
+  private _priceAtSelectionStart(
+    columns: readonly PriceColumn[],
+    slots: readonly string[],
+  ): number | null {
     for (const slot of slots) {
       const minutes = slotToMinutes(slot);
       if (minutes === null) continue;
-      const column = this._priceColumns.find(
+      const column = columns.find(
         (c) => minutes >= c.startMinutes && minutes < c.endMinutes,
       );
       if (column) return column.value;

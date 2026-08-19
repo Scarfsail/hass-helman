@@ -222,6 +222,7 @@ The mechanism, the trace codes and the config migration are documented in [docs/
 - Strange baseline/breakdown numbers: make sure each deferrable consumer is a non-overlapping
   sub-meter already included in the configured house total.
 - Card resource not auto-registering: auto-registration only works with storage-mode (UI) dashboards.
+- Solar inspector price strip empty or missing bars on past days: neither `sensor.helman_grid_import_price` nor your configured `power_devices.grid.forecast.sell_price_entity_id` may be excluded from Recorder. The inspector reads a past day's rates back out of their recorded history, so an `exclude` entry (or a `purge_keep_days` shorter than the inspector's day range) silently costs you that history. The import side falls back to the `import_price_windows` table where history is missing; the export side has no fallback, because a spot price is not derivable from config.
 
 ## Scheduled work
 

@@ -562,7 +562,8 @@
       "soc_from": "SoC začátek",
       "soc_to": "SoC konec",
       "soc_direction_label": "Směr",
-      "export_price_strip": "Výkupní cena",
+      "price_strip": "Ceny elektřiny",
+      "import_price": "Nákupní cena",
       "export_price": "Výkupní cena",
       "column_actual": "Skutečnost",
       "column_forecast": "Predikce",
@@ -616,6 +617,7 @@
         "grid": "Síť",
         "battery": "Baterie",
         "battery_soc": "SoC baterie",
+        "import_price": "Nákupní cena",
         "export_price": "Výkupní cena"
       }
     }

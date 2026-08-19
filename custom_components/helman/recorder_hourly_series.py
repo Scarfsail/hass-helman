@@ -435,6 +435,54 @@ async def query_slot_boundary_state_values(
     return _sample_state_values_at_boundaries(states, boundaries)
 
 
+async def query_slot_boundary_state_values_for_range(
+    hass: HomeAssistant,
+    entity_id: str,
+    *,
+    local_start: datetime,
+    local_end: datetime,
+    interval_minutes: int,
+) -> dict[datetime, float]:
+    """Sample an entity's recorded state at every slot boundary in a date range.
+
+    The same read as :func:`query_slot_boundary_state_values`, freed of its
+    hardcoded "today": the caller names the window the way
+    :func:`query_cumulative_slot_energy_changes` does, so a day that ended a
+    week ago can be sampled as readily as the one in progress.
+
+    Boundaries are the slot *starts* in ``[local_start, local_end)``, and each
+    takes the last state at or before it — a carry-forward, not an
+    interpolation. That is exactly right for a rate: a price entity only writes
+    a new state when the price changes, so the slots between two writes hold the
+    price that was in force, and slots before the entity's first ever reading
+    are absent rather than guessed.
+    """
+    local_boundaries = _build_local_slot_starts_until(
+        local_start,
+        local_end,
+        interval_minutes=interval_minutes,
+    )
+    if not local_boundaries:
+        return {}
+
+    boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
+    utc_end = dt_util.as_utc(local_end)
+    history = await get_instance(hass).async_add_executor_job(
+        lambda: state_changes_during_period(
+            hass,
+            boundaries[0],
+            utc_end,
+            entity_id,
+            True,
+            False,
+            None,
+            True,
+        )
+    )
+    states = history.get(entity_id) or history.get(entity_id.lower()) or []
+    return _sample_state_values_at_boundaries(states, boundaries)
+
+
 async def estimate_average_hourly_energy_when_switch_on(
     hass: HomeAssistant,
     *,

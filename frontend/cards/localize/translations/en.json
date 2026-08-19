@@ -29,7 +29,8 @@
       "soc_from": "SoC start",
       "soc_to": "SoC end",
       "soc_direction_label": "Direction",
-      "export_price_strip": "Export price",
+      "price_strip": "Grid prices",
+      "import_price": "Import price",
       "export_price": "Export price",
       "column_actual": "Actual",
       "column_forecast": "Forecast",
@@ -84,6 +85,7 @@
         "grid": "Grid",
         "battery": "Battery",
         "battery_soc": "Battery SoC",
+        "import_price": "Import price",
         "export_price": "Export price"
       }
     }

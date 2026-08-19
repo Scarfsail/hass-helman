@@ -68,6 +68,12 @@ SCHEDULE_EXECUTOR_INTERVAL_SECONDS = 30
 AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS = 30
 CONSUMPTION_TOTAL_ENTITY_ID = "sensor.helman_consumption_total"
 PRODUCTION_TOTAL_ENTITY_ID = "sensor.helman_production_total"
+#: The import rate Helman itself publishes so the recorder archives it. Nothing
+#: else records what a kilowatt-hour cost, because the rate is computed from the
+#: window config rather than read off an entity; once a slot elapses, this
+#: sensor's history is the only record that it applied. The inspector reads it
+#: back by this id, so it is pinned here rather than left to entity-id slugging.
+GRID_IMPORT_PRICE_ENTITY_ID = "sensor.helman_grid_import_price"
 HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS = 14
 HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS = 56
 HOUSE_FORECAST_DEFAULT_MIN_SLOT_POINTS = 2
