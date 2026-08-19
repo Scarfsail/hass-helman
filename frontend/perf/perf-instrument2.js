@@ -32,7 +32,7 @@
   const out = {};
   out.inspector = timeIt("inspector", customElements.get("helman-solar-inspector"), [
     "_viewForSlot", "_buildStacks", "_computeChartLayout", "_renderContent",
-    "_renderChart", "_renderStackSet", "_renderSocSection", "_renderExportPriceStrip",
+    "_renderChart", "_renderStackSet", "_renderSocSection", "_renderPriceStrip",
     "_renderScheduleActionsStrip", "_renderSelectedSlotDetails", "_renderTotals",
     "_renderContributionTable", "_renderNavigation", "_loadDayAggregates",
     "_syncScheduleOwner", "_syncChartResizeObserver", "_solarWindow",
@@ -44,7 +44,7 @@
   out.pills = timeIt("dayPills", customElements.get("helman-solar-day-pills"), [
     "_rebuildNormalizedIfNeeded", "_rebuildModelIfNeeded", "_syncOwner", "_revealSelectedPill",
   ]);
-  out.priceStrip = timeIt("priceStrip", customElements.get("helman-solar-export-price-strip"), [
+  out.priceStrip = timeIt("priceStrip", customElements.get("helman-solar-price-strip"), [
     "_load",
   ]);
   out.card = timeIt("helmanCard", customElements.get("helman-card"), [

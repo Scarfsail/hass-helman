@@ -471,6 +471,8 @@ class HelmanCoordinator:
         self._grid_import_price_unit: str | None = None
         self._cached_solar_forecast: dict[str, Any] | None = None
         self._battery_forecast_history: BatteryForecastHistoryStore | None = None
+        #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
+        self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
         self._cached_battery_forecast: dict | None = None
         self._cached_battery_forecast_expires_at: datetime | None = None
         self._cached_battery_forecast_house_generated_at: str | None = None
@@ -1100,11 +1102,31 @@ class HelmanCoordinator:
         reason ``async_get_forecast`` builds its own: the points and the "price
         now" are derived at a reference time, and a caller mid-quarter-hour must
         not be handed the previous refresh's slot.
+
+        Held for the rest of the slot it was built in, though. The inspector
+        calls this once per day opened, and a full build materializes the whole
+        forecast horizon at canonical granularity and re-runs the export channel
+        — including its "unavailable"/"partial" warnings, which would otherwise
+        repeat on every day-pill click while a sell-price entity is down. Within
+        one slot the answer cannot change, so the freshness the docstring above
+        demands is exactly what the cache key preserves.
         """
-        return GridPriceForecastBuilder(
+        from .recorder_hourly_series import get_local_current_slot_start
+
+        reference_time = dt_util.now()
+        slot_start = get_local_current_slot_start(
+            reference_time,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        )
+        cached = self._grid_price_snapshot_cache
+        if cached is not None and cached[0] == slot_start:
+            return cached[1]
+        snapshot = GridPriceForecastBuilder(
             self._hass,
             self._active_config,
-        ).build(reference_time=dt_util.now())
+        ).build(reference_time=reference_time)
+        self._grid_price_snapshot_cache = (slot_start, snapshot)
+        return snapshot
 
     def _get_battery_entity_id(self, key: str) -> str | None:
         power_devices = ConsumptionForecastBuilder._read_dict(

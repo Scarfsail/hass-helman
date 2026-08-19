@@ -432,7 +432,9 @@ async def query_slot_boundary_state_values(
         )
     )
     states = history.get(entity_id) or history.get(entity_id.lower()) or []
-    return _sample_state_values_at_boundaries(states, boundaries)
+    return _sample_rate_values_at_boundaries(
+        states, boundaries, interval_minutes=interval_minutes
+    )
 
 
 async def query_slot_boundary_state_values_for_range(
@@ -450,12 +452,12 @@ async def query_slot_boundary_state_values_for_range(
     :func:`query_cumulative_slot_energy_changes` does, so a day that ended a
     week ago can be sampled as readily as the one in progress.
 
-    Boundaries are the slot *starts* in ``[local_start, local_end)``, and each
-    takes the last state at or before it — a carry-forward, not an
-    interpolation. That is exactly right for a rate: a price entity only writes
-    a new state when the price changes, so the slots between two writes hold the
-    price that was in force, and slots before the entity's first ever reading
-    are absent rather than guessed.
+    Boundaries are the slot *starts* in ``[local_start, local_end)``. Each takes
+    the first state written *inside* its own slot, and only falls back to the
+    last state before it when the slot contains no write at all — see
+    :func:`_sample_rate_values_at_boundaries` for why a rate needs that rather
+    than the plain carry-forward a meter gets. Slots before the entity's first
+    ever reading are absent rather than guessed.
     """
     local_boundaries = _build_local_slot_starts_until(
         local_start,
@@ -480,7 +482,9 @@ async def query_slot_boundary_state_values_for_range(
         )
     )
     states = history.get(entity_id) or history.get(entity_id.lower()) or []
-    return _sample_state_values_at_boundaries(states, boundaries)
+    return _sample_rate_values_at_boundaries(
+        states, boundaries, interval_minutes=interval_minutes
+    )
 
 
 async def estimate_average_hourly_energy_when_switch_on(
@@ -683,6 +687,62 @@ def _build_slot_energy_changes_from_boundaries(
         values_by_slot[slot_start] = delta
 
     return values_by_slot
+
+
+def _sample_rate_values_at_boundaries(
+    states: list[Any],
+    boundaries: list[datetime],
+    *,
+    interval_minutes: int,
+) -> dict[datetime, float]:
+    """Sample a rate entity per slot, preferring the write made inside the slot.
+
+    A meter is sampled with a plain carry-forward — its value at the boundary is
+    the reading that boundary had. A rate is not that: the state carries the
+    price *in force*, and a producer publishing on the slot grid writes it a
+    moment after the boundary it belongs to, not a moment before. Taking the
+    last state at or before the boundary would then hand every slot its
+    predecessor's price, shifting the whole rail one slot late at every change —
+    which is wrong by a whole slot at exactly the boundaries that matter, the
+    ones where the price moves.
+
+    So the first write landing inside ``[boundary, boundary + interval)`` wins,
+    and the carry-forward is the fallback for slots that contain no write, which
+    is the normal case for an entity that only publishes on change. A write
+    genuinely made part-way through a slot is credited to the whole of it; no
+    single value can do better, and the alternative errs by a whole slot instead
+    of part of one.
+    """
+    if not states or not boundaries:
+        return {}
+
+    parsed: list[tuple[datetime, float]] = []
+    for state in states:
+        last_updated = getattr(state, "last_updated", None)
+        if last_updated is None:
+            continue
+        value = _read_float(getattr(state, "state", None))
+        if value is None:
+            continue
+        parsed.append((dt_util.as_utc(last_updated), value))
+    if not parsed:
+        return {}
+    parsed.sort(key=lambda item: item[0])
+
+    span = timedelta(minutes=interval_minutes)
+    samples: dict[datetime, float] = {}
+    index = 0
+    carried: float | None = None
+    for boundary in boundaries:
+        # Everything written before this slot began is only a fallback for it.
+        while index < len(parsed) and parsed[index][0] < boundary:
+            carried = parsed[index][1]
+            index += 1
+        if index < len(parsed) and parsed[index][0] < boundary + span:
+            samples[boundary] = parsed[index][1]
+        elif carried is not None:
+            samples[boundary] = carried
+    return samples
 
 
 def _sample_state_values_at_boundaries(

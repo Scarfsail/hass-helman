@@ -770,6 +770,12 @@ class SolarBiasCorrectionService:
             if isinstance(export_channel, dict):
                 unit = export_channel.get("unit")
                 price_unit = unit if isinstance(unit, str) and unit else None
+        if price_unit is None:
+            # An elapsed day has no live snapshot to read the unit off, so with
+            # no import windows configured the export rail would draw bare
+            # numbers. The sell-price entity states its own unit, and it is the
+            # same entity the recorded rail came from.
+            price_unit = self._grid_export_price_entity_unit()
 
         day = SolarBiasInspectorDay(
             date=target_date.isoformat(),
@@ -1309,6 +1315,17 @@ class SolarBiasCorrectionService:
             {"slot": dt_util.as_local(boundary).strftime("%H:%M"), "value": float(value)}
             for boundary, value in sorted(by_boundary.items())
         ]
+
+    def _grid_export_price_entity_unit(self) -> str | None:
+        """The sell-price entity's own unit, for days with no live snapshot."""
+        entity_id = self._grid_export_price_entity_id()
+        if not entity_id:
+            return None
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return None
+        unit = state.attributes.get("unit_of_measurement")
+        return unit if isinstance(unit, str) and unit else None
 
     def _grid_export_price_entity_id(self) -> str | None:
         """The configured sell-price entity, read for its recorder history.

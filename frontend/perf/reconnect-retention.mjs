@@ -27,7 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TAGS = [
   "helman-card", "helman-simple-card", "helman-solar-inspector-card",
   "helman-solar-inspector", "helman-solar-day-pills",
-  "helman-solar-schedule-band-strip", "helman-solar-export-price-strip",
+  "helman-solar-schedule-band-strip", "helman-solar-price-strip",
   "scheduling-entity-day-band", "power-device", "helman-power-history-bars",
   // Home Assistant's own elements, as the control: if these duplicate too then
   // the retention is the dashboard's, not the cards'.

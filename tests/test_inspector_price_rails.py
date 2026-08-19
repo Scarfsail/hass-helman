@@ -267,6 +267,53 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
         # which is the whole difference from the today-scoped variant.
         self.assertEqual(captured["end"], datetime(2026, 5, 10, 1, 0, tzinfo=PRAGUE))
 
+    async def test_a_write_just_after_the_boundary_belongs_to_that_slot(self):
+        # The regression this sampler exists for. The import sensor publishes
+        # from the quarter-hour refresh, so its write lands a few seconds after
+        # the boundary whose price it carries. Taking the last state at or
+        # before the boundary would hand 06:00 the 2.0 that expired there and
+        # shift the whole change one slot late.
+        states = [
+            SimpleNamespace(
+                last_updated=datetime(2026, 5, 10, 5, 45, 3, tzinfo=PRAGUE), state="2.0"
+            ),
+            SimpleNamespace(
+                last_updated=datetime(2026, 5, 10, 6, 0, 3, tzinfo=PRAGUE), state="4.0"
+            ),
+        ]
+        samples, _ = await self._sample(
+            states,
+            local_start=datetime(2026, 5, 10, 5, 45, tzinfo=PRAGUE),
+            local_end=datetime(2026, 5, 10, 6, 30, tzinfo=PRAGUE),
+        )
+
+        self.assertEqual(
+            {boundary.strftime("%H:%M"): value for boundary, value in samples.items()},
+            {"05:45": 2.0, "06:00": 4.0, "06:15": 4.0},
+        )
+
+    async def test_the_first_write_in_a_slot_wins_over_a_later_one(self):
+        # Two writes inside one slot: the slot is billed at the rate it opened
+        # with, not at whatever happened to be written last before it closed.
+        states = [
+            SimpleNamespace(
+                last_updated=datetime(2026, 5, 10, 0, 0, 2, tzinfo=PRAGUE), state="3.0"
+            ),
+            SimpleNamespace(
+                last_updated=datetime(2026, 5, 10, 0, 11, tzinfo=PRAGUE), state="9.0"
+            ),
+        ]
+        samples, _ = await self._sample(
+            states,
+            local_start=datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE),
+            local_end=datetime(2026, 5, 10, 0, 30, tzinfo=PRAGUE),
+        )
+
+        self.assertEqual(
+            {boundary.strftime("%H:%M"): value for boundary, value in samples.items()},
+            {"00:00": 3.0, "00:15": 9.0},
+        )
+
     async def test_an_empty_window_reads_nothing(self):
         samples, _ = await self._sample(
             [],
@@ -328,10 +375,17 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
         import_config=None,
         export_entity: str | None = EXPORT_ENTITY,
         price_snapshot=None,
+        export_entity_unit: str | None = None,
     ):
+        states = {}
+        if export_entity and export_entity_unit:
+            states[export_entity] = SimpleNamespace(
+                attributes={"unit_of_measurement": export_entity_unit}
+            )
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
+            states=SimpleNamespace(get=states.get),
         )
         service = service_mod.SolarBiasCorrectionService(
             hass,
@@ -494,6 +548,20 @@ class TestUnconfiguredSides(_PayloadCase):
         self.assertEqual(payload["series"]["importPrice"], [])
         self.assertFalse(payload["availability"]["hasImportPrice"])
         self.assertIsNone(payload["priceUnit"])
+
+    async def test_an_elapsed_day_takes_the_unit_off_the_sell_price_entity(self):
+        # A past day builds no live snapshot, so with no import windows there is
+        # no unit from either source the live path uses -- and the export bars
+        # would be drawn as bare numbers. The entity the recorded rail came from
+        # states its own unit.
+        service = self._make_service(
+            import_config=None, export_entity_unit="CZK/kWh"
+        )
+        payload = await self._payload(
+            service, PAST_DAY, recorded={EXPORT_ENTITY: _rail(_all_slots(), 1.5)}
+        )
+
+        self.assertEqual(payload["priceUnit"], "CZK/kWh")
 
     async def test_the_unit_falls_back_to_the_live_export_channel(self):
         # With no import windows configured there is no unit from config, but the
