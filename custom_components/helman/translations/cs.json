@@ -36,6 +36,9 @@
       "energy_production_d7": {
         "name": "Výroba energie den 7"
       },
+      "grid_import_price": {
+        "name": "Nákupní cena elektřiny"
+      },
       "energy_production_today_remaining": {
         "name": "Zbývající výroba energie dnes"
       }

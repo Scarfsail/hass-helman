@@ -131,6 +131,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             set_sensors=Mock(),
             set_entity_factory=Mock(),
             register_house_consumption_forecast_current_sensor=Mock(),
+            register_grid_import_price_sensor=Mock(),
         )
         hass = SimpleNamespace(data={"helman": {"coordinator": coordinator}})
         added_entities: list[object] = []
@@ -151,16 +152,21 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             forecast_sensors[-1].entity_id,
             "sensor.helman_energy_production_today_remaining",
         )
-        # Last 9 added entities should be the forecast sensors
+        # The forecast sensors, then the two coordinator-pushed singletons that
+        # follow them: the house consumption forecast and the grid import price.
         self.assertEqual(
-            [entity.entity_id for entity in added_entities[-10:-1]],
+            [entity.entity_id for entity in added_entities[-11:-2]],
             [entity.entity_id for entity in forecast_sensors],
         )
-        # Last added entity should be the house consumption forecast current sensor
         self.assertEqual(
-            added_entities[-1].entity_id,
+            added_entities[-2].entity_id,
             "sensor.helman_house_consumption_forecast_current",
         )
+        self.assertEqual(
+            added_entities[-1].entity_id,
+            "sensor.helman_grid_import_price",
+        )
+        coordinator.register_grid_import_price_sensor.assert_called_once()
 
     async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:
         sensor_module = _load_sensor_module()
@@ -301,6 +307,64 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(coordinator.get_solar_forecast_day_total(6))
             self.assertIsNone(coordinator.get_solar_forecast_day_total(7))
             self.assertEqual(coordinator.get_solar_forecast_today_remaining(), 1.5)
+
+    async def test_grid_import_price_entity_shape(self) -> None:
+        sensor_module = _load_sensor_module()
+
+        class FakeCoordinator:
+            price = 4.25
+            unit = "CZK/kWh"
+
+            def get_grid_import_price_current(self):
+                return self.price
+
+            def get_grid_import_price_unit(self):
+                return self.unit
+
+        coordinator = FakeCoordinator()
+        entity = sensor_module.HelmanGridImportPriceSensor(coordinator, _FakeEntry())
+
+        self.assertEqual(entity.entity_id, "sensor.helman_grid_import_price")
+        self.assertEqual(entity.native_value, 4.25)
+        self.assertEqual(entity.native_unit_of_measurement, "CZK/kWh")
+        self.assertTrue(entity.available)
+        self.assertEqual(entity._attr_state_class, "measurement")
+        # A price is a rate, not an accumulating cost: MONETARY would tell the
+        # energy dashboard to sum it.
+        self.assertFalse(hasattr(entity, "_attr_device_class"))
+
+        # Unconfigured, or a config the builder could not price: unavailable
+        # rather than a stale rate the recorder would archive as still current.
+        coordinator.price = None
+        coordinator.unit = None
+        self.assertFalse(entity.available)
+        self.assertIsNone(entity.native_value)
+        self.assertIsNone(entity.native_unit_of_measurement)
+
+    async def test_coordinator_absorbs_the_import_price_from_the_snapshot(self) -> None:
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coordinator_module = importlib.import_module(
+                "custom_components.helman.coordinator"
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+
+        coordinator._absorb_grid_import_price(
+            {"import": {"status": "available", "unit": "CZK/kWh", "currentPrice": 4.25}}
+        )
+        self.assertEqual(coordinator.get_grid_import_price_current(), 4.25)
+        self.assertEqual(coordinator.get_grid_import_price_unit(), "CZK/kWh")
+
+        # A channel that stopped being priced clears the value: a price that is
+        # no longer computed is not a price that has not moved.
+        coordinator._absorb_grid_import_price({"import": {"status": "not_configured"}})
+        self.assertIsNone(coordinator.get_grid_import_price_current())
+        self.assertIsNone(coordinator.get_grid_import_price_unit())
 
 
 if __name__ == "__main__":

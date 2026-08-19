@@ -8,7 +8,7 @@ from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, GRID_IMPORT_PRICE_ENTITY_ID
 
 _HYSTERESIS_W: float = 5.0
 _HYSTERESIS_MAX_GAP_S: float = 30.0
@@ -92,6 +92,10 @@ async def async_setup_entry(
     coordinator.register_house_consumption_forecast_current_sensor(
         house_consumption_forecast_current_sensor,
     )
+
+    grid_import_price_sensor = HelmanGridImportPriceSensor(coordinator, entry)
+    async_add_entities([grid_import_price_sensor])
+    coordinator.register_grid_import_price_sensor(grid_import_price_sensor)
 
 
 class HelmanBatteryTimeSensor(SensorEntity):
@@ -406,3 +410,43 @@ class HelmanHouseConsumptionForecastCurrentSensor(SensorEntity):
         if value is None:
             return None
         return round(value, 1)
+
+
+class HelmanGridImportPriceSensor(SensorEntity):
+    """Publishes the grid import rate that applies right now.
+
+    Helman derives this rate from the ``import_price_windows`` config table and
+    is therefore its only source — no entity anywhere else holds it, so once a
+    slot elapses there would be no record of what it cost. Publishing it as an
+    ordinary sensor hands that job to the recorder, which is the component whose
+    whole purpose is archiving sensor states; the inspector then samples this
+    entity's history back at slot boundaries, the same pairing
+    ``HelmanHouseConsumptionForecastCurrentSensor`` already uses.
+
+    No device class. ``SensorDeviceClass.MONETARY`` describes an accumulating
+    cost, and this is a rate — a price per kilowatt-hour, which does not add up
+    over time. The unit comes from the config rather than being fixed here,
+    since the tariff names its own currency.
+    """
+
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        self._coordinator = coordinator
+        self.entity_id = GRID_IMPORT_PRICE_ENTITY_ID
+        self._attr_unique_id = f"{entry.entry_id}_grid_import_price"
+        self._attr_translation_key = "grid_import_price"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.get_grid_import_price_current() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.get_grid_import_price_current()
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        return self._coordinator.get_grid_import_price_unit()

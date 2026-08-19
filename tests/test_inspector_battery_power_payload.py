@@ -271,7 +271,7 @@ class TestRecordedBatteryForecastPoints(unittest.TestCase):
         service = self._make_service(
             {"08:00": {"socPct": 40.0, "gridNetWh": -100.0, "batteryNetWh": 250.0}}
         )
-        soc, grid, battery = service._recorded_battery_forecast_points(
+        soc, grid, battery, _, _ = service._recorded_battery_forecast_points(
             date(2026, 5, 10), cutoff=None, timezone=PRAGUE
         )
         self.assertEqual(soc, [{"slot": "08:00", "pct": 40.0}])
@@ -283,7 +283,7 @@ class TestRecordedBatteryForecastPoints(unittest.TestCase):
 
     def test_days_archived_before_battery_net_yield_no_battery_points(self):
         service = self._make_service({"08:00": {"socPct": 40.0, "gridNetWh": -100.0}})
-        soc, grid, battery = service._recorded_battery_forecast_points(
+        soc, grid, battery, _, _ = service._recorded_battery_forecast_points(
             date(2026, 5, 10), cutoff=None, timezone=PRAGUE
         )
         self.assertEqual(len(soc), 1)

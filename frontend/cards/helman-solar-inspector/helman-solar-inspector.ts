@@ -30,7 +30,10 @@ import {
   DISCHARGE_COLOR,
   FORECAST_RAW_COLOR,
   GRID_COLOR,
+  GRID_EXPORT_COLOR,
+  GRID_IMPORT_COLOR,
   HOUSE_COLOR,
+  NEUTRAL_COLOR,
   SOLAR_COLOR,
   nodeAccentColor,
 } from "../color-utils";
@@ -53,8 +56,17 @@ import {
   type SolarInspectorDayAggregateRow,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
-import "./helman-solar-export-price-strip";
-import type { PriceColumn, PriceColumnsDetail } from "./helman-solar-export-price-strip";
+import "./helman-solar-price-strip";
+import "./helman-solar-money-strip";
+import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-solar-price-strip";
+import {
+  buildMoneySeries,
+  currencyFromPriceUnit,
+  sumMoney,
+  EMPTY_MONEY,
+  type MoneyPoint,
+  type MoneyTotals,
+} from "./money-model";
 import "../helman/power-devices-container";
 import { DeviceNode } from "../helman/DeviceNode";
 import {
@@ -222,6 +234,13 @@ type StrokeStyle = { width: number; opacity: number };
 const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
 
 const MINUTES_PER_DAY = 1440;
+
+/**
+ * The stand-in for a rail an older payload does not carry. A shared frozen array
+ * rather than a fresh `[]` per render: the strip's properties are compared by
+ * identity, and a new empty array every time would make it re-render for nothing.
+ */
+const EMPTY_PRICE_RAIL: readonly PriceRailPoint[] = Object.freeze([]);
 
 /** The SoC strip's own geometry; it borrows only the x scale from the chart. */
 const SOC_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
@@ -417,6 +436,22 @@ type InspectorPayload = {
     gridActual: InspectorPoint[];
     batteryForecast: InspectorPoint[];
     batteryActual: InspectorPoint[];
+    /**
+     * What the grid charged and paid per slot. Unlike the forecast/actual pairs
+     * above, each rail already spans the whole day: the backend joins recorder
+     * history behind the clock with the live feed ahead of it.
+     */
+    importPrice: PriceRailPoint[];
+    exportPrice: PriceRailPoint[];
+    /**
+     * The grid's two directions, unnetted. `gridForecast`/`gridActual` above are
+     * their signed difference, which is right for the chart and useless for
+     * money: each side is billed at its own rate.
+     */
+    gridImportForecast: InspectorPoint[];
+    gridExportForecast: InspectorPoint[];
+    gridImportActual: InspectorPoint[];
+    gridExportActual: InspectorPoint[];
   };
   totals: {
     rawWh: number | null;
@@ -443,6 +478,8 @@ type InspectorPayload = {
     hasGridActual: boolean;
     hasBatteryForecast: boolean;
     hasBatteryActual: boolean;
+    hasImportPrice: boolean;
+    hasExportPrice: boolean;
   };
   /**
    * The power card's configured title for unmetered load, reused so the
@@ -452,6 +489,8 @@ type InspectorPayload = {
   houseUnmeasuredLabel: string | null;
   /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
   batterySocBounds: SocBoundsPoint[];
+  /** The currency-per-energy unit both price rails are quoted in. */
+  priceUnit: string | null;
   trainingExplainability: TrainingExplainability | null;
 };
 
@@ -525,9 +564,7 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _error = "";
   /**
    * The forecast payload the day pills fetched. It backs the health banner —
-   * the card's only view of how fresh the forecast behind the pills is — and it
-   * is handed to the export-price strip, which draws its prices out of it rather
-   * than fetching the same payload a second time.
+   * the card's only view of how fresh the forecast behind the pills is.
    */
   @state() private _forecast: ForecastPayload | null = null;
   /**
@@ -539,7 +576,13 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _trainingTableCollapsed = true;
   @state() private _impactStripVisible = false;
   @state() private _socStripExpanded = true;
-  @state() private _exportPriceStripExpanded = true;
+  @state() private _priceStripExpanded = true;
+  @state() private _moneyStripExpanded = true;
+  /** Memo for {@link _money}, keyed on payload identity. */
+  private _moneyCache: {
+    payload: InspectorDayPayload;
+    money: { actual: readonly MoneyPoint[]; forecast: readonly MoneyPoint[] };
+  } | null = null;
   @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
@@ -554,11 +597,13 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _tooltip: TooltipContent | null = null;
   /**
-   * The selected day's export-price columns, echoed up from the price strip --
-   * the only place that loads them -- so the selected-slot panel can show a
-   * price for the slot even while the strip itself is collapsed or off-screen.
+   * The selected day's price columns, echoed up from the price strip -- the only
+   * place that lays the rails out on the timeline -- so the selected-slot panel
+   * can show both prices for the slot even while the strip itself is collapsed
+   * or off-screen.
    */
-  @state() private _priceColumns: PriceColumn[] = [];
+  @state() private _importPriceColumns: PriceColumn[] = [];
+  @state() private _exportPriceColumns: PriceColumn[] = [];
   @state() private _priceUnit = "";
   /**
    * The shared schedule owner's state, for the execution switch in the
@@ -1413,7 +1458,7 @@ export class HelmanSolarInspector extends LitElement {
             ${this._lastLayoutForStrip && this._socBars(view).length
               ? this._renderSocSection(view, this._lastLayoutForStrip)
               : ""}
-            ${this._renderExportPriceStrip(view, layout)}
+            ${this._renderPriceStrip(view, layout)}
             ${this._renderScheduleActionsStrip(view, layout)}
             ${this._impactStripVisible && this._lastLayoutForStrip
               ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, this._lastLayoutForStrip)}</div>`
@@ -2007,24 +2052,26 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  /** The export-price strip, behind a collapse toggle that starts expanded. */
-  private _renderExportPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
+  /** The two-rail price strip, behind a collapse toggle that starts expanded. */
+  private _renderPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
     return html`
       <div class="strip-section">
         <button
           class="strip-collapse-toggle"
           type="button"
-          aria-expanded=${this._exportPriceStripExpanded ? "true" : "false"}
-          @click=${() => { this._exportPriceStripExpanded = !this._exportPriceStripExpanded; }}
+          aria-expanded=${this._priceStripExpanded ? "true" : "false"}
+          @click=${() => { this._priceStripExpanded = !this._priceStripExpanded; }}
         >
-          <span class="strip-collapse-icon ${this._exportPriceStripExpanded ? "expanded" : ""}">▶</span>
-          ${this._t("bias_correction.inspector.export_price_strip")}
+          <span class="strip-collapse-icon ${this._priceStripExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.price_strip")}
         </button>
-        ${this._exportPriceStripExpanded
+        ${this._priceStripExpanded
           ? html`
-              <helman-solar-export-price-strip
+              <helman-solar-price-strip
                 .hass=${this.hass}
-                .forecast=${this._forecast}
+                .importPrice=${payload.series.importPrice ?? EMPTY_PRICE_RAIL}
+                .exportPrice=${payload.series.exportPrice ?? EMPTY_PRICE_RAIL}
+                .unit=${payload.priceUnit ?? ""}
                 .date=${payload.date}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
                 .selectedMinutes=${this._selectedMinutes(payload)}
@@ -2045,14 +2092,96 @@ export class HelmanSolarInspector extends LitElement {
                 @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
                   { this._tooltip = event.detail ?? null; }}
                 @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
-                  this._priceColumns = event.detail.columns;
+                  this._importPriceColumns = event.detail.importColumns;
+                  this._exportPriceColumns = event.detail.exportColumns;
                   this._priceUnit = event.detail.unit;
                 }}
-              ></helman-solar-export-price-strip>
+              ></helman-solar-price-strip>
+            `
+          : ""}
+      </div>
+      <div class="strip-block">
+        <button
+          class="strip-collapse-toggle"
+          aria-expanded=${this._moneyStripExpanded ? "true" : "false"}
+          @click=${() => { this._moneyStripExpanded = !this._moneyStripExpanded; }}
+        >
+          <span class="strip-collapse-icon ${this._moneyStripExpanded ? "expanded" : ""}">▶</span>
+          ${this._t("bias_correction.inspector.money_strip")}
+        </button>
+        ${this._moneyStripExpanded
+          ? html`
+              <helman-solar-money-strip
+                .hass=${this.hass}
+                .moneyActual=${this._moneyActual(payload)}
+                .moneyForecast=${this._moneyForecast(payload)}
+                .currency=${currencyFromPriceUnit(payload.priceUnit)}
+                .date=${payload.date}
+                .timeZone=${this._haTimeZone() ?? "UTC"}
+                .selectedMinutes=${this._selectedMinutes(payload)}
+                .geometry=${{
+                  width: layout.width,
+                  marginLeft: layout.margin.left,
+                  plotWidth: layout.plotWidth,
+                  startMinutes: layout.dayStartMinutes,
+                  endMinutes: layout.dayEndMinutes,
+                }}
+                .hoverMinutes=${this._hoveredMinutes}
+                .slotMinutes=${this._slotMinutes}
+                .nowMs=${this._nowMs}
+                @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
+                  this._handleStripSlotPick(event, payload)}
+                @slot-hover=${(event: CustomEvent<{ minutes: number | null }>) =>
+                  this._setHoverMinutes(event.detail?.minutes ?? null)}
+                @slot-tooltip=${(event: CustomEvent<TooltipContent | null>) =>
+                  { this._tooltip = event.detail ?? null; }}
+              ></helman-solar-money-strip>
             `
           : ""}
       </div>
     `;
+  }
+
+  /**
+   * The day's money, one vintage each, memoized on the payload that produced it.
+   *
+   * Both are derived from four series and two rails, and are read by the strip,
+   * the metric tiles and the selected-slot panel on every render — so deriving
+   * them per call would redo the same arithmetic several times a frame, and
+   * handing Lit a fresh array each time would re-render the strip along with it.
+   */
+  private _moneyActual(payload: InspectorDayPayload): readonly MoneyPoint[] {
+    return this._money(payload).actual;
+  }
+
+  private _moneyForecast(payload: InspectorDayPayload): readonly MoneyPoint[] {
+    return this._money(payload).forecast;
+  }
+
+  private _money(payload: InspectorDayPayload): {
+    actual: readonly MoneyPoint[];
+    forecast: readonly MoneyPoint[];
+  } {
+    if (this._moneyCache?.payload === payload) {
+      return this._moneyCache.money;
+    }
+    const series = payload.series;
+    const money = {
+      actual: buildMoneySeries({
+        importKwh: series.gridImportActual,
+        exportKwh: series.gridExportActual,
+        importPrice: series.importPrice,
+        exportPrice: series.exportPrice,
+      }),
+      forecast: buildMoneySeries({
+        importKwh: series.gridImportForecast,
+        exportKwh: series.gridExportForecast,
+        importPrice: series.importPrice,
+        exportPrice: series.exportPrice,
+      }),
+    };
+    this._moneyCache = { payload, money };
+    return money;
   }
 
   /** Resolve a strip click to the nearest impact slot, or clear the selection. */
@@ -2851,6 +2980,7 @@ export class HelmanSolarInspector extends LitElement {
             "batteryForecast",
             "batteryActual",
           )}
+          ${this._renderMoneyMetrics(payload, null)}
         </div>
       </div>
     `;
@@ -3002,12 +3132,19 @@ export class HelmanSolarInspector extends LitElement {
             "batteryForecast",
             "batteryActual",
           )}
-          ${this._priceColumns.length
+          ${this._importPriceColumns.length
             ? this._renderMetric(
-                this._t("bias_correction.inspector.merged.export_price"),
-                this._formatPrice(this._priceAtSelectionStart(slots)),
+                this._t("bias_correction.inspector.merged.import_price"),
+                this._formatPrice(this._priceAtSelectionStart(this._importPriceColumns, slots)),
               )
             : ""}
+          ${this._exportPriceColumns.length
+            ? this._renderMetric(
+                this._t("bias_correction.inspector.merged.export_price"),
+                this._formatPrice(this._priceAtSelectionStart(this._exportPriceColumns, slots)),
+              )
+            : ""}
+          ${this._renderMoneyMetrics(payload, slots)}
         </div>
       </div>
       ${this._renderHouseBreakdown(houseBreakdown, slots, "actual", payload.houseUnmeasuredLabel)}
@@ -3364,17 +3501,20 @@ export class HelmanSolarInspector extends LitElement {
    * quantity seen twice. When only one side has data the card shows just that
    * one. The whole card toggles both series at once.
    */
-  private _renderMergedMetric(
-    label: string,
+  /**
+   * The actual/forecast chips a metric card carries.
+   *
+   * Shared by the merged metric and the money tile, which differ only in their
+   * wrapper — one is a legend toggle, the other is not — and would otherwise
+   * drift apart in the fill rules that make a chip stand out against the card's
+   * own colour wash: the forecast keeps the hatch, the actual a flat tint one
+   * step darker again.
+   */
+  private _metricChips(
     color: string,
-    forecast: { value: string; present: boolean; title: string },
     actual: { value: string; present: boolean; title: string },
-    forecastSeries: SeriesKey,
-    actualSeries: SeriesKey,
-  ) {
-    // A chip has to stand out against the card's own colour wash, so its fill
-    // runs stronger than the wash: the forecast keeps the hatch, the actual a
-    // flat tint one step darker again.
+    forecast: { value: string; present: boolean; title: string },
+  ): TemplateResult[] {
     const chipFill = (isForecast: boolean): string =>
       isForecast
         ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 42%, transparent) 0px, color-mix(in srgb, ${color} 42%, transparent) 3px, transparent 3px, transparent 7px)`
@@ -3394,7 +3534,18 @@ export class HelmanSolarInspector extends LitElement {
     if (forecast.present) chips.push(chip(forecast, true));
     // Neither side reported: keep a single placeholder so the card still reads.
     if (chips.length === 0) chips.push(chip(forecast, true));
+    return chips;
+  }
 
+  private _renderMergedMetric(
+    label: string,
+    color: string,
+    forecast: { value: string; present: boolean; title: string },
+    actual: { value: string; present: boolean; title: string },
+    forecastSeries: SeriesKey,
+    actualSeries: SeriesKey,
+  ) {
+    const chips = this._metricChips(color, actual, forecast);
     const visible =
       this._isSeriesVisible(forecastSeries) || this._isSeriesVisible(actualSeries);
     // Faint full-card wash plus a solid left rail, both in the series colour, so
@@ -3416,6 +3567,76 @@ export class HelmanSolarInspector extends LitElement {
         <div class="metric-label">${label}</div>
         <div class="metric-chips">${chips}</div>
       </button>
+    `;
+  }
+
+  /**
+   * A money tile: the merged metric's shape without its legend toggle, since
+   * money is derived from the series rather than being one, and there is
+   * nothing on the chart for a click to hide.
+   */
+  private _renderMoneyMetric(
+    label: string,
+    color: string,
+    actual: { value: string; present: boolean; title: string },
+    forecast: { value: string; present: boolean; title: string },
+  ) {
+    const chips = this._metricChips(color, actual, forecast);
+    const cardStyle = `background: color-mix(in srgb, ${color} 12%, transparent); border-left: 3px solid ${color};`;
+    return html`
+      <div class="metric-card merged" style=${cardStyle}>
+        <div class="metric-label">${label}</div>
+        <div class="metric-chips">${chips}</div>
+      </div>
+    `;
+  }
+
+  /**
+   * The three money tiles, over the whole day or a selection.
+   *
+   * A vintage with no priced slot at all shows nothing rather than a zero: a
+   * day past the recorder's reach has real exported kWh at an unknown rate, and
+   * "earned 0" would be a claim the data does not support.
+   */
+  private _renderMoneyMetrics(
+    payload: InspectorDayPayload,
+    slots: string[] | null,
+  ): TemplateResult {
+    const money = this._money(payload);
+    const currency = currencyFromPriceUnit(payload.priceUnit);
+    // The selection is on the inspector's current slot width; money is on the
+    // rails' own 15-minute grid. A 60-minute selection therefore has to claim
+    // all four quarters it spans, or its sums would count only the first.
+    const railSlots = slots === null ? null : expandSlotsToNative(slots, this._slotMinutes);
+    const actual = sumMoney(money.actual, railSlots);
+    const forecast = sumMoney(money.forecast, railSlots);
+    // Presence is asked of the *selection*, not the day. Reading it day-wide
+    // would print "0.00" against an hour tonight simply because this morning
+    // had actuals -- claiming a future hour has already cost nothing, which is
+    // the one thing every other tile in this panel is careful not to do.
+    const wanted = railSlots === null ? null : new Set(railSlots);
+    const priced = (points: readonly MoneyPoint[]) =>
+      wanted === null
+        ? points.length > 0
+        : points.some((point) => wanted.has(point.slot));
+    const hasActual = priced(money.actual);
+    const hasForecast = priced(money.forecast);
+    const part = (totals: MoneyTotals, key: keyof MoneyTotals, present: boolean, title: string) => ({
+      value: present ? `${totals[key].toFixed(2)} ${currency}`.trim() : "—",
+      present,
+      title,
+    });
+    const tile = (labelKey: string, color: string, key: keyof MoneyTotals) =>
+      this._renderMoneyMetric(
+        this._t(`bias_correction.inspector.${labelKey}`),
+        color,
+        part(actual, key, hasActual, this._t("bias_correction.inspector.column_actual")),
+        part(forecast, key, hasForecast, this._t("bias_correction.inspector.column_forecast")),
+      );
+    return html`
+      ${tile("import_cost", GRID_IMPORT_COLOR, "cost")}
+      ${tile("export_gain", GRID_EXPORT_COLOR, "gain")}
+      ${tile("net_cost", NEUTRAL_COLOR, "net")}
     `;
   }
 
@@ -3966,11 +4187,14 @@ export class HelmanSolarInspector extends LitElement {
    * The price the selection opens on -- a rate, not an energy, so it is read at
    * the first slot rather than summed, the same rule the SoC box follows.
    */
-  private _priceAtSelectionStart(slots: readonly string[]): number | null {
+  private _priceAtSelectionStart(
+    columns: readonly PriceColumn[],
+    slots: readonly string[],
+  ): number | null {
     for (const slot of slots) {
       const minutes = slotToMinutes(slot);
       if (minutes === null) continue;
-      const column = this._priceColumns.find(
+      const column = columns.find(
         (c) => minutes >= c.startMinutes && minutes < c.endMinutes,
       );
       if (column) return column.value;

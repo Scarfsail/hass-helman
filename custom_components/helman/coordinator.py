@@ -463,8 +463,16 @@ class HelmanCoordinator:
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
         self._house_consumption_forecast_current_sensor = None
+        self._grid_import_price_sensor = None
+        # The import rate in force right now, refreshed with the forecast
+        # snapshots. Nothing else records it, so this is what the published
+        # sensor hands the recorder to archive.
+        self._grid_import_price_current: float | None = None
+        self._grid_import_price_unit: str | None = None
         self._cached_solar_forecast: dict[str, Any] | None = None
         self._battery_forecast_history: BatteryForecastHistoryStore | None = None
+        #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
+        self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
         self._cached_battery_forecast: dict | None = None
         self._cached_battery_forecast_expires_at: datetime | None = None
         self._cached_battery_forecast_house_generated_at: str | None = None
@@ -692,6 +700,13 @@ class HelmanCoordinator:
         if hcfc_sensor is not None:
             if getattr(hcfc_sensor, "hass", None) is not None:
                 hcfc_sensor.async_write_ha_state()
+        # Published on the same beat, though it is neither solar nor a forecast:
+        # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
+        # import windows align to the same grid, so a price change and its
+        # publication land in the same slot.
+        price_sensor = getattr(self, "_grid_import_price_sensor", None)
+        if price_sensor is not None and getattr(price_sensor, "hass", None) is not None:
+            price_sensor.async_write_ha_state()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -733,6 +748,9 @@ class HelmanCoordinator:
             battery_discharge_energy_entity_id_provider=lambda: self._get_battery_entity_id(
                 "today_discharge_energy"
             ),
+            grid_export_price_entity_id_provider=self._get_grid_sell_price_entity_id,
+            grid_import_price_config_provider=self._get_grid_import_price_config,
+            grid_price_snapshot_provider=self._build_grid_price_snapshot,
         )
         await self._solar_bias_service.async_setup()
         self._training_artifacts_store = TrainingArtifactsStore(self._hass)
@@ -1050,6 +1068,65 @@ class HelmanCoordinator:
         grid_config = ConsumptionForecastBuilder._read_dict(power_devices.get("grid"))
         entities = ConsumptionForecastBuilder._read_dict(grid_config.get("entities"))
         return ConsumptionForecastBuilder._read_entity_id(entities.get(key))
+
+    def _get_grid_sell_price_entity_id(self) -> str | None:
+        power_devices = ConsumptionForecastBuilder._read_dict(
+            self._active_config.get("power_devices")
+        )
+        grid_config = ConsumptionForecastBuilder._read_dict(power_devices.get("grid"))
+        forecast = ConsumptionForecastBuilder._read_dict(grid_config.get("forecast"))
+        return ConsumptionForecastBuilder._read_entity_id(
+            forecast.get("sell_price_entity_id")
+        )
+
+    def _get_grid_import_price_config(self):
+        """The validated import-price window table, or None when unconfigured.
+
+        Invalid config comes back as None: the inspector asking for a price rail
+        is no place to raise, and the config editor already reports the error.
+        """
+        from .grid_price_forecast_builder import (
+            GridImportPriceConfigError,
+            read_grid_import_price_config,
+        )
+
+        try:
+            return read_grid_import_price_config(self._active_config)
+        except GridImportPriceConfigError:
+            return None
+
+    def _build_grid_price_snapshot(self) -> dict[str, Any]:
+        """Both price channels as of right now, points running forward from here.
+
+        Built on demand rather than read off the last refresh, for the same
+        reason ``async_get_forecast`` builds its own: the points and the "price
+        now" are derived at a reference time, and a caller mid-quarter-hour must
+        not be handed the previous refresh's slot.
+
+        Held for the rest of the slot it was built in, though. The inspector
+        calls this once per day opened, and a full build materializes the whole
+        forecast horizon at canonical granularity and re-runs the export channel
+        — including its "unavailable"/"partial" warnings, which would otherwise
+        repeat on every day-pill click while a sell-price entity is down. Within
+        one slot the answer cannot change, so the freshness the docstring above
+        demands is exactly what the cache key preserves.
+        """
+        from .recorder_hourly_series import get_local_current_slot_start
+
+        reference_time = dt_util.now()
+        slot_start = get_local_current_slot_start(
+            reference_time,
+            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        )
+        cached = self._grid_price_snapshot_cache
+        if cached is not None and cached[0] == slot_start:
+            return cached[1]
+        snapshot = GridPriceForecastBuilder(
+            self._hass,
+            self._active_config,
+        ).build(reference_time=reference_time)
+        self._grid_price_snapshot_cache = (slot_start, snapshot)
+        return snapshot
 
     def _get_battery_entity_id(self, key: str) -> str | None:
         power_devices = ConsumptionForecastBuilder._read_dict(
@@ -1480,6 +1557,30 @@ class HelmanCoordinator:
         )
         return result
 
+    def _absorb_grid_import_price(self, grid_price_snapshot: Any) -> None:
+        """Take the current import rate off a freshly built price snapshot.
+
+        An unavailable or unconfigured channel clears the value rather than
+        holding the last one: a price that stopped being computed is not the
+        same as a price that has not moved, and the recorder must not archive
+        a stale rate as though it still applied.
+        """
+        channel = grid_price_snapshot.get("import") if isinstance(grid_price_snapshot, dict) else None
+        if not isinstance(channel, dict) or channel.get("status") != "available":
+            self._grid_import_price_current = None
+            self._grid_import_price_unit = None
+            return
+
+        raw_price = channel.get("currentPrice")
+        if isinstance(raw_price, bool) or not isinstance(raw_price, (int, float)):
+            self._grid_import_price_current = None
+            self._grid_import_price_unit = None
+            return
+
+        unit = channel.get("unit")
+        self._grid_import_price_current = float(raw_price)
+        self._grid_import_price_unit = unit if isinstance(unit, str) and unit else None
+
     async def _async_get_canonical_solar_forecast(
         self,
         *,
@@ -1853,6 +1954,17 @@ class HelmanCoordinator:
 
     def register_house_consumption_forecast_current_sensor(self, sensor) -> None:
         self._house_consumption_forecast_current_sensor = sensor
+
+    def register_grid_import_price_sensor(self, sensor) -> None:
+        self._grid_import_price_sensor = sensor
+
+    def get_grid_import_price_current(self) -> float | None:
+        """The import rate in force right now, or None when unconfigured."""
+        return self._grid_import_price_current
+
+    def get_grid_import_price_unit(self) -> str | None:
+        """The configured currency-per-energy unit of the import price."""
+        return self._grid_import_price_unit
 
     def get_house_consumption_forecast_current_w(self) -> float | None:
         # Report the same house demand the battery and grid forecasts are built
@@ -2390,6 +2502,10 @@ class HelmanCoordinator:
                 solar_snapshot=solar_snapshot,
                 started_at=request_now,
             )
+            # The builder is the one authority on what a price is, so the
+            # published sensor republishes what it just computed rather than
+            # deriving the rate a second time.
+            self._absorb_grid_import_price(raw_forecast.get("grid"))
             self._publish_solar_forecast_entities()
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")

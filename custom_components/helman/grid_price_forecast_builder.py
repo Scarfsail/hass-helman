@@ -173,24 +173,9 @@ class GridPriceForecastBuilder:
         windows: tuple[FixedGridImportPriceWindow, ...],
         minute_of_day: int,
     ) -> float:
-        for window in windows:
-            if self._window_contains_minute(window, minute_of_day):
-                return window.price
-
-        raise GridImportPriceConfigError(
-            "No import-price window matches the requested local time"
-        )
-
-    @staticmethod
-    def _window_contains_minute(
-        window: FixedGridImportPriceWindow,
-        minute_of_day: int,
-    ) -> bool:
-        if window.start_minutes < window.end_minutes:
-            return window.start_minutes <= minute_of_day < window.end_minutes
-        return (
-            minute_of_day >= window.start_minutes
-            or minute_of_day < window.end_minutes
+        return lookup_grid_import_price(
+            windows=windows,
+            minute_of_day=minute_of_day,
         )
 
     def _get_local_current_slot_start(
@@ -372,6 +357,33 @@ def read_grid_import_price_config(
     )
     _validate_grid_import_price_window_coverage(windows)
     return FixedGridImportPriceConfig(unit=raw_unit.strip(), windows=windows)
+
+
+def lookup_grid_import_price(
+    *,
+    windows: tuple[FixedGridImportPriceWindow, ...],
+    minute_of_day: int,
+) -> float:
+    """The configured import rate in force at ``minute_of_day``, any date.
+
+    The window table is a shape of the clock rather than of the calendar, so a
+    minute-of-day is the whole of the question — which is what lets a caller
+    outside the forecast pipeline (the inspector, pricing an elapsed slot the
+    recorder has no reading for) ask about a day in the past without going near
+    ``_build_import_price_points``, whose horizon starts at the current slot and
+    only runs forward.
+
+    Coverage is validated when the config is read, so a gap here means the
+    windows were never validated; that is a config error, not a missing value,
+    and it is raised rather than returned as ``None``.
+    """
+    for window in windows:
+        if _grid_import_window_contains_minute(window, minute_of_day):
+            return window.price
+
+    raise GridImportPriceConfigError(
+        "No import-price window matches the requested local time"
+    )
 
 
 def _read_grid_import_price_window(

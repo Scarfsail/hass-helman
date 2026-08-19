@@ -33,11 +33,13 @@ class BatteryForecastHistoryStore:
 
     Persisted shape:
       {"days": {"YYYY-MM-DD": {"HH:MM": {"socPct": float, "gridNetWh": float,
+                                         "gridImportWh": float,
+                                         "gridExportWh": float,
                                          "batteryNetWh": float}}}}
 
-    ``batteryNetWh`` was added after the first release, so days archived before
-    then simply lack the key; readers treat a missing key as "no value for that
-    slot" rather than zero.
+    ``batteryNetWh``, and later the two grid sides, were added after the first
+    release, so days archived before each simply lack those keys; readers treat
+    a missing key as "no value for that slot" rather than zero.
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -55,7 +57,11 @@ class BatteryForecastHistoryStore:
         self._days = days if isinstance(days, dict) else {}
 
     def slots_for_day(self, target_date: date) -> dict[str, dict[str, float]]:
-        """Return the recorded {slot: {socPct, gridNetWh, batteryNetWh}} map for a day."""
+        """The recorded map for a day.
+
+        Slots carry ``socPct``, ``gridNetWh``, ``gridImportWh``, ``gridExportWh``
+        and ``batteryNetWh``, each only where the archive held it.
+        """
         slots = self._days.get(target_date.isoformat())
         return slots if isinstance(slots, dict) else {}
 
@@ -143,6 +149,12 @@ def _slot_values(entry: dict[str, Any]) -> dict[str, float] | None:
     Net grid is positive when exporting, matching gridNetKwh elsewhere. Net
     battery follows the same "positive means energy leaving the house's demand"
     rule, so it is positive when charging.
+
+    The two grid sides are archived alongside the net rather than instead of it.
+    Netting is right for the chart, which draws one signed grid series, and
+    wrong for money: a slot can import at one rate and export at another, and
+    ``net x price`` is not what the meter charges. Both are kept so neither
+    caller has to reconstruct what the other threw away.
     """
     values: dict[str, float] = {}
     pct = entry.get("socPct")
@@ -155,9 +167,14 @@ def _slot_values(entry: dict[str, Any]) -> dict[str, float] | None:
     exported = entry.get("exportedToGridKwh")
     if imported is not None or exported is not None:
         try:
-            values["gridNetWh"] = (float(exported or 0.0) - float(imported or 0.0)) * 1000.0
+            imported_wh = float(imported or 0.0) * 1000.0
+            exported_wh = float(exported or 0.0) * 1000.0
         except (TypeError, ValueError):
             pass
+        else:
+            values["gridNetWh"] = exported_wh - imported_wh
+            values["gridImportWh"] = imported_wh
+            values["gridExportWh"] = exported_wh
     charged = entry.get("chargedKwh")
     discharged = entry.get("dischargedKwh")
     if charged is not None or discharged is not None:

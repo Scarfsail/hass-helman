@@ -52,7 +52,7 @@ const WATCHED_TAGS = [
     "helman-solar-inspector",
     "helman-solar-day-pills",
     "helman-solar-schedule-band-strip",
-    "helman-solar-export-price-strip",
+    "helman-solar-price-strip",
 ] as const;
 
 declare global {
@@ -179,7 +179,7 @@ test("an idle hass replacement re-renders nothing", async ({ page }) => {
         "helman-solar-inspector": 0,
         "helman-solar-day-pills": 0,
         "helman-solar-schedule-band-strip": 0,
-        "helman-solar-export-price-strip": 0,
+        "helman-solar-price-strip": 0,
     });
 
     // And nothing reloaded either (#61): a filtered `hass` must not re-enter any
