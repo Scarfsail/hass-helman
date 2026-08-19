@@ -309,8 +309,6 @@ class SolarBiasInspectorAvailability:
     has_battery_soc_actual: bool = False
     has_grid_forecast: bool = False
     has_grid_actual: bool = False
-    has_grid_sides_forecast: bool = False
-    has_grid_sides_actual: bool = False
     has_battery_forecast: bool = False
     has_battery_actual: bool = False
     has_import_price: bool = False
@@ -441,8 +439,6 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasBatterySocActual": day.availability.has_battery_soc_actual,
             "hasGridForecast": day.availability.has_grid_forecast,
             "hasGridActual": day.availability.has_grid_actual,
-            "hasGridSidesForecast": day.availability.has_grid_sides_forecast,
-            "hasGridSidesActual": day.availability.has_grid_sides_actual,
             "hasBatteryForecast": day.availability.has_battery_forecast,
             "hasBatteryActual": day.availability.has_battery_actual,
             "hasImportPrice": day.availability.has_import_price,

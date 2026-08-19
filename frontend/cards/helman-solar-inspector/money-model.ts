@@ -13,6 +13,14 @@ import type { PriceRailPoint } from "./helman-solar-price-strip";
  * The one rule worth stating plainly: cost and gain are computed per slot and
  * then summed. A day's cost is not its total imported energy times an average
  * price, because the expensive hours are rarely the ones you imported in.
+ *
+ * Known limitation, once a year: on the autumn DST fall-back day the local
+ * `HH:MM` labels repeat, so the repeated hour's two occurrences share four slot
+ * keys. Energy accumulates across both (right), while a rail holds one rate per
+ * label and therefore prices the combined kWh at whichever of the two hours the
+ * backend wrote last. The whole inspector keys slots by local label — the rails
+ * arrive that way — so this is the convention's cost rather than this module's,
+ * and fixing it here alone would only move the disagreement somewhere else.
  */
 
 const MINUTES_PER_DAY = 24 * 60;

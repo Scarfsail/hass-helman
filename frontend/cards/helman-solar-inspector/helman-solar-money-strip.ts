@@ -187,23 +187,41 @@ export class HelmanSolarMoneyStrip extends LitElement {
     private _renderStrip(cells: MoneyCell[], geometry: ScheduleStripGeometry): TemplateResult {
         const { height, padTop, padBottom } = MONEY_STRIP;
         const innerHeight = height - padTop - padBottom;
-        const maxCost = Math.max(0, ...cells.map((cell) => cell.cost));
-        const maxGain = Math.max(0, ...cells.map((cell) => cell.gain));
-        // Cost above and gain below share one scale, so a slot's two amounts are
-        // comparable by height -- which is the whole question this strip answers.
-        const extent = Math.max(0.0001, maxCost, maxGain);
+        const { start: visibleStart, end: visibleEnd } = stripWindow(geometry);
+        // Scale to the cells the reader can see. The daylight-only view is the
+        // default, so a night of cheap grid charging would otherwise set a
+        // maximum that no drawn bar reaches -- collapsing the daytime bars to
+        // slivers and labelling the axis with a column outside the window.
+        const scaled = cells.filter(
+            (cell) => cell.endMinutes > visibleStart && cell.startMinutes < visibleEnd,
+        );
+        // The bands are measured in what is actually *drawn*, not in cost and
+        // gain: cost goes up and gain goes down, so a negative amount crosses
+        // to the other side of the line. Reading the extents off the signed
+        // amounts instead would clamp those crossings away, and a day of
+        // negative export prices would then scale its bars against a maximum
+        // that excludes them and silently clip whatever overshot the plot.
+        const drawn = (scaled.length > 0 ? scaled : cells).flatMap(
+            (cell) => [cell.cost, -cell.gain],
+        );
+        const maxUp = Math.max(0, ...drawn);
+        const maxDown = Math.max(0, ...drawn.map((value) => -value));
+        // Up and down share one scale, so a slot's two amounts stay comparable
+        // by height -- which is the whole question this strip answers.
+        const extent = Math.max(0.0001, maxUp, maxDown);
         // A side with nothing on it gets no band. A day that only ever exported
-        // would otherwise spend half the plot on an empty cost half and draw its
+        // would otherwise spend half the plot on an empty half and draw its
         // gains at half the height they deserve.
-        const hasCost = cells.some((cell) => cell.cost !== 0);
-        const hasGain = cells.some((cell) => cell.gain !== 0);
-        const bands = (hasCost ? 1 : 0) + (hasGain ? 1 : 0);
+        const hasUp = maxUp > 0;
+        const hasDown = maxDown > 0;
+        const bands = (hasUp ? 1 : 0) + (hasDown ? 1 : 0);
         const bandHeight = bands > 0 ? innerHeight / bands : innerHeight;
-        const zeroY = padTop + (hasCost ? bandHeight : 0);
+        const zeroY = padTop + (hasUp ? bandHeight : 0);
         const scale = bandHeight / extent;
         const yForValue = (value: number) => zeroY - value * scale;
         const seam = this._seamMinutes();
-        const { start: windowStart, end: windowEnd } = stripWindow(geometry);
+        const windowStart = visibleStart;
+        const windowEnd = visibleEnd;
         const windowSpan = windowEnd - windowStart;
         const xForMinutes = (minutes: number) =>
             geometry.marginLeft + ((minutes - windowStart) / windowSpan) * geometry.plotWidth;
@@ -225,7 +243,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
                             <rect x=${geometry.marginLeft} y="0" width=${geometry.plotWidth} height=${height}></rect>
                         </clipPath>
                     </defs>
-                    ${this._renderGuides(geometry, zeroY, yForValue, maxCost, maxGain, hasGain)}
+                    ${this._renderGuides(geometry, zeroY, yForValue, maxUp, maxDown)}
                     ${renderSlotGridlines({
                         ticks: slotGridTicks({
                             startMinutes: windowStart,
@@ -352,9 +370,8 @@ export class HelmanSolarMoneyStrip extends LitElement {
         geometry: ScheduleStripGeometry,
         zeroY: number,
         yForValue: (value: number) => number,
-        maxCost: number,
-        maxGain: number,
-        hasGain: boolean,
+        maxUp: number,
+        maxDown: number,
     ) {
         const xLeft = geometry.marginLeft;
         const xRight = geometry.marginLeft + geometry.plotWidth;
@@ -377,9 +394,9 @@ export class HelmanSolarMoneyStrip extends LitElement {
             return clearOfZero(y) ? svg`${line(y)}${label(y, text)}` : nothing;
         };
         return svg`
-            ${maxCost > 0 ? guide(maxCost, maxCost.toFixed(1)) : nothing}
+            ${maxUp > 0 ? guide(maxUp, maxUp.toFixed(1)) : nothing}
             ${line(zeroY)}${label(zeroY, "0")}
-            ${hasGain && maxGain > 0 ? guide(-maxGain, maxGain.toFixed(1)) : nothing}
+            ${maxDown > 0 ? guide(-maxDown, maxDown.toFixed(1)) : nothing}
         `;
     }
 
@@ -460,25 +477,29 @@ export class HelmanSolarMoneyStrip extends LitElement {
         // The whole cell counts as hovered, not either bar's own height: an
         // amount near zero would otherwise leave almost nothing to point at,
         // and cost and gain are wanted together anyway.
+        // A cell behind the seam is measured money and belongs in the actual
+        // column, which is the distinction the bar's solid fill just drew.
+        const measured = cell.startMinutes < this._seamMinutes();
         this._emitHover(minutes);
         this._emitTooltip({
             x: event.clientX,
             y: event.clientY,
             title: `${this._formatMinutes(cell.startMinutes)} – ${this._formatMinutes(cell.endMinutes)}`,
-            hasActual: false,
+            hasActual: measured,
             rows: [
-                this._moneyRow("import_cost", cell.cost, "var(--helman-grid-import)"),
-                this._moneyRow("export_gain", cell.gain, "var(--helman-grid-export)"),
-                this._moneyRow("net_cost", cell.cost - cell.gain),
+                this._moneyRow("import_cost", cell.cost, measured, "var(--helman-grid-import)"),
+                this._moneyRow("export_gain", cell.gain, measured, "var(--helman-grid-export)"),
+                this._moneyRow("net_cost", cell.cost - cell.gain, measured),
             ],
         });
     }
 
-    private _moneyRow(key: string, amount: number, color?: string) {
+    private _moneyRow(key: string, amount: number, measured: boolean, color?: string) {
+        const cell = { value: this._formatMoney(amount), color };
         return {
             label: this._t(`bias_correction.inspector.${key}`),
-            actual: null,
-            forecast: { value: this._formatMoney(amount), color },
+            actual: measured ? cell : null,
+            forecast: measured ? null : cell,
         };
     }
 

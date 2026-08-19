@@ -566,9 +566,10 @@ class SolarBiasCorrectionService:
                     self._load_battery_soc_actual_for_date(target_date, timezone),
                     "battery SoC actual",
                 ),
-                self._guarded_points(
+                self._guarded_point_sets(
                     self._load_grid_actual_for_date(target_date, timezone),
                     "grid actual",
+                    count=3,
                 ),
                 self._guarded_points(
                     self._load_battery_actual_for_date(target_date, timezone),
@@ -893,12 +894,6 @@ class SolarBiasCorrectionService:
                 has_battery_soc_actual=bool(drawn_battery_soc_actual_points),
                 has_grid_forecast=bool(grid_forecast_points),
                 has_grid_actual=bool(drawn_grid_actual_points),
-                has_grid_sides_forecast=bool(
-                    grid_import_forecast_points or grid_export_forecast_points
-                ),
-                has_grid_sides_actual=bool(
-                    drawn_grid_import_actual_points or drawn_grid_export_actual_points
-                ),
                 has_battery_forecast=bool(battery_forecast_points),
                 has_battery_actual=bool(drawn_battery_actual_points),
                 has_import_price=bool(import_price_by_slot),
@@ -1079,6 +1074,23 @@ class SolarBiasCorrectionService:
         except Exception:
             _LOGGER.exception("Failed to load %s for inspector", description)
             return []
+
+    async def _guarded_point_sets(
+        self, coro, description: str, *, count: int
+    ) -> tuple[list[dict], ...]:
+        """The same boundary for a loader that returns several series at once.
+
+        A loader returning a tuple cannot share :meth:`_guarded_points`: its
+        empty-list failure value would be unpacked by the caller and raise,
+        turning one dead meter into a dead inspector day — the exact opposite of
+        what the boundary is for. The degraded value has to have the loader's
+        own shape.
+        """
+        try:
+            return await coro
+        except Exception:
+            _LOGGER.exception("Failed to load %s for inspector", description)
+            return tuple([] for _ in range(count))
 
     async def _load_slot_energy_kwh(
         self, entity_id: str, target_date: date, local_tz: ZoneInfo

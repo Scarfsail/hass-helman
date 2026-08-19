@@ -191,6 +191,26 @@ test.describe("money strip", () => {
         expect(gainBar(gainOnly).height).toBeGreaterThan(gainBar(both).height * 1.5);
     });
 
+    test("a negative amount crosses the line and is scaled with what it crosses into", async ({ page }) => {
+        // Gain is drawn downward, so a *negative* gain -- money paid to export --
+        // goes up, into the same band as cost. Measuring the bands off the signed
+        // amounts instead of what is drawn clamped those crossings away, and any
+        // bar taller than the day's largest cost was then silently clipped.
+        const bars = await barsFor(page, {
+            actual: [
+                { slot: "10:00", cost: 1, gain: 0 },
+                { slot: "11:00", cost: 0, gain: -8 },
+            ],
+            slotMinutes: 60,
+        });
+
+        expect(bars).toHaveLength(2);
+        // The upward -8 gain is eight times the 1 cost beside it, and fits.
+        const [cost, negativeGain] = bars;
+        expect(negativeGain.height / cost.height).toBeGreaterThan(4);
+        expect(negativeGain.height).toBeLessThanOrEqual(88);
+    });
+
     test("a day with no priced slot draws nothing at all", async ({ page }) => {
         const bars = await barsFor(page, { actual: [], forecast: [] });
         expect(bars).toEqual([]);

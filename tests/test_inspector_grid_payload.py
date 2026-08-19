@@ -240,6 +240,30 @@ class TestLoadGridActualSides(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(exported[0]["wh"], 700.0, places=6)
 
 
+class TestGridActualFailureStaysContained(unittest.IsolatedAsyncioTestCase):
+    """One dead meter must not take the whole inspector day with it."""
+
+    async def test_a_raising_loader_degrades_to_three_empty_series(self):
+        # The loader returns a tuple, so the boundary's degraded value has to
+        # have that shape: a bare [] would be unpacked by the caller and raise,
+        # turning a contained failure into a failed request.
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague"),
+            bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
+        )
+        service = service_mod.SolarBiasCorrectionService(
+            hass, _DummyStore(), _make_cfg()
+        )
+
+        async def _boom():
+            raise RuntimeError("recorder is down")
+
+        self.assertEqual(
+            await service._guarded_point_sets(_boom(), "grid actual", count=3),
+            ([], [], []),
+        )
+
+
 class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
     def _make_service(self, *, import_entity="sensor.grid_import", export_entity="sensor.grid_export"):
         hass = SimpleNamespace(
@@ -410,5 +434,3 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [p["valueWh"] for p in payload["series"]["gridExportActual"]], [0.0, 800.0]
         )
-        self.assertTrue(payload["availability"]["hasGridSidesActual"])
-        self.assertFalse(payload["availability"]["hasGridSidesForecast"])

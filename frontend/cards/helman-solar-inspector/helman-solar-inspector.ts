@@ -3501,17 +3501,20 @@ export class HelmanSolarInspector extends LitElement {
    * quantity seen twice. When only one side has data the card shows just that
    * one. The whole card toggles both series at once.
    */
-  private _renderMergedMetric(
-    label: string,
+  /**
+   * The actual/forecast chips a metric card carries.
+   *
+   * Shared by the merged metric and the money tile, which differ only in their
+   * wrapper — one is a legend toggle, the other is not — and would otherwise
+   * drift apart in the fill rules that make a chip stand out against the card's
+   * own colour wash: the forecast keeps the hatch, the actual a flat tint one
+   * step darker again.
+   */
+  private _metricChips(
     color: string,
-    forecast: { value: string; present: boolean; title: string },
     actual: { value: string; present: boolean; title: string },
-    forecastSeries: SeriesKey,
-    actualSeries: SeriesKey,
-  ) {
-    // A chip has to stand out against the card's own colour wash, so its fill
-    // runs stronger than the wash: the forecast keeps the hatch, the actual a
-    // flat tint one step darker again.
+    forecast: { value: string; present: boolean; title: string },
+  ): TemplateResult[] {
     const chipFill = (isForecast: boolean): string =>
       isForecast
         ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 42%, transparent) 0px, color-mix(in srgb, ${color} 42%, transparent) 3px, transparent 3px, transparent 7px)`
@@ -3531,7 +3534,18 @@ export class HelmanSolarInspector extends LitElement {
     if (forecast.present) chips.push(chip(forecast, true));
     // Neither side reported: keep a single placeholder so the card still reads.
     if (chips.length === 0) chips.push(chip(forecast, true));
+    return chips;
+  }
 
+  private _renderMergedMetric(
+    label: string,
+    color: string,
+    forecast: { value: string; present: boolean; title: string },
+    actual: { value: string; present: boolean; title: string },
+    forecastSeries: SeriesKey,
+    actualSeries: SeriesKey,
+  ) {
+    const chips = this._metricChips(color, actual, forecast);
     const visible =
       this._isSeriesVisible(forecastSeries) || this._isSeriesVisible(actualSeries);
     // Faint full-card wash plus a solid left rail, both in the series colour, so
@@ -3567,24 +3581,7 @@ export class HelmanSolarInspector extends LitElement {
     actual: { value: string; present: boolean; title: string },
     forecast: { value: string; present: boolean; title: string },
   ) {
-    const chipFill = (isForecast: boolean): string =>
-      isForecast
-        ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 42%, transparent) 0px, color-mix(in srgb, ${color} 42%, transparent) 3px, transparent 3px, transparent 7px)`
-        : `color-mix(in srgb, ${color} 34%, transparent)`;
-    const chip = (
-      part: { value: string; title: string },
-      isForecast: boolean,
-    ): TemplateResult => html`
-      <span
-        class="metric-value metric-chip"
-        style=${`background: ${chipFill(isForecast)};`}
-        title=${part.title}
-      >${part.value}</span>
-    `;
-    const chips: TemplateResult[] = [];
-    if (actual.present) chips.push(chip(actual, false));
-    if (forecast.present) chips.push(chip(forecast, true));
-    if (chips.length === 0) chips.push(chip(forecast, true));
+    const chips = this._metricChips(color, actual, forecast);
     const cardStyle = `background: color-mix(in srgb, ${color} 12%, transparent); border-left: 3px solid ${color};`;
     return html`
       <div class="metric-card merged" style=${cardStyle}>
@@ -3610,11 +3607,20 @@ export class HelmanSolarInspector extends LitElement {
     // The selection is on the inspector's current slot width; money is on the
     // rails' own 15-minute grid. A 60-minute selection therefore has to claim
     // all four quarters it spans, or its sums would count only the first.
-    const railSlots = slots === null ? null : this._railSlotsFor(slots);
+    const railSlots = slots === null ? null : expandSlotsToNative(slots, this._slotMinutes);
     const actual = sumMoney(money.actual, railSlots);
     const forecast = sumMoney(money.forecast, railSlots);
-    const hasActual = money.actual.length > 0;
-    const hasForecast = money.forecast.length > 0;
+    // Presence is asked of the *selection*, not the day. Reading it day-wide
+    // would print "0.00" against an hour tonight simply because this morning
+    // had actuals -- claiming a future hour has already cost nothing, which is
+    // the one thing every other tile in this panel is careful not to do.
+    const wanted = railSlots === null ? null : new Set(railSlots);
+    const priced = (points: readonly MoneyPoint[]) =>
+      wanted === null
+        ? points.length > 0
+        : points.some((point) => wanted.has(point.slot));
+    const hasActual = priced(money.actual);
+    const hasForecast = priced(money.forecast);
     const part = (totals: MoneyTotals, key: keyof MoneyTotals, present: boolean, title: string) => ({
       value: present ? `${totals[key].toFixed(2)} ${currency}`.trim() : "—",
       present,
@@ -3632,20 +3638,6 @@ export class HelmanSolarInspector extends LitElement {
       ${tile("export_gain", GRID_EXPORT_COLOR, "gain")}
       ${tile("net_cost", NEUTRAL_COLOR, "net")}
     `;
-  }
-
-  /** Every 15-minute rail slot covered by a selection at the current width. */
-  private _railSlotsFor(slots: readonly string[]): string[] {
-    const width = this._slotMinutes > 0 ? this._slotMinutes : 15;
-    const out: string[] = [];
-    for (const slot of slots) {
-      const start = slotToMinutes(slot);
-      if (start === null) continue;
-      for (let minutes = start; minutes < start + width; minutes += 15) {
-        out.push(minutesToSlot(minutes));
-      }
-    }
-    return out;
   }
 
   private _renderMetric(
