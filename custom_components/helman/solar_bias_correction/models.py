@@ -135,6 +135,36 @@ class SolarBiasPricePoint:
 
 
 @dataclass
+class SolarBiasMoneyPoint:
+    """What the grid charged, and what it paid, in one slot of the day.
+
+    A quantity rather than a rate, unlike the price point above: two slots of
+    money aggregate to their sum. Cost and gain are kept apart because each
+    direction is billed at its own rail, and no rate applied to the netted grid
+    series reproduces the pair.
+    """
+
+    slot: str  # "HH:MM"
+    cost: float
+    gain: float
+
+
+@dataclass
+class SolarBiasMoneyTotals:
+    """Cost, gain and their difference over a whole vintage of the day.
+
+    ``net`` is carried rather than left to the reader so the payload shape is
+    the one the card already sums a selection into -- the day's totals and a
+    selection's totals are then the same thing, and cannot drift apart.
+    """
+
+    cost: float
+    gain: float
+    #: What the grid came to on balance: positive means it took money off you.
+    net: float
+
+
+@dataclass
 class SolarBiasImpactPoint:
     slot: str
     raw_wh: float | None
@@ -265,12 +295,6 @@ class SolarBiasInspectorSeries:
     battery_soc_actual: list[BatterySocPoint] = field(default_factory=list)
     grid_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
     grid_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
-    #: The two grid directions kept apart, alongside the signed net above. Money
-    #: prices each at its own rate, which no rate applied to the net reproduces.
-    grid_import_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
-    grid_export_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
-    grid_import_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
-    grid_export_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
     battery_forecast: list[SolarBiasInspectorPoint] = field(default_factory=list)
     battery_actual: list[SolarBiasInspectorPoint] = field(default_factory=list)
     #: What the grid charged and paid per slot. Both rails span the whole day —
@@ -279,6 +303,12 @@ class SolarBiasInspectorSeries:
     #: the other half of the day.
     import_price: list[SolarBiasPricePoint] = field(default_factory=list)
     export_price: list[SolarBiasPricePoint] = field(default_factory=list)
+    #: What each slot cost and earned, priced from the two grid directions and
+    #: the rails above. Drawn series, so the actual one stops at the slot in
+    #: progress exactly as every other actual does; the totals below still count
+    #: it.
+    money_actual: list[SolarBiasMoneyPoint] = field(default_factory=list)
+    money_forecast: list[SolarBiasMoneyPoint] = field(default_factory=list)
 
 
 @dataclass
@@ -292,6 +322,11 @@ class SolarBiasInspectorTotals:
     grid_actual_wh: float | None = None
     battery_forecast_wh: float | None = None
     battery_actual_wh: float | None = None
+    #: None where the day priced nothing for that vintage -- a day past the
+    #: recorder's reach has real kWh at an unknown rate, and "cost 0" would be a
+    #: claim the data does not support.
+    money_actual: SolarBiasMoneyTotals | None = None
+    money_forecast: SolarBiasMoneyTotals | None = None
 
 
 @dataclass
@@ -387,18 +422,6 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             ],
             "gridForecast": [_inspector_point_payload(p) for p in day.series.grid_forecast],
             "gridActual": [_inspector_point_payload(p) for p in day.series.grid_actual],
-            "gridImportForecast": [
-                _inspector_point_payload(p) for p in day.series.grid_import_forecast
-            ],
-            "gridExportForecast": [
-                _inspector_point_payload(p) for p in day.series.grid_export_forecast
-            ],
-            "gridImportActual": [
-                _inspector_point_payload(p) for p in day.series.grid_import_actual
-            ],
-            "gridExportActual": [
-                _inspector_point_payload(p) for p in day.series.grid_export_actual
-            ],
             "batteryForecast": [
                 _inspector_point_payload(p) for p in day.series.battery_forecast
             ],
@@ -413,6 +436,10 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
                 {"slot": point.slot, "value": point.value}
                 for point in day.series.export_price
             ],
+            "moneyActual": [_money_point_payload(p) for p in day.series.money_actual],
+            "moneyForecast": [
+                _money_point_payload(p) for p in day.series.money_forecast
+            ],
         },
         "totals": {
             "rawWh": day.totals.raw_wh,
@@ -424,6 +451,8 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "gridActualWh": day.totals.grid_actual_wh,
             "batteryForecastWh": day.totals.battery_forecast_wh,
             "batteryActualWh": day.totals.battery_actual_wh,
+            "moneyActual": _money_totals_payload(day.totals.money_actual),
+            "moneyForecast": _money_totals_payload(day.totals.money_forecast),
         },
         "availability": {
             "hasRawForecast": day.availability.has_raw_forecast,
@@ -458,6 +487,18 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
 
 def _inspector_point_payload(point: SolarBiasInspectorPoint) -> dict[str, Any]:
     return {"timestamp": point.timestamp, "valueWh": point.value_wh}
+
+
+def _money_point_payload(point: SolarBiasMoneyPoint) -> dict[str, Any]:
+    return {"slot": point.slot, "cost": point.cost, "gain": point.gain}
+
+
+def _money_totals_payload(
+    totals: SolarBiasMoneyTotals | None,
+) -> dict[str, Any] | None:
+    if totals is None:
+        return None
+    return {"cost": totals.cost, "gain": totals.gain, "net": totals.net}
 
 
 def _house_breakdown_payload(point: SolarBiasHouseBreakdownPoint) -> dict[str, Any]:

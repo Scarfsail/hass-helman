@@ -35,6 +35,8 @@ from .models import (
     SolarBiasInspectorSeries,
     SolarBiasInspectorTotals,
     SolarBiasMetadata,
+    SolarBiasMoneyPoint,
+    SolarBiasMoneyTotals,
     SolarBiasPricePoint,
     SolarBiasProfile,
     SolarBiasSlotExplainability,
@@ -661,12 +663,6 @@ class SolarBiasCorrectionService:
         drawn_grid_actual_points = _drop_running_slot(
             grid_actual_points, running_slot=running_slot
         )
-        drawn_grid_import_actual_points = _drop_running_slot(
-            grid_import_actual_points, running_slot=running_slot
-        )
-        drawn_grid_export_actual_points = _drop_running_slot(
-            grid_export_actual_points, running_slot=running_slot
-        )
         drawn_battery_actual_points = _drop_running_slot(
             battery_actual_points, running_slot=running_slot
         )
@@ -802,6 +798,27 @@ class SolarBiasCorrectionService:
             # same entity the recorded rail came from.
             price_unit = self._grid_export_price_entity_unit()
 
+        # Money, priced off the two grid directions and the rails just built.
+        # The actual side is computed once from the *undropped* points and then
+        # split the way every energy series is: the totals count the slot in
+        # progress, the drawn series stops before it. The forecast side has no
+        # such split, since no forecast series is ever dropped.
+        money_actual_points = _money_points(
+            grid_import_actual_points,
+            grid_export_actual_points,
+            import_price_by_slot,
+            export_price_by_slot,
+        )
+        money_forecast_points = _money_points(
+            grid_import_forecast_points,
+            grid_export_forecast_points,
+            import_price_by_slot,
+            export_price_by_slot,
+        )
+        drawn_money_actual_points = _drop_running_slot(
+            money_actual_points, running_slot=running_slot
+        )
+
         day = SolarBiasInspectorDay(
             date=target_date.isoformat(),
             timezone=str(self._hass.config.time_zone),
@@ -830,18 +847,12 @@ class SolarBiasCorrectionService:
                 ),
                 grid_forecast=_inspector_points_from_raw(grid_forecast_points),
                 grid_actual=_inspector_points_from_raw(drawn_grid_actual_points),
-                grid_import_forecast=_inspector_points_from_raw(grid_import_forecast_points),
-                grid_export_forecast=_inspector_points_from_raw(grid_export_forecast_points),
-                grid_import_actual=_inspector_points_from_raw(
-                    drawn_grid_import_actual_points
-                ),
-                grid_export_actual=_inspector_points_from_raw(
-                    drawn_grid_export_actual_points
-                ),
                 battery_forecast=_inspector_points_from_raw(battery_forecast_points),
                 battery_actual=_inspector_points_from_raw(drawn_battery_actual_points),
                 import_price=_price_points(import_price_by_slot),
                 export_price=_price_points(export_price_by_slot),
+                money_actual=drawn_money_actual_points,
+                money_forecast=money_forecast_points,
             ),
             totals=SolarBiasInspectorTotals(
                 raw_wh=_sum_point_values(raw_points) if raw_points else None,
@@ -879,6 +890,8 @@ class SolarBiasCorrectionService:
                     if battery_actual_points
                     else None
                 ),
+                money_actual=_money_totals(money_actual_points),
+                money_forecast=_money_totals(money_forecast_points),
             ),
             availability=SolarBiasInspectorAvailability(
                 has_raw_forecast=bool(raw_points),
@@ -2223,6 +2236,84 @@ def _price_points(by_slot: dict[str, float]) -> list[SolarBiasPricePoint]:
         SolarBiasPricePoint(slot=slot, value=value)
         for slot, value in sorted(by_slot.items())
     ]
+
+
+def _energy_kwh_by_slot(points: list) -> dict[str, float]:
+    """One direction's energy in kWh, keyed by the local ``HH:MM`` slot label.
+
+    Takes the raw loader points -- ``{"timestamp", "wh"}`` -- as every other
+    summing helper here does. The label is read off the timestamp's local time
+    text rather than parsed into a datetime, which is what brings the energy
+    series onto the same key the price rails are already built on.
+    """
+    by_slot: dict[str, float] = {}
+    for point in points:
+        timestamp = point["timestamp"]
+        if not isinstance(timestamp, str) or len(timestamp) < 16:
+            continue
+        slot = timestamp[11:16]
+        by_slot[slot] = by_slot.get(slot, 0.0) + point["wh"] / 1000.0
+    return by_slot
+
+
+def _money_points(
+    import_points: list,
+    export_points: list,
+    import_price_by_slot: dict[str, float],
+    export_price_by_slot: dict[str, float],
+) -> list[SolarBiasMoneyPoint]:
+    """Cost and gain per slot, for one vintage.
+
+    Computed per slot and then summed, never as a day's energy times an average
+    rate: the expensive hours are rarely the ones the house imported in.
+
+    A slot appears when either direction has energy *and* a rate to value it at.
+    A direction with energy but no rate contributes nothing rather than zero --
+    a day past the recorder's reach has real exported kWh whose rate is simply
+    unknown, and calling that "earned nothing" would be a claim the data does
+    not support.
+
+    Known limitation, once a year: on the autumn DST fall-back day the local
+    ``HH:MM`` labels repeat, so the repeated hour's two occurrences share four
+    slot keys. Energy accumulates across both (right), while a rail holds one
+    rate per label and therefore prices the combined kWh at whichever of the two
+    hours was written last. The whole inspector keys slots by local label -- the
+    rails arrive that way -- so this is the convention's cost rather than this
+    helper's, and pricing money by timestamp alone would only make it disagree
+    with the rail drawn above it.
+    """
+    imported = _energy_kwh_by_slot(import_points)
+    exported = _energy_kwh_by_slot(export_points)
+    points: list[SolarBiasMoneyPoint] = []
+    for slot_index in range(96):
+        slot = f"{slot_index // 4:02d}:{(slot_index % 4) * 15:02d}"
+        import_kwh = imported.get(slot)
+        export_kwh = exported.get(slot)
+        cost_rate = import_price_by_slot.get(slot)
+        gain_rate = export_price_by_slot.get(slot)
+        priced_cost = import_kwh is not None and cost_rate is not None
+        priced_gain = export_kwh is not None and gain_rate is not None
+        if not priced_cost and not priced_gain:
+            continue
+        points.append(
+            SolarBiasMoneyPoint(
+                slot=slot,
+                cost=import_kwh * cost_rate if priced_cost else 0.0,
+                gain=export_kwh * gain_rate if priced_gain else 0.0,
+            )
+        )
+    return points
+
+
+def _money_totals(
+    points: list[SolarBiasMoneyPoint],
+) -> SolarBiasMoneyTotals | None:
+    """Sum a money series, or None where the day priced nothing at all."""
+    if not points:
+        return None
+    cost = sum(point.cost for point in points)
+    gain = sum(point.gain for point in points)
+    return SolarBiasMoneyTotals(cost=cost, gain=gain, net=cost - gain)
 
 
 def _current_slot_start(local_now: datetime) -> datetime:
