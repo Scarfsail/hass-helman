@@ -126,6 +126,23 @@ def _make_cfg():
     )
 
 
+def _slot_energy_kwh_by_entity(
+    consumer_slot_by_entity: dict[str, dict[str, float]] | None,
+) -> dict[str, dict[datetime, float]]:
+    """The batched meter read's shape, from per-consumer ``{"HH:MM": Wh}`` maps.
+
+    The inspector reads every cumulative meter for the day in one recorder query
+    and hands the result to the shaping steps, so a test stubs that one read.
+    """
+    return {
+        entity_id: {
+            datetime.fromisoformat(f"{TARGET_DATE}T{slot}:00+02:00"): wh / 1000.0
+            for slot, wh in by_slot.items()
+        }
+        for entity_id, by_slot in (consumer_slot_by_entity or {}).items()
+    }
+
+
 async def _inspector_payload(
     _history=None, _consumer_slot_by_entity=None, **service_kwargs
 ):
@@ -180,11 +197,9 @@ async def _inspector_payload(
             AsyncMock(return_value=BATTERY_SOC_ACTUAL),
         ), patch.object(
             service,
-            "_load_consumer_slot_map",
+            "_load_slot_energy_kwh_for_entities",
             AsyncMock(
-                side_effect=lambda entity_id, *a, **kw: dict(
-                    (_consumer_slot_by_entity or {}).get(entity_id, {})
-                )
+                return_value=_slot_energy_kwh_by_entity(_consumer_slot_by_entity)
             ),
         ):
             return await service.async_get_inspector_day(TARGET_DATE)

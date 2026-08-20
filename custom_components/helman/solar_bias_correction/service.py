@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
@@ -552,6 +552,34 @@ class SolarBiasCorrectionService:
             + timedelta(days=1)
         )
 
+        # Every cumulative meter the day's actual series need — house, both grid
+        # sides, both battery sides and one per house consumer — is read in a
+        # single recorder query up front. The recorder serves from one DB
+        # executor thread, so gathering a read per meter would only queue them;
+        # the batch turns ~18 serial round-trips into one. The consumer roster
+        # has to be resolved first because it decides most of the entity ids.
+        # The two steps degrade apart, the way the per-series loaders they came
+        # from did: a roster that cannot be built costs the breakdown, and a
+        # recorder that cannot be read costs the meter series, neither the other.
+        breakdown_consumers_for_day: list[dict] = []
+        slot_energy_by_entity: dict[str, dict[datetime, float]] = {}
+        if need_past:
+            try:
+                breakdown_consumers_for_day = await self._house_breakdown_consumers()
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to load house consumer breakdown for inspector"
+                )
+            try:
+                slot_energy_by_entity = await self._load_slot_energy_kwh_for_entities(
+                    self._cumulative_meter_entity_ids(breakdown_consumers_for_day),
+                    target_date,
+                    timezone,
+                )
+            except Exception:
+                _LOGGER.exception("Failed to load slot energy meters for inspector")
+                slot_energy_by_entity = {}
+
         # Independent recorder/snapshot reads, so overlap them rather than
         # awaiting in turn.
         past_coros = (
@@ -561,7 +589,7 @@ class SolarBiasCorrectionService:
                     "house forecast history",
                 ),
                 self._guarded_points(
-                    self._load_house_actual_for_date(target_date, timezone),
+                    self._load_house_actual_for_date(target_date, slot_energy_by_entity),
                     "house actual",
                 ),
                 self._guarded_points(
@@ -569,15 +597,14 @@ class SolarBiasCorrectionService:
                     "battery SoC actual",
                 ),
                 self._guarded_point_sets(
-                    self._load_grid_actual_for_date(target_date, timezone),
+                    self._load_grid_actual_for_date(target_date, slot_energy_by_entity),
                     "grid actual",
                     count=3,
                 ),
                 self._guarded_points(
-                    self._load_battery_actual_for_date(target_date, timezone),
+                    self._load_battery_actual_for_date(target_date, slot_energy_by_entity),
                     "battery actual",
                 ),
-                self._load_house_consumer_breakdown_for_date(target_date, timezone),
                 self._guarded_points(
                     self._load_recorded_price_rail(
                         GRID_IMPORT_PRICE_ENTITY_ID,
@@ -621,11 +648,18 @@ class SolarBiasCorrectionService:
                 battery_soc_actual_points,
                 grid_actual_series,
                 battery_actual_points,
-                consumer_breakdown,
                 recorded_import_price_points,
                 recorded_export_price_points,
-            ) = gathered[:8]
-            breakdown_consumers, consumer_slot_maps = consumer_breakdown
+            ) = gathered[:7]
+            # Shaping only — the consumer meters came out of the batched read
+            # above, so this is not another recorder round-trip.
+            breakdown_consumers, consumer_slot_maps = (
+                self._house_consumer_breakdown_for_date(
+                    target_date,
+                    breakdown_consumers_for_day,
+                    slot_energy_by_entity,
+                )
+            )
         battery_snapshot = gathered[-1] if need_future else None
 
         # The breakdown decomposes the house actual already loaded, so it is
@@ -1105,27 +1139,69 @@ class SolarBiasCorrectionService:
             _LOGGER.exception("Failed to load %s for inspector", description)
             return tuple([] for _ in range(count))
 
-    async def _load_slot_energy_kwh(
-        self, entity_id: str, target_date: date, local_tz: ZoneInfo
-    ) -> dict[datetime, float]:
-        """Per-15-min energy deltas of a cumulative meter, keyed by UTC slot start.
+    async def _load_slot_energy_kwh_for_entities(
+        self, entity_ids: Sequence[str], target_date: date, local_tz: ZoneInfo
+    ) -> dict[str, dict[datetime, float]]:
+        """Per-15-min energy deltas of several cumulative meters, in one recorder read.
 
-        Daily-resetting meters are fine here: the query unwraps total_increasing
-        resets, and a single local day never spans the midnight reset boundary.
+        Keyed by entity id, each value keyed by UTC slot start. Daily-resetting
+        meters are fine here: the query unwraps total_increasing resets, and a
+        single local day never spans the midnight reset boundary.
+
+        Every cumulative-meter series the inspector draws comes through here, and
+        it is deliberately a single call: the recorder serves its queries from one
+        DB executor thread, so a read per meter is a serial round-trip per meter no
+        matter how the awaits are arranged.
         """
-        from ..recorder_hourly_series import query_cumulative_slot_energy_changes
+        from ..recorder_hourly_series import (
+            query_cumulative_slot_energy_changes_for_entities,
+        )
 
         local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
-        return await query_cumulative_slot_energy_changes(
+        return await query_cumulative_slot_energy_changes_for_entities(
             self._hass,
-            entity_id,
+            list(entity_ids),
             local_start=local_start,
             local_end=local_start + timedelta(days=1),
             interval_minutes=15,
         )
 
+    def _cumulative_meter_entity_ids(self, consumers: list[dict]) -> list[str]:
+        """Every cumulative meter the inspector's actual series read for a day.
+
+        The house meter, both grid sides, both battery sides and one per house
+        consumer — the entity ids the single batched read has to cover. Missing
+        providers and unconfigured meters drop out; the batch de-duplicates.
+
+        A provider that raises costs only its own meter here. Its series still
+        calls it and still fails, and its own error boundary still degrades that
+        one series — which is what a failing provider cost before the reads were
+        batched, and must keep costing now that they share a query.
+        """
+
+        def _entity_id(provider) -> str | None:
+            if provider is None:
+                return None
+            try:
+                return provider()
+            except Exception:
+                _LOGGER.exception("Meter entity id provider failed for inspector")
+                return None
+
+        candidates = [
+            _entity_id(self._house_energy_entity_id_provider),
+            _entity_id(self._grid_import_energy_entity_id_provider),
+            _entity_id(self._grid_export_energy_entity_id_provider),
+            _entity_id(self._battery_charge_energy_entity_id_provider),
+            _entity_id(self._battery_discharge_energy_entity_id_provider),
+            *(consumer["energy_entity_id"] for consumer in consumers),
+        ]
+        return [entity_id for entity_id in candidates if entity_id]
+
     async def _load_house_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo
+        self,
+        target_date: date,
+        slot_energy_by_entity: dict[str, dict[datetime, float]],
     ) -> list[dict]:
         """Load per-15-min house energy actuals for target_date."""
         if self._house_energy_entity_id_provider is None:
@@ -1133,11 +1209,7 @@ class SolarBiasCorrectionService:
         entity_id = self._house_energy_entity_id_provider()
         if not entity_id:
             return []
-        try:
-            by_slot = await self._load_slot_energy_kwh(entity_id, target_date, local_tz)
-        except Exception:
-            _LOGGER.exception("Failed to load house actual for inspector")
-            return []
+        by_slot = slot_energy_by_entity.get(entity_id) or {}
         return _slot_energy_points(
             {slot: kwh * 1000.0 for slot, kwh in by_slot.items()},
             target_date,
@@ -1284,11 +1356,11 @@ class SolarBiasCorrectionService:
             merged.append(consumer)
         return merged
 
-    async def _load_consumer_slot_map(
-        self, entity_id: str, target_date: date, local_tz: ZoneInfo
+    @staticmethod
+    def _consumer_slot_map(
+        by_slot_utc: dict[datetime, float], target_date: date
     ) -> dict[str, float]:
         """One consumer's per-slot energy (Wh) for the day, keyed by local "HH:MM"."""
-        by_slot_utc = await self._load_slot_energy_kwh(entity_id, target_date, local_tz)
         by_slot: dict[str, float] = {}
         for slot_start_utc, kwh in by_slot_utc.items():
             slot_local = dt_util.as_local(slot_start_utc)
@@ -1298,37 +1370,38 @@ class SolarBiasCorrectionService:
             by_slot[slot] = kwh * 1000.0
         return by_slot
 
-    async def _load_house_consumer_breakdown_for_date(
-        self, target_date: date, local_tz: ZoneInfo
+    def _house_consumer_breakdown_for_date(
+        self,
+        target_date: date,
+        consumers: list[dict],
+        slot_energy_by_entity: dict[str, dict[datetime, float]],
     ) -> tuple[list[dict], list[dict]]:
         """The consumer list and its per-slot energy maps, aligned by index.
 
         Returns ``(consumers, slot_maps)`` from a single source so the compose step
-        never re-reads the list and can zip them safely. The maps overlap the
-        house-actual read in the same gather, so this adds only the appliance
-        meters, not a serial round-trip. Any failure degrades to no breakdown.
+        never re-reads the list and can zip them safely. The meters were read with
+        the rest of the day's cumulative meters in one recorder query, so this is
+        pure shaping. Any failure degrades to no breakdown.
         """
         try:
-            consumers = await self._house_breakdown_consumers()
             if not consumers:
                 return [], []
-            slot_maps = list(
-                await asyncio.gather(
-                    *(
-                        self._load_consumer_slot_map(
-                            consumer["energy_entity_id"], target_date, local_tz
-                        )
-                        for consumer in consumers
-                    )
+            slot_maps = [
+                self._consumer_slot_map(
+                    slot_energy_by_entity.get(consumer["energy_entity_id"]) or {},
+                    target_date,
                 )
-            )
+                for consumer in consumers
+            ]
             return consumers, slot_maps
         except Exception:
             _LOGGER.exception("Failed to load house consumer breakdown for inspector")
             return [], []
 
     async def _load_grid_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo
+        self,
+        target_date: date,
+        slot_energy_by_entity: dict[str, dict[datetime, float]],
     ) -> tuple[list[dict], list[dict], list[dict]]:
         """Load per-15-min grid energy for target_date, as (net, imported, exported).
 
@@ -1354,19 +1427,8 @@ class SolarBiasCorrectionService:
         if not import_entity and not export_entity:
             return [], [], []
 
-        async def _load(entity_id: str | None) -> dict[datetime, float]:
-            if not entity_id:
-                return {}
-            return await self._load_slot_energy_kwh(entity_id, target_date, local_tz)
-
-        try:
-            # The two meters are independent recorder reads; overlap them.
-            imported, exported = await asyncio.gather(
-                _load(import_entity), _load(export_entity)
-            )
-        except Exception:
-            _LOGGER.exception("Failed to load grid actual for inspector")
-            return [], [], []
+        imported = slot_energy_by_entity.get(import_entity) or {} if import_entity else {}
+        exported = slot_energy_by_entity.get(export_entity) or {} if export_entity else {}
         slots = imported.keys() | exported.keys()
         net_wh_by_slot = {
             slot: (exported.get(slot, 0.0) - imported.get(slot, 0.0)) * 1000.0
@@ -1468,7 +1530,9 @@ class SolarBiasCorrectionService:
         return snapshot if isinstance(snapshot, dict) else {}
 
     async def _load_battery_actual_for_date(
-        self, target_date: date, local_tz: ZoneInfo
+        self,
+        target_date: date,
+        slot_energy_by_entity: dict[str, dict[datetime, float]],
     ) -> list[dict]:
         """Load per-15-min net battery energy for target_date.
 
@@ -1491,19 +1555,10 @@ class SolarBiasCorrectionService:
         if not charge_entity and not discharge_entity:
             return []
 
-        async def _load(entity_id: str | None) -> dict[datetime, float]:
-            if not entity_id:
-                return {}
-            return await self._load_slot_energy_kwh(entity_id, target_date, local_tz)
-
-        try:
-            # The two meters are independent recorder reads; overlap them.
-            charged, discharged = await asyncio.gather(
-                _load(charge_entity), _load(discharge_entity)
-            )
-        except Exception:
-            _LOGGER.exception("Failed to load battery actual for inspector")
-            return []
+        charged = slot_energy_by_entity.get(charge_entity) or {} if charge_entity else {}
+        discharged = (
+            slot_energy_by_entity.get(discharge_entity) or {} if discharge_entity else {}
+        )
         net_wh_by_slot = {
             slot: (charged.get(slot, 0.0) - discharged.get(slot, 0.0)) * 1000.0
             for slot in charged.keys() | discharged.keys()

@@ -184,6 +184,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
             history_mod = types.ModuleType("homeassistant.components.recorder.history")
             sys.modules["homeassistant.components.recorder.history"] = history_mod
         history_mod.state_changes_during_period = lambda *args, **kwargs: {}
+        history_mod.get_significant_states = lambda *args, **kwargs: {}
 
         energy_pkg = sys.modules.get("homeassistant.components.energy")
         if energy_pkg is None:
@@ -286,6 +287,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         history_mod = types.ModuleType("homeassistant.components.recorder.history")
         sys.modules["homeassistant.components.recorder.history"] = history_mod
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
+    history_mod.get_significant_states = lambda *args, **kwargs: {}
 
     # ``automation.day_context_store`` builds a ``storage.Store``; force a
     # lightweight stub even when the real ``homeassistant`` package is importable

@@ -66,6 +66,7 @@ def _install_import_stubs() -> dict[str, types.ModuleType | None]:
         if history_pkg is None:
             history_pkg = types.ModuleType("homeassistant.components.recorder.history")
             history_pkg.state_changes_during_period = lambda *args, **kwargs: {}
+            history_pkg.get_significant_states = lambda *args, **kwargs: {}
             sys.modules["homeassistant.components.recorder.history"] = history_pkg
 
         util_pkg = sys.modules.get("homeassistant.util")

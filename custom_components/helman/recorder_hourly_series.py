@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.history import (
+    get_significant_states,
+    state_changes_during_period,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -161,18 +165,113 @@ async def query_cumulative_slot_energy_changes(
             None,
             True,
         )
-        states = history.get(entity_id) or history.get(entity_id.lower()) or []
-        observations = _build_unwrapped_energy_observations(
-            _parse_energy_observations(states, default_unit=default_unit)
-        )
-        boundary_samples = _sample_energy_observations_at_boundaries(
-            observations, utc_boundaries
-        )
-        return _build_slot_energy_changes_from_boundaries(
-            utc_boundaries, boundary_samples
+        return _slot_energy_changes_from_states(
+            _states_for_entity(history, entity_id),
+            default_unit=default_unit,
+            utc_boundaries=utc_boundaries,
         )
 
     return await get_instance(hass).async_add_executor_job(_query_and_parse)
+
+
+async def query_cumulative_slot_energy_changes_for_entities(
+    hass: HomeAssistant,
+    entity_ids: Sequence[str],
+    *,
+    local_start: datetime,
+    local_end: datetime,
+    interval_minutes: int,
+) -> dict[str, dict[datetime, float]]:
+    """The per-slot energy deltas of several cumulative meters, in ONE recorder read.
+
+    Same shape and same semantics as :func:`query_cumulative_slot_energy_changes`,
+    for a set of entities that share a window and a grid. The recorder runs its
+    queries on a single DB executor thread, so N separate calls are N serial
+    round-trips no matter how they are awaited; ``get_significant_states`` takes
+    a list of entity ids, which turns them into one.
+
+    Returns a map keyed by entity id. An entity the recorder has nothing for maps
+    to ``{}``, matching the singular function.
+    """
+    unique_entity_ids = list(dict.fromkeys(eid for eid in entity_ids if eid))
+    if not unique_entity_ids:
+        return {}
+
+    local_slot_starts = _build_local_slot_starts_until(
+        local_start,
+        local_end,
+        interval_minutes=interval_minutes,
+    )
+    if not local_slot_starts:
+        return {entity_id: {} for entity_id in unique_entity_ids}
+
+    local_boundaries = [*local_slot_starts, local_end]
+    utc_boundaries = [dt_util.as_utc(boundary) for boundary in local_boundaries]
+
+    default_units: dict[str, str | None] = {}
+    for entity_id in unique_entity_ids:
+        current_state = hass.states.get(entity_id)
+        default_units[entity_id] = (
+            None
+            if current_state is None
+            else current_state.attributes.get("unit_of_measurement")
+        )
+
+    # One query has to serve every entity, so the attributes join can only be
+    # dropped when no entity needs it — see the singular function for why an
+    # entity without a live unit needs it at all.
+    no_attributes = all(unit is not None for unit in default_units.values())
+
+    def _query_and_parse() -> dict[str, dict[datetime, float]]:
+        history = get_significant_states(
+            hass,
+            utc_boundaries[0],
+            utc_boundaries[-1],
+            entity_ids=unique_entity_ids,
+            filters=None,
+            include_start_time_state=True,
+            # The singular query reads real state changes only; this one has to
+            # read the same rows or it is not the same function. Left False, an
+            # attribute-only write — a utility_meter republishing last_period
+            # while its value stands still — becomes an extra observation, and
+            # the unwrap reads a dip it would have ignored as the series' last
+            # reading as a counter reset, inventing a slot the size of the whole
+            # meter. None of these entities is in a significant domain, so True
+            # applies exactly the filter the singular query applies.
+            significant_changes_only=True,
+            minimal_response=False,
+            no_attributes=no_attributes,
+            compressed_state_format=False,
+        )
+        return {
+            entity_id: _slot_energy_changes_from_states(
+                _states_for_entity(history, entity_id),
+                default_unit=default_units[entity_id],
+                utc_boundaries=utc_boundaries,
+            )
+            for entity_id in unique_entity_ids
+        }
+
+    return await get_instance(hass).async_add_executor_job(_query_and_parse)
+
+
+def _states_for_entity(history: Any, entity_id: str) -> list[Any]:
+    return (history or {}).get(entity_id) or (history or {}).get(entity_id.lower()) or []
+
+
+def _slot_energy_changes_from_states(
+    states: list[Any],
+    *,
+    default_unit: str | None,
+    utc_boundaries: list[datetime],
+) -> dict[datetime, float]:
+    observations = _build_unwrapped_energy_observations(
+        _parse_energy_observations(states, default_unit=default_unit)
+    )
+    boundary_samples = _sample_energy_observations_at_boundaries(
+        observations, utc_boundaries
+    )
+    return _build_slot_energy_changes_from_boundaries(utc_boundaries, boundary_samples)
 
 
 async def query_cumulative_hourly_energy_changes(
