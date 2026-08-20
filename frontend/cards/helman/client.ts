@@ -8,6 +8,9 @@ import type {
     GetControllableEntitiesRequest,
     GetApplianceProjectionsRequest,
     GetAppliancesRequest,
+    GetDeviceTreeRequest,
+    GetHistoryRequest,
+    HistoryPayload,
     GetScheduleRequest,
     SchedulePayload,
     ScheduleSlotDTO,
@@ -15,6 +18,7 @@ import type {
     SetScheduleExecutionResponse,
     SetScheduleRequest,
     SetScheduleResponse,
+    TreePayload,
 } from "../helman-api";
 import { cloneScheduleSlotDTO } from "./models";
 
@@ -71,6 +75,20 @@ export class HelmanClient {
             type: "helman/get_appliances",
         };
         return this._hass.callWS<AppliancesPayload>(request);
+    }
+
+    public getDeviceTree(): Promise<TreePayload> {
+        const request: GetDeviceTreeRequest = {
+            type: "helman/get_device_tree",
+        };
+        return this._hass.callWS<TreePayload>(request);
+    }
+
+    public getHistory(): Promise<HistoryPayload> {
+        const request: GetHistoryRequest = {
+            type: "helman/get_history",
+        };
+        return this._hass.callWS<HistoryPayload>(request);
     }
 
     public getApplianceProjections(): Promise<ApplianceProjectionsPayload> {
