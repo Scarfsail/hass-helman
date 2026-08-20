@@ -61,10 +61,8 @@ import "./helman-solar-price-strip";
 import "./helman-solar-money-strip";
 import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-solar-price-strip";
 import {
-  buildMoneySeries,
   currencyFromPriceUnit,
   sumMoney,
-  EMPTY_MONEY,
   type MoneyPoint,
   type MoneyTotals,
 } from "./money-model";
@@ -445,14 +443,12 @@ type InspectorPayload = {
     importPrice: PriceRailPoint[];
     exportPrice: PriceRailPoint[];
     /**
-     * The grid's two directions, unnetted. `gridForecast`/`gridActual` above are
-     * their signed difference, which is right for the chart and useless for
-     * money: each side is billed at its own rate.
+     * What each slot cost and earned, priced in Python from the two grid
+     * directions and the rails above. Drawn series: the actual one stops at the
+     * slot in progress, like every other actual, while `totals` below counts it.
      */
-    gridImportForecast: InspectorPoint[];
-    gridExportForecast: InspectorPoint[];
-    gridImportActual: InspectorPoint[];
-    gridExportActual: InspectorPoint[];
+    moneyActual: MoneyPoint[];
+    moneyForecast: MoneyPoint[];
   };
   totals: {
     rawWh: number | null;
@@ -464,6 +460,9 @@ type InspectorPayload = {
     gridActualWh: number | null;
     batteryForecastWh: number | null;
     batteryActualWh: number | null;
+    /** Null where the day priced nothing for that vintage. */
+    moneyActual: MoneyTotals | null;
+    moneyForecast: MoneyTotals | null;
   };
   availability: {
     hasRawForecast: boolean;
@@ -579,11 +578,6 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _socStripExpanded = true;
   @state() private _priceStripExpanded = true;
   @state() private _moneyStripExpanded = true;
-  /** Memo for {@link _money}, keyed on payload identity. */
-  private _moneyCache: {
-    payload: InspectorDayPayload;
-    money: { actual: readonly MoneyPoint[]; forecast: readonly MoneyPoint[] };
-  } | null = null;
   @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
@@ -2114,8 +2108,8 @@ export class HelmanSolarInspector extends LitElement {
           ? html`
               <helman-solar-money-strip
                 .hass=${this.hass}
-                .moneyActual=${this._moneyActual(payload)}
-                .moneyForecast=${this._moneyForecast(payload)}
+                .moneyActual=${payload.series.moneyActual}
+                .moneyForecast=${payload.series.moneyForecast}
                 .currency=${currencyFromPriceUnit(payload.priceUnit)}
                 .date=${payload.date}
                 .timeZone=${this._haTimeZone() ?? "UTC"}
@@ -2141,48 +2135,6 @@ export class HelmanSolarInspector extends LitElement {
           : ""}
       </div>
     `;
-  }
-
-  /**
-   * The day's money, one vintage each, memoized on the payload that produced it.
-   *
-   * Both are derived from four series and two rails, and are read by the strip,
-   * the metric tiles and the selected-slot panel on every render — so deriving
-   * them per call would redo the same arithmetic several times a frame, and
-   * handing Lit a fresh array each time would re-render the strip along with it.
-   */
-  private _moneyActual(payload: InspectorDayPayload): readonly MoneyPoint[] {
-    return this._money(payload).actual;
-  }
-
-  private _moneyForecast(payload: InspectorDayPayload): readonly MoneyPoint[] {
-    return this._money(payload).forecast;
-  }
-
-  private _money(payload: InspectorDayPayload): {
-    actual: readonly MoneyPoint[];
-    forecast: readonly MoneyPoint[];
-  } {
-    if (this._moneyCache?.payload === payload) {
-      return this._moneyCache.money;
-    }
-    const series = payload.series;
-    const money = {
-      actual: buildMoneySeries({
-        importKwh: series.gridImportActual,
-        exportKwh: series.gridExportActual,
-        importPrice: series.importPrice,
-        exportPrice: series.exportPrice,
-      }),
-      forecast: buildMoneySeries({
-        importKwh: series.gridImportForecast,
-        exportKwh: series.gridExportForecast,
-        importPrice: series.importPrice,
-        exportPrice: series.exportPrice,
-      }),
-    };
-    this._moneyCache = { payload, money };
-    return money;
   }
 
   /** Resolve a strip click to the nearest impact slot, or clear the selection. */
@@ -3595,33 +3547,54 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * The three money tiles, over the whole day or a selection.
    *
+   * The day reads the payload's own totals, which count the slot in progress
+   * exactly as every energy total does. A selection sums the drawn series
+   * instead, so it excludes that slot exactly as the energy figures beside it
+   * in the selection panel do. Two rules, but each tile follows the same one as
+   * the energy it sits next to — which is the whole point.
+   *
    * A vintage with no priced slot at all shows nothing rather than a zero: a
    * day past the recorder's reach has real exported kWh at an unknown rate, and
    * "earned 0" would be a claim the data does not support.
    */
   private _renderMoneyMetrics(
-    payload: InspectorDayPayload,
+    payload: InspectorPayload,
     slots: string[] | null,
   ): TemplateResult {
-    const money = this._money(payload);
     const currency = currencyFromPriceUnit(payload.priceUnit);
     // The selection is on the inspector's current slot width; money is on the
     // rails' own 15-minute grid. A 60-minute selection therefore has to claim
     // all four quarters it spans, or its sums would count only the first.
     const railSlots = slots === null ? null : expandSlotsToNative(slots, this._slotMinutes);
-    const actual = sumMoney(money.actual, railSlots);
-    const forecast = sumMoney(money.forecast, railSlots);
     // Presence is asked of the *selection*, not the day. Reading it day-wide
     // would print "0.00" against an hour tonight simply because this morning
     // had actuals -- claiming a future hour has already cost nothing, which is
     // the one thing every other tile in this panel is careful not to do.
-    const wanted = railSlots === null ? null : new Set(railSlots);
-    const priced = (points: readonly MoneyPoint[]) =>
-      wanted === null
-        ? points.length > 0
-        : points.some((point) => wanted.has(point.slot));
-    const hasActual = priced(money.actual);
-    const hasForecast = priced(money.forecast);
+    const summed = (
+      points: readonly MoneyPoint[],
+      dayTotals: MoneyTotals | null,
+    ): { totals: MoneyTotals; present: boolean } => {
+      if (railSlots === null) {
+        // The zero stands in only where `present` is false, so no tile ever
+        // renders it -- an unpriced vintage prints an em dash instead.
+        const totals = dayTotals ?? { cost: 0, gain: 0, net: 0 };
+        return { totals, present: dayTotals !== null };
+      }
+      const wanted = new Set(railSlots);
+      return {
+        totals: sumMoney(points, railSlots),
+        present: points.some((point) => wanted.has(point.slot)),
+      };
+    };
+    const actualSide = summed(payload.series.moneyActual, payload.totals.moneyActual);
+    const forecastSide = summed(
+      payload.series.moneyForecast,
+      payload.totals.moneyForecast,
+    );
+    const actual = actualSide.totals;
+    const forecast = forecastSide.totals;
+    const hasActual = actualSide.present;
+    const hasForecast = forecastSide.present;
     const part = (totals: MoneyTotals, key: keyof MoneyTotals, present: boolean, title: string) => ({
       value: present ? `${totals[key].toFixed(2)} ${currency}`.trim() : "—",
       present,
@@ -3837,12 +3810,16 @@ export class HelmanSolarInspector extends LitElement {
       payload.series.gridActual ??= [];
       payload.series.batteryForecast ??= [];
       payload.series.batteryActual ??= [];
+      payload.series.moneyActual ??= [];
+      payload.series.moneyForecast ??= [];
       payload.totals.houseForecastWh ??= null;
       payload.totals.houseActualWh ??= null;
       payload.totals.gridForecastWh ??= null;
       payload.totals.gridActualWh ??= null;
       payload.totals.batteryForecastWh ??= null;
       payload.totals.batteryActualWh ??= null;
+      payload.totals.moneyActual ??= null;
+      payload.totals.moneyForecast ??= null;
       payload.availability.hasHouseForecast ??= false;
       payload.availability.hasHouseActual ??= false;
       payload.availability.hasBatterySocForecast ??= false;

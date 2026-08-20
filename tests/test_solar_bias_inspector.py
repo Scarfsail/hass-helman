@@ -144,14 +144,12 @@ def test_inspector_day_serializes_frontend_contract():
             "batterySocActual": [],
             "gridForecast": [],
             "gridActual": [],
-            "gridImportForecast": [],
-            "gridExportForecast": [],
-            "gridImportActual": [],
-            "gridExportActual": [],
             "batteryForecast": [],
             "batteryActual": [],
             "importPrice": [],
             "exportPrice": [],
+            "moneyActual": [],
+            "moneyForecast": [],
         },
         "totals": {
             "rawWh": 420.0,
@@ -163,6 +161,8 @@ def test_inspector_day_serializes_frontend_contract():
             "gridActualWh": None,
             "batteryForecastWh": None,
             "batteryActualWh": None,
+            "moneyActual": None,
+            "moneyForecast": None,
         },
         "availability": {
             "hasRawForecast": True,
@@ -741,6 +741,8 @@ def test_inspector_day_applies_current_profile_and_totals():
         "gridActualWh": None,
         "batteryForecastWh": None,
         "batteryActualWh": None,
+        "moneyActual": None,
+        "moneyForecast": None,
     }
     assert payload["range"]["minDate"] == "2026-04-13"
     assert payload["range"]["isToday"] is True

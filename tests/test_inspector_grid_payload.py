@@ -210,7 +210,7 @@ class TestGridSidesSurviveSeparately(unittest.TestCase):
 
 
 class TestLoadGridActualSides(unittest.IsolatedAsyncioTestCase):
-    async def test_the_meters_reach_the_payload_unnetted(self):
+    async def test_the_meters_are_returned_unnetted(self):
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
@@ -426,11 +426,3 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["availability"]["hasGridForecast"])
         self.assertEqual(payload["totals"]["gridActualWh"], 500.0)
         self.assertIsNone(payload["totals"]["gridForecastWh"])
-        # The two directions survive alongside the net they were netted into,
-        # which is what lets each be priced at its own rate.
-        self.assertEqual(
-            [p["valueWh"] for p in payload["series"]["gridImportActual"]], [300.0, 0.0]
-        )
-        self.assertEqual(
-            [p["valueWh"] for p in payload["series"]["gridExportActual"]], [0.0, 800.0]
-        )
