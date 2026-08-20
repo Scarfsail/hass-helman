@@ -18,7 +18,7 @@ import unittest
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -253,8 +253,8 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
                 service, "_load_battery_actual_for_date", AsyncMock(return_value=[])
             ), patch.object(
                 service,
-                "_load_house_consumer_breakdown_for_date",
-                AsyncMock(return_value=([], [])),
+                "_house_consumer_breakdown_for_date",
+                Mock(return_value=([], [])),
             ), patch.object(
                 service, "_load_recorded_price_rail", side_effect=_fake_rail
             ):

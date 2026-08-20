@@ -96,6 +96,8 @@ def _install_import_stubs() -> None:
         sys.modules["homeassistant.components.recorder.history"] = history_mod
     if not hasattr(history_mod, "state_changes_during_period"):
         history_mod.state_changes_during_period = lambda *args, **kwargs: {}
+    if not hasattr(history_mod, "get_significant_states"):
+        history_mod.get_significant_states = lambda *args, **kwargs: {}
 
     util_pkg = sys.modules.get("homeassistant.util")
     if util_pkg is None:

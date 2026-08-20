@@ -227,13 +227,9 @@ class TestLoadGridActualSides(unittest.IsolatedAsyncioTestCase):
             "sensor.grid_export": {_slot(6): 0.7},
         }
 
-        async def _fake_load(entity_id, target_date, local_tz):
-            return by_entity[entity_id]
-
-        with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            net, imported, exported = await service._load_grid_actual_for_date(
-                date(2026, 5, 10), PRAGUE
-            )
+        net, imported, exported = await service._load_grid_actual_for_date(
+            date(2026, 5, 10), by_entity
+        )
 
         self.assertAlmostEqual(net[0]["wh"], 400.0, places=6)
         self.assertAlmostEqual(imported[0]["wh"], 300.0, places=6)
@@ -285,11 +281,9 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
             "sensor.grid_export": {_slot(12): 0.8, _slot(13): 0.5},
         }
 
-        async def _fake_load(entity_id, target_date, local_tz):
-            return by_entity[entity_id]
-
-        with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+        points, _, _ = await service._load_grid_actual_for_date(
+            date(2026, 5, 10), by_entity
+        )
 
         # Positive is exported to the grid, negative is imported from it.
         self.assertEqual(
@@ -304,37 +298,28 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
     async def test_import_only_setup_still_yields_a_series(self):
         service = self._make_service(export_entity=None)
 
-        async def _fake_load(entity_id, target_date, local_tz):
-            self.assertEqual(entity_id, "sensor.grid_import")
-            return {_slot(6): 0.3}
-
-        with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+        points, _, _ = await service._load_grid_actual_for_date(
+            date(2026, 5, 10), {"sensor.grid_import": {_slot(6): 0.3}}
+        )
 
         self.assertEqual([(p["timestamp"], p["wh"]) for p in points], [(_slot(6).isoformat(), -300.0)])
 
     async def test_export_only_setup_still_yields_a_series(self):
         service = self._make_service(import_entity=None)
 
-        async def _fake_load(entity_id, target_date, local_tz):
-            self.assertEqual(entity_id, "sensor.grid_export")
-            return {_slot(12): 0.8}
-
-        with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+        points, _, _ = await service._load_grid_actual_for_date(
+            date(2026, 5, 10), {"sensor.grid_export": {_slot(12): 0.8}}
+        )
 
         self.assertEqual([(p["timestamp"], p["wh"]) for p in points], [(_slot(12).isoformat(), 800.0)])
 
     async def test_keeps_the_still_running_slot_for_the_daily_total(self):
         service = self._make_service()
 
-        async def _fake_load(entity_id, target_date, local_tz):
-            if entity_id == "sensor.grid_import":
-                return {_slot(9, 45): 0.2, _slot(10, 0): 0.1}
-            return {}
-
-        with patch.object(service, "_load_slot_energy_kwh", side_effect=_fake_load):
-            points, _, _ = await service._load_grid_actual_for_date(date(2026, 5, 10), PRAGUE)
+        points, _, _ = await service._load_grid_actual_for_date(
+            date(2026, 5, 10),
+            {"sensor.grid_import": {_slot(9, 45): 0.2, _slot(10, 0): 0.1}},
+        )
 
         # The loader reports every Wh the meter recorded; the running slot is
         # dropped from the drawn series where the payload is assembled, so the

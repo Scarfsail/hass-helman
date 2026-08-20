@@ -47,6 +47,7 @@ def _install_import_stubs() -> None:
     recorder_pkg.get_instance = lambda hass: _FakeRecorder()
     history_mod = _ensure("homeassistant.components.recorder.history")
     history_mod.state_changes_during_period = lambda *args, **kwargs: {}
+    history_mod.get_significant_states = lambda *args, **kwargs: {}
     components_pkg.recorder = recorder_pkg
     core_mod = _ensure("homeassistant.core")
     core_mod.HomeAssistant = object
