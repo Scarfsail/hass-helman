@@ -20,6 +20,9 @@ type HelmanConnection = HomeAssistant["connection"];
 
 const helmanStores = new WeakMap<HelmanConnection, HelmanStoreImpl>();
 
+/** In-flight reads a schedule write invalidates. */
+const SCHEDULE_DERIVED_KEYS = ["get_schedule"] as const;
+
 export interface HelmanStore {
     getSchedule(): Promise<SchedulePayload>;
     applySchedulePatches(patches: readonly HelmanSchedulePatch[]): Promise<SetScheduleResponse>;
@@ -82,12 +85,25 @@ class HelmanStoreImpl implements HelmanStore {
     }
 
     /**
-     * Drop the in-flight entries once a mutation settles, so a read issued after it
-     * cannot join a request that left before the write and come back pre-mutation.
-     * The dropped requests still resolve normally for whoever already awaits them.
+     * Drop the schedule-derived entries once a write settles, so a read issued
+     * after it starts a fresh request rather than joining one that may have left
+     * before the write. Requests already awaited still resolve normally.
+     *
+     * Only the schedule keys: a device tree, history buffer, appliance roster or
+     * controllable list is unaffected by a schedule write, and clearing those
+     * would re-open the very fan-out this map exists to collapse — a toggle while
+     * a dashboard is still loading would send both cards back for their own copy.
+     *
+     * Note the narrow gap this does *not* close: a read issued while the write is
+     * still in flight can still join a request that left before it. Nothing
+     * currently does that — `schedule-owner` awaits its pending read before
+     * writing — and closing it would mean clearing on issue rather than on
+     * settle, which drops entries the write may yet fail to change.
      */
     private _afterMutation<T>(mutation: Promise<T>): Promise<T> {
-        return mutation.finally(() => this._inFlight.clear());
+        return mutation.finally(() => {
+            for (const key of SCHEDULE_DERIVED_KEYS) this._inFlight.delete(key);
+        });
     }
 
     public getSchedule(): Promise<SchedulePayload> {
@@ -118,8 +134,15 @@ class HelmanStoreImpl implements HelmanStore {
         return this._dedupe("get_appliances", () => this._client.getAppliances());
     }
 
+    /**
+     * Never de-duplicated: a projection is a function of the schedule, and its
+     * caller re-reads it precisely *because* the schedule just changed. Sharing
+     * an in-flight request would hand back figures computed against the
+     * previous schedule, and the caller's generation check cannot tell — it was
+     * bumped before the join, so the stale answer looks current and is kept.
+     */
     public getApplianceProjections(): Promise<ApplianceProjectionsPayload> {
-        return this._dedupe("get_appliance_projections", () => this._client.getApplianceProjections());
+        return this._client.getApplianceProjections();
     }
 
     public getDeviceTree(): Promise<TreePayload> {
