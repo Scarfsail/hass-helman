@@ -642,12 +642,20 @@ class _FakeCoordinator:
         reference_time: datetime,
         day_contexts: dict | None = None,
         compute_inputs=None,
+        demand_schedule_document: ScheduleDocument | None = None,
     ) -> OptimizationSnapshot:
         self.snapshot_calls.append(
             {
                 "schedule_document": schedule_document,
                 "input_bundle": input_bundle,
                 "reference_time": reference_time,
+                # What house demand was read from: the working document unless
+                # lanes still ahead in the order were taken back from baseline.
+                "demand_schedule_document": (
+                    schedule_document
+                    if demand_schedule_document is None
+                    else demand_schedule_document
+                ),
             }
         )
         return self._snapshot_factory(
@@ -664,6 +672,7 @@ class _FakeCoordinator:
         reference_time: datetime,
         day_contexts: dict | None = None,
         compute_inputs=None,
+        demand_schedule_document: ScheduleDocument | None = None,
     ) -> OptimizationSnapshot:
         return self._build_automation_snapshot_from_schedule_pure(
             schedule_document=schedule_document,
@@ -671,6 +680,7 @@ class _FakeCoordinator:
             reference_time=reference_time,
             day_contexts=day_contexts,
             compute_inputs=compute_inputs,
+            demand_schedule_document=demand_schedule_document,
         )
 
     async def _persist_automation_result_locked(
@@ -2393,7 +2403,11 @@ class RunOptimizerLoopPurityTests(unittest.TestCase):
     def test_runs_in_worker_thread_without_hass(self) -> None:
         rebuilt_documents: list[ScheduleDocument] = []
 
-        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+        def build_snapshot(
+            document: ScheduleDocument,
+            *,
+            demand_schedule_document: ScheduleDocument | None = None,
+        ) -> OptimizationSnapshot:
             rebuilt_documents.append(document)
             return _make_snapshot(schedule_document=document)
 
@@ -2412,7 +2426,11 @@ class OptimizerLoopExecutorEquivalenceTests(unittest.IsolatedAsyncioTestCase):
     """Moving the loop across the executor boundary must not change its result."""
 
     async def test_executor_hop_matches_inline(self) -> None:
-        def build_snapshot(document: ScheduleDocument) -> OptimizationSnapshot:
+        def build_snapshot(
+            document: ScheduleDocument,
+            *,
+            demand_schedule_document: ScheduleDocument | None = None,
+        ) -> OptimizationSnapshot:
             return _make_snapshot(schedule_document=document)
 
         inline_result = _run_pure_loop(build_snapshot)
@@ -2438,3 +2456,146 @@ class OptimizerLoopExecutorEquivalenceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _make_appliance_optimizer_instance(
+    *,
+    optimizer_id: str,
+    controllable_id: str,
+) -> OptimizerInstanceConfig:
+    return _make_optimizer_instance(
+        optimizer_id=optimizer_id,
+        kind="appliance_runtime",
+        target={"controllable_id": controllable_id},
+        params={"daily_minimum": {"hours": 1.0}},
+    )
+
+
+class PendingApplianceDemandTests(unittest.IsolatedAsyncioTestCase):
+    """Issue #116: an optimizer must read the appliance demand of the lanes
+    *behind* it in the order, not a house stripped of every appliance run.
+
+    The run strips all automation-owned actions and re-plans from scratch, so
+    without this the first optimizer sizes the day against a house carrying none
+    of the load the same run is about to schedule.
+    """
+
+    APPLIANCE_ACTION = {"on": True, "setBy": "automation"}
+    INVERTER_ACTION = {"kind": "stop_charging", "setBy": "automation"}
+
+    def _baseline_document(self) -> ScheduleDocument:
+        return ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "inverter": dict(self.INVERTER_ACTION),
+                    "pool-filtration": dict(self.APPLIANCE_ACTION),
+                }
+            },
+        )
+
+    def _optimizers(self) -> tuple[OptimizerInstanceConfig, ...]:
+        return (
+            _make_optimizer_instance(optimizer_id="charge-hold", kind="charge_hold"),
+            _make_appliance_optimizer_instance(
+                optimizer_id="pool", controllable_id="pool-filtration"
+            ),
+        )
+
+    def test_pending_lanes_exclude_own_lane_and_non_appliance_kinds(self) -> None:
+        first, second = self._optimizers()
+        pending = pipeline_module._pending_appliance_ids_by_index((first, second))
+        # The battery-first optimizer reads the appliance lane behind it...
+        self.assertEqual(pending[0], ("pool-filtration",))
+        # ...while the appliance optimizer is re-planning that lane itself, so
+        # nothing is restored into its own view of it.
+        self.assertEqual(pending[1], ())
+        self.assertEqual(
+            pipeline_module._appliance_lane_ids((first, second)),
+            ("pool-filtration",),
+        )
+
+    async def _run(self):
+        coordinator = _FakeCoordinator(
+            schedule_document=self._baseline_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=_make_snapshot,
+        )
+        fresh_appliance_plan = ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                CURRENT_SLOT_ID: {
+                    "pool-filtration": {"on": False, "setBy": "automation"},
+                }
+            },
+        )
+
+        def _build_optimizer_side_effect(config, *, control_config, appliance_registry):
+            if config.id == "charge-hold":
+                # Writes nothing: this test is about what it *reads*.
+                return SimpleNamespace(
+                    optimize=Mock(side_effect=lambda snapshot, *a, **kw: snapshot.schedule)
+                )
+            return SimpleNamespace(
+                optimize=Mock(return_value=deepcopy(fresh_appliance_plan))
+            )
+
+        with patch.object(
+            pipeline_module,
+            "build_optimizer",
+            side_effect=_build_optimizer_side_effect,
+        ):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(*self._optimizers()),
+            ).run(reference_time=REFERENCE_TIME)
+        return coordinator, result
+
+    async def test_first_optimizer_reads_the_pending_appliance_load(self) -> None:
+        coordinator, result = await self._run()
+        self.assertTrue(result.ran_automation)
+        first_demand = coordinator.snapshot_calls[0]["demand_schedule_document"]
+        slot = schedule_document_to_dict(first_demand)["slots"][CURRENT_SLOT_ID]
+        # The lane the *later* optimizer owns is taken back from the baseline,
+        # so the house demand this optimizer ranks against is whole.
+        self.assertEqual(slot.get("pool-filtration"), self.APPLIANCE_ACTION)
+        # Its own lane stays stripped: it is re-planning that one, and restoring
+        # it would have it read its own previous placements as fixed.
+        self.assertNotIn("inverter", slot)
+
+    async def test_appliance_optimizer_does_not_see_its_own_stale_lane(self) -> None:
+        coordinator, _ = await self._run()
+        second_demand = coordinator.snapshot_calls[1]["demand_schedule_document"]
+        slots = schedule_document_to_dict(second_demand)["slots"]
+        self.assertNotIn("pool-filtration", slots.get(CURRENT_SLOT_ID, {}))
+
+    async def test_restored_demand_never_leaks_into_the_plan(self) -> None:
+        """The lane is restored for demand only.
+
+        ``snapshot.schedule`` is what an optimizer's writer builds its result on
+        top of, so a restored action placed there would ride back out as this
+        run's plan and resurrect the previous run's appliance placements.
+        """
+        coordinator, result = await self._run()
+        for call in coordinator.snapshot_calls:
+            slot = schedule_document_to_dict(call["schedule_document"])["slots"].get(
+                CURRENT_SLOT_ID, {}
+            )
+            self.assertNotEqual(slot.get("pool-filtration"), self.APPLIANCE_ACTION)
+        planned = schedule_document_to_dict(result.snapshot.schedule)["slots"]
+        self.assertNotEqual(
+            planned.get(CURRENT_SLOT_ID, {}).get("pool-filtration"),
+            self.APPLIANCE_ACTION,
+        )
+
+    async def test_final_rebuild_carries_the_finished_plan_only(self) -> None:
+        coordinator, result = await self._run()
+        final_document = coordinator.snapshot_calls[-1]["schedule_document"]
+        slot = schedule_document_to_dict(final_document)["slots"][CURRENT_SLOT_ID]
+        # Nothing pending any more: the appliance lane is the fresh plan, not
+        # the baseline it was restored from earlier in the loop.
+        self.assertEqual(slot["pool-filtration"], {"on": False, "setBy": "automation"})
+        self.assertEqual(
+            schedule_document_to_dict(result.snapshot.schedule),
+            schedule_document_to_dict(final_document),
+        )
