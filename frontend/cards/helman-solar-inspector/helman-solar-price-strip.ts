@@ -13,6 +13,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
+import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -485,7 +486,7 @@ export class HelmanSolarPriceStrip extends LitElement {
     ) {
         return cells.map((cell) => {
             const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
-            if (width < 16) {
+            if (!columnFitsLabel(width)) {
                 return "";
             }
             const centre = left + width / 2;
@@ -496,10 +497,7 @@ export class HelmanSolarPriceStrip extends LitElement {
                     const y = value >= 0
                         ? Math.max(valueY - 3, 9)
                         : Math.min(valueY + 9, ctx.height - 2);
-                    return svg`
-                        <text x=${centre} y=${y} text-anchor="middle" font-size="9"
-                              fill="var(--secondary-text-color)">${value.toFixed(1)}</text>
-                    `;
+                    return stripValueLabel({ x: centre, y, text: value.toFixed(1) });
                 }
                 const fitsInside = Math.abs(valueY - ctx.zeroY) >= LABEL_INSIDE_MIN_HEIGHT;
                 const y = value >= 0
@@ -514,11 +512,9 @@ export class HelmanSolarPriceStrip extends LitElement {
                 const onFill = fitsInside
                     ? { value, side }
                     : (shareSign ? outer : null);
-                return svg`
-                    <text x=${centre} y=${y} text-anchor="middle" font-size="9"
-                          font-weight="600" fill=${_inkOn(onFill)}
-                    >${value.toFixed(1)}</text>
-                `;
+                return stripValueLabel({
+                    x: centre, y, text: value.toFixed(1), ink: _inkOn(onFill), bold: true,
+                });
             });
         });
     }

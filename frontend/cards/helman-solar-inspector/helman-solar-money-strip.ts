@@ -13,6 +13,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
+import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
 import { EMPTY_MONEY, type MoneyPoint } from "./money-model";
 
 const MINUTES_PER_DAY = 1440;
@@ -335,14 +336,12 @@ export class HelmanSolarMoneyStrip extends LitElement {
     ) {
         return cells.map((cell) => {
             const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
-            if (width < 22) {
+            if (!columnFitsLabel(width)) {
                 return "";
             }
             const centre = left + width / 2;
-            const label = (amount: number, y: number) => svg`
-                <text x=${centre} y=${y} text-anchor="middle" font-size="9"
-                      fill="var(--secondary-text-color)">${this._formatAmount(amount)}</text>
-            `;
+            const label = (amount: number, y: number) =>
+                stripValueLabel({ x: centre, y, text: this._formatAmount(amount) });
             // An amount that rounds to nothing gets no label: "0.0" over a
             // hairline bar says less than the bar already did.
             const worthLabelling = (amount: number) => Math.abs(amount) >= 0.05;
