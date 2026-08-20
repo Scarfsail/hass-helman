@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..const import SCHEDULE_ACTION_EMPTY
@@ -39,17 +39,27 @@ def restore_automation_owned_appliance_actions(
     *,
     baseline: "ScheduleDocument",
     current: "ScheduleDocument",
-    appliance_id: str,
+    appliance_ids: "Iterable[str]",
 ) -> "ScheduleDocument":
+    """``current`` with the named appliance lanes taken back from ``baseline``.
+
+    Only lanes ``current`` says nothing about are restored, so a lane an
+    optimizer has already re-planned this run keeps its fresh actions.
+    """
     from ..scheduling.schedule import ControllableScheduleActions, ScheduleDocument
+
+    wanted = tuple(appliance_ids)
+    if not wanted:
+        return current
 
     restored_slots: dict[str, ControllableScheduleActions] = {}
     for slot_id in sorted(set(baseline.slots) | set(current.slots)):
         baseline_actions = baseline.slots.get(slot_id, {})
         restored = dict(current.slots.get(slot_id, {}))
-        baseline_action = baseline_actions.get(appliance_id)
-        if appliance_id not in restored and _is_automation_owned(baseline_action):
-            restored[appliance_id] = dict(baseline_action)
+        for appliance_id in wanted:
+            baseline_action = baseline_actions.get(appliance_id)
+            if appliance_id not in restored and _is_automation_owned(baseline_action):
+                restored[appliance_id] = dict(baseline_action)
         if not restored:
             continue
         restored_slots[slot_id] = restored

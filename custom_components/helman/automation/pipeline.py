@@ -334,9 +334,20 @@ class AutomationRunner:
                             include_condition_flags=True,
                         )
                     )
+                    # Nothing has run yet, so every appliance lane is still
+                    # pending: take them all back from the baseline so the day
+                    # classification and the static rails read the house the run
+                    # will actually have, not the one left by stripping.
                     initial_snapshot = (
                         await self._coordinator._build_automation_snapshot_from_schedule_locked(
                             schedule_document=schedule_document,
+                            demand_schedule_document=restore_automation_owned_appliance_actions(
+                                baseline=baseline_schedule_document,
+                                current=schedule_document,
+                                appliance_ids=_appliance_lane_ids(
+                                    self._automation_config.execution_optimizers
+                                ),
+                            ),
                             input_bundle=input_bundle,
                             reference_time=active_reference_time,
                             compute_inputs=compute_inputs,
@@ -463,7 +474,11 @@ class AutomationRunner:
             )
         control_config = self._coordinator._read_schedule_control_config()
 
-        def build_snapshot(doc: ScheduleDocument) -> OptimizationSnapshot:
+        def build_snapshot(
+            doc: ScheduleDocument,
+            *,
+            demand_schedule_document: ScheduleDocument | None = None,
+        ) -> OptimizationSnapshot:
             # Pure, hass-free: every live value comes from ``compute_inputs``.
             return self._coordinator._build_automation_snapshot_from_schedule_pure(
                 schedule_document=doc,
@@ -471,6 +486,7 @@ class AutomationRunner:
                 reference_time=reference_time,
                 day_contexts=day_contexts,
                 compute_inputs=compute_inputs,
+                demand_schedule_document=demand_schedule_document,
             )
 
         return await self._coordinator._hass.async_add_executor_job(
@@ -529,6 +545,88 @@ class AutomationRunner:
         return finalized
 
 
+#: Optimizer kind that owns an appliance lane. Only these lanes are taken back
+#: from the baseline: the inverter lane is what the battery-first optimizers are
+#: re-planning, so restoring it would hand them their own previous run's holds.
+_APPLIANCE_OPTIMIZER_KIND = "appliance_runtime"
+
+
+def _appliance_lane_ids(
+    execution_optimizers: "Sequence[OptimizerInstanceConfig]",
+) -> tuple[str, ...]:
+    """Every appliance lane this run will re-plan.
+
+    All of them are still pending before the loop starts, which is what the
+    initial snapshot has to assume.
+    """
+    return tuple(
+        optimizer.controllable_id
+        for optimizer in execution_optimizers
+        if optimizer.kind == _APPLIANCE_OPTIMIZER_KIND
+    )
+
+
+def _pending_appliance_ids_by_index(
+    execution_optimizers: "Sequence[OptimizerInstanceConfig]",
+) -> tuple[tuple[str, ...], ...]:
+    """For each optimizer, the appliance lanes the ones *after* it will write.
+
+    Every run strips all automation-owned actions and re-plans from scratch, so
+    an optimizer sees only the lanes of the optimizers before it. That is right
+    for the lane it owns — it is re-planning it — but wrong for the house demand
+    it reads: ``charge_hold`` runs first and would size the day's charge against
+    a house carrying none of the appliance load this same run is about to
+    schedule, inflating every slot's surplus by the appliances' combined power
+    and cutting the day's charge set short (issue #116). Naming the still
+    pending lanes here lets each rebuild take them back from the baseline, so
+    demand is whole wherever in the order an optimizer sits.
+
+    The entry for an optimizer never includes its own lane: it is re-planning
+    that one, and restoring it would have the optimizer read its own previous
+    run's placements as if they were fixed.
+    """
+    lane_by_index = [
+        optimizer.controllable_id
+        if optimizer.kind == _APPLIANCE_OPTIMIZER_KIND
+        else None
+        for optimizer in execution_optimizers
+    ]
+    return tuple(
+        tuple(lane for lane in lane_by_index[index + 1 :] if lane is not None)
+        for index in range(len(lane_by_index))
+    )
+
+
+def _build_pending_aware_snapshot(
+    *,
+    build_snapshot: "Callable[..., OptimizationSnapshot]",
+    baseline_schedule_document: ScheduleDocument,
+    working_schedule_document: ScheduleDocument,
+    pending_appliance_ids_by_index: tuple[tuple[str, ...], ...],
+    next_index: int,
+) -> OptimizationSnapshot:
+    """Rebuild for the optimizer at ``next_index``, appliance demand intact.
+
+    Past the end of the loop nothing is pending and this is a plain rebuild of
+    the finished plan.
+    """
+    pending = (
+        pending_appliance_ids_by_index[next_index]
+        if next_index < len(pending_appliance_ids_by_index)
+        else ()
+    )
+    if not pending:
+        return build_snapshot(working_schedule_document)
+    return build_snapshot(
+        working_schedule_document,
+        demand_schedule_document=restore_automation_owned_appliance_actions(
+            baseline=baseline_schedule_document,
+            current=working_schedule_document,
+            appliance_ids=pending,
+        ),
+    )
+
+
 def run_optimizer_loop_pure(
     *,
     execution_optimizers: "Sequence[OptimizerInstanceConfig]",
@@ -538,7 +636,7 @@ def run_optimizer_loop_pure(
     reference_time: datetime,
     control_config: Any,
     appliance_registry: Any,
-    build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
+    build_snapshot: "Callable[..., OptimizationSnapshot]",
 ) -> _PipelineExecutionResult:
     """Pure, synchronous optimizer loop — safe to run in an executor.
 
@@ -549,11 +647,14 @@ def run_optimizer_loop_pure(
     working_schedule_document = schedule_document
     snapshot = initial_snapshot
     optimizer_summaries: list[OptimizerRunSummary] = []
+    pending_appliance_ids_by_index = _pending_appliance_ids_by_index(
+        execution_optimizers
+    )
     trace = OptimizerTrace(slot_ids=iter_horizon_slot_ids(reference_time))
     trace.set_static_rails(
         _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
     )
-    for optimizer_config in execution_optimizers:
+    for index, optimizer_config in enumerate(execution_optimizers):
         optimizer_started_at = time.perf_counter()
         trace.begin_step(
             optimizer_config.id,
@@ -596,9 +697,15 @@ def run_optimizer_loop_pure(
                 working_schedule_document = restore_automation_owned_appliance_actions(
                     baseline=baseline_schedule_document,
                     current=working_schedule_document,
-                    appliance_id=err.appliance_id,
+                    appliance_ids=(err.appliance_id,),
                 )
-                snapshot = build_snapshot(working_schedule_document)
+                snapshot = _build_pending_aware_snapshot(
+                    build_snapshot=build_snapshot,
+                    baseline_schedule_document=baseline_schedule_document,
+                    working_schedule_document=working_schedule_document,
+                    pending_appliance_ids_by_index=pending_appliance_ids_by_index,
+                    next_index=index + 1,
+                )
             except Exception as rebuild_err:
                 trace.end_step(status="failed")
                 raise _build_optimizer_error(
@@ -645,7 +752,16 @@ def run_optimizer_loop_pure(
                 candidate_document=candidate_schedule_document,
                 execution_enabled=working_schedule_document.execution_enabled,
             )
-            snapshot = build_snapshot(working_schedule_document)
+            # Built for whoever runs next, so the lanes still ahead of them are
+            # present as demand. After the last step nothing is pending and this
+            # is the finished plan, which is what the run result reports.
+            snapshot = _build_pending_aware_snapshot(
+                build_snapshot=build_snapshot,
+                baseline_schedule_document=baseline_schedule_document,
+                working_schedule_document=working_schedule_document,
+                pending_appliance_ids_by_index=pending_appliance_ids_by_index,
+                next_index=index + 1,
+            )
         except Exception as err:
             trace.end_step(status="failed")
             raise _build_optimizer_error(
