@@ -239,7 +239,11 @@ class TestConfigFallbackFill(unittest.TestCase):
 
 
 class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
-    """The one read path both rails go through, freed of "today"."""
+    """What a boundary sample means for a rate, over a caller-named window.
+
+    Driven through the batched reader with a single entity, because that is the
+    one read path both rails go through now.
+    """
 
     def setUp(self):
         self.recorder = importlib.import_module(
@@ -249,10 +253,10 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
     async def _sample(self, states, *, local_start, local_end):
         captured: dict[str, object] = {}
 
-        def _fake_query(hass, start, end, entity_id, *args):
+        def _fake_query(hass, start, end, **kwargs):
             captured["start"] = start
             captured["end"] = end
-            return {entity_id: states}
+            return {EXPORT_ENTITY: states}
 
         class _Recorder:
             @staticmethod
@@ -260,16 +264,16 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
                 return func()
 
         with patch.object(
-            self.recorder, "state_changes_during_period", _fake_query
+            self.recorder, "get_significant_states", _fake_query
         ), patch.object(self.recorder, "get_instance", lambda hass: _Recorder()):
-            samples = await self.recorder.query_slot_boundary_state_values_for_range(
+            samples = await self.recorder.query_slot_boundary_state_values_for_entities(
                 object(),
-                EXPORT_ENTITY,
+                [EXPORT_ENTITY],
                 local_start=local_start,
                 local_end=local_end,
                 interval_minutes=15,
             )
-        return samples, captured
+        return samples.get(EXPORT_ENTITY, {}), captured
 
     async def test_carries_the_last_state_forward_across_boundaries(self):
         # A price entity writes only when the price changes, so most boundaries
