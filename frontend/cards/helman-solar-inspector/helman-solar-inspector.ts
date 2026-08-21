@@ -569,17 +569,25 @@ export class HelmanSolarInspector extends LitElement {
    */
   private readonly _breakdownGroups = new Map<string, DeviceNode>();
   /**
-   * How far navigation may travel, as the last successful load of *either* view
-   * reported it. Kept apart from the payload so the day pills stay put while the
-   * next day loads — the payload is cleared for the duration, and a header that
-   * emptied on every click would reflow the whole card under the pointer.
+   * How far navigation may travel, kept once per view because the two answers
+   * genuinely differ. The aggregate views are bounded by the long-term
+   * statistics, which the recorder keeps indefinitely; the day view is bounded
+   * by the raw states behind its actuals, which the recorder purges. One field
+   * would mean whichever view loaded last decided the other's floor — and
+   * drilling from a month into an already-loaded day skips the day's own load,
+   * so the day view would keep the deep floor and offer a back arrow full of
+   * days it cannot draw.
+   *
+   * Kept apart from the payload so the day pills stay put while the next day
+   * loads — the payload is cleared for the duration, and a header that emptied
+   * on every click would reflow the whole card under the pointer.
    *
    * Only the bounds. The day payload's `canGoPrevious`/`isToday` and friends
    * describe one particular day and are read from that payload where they are
-   * needed; both payloads answer with the same bounds, so which view filled this
-   * in does not matter.
+   * needed.
    */
-  @state() private _range: NavigationRange | null = null;
+  @state() private _dayRange: NavigationRange | null = null;
+  @state() private _spanRange: NavigationRange | null = null;
   /** Whole-day measurements for the past days the pill row is showing. */
   @state() private _historyDays: readonly SolarInspectorHistoryDay[] = EMPTY_HISTORY_DAYS;
   /**
@@ -1455,7 +1463,7 @@ export class HelmanSolarInspector extends LitElement {
   private _renderNavigation() {
     // Both computed in `willUpdate`; nothing is derived or assigned here.
     const today = this._todayKey;
-    const minDate = this._range?.minDate ?? null;
+    const minDate = this._activeRange()?.minDate ?? null;
     // Spans, not days: the aggregate views step a month or a year at a time, so
     // a floor that falls mid-span still leaves that span reachable. Comparing
     // raw dates said otherwise and disagreed with the clamp in `_moveSpan`,
@@ -1645,6 +1653,16 @@ export class HelmanSolarInspector extends LitElement {
     return this._viewMode === "day" ? this._loading : this._spanLoading;
   }
 
+  /**
+   * The bounds the view on screen navigates by.
+   *
+   * `null` until that view has loaded once, which the callers read as "no floor
+   * known yet" rather than as a floor of any particular depth.
+   */
+  private _activeRange(): NavigationRange | null {
+    return this._viewMode === "day" ? this._dayRange : this._spanRange;
+  }
+
   /** What one column is in the current view; the day view has no aggregate. */
   private _spanBucket(): "day" | "month" {
     return this._viewMode === "year" ? "month" : "day";
@@ -1703,7 +1721,7 @@ export class HelmanSolarInspector extends LitElement {
     }
     const today = this._todayIso();
     const target = this._addSpans(this._selectedDate || today, delta);
-    const minDate = this._range?.minDate ?? null;
+    const minDate = this._spanRange?.minDate ?? null;
     const clamped = delta < 0
       ? (minDate !== null && target < minDate ? this._spanStart(minDate) : target)
       : (target > today ? this._spanStart(today) : target);
@@ -1790,7 +1808,7 @@ export class HelmanSolarInspector extends LitElement {
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
       // Same stale-request guard as the payload above: a span view is a way into
       // the card, so this is where the floor arrives when no day was ever loaded.
-      if (result?.range) this._range = result.range;
+      if (result?.range) this._spanRange = result.range;
     } catch (err: any) {
       if (this._spanRequestKey !== key) return;
       this._spanError = err?.message || this._t("bias_correction.inspector.load_failed");
@@ -4468,7 +4486,7 @@ export class HelmanSolarInspector extends LitElement {
       if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
         this._payload = payload;
         this._emitWatchedEntities(payload);
-        this._range = payload.range;
+        this._dayRange = payload.range;
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),
           this._slotSelection,
@@ -4504,7 +4522,7 @@ export class HelmanSolarInspector extends LitElement {
   private _moveWeek(delta: number) {
     const today = this._todayIso();
     const target = this._addDays(this._selectedDate || today, delta * 7);
-    const minDate = this._range?.minDate ?? null;
+    const minDate = this._dayRange?.minDate ?? null;
     const clamped = delta < 0
       ? (minDate !== null && target < minDate ? minDate : target)
       : (target > today ? today : target);
@@ -4528,7 +4546,7 @@ export class HelmanSolarInspector extends LitElement {
   private _pillWindow(today: string): { start: string; end: string } {
     const selected = this._selectedDate || today;
     if (selected >= today) {
-      return { start: today, end: this._range?.maxDate ?? today };
+      return { start: today, end: this._dayRange?.maxDate ?? today };
     }
 
     const daysBack = Math.round(

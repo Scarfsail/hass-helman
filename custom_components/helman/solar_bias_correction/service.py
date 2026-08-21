@@ -7,7 +7,7 @@ from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
@@ -395,7 +395,9 @@ class SolarBiasCorrectionService:
         # The range travels with every answer, empty ones included: it is what
         # the card navigates by, and a span with no rows is exactly when the
         # reader is about to press an arrow.
-        span_min_date, span_max_date = await self._async_navigation_range(local_now)
+        span_min_date, span_max_date = await self._async_navigation_range(
+            local_now, view="span"
+        )
         navigation_range = navigation_range_payload(
             span_min_date.isoformat(), span_max_date.isoformat()
         )
@@ -602,9 +604,7 @@ class SolarBiasCorrectionService:
         this whole change exists to fix. Queueing behind the read instead means
         every caller sees the same answer.
         """
-        fallback = local_now.date() - timedelta(
-            days=max(self._metadata.usable_days, 0)
-        )
+        fallback = self._trainer_window_floor(local_now)
 
         if self._history_floor_is_stale(local_now):
             async with self._history_floor_lock:
@@ -615,6 +615,19 @@ class SolarBiasCorrectionService:
 
         probed = self._history_floor
         return fallback if probed is None else min(probed, fallback)
+
+    def _trainer_window_floor(self, local_now: datetime) -> date:
+        """The oldest day the bias trainer demonstrably read.
+
+        ``usable_days`` counts training samples it actually built, and the
+        trainer reads raw states just as the day view does, so this date is
+        *evidence* that those states exist rather than a guess about retention.
+        Both floors lean on it, for opposite reasons: the aggregate floor uses it
+        as the fallback when the recorder has no statistics to point at, and the
+        day floor uses it as the guarantee that a day the trainer read is never
+        hidden.
+        """
+        return local_now.date() - timedelta(days=max(self._metadata.usable_days, 0))
 
     def _history_floor_is_stale(self, local_now: datetime) -> bool:
         cached_at = self._history_floor_probed_at
@@ -658,24 +671,100 @@ class SolarBiasCorrectionService:
             local_tz=ZoneInfo(str(self._hass.config.time_zone)),
         )
 
-    async def _async_navigation_range(self, local_now: datetime) -> tuple[date, date]:
+    def _purge_horizon_days(self) -> int | None:
+        """How many days of raw state the recorder is keeping, or ``None``.
+
+        ``keep_days`` is the recorder's own ``purge_keep_days`` setting, and it
+        is the same number ``Recorder._purge`` turns into
+        ``utcnow() - timedelta(days=self.keep_days)``. Reading it means the day
+        view's floor *is* the purge horizon rather than a guess about where the
+        purge has got to.
+
+        ``None`` for every way of there not being a horizon to speak of -- the
+        recorder integration is not set up, ``get_instance`` raises, the
+        attribute is missing or is not a usable count, or ``auto_purge`` is off
+        and nothing is being trimmed at all. Every one of them is answered the
+        same way by the caller: leave the day view on the aggregate floor, which
+        is what it had before this method existed, and which errs towards
+        offering a day rather than hiding one.
+
+        ``auto_purge`` is the case worth spelling out, because ``keep_days``
+        keeps its configured value while purging is disabled. Flooring on it
+        then would hide raw states the recorder is deliberately still holding.
+        The recorder's own schema pins ``keep_days`` at one day or more
+        (``vol.Range(min=1)``), so anything below that is a value this code does
+        not understand rather than a shorter horizon.
+        """
+        try:
+            from homeassistant.components.recorder import get_instance
+
+            recorder = get_instance(self._hass)
+            if not getattr(recorder, "auto_purge", True):
+                return None
+            keep_days = recorder.keep_days
+        except Exception:
+            return None
+        if isinstance(keep_days, bool) or not isinstance(keep_days, int):
+            return None
+        return keep_days if keep_days >= 1 else None
+
+    def _day_view_floor(self, local_now: datetime, aggregate_floor: date) -> date:
+        """The oldest day the *day* view may be browsed back to.
+
+        Shallower than the aggregate floor, and deliberately so. The two views
+        read two different stores: the month and year views read long-term
+        statistics, which the recorder keeps indefinitely, while the day view
+        reads raw states through ``load_actuals_for_day``, which the recorder
+        purges at ``purge_keep_days``. Handing the day view the statistics floor
+        would give it a back arrow offering hundreds of days that can only ever
+        draw empty.
+
+        Two guards sit around the purge horizon, and neither is decoration:
+
+        * the ``min`` with the trainer's window, because a day the trainer
+          demonstrably read must not be hidden -- it read raw states too, so
+          ``usable_days`` is evidence those states are there whatever the
+          retention setting says about them;
+        * the outer ``max``, because the day view can never usefully reach
+          further back than the statistics do, and a purge horizon longer than
+          the recorded history would otherwise offer days that predate the
+          meters entirely.
+        """
+        keep_days = self._purge_horizon_days()
+        if keep_days is None:
+            return aggregate_floor
+        purge_horizon = local_now.date() - timedelta(days=keep_days)
+        trainer_floor = self._trainer_window_floor(local_now)
+        return max(aggregate_floor, min(purge_horizon, trainer_floor))
+
+    async def _async_navigation_range(
+        self, local_now: datetime, *, view: Literal["day", "span"]
+    ) -> tuple[date, date]:
         """The dates the inspector's navigation may move between, inclusive.
 
-        One definition, asked by both payloads, so the day view and the aggregate
-        views cannot disagree about where history ends. Forward is unchanged:
-        one day per configured daily-energy entity, which is how far the forecast
-        reaches.
+        Forward is one answer for everyone: one day per configured daily-energy
+        entity, which is how far the forecast reaches. Backwards is two, because
+        the views read two different stores and are bounded by two different
+        retention horizons -- see :meth:`_day_view_floor`. ``view`` names which
+        payload is asking, and that is the only distinction that exists here.
+
+        Both floors still come from one place, so neither payload can invent its
+        own: the day floor is derived *from* the aggregate floor and can only be
+        shallower than it, never deeper and never unrelated.
         """
         max_date = local_now.date() + timedelta(
             days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
         )
-        return await self._async_history_floor(local_now), max_date
+        aggregate_floor = await self._async_history_floor(local_now)
+        if view == "span":
+            return aggregate_floor, max_date
+        return self._day_view_floor(local_now, aggregate_floor), max_date
 
     async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
         target_date = date.fromisoformat(raw_date)
         local_now = dt_util.as_local(dt_util.now())
         today = local_now.date()
-        min_date, max_date = await self._async_navigation_range(local_now)
+        min_date, max_date = await self._async_navigation_range(local_now, view="day")
 
         status, effective_variant, _fallback_reason = self._resolve_status()
         timezone = ZoneInfo(str(self._hass.config.time_zone))

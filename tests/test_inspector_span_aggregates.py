@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import contextmanager
 import types
 import unittest
 from dataclasses import replace
@@ -76,9 +77,13 @@ def _install_import_stubs() -> None:
         return func(*args)
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
+    # One shared instance rather than a fresh namespace per call, so a test can
+    # give the recorder a purge horizon. ``keep_days`` and ``auto_purge`` are
+    # absent by default, which is how the fake says "no horizon to be had".
+    recorder_mod.instance_stub = SimpleNamespace(
         async_add_executor_job=_run_in_executor
     )
+    recorder_mod.get_instance = lambda hass: recorder_mod.instance_stub
     sys.modules["homeassistant.components.recorder"] = recorder_mod
 
     history_mod = types.ModuleType("homeassistant.components.recorder.history")
@@ -150,6 +155,20 @@ _install_import_stubs()
 
 #: The stubbed ``dt_util`` module, so a test can move the clock.
 DT_STUB = sys.modules["homeassistant.util.dt"]
+#: The stubbed recorder instance, so a test can give it a purge horizon.
+RECORDER_STUB = sys.modules["homeassistant.components.recorder"].instance_stub
+
+
+@contextmanager
+def _purging_after(keep_days: int, *, auto_purge: bool = True):
+    """Give the fake recorder a purge horizon for the duration of a test."""
+    RECORDER_STUB.keep_days = keep_days
+    RECORDER_STUB.auto_purge = auto_purge
+    try:
+        yield
+    finally:
+        del RECORDER_STUB.keep_days
+        del RECORDER_STUB.auto_purge
 
 import importlib  # noqa: E402
 
@@ -1148,19 +1167,61 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["days"], [])
         self.assertEqual(payload["range"]["minDate"], "2024-03-01")
 
-    async def test_the_day_view_and_the_span_views_are_told_the_same_floor(self):
-        # One bound, all three views. A day view with a shallower floor than the
-        # month view would let a reader drill from a reachable month into an
-        # unreachable day.
+    async def test_the_day_view_stops_at_the_purge_horizon_and_the_spans_do_not(self):
+        # The two floors differ on purpose, because the two views read two
+        # different stores. The month and year views read long-term statistics,
+        # which the recorder keeps indefinitely; the day view reads raw states
+        # through load_actuals_for_day, which the recorder purges at
+        # purge_keep_days. One deep floor would give the day view a back arrow
+        # offering hundreds of days that can only ever draw empty.
         _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
-        service = _make_service()
+        service = _with_usable_days(_make_service(), 5)
 
-        span = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
-        day = await service.async_get_inspector_day("2026-05-25")
+        with _purging_after(10):
+            span = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+            day = await service.async_get_inspector_day("2026-05-25")
 
-        self.assertEqual(day["range"]["minDate"], span["range"]["minDate"])
+        self.assertEqual(span["range"]["minDate"], "2024-03-01")
+        self.assertEqual(day["range"]["minDate"], "2026-05-15")
+        # Forward is one answer for everyone; only the floor is per view.
         self.assertEqual(day["range"]["maxDate"], span["range"]["maxDate"])
-        self.assertEqual(day["range"]["minDate"], "2024-03-01")
         # The day payload keeps its own four extra keys; the shared helper only
         # owns the two bounds.
         self.assertTrue(day["range"]["canGoPrevious"])
+
+    async def test_a_day_the_trainer_read_is_never_hidden_by_the_purge_horizon(self):
+        # usable_days counts samples the trainer actually built, and it reads raw
+        # states just as the day view does -- so it is evidence those states are
+        # there, whatever the retention setting says about them. Sixty days of
+        # them against a ten-day horizon: the evidence wins.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 60)
+
+        with _purging_after(10):
+            day = await service.async_get_inspector_day("2026-05-25")
+
+        self.assertEqual(day["range"]["minDate"], "2026-03-26")
+
+    async def test_without_a_purge_horizon_the_day_view_keeps_the_deep_floor(self):
+        # No recorder to ask, so there is no horizon to floor on. Erring towards
+        # offering a day rather than hiding one is the safe direction, and it is
+        # what the day view did before the horizon was consulted at all.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 5)
+
+        day = await service.async_get_inspector_day("2026-05-25")
+
+        self.assertEqual(day["range"]["minDate"], "2024-03-01")
+
+    async def test_purging_switched_off_is_not_a_horizon(self):
+        # keep_days keeps its configured value while auto_purge is off, so
+        # flooring on it would hide raw states the recorder is deliberately
+        # still holding.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 5)
+
+        with _purging_after(10, auto_purge=False):
+            day = await service.async_get_inspector_day("2026-05-25")
+
+        self.assertEqual(day["range"]["minDate"], "2024-03-01")
+

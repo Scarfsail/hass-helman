@@ -48,11 +48,17 @@ async function mountInspector(
     holes = false,
     variant: "" | "no-gain" | "over-soc" | "no-energy" = "",
     minDate = "2020-01-01",
+    dayMinDate: string | null = null,
 ): Promise<void> {
-    await page.evaluate(([punchHoles, shape, floor]: [boolean, string, string]) => {
+    await page.evaluate(([punchHoles, shape, floor, rawDayFloor]: [boolean, string, string, string | null]) => {
         const today = new Date();
         const iso = (date: Date) => date.toISOString().slice(0, 10);
         const date = iso(today);
+        // The backend answers the two views with two different floors: the
+        // aggregates are bounded by long-term statistics, the day view by the
+        // raw states the recorder purges. Same value unless a test says
+        // otherwise, so every existing case is unaffected.
+        const dayFloor = rawDayFloor ?? floor;
 
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
         const price: Array<{ slot: string; value: number }> = [];
@@ -74,7 +80,7 @@ async function mountInspector(
             trainedAt: null,
             priceUnit: "CZK/kWh",
             range: {
-                minDate: floor, maxDate: date, canGoPrevious: true, canGoNext: false,
+                minDate: dayFloor, maxDate: date, canGoPrevious: true, canGoNext: false,
                 isToday: true, isFuture: false,
             },
             series: {
@@ -161,9 +167,10 @@ async function mountInspector(
                         bucket: msg.bucket ?? "day",
                         currency: "CZK",
                         days: spanDays(msg.start_date, msg.end_date, msg.bucket ?? "day"),
-                        // The span payload carries the same bounds the day
-                        // payload does, which is what lets the aggregate views
-                        // navigate without a day load having happened first.
+                        // The span payload carries its own bounds, which is
+                        // what lets the aggregate views navigate without a day
+                        // load having happened first -- and what keeps the day
+                        // view's shallower floor out of their way.
                         range: { minDate: floor, maxDate: date },
                     };
                 }
@@ -175,7 +182,7 @@ async function mountInspector(
             },
         };
         document.body.appendChild(el);
-    }, [holes, variant, minDate] as [boolean, string, string]);
+    }, [holes, variant, minDate, dayMinDate] as [boolean, string, string, string | null]);
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
@@ -408,6 +415,45 @@ test.describe("solar inspector aggregate views", () => {
             }),
         );
         expect(await canPageBack(page)).toBe(false);
+    });
+
+    /**
+     * The two views are bounded by two different stores, so the card keeps two
+     * floors rather than one field whichever view loaded last overwrote.
+     *
+     * Drilling is the path that catches it: coming back to a day the card
+     * already holds skips the day's own load, so a single field would still be
+     * carrying the span's floor -- and the day view's back arrow would offer
+     * days from before the recorder's raw states, every one of them empty.
+     */
+    test("returning to the day view navigates by the day's floor, not the span's", async ({ page }) => {
+        const iso = (daysBack: number) => {
+            const day = new Date();
+            day.setUTCDate(day.getUTCDate() - daysBack);
+            return day.toISOString().slice(0, 10);
+        };
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`, iso(3));
+
+        // Into the month view and straight back out, so the span load has
+        // happened and the day the card holds is still the one it wants.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await clickStop(page, STOP_SLOT_60);
+        await waitForDayChart(page);
+
+        await pageBack(page);
+        await page.waitForFunction(
+            (floor) => ((window as any).__dayRequests as string[]).includes(floor),
+            iso(3),
+            { timeout: 2000 },
+        );
+
+        // A week back would be day seven; the day floor is day three, and it is
+        // the day floor that clamps.
+        const requests = await page.evaluate(() => (window as any).__dayRequests as string[]);
+        expect(requests[requests.length - 1]).toBe(iso(3));
+        expect(requests).not.toContain(iso(7));
     });
 
     test("the year view draws one column per month", async ({ page }) => {
