@@ -154,6 +154,7 @@ BATTERY_DISCHARGE_METER = "sensor.batt_discharge"
 BATTERY_SOC = "sensor.batt_soc"
 IMPORT_PRICE = "sensor.helman_grid_import_price"
 EXPORT_PRICE = "sensor.spot_sell_price"
+HELMAN_EXPORT_PRICE = "sensor.helman_grid_export_price"
 
 
 def _row(local_hour: datetime, **fields) -> dict:
@@ -322,6 +323,7 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                 BATTERY_DISCHARGE_METER,
                 BATTERY_SOC,
                 IMPORT_PRICE,
+                HELMAN_EXPORT_PRICE,
                 EXPORT_PRICE,
             },
         )
@@ -608,6 +610,62 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["moneyCost"], 2.0)
         # Exported nothing rather than earned nothing.
         self.assertIsNone(second["moneyGain"])
+
+    async def test_the_export_rate_prefers_helmans_mirror_hour_by_hour(self):
+        """The mirror wins where it has the hour; the configured entity fills the rest.
+
+        The reason the mirror exists at all is that a sell-price entity usually
+        declares no ``state_class`` and therefore has no statistics -- but some
+        setups' do, and the mirror only reaches back as far as its back-fill got.
+        A per-series choice would either blank the hours only one of them covers
+        or throw away Helman's own record; a per-hour one keeps both.
+        """
+        _set_rows(
+            {
+                GRID_EXPORT_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    # 10:00: both series have the hour.
+                    _row(_hour("2026-04-23T10:00:00+02:00"), state=1.0),
+                    # 11:00: only the configured entity does.
+                    _row(_hour("2026-04-23T11:00:00+02:00"), state=3.0),
+                    # 12:00: only the mirror does.
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=7.0),
+                ],
+                HELMAN_EXPORT_PRICE: [
+                    _row(_hour("2026-04-23T10:00:00+02:00"), mean=2.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), mean=5.0),
+                ],
+                EXPORT_PRICE: [
+                    # Deliberately disagreeing on the shared hour: the mirror is
+                    # the series Helman archived, so it is the one that counts.
+                    _row(_hour("2026-04-23T10:00:00+02:00"), mean=99.0),
+                    _row(_hour("2026-04-23T11:00:00+02:00"), mean=3.0),
+                ],
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        # 1 kWh at the mirror's 2.0, 2 kWh at the configured entity's 3.0, and
+        # 4 kWh at the mirror's 5.0.
+        self.assertEqual(payload["days"][0]["moneyGain"], 28.0)
+
+    async def test_the_export_rate_falls_back_when_the_mirror_has_no_rows(self):
+        _set_rows(
+            {
+                GRID_EXPORT_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T10:00:00+02:00"), state=2.0),
+                ],
+                EXPORT_PRICE: [_row(_hour("2026-04-23T10:00:00+02:00"), mean=1.5)],
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        self.assertEqual(payload["days"][0]["moneyGain"], 3.0)
 
     async def test_a_window_boundary_inside_an_hour_is_averaged_across_it(self):
         # The night rate ends at 08:30, so the 08:00 hour is half at 2.0 and

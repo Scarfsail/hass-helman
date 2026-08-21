@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..const import GRID_IMPORT_PRICE_ENTITY_ID
+from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
 from .forecast_history import load_forecast_points_for_day, load_trainer_samples
@@ -413,6 +413,11 @@ class SolarBiasCorrectionService:
         charge_entity = _entity_id(self._battery_charge_energy_entity_id_provider)
         discharge_entity = _entity_id(self._battery_discharge_energy_entity_id_provider)
         soc_entity = _entity_id(self._battery_soc_entity_id_provider)
+        # Two export rate sources, asked for together and resolved per hour
+        # below: the mirror Helman publishes, whose statistics are the only ones
+        # that exist on a setup whose sell-price entity declares no
+        # ``state_class``, and the configured entity itself, which has its own
+        # statistics only where the user's setup happens to produce them.
         export_price_entity = self._grid_export_price_entity_id()
 
         from ..recorder_statistics_span import SpanStatistics, query_hourly_statistics
@@ -429,6 +434,7 @@ class SolarBiasCorrectionService:
                     discharge_entity,
                     soc_entity,
                     GRID_IMPORT_PRICE_ENTITY_ID,
+                    GRID_EXPORT_PRICE_ENTITY_ID,
                     export_price_entity,
                 ],
                 local_start=local_start,
@@ -454,7 +460,10 @@ class SolarBiasCorrectionService:
             span.energy_for(import_entity),
             span.energy_for(export_entity),
             span.rows_for(GRID_IMPORT_PRICE_ENTITY_ID),
-            span.rows_for(export_price_entity),
+            _prefer_rows(
+                span.rows_for(GRID_EXPORT_PRICE_ENTITY_ID),
+                span.rows_for(export_price_entity),
+            ),
             bucket=bucket,
             local_tz=local_tz,
             import_price_windows=(
@@ -1555,9 +1564,14 @@ class SolarBiasCorrectionService:
     def _grid_export_price_entity_id(self) -> str | None:
         """The configured sell-price entity, read for its recorder history.
 
-        No Helman mirror of it exists on purpose: it is already an ordinary
-        recorded sensor, so its past is on disk for days that elapsed long
-        before this feature shipped.
+        Still read directly, even though Helman now mirrors it into
+        ``sensor.helman_grid_export_price``: the mirror's *raw states* only go
+        back to the day it started publishing, while this entity's reach back as
+        far as the recorder keeps them. The day view prices elapsed slots from
+        raw states, so it would lose every day older than the mirror. The
+        aggregate views, which read hourly statistics rather than states, prefer
+        the mirror -- see ``_prefer_rows``. Collapsing the two readers onto one
+        source is #133.
         """
         if self._grid_export_price_entity_id_provider is None:
             return None
@@ -2602,12 +2616,15 @@ def _money_by_bucket(
     configured -- the normal one -- always has the fallback and never lands
     here.
 
-    The export rate has no such fill. It is a user-configured external entity that
-    may carry no ``state_class`` at all, in which case it has no statistics and
-    ``gain`` is None for those buckets -- the honest answer, since "earned
-    nothing" is a claim the data does not support. The day view lets the *live*
-    export feed override the recorder; history has no live feed, so that does not
-    carry over.
+    The export rate has no such fill -- there is no table to fall back on, since
+    a spot export price is not derivable from config. Its rows come from the
+    mirror Helman publishes for exactly this reason (the configured sell-price
+    entity typically declares no ``state_class`` and so has no statistics at
+    all), merged with the configured entity's own rows where it has any. An hour
+    neither covers is unpriced and its ``gain`` is None -- the honest answer,
+    since "earned nothing" is a claim the data does not support. The day view
+    lets the *live* export feed override the recorder; history has no live feed,
+    so that does not carry over.
 
     Returns ``{bucket_key: (cost, gain)}`` with either side None where nothing in
     the bucket could be priced.
@@ -2634,6 +2651,32 @@ def _money_by_bucket(
         gain[key] = gain.get(key, 0.0) + kwh * rate
 
     return {key: (cost.get(key), gain.get(key)) for key in cost.keys() | gain.keys()}
+
+
+def _prefer_rows(
+    preferred: dict[datetime, dict[str, Any]],
+    fallback: dict[datetime, dict[str, Any]],
+) -> dict[datetime, dict[str, Any]]:
+    """Two hourly series of the same quantity, merged hour by hour.
+
+    Per hour rather than per series, for the reason the import rail already
+    merges per hour: the seam between the two falls mid-span. Helman's export
+    price mirror covers every hour from the moment it started publishing plus
+    whatever its back-fill reached, and the configured sell-price entity covers
+    whatever hours its own statistics happen to hold -- usually none, since such
+    an entity typically declares no ``state_class``. Choosing one series for the
+    whole span would either blank the hours only the other one covers or discard
+    Helman's own record in favour of a third party's.
+
+    Helman's own series wins where both have the hour. They mirror the same
+    number, so they agree; where they somehow do not, the one Helman archived is
+    the one it can account for.
+    """
+    if not fallback:
+        return preferred
+    if not preferred:
+        return fallback
+    return {**fallback, **preferred}
 
 
 def _hourly_rate(
