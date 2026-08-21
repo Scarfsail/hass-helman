@@ -27,8 +27,12 @@ plausible-looking numbers rather than an error:
   Per-hour energy here is instead the difference between consecutive
   ``state`` readings, run through
   :func:`~.recorder_hourly_series.unwrap_cumulative_energy_series` so that this
-  integration applies one reset convention everywhere -- the same one the raw
-  state path applies, including its transient-drop suppression.
+  integration applies one reset convention everywhere rather than inheriting a
+  second one from the statistics compiler. That function's glitch suppression is
+  sized for the samples it is given, which is why :data:`_REBOUND_WINDOW` is
+  passed explicitly here: on hourly samples the raw-state default could never
+  fire, and a single dipped reading would rebuild the very artefact this
+  module exists to avoid.
 * ``StatisticsRow["start"]`` and ``["end"]`` are POSIX ``float`` timestamps, not
   datetimes -- unlike every other recorder helper in this integration. This
   module converts them once, here, so no caller has to remember; and it converts
@@ -78,6 +82,19 @@ STATISTICS_UNITS: dict[str, str] = {"energy": "kWh"}
 #: all. One extra hour per entity supplies exactly that, at the cost of one row,
 #: and it is dropped before anything is folded into a bucket.
 _SEED_PAD = timedelta(hours=1)
+
+#: How long a dipped hourly reading has to climb back before it is called a
+#: glitch rather than a counter reset.
+#:
+#: One hour, because that is the spacing of the samples: the meter blinking
+#: unavailable and returning shows up as one low reading with a normal one an
+#: hour later, and the suppression has to be able to see that neighbour. The
+#: raw-state default of thirty minutes is shorter than the interval and would
+#: silently classify every such blink as a reset, lifting the rest of the series
+#: by the meter's whole reading -- the artefact, rebuilt on the path meant to
+#: avoid it. A genuine reset is unaffected: a meter that restarts at zero does
+#: not climb back past its old total within the hour.
+_REBOUND_WINDOW = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -204,7 +221,9 @@ def _hourly_energy_kwh(
     has served as the first delta's left-hand side.
 
     The readings are unwrapped first, so a counter that resets mid-span lifts the
-    rest of the series instead of producing one enormous negative step. A gap in
+    rest of the series instead of producing one enormous negative step, and a
+    single dipped reading that recovers an hour later is discarded as the glitch
+    it is rather than counted as a reset. A gap in
     the statistics -- Home Assistant down for a day -- leaves the energy that
     accumulated across it attributed to the first hour that reports again, which
     is what a cumulative meter genuinely tells us and what the raw state path
@@ -227,7 +246,9 @@ def _hourly_energy_kwh(
     if len(samples) < 2:
         return {}
 
-    unwrapped = unwrap_cumulative_energy_series(samples)
+    unwrapped = unwrap_cumulative_energy_series(
+        samples, rebound_window=_REBOUND_WINDOW
+    )
 
     energy: dict[datetime, float] = {}
     previous_value: float | None = None

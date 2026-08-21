@@ -15,6 +15,15 @@ from homeassistant.util import dt as dt_util
 
 from .energy_units import normalize_energy_to_kwh
 
+#: How long a dipped reading has to climb back before the dip is called a
+#: glitch rather than a counter reset.
+#:
+#: It has to be read against the spacing of the samples it is applied to: a
+#: rebound can only be *seen* in a later sample, so a window shorter than one
+#: sample interval can never fire at all. Thirty minutes suits raw states, which
+#: arrive every few minutes. Anything sampling more coarsely -- hourly long-term
+#: statistics, in particular -- must pass its own window or lose the suppression
+#: silently, which is why every function on this path takes it as an argument.
 _TRANSIENT_REBOUND_WINDOW = timedelta(minutes=30)
 _ENERGY_TOLERANCE_KWH = 1e-6
 
@@ -1156,6 +1165,8 @@ def _parse_energy_observations(
 
 def unwrap_cumulative_energy_series(
     samples: list[tuple[datetime, float]],
+    *,
+    rebound_window: timedelta = _TRANSIENT_REBOUND_WINDOW,
 ) -> list[tuple[datetime, float]]:
     """Lift a resetting cumulative meter into a monotonic series.
 
@@ -1163,10 +1174,16 @@ def unwrap_cumulative_energy_series(
     hold plain ``(instant, kWh)`` pairs rather than recorder ``State`` rows --
     hourly long-term statistics, in particular. There is exactly one reset
     convention in this integration and it lives here: a genuine reset lifts
-    every later reading by the segment's maximum, while a dip that comes back
-    within the rebound window is discarded as a glitch rather than treated as a
+    every later reading by the segment's maximum, while a dip that climbs back
+    within ``rebound_window`` is discarded as a glitch rather than treated as a
     reset. Long-term statistics apply their own, different convention, which is
     why anything reading them comes back through this function.
+
+    **Pass a ``rebound_window`` of at least one sample interval.** A rebound is
+    only visible in a later sample, so the default -- sized for raw states,
+    which arrive every few minutes -- can never fire on a coarser series, and
+    the suppression would be lost without any error to say so. See
+    :data:`_TRANSIENT_REBOUND_WINDOW`.
 
     Input need not be sorted; output is sorted by instant.
     """
@@ -1174,14 +1191,20 @@ def unwrap_cumulative_energy_series(
         _EnergyObservation(updated_at=instant, value_kwh=value)
         for instant, value in sorted(samples, key=lambda pair: pair[0])
     ]
-    unwrapped = _build_unwrapped_energy_observations(observations)
+    unwrapped = _build_unwrapped_energy_observations(
+        observations, rebound_window=rebound_window
+    )
     return [(item.updated_at, item.value_kwh) for item in unwrapped]
 
 
 def _build_unwrapped_energy_observations(
     observations: list[_EnergyObservation],
+    *,
+    rebound_window: timedelta = _TRANSIENT_REBOUND_WINDOW,
 ) -> list[_EnergyObservation]:
-    unwrapped, _state = _unwrap_energy_observations(observations)
+    unwrapped, _state = _unwrap_energy_observations(
+        observations, rebound_window=rebound_window
+    )
     return unwrapped
 
 
@@ -1190,6 +1213,7 @@ def _unwrap_energy_observations(
     *,
     resume_state: _UnwrapState = _INITIAL_UNWRAP_STATE,
     freeze_at: datetime | None = None,
+    rebound_window: timedelta = _TRANSIENT_REBOUND_WINDOW,
 ) -> tuple[list[_EnergyObservation], _UnwrapState]:
     """Lift a resetting counter into a monotonic series.
 
@@ -1226,6 +1250,7 @@ def _unwrap_energy_observations(
             observations,
             drop_index=index,
             pre_drop_value_kwh=segment_value_kwh,
+            rebound_window=rebound_window,
         ):
             # A dip that came back: drop the reading, keep the segment.
             pass
@@ -1256,9 +1281,10 @@ def _is_transient_drop(
     *,
     drop_index: int,
     pre_drop_value_kwh: float,
+    rebound_window: timedelta,
 ) -> bool:
     drop_observation = observations[drop_index]
-    rebound_deadline = drop_observation.updated_at + _TRANSIENT_REBOUND_WINDOW
+    rebound_deadline = drop_observation.updated_at + rebound_window
 
     for candidate in observations[drop_index + 1 :]:
         if candidate.updated_at > rebound_deadline:

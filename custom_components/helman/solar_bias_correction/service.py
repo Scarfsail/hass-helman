@@ -2521,6 +2521,14 @@ def _soc_bounds_by_bucket(
     Statistics carry the true per-hour min and max, so folding them is exact --
     strictly better than scanning raw states, which sees only what has not been
     purged yet and quietly reports the surviving extremes as the day's.
+
+    The cost of that exactness: ``min``/``max`` exist only for an entity Home
+    Assistant compiles statistics for, which means a SoC sensor declaring
+    ``state_class: measurement``. A template or REST sensor without one reports
+    ``None`` for every bucket here, where the raw-state scan this replaced would
+    have read any numeric sensor. The pills draw such a battery as having no SoC
+    history at all rather than showing a wrong one, which is the safer of the two
+    failures but is a behaviour change worth knowing about.
     """
     bounds: dict[str, tuple[float | None, float | None]] = {}
     for utc_hour, row in rows.items():
@@ -2567,6 +2575,14 @@ def _money_by_bucket(
     sensor are priced at *today's* tariff. That is the approximation the day view
     already makes for a pre-sensor day; a year view simply shows more of them. An
     approximate cost is more useful here than a hole.
+
+    A second one, in the same spirit: an hour with neither a recorded rate nor a
+    window covering it contributes its energy to no total at all, so a bucket
+    straddling the price sensor's ship date reports the cost of the hours it
+    could price without saying which those were. ``None`` is reserved for a
+    bucket nothing in which could be priced. A setup with import windows
+    configured -- the normal one -- always has the fallback and never lands
+    here.
 
     The export rate has no such fill. It is a user-configured external entity that
     may carry no ``state_class`` at all, in which case it has no statistics and
@@ -2615,8 +2631,29 @@ def _hourly_rate(
     return None if row is None else row.get("mean")
 
 
+#: The finest grain the window table is sampled at when pricing a whole hour.
+#:
+#: Windows are configured in minutes and need not begin on the hour, so an hour
+#: the tariff changes inside of has no single rate. One minute is exact for any
+#: window a user can express and costs sixty lookups on a path that only runs
+#: for hours long-term statistics have no recorded rate for.
+_TARIFF_SAMPLE_MINUTES = 1
+
+
 def _config_import_rate(import_price_windows, local_hour: datetime) -> float | None:
-    """The configured import tariff in force at ``local_hour``, or None.
+    """The configured import tariff across ``local_hour``, or None.
+
+    The rate is averaged over the hour's minutes rather than read off its start.
+    A window boundary that does not land on the hour -- a night tariff ending at
+    08:30, say -- otherwise mis-prices the crossing hour by the full difference
+    between the two rates, and does so systematically: this fallback exists to
+    price history older than the price sensor, so every such hour in a year view
+    would carry the same error rather than it averaging out.
+
+    Minutes no window covers are left out of the average rather than counted as
+    zero; an hour no window covers at all is unpriced. Weighting is by time, not
+    by energy, because the intra-hour shape of the import is exactly what
+    statistics no longer hold.
 
     Imported lazily, like the other cross-module helpers here -- the builder
     module pulls in Home Assistant's core, which several importers of this module
@@ -2629,17 +2666,27 @@ def _config_import_rate(import_price_windows, local_hour: datetime) -> float | N
         lookup_grid_import_price,
     )
 
-    try:
-        return lookup_grid_import_price(
-            windows=import_price_windows,
-            minute_of_day=local_hour.hour * 60,
-        )
-    except GridImportPriceConfigError:
+    hour_start = local_hour.hour * 60
+    total = 0.0
+    covered = 0
+    for offset in range(0, 60, _TARIFF_SAMPLE_MINUTES):
+        try:
+            total += lookup_grid_import_price(
+                windows=import_price_windows,
+                minute_of_day=hour_start + offset,
+            )
+        except GridImportPriceConfigError:
+            continue
+        covered += 1
+
+    if covered == 0:
         _LOGGER.debug(
-            "No import price window covers %02d:00; leaving the hour unpriced",
+            "No import price window covers %02d:00-%02d:59; leaving the hour unpriced",
+            local_hour.hour,
             local_hour.hour,
         )
         return None
+    return total / covered
 
 
 def _round_wh(value_kwh: float | None) -> float | None:

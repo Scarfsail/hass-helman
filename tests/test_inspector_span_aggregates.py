@@ -403,6 +403,33 @@ class TestResetArtefacts(unittest.IsolatedAsyncioTestCase):
         # 3.7 + 6.4 + 8.0 + 3.3, to the tenth of a Wh the payload rounds to.
         self.assertEqual(payload["days"][0]["solarWh"], 21400.0)
 
+    async def test_a_single_dipped_reading_is_a_glitch_not_a_reset(self):
+        # The blink itself, seen in the readings rather than in ``change``: one
+        # low sample with a normal one an hour later. Suppressing it needs a
+        # rebound window at least as long as the sample spacing -- the raw-state
+        # default of thirty minutes never sees the neighbour, so every blink
+        # would open a new segment and lift the rest of the series by the
+        # meter's whole reading.
+        _set_rows(
+            {
+                SOLAR_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=49181.0),
+                    _row(_hour("2026-04-23T07:00:00+02:00"), state=49184.7),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=0.5),
+                    _row(_hour("2026-04-23T09:00:00+02:00"), state=49191.1),
+                    _row(_hour("2026-04-23T10:00:00+02:00"), state=49195.0),
+                ]
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        # 3.7, then 6.4 spanning the discarded reading's hour and the next, then
+        # 3.9. The blink costs the resolution of one hour, not its energy.
+        # Treating the dip as a reset would put ~49190 kWh into this one day.
+        self.assertEqual(payload["days"][0]["solarWh"], 14000.0)
+
     async def test_a_genuine_midnight_reset_is_unwrapped_not_counted_as_energy(self):
         # A daily-resetting meter drops to zero at midnight. Differencing alone
         # would hand the bucket a large negative step; the shared unwrap lifts
@@ -548,6 +575,36 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["moneyCost"], 2.0)
         # Exported nothing rather than earned nothing.
         self.assertIsNone(second["moneyGain"])
+
+    async def test_a_window_boundary_inside_an_hour_is_averaged_across_it(self):
+        # The night rate ends at 08:30, so the 08:00 hour is half at 2.0 and
+        # half at 5.0. Reading the rate off the hour's start would price the
+        # whole hour at 2.0 -- and would do it to every such hour in a year.
+        config = price_builder.FixedGridImportPriceConfig(
+            unit="CZK/kWh",
+            windows=(
+                price_builder.FixedGridImportPriceWindow(
+                    start_minutes=0, end_minutes=510, price=2.0
+                ),
+                price_builder.FixedGridImportPriceWindow(
+                    start_minutes=510, end_minutes=1440, price=5.0
+                ),
+            ),
+        )
+        _set_rows(
+            {
+                GRID_IMPORT_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=2.0),
+                ]
+            }
+        )
+        service = _make_service(import_price_config=config)
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        # 2 kWh at the hour's mean of (30 x 2.0 + 30 x 5.0) / 60 = 3.5.
+        self.assertEqual(payload["days"][0]["moneyCost"], 7.0)
 
     async def test_without_an_import_config_unpriced_hours_stay_unpriced(self):
         _set_rows(
