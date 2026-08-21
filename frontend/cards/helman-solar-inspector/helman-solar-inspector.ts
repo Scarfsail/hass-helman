@@ -62,6 +62,7 @@ import "./helman-solar-money-strip";
 import "./helman-solar-aggregate-chart";
 import type {
   AggregateBucketSelectDetail,
+  AggregateBucketHoverDetail,
   SpanAggregatePayload,
   SpanAggregateRow,
 } from "./helman-solar-aggregate-chart";
@@ -1788,6 +1789,7 @@ export class HelmanSolarInspector extends LitElement {
       return html`<div class="note">${this._tFormat("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
     }
     return html`
+      ${this._renderTooltip()}
       <div class="chart-wrap">
         <helman-solar-aggregate-chart
           .hass=${this.hass}
@@ -1796,6 +1798,7 @@ export class HelmanSolarInspector extends LitElement {
           .selectedKey=${this._selectedBucket}
           .width=${this._chartWidth}
           @aggregate-bucket-select=${this._handleBucketSelect}
+          @aggregate-bucket-hover=${this._handleBucketHover}
         ></helman-solar-aggregate-chart>
       </div>
       ${this._renderSelectedBucket(rows)}
@@ -1835,6 +1838,53 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /** One bucket's six meters, in the chart's own order and colours. */
+  /**
+   * Draw the card's one hover popup for an aggregate bucket.
+   *
+   * The same popup the day view uses, deliberately: the aggregate chart reports
+   * which bucket and where the pointer is, and the rows are built here so both
+   * views share one popup, one position rule and one set of styles. A bucket is
+   * measured history with nothing to compare against, so `hasActual` is false
+   * and each reading sits in the single guaranteed column -- the shape
+   * `TooltipRow` already describes for a slot with only one vintage.
+   */
+  private _handleBucketHover = (event: CustomEvent<AggregateBucketHoverDetail>) => {
+    event.stopPropagation();
+    const { key, x, y } = event.detail;
+    if (key === null) {
+      this._clearTooltip();
+      return;
+    }
+    const row = (this._span?.days ?? []).find((candidate) => candidate.date === key);
+    if (!row) {
+      this._clearTooltip();
+      return;
+    }
+    const kwhToWh = (value: number | null) => (value === null ? null : value * 1000);
+    const cell = (wh: number | null, color: string): TooltipCell =>
+      wh === null ? null : { value: this._formatWh(wh), color };
+    const measured = (label: string, wh: number | null, color: string): TooltipRow => ({
+      label,
+      actual: null,
+      forecast: cell(wh, color),
+    });
+    const rows: TooltipRow[] = [
+      measured(this._t("bias_correction.inspector.merged.solar"), row.solarWh, CHART_COLORS.corrected),
+      measured(this._t("bias_correction.inspector.merged.house"), row.houseWh, CHART_COLORS.house),
+      measured(this._t("bias_correction.inspector.grid_import"), kwhToWh(row.gridImportKwh), CHART_COLORS.grid),
+      measured(this._t("bias_correction.inspector.grid_export"), kwhToWh(row.gridExportKwh), CHART_COLORS.grid),
+      measured(this._t("bias_correction.inspector.battery_charge"), row.batteryChargeWh, CHART_COLORS.battery),
+      measured(this._t("bias_correction.inspector.battery_discharge"), row.batteryDischargeWh, CHART_COLORS.battery),
+    ].filter((candidate) => candidate.forecast !== null);
+    this._tooltip = {
+      x,
+      y,
+      title: this._formatBucket(key),
+      hasActual: false,
+      rows,
+    };
+  };
+
   private _renderBucketMetrics(row: SpanAggregateRow) {
     const kwhToWh = (value: number | null) => (value === null ? null : value * 1000);
     return html`

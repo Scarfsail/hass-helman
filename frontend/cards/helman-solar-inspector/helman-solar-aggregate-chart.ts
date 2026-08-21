@@ -1,12 +1,12 @@
 import { LitElement, css, html, svg } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../hass-frontend/src/types";
 import { helmanColorVars } from "../color-vars";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { BATT_COLOR, GRID_COLOR, HOUSE_COLOR, SOLAR_COLOR } from "../color-utils";
 import { symmetricEnergyAxis } from "./chart-axis";
-import { accumulateBands, clampToSign, stackSlots, type StackLayer, type StackSet } from "./chart-stack";
+import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
 
 /** One bucket of the span read: a local day, or a local month. */
 export interface SpanAggregateRow {
@@ -37,6 +37,19 @@ export interface AggregateBucketSelectDetail {
 }
 
 /**
+ * The pointer moved onto a column, or off the chart entirely (`key: null`).
+ *
+ * The coordinates are the pointer's own, in client space, because the popup the
+ * inspector draws from them is `position: fixed` -- the same contract the day
+ * chart's hover already uses, so one tooltip serves both views.
+ */
+export interface AggregateBucketHoverDetail {
+    key: string | null;
+    x: number;
+    y: number;
+}
+
+/**
  * The chart's own geometry. It is not the inspector's: nothing else is drawn
  * against this axis, so there is no strip below to stay aligned with and no
  * reason to inherit the day chart's margins. The left gutter is a little
@@ -44,6 +57,13 @@ export interface AggregateBucketSelectDetail {
  * kW one reaches one plus a decimal.
  */
 const CHART = { height: 240, marginTop: 16, marginRight: 16, marginBottom: 24, marginLeft: 44 } as const;
+
+/**
+ * The fill opacity the day chart gives a measured band, repeated here so the
+ * two views read as one language rather than as two charts that happen to share
+ * colours.
+ */
+const BAND_FILL_OPACITY = 0.45;
 
 /** Below this column width a label cannot be written without colliding. */
 const MIN_LABEL_PX = 13;
@@ -100,6 +120,9 @@ export class HelmanSolarAggregateChart extends LitElement {
     @property({ type: String }) public selectedKey: string | null = null;
     /** viewBox width; the SVG scales to its container, so this is only a ratio. */
     @property({ type: Number }) public width = 900;
+
+    /** The column under the pointer, as an index into {@link rows}. */
+    @state() private _hoveredIndex: number | null = null;
 
     private _t(key: string): string {
         const localize: LocalizeFunction = this.hass
@@ -194,38 +217,98 @@ export class HelmanSolarAggregateChart extends LitElement {
                     class="aggregate-chart"
                     aria-label=${this._t("bias_correction.inspector.aggregate_chart")}
                     style="cursor: pointer;"
+                    @mouseleave=${this._clearHover}
                 >
                     ${this._renderAxis(yTicks, yFor, plotWidth)}
                     ${this._renderColumns(rows, xFor, columnWidth)}
-                    ${[...positive, ...negative].map((band) => indices.map((index) => {
-                        const top = band.top.get(index) ?? 0;
-                        const base = band.base.get(index) ?? 0;
-                        if (top === base) return nothing;
-                        // Half a unit of gap on each side, so neighbouring
-                        // columns stay countable at a month's width and still
-                        // touch nothing at a year's.
-                        const left = xFor(index) + columnWidth * 0.1;
-                        const barWidth = Math.max(1, columnWidth * 0.8);
-                        const yTop = Math.min(yFor(top), yFor(base));
-                        const barHeight = Math.max(1, Math.abs(yFor(top) - yFor(base)));
-                        // Painted over the hit rects, so it must not take the
-                        // pointer: the bars cover most of a column, and without
-                        // this a click on the stack itself -- the obvious place
-                        // to aim -- selects nothing. Every drawn element in the
-                        // day chart does the same.
-                        return svg`
-                            <rect
-                                x=${left} y=${yTop}
-                                width=${barWidth} height=${barHeight}
-                                fill=${band.layer.color} fill-opacity="0.85"
-                                pointer-events="none"
-                            ></rect>
-                        `;
-                    }))}
+                    ${this._renderHoverHighlight(xFor, columnWidth)}
+                    ${[...positive, ...negative].map(
+                        (band) => this._renderBand(band, indices, xFor, yFor),
+                    )}
                     ${this._renderBucketLabels(rows, xFor, columnWidth)}
                 </svg>
             `}
             </div>
+        `;
+    }
+
+    /**
+     * One band as a run of flat-topped steps, exactly as the day chart draws it.
+     *
+     * Contiguous, with no gap between neighbouring buckets: a bucket is an
+     * interval, not a sample, so its band spans the whole width it stands for
+     * and meets the next one. Inset bars would read as a bar chart of discrete
+     * things and, more to the point, would not look like the same chart the
+     * reader was just looking at one zoom level down.
+     *
+     * A bucket the meter has no reading for breaks the run rather than closing
+     * to zero, so a gap in the data stays visibly a gap.
+     */
+    private _renderBand(
+        band: StackBand,
+        indices: number[],
+        xFor: (index: number) => number,
+        yFor: (kwh: number) => number,
+    ) {
+        const thickness = (index: number) =>
+            (band.top.get(index) ?? 0) - (band.base.get(index) ?? 0);
+        const runs: number[][] = [];
+        for (const index of indices) {
+            if (thickness(index) === 0) continue;
+            const current = runs[runs.length - 1];
+            if (current && current[current.length - 1] === index - 1) current.push(index);
+            else runs.push([index]);
+        }
+
+        const edge = (index: number, level: Map<number, number>) => {
+            const y = yFor(level.get(index) ?? 0);
+            return [[xFor(index), y], [xFor(index + 1), y]] as const;
+        };
+        const toPath = (points: readonly (readonly number[])[]) =>
+            points
+                .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
+                .join(" ");
+
+        return runs.map((run) => {
+            const outer = run.flatMap((index) => [...edge(index, band.top)]);
+            const inner = [...run]
+                .reverse()
+                .flatMap((index) => [...edge(index, band.base)].reverse());
+            // Painted over the hit rects, so it must not take the pointer: the
+            // bands cover most of a column, and without this a click or hover
+            // aimed at the stack itself -- the obvious place to aim -- reaches
+            // nothing. Every drawn element in the day chart does the same.
+            return svg`
+                <path
+                    d=${`${toPath([...outer, ...inner])} Z`}
+                    fill=${band.layer.color} fill-opacity=${BAND_FILL_OPACITY}
+                    stroke=${band.layer.color} stroke-width="0.75" stroke-opacity="0.6"
+                    pointer-events="none"
+                ></path>
+            `;
+        });
+    }
+
+    /**
+     * The hovered column, in the day chart's own hover treatment.
+     *
+     * Drawn under the bands and over the selection, so a hover reads on top of
+     * whatever is already highlighted without hiding the data it is about.
+     */
+    private _renderHoverHighlight(
+        xFor: (index: number) => number,
+        columnWidth: number,
+    ) {
+        if (this._hoveredIndex === null) return nothing;
+        const height = CHART.height - CHART.marginTop - CHART.marginBottom;
+        return svg`
+            <rect
+                class="bucket-hover"
+                x=${xFor(this._hoveredIndex)} y=${CHART.marginTop}
+                width=${columnWidth} height=${height}
+                style="fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection);"
+                stroke-width="1" pointer-events="none"
+            ></rect>
         `;
     }
 
@@ -280,10 +363,44 @@ export class HelmanSolarAggregateChart extends LitElement {
                     fill=${selected ? "var(--helman-selection)" : "transparent"}
                     fill-opacity=${selected ? 0.18 : 1}
                     @click=${() => this._selectBucket(row.date)}
+                    @mousemove=${(event: MouseEvent) => this._hoverBucket(index, event)}
                 ></rect>
             `;
         });
     }
+
+    /**
+     * Track the hovered column and tell the inspector where the pointer is.
+     *
+     * The popup itself is the inspector's, not this element's: the day view
+     * already owns one, `position: fixed` over the whole card, and growing a
+     * second here would be two popups to keep looking alike. So this reports
+     * the bucket and the pointer, and the card draws the same popup it draws
+     * for a slot.
+     *
+     * `mousemove` rather than `mouseenter`, because the popup follows the
+     * cursor within a column as well as between columns.
+     */
+    private _hoverBucket(index: number, event: MouseEvent) {
+        this._hoveredIndex = index;
+        const row = this.rows[index];
+        if (!row) return;
+        this.dispatchEvent(new CustomEvent<AggregateBucketHoverDetail>("aggregate-bucket-hover", {
+            detail: { key: row.date, x: event.clientX, y: event.clientY },
+            bubbles: true,
+            composed: true,
+        }));
+    }
+
+    private _clearHover = () => {
+        if (this._hoveredIndex === null) return;
+        this._hoveredIndex = null;
+        this.dispatchEvent(new CustomEvent<AggregateBucketHoverDetail>("aggregate-bucket-hover", {
+            detail: { key: null, x: 0, y: 0 },
+            bubbles: true,
+            composed: true,
+        }));
+    };
 
     private _selectBucket(key: string) {
         this.dispatchEvent(new CustomEvent<AggregateBucketSelectDetail>("aggregate-bucket-select", {
