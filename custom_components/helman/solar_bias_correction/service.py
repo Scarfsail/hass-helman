@@ -151,6 +151,10 @@ class SolarBiasCorrectionService:
         #: is why the timestamp is what decides whether to re-ask, not the value.
         self._history_floor: date | None = None
         self._history_floor_probed_at: datetime | None = None
+        #: Held across the probe so concurrent callers await one read rather than
+        #: racing it. A card mounting into an aggregate view dispatches the day
+        #: and span commands together, and both ask for the floor.
+        self._history_floor_lock = asyncio.Lock()
 
     async def async_setup(self) -> None:
         stored = self._store.profile
@@ -586,42 +590,73 @@ class SolarBiasCorrectionService:
 
         Cached, and deliberately not forever. A purge moves the true floor
         forward and a back-fill moves it back, so the answer is re-asked every
-        :data:`_HISTORY_FLOOR_TTL`; between refreshes it costs nothing, which is
-        what lets both payloads ask on every request without either of them
+        :data:`_HISTORY_FLOOR_TTL`; between refreshes it is a field read, which
+        is what lets both payloads ask on every request without either of them
         having to know it is a database read.
+
+        The lock is not an optimisation. Both payloads are dispatched at once
+        when a card mounts, and a probe that merely *deduplicated* the read would
+        let the second caller past a stamp the first had not yet filled in --
+        handing it the fallback while the first got the recorder's answer. The
+        two payloads would then disagree about ``minDate`` on exactly the load
+        this whole change exists to fix. Queueing behind the read instead means
+        every caller sees the same answer.
         """
         fallback = local_now.date() - timedelta(
             days=max(self._metadata.usable_days, 0)
         )
 
-        cached_at = self._history_floor_probed_at
-        if cached_at is None or local_now - cached_at >= _HISTORY_FLOOR_TTL:
-            # Stamped before the await, not after: two payloads asked for at once
-            # would otherwise both see an unstamped cache and both probe.
-            self._history_floor_probed_at = local_now
-            self._history_floor = await self._async_probe_history_floor()
+        if self._history_floor_is_stale(local_now):
+            async with self._history_floor_lock:
+                # Re-checked under the lock: whoever queued behind the probe
+                # wants its answer, not a second read of the same rows.
+                if self._history_floor_is_stale(local_now):
+                    await self._async_refresh_history_floor(local_now)
 
         probed = self._history_floor
         return fallback if probed is None else min(probed, fallback)
 
+    def _history_floor_is_stale(self, local_now: datetime) -> bool:
+        cached_at = self._history_floor_probed_at
+        return cached_at is None or local_now - cached_at >= _HISTORY_FLOOR_TTL
+
+    async def _async_refresh_history_floor(self, local_now: datetime) -> None:
+        """Ask the recorder again, and stamp the cache only if it answered.
+
+        A probe that came back empty *is* an answer -- a fresh install with no
+        compiled statistics -- and is cached like any other. A probe that raised
+        is not, and stamping it would pin the shallow fallback for the whole TTL
+        over what may have been a moment's unavailability.
+        """
+        try:
+            self._history_floor = await self._async_probe_history_floor()
+        except Exception:
+            _LOGGER.exception("Failed to probe the recorder for the history floor")
+            return
+        self._history_floor_probed_at = local_now
+
     async def _async_probe_history_floor(self) -> date | None:
         """Ask the recorder where the meters' statistics begin, or ``None``.
 
-        Failures are swallowed to ``None`` rather than raised: the floor is
-        navigation furniture, and a recorder that cannot answer should cost the
-        reader the deeper range, not the whole inspector.
+        ``None`` means the recorder answered and there is nothing yet. Failure
+        is raised rather than folded into that answer, so the caller can tell the
+        two apart and decline to cache one of them; it is
+        :meth:`_async_refresh_history_floor` that keeps a failure from costing
+        the reader anything more than the shallower range.
+
+        The import is deferred, and it runs inside this coroutine, so the
+        caller's ``except`` covers it: ``recorder_statistics_span`` reaches into
+        the recorder integration, which need not be set up, and an import error
+        is one more way the recorder cannot answer -- not a reason for the whole
+        inspector request to fail.
         """
         from ..recorder_statistics_span import query_oldest_statistics_date
 
-        try:
-            return await query_oldest_statistics_date(
-                self._hass,
-                self._energy_meter_entity_ids(),
-                local_tz=ZoneInfo(str(self._hass.config.time_zone)),
-            )
-        except Exception:
-            _LOGGER.exception("Failed to probe the recorder for the history floor")
-            return None
+        return await query_oldest_statistics_date(
+            self._hass,
+            self._energy_meter_entity_ids(),
+            local_tz=ZoneInfo(str(self._hass.config.time_zone)),
+        )
 
     async def _async_navigation_range(self, local_now: datetime) -> tuple[date, date]:
         """The dates the inspector's navigation may move between, inclusive.

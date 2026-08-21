@@ -118,9 +118,18 @@ _REBOUND_WINDOW = timedelta(hours=1)
 #: The Unix epoch, because "as far back as anything could possibly go" is the
 #: only honest answer -- the probe's whole job is to find out where the data
 #: begins, so any tighter guess would be the very assumption it exists to
-#: replace. It costs nothing to reach this far: the filter is
-#: ``start_ts >= 0`` against an indexed column, and what bounds the scan is how
-#: many rows the entities actually own, not how wide the window is.
+#: replace. Widening the window costs nothing by itself: what bounds the read is
+#: how many rows the entities actually own, not how far back it reaches.
+#:
+#: Those rows are not free, though, and the comment would be dishonest if it
+#: stopped there. ``statistics_during_period`` reduces *after* fetching, so a
+#: month-period read still selects every hourly row in range and builds a dict
+#: per row before collapsing them -- on six meters and five years, a few hundred
+#: thousand of each, on the recorder's executor thread. That is the price of the
+#: only honest answer, it is paid once per :data:`_HISTORY_FLOOR_TTL` rather
+#: than per request, and it is the same order as the read a year view already
+#: performs every time it opens. If it ever proves too much on a small host, the
+#: fix is to probe fewer meters -- not to guess a shallower epoch.
 _HISTORY_PROBE_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 #: The recorder period that serves the short-term statistics table.
@@ -322,10 +331,7 @@ async def query_oldest_statistics_date(
     * **``types`` is empty.** ``_generate_select_columns_for_types_stmt`` adds a
       column per requested type and none otherwise, so the statement selects
       ``metadata_id, start_ts`` and nothing else. The scan stays two narrow
-      columns wide however deep the history is. A **fresh** set is passed on
-      every call because ``_extract_metadata_and_discard_impossible_columns``
-      mutates the argument -- a module-level constant would be quietly emptied
-      by the first call and reused for every one after it.
+      columns wide however deep the history is.
     * **``period="month"``.** The reduction happens in Python either way, so this
       buys nothing in SQL; what it buys is the return value. A month's worth of
       hourly rows collapses to one row whose ``start`` is local midnight on the

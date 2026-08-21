@@ -21,11 +21,12 @@ of ``test_inspector_recorder_query_count.py``.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -68,6 +69,10 @@ def _install_import_stubs() -> None:
     sys.modules["homeassistant.components"] = components_mod
 
     async def _run_in_executor(func, *args):
+        # Yields before running, the way a real executor hand-off does. Without
+        # this the fake never lets a second coroutine interleave, and anything
+        # racing a recorder read would pass here no matter how it behaved.
+        await asyncio.sleep(0)
         return func(*args)
 
     recorder_mod = types.ModuleType("homeassistant.components.recorder")
@@ -1075,6 +1080,62 @@ class TestHistoryFloor(unittest.IsolatedAsyncioTestCase):
             span_mod.statistics_during_period = original
 
         self.assertEqual(payload["range"]["minDate"], "2026-05-13")
+
+    async def test_a_failed_probe_is_retried_rather_than_cached(self):
+        # A stamp written for a probe that raised would pin the shallow fallback
+        # for the whole TTL over what may have been a moment's unavailability.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 12)
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError("recorder is down")
+
+        original = span_mod.statistics_during_period
+        span_mod.statistics_during_period = _explode
+        try:
+            first = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+        finally:
+            span_mod.statistics_during_period = original
+        self.assertEqual(first["range"]["minDate"], "2026-05-13")
+
+        # Same instant, so nothing but the failure could have expired: the
+        # recorder is asked again and its answer lands.
+        second = await service.async_get_span_aggregates("2026-05-24", "2026-05-24")
+        self.assertEqual(second["range"]["minDate"], "2024-03-01")
+
+    async def test_a_caller_arriving_mid_probe_waits_for_its_answer(self):
+        # What a card mounting into an aggregate view really does: both websocket
+        # commands are dispatched together, and one of them reaches the floor
+        # while the other's read is still in flight. A probe that merely
+        # deduplicated the read would let the late caller past a stamp the first
+        # had not yet filled in and hand it the trainer window -- so the two
+        # payloads would disagree about minDate on exactly the load this bound
+        # exists to fix. The barrier holds the probe open so the overlap is the
+        # test's, not the scheduler's to grant.
+        _set_rows({}, month={SOLAR_METER: [_month_row(_hour("2024-03-01T00:00:00+01:00"))]})
+        service = _with_usable_days(_make_service(), 12)
+
+        probing = asyncio.Event()
+        release = asyncio.Event()
+        real_probe = service._async_probe_history_floor
+
+        async def _held_probe():
+            probing.set()
+            await release.wait()
+            return await real_probe()
+
+        service._async_probe_history_floor = _held_probe
+
+        first = asyncio.ensure_future(service._async_history_floor(NOW))
+        await probing.wait()
+        second = asyncio.ensure_future(service._async_history_floor(NOW))
+        # Let the late caller run as far as it can get on its own.
+        await asyncio.sleep(0)
+        release.set()
+
+        self.assertEqual(await first, date(2024, 3, 1))
+        self.assertEqual(await second, date(2024, 3, 1))
+        self.assertEqual(len(_calls("month")), 1)
 
     async def test_an_empty_span_still_carries_the_range(self):
         # The reader is never more likely to press an arrow than when the span
