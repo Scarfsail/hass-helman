@@ -12,6 +12,7 @@ import {
     HOUSE_COLOR,
     SOLAR_COLOR,
 } from "../color-utils";
+import { columnFitsLabel, stripValueLabel } from "../shared/strip-value-labels";
 import { symmetricEnergyAxis } from "./chart-axis";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
 
@@ -85,6 +86,15 @@ const MIN_LABEL_PX = 13;
  * about them belongs on the kWh axis above.
  */
 const SOC_ROW = { height: 96, marginTop: 14, marginBottom: 10 } as const;
+
+/**
+ * How solidly the low-water bar fills, against the high-water one behind it.
+ *
+ * The two are the same colour because they are the same quantity read twice, so
+ * only weight separates them: the darker one is the level the battery never went
+ * below, the lighter one how far it climbed above that.
+ */
+const SOC_MIN_FILL_OPACITY = 0.85;
 const MONEY_ROW = { height: 96, marginTop: 14, marginBottom: 10 } as const;
 
 /** A state of charge is a percentage, so its axis is the fixed 0..100. */
@@ -380,28 +390,88 @@ export class HelmanSolarAggregateChart extends LitElement {
                     role="img"
                     class="soc-row"
                     aria-label=${this._t("bias_correction.inspector.aggregate_soc_row")}
+                    style="cursor: pointer;"
+                    @mouseleave=${this._clearHover}
                 >
                     ${this._renderRowGuides(SOC_TICKS, yFor, plotWidth, (tick) => String(tick))}
-                    ${this._renderRowMarkers(rows, xFor, columnWidth, SOC_ROW.marginTop, plotHeight)}
+                    ${this._renderRowColumns(rows, xFor, columnWidth, SOC_ROW.marginTop, plotHeight)}
                     ${runs.map((run) => svg`
                         <path
-                            class="soc-band"
+                            class="soc-band max"
                             d=${stepAreaPath(
                                 run,
                                 (index) => yFor(bounds(rows[index])!.max),
-                                (index) => yFor(bounds(rows[index])!.min),
+                                () => yFor(0),
                                 xFor,
                             )}
                             fill=${BATT_COLOR} fill-opacity=${BAND_FILL_OPACITY}
                             stroke=${BATT_COLOR} stroke-width="0.75" stroke-opacity="0.6"
                             pointer-events="none"
                         ></path>
+                        <path
+                            class="soc-band min"
+                            d=${stepAreaPath(
+                                run,
+                                (index) => yFor(bounds(rows[index])!.min),
+                                () => yFor(0),
+                                xFor,
+                            )}
+                            fill=${BATT_COLOR} fill-opacity=${SOC_MIN_FILL_OPACITY}
+                            stroke=${BATT_COLOR} stroke-width="0.75" stroke-opacity="0.6"
+                            pointer-events="none"
+                        ></path>
                     `)}
+                    ${this._renderSocLabels(rows, bounds, xFor, columnWidth, yFor)}
                     ${this._renderRowCaption(this._t("bias_correction.inspector.aggregate_soc_row"))}
                 </svg>
             `}
             </div>
         `;
+    }
+
+    /**
+     * Each bucket's two percentages, written where the day view writes its one.
+     *
+     * The high-water mark sits above the column and the low-water mark just
+     * above its own bar, so each number is next to the edge it describes. Both
+     * go through the shared strip label, which means they disappear at the same
+     * column width the day view's percentages, prices and amounts do -- the
+     * whole point of that helper being shared.
+     *
+     * The low mark is drawn on the darker fill, so it takes the on-fill
+     * treatment the helper offers: bold, in the primary ink.
+     */
+    private _renderSocLabels(
+        rows: readonly SpanAggregateRow[],
+        bounds: (row: SpanAggregateRow | undefined) => { min: number; max: number } | null,
+        xFor: (index: number) => number,
+        columnWidth: number,
+        yFor: (pct: number) => number,
+    ) {
+        if (!columnFitsLabel(columnWidth)) return nothing;
+        return rows.map((row, index) => {
+            const pair = bounds(row);
+            if (pair === null) return nothing;
+            const centre = xFor(index) + columnWidth / 2;
+            const low = svg`${stripValueLabel({
+                x: centre,
+                y: Math.min(yFor(pair.min) + 8, yFor(0) - 2),
+                text: `${Math.round(pair.min)}%`,
+                ink: "var(--primary-text-color)",
+                bold: true,
+            })}`;
+            // A range too shallow to hold two lines of digits says everything
+            // with one: the high mark, which is the number a reader scans for.
+            const separated = yFor(pair.min) - yFor(pair.max) >= 14;
+            return svg`
+                ${stripValueLabel({
+                    x: centre,
+                    y: Math.max(yFor(pair.max) - 3, 9),
+                    text: `${Math.round(pair.max)}%`,
+                })}
+                ${separated ? low : nothing}
+            `;
+        });
     }
 
     /**
@@ -489,16 +559,61 @@ export class HelmanSolarAggregateChart extends LitElement {
                     role="img"
                     class="money-row"
                     aria-label=${caption}
+                    style="cursor: pointer;"
+                    @mouseleave=${this._clearHover}
                 >
                     ${this._renderRowGuides(ticks, yFor, plotWidth, formatMoneyTick)}
-                    ${this._renderRowMarkers(rows, xFor, columnWidth, MONEY_ROW.marginTop, plotHeight)}
+                    ${this._renderRowColumns(rows, xFor, columnWidth, MONEY_ROW.marginTop, plotHeight)}
                     ${cell("money-band cost", GRID_IMPORT_COLOR, cost)}
                     ${cell("money-band gain", GRID_EXPORT_COLOR, gain)}
+                    ${this._renderMoneyLabels(rows, xFor, columnWidth, yFor, zeroY)}
                     ${this._renderRowCaption(caption)}
                 </svg>
             `}
             </div>
         `;
+    }
+
+    /**
+     * Each bucket's cost and gain, written past the end of their own bars.
+     *
+     * The money strip's rule, kept: cost above its bar and gain below its, so
+     * neither number fights the fill it belongs to, and an amount that rounds to
+     * nothing gets no label -- "0.0" over a hairline bar says less than the bar
+     * already did. The amounts are unitless here because the currency is stated
+     * once, in the row's caption, rather than repeated thirty-one times.
+     */
+    private _renderMoneyLabels(
+        rows: readonly SpanAggregateRow[],
+        xFor: (index: number) => number,
+        columnWidth: number,
+        yFor: (value: number) => number,
+        zeroY: number,
+    ) {
+        if (!columnFitsLabel(columnWidth)) return nothing;
+        const worthLabelling = (amount: number | null): amount is number =>
+            amount !== null && Number.isFinite(amount) && Math.abs(amount) >= 0.05;
+        return rows.map((row, index) => {
+            const centre = xFor(index) + columnWidth / 2;
+            const costValue = row.moneyCost;
+            const gainValue = row.moneyGain;
+            return svg`
+                ${worthLabelling(costValue)
+                    ? stripValueLabel({
+                        x: centre,
+                        y: Math.max(yFor(costValue) - 3, 9),
+                        text: formatMoneyTick(costValue),
+                    })
+                    : nothing}
+                ${worthLabelling(gainValue)
+                    ? stripValueLabel({
+                        x: centre,
+                        y: Math.max(yFor(-gainValue) + 8, zeroY + 8),
+                        text: formatMoneyTick(gainValue),
+                    })
+                    : nothing}
+            `;
+        });
     }
 
     /** A row's gridlines and their left-gutter labels, on the chart's x span. */
@@ -540,40 +655,46 @@ export class HelmanSolarAggregateChart extends LitElement {
     }
 
     /**
-     * The selected and hovered columns repeated in a row below the chart.
+     * One hit target per bucket in a row below the chart, tinted like the chart's.
      *
-     * The rows carry no hit targets of their own -- pointing at a column is
-     * done once, on the chart -- but they must *show* which column is in play,
-     * or a reader hovering a day in the chart has to find it again by eye in
-     * two more panels standing on the same axis.
+     * These carry the pointer as well as showing it. Pointing once, on the
+     * chart, was the wrong economy: a reader looking at the SoC row is looking
+     * *at* the SoC row, and asking them to move up to the energy chart to find
+     * out what a column says is exactly the seam between panels this feature
+     * keeps trying to close. Hover and click here mean what they mean up there,
+     * and reach the same popup.
      */
-    private _renderRowMarkers(
+    private _renderRowColumns(
         rows: readonly SpanAggregateRow[],
         xFor: (index: number) => number,
         columnWidth: number,
         top: number,
         height: number,
     ) {
-        const marker = (index: number, klass: string, style: string) => svg`
-            <rect
-                class=${klass}
-                x=${xFor(index)} y=${top}
-                width=${columnWidth} height=${height}
-                style=${style}
-                pointer-events="none"
-            ></rect>
-        `;
-        const selectedIndex = rows.findIndex((row) => row.date === this.selectedKey);
-        return [
-            selectedIndex >= 0
-                ? marker(selectedIndex, "bucket-tint selected",
-                    "fill: var(--helman-selection); fill-opacity: 0.18;")
-                : nothing,
-            this._hoveredIndex !== null
-                ? marker(this._hoveredIndex, "bucket-tint hovered",
-                    "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection); stroke-width: 1;")
-                : nothing,
-        ];
+        return rows.map((row, index) => {
+            const selected = row.date === this.selectedKey;
+            const hovered = this._hoveredIndex === index;
+            // Hover reads over selection, as it does on the chart: the pointer
+            // is about the column under it, whatever is already picked.
+            const style = hovered
+                ? "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection); stroke-width: 1;"
+                : selected
+                    ? "fill: var(--helman-selection); fill-opacity: 0.18;"
+                    // Transparent rather than `none`: a fill of `none` is not
+                    // hit-tested, and this rect exists to be pointed at.
+                    : "fill: transparent;";
+            return svg`
+                <rect
+                    class="bucket-tint ${selected ? "selected" : ""} ${hovered ? "hovered" : ""}"
+                    data-bucket=${row.date}
+                    x=${xFor(index)} y=${top}
+                    width=${columnWidth} height=${height}
+                    style=${style}
+                    @click=${() => this._selectBucket(row.date)}
+                    @mousemove=${(event: MouseEvent) => this._hoverBucket(index, event)}
+                ></rect>
+            `;
+        });
     }
 
     /**

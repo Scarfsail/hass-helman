@@ -597,19 +597,37 @@ test.describe("solar inspector aggregate views", () => {
             .shadowRoot.querySelector(".hover-tooltip"));
     });
     /**
-     * The SoC row draws a *range* per bucket, in the step-area language the
-     * energy bands above it use: one path per unbroken stretch of buckets, four
-     * vertices apiece — across the top edge and back along the bottom — so a
-     * whole month with bounds everywhere is one path of `4 × days` points, one
-     * range per day.
+     * The SoC row draws two grounded bars per bucket, the way the day view's SoC
+     * strip draws its one: a column standing on the baseline, not a ribbon
+     * floating at the level. The high-water mark gives the column its height and
+     * the low-water mark is a second, darker bar nested inside it, so the pair
+     * reads as "never below this, up to that" rather than as an abstract band.
+     *
+     * Both are step areas, one path per unbroken stretch, four vertices per
+     * bucket — across the top edge and back along the baseline.
      */
-    test("the month view draws a min/max SoC range for every day", async ({ page }) => {
+    test("the month view draws grounded min and max SoC bars for every day", async ({ page }) => {
         await clickStop(page, STOP_MONTH_VIEW);
         await waitForAggregateChart(page);
 
-        const runs = await bandRuns(page, "path.soc-band");
         const days = (await columns(page)).length;
-        expect(runs).toEqual([4 * days]);
+        expect(await bandRuns(page, "path.soc-band.max")).toEqual([4 * days]);
+        // The min bar is the piece that was missing: same run, its own fill.
+        expect(await bandRuns(page, "path.soc-band.min")).toEqual([4 * days]);
+
+        // Both stand on the row's baseline, and the min bar never rises above
+        // the max bar it sits inside.
+        const geometry = await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            const box = (selector: string) =>
+                chart.shadowRoot.querySelector(selector).getBoundingClientRect();
+            const max = box("path.soc-band.max");
+            const min = box("path.soc-band.min");
+            return { sameFloor: Math.abs(max.bottom - min.bottom) < 1, minLower: min.top >= max.top };
+        });
+        expect(geometry.sameFloor).toBe(true);
+        expect(geometry.minLower).toBe(true);
     });
 
     test("a bucket with one SoC bound draws nothing, and one with neither leaves a gap", async ({ page }) => {
@@ -623,7 +641,8 @@ test.describe("solar inspector aggregate views", () => {
         const days = (await columns(page)).length;
         // Buckets 3 (upper bound only) and 4 (nothing at all) both break the run,
         // leaving the first three days and everything from the sixth on.
-        expect(await bandRuns(page, "path.soc-band")).toEqual([4 * 3, 4 * (days - 5)]);
+        expect(await bandRuns(page, "path.soc-band.max")).toEqual([4 * 3, 4 * (days - 5)]);
+        expect(await bandRuns(page, "path.soc-band.min")).toEqual([4 * 3, 4 * (days - 5)]);
         // The energy bands see only the empty bucket, so they break once.
         expect(await bandRuns(page, "path.energy-band")).toHaveLength(12);
     });
@@ -828,5 +847,99 @@ test.describe("solar inspector aggregate views", () => {
         expect(present.soc).toBe(true);
         expect(present.money).toBe(true);
         expect(present.columns).toBeGreaterThan(0);
+    });
+
+    test("both rows write each bucket's value on its column, as the day strips do", async ({ page }) => {
+        // The day view's SoC strip writes a percentage on every column and its
+        // money strip writes both amounts; a month view that draws the same
+        // shapes without the numbers makes the reader hover for what the day
+        // view simply says. Both go through the shared strip label, so both
+        // vanish at the same column width the day view's do.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const labels = await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            // Left-gutter tick labels sit left of the plot; value labels are
+            // centred on their column, so x alone separates the two.
+            const onPlot = (root: Element) => [...root.querySelectorAll("text")]
+                .filter((node: Element) => Number(node.getAttribute("x")) > 44)
+                .map((node: Element) => (node.textContent || "").trim())
+                .filter((text: string) => text.length > 0);
+            return {
+                soc: onPlot(chart.shadowRoot.querySelector(".soc-row")),
+                money: onPlot(chart.shadowRoot.querySelector(".money-row")),
+            };
+        });
+
+        // A percentage for each end of every bucket's range.
+        expect(labels.soc.filter((text) => text === "90%").length).toBeGreaterThan(0);
+        expect(labels.soc.filter((text) => text === "20%").length).toBeGreaterThan(0);
+        // And both money amounts, cost and gain.
+        expect(labels.money.filter((text) => text === "40.0").length).toBeGreaterThan(0);
+        expect(labels.money.filter((text) => text === "12.0").length).toBeGreaterThan(0);
+    });
+
+    test("hovering the SoC or money row works exactly as hovering the chart does", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        for (const row of [".soc-row", ".money-row"]) {
+            const point = await page.evaluate((selector: string) => {
+                const chart = (document.querySelector("helman-solar-inspector") as any)
+                    .shadowRoot.querySelector("helman-solar-aggregate-chart");
+                const box = (chart.shadowRoot
+                    .querySelectorAll(`${selector} .bucket-tint`)[2] as SVGElement)
+                    .getBoundingClientRect();
+                return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            }, row);
+
+            await page.mouse.move(point.x, point.y);
+            await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector(".hover-tooltip"));
+
+            // The popup, and the column marked in every panel including the
+            // chart above -- the same answer whichever row was pointed at.
+            const state = await page.evaluate(() => {
+                const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
+                const chart = root.querySelector("helman-solar-aggregate-chart");
+                return {
+                    title: root.querySelector(".hover-tooltip-title")?.textContent?.trim(),
+                    chartMarked: !!chart.shadowRoot.querySelector(".bucket-hover"),
+                    rowsMarked: chart.shadowRoot.querySelectorAll(".bucket-tint.hovered").length,
+                };
+            });
+            expect(state.title).toBeTruthy();
+            expect(state.chartMarked).toBe(true);
+            expect(state.rowsMarked).toBe(2);
+
+            await page.mouse.move(5, 5);
+            await page.waitForFunction(() => !(document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector(".hover-tooltip"));
+        }
+    });
+
+    test("clicking a column in a row selects it, as clicking the chart does", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            (chart.shadowRoot.querySelectorAll(".money-row .bucket-tint")[4] as SVGElement)
+                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        });
+        await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".metrics-section"));
+
+        const selected = await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            return chart.shadowRoot.querySelector(".bucket-column.selected")
+                ?.getAttribute("data-bucket");
+        });
+        const keys = await columns(page);
+        expect(selected).toBe(keys[4]);
     });
 });
