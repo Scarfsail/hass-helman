@@ -78,6 +78,11 @@ export interface HelmanUiConfig {
 
 // ── WebSocket message payloads ────────────────────────────────────────────────
 
+/** Request type for the "helman/get_device_tree" WebSocket command. */
+export interface GetDeviceTreeRequest {
+    type: "helman/get_device_tree";
+}
+
 /** Response type for the "helman/get_device_tree" WebSocket command. */
 export interface TreePayload {
     sources: DeviceNodeDTO[];
@@ -85,6 +90,11 @@ export interface TreePayload {
     consumptionTotalSensorId: string | null;
     productionTotalSensorId: string | null;
     uiConfig: HelmanUiConfig;
+}
+
+/** Request type for the "helman/get_history" WebSocket command. */
+export interface GetHistoryRequest {
+    type: "helman/get_history";
 }
 
 /** Response type for the "helman/get_history" WebSocket command. */

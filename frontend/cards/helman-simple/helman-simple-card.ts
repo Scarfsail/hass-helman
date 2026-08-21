@@ -4,8 +4,9 @@ import type { HomeAssistant } from "../../hass-frontend/src/types";
 import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
-import { ValueType, DeviceNodeDTO, TreePayload, HistoryPayload, HelmanUiConfig, applyValueType } from "../helman-api";
+import { ValueType, DeviceNodeDTO, TreePayload, HelmanUiConfig, applyValueType } from "../helman-api";
 import { HistoryEngine } from "../helman/history-engine";
+import { getSharedHelmanStore } from "../helman/store";
 import { DeviceNode } from "../helman/DeviceNode";
 import { hydrateNode } from "../helman/device-node-hydrator";
 import type { BatteryDeviceConfig } from "../helman/DeviceConfig";
@@ -432,9 +433,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private async _loadFromBackend(): Promise<boolean> {
         this._historyEngine?.stop();
         try {
-            const payload = await this._latestHass!.connection.sendMessagePromise<TreePayload>({
-                type: "helman/get_device_tree",
-            });
+            const store = getSharedHelmanStore(this._latestHass!);
+            const payload = await store.getDeviceTree();
             this._uiConfig = payload.uiConfig;
             this._entityMap = this._buildEntityMap(payload);
             this._energy = this._readEnergyValues(this._latestHass!, this._entityMap);
@@ -467,9 +467,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 : null;
             if (this._consumptionNode) this._consumptionNode.isSource = true;
 
-            const history = await this._latestHass!.connection.sendMessagePromise<HistoryPayload>({
-                type: 'helman/get_history',
-            });
+            const history = await store.getHistory();
             this._historyEngine = new HistoryEngine(
                 () => this._latestHass,
                 histBuckets,

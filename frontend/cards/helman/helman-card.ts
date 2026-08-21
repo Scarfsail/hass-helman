@@ -7,9 +7,10 @@ import type { BatteryDeviceConfig } from "./DeviceConfig";
 import "./power-device";
 import "./power-devices-container";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { DeviceNodeDTO, TreePayload, HistoryPayload } from "../helman-api";
+import { DeviceNodeDTO, TreePayload } from "../helman-api";
 import { hydrateNode } from "./device-node-hydrator";
 import { HistoryEngine } from "./history-engine";
+import { getSharedHelmanStore } from "./store";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
     buildNodeDetailParams,
@@ -308,17 +309,14 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     private async _loadBackendData(): Promise<void> {
         this._historyEngine?.stop();
         try {
-            const treePayload = await this._latestHass!.connection.sendMessagePromise<TreePayload>({
-                type: "helman/get_device_tree",
-            });
+            const store = getSharedHelmanStore(this._latestHass!);
+            const treePayload = await store.getDeviceTree();
             this._uiConfig = treePayload.uiConfig;
             this._deviceTree = this._hydrateDeviceNodes(treePayload);
             this._sourceNodes = this._collectSourceNodes(this._deviceTree);
             this._rebuildWatchedEntityIds();
 
-            const history = await this._latestHass!.connection.sendMessagePromise<HistoryPayload>({
-                type: 'helman/get_history',
-            });
+            const history = await store.getHistory();
             const histBuckets = this._uiConfig.history_buckets;
             this._historyEngine = new HistoryEngine(
                 () => this._latestHass,
