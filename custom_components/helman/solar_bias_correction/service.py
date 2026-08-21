@@ -398,10 +398,10 @@ class SolarBiasCorrectionService:
         soc_entity = _entity_id(self._battery_soc_entity_id_provider)
         export_price_entity = self._grid_export_price_entity_id()
 
-        from ..recorder_statistics_span import query_hourly_statistics
+        from ..recorder_statistics_span import SpanStatistics, query_hourly_statistics
 
         try:
-            rows_by_entity = await query_hourly_statistics(
+            span = await query_hourly_statistics(
                 self._hass,
                 [
                     solar_entity,
@@ -419,27 +419,24 @@ class SolarBiasCorrectionService:
             )
         except Exception:
             _LOGGER.exception("Failed to load statistics for span aggregates")
-            rows_by_entity = {}
+            span = SpanStatistics(rows={}, energy_kwh={})
 
-        def _rows(entity_id: str | None) -> dict[datetime, dict[str, Any]]:
-            if not entity_id:
-                return {}
-            return rows_by_entity.get(entity_id) or {}
-
-        solar_kwh = _energy_by_bucket(_rows(solar_entity), bucket, local_tz)
-        imported_kwh = _energy_by_bucket(_rows(import_entity), bucket, local_tz)
-        exported_kwh = _energy_by_bucket(_rows(export_entity), bucket, local_tz)
-        house_kwh = _energy_by_bucket(_rows(house_entity), bucket, local_tz)
-        charged_kwh = _energy_by_bucket(_rows(charge_entity), bucket, local_tz)
-        discharged_kwh = _energy_by_bucket(_rows(discharge_entity), bucket, local_tz)
-        soc_by_bucket = _soc_bounds_by_bucket(_rows(soc_entity), bucket, local_tz)
+        solar_kwh = _energy_by_bucket(span.energy_for(solar_entity), bucket, local_tz)
+        imported_kwh = _energy_by_bucket(span.energy_for(import_entity), bucket, local_tz)
+        exported_kwh = _energy_by_bucket(span.energy_for(export_entity), bucket, local_tz)
+        house_kwh = _energy_by_bucket(span.energy_for(house_entity), bucket, local_tz)
+        charged_kwh = _energy_by_bucket(span.energy_for(charge_entity), bucket, local_tz)
+        discharged_kwh = _energy_by_bucket(
+            span.energy_for(discharge_entity), bucket, local_tz
+        )
+        soc_by_bucket = _soc_bounds_by_bucket(span.rows_for(soc_entity), bucket, local_tz)
 
         import_price_config = self._grid_import_price_config()
         money_by_bucket = _money_by_bucket(
-            _rows(import_entity),
-            _rows(export_entity),
-            _rows(GRID_IMPORT_PRICE_ENTITY_ID),
-            _rows(export_price_entity),
+            span.energy_for(import_entity),
+            span.energy_for(export_entity),
+            span.rows_for(GRID_IMPORT_PRICE_ENTITY_ID),
+            span.rows_for(export_price_entity),
             bucket=bucket,
             local_tz=local_tz,
             import_price_windows=(
@@ -2492,26 +2489,25 @@ def _trim_span_to_cap(start_date: date, end_date: date, bucket: str) -> date:
 
 
 def _energy_by_bucket(
-    rows: dict[datetime, dict[str, Any]],
+    hourly_kwh: dict[datetime, float],
     bucket: str,
     local_tz: ZoneInfo,
 ) -> dict[str, float]:
-    """A cumulative meter's energy per bucket, from hourly ``change``.
+    """A meter's energy per bucket, folded from its per-hour energy.
 
-    ``change`` and never ``sum``: ``sum`` is the meter's running total since its
-    first statistic ever, so adding those up would produce a number with no
-    physical meaning that nonetheless grows plausibly across the span.
+    The hourly figures arrive already differenced and reset-unwrapped from
+    :mod:`..recorder_statistics_span`; the only thing left to decide here is
+    which local day or month each UTC hour belongs to. Deliberately not the
+    statistics ``change`` column -- see that module's docstring for what that
+    column does to a meter that glitches.
 
-    A bucket appears here only if at least one of its hours reported a change, so
-    a caller can tell "nothing recorded" from "recorded zero".
+    A bucket appears here only if at least one of its hours reported energy, so a
+    caller can tell "nothing recorded" from "recorded zero".
     """
     totals: dict[str, float] = {}
-    for utc_hour, row in rows.items():
-        change = row.get("change")
-        if change is None:
-            continue
+    for utc_hour, kwh in hourly_kwh.items():
         key = _bucket_key(utc_hour, bucket, local_tz)
-        totals[key] = totals.get(key, 0.0) + change
+        totals[key] = totals.get(key, 0.0) + kwh
     return totals
 
 
@@ -2543,8 +2539,8 @@ def _soc_bounds_by_bucket(
 
 
 def _money_by_bucket(
-    import_rows: dict[datetime, dict[str, Any]],
-    export_rows: dict[datetime, dict[str, Any]],
+    import_kwh_by_hour: dict[datetime, float],
+    export_kwh_by_hour: dict[datetime, float],
     import_rate_rows: dict[datetime, dict[str, Any]],
     export_rate_rows: dict[datetime, dict[str, Any]],
     *,
@@ -2585,10 +2581,7 @@ def _money_by_bucket(
     cost: dict[str, float] = {}
     gain: dict[str, float] = {}
 
-    for utc_hour, row in import_rows.items():
-        kwh = row.get("change")
-        if kwh is None:
-            continue
+    for utc_hour, kwh in import_kwh_by_hour.items():
         rate = _hourly_rate(import_rate_rows, utc_hour)
         if rate is None:
             rate = _config_import_rate(
@@ -2599,10 +2592,7 @@ def _money_by_bucket(
         key = _bucket_key(utc_hour, bucket, local_tz)
         cost[key] = cost.get(key, 0.0) + kwh * rate
 
-    for utc_hour, row in export_rows.items():
-        kwh = row.get("change")
-        if kwh is None:
-            continue
+    for utc_hour, kwh in export_kwh_by_hour.items():
         rate = _hourly_rate(export_rate_rows, utc_hour)
         if rate is None:
             continue

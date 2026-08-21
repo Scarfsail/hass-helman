@@ -1154,6 +1154,30 @@ def _parse_energy_observations(
     return observations
 
 
+def unwrap_cumulative_energy_series(
+    samples: list[tuple[datetime, float]],
+) -> list[tuple[datetime, float]]:
+    """Lift a resetting cumulative meter into a monotonic series.
+
+    The public door onto :func:`_unwrap_energy_observations`, for callers that
+    hold plain ``(instant, kWh)`` pairs rather than recorder ``State`` rows --
+    hourly long-term statistics, in particular. There is exactly one reset
+    convention in this integration and it lives here: a genuine reset lifts
+    every later reading by the segment's maximum, while a dip that comes back
+    within the rebound window is discarded as a glitch rather than treated as a
+    reset. Long-term statistics apply their own, different convention, which is
+    why anything reading them comes back through this function.
+
+    Input need not be sorted; output is sorted by instant.
+    """
+    observations = [
+        _EnergyObservation(updated_at=instant, value_kwh=value)
+        for instant, value in sorted(samples, key=lambda pair: pair[0])
+    ]
+    unwrapped = _build_unwrapped_energy_observations(observations)
+    return [(item.updated_at, item.value_kwh) for item in unwrapped]
+
+
 def _build_unwrapped_energy_observations(
     observations: list[_EnergyObservation],
 ) -> list[_EnergyObservation]:

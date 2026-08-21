@@ -48,6 +48,10 @@ def _install_import_stubs() -> None:
     history_mod.get_significant_states = _fake_get_significant_states
     sys.modules["homeassistant.components.recorder.history"] = history_mod
 
+    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
+    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
+    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
+
     core_mod = types.ModuleType("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func
@@ -1356,18 +1360,39 @@ def _install_fake_statistics_reader(reads, by_entity):
     the endpoint is a single hourly-statistics read for the whole window, at any
     width, rather than a read per meter or per day.
     """
-    module_name = "custom_components.helman.recorder_statistics_span"
-    original = sys.modules.get(module_name)
-    fake = types.ModuleType(module_name)
+    import importlib
+
+    span_mod = importlib.import_module(
+        "custom_components.helman.recorder_statistics_span"
+    )
+    original = span_mod.query_hourly_statistics
 
     async def query_hourly_statistics(hass, statistic_ids, *, local_start, local_end):
         ids = [entity_id for entity_id in statistic_ids if entity_id]
         reads.append((ids, local_start, local_end))
-        return {entity_id: by_entity.get(entity_id, {}) for entity_id in ids}
+        rows = {entity_id: by_entity.get(entity_id, {}) for entity_id in ids}
+        # The real derivation, not a second one: the rows above are meter
+        # readings, and turning them into per-hour energy is exactly the step
+        # that has to survive a compiler-invented reset.
+        return span_mod.SpanStatistics(
+            rows={
+                entity_id: {
+                    utc_hour: row
+                    for utc_hour, row in entity_rows.items()
+                    if local_start <= utc_hour < local_end
+                }
+                for entity_id, entity_rows in rows.items()
+            },
+            energy_kwh={
+                entity_id: span_mod._hourly_energy_kwh(
+                    entity_rows, local_start=local_start, local_end=local_end
+                )
+                for entity_id, entity_rows in rows.items()
+            },
+        )
 
-    fake.query_hourly_statistics = query_hourly_statistics
-    sys.modules[module_name] = fake
-    return module_name, original
+    span_mod.query_hourly_statistics = query_hourly_statistics
+    return span_mod, original
 
 
 def _stat_rows(rows):
@@ -1385,23 +1410,31 @@ def test_day_aggregates_fold_hourly_statistics_into_local_days_in_one_read():
     service._battery_soc_entity_id_provider = lambda: "sensor.battery_soc"
 
     reads: list[tuple] = []
-    module_name, original_module = _install_fake_statistics_reader(
+    span_mod, original_query = _install_fake_statistics_reader(
         reads,
         {
-            # ``sum`` is the meter's lifetime running total and is deliberately
-            # not the answer to anything here; ``change`` is the hour's energy.
+            # Meter readings, not deltas: the hour's energy is the step between
+            # two of them, which is what survives a compiler-invented reset.
+            # Each series opens on the padded hour before the window.
             "sensor.solar_total": _stat_rows(
                 [
-                    ("2026-04-23T08:00:00+02:00", {"change": 1.5, "sum": 100.5}),
-                    ("2026-04-23T09:00:00+02:00", {"change": 2.5, "sum": 103.0}),
-                    ("2026-04-24T10:00:00+02:00", {"change": 3.0, "sum": 106.0}),
+                    ("2026-04-22T23:00:00+02:00", {"state": 99.0}),
+                    ("2026-04-23T08:00:00+02:00", {"state": 100.5}),
+                    ("2026-04-23T09:00:00+02:00", {"state": 103.0}),
+                    ("2026-04-24T10:00:00+02:00", {"state": 106.0}),
                 ]
             ),
             "sensor.grid_import": _stat_rows(
-                [("2026-04-23T20:00:00+02:00", {"change": 1.25, "sum": 50.0})]
+                [
+                    ("2026-04-23T19:00:00+02:00", {"state": 48.75}),
+                    ("2026-04-23T20:00:00+02:00", {"state": 50.0}),
+                ]
             ),
             "sensor.grid_export": _stat_rows(
-                [("2026-04-24T12:00:00+02:00", {"change": 0.75, "sum": 8.0})]
+                [
+                    ("2026-04-24T11:00:00+02:00", {"state": 7.25}),
+                    ("2026-04-24T12:00:00+02:00", {"state": 8.0}),
+                ]
             ),
             "sensor.battery_soc": _stat_rows(
                 [
@@ -1421,10 +1454,7 @@ def test_day_aggregates_fold_hourly_statistics_into_local_days_in_one_read():
         )
     finally:
         service_mod.dt_util.now = old_now
-        if original_module is None:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = original_module
+        span_mod.query_hourly_statistics = original_query
 
     # One read for every meter and every day of the span.
     assert len(reads) == 1
@@ -1476,7 +1506,7 @@ def test_day_aggregates_fold_hourly_statistics_into_local_days_in_one_read():
 def test_day_aggregates_stop_at_today_and_cap_the_span():
     service = _make_service()
     reads: list[tuple] = []
-    module_name, original_module = _install_fake_statistics_reader(reads, {})
+    span_mod, original_query = _install_fake_statistics_reader(reads, {})
 
     old_now = service_mod.dt_util.now
     try:
@@ -1491,10 +1521,7 @@ def test_day_aggregates_stop_at_today_and_cap_the_span():
         )
     finally:
         service_mod.dt_util.now = old_now
-        if original_module is None:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = original_module
+        span_mod.query_hourly_statistics = original_query
 
     days = [day["date"] for day in payload["days"]]
     assert len(days) == service_mod._MAX_AGGREGATE_BUCKETS["day"]

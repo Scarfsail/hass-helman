@@ -6,9 +6,11 @@ numbers), and it does not issue a query per bucket. What it does instead has
 three ways of being quietly wrong, each of which returns numbers rather than an
 error, so each gets a test here:
 
-* summing the cumulative ``sum`` instead of the per-period ``change``;
-* letting the recorder's seeded ``prev_sum`` dump a meter's whole lifetime into
-  the window's first bucket;
+* trusting the statistics ``change`` column, which the compiler's own reset
+  detection corrupts whenever a ``total_increasing`` meter blinks -- it adds the
+  meter's entire lifetime total into that hour;
+* dropping the hour before the window, leaving the first real hour with no
+  earlier reading to be differenced against;
 * folding float timestamps by arithmetic instead of by local time, which loses a
   25-hour day.
 
@@ -200,32 +202,34 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
         _set_rows(
             {
                 SOLAR_METER: [
-                    # The window's left edge, one hour before it starts. The
-                    # recorder seeds ``change`` from zero when it finds no
-                    # earlier row, so this hour claims the meter's whole life --
-                    # and it must not land in 2026-04-23.
-                    _row(_hour("2026-04-22T23:00:00+02:00"), change=999.0, sum=99.0),
-                    # ``sum`` is cumulative and deliberately inconsistent with
-                    # ``change`` here: anything that adds up the sums produces
-                    # 100+102.5+105.5 kWh instead of 1.5+2.5.
-                    _row(_hour("2026-04-23T08:00:00+02:00"), change=1.5, sum=100.5),
-                    _row(_hour("2026-04-23T09:00:00+02:00"), change=2.5, sum=103.0),
-                    _row(_hour("2026-04-24T10:00:00+02:00"), change=3.0, sum=106.0),
+                    # The padded hour, one before the window opens. It is what
+                    # the first real hour is differenced against -- and its own
+                    # reading must not itself become energy in 2026-04-23.
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=99.0),
+                    # Readings, not deltas: 1.5 kWh then 2.5 kWh on the 23rd.
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=100.5),
+                    _row(_hour("2026-04-23T09:00:00+02:00"), state=103.0),
+                    _row(_hour("2026-04-24T10:00:00+02:00"), state=106.0),
                 ],
                 GRID_IMPORT_METER: [
-                    _row(_hour("2026-04-23T20:00:00+02:00"), change=1.25, sum=50.0)
+                    _row(_hour("2026-04-23T19:00:00+02:00"), state=48.75),
+                    _row(_hour("2026-04-23T20:00:00+02:00"), state=50.0),
                 ],
                 GRID_EXPORT_METER: [
-                    _row(_hour("2026-04-24T12:00:00+02:00"), change=0.75, sum=8.0)
+                    _row(_hour("2026-04-24T11:00:00+02:00"), state=7.25),
+                    _row(_hour("2026-04-24T12:00:00+02:00"), state=8.0),
                 ],
                 HOUSE_METER: [
-                    _row(_hour("2026-04-23T07:00:00+02:00"), change=2.0, sum=70.0)
+                    _row(_hour("2026-04-23T06:00:00+02:00"), state=68.0),
+                    _row(_hour("2026-04-23T07:00:00+02:00"), state=70.0),
                 ],
                 BATTERY_CHARGE_METER: [
-                    _row(_hour("2026-04-23T13:00:00+02:00"), change=4.0, sum=40.0)
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=36.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=40.0),
                 ],
                 BATTERY_DISCHARGE_METER: [
-                    _row(_hour("2026-04-24T19:00:00+02:00"), change=1.0, sum=12.0)
+                    _row(_hour("2026-04-24T18:00:00+02:00"), state=11.0),
+                    _row(_hour("2026-04-24T19:00:00+02:00"), state=12.0),
                 ],
                 BATTERY_SOC: [
                     _row(_hour("2026-04-23T06:00:00+02:00"), min=41.0, max=60.0),
@@ -278,7 +282,7 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
         call = STATISTICS_CALLS[0]
         self.assertEqual(call["period"], "hour")
         self.assertEqual(call["units"], {"energy": "kWh"})
-        self.assertEqual(call["types"], {"change", "min", "max", "mean"})
+        self.assertEqual(call["types"], {"state", "min", "max", "mean"})
         self.assertEqual(
             call["statistic_ids"],
             {
@@ -293,8 +297,8 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                 EXPORT_PRICE,
             },
         )
-        # One hour of padding before local midnight, so the seeded row above is
-        # the one the recorder mis-attributes rather than a real bucket's hour.
+        # One hour of padding before local midnight, so the window's first hour
+        # has an earlier reading to be differenced against.
         self.assertEqual(
             call["start_time"],
             _hour("2026-04-23T00:00:00+02:00").astimezone(timezone.utc)
@@ -314,8 +318,11 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
         _set_rows(
             {
                 SOLAR_METER: [
-                    _row(first_hour + timedelta(hours=index), change=1.0, sum=float(index))
-                    for index in range(25)
+                    _row(first_hour - timedelta(hours=1), state=0.0),
+                    *(
+                        _row(first_hour + timedelta(hours=index), state=float(index + 1))
+                        for index in range(25)
+                    ),
                 ]
             }
         )
@@ -355,18 +362,82 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(STATISTICS_CALLS), 1)
 
 
+class TestResetArtefacts(unittest.IsolatedAsyncioTestCase):
+    """The reason this endpoint does not read the ``change`` column.
+
+    Taken from a real inverter feed: a ``total_increasing`` meter that blinked
+    unavailable and came back made the statistics compiler record a counter
+    reset, so it added the meter's entire lifetime reading into that hour. The
+    day's ``change`` came to 49 MWh against a true 37 kWh, and one hour carried
+    two such resets at once. The meter's own ``state`` readings were fine
+    throughout, which is what this endpoint differences instead.
+    """
+
+    async def test_a_lifetime_sized_change_column_does_not_reach_the_bucket(self):
+        _set_rows(
+            {
+                SOLAR_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=49181.0, change=0.0),
+                    _row(_hour("2026-04-23T07:00:00+02:00"), state=49184.7, change=3.7),
+                    _row(_hour("2026-04-23T08:00:00+02:00"), state=49191.1, change=6.4),
+                    # The blink. ``change`` claims the meter's whole life; the
+                    # reading beside it says 8.0 kWh actually arrived.
+                    _row(
+                        _hour("2026-04-23T09:00:00+02:00"),
+                        state=49199.1,
+                        change=49199.1,
+                    ),
+                    # And an hour carrying two resets at once.
+                    _row(
+                        _hour("2026-04-23T10:00:00+02:00"),
+                        state=49202.4,
+                        change=98404.8,
+                    ),
+                ]
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        # 3.7 + 6.4 + 8.0 + 3.3, to the tenth of a Wh the payload rounds to.
+        self.assertEqual(payload["days"][0]["solarWh"], 21400.0)
+
+    async def test_a_genuine_midnight_reset_is_unwrapped_not_counted_as_energy(self):
+        # A daily-resetting meter drops to zero at midnight. Differencing alone
+        # would hand the bucket a large negative step; the shared unwrap lifts
+        # the series instead, which is what the raw-state path does too.
+        _set_rows(
+            {
+                SOLAR_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=30.0),
+                    _row(_hour("2026-04-23T09:00:00+02:00"), state=4.0),
+                    _row(_hour("2026-04-23T10:00:00+02:00"), state=6.5),
+                    _row(_hour("2026-04-23T11:00:00+02:00"), state=9.0),
+                ]
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+
+        # The 09:00 reading opens a new segment, so the day is 4.0 + 2.5 + 2.5.
+        self.assertEqual(payload["days"][0]["solarWh"], 9000.0)
+
+
 class TestMonthBuckets(unittest.IsolatedAsyncioTestCase):
     async def test_the_span_snaps_outward_to_whole_months(self):
         _set_rows(
             {
                 SOLAR_METER: [
+                    _row(_hour("2026-02-28T23:00:00+01:00"), state=8.0),
                     # The 1st of March, which a request starting on the 17th
                     # would miss without the outward snap.
-                    _row(_hour("2026-03-01T09:00:00+01:00"), change=2.0, sum=10.0),
-                    _row(_hour("2026-03-20T09:00:00+01:00"), change=3.0, sum=13.0),
+                    _row(_hour("2026-03-01T09:00:00+01:00"), state=10.0),
+                    _row(_hour("2026-03-20T09:00:00+01:00"), state=13.0),
                     # And the 30th of April, likewise past a request ending on
                     # the 9th.
-                    _row(_hour("2026-04-30T09:00:00+02:00"), change=4.0, sum=17.0),
+                    _row(_hour("2026-04-30T09:00:00+02:00"), state=17.0),
                 ]
             }
         )
@@ -441,18 +512,20 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         _set_rows(
             {
                 GRID_IMPORT_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
                     # 03:00 has no recorded rate, so the window table fills it.
-                    _row(_hour("2026-04-23T03:00:00+02:00"), change=1.0, sum=1.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=1.0),
                     # 09:00 does, and the recorded rate wins over the window's
                     # 5.0 -- history first, config only as a gap-fill.
-                    _row(_hour("2026-04-23T09:00:00+02:00"), change=2.0, sum=3.0),
-                    _row(_hour("2026-04-24T05:00:00+02:00"), change=1.0, sum=4.0),
+                    _row(_hour("2026-04-23T09:00:00+02:00"), state=3.0),
+                    _row(_hour("2026-04-24T05:00:00+02:00"), state=4.0),
                 ],
                 GRID_EXPORT_METER: [
-                    _row(_hour("2026-04-23T12:00:00+02:00"), change=3.0, sum=3.0),
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=3.0),
                     # No export rate for this hour, and no config fill exists for
                     # the sell side, so its kWh are simply not valued.
-                    _row(_hour("2026-04-23T13:00:00+02:00"), change=1.0, sum=4.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=4.0),
                 ],
                 IMPORT_PRICE: [
                     _row(_hour("2026-04-23T09:00:00+02:00"), mean=7.0),
@@ -480,8 +553,9 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         _set_rows(
             {
                 GRID_IMPORT_METER: [
-                    _row(_hour("2026-04-23T03:00:00+02:00"), change=1.0, sum=1.0),
-                    _row(_hour("2026-04-23T09:00:00+02:00"), change=2.0, sum=3.0),
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=1.0),
+                    _row(_hour("2026-04-23T09:00:00+02:00"), state=3.0),
                 ],
                 IMPORT_PRICE: [_row(_hour("2026-04-23T09:00:00+02:00"), mean=7.0)],
             }
@@ -503,14 +577,17 @@ class TestQueryHourlyStatistics(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
         local_start = _hour("2026-04-23T00:00:00+02:00")
 
-        by_entity = await span_mod.query_hourly_statistics(
+        span = await span_mod.query_hourly_statistics(
             hass,
             ["sensor.a", None, "sensor.b", "sensor.a"],
             local_start=local_start,
             local_end=local_start + timedelta(days=1),
         )
 
-        self.assertEqual(by_entity, {"sensor.a": {}, "sensor.b": {}})
+        self.assertEqual(span.rows, {"sensor.a": {}, "sensor.b": {}})
+        self.assertEqual(span.energy_kwh, {"sensor.a": {}, "sensor.b": {}})
+        self.assertEqual(span.rows_for(None), {})
+        self.assertEqual(span.energy_for("sensor.unconfigured"), {})
         self.assertEqual(STATISTICS_CALLS[0]["statistic_ids"], {"sensor.a", "sensor.b"})
 
     async def test_an_empty_id_list_costs_no_query(self):
@@ -518,15 +595,15 @@ class TestQueryHourlyStatistics(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
         local_start = _hour("2026-04-23T00:00:00+02:00")
 
-        self.assertEqual(
-            await span_mod.query_hourly_statistics(
-                hass,
-                [None, ""],
-                local_start=local_start,
-                local_end=local_start + timedelta(days=1),
-            ),
-            {},
+        span = await span_mod.query_hourly_statistics(
+            hass,
+            [None, ""],
+            local_start=local_start,
+            local_end=local_start + timedelta(days=1),
         )
+
+        self.assertEqual(span.rows, {})
+        self.assertEqual(span.energy_kwh, {})
         self.assertEqual(STATISTICS_CALLS, [])
 
 
