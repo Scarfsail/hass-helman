@@ -110,16 +110,6 @@ function contiguousRuns(indices: readonly number[], has: (index: number) => bool
 }
 
 /**
- * One run of buckets as a closed step area: along the top edge and back along
- * the base.
- *
- * Every filled shape in this chart is built this way -- the energy bands, the
- * SoC ranges and the money cells alike -- because a bucket is an *interval*:
- * its edge runs flat across the whole width it stands for and meets its
- * neighbour's, which is what makes the aggregate views read as the day chart at
- * a wider zoom rather than as a bar chart of separate things.
- */
-/**
  * A money gridline's label: enough digits to tell two ticks apart, and no more.
  *
  * A row's ticks are its extremes and zero, so they are far apart; two decimals
@@ -131,6 +121,16 @@ function formatMoneyTick(value: number): string {
     return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
 }
 
+/**
+ * One run of buckets as a closed step area: along the top edge and back along
+ * the base.
+ *
+ * Every filled shape in this chart is built this way -- the energy bands, the
+ * SoC ranges and the money cells alike -- because a bucket is an *interval*:
+ * its edge runs flat across the whole width it stands for and meets its
+ * neighbour's, which is what makes the aggregate views read as the day chart at
+ * a wider zoom rather than as a bar chart of separate things.
+ */
 function stepAreaPath(
     run: readonly number[],
     topAt: (index: number) => number,
@@ -222,11 +222,14 @@ export class HelmanSolarAggregateChart extends LitElement {
         if (rows.length === 0) {
             return nothing;
         }
+        // Deliberately no bail on an empty stack. A span whose energy meters
+        // have no statistics -- purged, or never configured -- still has SoC
+        // bounds and money to show, and the energy chart is where the hit rects
+        // live, so dropping it would take the pointing surface with it. The
+        // chart draws its axis over an empty field instead, which is the honest
+        // reading of "no energy here", and the two rows below carry on.
         const set = this._buildStack(rows);
         const indices = stackSlots(set, 1);
-        if (indices.length === 0) {
-            return nothing;
-        }
         return this._renderChart(rows, set, indices);
     }
 
@@ -355,7 +358,13 @@ export class HelmanSolarAggregateChart extends LitElement {
             const max = row?.batteryMaxSocPct ?? null;
             if (min === null || max === null) return null;
             if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
-            return { min: Math.min(min, max), max: Math.max(min, max) };
+            // Clamped to the axis this row draws. A BMS that rounds to 100.4 %
+            // would otherwise push the range's top edge above the plot and
+            // through the caption sitting in the margin, and a negative reading
+            // would spill out of the bottom. The shared gauge clamps for the
+            // same reason.
+            const clamp = (pct: number) => Math.max(0, Math.min(100, pct));
+            return { min: clamp(Math.min(min, max)), max: clamp(Math.max(min, max)) };
         };
         const indices = rows.map((_, index) => index);
         const runs = contiguousRuns(indices, (index) => bounds(rows[index]) !== null);
@@ -434,9 +443,18 @@ export class HelmanSolarAggregateChart extends LitElement {
         const plotHeight = MONEY_ROW.height - MONEY_ROW.marginTop - MONEY_ROW.marginBottom;
         const maxUp = Math.max(0, ...drawn);
         const maxDown = Math.max(0, ...drawn.map((value) => -value));
-        const bands = (maxUp > 0 ? 1 : 0) + (maxDown > 0 ? 1 : 0);
-        const bandHeight = bands > 0 ? plotHeight / bands : plotHeight;
-        const zeroY = MONEY_ROW.marginTop + (maxUp > 0 ? bandHeight : 0);
+        // A side with nothing on it gets no half of the plot: cost alone grows
+        // up from the floor, gain alone down from the ceiling. A span priced at
+        // exactly zero throughout has *neither* side, and is drawn as though it
+        // had both -- otherwise the baseline lands on the row's top edge with an
+        // empty field beneath it, which reads as a row of pure gain rather than
+        // a row of nothing.
+        const empty = maxUp === 0 && maxDown === 0;
+        const upBand = maxUp > 0 || empty;
+        const downBand = maxDown > 0 || empty;
+        const bands = (upBand ? 1 : 0) + (downBand ? 1 : 0);
+        const bandHeight = plotHeight / bands;
+        const zeroY = MONEY_ROW.marginTop + (upBand ? bandHeight : 0);
         const extent = Math.max(0.0001, maxUp, maxDown);
         const yFor = (value: number) => zeroY - (value / extent) * bandHeight;
         const ticks = [

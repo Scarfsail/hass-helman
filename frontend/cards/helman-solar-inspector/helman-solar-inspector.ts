@@ -429,6 +429,20 @@ type TooltipContent = {
   rows: TooltipRow[];
 };
 
+/**
+ * A span's money, with each side independently unknown.
+ *
+ * Not `MoneyTotals`: that type is the day view's, where every slot on the rails
+ * is priced and the three numbers always exist. Over a span they need not --
+ * see `_spanMoney` -- and widening `MoneyTotals` would push nulls into the day
+ * view, which has no way to mean them.
+ */
+type SpanMoneyTotals = {
+  cost: number | null;
+  gain: number | null;
+  net: number | null;
+};
+
 /** The four things the combined chart stacks; one popup section per family. */
 type SeriesFamily = "solar" | "house" | "battery" | "grid";
 
@@ -1891,13 +1905,16 @@ export class HelmanSolarInspector extends LitElement {
     }
     const money = this._spanMoney([row], [row.date]);
     if (money !== null) {
-      const amount = (labelKey: string, value: number, color: string) => rows.push({
+      const amount = (labelKey: string, value: number | null, color: string) => rows.push({
         label: this._t(`bias_correction.inspector.${labelKey}`),
         actual: null,
         forecast: { value: this._formatSpanMoney(value), color },
       });
       amount("import_cost", money.cost, GRID_IMPORT_COLOR);
       amount("export_gain", money.gain, GRID_EXPORT_COLOR);
+      // The net too, or the popup stops one row short of the panel it claims to
+      // repeat -- and the net is the figure a reader is usually after.
+      amount("net_cost", money.net, GRID_COLOR);
     }
     this._tooltip = {
       x,
@@ -1929,28 +1946,53 @@ export class HelmanSolarInspector extends LitElement {
       const cost = Number.isFinite(row.moneyCost as number) ? (row.moneyCost as number) : null;
       const gain = Number.isFinite(row.moneyGain as number) ? (row.moneyGain as number) : null;
       if (cost === null && gain === null) continue;
+      // Zero stands in only so `sumMoney` has a number to add; whether the side
+      // was priced at all is tracked separately in `_spanMoney`, which is what
+      // decides between a figure and an em dash. A zero written here must never
+      // reach the reader as one.
       points.push({ slot: row.date, cost: cost ?? 0, gain: gain ?? 0 });
     }
     return points;
   }
 
   /**
-   * The three money figures over a set of buckets, or null where none of them
-   * carries a price at all -- an em dash, never a zero.
+   * The three money figures over a set of buckets, each independently nullable.
+   *
+   * The backend reserves `null` for "this side could not be priced" and says so
+   * in as many words -- an export entity with no statistics earns `moneyGain:
+   * null`, because "earned nothing" is a claim the data does not support. A
+   * side is a figure here only if some bucket in the selection actually priced
+   * it; otherwise it stays null and renders as an em dash.
+   *
+   * The net follows both: subtracting an unknown gain from a known cost would
+   * restate the whole import bill as what the grid came to, which is the same
+   * unsupported claim wearing a different label. In a healthy setup neither side
+   * is ever null -- a working export meter on a day that exported nothing prices
+   * a real 0.00 -- so this costs the ordinary reader nothing.
    */
   private _spanMoney(
     rows: readonly SpanAggregateRow[],
     keys: readonly string[],
-  ): MoneyTotals | null {
+  ): SpanMoneyTotals | null {
     const points = this._spanMoneyPoints(rows);
     const wanted = new Set(keys);
     if (!points.some((point) => wanted.has(point.slot))) return null;
-    return sumMoney(points, keys);
+    const priced = (read: (row: SpanAggregateRow) => number | null) =>
+      rows.some((row) => wanted.has(row.date) && Number.isFinite(read(row) as number));
+    const totals: MoneyTotals = sumMoney(points, keys);
+    const cost = priced((row) => row.moneyCost) ? totals.cost : null;
+    const gain = priced((row) => row.moneyGain) ? totals.gain : null;
+    return {
+      cost,
+      gain,
+      net: cost !== null && gain !== null ? cost - gain : null,
+    };
   }
 
+  /** Missing money is an em dash, matching the day view's own money rail. */
   private _formatSpanMoney(value: number | null): string {
     if (value === null || !Number.isFinite(value)) {
-      return this._t("bias_correction.inspector.actual_not_available");
+      return "—";
     }
     return `${value.toFixed(2)} ${this._span?.currency ?? ""}`.trim();
   }

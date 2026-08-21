@@ -43,8 +43,12 @@ async function loadCardBundle(page: Page): Promise<void> {
  * shapes the backend really produces — a battery sensor that started recording
  * mid-day, a day the recorder never saw — and both are drawn by *not* drawing.
  */
-async function mountInspector(page: Page, holes = false): Promise<void> {
-    await page.evaluate((punchHoles: boolean) => {
+async function mountInspector(
+    page: Page,
+    holes = false,
+    variant: "" | "no-gain" | "over-soc" | "no-energy" = "",
+): Promise<void> {
+    await page.evaluate(([punchHoles, shape]: [boolean, string]) => {
         const today = new Date();
         const iso = (date: Date) => date.toISOString().slice(0, 10);
         const date = iso(today);
@@ -108,18 +112,28 @@ async function mountInspector(page: Page, holes = false): Promise<void> {
             while (cursor <= last) {
                 const halfKnown = punchHoles && bucket !== "month" && index === 3;
                 const missing = punchHoles && bucket !== "month" && index === 4;
+                // An export price entity with no statistics: every bucket is
+                // priced on the import side and on neither other.
+                const noGain = shape === "no-gain";
+                // A BMS that rounds past the top of its own scale, and the same
+                // bucket's neighbour sitting exactly on it.
+                const overSoc = shape === "over-soc";
+                // Energy meters with no statistics at all, SoC and money intact.
+                const noEnergy = shape === "no-energy";
                 rows.push({
                     date: iso(cursor),
-                    solarWh: missing ? null : 20000 + index * 500,
-                    gridImportKwh: missing ? null : 4,
-                    gridExportKwh: missing ? null : 6,
+                    solarWh: missing || noEnergy ? null : 20000 + index * 500,
+                    gridImportKwh: missing || noEnergy ? null : 4,
+                    gridExportKwh: missing || noEnergy ? null : 6,
                     batteryMinSocPct: halfKnown || missing ? null : 20,
-                    batteryMaxSocPct: missing ? null : 90,
-                    houseWh: missing ? null : 18000,
-                    batteryChargeWh: missing ? null : 7000,
-                    batteryDischargeWh: missing ? null : 6000,
+                    batteryMaxSocPct: missing
+                        ? null
+                        : overSoc ? (index === 0 ? 100.4 : 100) : 90,
+                    houseWh: missing || noEnergy ? null : 18000,
+                    batteryChargeWh: missing || noEnergy ? null : 7000,
+                    batteryDischargeWh: missing || noEnergy ? null : 6000,
                     moneyCost: missing ? null : 40,
-                    moneyGain: missing ? null : 12,
+                    moneyGain: missing || noGain ? null : 12,
                 });
                 index += 1;
                 if (bucket === "month") {
@@ -156,7 +170,7 @@ async function mountInspector(page: Page, holes = false): Promise<void> {
             },
         };
         document.body.appendChild(el);
-    }, holes);
+    }, [holes, variant] as [boolean, string]);
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
@@ -736,5 +750,83 @@ test.describe("solar inspector aggregate views", () => {
                     Math.abs(rect.getBoundingClientRect().x - hover.x) < 1);
         });
         expect(aligned).toBe(true);
+    });
+
+    test("an unpriceable export side stays an em dash, and takes the net with it", async ({ page }) => {
+        // The backend reserves null for "this side could not be priced" and says
+        // so: an export entity with no statistics earns moneyGain: null, because
+        // "earned nothing" is a claim the data does not support. Zero-filling it
+        // here would print `0.00` and a net equal to the whole import bill --
+        // the unsupported claim, restated by the card.
+        await mountInspector(page, false, "no-gain");
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            (chart.shadowRoot.querySelectorAll(".bucket-column")[1] as SVGElement)
+                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        });
+        await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".metrics-section"));
+
+        const text = await page.evaluate(() => ((
+            document.querySelector("helman-solar-inspector") as any
+        ).shadowRoot.querySelector(".metrics-section").textContent as string)
+            .replace(/\s+/g, " "));
+
+        // The cost is known; the gain and the net it feeds are not, and say so.
+        expect(text).toMatch(/Import cost 40\.00 CZK/);
+        expect(text).toMatch(/Export gain \u2014/);
+        expect(text).toMatch(/Net cost \u2014/);
+        expect(text).not.toMatch(/Export gain 0\.00/);
+    });
+
+    test("an out-of-range SoC reading is clamped to the row's own scale", async ({ page }) => {
+        // Some BMS feeds round past 100 %. Unclamped, the range's top edge
+        // leaves the plot and crosses the caption drawn in the margin above it.
+        await mountInspector(page, false, "over-soc");
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const tops = await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            const path = chart.shadowRoot.querySelector(".soc-row path");
+            const numbers = (path.getAttribute("d") as string)
+                .match(/-?\d+(\.\d+)?/g)!.map(Number);
+            // The top edge is walked first, two vertices per bucket: y of the
+            // 100.4 % bucket, then y of the 100 % one beside it.
+            return { first: numbers[1], second: numbers[5] };
+        });
+
+        // Clamped, the two draw at the same height; unclamped the first is above.
+        expect(tops.first).toBe(tops.second);
+    });
+
+    test("a span with no energy statistics still draws its SoC and money rows", async ({ page }) => {
+        // Those rows have their own data and their own null handling; bailing on
+        // an empty energy stack would discard two panels that had something to
+        // say. The energy chart stays too, because the hit rects live in it.
+        await mountInspector(page, false, "no-energy");
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        const present = await page.evaluate(() => {
+            const chart = (document.querySelector("helman-solar-inspector") as any)
+                .shadowRoot.querySelector("helman-solar-aggregate-chart");
+            return {
+                energyBands: chart.shadowRoot.querySelectorAll("path.energy-band").length,
+                soc: !!chart.shadowRoot.querySelector(".soc-row path"),
+                money: !!chart.shadowRoot.querySelector(".money-row path"),
+                columns: chart.shadowRoot.querySelectorAll(".bucket-column").length,
+            };
+        });
+
+        expect(present.energyBands).toBe(0);
+        expect(present.soc).toBe(true);
+        expect(present.money).toBe(true);
+        expect(present.columns).toBeGreaterThan(0);
     });
 });
