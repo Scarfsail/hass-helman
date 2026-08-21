@@ -42,6 +42,7 @@ from .models import (
     SolarBiasSlotExplainability,
     SolarBiasTrainingExplainability,
     inspector_day_to_payload,
+    navigation_range_payload,
     training_explainability_to_payload,
 )
 from .trainer import compute_fingerprint, train
@@ -60,6 +61,14 @@ _LOGGER = logging.getLogger(__name__)
 #: the same span, which is the point -- the ceiling on the query is the same
 #: either way, and it admits the year view the aggregate views are for.
 _MAX_AGGREGATE_BUCKETS = {"day": 366, "month": 13}
+#: How long the recorder's answer about where history begins is trusted for.
+#:
+#: The floor moves for two reasons and neither is urgent: a purge trims the far
+#: end, a back-fill extends it. Six hours is short enough that neither goes
+#: unnoticed for a session and long enough that the probe is invisible next to
+#: the reads the views themselves issue.
+_HISTORY_FLOOR_TTL = timedelta(hours=6)
+
 #: The price rails' own grid, matching the schedule's canonical slot.
 PRICE_RAIL_SLOT_MINUTES = 15
 MINUTES_PER_DAY = 24 * 60
@@ -137,6 +146,11 @@ class SolarBiasCorrectionService:
         self._training_lock = asyncio.Lock()
         self._training_in_progress = False
         self._last_emitted_status: tuple[str, str] | None = None
+        #: The recorder's last answer about where the meters' history begins, and
+        #: when it was asked. ``None`` for "asked, and there is nothing" -- which
+        #: is why the timestamp is what decides whether to re-ask, not the value.
+        self._history_floor: date | None = None
+        self._history_floor_probed_at: datetime | None = None
 
     async def async_setup(self) -> None:
         stored = self._store.profile
@@ -374,8 +388,20 @@ class SolarBiasCorrectionService:
         # short at today: a partial current month is the answer, not an absent
         # one.
         end_date = min(end_date, local_now.date())
+        # The range travels with every answer, empty ones included: it is what
+        # the card navigates by, and a span with no rows is exactly when the
+        # reader is about to press an arrow.
+        span_min_date, span_max_date = await self._async_navigation_range(local_now)
+        navigation_range = navigation_range_payload(
+            span_min_date.isoformat(), span_max_date.isoformat()
+        )
         if end_date < start_date:
-            return {"bucket": bucket, "currency": None, "days": []}
+            return {
+                "bucket": bucket,
+                "currency": None,
+                "days": [],
+                "range": navigation_range,
+            }
         start_date = _trim_span_to_cap(start_date, end_date, bucket)
 
         local_start = datetime.combine(start_date, time(0, 0), tzinfo=local_tz)
@@ -400,18 +426,14 @@ class SolarBiasCorrectionService:
         def _entity_id(provider) -> str | None:
             return provider() if provider is not None else None
 
-        raw_solar_entity = self._cfg.total_energy_entity_id
-        solar_entity = (
-            raw_solar_entity.strip() if isinstance(raw_solar_entity, str) else None
-        )
-        import_entity = _entity_id(self._grid_import_energy_entity_id_provider)
-        export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
-        # The house's own meter, never solar/grid/battery arithmetic: the day
-        # view reads this same meter, and a second, subtractive definition of
-        # house load would disagree with the number sitting next to it.
-        house_entity = _entity_id(self._house_energy_entity_id_provider)
-        charge_entity = _entity_id(self._battery_charge_energy_entity_id_provider)
-        discharge_entity = _entity_id(self._battery_discharge_energy_entity_id_provider)
+        (
+            solar_entity,
+            import_entity,
+            export_entity,
+            house_entity,
+            charge_entity,
+            discharge_entity,
+        ) = self._energy_meter_entity_ids()
         soc_entity = _entity_id(self._battery_soc_entity_id_provider)
         # Two export rate sources, asked for together and resolved per hour
         # below: the mirror Helman publishes, whose statistics are the only ones
@@ -495,6 +517,7 @@ class SolarBiasCorrectionService:
             "bucket": bucket,
             "currency": self._resolve_span_currency(import_price_config),
             "days": days,
+            "range": navigation_range,
         }
 
     def _resolve_span_currency(self, import_price_config) -> str | None:
@@ -514,15 +537,110 @@ class SolarBiasCorrectionService:
                 return unit
         return self._grid_export_price_entity_unit()
 
+    def _energy_meter_entity_ids(
+        self,
+    ) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None]:
+        """The six meters whose history the inspector actually draws.
+
+        Solar, grid import, grid export, house, battery charge, battery
+        discharge -- in that order, and always in that order, because two callers
+        unpack this positionally. The house entry is the house's *own* meter and
+        never solar/grid/battery arithmetic: the day view reads this same meter,
+        and a second, subtractive definition of house load would disagree with
+        the number sitting next to it.
+
+        These are the meters, and only the meters. The battery SoC sensor and the
+        price rails are read alongside them by the span aggregates, but they are
+        not history in the sense that matters here -- a month with prices and no
+        meters has nothing to draw -- which is why the history floor asks about
+        this list rather than about everything the span read touches.
+        """
+
+        def _entity_id(provider) -> str | None:
+            return provider() if provider is not None else None
+
+        raw_solar_entity = self._cfg.total_energy_entity_id
+        solar_entity = (
+            raw_solar_entity.strip() if isinstance(raw_solar_entity, str) else None
+        )
+        return (
+            solar_entity,
+            _entity_id(self._grid_import_energy_entity_id_provider),
+            _entity_id(self._grid_export_energy_entity_id_provider),
+            _entity_id(self._house_energy_entity_id_provider),
+            _entity_id(self._battery_charge_energy_entity_id_provider),
+            _entity_id(self._battery_discharge_energy_entity_id_provider),
+        )
+
+    async def _async_history_floor(self, local_now: datetime) -> date:
+        """The oldest date the inspector may be browsed back to.
+
+        The recorder's answer where it has one, and the bias trainer's window
+        where it does not. The trainer's window is the floor this used to be --
+        ``today - usable_days``, a count of usable *training samples* -- and it
+        was wrong in the only way a bound can be: it hid data that exists. It
+        stays as the fallback because a fresh install with no compiled statistics
+        yet still has to be able to browse the days it has, and because taking
+        the *minimum* of the two means this change can only ever widen the range,
+        never narrow one somebody is already using.
+
+        Cached, and deliberately not forever. A purge moves the true floor
+        forward and a back-fill moves it back, so the answer is re-asked every
+        :data:`_HISTORY_FLOOR_TTL`; between refreshes it costs nothing, which is
+        what lets both payloads ask on every request without either of them
+        having to know it is a database read.
+        """
+        fallback = local_now.date() - timedelta(
+            days=max(self._metadata.usable_days, 0)
+        )
+
+        cached_at = self._history_floor_probed_at
+        if cached_at is None or local_now - cached_at >= _HISTORY_FLOOR_TTL:
+            # Stamped before the await, not after: two payloads asked for at once
+            # would otherwise both see an unstamped cache and both probe.
+            self._history_floor_probed_at = local_now
+            self._history_floor = await self._async_probe_history_floor()
+
+        probed = self._history_floor
+        return fallback if probed is None else min(probed, fallback)
+
+    async def _async_probe_history_floor(self) -> date | None:
+        """Ask the recorder where the meters' statistics begin, or ``None``.
+
+        Failures are swallowed to ``None`` rather than raised: the floor is
+        navigation furniture, and a recorder that cannot answer should cost the
+        reader the deeper range, not the whole inspector.
+        """
+        from ..recorder_statistics_span import query_oldest_statistics_date
+
+        try:
+            return await query_oldest_statistics_date(
+                self._hass,
+                self._energy_meter_entity_ids(),
+                local_tz=ZoneInfo(str(self._hass.config.time_zone)),
+            )
+        except Exception:
+            _LOGGER.exception("Failed to probe the recorder for the history floor")
+            return None
+
+    async def _async_navigation_range(self, local_now: datetime) -> tuple[date, date]:
+        """The dates the inspector's navigation may move between, inclusive.
+
+        One definition, asked by both payloads, so the day view and the aggregate
+        views cannot disagree about where history ends. Forward is unchanged:
+        one day per configured daily-energy entity, which is how far the forecast
+        reaches.
+        """
+        max_date = local_now.date() + timedelta(
+            days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
+        )
+        return await self._async_history_floor(local_now), max_date
+
     async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
         target_date = date.fromisoformat(raw_date)
         local_now = dt_util.as_local(dt_util.now())
         today = local_now.date()
-        previous_days = max(self._metadata.usable_days, 0)
-        min_date = today - timedelta(days=previous_days)
-        max_date = today + timedelta(
-            days=max(len(self._cfg.daily_energy_entity_ids) - 1, 0)
-        )
+        min_date, max_date = await self._async_navigation_range(local_now)
 
         status, effective_variant, _fallback_reason = self._resolve_status()
         timezone = ZoneInfo(str(self._hass.config.time_zone))

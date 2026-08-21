@@ -58,6 +58,14 @@ def _install_import_stubs() -> None:
     history_mod.get_significant_states = _fake_get_significant_states
     sys.modules["homeassistant.components.recorder.history"] = history_mod
 
+    # The inspector day asks the recorder where its statistics begin, which
+    # imports the span module. Answering with nothing leaves the floor at the
+    # trainer's window, which is what every assertion in this file was written
+    # against.
+    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
+    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
+    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
+
     core_mod = types.ModuleType("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
     core_mod.callback = lambda func: func

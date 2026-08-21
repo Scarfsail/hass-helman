@@ -10,7 +10,9 @@ span unaffordable.
 Home Assistant's hourly long-term statistics hold ~8760 rows per entity per year
 and already carry everything an aggregate view needs: the meter reading at each
 hour's end, and the min/max/mean of a measurement. This module is the one read
-that fetches them.
+that fetches them -- and, in :func:`query_oldest_statistics_date`, the one that
+asks the same table how far back it goes, so that a history view's floor is the
+data rather than a guess made elsewhere.
 
 Three things about that API are easy to get wrong, and each of them produces
 plausible-looking numbers rather than an error:
@@ -63,7 +65,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -110,6 +112,16 @@ _SEED_PAD = timedelta(hours=1)
 #: avoid it. A genuine reset is unaffected: a meter that restarts at zero does
 #: not climb back past its old total within the hour.
 _REBOUND_WINDOW = timedelta(hours=1)
+
+#: How far back the history probe starts looking.
+#:
+#: The Unix epoch, because "as far back as anything could possibly go" is the
+#: only honest answer -- the probe's whole job is to find out where the data
+#: begins, so any tighter guess would be the very assumption it exists to
+#: replace. It costs nothing to reach this far: the filter is
+#: ``start_ts >= 0`` against an indexed column, and what bounds the scan is how
+#: many rows the entities actually own, not how wide the window is.
+_HISTORY_PROBE_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 #: The recorder period that serves the short-term statistics table.
 #:
@@ -283,6 +295,79 @@ async def query_hourly_statistics(
         )
 
     return SpanStatistics(rows=rows, energy_kwh=energy)
+
+
+async def query_oldest_statistics_date(
+    hass: HomeAssistant,
+    statistic_ids: Sequence[str | None],
+    *,
+    local_tz: tzinfo,
+) -> date | None:
+    """The local date the oldest statistics for these entities begin on.
+
+    This is how far back a history view can honestly be browsed, and it is a
+    question only the recorder can answer. Nothing else in this integration
+    knows it: a training window, a forecast horizon or a purge setting are all
+    guesses that happen to be shaped like an answer.
+
+    ``statistic_ids`` may contain ``None`` and duplicates, the same latitude
+    :func:`query_hourly_statistics` gives its callers and for the same reason --
+    the ids arrive from optional config providers. ``None`` comes back when none
+    of the named entities has a single statistics row, which is the ordinary
+    state of a fresh install and not an error.
+
+    Two choices keep this affordable on a database holding years of history, and
+    both are load-bearing rather than tidy:
+
+    * **``types`` is empty.** ``_generate_select_columns_for_types_stmt`` adds a
+      column per requested type and none otherwise, so the statement selects
+      ``metadata_id, start_ts`` and nothing else. The scan stays two narrow
+      columns wide however deep the history is. A **fresh** set is passed on
+      every call because ``_extract_metadata_and_discard_impossible_columns``
+      mutates the argument -- a module-level constant would be quietly emptied
+      by the first call and reused for every one after it.
+    * **``period="month"``.** The reduction happens in Python either way, so this
+      buys nothing in SQL; what it buys is the return value. A month's worth of
+      hourly rows collapses to one row whose ``start`` is local midnight on the
+      first of that month, so the earliest row *is* the answer, already floored,
+      and a handful of rows per entity crosses back rather than thousands.
+
+    Like every other statistics read here, ``start`` arrives as a POSIX float
+    rather than a datetime, and the conversion goes through
+    ``datetime.fromtimestamp`` so the local date is the one the recorder bucketed
+    by.
+    """
+    unique_ids = list(dict.fromkeys(sid for sid in statistic_ids if sid))
+    if not unique_ids:
+        return None
+
+    def _query() -> dict[str, list[dict[str, Any]]]:
+        return statistics_during_period(
+            hass,
+            _HISTORY_PROBE_EPOCH,
+            None,
+            set(unique_ids),
+            "month",
+            None,
+            set(),
+        )
+
+    raw = await get_instance(hass).async_add_executor_job(_query)
+
+    # The oldest across all of them, not per entity: one meter installed later
+    # than another does not move the floor forward, because the earlier meter's
+    # months are still drawable.
+    oldest: float | None = None
+    for entity_rows in (raw or {}).values():
+        for row in entity_rows or []:
+            start = row.get("start")
+            if start is None:
+                continue
+            if oldest is None or start < oldest:
+                oldest = start
+    if oldest is None:
+        return None
+    return datetime.fromtimestamp(oldest, tz=local_tz).date()
 
 
 def _tail_window_start(

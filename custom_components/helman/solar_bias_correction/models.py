@@ -377,6 +377,18 @@ class SolarBiasInspectorDay:
     price_unit: str | None = None
 
 
+def navigation_range_payload(min_date: str, max_date: str) -> dict[str, str]:
+    """The two dates the inspector's navigation may move between, inclusive.
+
+    Both the day payload and the span payload carry this, because both views
+    navigate and neither may be told a different story about where history ends.
+    The day payload adds four more keys on top; they answer questions only a
+    single day has -- whether *this* day is today, whether it is in the future --
+    and a span has no equivalent to state.
+    """
+    return {"minDate": min_date, "maxDate": max_date}
+
+
 def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
     return {
         "date": day.date,
@@ -385,8 +397,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
         "effectiveVariant": day.effective_variant,
         "trainedAt": day.trained_at,
         "range": {
-            "minDate": day.min_date,
-            "maxDate": day.max_date,
+            **navigation_range_payload(day.min_date, day.max_date),
             "canGoPrevious": day.date > day.min_date,
             "canGoNext": day.date < day.max_date,
             "isToday": day.is_today,

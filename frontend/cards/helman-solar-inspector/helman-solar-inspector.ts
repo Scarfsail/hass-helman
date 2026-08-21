@@ -63,6 +63,7 @@ import "./helman-solar-aggregate-chart";
 import type {
   AggregateBucketSelectDetail,
   AggregateBucketHoverDetail,
+  NavigationRange,
   SpanAggregatePayload,
   SpanAggregateRow,
 } from "./helman-solar-aggregate-chart";
@@ -452,9 +453,7 @@ type InspectorPayload = {
   status: string;
   effectiveVariant: string | null;
   trainedAt: string | null;
-  range: {
-    minDate: string;
-    maxDate: string;
+  range: NavigationRange & {
     canGoPrevious: boolean;
     canGoNext: boolean;
     isToday: boolean;
@@ -570,12 +569,17 @@ export class HelmanSolarInspector extends LitElement {
    */
   private readonly _breakdownGroups = new Map<string, DeviceNode>();
   /**
-   * The day range the last successful load reported. Kept apart from the
-   * payload so the day pills stay put while the next day loads — the payload is
-   * cleared for the duration, and a header that emptied on every click would
-   * reflow the whole card under the pointer.
+   * How far navigation may travel, as the last successful load of *either* view
+   * reported it. Kept apart from the payload so the day pills stay put while the
+   * next day loads — the payload is cleared for the duration, and a header that
+   * emptied on every click would reflow the whole card under the pointer.
+   *
+   * Only the bounds. The day payload's `canGoPrevious`/`isToday` and friends
+   * describe one particular day and are read from that payload where they are
+   * needed; both payloads answer with the same bounds, so which view filled this
+   * in does not matter.
    */
-  @state() private _range: InspectorPayload["range"] | null = null;
+  @state() private _range: NavigationRange | null = null;
   /** Whole-day measurements for the past days the pill row is showing. */
   @state() private _historyDays: readonly SolarInspectorHistoryDay[] = EMPTY_HISTORY_DAYS;
   /**
@@ -1452,7 +1456,15 @@ export class HelmanSolarInspector extends LitElement {
     // Both computed in `willUpdate`; nothing is derived or assigned here.
     const today = this._todayKey;
     const minDate = this._range?.minDate ?? null;
-    const canGoBack = minDate === null || this._selectedDate > minDate;
+    // Spans, not days: the aggregate views step a month or a year at a time, so
+    // a floor that falls mid-span still leaves that span reachable. Comparing
+    // raw dates said otherwise and disagreed with the clamp in `_moveSpan`,
+    // which is what made the year view's arrow go dead on a span it had just
+    // arrived at. In the day view `_spanStart` is the identity, so this is the
+    // comparison it has always made.
+    const canGoBack =
+      minDate === null
+      || this._spanStart(this._selectedDate) > this._spanStart(minDate);
     // Forward stops at the span that contains today, whatever a span is in the
     // current view: tomorrow does not exist, and neither does next month. In the
     // day view a span is a day and this is the comparison it has always made.
@@ -1776,6 +1788,9 @@ export class HelmanSolarInspector extends LitElement {
       });
       if (this._spanRequestKey !== key) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
+      // Same stale-request guard as the payload above: a span view is a way into
+      // the card, so this is where the floor arrives when no day was ever loaded.
+      if (result?.range) this._range = result.range;
     } catch (err: any) {
       if (this._spanRequestKey !== key) return;
       this._spanError = err?.message || this._t("bias_correction.inspector.load_failed");

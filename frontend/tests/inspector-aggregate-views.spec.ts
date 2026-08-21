@@ -47,8 +47,9 @@ async function mountInspector(
     page: Page,
     holes = false,
     variant: "" | "no-gain" | "over-soc" | "no-energy" = "",
+    minDate = "2020-01-01",
 ): Promise<void> {
-    await page.evaluate(([punchHoles, shape]: [boolean, string]) => {
+    await page.evaluate(([punchHoles, shape, floor]: [boolean, string, string]) => {
         const today = new Date();
         const iso = (date: Date) => date.toISOString().slice(0, 10);
         const date = iso(today);
@@ -73,7 +74,7 @@ async function mountInspector(
             trainedAt: null,
             priceUnit: "CZK/kWh",
             range: {
-                minDate: "2020-01-01", maxDate: date, canGoPrevious: true, canGoNext: false,
+                minDate: floor, maxDate: date, canGoPrevious: true, canGoNext: false,
                 isToday: true, isFuture: false,
             },
             series: {
@@ -160,6 +161,10 @@ async function mountInspector(
                         bucket: msg.bucket ?? "day",
                         currency: "CZK",
                         days: spanDays(msg.start_date, msg.end_date, msg.bucket ?? "day"),
+                        // The span payload carries the same bounds the day
+                        // payload does, which is what lets the aggregate views
+                        // navigate without a day load having happened first.
+                        range: { minDate: floor, maxDate: date },
                     };
                 }
                 if (msg.type === "helman/solar_bias/inspector") {
@@ -170,7 +175,7 @@ async function mountInspector(
             },
         };
         document.body.appendChild(el);
-    }, [holes, variant] as [boolean, string]);
+    }, [holes, variant, minDate] as [boolean, string, string]);
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
@@ -204,6 +209,46 @@ async function pageBack(page: Page): Promise<void> {
             .shadowRoot.querySelectorAll(".week-nav .week-arrow");
         (buttons[0] as HTMLElement).click();
     });
+}
+
+/** Whether the backwards span arrow is offering to go anywhere. */
+async function canPageBack(page: Page): Promise<boolean> {
+    return page.evaluate(() => {
+        const button = (document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".week-nav .week-arrow") as HTMLButtonElement;
+        return !button.disabled;
+    });
+}
+
+/**
+ * The `start_date` of every span asked for with the given bucket, in order.
+ *
+ * The bucket is the filter because the day pills share this endpoint: they ask
+ * for `"day"` over their own seven-day window whatever view is on screen, and
+ * those requests are not what a test about span navigation is looking at.
+ */
+async function spanStarts(page: Page, bucket: "day" | "month"): Promise<string[]> {
+    return page.evaluate((want) =>
+        ((window as any).__spanRequests as Array<{ start_date: string; bucket: string }>)
+            .filter((msg) => msg.bucket === want)
+            .map((msg) => msg.start_date), bucket);
+}
+
+/** The span on screen, in the card's own words: "2026" or "August 2026". */
+async function spanLabel(page: Page): Promise<string> {
+    return page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)
+        .shadowRoot.querySelector(".span-label")?.textContent?.trim() ?? "");
+}
+
+/** Step back, and wait for the label to say the view really moved. */
+async function pageBackAndWait(page: Page): Promise<void> {
+    const before = await spanLabel(page);
+    await pageBack(page);
+    await page.waitForFunction(
+        (previous) => ((document.querySelector("helman-solar-inspector") as any)
+            .shadowRoot.querySelector(".span-label")?.textContent?.trim() ?? "") !== previous,
+        before,
+    );
 }
 
 async function waitForDayChart(page: Page): Promise<void> {
@@ -290,6 +335,79 @@ test.describe("solar inspector aggregate views", () => {
         expect(requests).toHaveLength(1);
         expect(requests[0].bucket).toBe("day");
         expect(requests[0].start_date.slice(-2)).toBe("01");
+    });
+
+    /**
+     * The bug these two tests were written for.
+     *
+     * The floor used to be the solar-bias trainer's window -- a couple of
+     * months -- so a backwards step in the year view clamped onto the year it
+     * was already showing: nothing moved, and the arrow then read as disabled
+     * because `canGoBack` compared a *day* against that floor. Both halves are
+     * asserted here: that the step really travels, and that the arrow goes dead
+     * exactly once, on the span the data actually stops in.
+     */
+    test("the year view steps back a year at a time to the oldest data", async ({ page }) => {
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear - 3}-06-15`);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        for (let step = 0; step < 3; step += 1) {
+            expect(await canPageBack(page)).toBe(true);
+            await pageBackAndWait(page);
+        }
+
+        expect(await spanStarts(page, "month")).toEqual([
+            `${thisYear}-01-01`,
+            `${thisYear - 1}-01-01`,
+            `${thisYear - 2}-01-01`,
+            `${thisYear - 3}-01-01`,
+        ]);
+        expect(await spanLabel(page)).toBe(String(thisYear - 3));
+        // The floor's own year is reachable and is where travel stops.
+        expect(await canPageBack(page)).toBe(false);
+    });
+
+    test("a floor inside the current year disables the arrow rather than offering a dead click", async ({ page }) => {
+        // The reported symptom, in its own right. `_moveSpan` clamps a backwards
+        // step to the span holding the floor, so with the floor inside this year
+        // there is nowhere to go -- but `canGoBack` compared today's *date*
+        // against the floor, said yes, and left an arrow that moved nothing and
+        // then went dead. Comparing spans is what makes the control honest
+        // before it is pressed.
+        const thisYear = new Date().getUTCFullYear();
+        await mountInspector(page, false, "", `${thisYear}-02-01`);
+        await clickStop(page, STOP_YEAR_VIEW);
+        await waitForAggregateChart(page);
+
+        expect(await spanLabel(page)).toBe(String(thisYear));
+        expect(await canPageBack(page)).toBe(false);
+    });
+
+    test("the month view reaches every month back to the oldest data", async ({ page }) => {
+        const floor = new Date();
+        floor.setUTCDate(1);
+        floor.setUTCMonth(floor.getUTCMonth() - 14);
+        const floorIso = floor.toISOString().slice(0, 10);
+        await mountInspector(page, false, "", floorIso);
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+
+        for (let step = 0; step < 14; step += 1) {
+            expect(await canPageBack(page)).toBe(true);
+            await pageBackAndWait(page);
+        }
+
+        // The label, not the request log: the day pills share the span endpoint
+        // and ask for day buckets of their own, and what this test is about is
+        // that fourteen clicks really travel fourteen months.
+        expect(await spanLabel(page)).toBe(
+            floor.toLocaleDateString(undefined, {
+                timeZone: "UTC", year: "numeric", month: "long",
+            }),
+        );
+        expect(await canPageBack(page)).toBe(false);
     });
 
     test("the year view draws one column per month", async ({ page }) => {
