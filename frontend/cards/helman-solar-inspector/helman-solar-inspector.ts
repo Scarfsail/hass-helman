@@ -49,6 +49,8 @@ import type {
 } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import "./helman-solar-day-pills";
 import type { DayPillForecastHealthDetail, DayPillSelectDetail } from "./helman-solar-day-pills";
+import "./helman-solar-span-pills";
+import type { SpanPillSelectDetail } from "./helman-solar-span-pills";
 import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import type { ForecastPayload } from "../helman-api";
@@ -819,13 +821,11 @@ export class HelmanSolarInspector extends LitElement {
       font-weight: 600;
     }
 
-    /* The aggregate views' stand-in for the pill row: the span in words, on the
-       line the pills would have occupied so the toolbar wraps the same way. */
-    .span-label {
-      font-size: 1rem;
-      font-weight: 600;
-      padding: 6px 2px;
-      white-space: nowrap;
+    /* The aggregate views' pill row, on the line the day row occupies so the
+       toolbar wraps the same way whichever view is on screen. */
+    .span-pills {
+      flex: 1 1 auto;
+      min-width: 0;
     }
 
     .drill-button {
@@ -1505,7 +1505,19 @@ export class HelmanSolarInspector extends LitElement {
             @day-pill-select=${this._handleDayPillSelect}
             @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>`}
-          ${this._viewMode === "day" ? "" : html`<div class="span-label">${this._spanLabel()}</div>`}
+          <!-- The aggregate views get the same manners the day view has: every
+               neighbouring span one click away, with the arrows there to leave
+               the row. It replaces the label that used to sit here — the pills
+               name the span on screen and name every other one with it. -->
+          ${this._viewMode === "day" ? "" : html`<helman-solar-span-pills
+            class="span-pills"
+            .hass=${this.hass}
+            .viewMode=${this._viewMode}
+            .selectedDate=${this._selectedDate}
+            .minDate=${this._spanRange?.minDate ?? ""}
+            .todayKey=${today}
+            @span-pill-select=${this._handleSpanPillSelect}
+          ></helman-solar-span-pills>`}
         </div>
         <div class="nav-actions">
           <!-- One week per click rather than one day: the row already offers
@@ -1730,11 +1742,29 @@ export class HelmanSolarInspector extends LitElement {
     const clamped = delta < 0
       ? (minDate !== null && target < minDate ? this._spanStart(minDate) : target)
       : (target > today ? this._spanStart(today) : target);
-    if (clamped === this._selectedDate) return;
-    this._selectedDate = clamped;
+    this._showSpan(clamped);
+  }
+
+  /**
+   * Put a span on screen, whether an arrow or a pill asked for it.
+   *
+   * The two ways in must agree on what changing span means -- the date moves,
+   * the bucket the panel was describing is no longer in view, and the new span
+   * has to be fetched -- so they share this rather than each doing it. Landing
+   * on the span already shown is a no-op, which is what keeps a pill click on
+   * the current span from reloading it.
+   */
+  private _showSpan(spanKey: string) {
+    if (spanKey === this._selectedDate) return;
+    this._selectedDate = spanKey;
     this._selectedBucket = null;
     this._loadSpan();
   }
+
+  private _handleSpanPillSelect = (event: CustomEvent<SpanPillSelectDetail>): void => {
+    event.stopPropagation();
+    this._showSpan(event.detail.date);
+  };
 
   /** The nav arrows say what a step actually is in the current view. */
   private _spanNavKey(direction: "previous" | "next"): string {

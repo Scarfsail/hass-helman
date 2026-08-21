@@ -26,6 +26,7 @@
       "daylight_only": "Show only hours with solar energy",
       "day_pills": "Pick a day",
       "slot_size": "Slot width (minutes)",
+      "span_pills": "Pick a month or year",
       "today": "Today",
       "forecast_only": "Forecast only",
       "raw_forecast": "Raw forecast",
