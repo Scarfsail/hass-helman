@@ -19,3 +19,28 @@ export function symmetricPowerAxis(peakW: number): { maxKw: number; yTicks: numb
   }
   return { maxKw, yTicks };
 }
+
+/**
+ * An energy tick scale symmetric about zero, in kWh.
+ *
+ * The aggregate views' counterpart to {@link symmetricPowerAxis}, and symmetric
+ * for the same reason: a bucket's supply and its demand are two accounts of the
+ * same energy, so they have to be read against one scale or the eye compares
+ * heights that mean different things.
+ *
+ * It is a separate function rather than a unit argument because the two are not
+ * the same quantity. A day collapsed into one column has no meaningful average
+ * power — `toAveragePower` would divide a day's watt-hours by a bucket width
+ * that no longer exists — so what these columns carry is energy, and the axis
+ * has to say kWh.
+ */
+export function symmetricEnergyAxis(peakKwh: number): { maxKwh: number; yTicks: number[] } {
+  const bound = Math.max(1, Math.ceil(peakKwh));
+  const step = Math.max(1, Math.ceil(bound / 3));
+  const maxKwh = Math.ceil(bound / step) * step;
+  const yTicks: number[] = [];
+  for (let value = -maxKwh; value <= maxKwh; value += step) {
+    yTicks.push(value);
+  }
+  return { maxKwh, yTicks };
+}

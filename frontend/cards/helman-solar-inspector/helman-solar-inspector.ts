@@ -59,6 +59,12 @@ import {
 } from "./day-pill-model";
 import "./helman-solar-price-strip";
 import "./helman-solar-money-strip";
+import "./helman-solar-aggregate-chart";
+import type {
+  AggregateBucketSelectDetail,
+  SpanAggregatePayload,
+  SpanAggregateRow,
+} from "./helman-solar-aggregate-chart";
 import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-solar-price-strip";
 import {
   currencyFromPriceUnit,
@@ -123,6 +129,28 @@ import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-s
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
+
+/** Day view, or one of the two history-only aggregate widths. */
+type InspectorViewMode = "day" | "month" | "year";
+
+/**
+ * The five stops the width toggle offers, narrowest first.
+ *
+ * One control, because widening the axis is one idea to a reader: quarter hour,
+ * half hour, hour, day, month. It is deliberately *not* five slot widths.
+ * `_slotMinutes` means minutes everywhere -- some twenty arithmetic sites read
+ * it as a number and three child strips re-floor by it -- and a month has no
+ * fixed minute count, so the two wider stops carry a view mode instead and the
+ * minutes field simply stops applying. Keeping them in one list is what makes
+ * the toggle read as one axis while the states behind it stay honest.
+ */
+const VIEW_STOPS: readonly { label: string; mode: InspectorViewMode; minutes?: 15 | 30 | 60 }[] = [
+  { label: "15", mode: "day", minutes: 15 },
+  { label: "30", mode: "day", minutes: 30 },
+  { label: "60", mode: "day", minutes: 60 },
+  { label: "D", mode: "month" },
+  { label: "M", mode: "year" },
+];
 
 /** How far the clock has to move before the "now" line is worth redrawing. */
 const NOW_RESOLUTION_MS = 30_000;
@@ -552,6 +580,14 @@ export class HelmanSolarInspector extends LitElement {
   private _todayKey = "";
   private _pillWindowStart = "";
   private _pillWindowEnd = "";
+  /**
+   * The span request in flight, keyed by what it asks for.
+   *
+   * Same discipline as `_loadDayAggregates`: a response that no longer matches
+   * the key wins nothing, so a fast click through three months cannot let the
+   * first answer land last.
+   */
+  private _spanRequestKey: string | null = null;
   @state() private _loading = false;
   /**
    * A reload the user did not ask for, running under the drawn day.
@@ -581,6 +617,18 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _scheduleBandExpanded = true;
   @state() private _daylightOnly = true;
   @state() private _slotMinutes = 30;
+  /**
+   * Which width the toggle is on: the day view, or one of the two aggregate
+   * ones. Its own state rather than a wider `_slotMinutes`, for the reason
+   * :data:`VIEW_STOPS` gives.
+   */
+  @state() private _viewMode: InspectorViewMode = "day";
+  /** The span the aggregate views draw, or null before the first load. */
+  @state() private _span: SpanAggregatePayload | null = null;
+  @state() private _spanLoading = false;
+  @state() private _spanError = "";
+  /** The bucket key clicked in the aggregate chart, or null for none. */
+  @state() private _selectedBucket: string | null = null;
   @state() private _chartWidth = 720;
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
@@ -742,6 +790,26 @@ export class HelmanSolarInspector extends LitElement {
       background: color-mix(in srgb, var(--primary-color, #2563eb) 18%, var(--card-background-color));
       color: var(--primary-color, #2563eb);
       font-weight: 600;
+    }
+
+    /* The aggregate views' stand-in for the pill row: the span in words, on the
+       line the pills would have occupied so the toolbar wraps the same way. */
+    .span-label {
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 6px 2px;
+      white-space: nowrap;
+    }
+
+    .drill-button {
+      margin-top: 8px;
+      padding: 6px 12px;
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      font: inherit;
+      cursor: pointer;
     }
 
     .icon-button {
@@ -1341,9 +1409,11 @@ export class HelmanSolarInspector extends LitElement {
           .items=${buildForecastHealthItems(this._forecast, this._localize)}
           .localize=${this._localize}
         ></helman-forecast-health-banner>
-        ${this._loading ? html`<div class="note">${this._t("bias_correction.inspector.loading")}</div>` : ""}
-        ${this._error ? html`<div class="note">${this._error}</div>` : ""}
-        ${payload ? this._renderContent(payload) : ""}
+        ${(this._viewMode === "day" ? this._loading : this._spanLoading)
+          ? html`<div class="note">${this._t("bias_correction.inspector.loading")}</div>` : ""}
+        ${(this._viewMode === "day" ? this._error : this._spanError)
+          ? html`<div class="note">${this._viewMode === "day" ? this._error : this._spanError}</div>` : ""}
+        ${this._renderContent(payload)}
       </div>
     `;
   }
@@ -1368,13 +1438,22 @@ export class HelmanSolarInspector extends LitElement {
     const today = this._todayKey;
     const minDate = this._range?.minDate ?? null;
     const canGoBack = minDate === null || this._selectedDate > minDate;
-    const canGoForward = this._selectedDate < today;
+    // Forward stops at the span that contains today, whatever a span is in the
+    // current view: tomorrow does not exist, and neither does next month. In the
+    // day view a span is a day and this is the comparison it has always made.
+    const canGoForward =
+      this._spanStart(this._selectedDate || today) < this._spanStart(today);
     // The day and its offset used to head the card in words. The pills say the
     // same thing and say it about every day at once, so the words went.
     return html`
       <div class="nav">
         <div class="day-nav">
-          <helman-solar-day-pills
+          <!-- The pill row is a day picker and says nothing an aggregate view
+               can use, so the wider views drop it rather than showing a week of
+               days beside a month of columns. The wrapper stays: it is what the
+               toolbar wraps against, and the header's two-line behaviour is
+               pinned by spec. -->
+          ${this._viewMode !== "day" ? "" : html`<helman-solar-day-pills
             class="day-pills"
             .hass=${this.hass}
             .selectedDate=${this._selectedDate}
@@ -1385,7 +1464,8 @@ export class HelmanSolarInspector extends LitElement {
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
             @forecast-health=${this._handleForecastHealth}
-          ></helman-solar-day-pills>
+          ></helman-solar-day-pills>`}
+          ${this._viewMode === "day" ? "" : html`<div class="span-label">${this._spanLabel()}</div>`}
         </div>
         <div class="nav-actions">
           <!-- One week per click rather than one day: the row already offers
@@ -1396,37 +1476,54 @@ export class HelmanSolarInspector extends LitElement {
                that when the header runs out of width the row keeps a line to
                itself and every control drops to the next one together. -->
           <div class="week-nav">
-            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.previous_week")} ?disabled=${!canGoBack || this._loading} @click=${() => this._moveWeek(-1)}>&lsaquo;&lsaquo;</button>
-            <button class="icon-button week-arrow" title=${this._t("bias_correction.inspector.next_week")} ?disabled=${!canGoForward || this._loading} @click=${() => this._moveWeek(1)}>&rsaquo;&rsaquo;</button>
+            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("previous"))} ?disabled=${!canGoBack || this._loading} @click=${() => this._moveSpan(-1)}>&lsaquo;&lsaquo;</button>
+            <button class="icon-button week-arrow" title=${this._t(this._spanNavKey("next"))} ?disabled=${!canGoForward || this._loading} @click=${() => this._moveSpan(1)}>&rsaquo;&rsaquo;</button>
           </div>
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
-            ${SLOT_SIZE_OPTIONS.map((minutes) => html`
+            ${VIEW_STOPS.map((stop) => {
+              const active = stop.minutes === undefined
+                ? this._viewMode === stop.mode
+                : this._viewMode === "day" && this._slotMinutes === stop.minutes;
+              return html`
               <button
-                class="slot-size-button ${this._slotMinutes === minutes ? "active" : ""}"
+                class="slot-size-button ${active ? "active" : ""}"
                 type="button"
-                aria-pressed=${this._slotMinutes === minutes ? "true" : "false"}
-                @click=${() => this._setSlotMinutes(minutes)}
-              >${minutes}</button>
-            `)}
+                aria-pressed=${active ? "true" : "false"}
+                @click=${() => this._selectViewStop(stop)}
+              >${stop.label}</button>
+            `;
+            })}
           </div>
-          <button
+          ${this._viewMode !== "day" ? "" : html`<button
             class="icon-button ${this._daylightOnly ? "active" : ""}"
             title=${this._t("bias_correction.inspector.daylight_only")}
             aria-pressed=${this._daylightOnly ? "true" : "false"}
             @click=${() => { this._daylightOnly = !this._daylightOnly; }}
-          >☀</button>
+          >☀</button>`}
           <button
             class="icon-button"
             title=${this._t("bias_correction.inspector.refresh")}
-            ?disabled=${this._loading}
-            @click=${() => this._load()}
+            ?disabled=${this._loading || this._spanLoading}
+            @click=${() => this._reloadActiveView()}
           >⟳</button>
         </div>
       </div>
     `;
   }
 
-  private _renderContent(payload: InspectorPayload) {
+  private _renderContent(payload: InspectorPayload | null) {
+    // The one branch, and it is the first thing here for a reason: `_viewForSlot`
+    // below takes an `InspectorPayload`, and the span payload is not one. Every
+    // day-shaped strip -- price, schedule actions, SoC, impact, the house
+    // breakdown, the now marker -- lives past this line and never runs for an
+    // aggregate view, which is what makes "the day view does not move" a
+    // structural property rather than a promise.
+    if (this._viewMode !== "day") {
+      return this._renderAggregateContent();
+    }
+    if (!payload) {
+      return "";
+    }
     // Everything below renders from the slot-collapsed view; only the daily
     // totals it carries through are slot-width independent.
     const view = this._viewForSlot(payload);
@@ -1485,6 +1582,291 @@ export class HelmanSolarInspector extends LitElement {
       this._slotSelection,
       (slot) => snapSlotToGrid(slot, minutes),
     ));
+  }
+
+  /**
+   * A stop of the width toggle was pressed.
+   *
+   * A minutes stop is exactly what it always was -- including the selection
+   * re-gridding, which is why it goes through `_setSlotMinutes` rather than
+   * assigning the field. The two wider stops leave `_slotMinutes` alone, so
+   * coming back to a minutes stop restores the day view as it was rather than
+   * rebuilding it from a default.
+   */
+  private _selectViewStop(stop: { mode: InspectorViewMode; minutes?: 15 | 30 | 60 }) {
+    if (stop.minutes !== undefined) {
+      this._viewMode = "day";
+      this._setSlotMinutes(stop.minutes);
+      return;
+    }
+    if (this._viewMode === stop.mode) return;
+    this._viewMode = stop.mode;
+    this._selectedBucket = null;
+    this._loadSpan();
+  }
+
+  /** What one column is in the current view; the day view has no aggregate. */
+  private _spanBucket(): "day" | "month" {
+    return this._viewMode === "year" ? "month" : "day";
+  }
+
+  /**
+   * The first day of the span the given day falls in.
+   *
+   * A day in the day view, the containing month in the month view, the
+   * containing year in the year view. Navigation, the forward stop and the span
+   * request all key off this one definition, so they cannot disagree about
+   * where a span begins.
+   */
+  private _spanStart(dayKey: string): string {
+    const { year, month } = this._parseIsoDate(dayKey);
+    if (this._viewMode === "month") return this._formatDateParts(year, month, 1);
+    if (this._viewMode === "year") return this._formatDateParts(year, 1, 1);
+    return dayKey;
+  }
+
+  /** The last day of the span the given day falls in. */
+  private _spanEnd(dayKey: string): string {
+    const { year, month } = this._parseIsoDate(dayKey);
+    if (this._viewMode === "month") {
+      // Day zero of the next month is the last of this one, leap years included.
+      const last = new Date(Date.UTC(year, month, 0));
+      return this._formatDateParts(year, month, last.getUTCDate());
+    }
+    if (this._viewMode === "year") return this._formatDateParts(year, 12, 31);
+    return dayKey;
+  }
+
+  /** The span `delta` steps away, as its first day. */
+  private _addSpans(dayKey: string, delta: number): string {
+    const { year, month } = this._parseIsoDate(dayKey);
+    if (this._viewMode === "month") {
+      const moved = new Date(Date.UTC(year, month - 1 + delta, 1));
+      return this._formatDateParts(moved.getUTCFullYear(), moved.getUTCMonth() + 1, 1);
+    }
+    if (this._viewMode === "year") return this._formatDateParts(year + delta, 1, 1);
+    return this._addDays(dayKey, delta * 7);
+  }
+
+  /**
+   * Travel one span at a time.
+   *
+   * A week in the day view -- unchanged, including the reason forward stops at
+   * today rather than at `maxDate` -- a month in the month view, a year in the
+   * year view. The clamp is the same in all three: never past the span that
+   * holds today, never before the day the recorder's history starts.
+   */
+  private _moveSpan(delta: number) {
+    if (this._viewMode === "day") {
+      this._moveWeek(delta);
+      return;
+    }
+    const today = this._todayIso();
+    const target = this._addSpans(this._selectedDate || today, delta);
+    const minDate = this._range?.minDate ?? null;
+    const clamped = delta < 0
+      ? (minDate !== null && target < minDate ? this._spanStart(minDate) : target)
+      : (target > today ? this._spanStart(today) : target);
+    if (clamped === this._selectedDate) return;
+    this._selectedDate = clamped;
+    this._selectedBucket = null;
+    this._loadSpan();
+  }
+
+  /** The nav arrows say what a step actually is in the current view. */
+  private _spanNavKey(direction: "previous" | "next"): string {
+    const span = this._viewMode === "day" ? "week" : this._viewMode === "month" ? "month" : "year";
+    return `bias_correction.inspector.${direction}_${span}`;
+  }
+
+  /** The span on screen, in words: "July 2026" or "2026". */
+  private _spanLabel(): string {
+    const anchor = this._selectedDate || this._todayIso();
+    const { year, month } = this._parseIsoDate(anchor);
+    if (this._viewMode === "year") return String(year);
+    return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "long",
+    });
+  }
+
+  /** Whichever view is on screen, asked for again. */
+  private _reloadActiveView() {
+    if (this._viewMode === "day") {
+      this._load();
+      return;
+    }
+    this._spanRequestKey = null;
+    this._loadSpan();
+  }
+
+  /**
+   * Fetch the span the aggregate views draw.
+   *
+   * The same command the day pills use, with the bucket the view needs. Keyed
+   * by what it asks for and checked again on arrival, so paging quickly through
+   * months cannot let an older answer land on top of a newer one -- the
+   * discipline `_loadDayAggregates` established for the pills, which share this
+   * endpoint.
+   */
+  private async _loadSpan() {
+    if (!this.hass) return;
+    if (!this._selectedDate) this._selectedDate = this._todayIso();
+    const bucket = this._spanBucket();
+    const start = this._spanStart(this._selectedDate);
+    const end = this._spanEnd(this._selectedDate);
+    const key = `${bucket}:${start}..${end}`;
+    if (this._spanRequestKey === key) return;
+    this._spanRequestKey = key;
+    this._spanLoading = true;
+    this._spanError = "";
+    this._span = null;
+    try {
+      const result = await this.hass.callWS<SpanAggregatePayload>({
+        type: "helman/solar_bias/day_aggregates",
+        start_date: start,
+        end_date: end,
+        bucket,
+      });
+      if (this._spanRequestKey !== key) return;
+      this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
+    } catch (err: any) {
+      if (this._spanRequestKey !== key) return;
+      this._spanError = err?.message || this._t("bias_correction.inspector.load_failed");
+    } finally {
+      if (this._spanRequestKey === key) this._spanLoading = false;
+      this.requestUpdate();
+    }
+  }
+
+  /**
+   * The aggregate views: a chart, the clicked bucket, and the span's totals.
+   *
+   * Everything a day has and a span does not is simply absent -- no forecast to
+   * compare against, no price rail, no planned actions, no SoC trajectory, no
+   * house composition. They are not hidden here; they are on the other side of
+   * the branch at the top of `_renderContent` and never run.
+   */
+  private _renderAggregateContent() {
+    const rows = this._span?.days ?? [];
+    if (this._spanLoading || this._spanError) {
+      // The note above already says which; a second empty frame would flicker.
+      return "";
+    }
+    if (rows.length === 0) {
+      return html`<div class="note">${this._tFormat("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
+    }
+    return html`
+      <div class="chart-wrap">
+        <helman-solar-aggregate-chart
+          .hass=${this.hass}
+          .rows=${rows}
+          .bucket=${this._spanBucket()}
+          .selectedKey=${this._selectedBucket}
+          .width=${this._chartWidth}
+          @aggregate-bucket-select=${this._handleBucketSelect}
+        ></helman-solar-aggregate-chart>
+      </div>
+      ${this._renderSelectedBucket(rows)}
+      ${this._renderSpanTotals(rows)}
+    `;
+  }
+
+  private _handleBucketSelect = (event: CustomEvent<AggregateBucketSelectDetail>) => {
+    event.stopPropagation();
+    // Clicking the selected column clears it, the way the day chart's slot
+    // selection toggles rather than latching.
+    this._selectedBucket = this._selectedBucket === event.detail.key ? null : event.detail.key;
+  };
+
+  /**
+   * The clicked bucket's own numbers, and the control that opens it.
+   *
+   * Drilling is one level finer and no further: a month view opens a day, a year
+   * view opens that month. It moves the selected date as well as the view, so
+   * the day the user pointed at is the day that loads.
+   */
+  private _renderSelectedBucket(rows: readonly SpanAggregateRow[]) {
+    const row = rows.find((candidate) => candidate.date === this._selectedBucket);
+    if (!row) return "";
+    const drillKey = this._viewMode === "month"
+      ? "bias_correction.inspector.open_day"
+      : "bias_correction.inspector.open_month";
+    return html`
+      <div class="metrics-section">
+        <strong>${this._formatDay(row.date)}</strong>
+        <div class="metric-grid">${this._renderBucketMetrics(row)}</div>
+        <button class="drill-button" type="button" @click=${() => this._drillInto(row.date)}>
+          ${this._t(drillKey)}
+        </button>
+      </div>
+    `;
+  }
+
+  /** One bucket's six meters, in the chart's own order and colours. */
+  private _renderBucketMetrics(row: SpanAggregateRow) {
+    const kwhToWh = (value: number | null) => (value === null ? null : value * 1000);
+    return html`
+      ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(row.solarWh), CHART_COLORS.corrected)}
+      ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(row.houseWh), CHART_COLORS.house)}
+      ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(kwhToWh(row.gridImportKwh)), CHART_COLORS.grid)}
+      ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhToWh(row.gridExportKwh)), CHART_COLORS.grid)}
+      ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(row.batteryChargeWh), CHART_COLORS.battery)}
+      ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(row.batteryDischargeWh), CHART_COLORS.battery)}
+    `;
+  }
+
+  /**
+   * One level finer, on the bucket that was clicked.
+   *
+   * The finer view's own load is what fills the screen, so both the view and the
+   * date move before it is asked for -- a month view that dropped to the day
+   * view first would briefly draw the wrong day.
+   */
+  private _drillInto(bucketKey: string) {
+    this._selectedBucket = null;
+    if (this._viewMode === "month") {
+      this._viewMode = "day";
+      if (this._selectedDate !== bucketKey) {
+        this._selectedDate = bucketKey;
+        this._load();
+      }
+      return;
+    }
+    this._viewMode = "month";
+    this._selectedDate = bucketKey;
+    this._loadSpan();
+  }
+
+  /** What the whole span came to, summed from the buckets already on screen. */
+  private _renderSpanTotals(rows: readonly SpanAggregateRow[]) {
+    const sum = (read: (row: SpanAggregateRow) => number | null) => {
+      let total: number | null = null;
+      for (const row of rows) {
+        const value = read(row);
+        if (value === null || !Number.isFinite(value)) continue;
+        total = (total ?? 0) + value;
+      }
+      return total;
+    };
+    const kwhSum = (read: (row: SpanAggregateRow) => number | null) => {
+      const total = sum(read);
+      return total === null ? null : total * 1000;
+    };
+    return html`
+      <div class="metrics-section">
+        <strong>${this._t("bias_correction.inspector.span_totals")}</strong>
+        <div class="metric-grid">
+          ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(sum((row) => row.solarWh)), CHART_COLORS.corrected)}
+          ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(sum((row) => row.houseWh)), CHART_COLORS.house)}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(kwhSum((row) => row.gridImportKwh)), CHART_COLORS.grid)}
+          ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhSum((row) => row.gridExportKwh)), CHART_COLORS.grid)}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(sum((row) => row.batteryChargeWh)), CHART_COLORS.battery)}
+          ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(sum((row) => row.batteryDischargeWh)), CHART_COLORS.battery)}
+        </div>
+      </div>
+    `;
   }
 
   /**
