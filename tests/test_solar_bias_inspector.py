@@ -6,7 +6,7 @@ import importlib
 import pytest
 import sys
 import types
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
@@ -47,6 +47,10 @@ def _install_import_stubs() -> None:
 
     history_mod.get_significant_states = _fake_get_significant_states
     sys.modules["homeassistant.components.recorder.history"] = history_mod
+
+    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
+    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
+    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
 
     core_mod = types.ModuleType("homeassistant.core")
     core_mod.HomeAssistant = type("HomeAssistant", (), {})
@@ -1349,88 +1353,142 @@ def test_service_saves_training_explainability_after_training():
     assert saved["trainingExplainability"]["slots"]["12:00"]["rows"][0]["status"] == "included"
 
 
-def _install_fake_meter_reader(reads, by_entity):
-    """Stand in for the recorder read the day aggregates make.
+def _install_fake_statistics_reader(reads, by_entity):
+    """Stand in for the one statistics read the span aggregates make.
 
     Records every call so the test can assert what the span cost: the point of
-    the endpoint is one read per meter for the whole window, not one per day.
+    the endpoint is a single hourly-statistics read for the whole window, at any
+    width, rather than a read per meter or per day.
     """
-    module_name = "custom_components.helman.recorder_hourly_series"
-    original = sys.modules.get(module_name)
-    fake = types.ModuleType(module_name)
+    import importlib
 
-    async def query_cumulative_slot_energy_changes(
-        hass, entity_id, *, local_start, local_end, interval_minutes
+    span_mod = importlib.import_module(
+        "custom_components.helman.recorder_statistics_span"
+    )
+    original = span_mod.query_hourly_statistics
+
+    async def query_hourly_statistics(
+        hass, statistic_ids, *, local_start, local_end, tail_start=None
     ):
-        reads.append((entity_id, local_start, local_end))
-        return by_entity.get(entity_id, {})
+        ids = [entity_id for entity_id in statistic_ids if entity_id]
+        reads.append((ids, local_start, local_end, tail_start))
+        rows = {entity_id: by_entity.get(entity_id, {}) for entity_id in ids}
+        # The real derivation, not a second one: the rows above are meter
+        # readings, and turning them into per-hour energy is exactly the step
+        # that has to survive a compiler-invented reset.
+        return span_mod.SpanStatistics(
+            rows={
+                entity_id: {
+                    utc_hour: row
+                    for utc_hour, row in entity_rows.items()
+                    if local_start <= utc_hour < local_end
+                }
+                for entity_id, entity_rows in rows.items()
+            },
+            energy_kwh={
+                entity_id: span_mod._hourly_energy_kwh(
+                    entity_rows, local_start=local_start, local_end=local_end
+                )
+                for entity_id, entity_rows in rows.items()
+            },
+        )
 
-    fake.query_cumulative_slot_energy_changes = query_cumulative_slot_energy_changes
-    sys.modules[module_name] = fake
-    return module_name, original
+    span_mod.query_hourly_statistics = query_hourly_statistics
+    return span_mod, original
 
 
-def test_day_aggregates_sum_each_meter_into_local_days_in_one_read():
+def _stat_rows(rows):
+    """``{utc_hour: StatisticsRow}``, from ``(local ISO hour, fields)`` pairs."""
+    return {
+        datetime.fromisoformat(raw).astimezone(timezone.utc): fields
+        for raw, fields in rows
+    }
+
+
+def test_day_aggregates_fold_hourly_statistics_into_local_days_in_one_read():
     service = _make_service()
     service._grid_import_energy_entity_id_provider = lambda: "sensor.grid_import"
     service._grid_export_energy_entity_id_provider = lambda: "sensor.grid_export"
     service._battery_soc_entity_id_provider = lambda: "sensor.battery_soc"
 
-    def _slot(raw: str) -> datetime:
-        return datetime.fromisoformat(raw)
-
     reads: list[tuple] = []
-    module_name, original_module = _install_fake_meter_reader(
+    span_mod, original_query = _install_fake_statistics_reader(
         reads,
         {
-            "sensor.solar_total": {
-                _slot("2026-04-23T08:00:00+02:00"): 1.5,
-                _slot("2026-04-23T09:00:00+02:00"): 2.5,
-                _slot("2026-04-24T10:00:00+02:00"): 3.0,
-            },
-            "sensor.grid_import": {_slot("2026-04-23T20:00:00+02:00"): 1.25},
-            "sensor.grid_export": {_slot("2026-04-24T12:00:00+02:00"): 0.75},
+            # Meter readings, not deltas: the hour's energy is the step between
+            # two of them, which is what survives a compiler-invented reset.
+            # Each series opens on the padded hour before the window.
+            "sensor.solar_total": _stat_rows(
+                [
+                    ("2026-04-22T23:00:00+02:00", {"state": 99.0}),
+                    ("2026-04-23T08:00:00+02:00", {"state": 100.5}),
+                    ("2026-04-23T09:00:00+02:00", {"state": 103.0}),
+                    ("2026-04-24T10:00:00+02:00", {"state": 106.0}),
+                ]
+            ),
+            "sensor.grid_import": _stat_rows(
+                [
+                    ("2026-04-23T19:00:00+02:00", {"state": 48.75}),
+                    ("2026-04-23T20:00:00+02:00", {"state": 50.0}),
+                ]
+            ),
+            "sensor.grid_export": _stat_rows(
+                [
+                    ("2026-04-24T11:00:00+02:00", {"state": 7.25}),
+                    ("2026-04-24T12:00:00+02:00", {"state": 8.0}),
+                ]
+            ),
+            "sensor.battery_soc": _stat_rows(
+                [
+                    ("2026-04-23T06:00:00+02:00", {"min": 41.0, "max": 60.0}),
+                    ("2026-04-23T14:00:00+02:00", {"min": 55.0, "max": 88.0}),
+                    ("2026-04-24T05:00:00+02:00", {"min": 30.0, "max": 30.0}),
+                ]
+            ),
         },
     )
 
-    soc_states = [
-        SimpleNamespace(state="41.0", last_changed=_slot("2026-04-23T06:00:00+02:00")),
-        SimpleNamespace(state="88.0", last_changed=_slot("2026-04-23T14:00:00+02:00")),
-        SimpleNamespace(state="not a number", last_changed=_slot("2026-04-23T15:00:00+02:00")),
-        SimpleNamespace(state="30.0", last_changed=_slot("2026-04-24T05:00:00+02:00")),
-    ]
-
-    async def fake_significant_states(hass, start_utc, end_utc, entity_ids):
-        return {"sensor.battery_soc": soc_states}
-
-    old_states = service_mod._get_significant_states_safe
     old_now = service_mod.dt_util.now
     try:
-        service_mod._get_significant_states_safe = fake_significant_states
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         payload = asyncio.run(
-            service.async_get_day_aggregates("2026-04-23", "2026-04-24")
+            service.async_get_span_aggregates("2026-04-23", "2026-04-24")
         )
     finally:
-        service_mod._get_significant_states_safe = old_states
         service_mod.dt_util.now = old_now
-        if original_module is None:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = original_module
+        span_mod.query_hourly_statistics = original_query
 
-    # One read per meter for the whole span, not one per day.
-    assert len(reads) == 3
-    assert {entity_id for entity_id, _start, _end in reads} == {
+    # One read for every meter and every day of the span.
+    assert len(reads) == 1
+    entity_ids, local_start, local_end, tail_start = reads[0]
+    # The span stops well before today, so nothing is asked of the short-term
+    # table: every hour in it is long since compiled.
+    assert tail_start is None
+    assert {
         "sensor.solar_total",
         "sensor.grid_import",
         "sensor.grid_export",
-    }
-    for _entity_id, local_start, local_end in reads:
-        assert local_start.date() == date.fromisoformat("2026-04-23")
-        assert local_end.date() == date.fromisoformat("2026-04-25")
+        "sensor.battery_soc",
+    } <= set(entity_ids)
+    assert local_start.date() == date.fromisoformat("2026-04-23")
+    assert local_end.date() == date.fromisoformat("2026-04-25")
 
-    assert payload["days"] == [
+    # The day pills' four fields are unchanged, whatever else the span now
+    # carries alongside them.
+    assert [
+        {
+            key: day[key]
+            for key in (
+                "date",
+                "solarWh",
+                "gridImportKwh",
+                "gridExportKwh",
+                "batteryMinSocPct",
+                "batteryMaxSocPct",
+            )
+        }
+        for day in payload["days"]
+    ] == [
         {
             "date": "2026-04-23",
             "solarWh": 4000.0,
@@ -1453,27 +1511,24 @@ def test_day_aggregates_sum_each_meter_into_local_days_in_one_read():
 def test_day_aggregates_stop_at_today_and_cap_the_span():
     service = _make_service()
     reads: list[tuple] = []
-    module_name, original_module = _install_fake_meter_reader(reads, {})
+    span_mod, original_query = _install_fake_statistics_reader(reads, {})
 
     old_now = service_mod.dt_util.now
     try:
         service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
         # A span reaching into the future is cut at today, and one reaching far
-        # back keeps only the last _MAX_AGGREGATE_DAYS of it.
+        # back keeps only the most recent buckets the cap allows.
         payload = asyncio.run(
-            service.async_get_day_aggregates("2025-01-01", "2026-05-30")
+            service.async_get_span_aggregates("2020-01-01", "2026-05-30")
         )
         future_only = asyncio.run(
-            service.async_get_day_aggregates("2026-04-26", "2026-04-30")
+            service.async_get_span_aggregates("2026-04-26", "2026-04-30")
         )
     finally:
         service_mod.dt_util.now = old_now
-        if original_module is None:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = original_module
+        span_mod.query_hourly_statistics = original_query
 
     days = [day["date"] for day in payload["days"]]
-    assert len(days) == service_mod._MAX_AGGREGATE_DAYS
+    assert len(days) == service_mod._MAX_AGGREGATE_BUCKETS["day"]
     assert days[-1] == "2026-04-25"
-    assert future_only == {"days": []}
+    assert future_only["days"] == []

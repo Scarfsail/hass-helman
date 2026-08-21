@@ -748,6 +748,79 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
                     [(1, "invalid_date", "Date must use YYYY-MM-DD format")],
                 )
 
+    async def test_day_aggregates_defaults_to_day_buckets(self) -> None:
+        payload = {"bucket": "day", "currency": None, "days": []}
+        service = SimpleNamespace(
+            async_get_span_aggregates=AsyncMock(return_value=payload)
+        )
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+            FakeHass(coordinator),
+            connection,
+            {
+                "id": 1,
+                "type": "helman/solar_bias/day_aggregates",
+                "start_date": "2026-04-19",
+                "end_date": "2026-04-25",
+            },
+        )
+
+        # The day pills send no bucket at all, and must keep getting days.
+        service.async_get_span_aggregates.assert_awaited_once_with(
+            "2026-04-19", "2026-04-25", "day"
+        )
+        self.assertEqual(connection.results, [(1, payload)])
+        self.assertEqual(connection.errors, [])
+
+    async def test_day_aggregates_passes_the_month_bucket_through(self) -> None:
+        payload = {"bucket": "month", "currency": "CZK/kWh", "days": []}
+        service = SimpleNamespace(
+            async_get_span_aggregates=AsyncMock(return_value=payload)
+        )
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+            FakeHass(coordinator),
+            connection,
+            {
+                "id": 1,
+                "type": "helman/solar_bias/day_aggregates",
+                "start_date": "2025-06-01",
+                "end_date": "2026-05-31",
+                "bucket": "month",
+            },
+        )
+
+        service.async_get_span_aggregates.assert_awaited_once_with(
+            "2025-06-01", "2026-05-31", "month"
+        )
+        self.assertEqual(connection.results, [(1, payload)])
+
+    async def test_day_aggregates_rejects_invalid_dates(self) -> None:
+        service = SimpleNamespace(async_get_span_aggregates=AsyncMock())
+        coordinator = SimpleNamespace(_solar_bias_service=service)
+        connection = FakeConnection()
+
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+            FakeHass(coordinator),
+            connection,
+            {
+                "id": 1,
+                "type": "helman/solar_bias/day_aggregates",
+                "start_date": "04/19/2026",
+                "end_date": "2026-04-25",
+            },
+        )
+
+        service.async_get_span_aggregates.assert_not_awaited()
+        self.assertEqual(
+            connection.errors,
+            [(1, "invalid_date", "Dates must use YYYY-MM-DD format")],
+        )
+
     def test_registration_wiring_includes_solar_bias_handlers(self) -> None:
         registered: list[object] = []
         self.websockets_mod.async_register_command = lambda hass, command: registered.append(

@@ -132,6 +132,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             set_entity_factory=Mock(),
             register_house_consumption_forecast_current_sensor=Mock(),
             register_grid_import_price_sensor=Mock(),
+            register_grid_export_price_sensor=Mock(),
         )
         hass = SimpleNamespace(data={"helman": {"coordinator": coordinator}})
         added_entities: list[object] = []
@@ -152,21 +153,22 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             forecast_sensors[-1].entity_id,
             "sensor.helman_energy_production_today_remaining",
         )
-        # The forecast sensors, then the two coordinator-pushed singletons that
-        # follow them: the house consumption forecast and the grid import price.
+        # The forecast sensors, then the three coordinator-pushed singletons that
+        # follow them: the house consumption forecast and the two price sensors.
         self.assertEqual(
-            [entity.entity_id for entity in added_entities[-11:-2]],
+            [entity.entity_id for entity in added_entities[-12:-3]],
             [entity.entity_id for entity in forecast_sensors],
         )
         self.assertEqual(
-            added_entities[-2].entity_id,
-            "sensor.helman_house_consumption_forecast_current",
-        )
-        self.assertEqual(
-            added_entities[-1].entity_id,
-            "sensor.helman_grid_import_price",
+            [entity.entity_id for entity in added_entities[-3:]],
+            [
+                "sensor.helman_house_consumption_forecast_current",
+                "sensor.helman_grid_import_price",
+                "sensor.helman_grid_export_price",
+            ],
         )
         coordinator.register_grid_import_price_sensor.assert_called_once()
+        coordinator.register_grid_export_price_sensor.assert_called_once()
 
     async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:
         sensor_module = _load_sensor_module()
@@ -365,6 +367,132 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator._absorb_grid_import_price({"import": {"status": "not_configured"}})
         self.assertIsNone(coordinator.get_grid_import_price_current())
         self.assertIsNone(coordinator.get_grid_import_price_unit())
+
+    async def test_grid_export_price_entity_shape(self) -> None:
+        sensor_module = _load_sensor_module()
+
+        class FakeCoordinator:
+            price = 1.85
+            unit = "CZK/kWh"
+
+            def get_grid_export_price_current(self):
+                return self.price
+
+            def get_grid_export_price_unit(self):
+                return self.unit
+
+        coordinator = FakeCoordinator()
+        entity = sensor_module.HelmanGridExportPriceSensor(coordinator, _FakeEntry())
+
+        self.assertEqual(entity.entity_id, "sensor.helman_grid_export_price")
+        self.assertEqual(entity.native_value, 1.85)
+        self.assertEqual(entity.native_unit_of_measurement, "CZK/kWh")
+        self.assertTrue(entity.available)
+        # MEASUREMENT is the whole point of this entity: it is what makes the
+        # recorder compile long-term statistics, which the configured
+        # sell-price entity does not declare and so never gets.
+        self.assertEqual(entity._attr_state_class, "measurement")
+        self.assertFalse(hasattr(entity, "_attr_device_class"))
+
+        coordinator.price = None
+        coordinator.unit = None
+        self.assertFalse(entity.available)
+        self.assertIsNone(entity.native_value)
+        self.assertIsNone(entity.native_unit_of_measurement)
+
+    async def test_coordinator_absorbs_the_export_price_from_the_snapshot(self) -> None:
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coordinator_module = importlib.import_module(
+                "custom_components.helman.coordinator"
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+
+        coordinator._absorb_grid_export_price(
+            {"export": {"status": "available", "unit": "CZK/kWh", "currentPrice": 1.85}}
+        )
+        self.assertEqual(coordinator.get_grid_export_price_current(), 1.85)
+        self.assertEqual(coordinator.get_grid_export_price_unit(), "CZK/kWh")
+
+        # "partial" grades the *forecast* -- a sell-price entity that publishes
+        # a price but no forward points. The price is exactly what this mirror
+        # asks for, so it is taken; refusing it would leave the whole series
+        # empty on any setup whose spot integration publishes no attributes.
+        coordinator._absorb_grid_export_price(
+            {"export": {"status": "partial", "unit": "CZK/kWh", "currentPrice": 2.5}}
+        )
+        self.assertEqual(coordinator.get_grid_export_price_current(), 2.5)
+
+        # A channel with no price at all clears the value rather than holding
+        # the last one: the recorder must not archive a stale rate as current.
+        coordinator._absorb_grid_export_price({"export": {"status": "unavailable"}})
+        self.assertIsNone(coordinator.get_grid_export_price_current())
+        self.assertIsNone(coordinator.get_grid_export_price_unit())
+
+    async def test_the_backfill_waits_for_a_unit_before_it_writes_metadata(self) -> None:
+        # The first import writes the mirror's statistics metadata. Writing it
+        # with a null unit leaves the archived series claiming no unit while the
+        # sensor's own states carry one -- a disagreement the recorder surfaces
+        # and that nothing here would ever correct. Price and unit are read
+        # independently off the snapshot, so a source publishing a bare number
+        # has one without the other.
+        previous_modules = _install_coordinator_import_stubs()
+        try:
+            sys.modules.pop("custom_components.helman.coordinator", None)
+            coordinator_module = importlib.import_module(
+                "custom_components.helman.coordinator"
+            )
+        finally:
+            _restore_modules(previous_modules)
+            sys.modules.pop("custom_components.helman.coordinator", None)
+
+        # The starter lazily imports the back-fill module; stand in for it so
+        # the import does not drag the whole integration into this stubbed
+        # environment. What is under test is the gate, not the walk.
+        backfill_stub = types.ModuleType(
+            "custom_components.helman.grid_export_price_backfill"
+        )
+
+        async def _never_runs(*args, **kwargs):
+            return None
+
+        backfill_stub.async_backfill_grid_export_price_statistics = _never_runs
+        sys.modules["custom_components.helman.grid_export_price_backfill"] = backfill_stub
+        self.addCleanup(
+            sys.modules.pop,
+            "custom_components.helman.grid_export_price_backfill",
+            None,
+        )
+
+        started: list[object] = []
+        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator._grid_export_price_backfill_started = False
+        coordinator._get_grid_sell_price_entity_id = lambda: "sensor.spot_sell_price"
+        coordinator._hass = SimpleNamespace(
+            async_create_background_task=lambda coro, name: (
+                coro.close(), started.append(name)
+            )[1],
+        )
+
+        # A price with no unit: nothing starts.
+        coordinator._absorb_grid_export_price(
+            {"export": {"status": "partial", "currentPrice": 2.5}}
+        )
+        coordinator._maybe_start_grid_export_price_backfill()
+        self.assertEqual(started, [])
+        self.assertFalse(coordinator._grid_export_price_backfill_started)
+
+        # The next beat carries both, and the walk begins.
+        coordinator._absorb_grid_export_price(
+            {"export": {"status": "partial", "unit": "CZK/kWh", "currentPrice": 2.5}}
+        )
+        coordinator._maybe_start_grid_export_price_backfill()
+        self.assertEqual(len(started), 1)
 
 
 if __name__ == "__main__":

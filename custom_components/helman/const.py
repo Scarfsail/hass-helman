@@ -74,6 +74,15 @@ PRODUCTION_TOTAL_ENTITY_ID = "sensor.helman_production_total"
 #: sensor's history is the only record that it applied. The inspector reads it
 #: back by this id, so it is pinned here rather than left to entity-id slugging.
 GRID_IMPORT_PRICE_ENTITY_ID = "sensor.helman_grid_import_price"
+#: The export rate Helman mirrors so the recorder archives it. The rate itself
+#: comes from a third-party spot-price entity, which typically declares no
+#: ``state_class`` and therefore has no long-term statistics at all -- so the
+#: aggregate views, which price history hour by hour off statistics, had nothing
+#: to value an export with. Mirroring it into an entity Helman owns hands that
+#: archiving to the recorder for good, whatever the upstream integration decides
+#: to declare. Pinned here for the same reason as the import id: the inspector
+#: reads it back by name.
+GRID_EXPORT_PRICE_ENTITY_ID = "sensor.helman_grid_export_price"
 HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS = 14
 HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS = 56
 HOUSE_FORECAST_DEFAULT_MIN_SLOT_POINTS = 2

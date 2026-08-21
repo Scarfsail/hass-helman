@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..const import GRID_IMPORT_PRICE_ENTITY_ID
+from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
 from .actuals import load_actuals_for_day, load_actuals_window
 from .adjuster import adjust
 from .forecast_history import load_forecast_points_for_day, load_trainer_samples
@@ -51,9 +51,15 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# A pill row never offers more than a month of days, and the span is what sizes
-# the recorder read.
-_MAX_AGGREGATE_DAYS = 31
+#: How many buckets one span read may return, per bucket size.
+#:
+#: The cap is expressed in buckets because that is what a caller asks for, but
+#: it is chosen for the *days* behind them: the read is hourly whatever the
+#: bucket, so a month view over ~400 days is still ~9600 hours per statistic id
+#: however few rows come back. A year of days and thirteen months are both about
+#: the same span, which is the point -- the ceiling on the query is the same
+#: either way, and it admits the year view the aggregate views are for.
+_MAX_AGGREGATE_BUCKETS = {"day": 366, "month": 13}
 #: The price rails' own grid, matching the schedule's canonical slot.
 PRICE_RAIL_SLOT_MINUTES = 15
 MINUTES_PER_DAY = 24 * 60
@@ -314,33 +320,82 @@ class SolarBiasCorrectionService:
             "omittedSlots": list(self._profile.omitted_slots),
         }
 
-    async def async_get_day_aggregates(
-        self, raw_start_date: str, raw_end_date: str
+    async def async_get_span_aggregates(
+        self,
+        raw_start_date: str,
+        raw_end_date: str,
+        bucket: str = "day",
     ) -> dict[str, Any]:
-        """Whole-day measured figures for a span of days, in one read each.
+        """Measured figures for a span of history, bucketed into local days or months.
 
-        This is what the inspector's day pills need to be a comparison rather
-        than a picker: the same three numbers the pills already draw, for every
-        day on offer. Asking `async_get_inspector_day` once per pill would be a
-        week of full inspector days — actuals, forecast history and training —
-        to end up with three numbers apiece, so the meters are read once across
-        the whole span instead and bucketed into local days here.
+        One statistics read for the whole span, however wide it is -- plus a
+        short second one over the last few hours when the span reaches today,
+        because the hourly table stops at the last compiled hour and the bucket
+        in progress would otherwise be hours short. The inspector
+        has two consumers for this: the day pills, which compare a week of days,
+        and the aggregate views, which draw a month of days or a year of months.
+        Asking ``async_get_inspector_day`` once per bucket would be a full
+        inspector day -- actuals, forecast history and training -- for a handful
+        of numbers apiece, and reading raw states across a year would be millions
+        of rows for the same handful.
+
+        So the meters, the battery SoC and both price sensors are read once, from
+        Home Assistant's hourly long-term statistics, and folded here. Hourly is
+        the finest grain statistics offer, and it is enough: energy sums, SoC
+        bounds take min/max, and money is priced per hour rather than per bucket
+        because a bucket's kWh times its mean rate is not what the meter cost --
+        the expensive hours are rarely the ones the house imported in.
+
+        ``bucket`` is ``"day"`` (one row per local day, what the pills ask for)
+        or ``"month"`` (one row per local month, with the span snapped outward to
+        whole months first). Both walk the same fold; only the key differs.
+
+        Note that the DST hazard :func:`_money_points` documents does *not* carry
+        over. That one is about repeated ``"HH:MM"`` slot labels colliding on the
+        fall-back day; here the hours arrive keyed by UTC instant, so the two
+        occurrences of the repeated hour stay distinct, carry their own rates and
+        both fold onto the same local date. Nothing to work around -- and nothing
+        to re-implement the day view's workaround for.
         """
+        bucket = bucket if bucket in _MAX_AGGREGATE_BUCKETS else "day"
         start_date = date.fromisoformat(raw_start_date)
         end_date = date.fromisoformat(raw_end_date)
         local_tz = ZoneInfo(str(self._hass.config.time_zone))
         local_now = dt_util.as_local(dt_util.now())
+
+        # Month buckets describe whole months, so the requested edges are snapped
+        # outward before anything else looks at them -- otherwise a span starting
+        # mid-month would report a partial month as if it were a whole one.
+        if bucket == "month":
+            start_date = start_date.replace(day=1)
+            end_date = _last_day_of_month(end_date)
         # Nothing is measured beyond now, and a span that reached past today
-        # would only widen the recorder read.
+        # would only widen the recorder read. The month in progress stays, cut
+        # short at today: a partial current month is the answer, not an absent
+        # one.
         end_date = min(end_date, local_now.date())
         if end_date < start_date:
-            return {"days": []}
-        start_date = max(start_date, end_date - timedelta(days=_MAX_AGGREGATE_DAYS - 1))
+            return {"bucket": bucket, "currency": None, "days": []}
+        start_date = _trim_span_to_cap(start_date, end_date, bucket)
 
         local_start = datetime.combine(start_date, time(0, 0), tzinfo=local_tz)
         local_end = datetime.combine(
             end_date + timedelta(days=1), time(0, 0), tzinfo=local_tz
         )
+        # Hourly statistics only exist for hours that have ended and been
+        # compiled, so the bucket in progress is short by up to a couple of
+        # hours -- and just after midnight a day bucket has no completed hour at
+        # all. These views are history-only, so nothing draws in the gap's place.
+        # Naming the newest bucket's start asks the span read to top those hours
+        # up from the short-term table; a span that stops before today is fully
+        # compiled and is not asked to.
+        tail_start = None
+        if end_date == local_now.date():
+            newest_bucket_start = end_date if bucket == "day" else end_date.replace(day=1)
+            tail_start = max(
+                local_start,
+                datetime.combine(newest_bucket_start, time(0, 0), tzinfo=local_tz),
+            )
 
         def _entity_id(provider) -> str | None:
             return provider() if provider is not None else None
@@ -351,110 +406,113 @@ class SolarBiasCorrectionService:
         )
         import_entity = _entity_id(self._grid_import_energy_entity_id_provider)
         export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
+        # The house's own meter, never solar/grid/battery arithmetic: the day
+        # view reads this same meter, and a second, subtractive definition of
+        # house load would disagree with the number sitting next to it.
+        house_entity = _entity_id(self._house_energy_entity_id_provider)
+        charge_entity = _entity_id(self._battery_charge_energy_entity_id_provider)
+        discharge_entity = _entity_id(self._battery_discharge_energy_entity_id_provider)
         soc_entity = _entity_id(self._battery_soc_entity_id_provider)
+        # Two export rate sources, asked for together and resolved per hour
+        # below: the mirror Helman publishes, whose statistics are the only ones
+        # that exist on a setup whose sell-price entity declares no
+        # ``state_class``, and the configured entity itself, which has its own
+        # statistics only where the user's setup happens to produce them.
+        export_price_entity = self._grid_export_price_entity_id()
 
-        solar_kwh, imported_kwh, exported_kwh, soc_by_day = await asyncio.gather(
-            self._sum_meter_by_day(solar_entity, local_start, local_end, local_tz),
-            self._sum_meter_by_day(import_entity, local_start, local_end, local_tz),
-            self._sum_meter_by_day(export_entity, local_start, local_end, local_tz),
-            self._soc_bounds_by_day(soc_entity, local_start, local_end),
+        from ..recorder_statistics_span import SpanStatistics, query_hourly_statistics
+
+        try:
+            span = await query_hourly_statistics(
+                self._hass,
+                [
+                    solar_entity,
+                    import_entity,
+                    export_entity,
+                    house_entity,
+                    charge_entity,
+                    discharge_entity,
+                    soc_entity,
+                    GRID_IMPORT_PRICE_ENTITY_ID,
+                    GRID_EXPORT_PRICE_ENTITY_ID,
+                    export_price_entity,
+                ],
+                local_start=local_start,
+                local_end=local_end,
+                tail_start=tail_start,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to load statistics for span aggregates")
+            span = SpanStatistics(rows={}, energy_kwh={})
+
+        solar_kwh = _energy_by_bucket(span.energy_for(solar_entity), bucket, local_tz)
+        imported_kwh = _energy_by_bucket(span.energy_for(import_entity), bucket, local_tz)
+        exported_kwh = _energy_by_bucket(span.energy_for(export_entity), bucket, local_tz)
+        house_kwh = _energy_by_bucket(span.energy_for(house_entity), bucket, local_tz)
+        charged_kwh = _energy_by_bucket(span.energy_for(charge_entity), bucket, local_tz)
+        discharged_kwh = _energy_by_bucket(
+            span.energy_for(discharge_entity), bucket, local_tz
+        )
+        soc_by_bucket = _soc_bounds_by_bucket(span.rows_for(soc_entity), bucket, local_tz)
+
+        import_price_config = self._grid_import_price_config()
+        money_by_bucket = _money_by_bucket(
+            span.energy_for(import_entity),
+            span.energy_for(export_entity),
+            span.rows_for(GRID_IMPORT_PRICE_ENTITY_ID),
+            _prefer_rows(
+                span.rows_for(GRID_EXPORT_PRICE_ENTITY_ID),
+                span.rows_for(export_price_entity),
+            ),
+            bucket=bucket,
+            local_tz=local_tz,
+            import_price_windows=(
+                None if import_price_config is None else import_price_config.windows
+            ),
         )
 
         days: list[dict[str, Any]] = []
-        cursor = start_date
-        while cursor <= end_date:
-            day_key = cursor.isoformat()
-            solar = solar_kwh.get(day_key)
-            imported = imported_kwh.get(day_key)
-            exported = exported_kwh.get(day_key)
-            min_pct, max_pct = soc_by_day.get(day_key, (None, None))
+        for key in _bucket_keys(start_date, end_date, bucket):
+            min_pct, max_pct = soc_by_bucket.get(key, (None, None))
+            cost, gain = money_by_bucket.get(key, (None, None))
             days.append(
                 {
-                    "date": day_key,
-                    "solarWh": None if solar is None else round(solar * 1000.0, 1),
-                    "gridImportKwh": None if imported is None else round(imported, 3),
-                    "gridExportKwh": None if exported is None else round(exported, 3),
+                    "date": key,
+                    "solarWh": _round_wh(solar_kwh.get(key)),
+                    "gridImportKwh": _round_kwh(imported_kwh.get(key)),
+                    "gridExportKwh": _round_kwh(exported_kwh.get(key)),
                     "batteryMinSocPct": min_pct,
                     "batteryMaxSocPct": max_pct,
+                    "houseWh": _round_wh(house_kwh.get(key)),
+                    "batteryChargeWh": _round_wh(charged_kwh.get(key)),
+                    "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
+                    "moneyCost": None if cost is None else round(cost, 3),
+                    "moneyGain": None if gain is None else round(gain, 3),
                 }
             )
-            cursor += timedelta(days=1)
 
-        return {"days": days}
+        return {
+            "bucket": bucket,
+            "currency": self._resolve_span_currency(import_price_config),
+            "days": days,
+        }
 
-    async def _sum_meter_by_day(
-        self,
-        entity_id: str | None,
-        local_start: datetime,
-        local_end: datetime,
-        local_tz: ZoneInfo,
-    ) -> dict[str, float]:
-        """A cumulative meter's energy, summed into the local days it fell in.
+    def _resolve_span_currency(self, import_price_config) -> str | None:
+        """The unit both money columns are in, resolved as the day view resolves it.
 
-        One recorder read for the whole span. The slot deltas already unwrap
-        counter resets, so a daily-resetting meter survives the span crossing
-        its midnights.
+        Same order as the inspector day (the import windows first, then the live
+        export channel, then the sell-price entity's own unit), because a span
+        showing a different currency than the day it is made of would be a bug
+        no reader could explain.
         """
-        if not entity_id:
-            return {}
-        from ..recorder_hourly_series import query_cumulative_slot_energy_changes
-
-        try:
-            by_slot = await query_cumulative_slot_energy_changes(
-                self._hass,
-                entity_id,
-                local_start=local_start,
-                local_end=local_end,
-                interval_minutes=15,
-            )
-        except Exception:
-            _LOGGER.exception("Failed to load %s for day aggregates", entity_id)
-            return {}
-
-        totals: dict[str, float] = {}
-        for slot_start, value_kwh in by_slot.items():
-            day_key = slot_start.astimezone(local_tz).date().isoformat()
-            totals[day_key] = totals.get(day_key, 0.0) + value_kwh
-        return totals
-
-    async def _soc_bounds_by_day(
-        self,
-        entity_id: str | None,
-        local_start: datetime,
-        local_end: datetime,
-    ) -> dict[str, tuple[float | None, float | None]]:
-        """The lowest and highest SoC each local day reached, in one read."""
-        if not entity_id:
-            return {}
-        try:
-            states_by_entity = await _get_significant_states_safe(
-                self._hass,
-                dt_util.as_utc(local_start),
-                dt_util.as_utc(local_end),
-                [entity_id],
-            )
-        except Exception:
-            _LOGGER.exception("Failed to load battery SoC for day aggregates")
-            return {}
-
-        bounds: dict[str, tuple[float | None, float | None]] = {}
-        for state in (states_by_entity or {}).get(entity_id) or []:
-            try:
-                value = float(getattr(state, "state", None))
-            except (TypeError, ValueError):
-                continue
-            ts = getattr(state, "last_changed", None) or getattr(
-                state, "last_updated", None
-            )
-            if ts is None:
-                continue
-            day_key = dt_util.as_local(ts).date().isoformat()
-            low, high = bounds.get(day_key, (None, None))
-            bounds[day_key] = (
-                value if low is None else min(low, value),
-                value if high is None else max(high, value),
-            )
-        return bounds
+        if import_price_config is not None and import_price_config.unit:
+            return import_price_config.unit
+        export_channel = self._grid_price_snapshot().get("export")
+        if isinstance(export_channel, dict):
+            unit = export_channel.get("unit")
+            if isinstance(unit, str) and unit:
+                return unit
+        return self._grid_export_price_entity_unit()
 
     async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
         target_date = date.fromisoformat(raw_date)
@@ -1506,9 +1564,14 @@ class SolarBiasCorrectionService:
     def _grid_export_price_entity_id(self) -> str | None:
         """The configured sell-price entity, read for its recorder history.
 
-        No Helman mirror of it exists on purpose: it is already an ordinary
-        recorded sensor, so its past is on disk for days that elapsed long
-        before this feature shipped.
+        Still read directly, even though Helman now mirrors it into
+        ``sensor.helman_grid_export_price``: the mirror's *raw states* only go
+        back to the day it started publishing, while this entity's reach back as
+        far as the recorder keeps them. The day view prices elapsed slots from
+        raw states, so it would lose every day older than the mirror. The
+        aggregate views, which read hourly statistics rather than states, prefer
+        the mirror -- see ``_prefer_rows``. Collapsing the two readers onto one
+        source is #133.
         """
         if self._grid_export_price_entity_id_provider is None:
             return None
@@ -2384,6 +2447,325 @@ def _money_totals(
     cost = sum(point.cost for point in points)
     gain = sum(point.gain for point in points)
     return SolarBiasMoneyTotals(cost=cost, gain=gain, net=cost - gain)
+
+
+# --- Span aggregates: bucketing the hourly statistics ------------------------
+#
+# Everything below folds ``{utc_hour: StatisticsRow}`` maps -- what
+# ``recorder_statistics_span.query_hourly_statistics`` returns -- into buckets
+# keyed by an ISO date. The hour keys are UTC instants (see that function for
+# why they must not be local ones), so every fold converts before it keys. Day
+# and month differ only in that key, so the folds themselves are written once.
+
+
+def _bucket_key(utc_hour: datetime, bucket: str, local_tz: ZoneInfo) -> str:
+    """The bucket an hour belongs to, as the ISO date the payload reports.
+
+    A month bucket is named by its first day rather than by ``YYYY-MM`` so that
+    every row of every span carries the same kind of value in ``date``: the local
+    date the bucket starts on.
+    """
+    local_date = utc_hour.astimezone(local_tz).date()
+    return (
+        local_date.isoformat()
+        if bucket == "day"
+        else local_date.replace(day=1).isoformat()
+    )
+
+
+def _bucket_keys(start_date: date, end_date: date, bucket: str) -> list[str]:
+    """Every bucket in the span, in order, whether or not it has data.
+
+    The span is enumerated rather than read off the statistics, so a bucket the
+    recorder holds nothing for still appears -- with nulls, which is a different
+    statement from being absent.
+    """
+    if bucket == "day":
+        keys: list[str] = []
+        cursor = start_date
+        while cursor <= end_date:
+            keys.append(cursor.isoformat())
+            cursor += timedelta(days=1)
+        return keys
+
+    keys = []
+    cursor = start_date.replace(day=1)
+    last = end_date.replace(day=1)
+    while cursor <= last:
+        keys.append(cursor.isoformat())
+        cursor = _add_months(cursor, 1)
+    return keys
+
+
+def _add_months(anchor: date, delta: int) -> date:
+    """The first of the month ``delta`` months from ``anchor``'s month."""
+    total = anchor.year * 12 + (anchor.month - 1) + delta
+    year, month_index = divmod(total, 12)
+    return date(year, month_index + 1, 1)
+
+
+def _last_day_of_month(anchor: date) -> date:
+    return _add_months(anchor, 1) - timedelta(days=1)
+
+
+def _trim_span_to_cap(start_date: date, end_date: date, bucket: str) -> date:
+    """Move the span's start forward until it fits :data:`_MAX_AGGREGATE_BUCKETS`.
+
+    The recent end is what a reader is looking at, so the far end is what gets
+    dropped -- the same choice the day pills have always made.
+    """
+    cap = _MAX_AGGREGATE_BUCKETS[bucket]
+    if bucket == "day":
+        return max(start_date, end_date - timedelta(days=cap - 1))
+    return max(start_date, _add_months(end_date.replace(day=1), -(cap - 1)))
+
+
+def _energy_by_bucket(
+    hourly_kwh: dict[datetime, float],
+    bucket: str,
+    local_tz: ZoneInfo,
+) -> dict[str, float]:
+    """A meter's energy per bucket, folded from its per-hour energy.
+
+    The hourly figures arrive already differenced and reset-unwrapped from
+    :mod:`..recorder_statistics_span`; the only thing left to decide here is
+    which local day or month each UTC hour belongs to. Deliberately not the
+    statistics ``change`` column -- see that module's docstring for what that
+    column does to a meter that glitches.
+
+    A bucket appears here only if at least one of its hours reported energy, so a
+    caller can tell "nothing recorded" from "recorded zero".
+    """
+    totals: dict[str, float] = {}
+    for utc_hour, kwh in hourly_kwh.items():
+        key = _bucket_key(utc_hour, bucket, local_tz)
+        totals[key] = totals.get(key, 0.0) + kwh
+    return totals
+
+
+def _soc_bounds_by_bucket(
+    rows: dict[datetime, dict[str, Any]],
+    bucket: str,
+    local_tz: ZoneInfo,
+) -> dict[str, tuple[float | None, float | None]]:
+    """The lowest and highest SoC each bucket reached.
+
+    Statistics carry the true per-hour min and max, so folding them is exact --
+    strictly better than scanning raw states, which sees only what has not been
+    purged yet and quietly reports the surviving extremes as the day's.
+
+    The cost of that exactness: ``min``/``max`` exist only for an entity Home
+    Assistant compiles statistics for, which means a SoC sensor declaring
+    ``state_class: measurement``. A template or REST sensor without one reports
+    ``None`` for every bucket here, where the raw-state scan this replaced would
+    have read any numeric sensor. The pills draw such a battery as having no SoC
+    history at all rather than showing a wrong one, which is the safer of the two
+    failures but is a behaviour change worth knowing about.
+    """
+    bounds: dict[str, tuple[float | None, float | None]] = {}
+    for utc_hour, row in rows.items():
+        low_value = row.get("min")
+        high_value = row.get("max")
+        if low_value is None and high_value is None:
+            continue
+        key = _bucket_key(utc_hour, bucket, local_tz)
+        low, high = bounds.get(key, (None, None))
+        if low_value is not None:
+            low = low_value if low is None else min(low, low_value)
+        if high_value is not None:
+            high = high_value if high is None else max(high, high_value)
+        bounds[key] = (low, high)
+    return bounds
+
+
+def _money_by_bucket(
+    import_kwh_by_hour: dict[datetime, float],
+    export_kwh_by_hour: dict[datetime, float],
+    import_rate_rows: dict[datetime, dict[str, Any]],
+    export_rate_rows: dict[datetime, dict[str, Any]],
+    *,
+    bucket: str,
+    local_tz: ZoneInfo,
+    import_price_windows,
+) -> dict[str, tuple[float | None, float | None]]:
+    """Cost and gain per bucket, priced hour by hour.
+
+    Never a bucket's kWh times a bucket's mean rate: the expensive hours are
+    rarely the ones the house imported in, which is the same reason
+    :func:`_money_points` prices the day per slot.
+
+    Both rails follow the inspector day's precedence -- recorded history first.
+    The import rate is the price sensor Helman publishes, whose hourly ``mean``
+    is real tariff history from the day the feature shipped; the configured
+    window table fills only the hours statistics have nothing for, per hour and
+    never per bucket, because the sensor's ship date and the recorder's retention
+    edge each fall mid-span and anything coarser would either blank a covered
+    stretch or overwrite recorded truth with today's tariff.
+
+    Known limitation, stated rather than engineered around: the window table is
+    keyed on minute-of-day and holds no history, so buckets older than the price
+    sensor are priced at *today's* tariff. That is the approximation the day view
+    already makes for a pre-sensor day; a year view simply shows more of them. An
+    approximate cost is more useful here than a hole.
+
+    A second one, in the same spirit: an hour with neither a recorded rate nor a
+    window covering it contributes its energy to no total at all, so a bucket
+    straddling the price sensor's ship date reports the cost of the hours it
+    could price without saying which those were. ``None`` is reserved for a
+    bucket nothing in which could be priced. A setup with import windows
+    configured -- the normal one -- always has the fallback and never lands
+    here.
+
+    The export rate has no such fill -- there is no table to fall back on, since
+    a spot export price is not derivable from config. Its rows come from the
+    mirror Helman publishes for exactly this reason (the configured sell-price
+    entity typically declares no ``state_class`` and so has no statistics at
+    all), merged with the configured entity's own rows where it has any. An hour
+    neither covers is unpriced and its ``gain`` is None -- the honest answer,
+    since "earned nothing" is a claim the data does not support. The day view
+    lets the *live* export feed override the recorder; history has no live feed,
+    so that does not carry over.
+
+    Returns ``{bucket_key: (cost, gain)}`` with either side None where nothing in
+    the bucket could be priced.
+    """
+    cost: dict[str, float] = {}
+    gain: dict[str, float] = {}
+
+    for utc_hour, kwh in import_kwh_by_hour.items():
+        rate = _hourly_rate(import_rate_rows, utc_hour)
+        if rate is None:
+            rate = _config_import_rate(
+                import_price_windows, utc_hour.astimezone(local_tz)
+            )
+        if rate is None:
+            continue
+        key = _bucket_key(utc_hour, bucket, local_tz)
+        cost[key] = cost.get(key, 0.0) + kwh * rate
+
+    for utc_hour, kwh in export_kwh_by_hour.items():
+        rate = _hourly_rate(export_rate_rows, utc_hour)
+        if rate is None:
+            continue
+        key = _bucket_key(utc_hour, bucket, local_tz)
+        gain[key] = gain.get(key, 0.0) + kwh * rate
+
+    return {key: (cost.get(key), gain.get(key)) for key in cost.keys() | gain.keys()}
+
+
+def _prefer_rows(
+    preferred: dict[datetime, dict[str, Any]],
+    fallback: dict[datetime, dict[str, Any]],
+) -> dict[datetime, dict[str, Any]]:
+    """Two hourly series of the same quantity, merged hour by hour.
+
+    Per hour rather than per series, for the reason the import rail already
+    merges per hour: the seam between the two falls mid-span. Helman's export
+    price mirror covers every hour from the moment it started publishing plus
+    whatever its back-fill reached, and the configured sell-price entity covers
+    whatever hours its own statistics happen to hold -- usually none, since such
+    an entity typically declares no ``state_class``. Choosing one series for the
+    whole span would either blank the hours only the other one covers or discard
+    Helman's own record in favour of a third party's.
+
+    Helman's own series wins where both have the hour *and its row carries a
+    rate*. They mirror the same number, so they agree; where they somehow do
+    not, the one Helman archived is the one it can account for. But a row is not
+    the same as a reading: the span read folds five-minute tail rows onto their
+    containing hour and emits a row whether or not any of them carried a mean,
+    so the hour in progress can arrive present-but-empty -- and preferring it on
+    presence alone would blank an hour the fallback could have priced.
+    """
+    if not fallback:
+        return preferred
+    if not preferred:
+        return fallback
+    merged = dict(fallback)
+    for hour, row in preferred.items():
+        if row.get("mean") is None and merged.get(hour, {}).get("mean") is not None:
+            continue
+        merged[hour] = row
+    return merged
+
+
+def _hourly_rate(
+    rate_rows: dict[datetime, dict[str, Any]],
+    utc_hour: datetime,
+) -> float | None:
+    """A price sensor's recorded rate for one hour, or None where it has none.
+
+    Matched on the UTC instant, which is the only key that tells the fall-back
+    day's two 02:00 hours apart -- and they can carry different rates.
+    """
+    row = rate_rows.get(utc_hour)
+    return None if row is None else row.get("mean")
+
+
+#: The finest grain the window table is sampled at when pricing a whole hour.
+#:
+#: Windows are configured in minutes and need not begin on the hour, so an hour
+#: the tariff changes inside of has no single rate. One minute is exact for any
+#: window a user can express and costs sixty lookups on a path that only runs
+#: for hours long-term statistics have no recorded rate for.
+_TARIFF_SAMPLE_MINUTES = 1
+
+
+def _config_import_rate(import_price_windows, local_hour: datetime) -> float | None:
+    """The configured import tariff across ``local_hour``, or None.
+
+    The rate is averaged over the hour's minutes rather than read off its start.
+    A window boundary that does not land on the hour -- a night tariff ending at
+    08:30, say -- otherwise mis-prices the crossing hour by the full difference
+    between the two rates, and does so systematically: this fallback exists to
+    price history older than the price sensor, so every such hour in a year view
+    would carry the same error rather than it averaging out.
+
+    Minutes no window covers are left out of the average rather than counted as
+    zero; an hour no window covers at all is unpriced. Weighting is by time, not
+    by energy, because the intra-hour shape of the import is exactly what
+    statistics no longer hold.
+
+    Imported lazily, like the other cross-module helpers here -- the builder
+    module pulls in Home Assistant's core, which several importers of this module
+    deliberately do without.
+    """
+    if import_price_windows is None:
+        return None
+    from ..grid_price_forecast_builder import (
+        GridImportPriceConfigError,
+        lookup_grid_import_price,
+    )
+
+    hour_start = local_hour.hour * 60
+    total = 0.0
+    covered = 0
+    for offset in range(0, 60, _TARIFF_SAMPLE_MINUTES):
+        try:
+            total += lookup_grid_import_price(
+                windows=import_price_windows,
+                minute_of_day=hour_start + offset,
+            )
+        except GridImportPriceConfigError:
+            continue
+        covered += 1
+
+    if covered == 0:
+        _LOGGER.debug(
+            "No import price window covers %02d:00-%02d:59; leaving the hour unpriced",
+            local_hour.hour,
+            local_hour.hour,
+        )
+        return None
+    return total / covered
+
+
+def _round_wh(value_kwh: float | None) -> float | None:
+    """kWh from statistics, reported as the payload's Wh."""
+    return None if value_kwh is None else round(value_kwh * 1000.0, 1)
+
+
+def _round_kwh(value_kwh: float | None) -> float | None:
+    return None if value_kwh is None else round(value_kwh, 3)
 
 
 def _current_slot_start(local_now: datetime) -> datetime:

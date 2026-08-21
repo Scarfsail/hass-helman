@@ -150,6 +150,7 @@ async def ws_get_solar_bias_inspector(
         vol.Required("type"): "helman/solar_bias/day_aggregates",
         vol.Required("start_date"): str,
         vol.Required("end_date"): str,
+        vol.Optional("bucket", default="day"): vol.In(("day", "month")),
     }
 )
 @websocket_api.async_response
@@ -158,7 +159,13 @@ async def ws_get_solar_bias_day_aggregates(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    """Whole-day measured figures for a span, for the inspector's day pills."""
+    """Measured figures for a span, bucketed into local days or months.
+
+    ``bucket`` defaults to ``"day"`` -- the shape the inspector's day pills have
+    always asked for, and the reason this command keeps its name. ``"month"``
+    snaps the requested dates outward to whole local months and returns one row
+    per month; the dates themselves stay plain ISO dates either way.
+    """
     raw_start = msg.get("start_date")
     raw_end = msg.get("end_date")
     if not _is_dashed_date(raw_start) or not _is_dashed_date(raw_end):
@@ -174,7 +181,9 @@ async def ws_get_solar_bias_day_aggregates(
         return
 
     try:
-        payload = await service.async_get_day_aggregates(raw_start, raw_end)
+        payload = await service.async_get_span_aggregates(
+            raw_start, raw_end, msg.get("bucket", "day")
+        )
     except Exception:
         _LOGGER.exception("Unexpected solar bias day aggregates failure")
         connection.send_error(
