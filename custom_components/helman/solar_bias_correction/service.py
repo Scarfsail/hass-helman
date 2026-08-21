@@ -328,7 +328,10 @@ class SolarBiasCorrectionService:
     ) -> dict[str, Any]:
         """Measured figures for a span of history, bucketed into local days or months.
 
-        One statistics read for the whole span, however wide it is. The inspector
+        One statistics read for the whole span, however wide it is -- plus a
+        short second one over the last few hours when the span reaches today,
+        because the hourly table stops at the last compiled hour and the bucket
+        in progress would otherwise be hours short. The inspector
         has two consumers for this: the day pills, which compare a week of days,
         and the aggregate views, which draw a month of days or a year of months.
         Asking ``async_get_inspector_day`` once per bucket would be a full
@@ -379,6 +382,20 @@ class SolarBiasCorrectionService:
         local_end = datetime.combine(
             end_date + timedelta(days=1), time(0, 0), tzinfo=local_tz
         )
+        # Hourly statistics only exist for hours that have ended and been
+        # compiled, so the bucket in progress is short by up to a couple of
+        # hours -- and just after midnight a day bucket has no completed hour at
+        # all. These views are history-only, so nothing draws in the gap's place.
+        # Naming the newest bucket's start asks the span read to top those hours
+        # up from the short-term table; a span that stops before today is fully
+        # compiled and is not asked to.
+        tail_start = None
+        if end_date == local_now.date():
+            newest_bucket_start = end_date if bucket == "day" else end_date.replace(day=1)
+            tail_start = max(
+                local_start,
+                datetime.combine(newest_bucket_start, time(0, 0), tzinfo=local_tz),
+            )
 
         def _entity_id(provider) -> str | None:
             return provider() if provider is not None else None
@@ -416,6 +433,7 @@ class SolarBiasCorrectionService:
                 ],
                 local_start=local_start,
                 local_end=local_end,
+                tail_start=tail_start,
             )
         except Exception:
             _LOGGER.exception("Failed to load statistics for span aggregates")

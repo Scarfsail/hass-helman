@@ -1,4 +1,4 @@
-"""Hourly long-term statistics for a span of days, in ONE recorder read.
+"""Hourly long-term statistics for a span of days, in one recorder read plus a tail.
 
 The sibling :mod:`recorder_hourly_series` reads raw states, which is the right
 grain for a single day: it sees every meter tick and can unwrap a counter that
@@ -42,6 +42,21 @@ plausible-looking numbers rather than an error:
   would simply be missing. :data:`_SEED_PAD` is the defence: the query starts one
   hour early, that hour seeds the first real delta, and it is never folded into a
   bucket itself.
+
+One more thing about the *newest* hours, which is why this module is one read
+plus a short second one rather than the single read it started as. Long-term
+statistics only exist for hours that have both ended and been compiled, so the
+bucket in progress is short by up to ~2 hours -- measured on a live instance at
+13:54 local, the newest hourly reading was stamped 12:00, with 4.7 kWh of solar
+missing from the day's column. Just after midnight the current day has no
+completed hour at all and would read as a gap, and these views are history-only,
+so nothing draws in its place. ``statistics_during_period`` serves the
+short-term table on ``period="5minute"`` with the same ``state`` column, so
+:data:`TAIL_PERIOD` is the same read, the same unwrap and the same differencing
+against a finer table -- not a second data source. The tail rows are folded onto
+their containing hour and merged in *before* energy is differenced, so nothing
+downstream learns that the split happened: :class:`SpanStatistics` keeps its
+shape and its hourly keys.
 """
 
 from __future__ import annotations
@@ -96,6 +111,25 @@ _SEED_PAD = timedelta(hours=1)
 #: not climb back past its old total within the hour.
 _REBOUND_WINDOW = timedelta(hours=1)
 
+#: The recorder period that serves the short-term statistics table.
+#:
+#: Same function, same ``state`` column, same five-minute rows the energy
+#: dashboard's "today" figure is built from. Rows here are purged on
+#: ``purge_keep_days`` (~10 days by default), which is exactly the recent end
+#: where the tail needs them; everything older is only ever asked of the hourly
+#: table.
+TAIL_PERIOD = "5minute"
+
+#: How far back from now the tail read is allowed to reach.
+#:
+#: The tail exists to fill hours the hourly compiler has not produced yet, and
+#: those are always the last one or two. A caller naming the newest *bucket* --
+#: the current month, say -- would otherwise ask for ~9000 five-minute rows per
+#: entity to fix two hours, so the requested start is clamped to this window
+#: before the query is issued. Six hours is generous against the ~2-hour worst
+#: case observed, and still cheap: ~72 rows per entity.
+_MAX_TAIL_SPAN = timedelta(hours=6)
+
 
 @dataclass(frozen=True)
 class SpanStatistics:
@@ -141,6 +175,7 @@ async def query_hourly_statistics(
     *,
     local_start: datetime,
     local_end: datetime,
+    tail_start: datetime | None = None,
 ) -> SpanStatistics:
     """Every entity's hourly statistics over ``[local_start, local_end)``, in one call.
 
@@ -156,6 +191,16 @@ async def query_hourly_statistics(
     ``_statistics_during_period_with_session`` always selects the hourly table
     and reduces in Python, so a coarser period pushes no work into SQL -- it only
     throws away the resolution that pricing energy per hour needs.
+
+    ``tail_start`` names the local instant from which the hourly table cannot be
+    trusted to be complete -- in practice the start of the bucket in progress.
+    Pass it only when the window actually reaches the present; a span entirely in
+    the past is fully compiled and costs no second query. It is clamped to
+    :data:`_MAX_TAIL_SPAN` and floored to the hour, and the rows it brings back
+    *fill* hours the hourly read had nothing for rather than replacing hours it
+    did. A compiled hour is complete by construction, while the tail's view of it
+    depends on the short-term table being equally intact, so there is nothing to
+    win by overwriting and a ragged edge to lose by it.
     """
     unique_ids = list(dict.fromkeys(sid for sid in statistic_ids if sid))
     empty = SpanStatistics(
@@ -168,18 +213,28 @@ async def query_hourly_statistics(
     utc_start = dt_util.as_utc(local_start) - _SEED_PAD
     utc_end = dt_util.as_utc(local_end)
 
-    def _query() -> dict[str, list[dict[str, Any]]]:
+    def _query(
+        window_start: datetime, window_end: datetime, period: str
+    ) -> dict[str, list[dict[str, Any]]]:
         return statistics_during_period(
             hass,
-            utc_start,
-            utc_end,
+            window_start,
+            window_end,
             set(unique_ids),
-            "hour",
+            period,
             STATISTICS_UNITS,
             STATISTICS_TYPES,
         )
 
-    raw = await get_instance(hass).async_add_executor_job(_query)
+    executor = get_instance(hass).async_add_executor_job
+    raw = await executor(_query, utc_start, utc_end, "hour")
+
+    utc_tail_start = _tail_window_start(tail_start, utc_end)
+    tail_by_hour: dict[str, dict[datetime, dict[str, Any]]] = {}
+    if utc_tail_start is not None:
+        raw_tail = await executor(_query, utc_tail_start, utc_end, TAIL_PERIOD)
+        for statistic_id, entity_rows in (raw_tail or {}).items():
+            tail_by_hour[statistic_id] = _fold_to_hours(entity_rows or [])
 
     rows: dict[str, dict[datetime, dict[str, Any]]] = {
         statistic_id: {} for statistic_id in unique_ids
@@ -195,6 +250,29 @@ async def query_hourly_statistics(
                 continue
             by_hour[datetime.fromtimestamp(start, tz=timezone.utc)] = row
 
+        # Fill, never overwrite -- see the docstring. Merging here, before the
+        # energy differencing below, is what keeps the tail invisible: the hour
+        # in progress becomes an ordinary reading that the previous compiled
+        # hour is differenced against, so the two tables telescope instead of
+        # meeting at a seam somebody downstream would have to reason about.
+        for utc_hour, row in tail_by_hour.pop(statistic_id, {}).items():
+            by_hour.setdefault(utc_hour, row)
+
+        rows[statistic_id] = {
+            utc_hour: row
+            for utc_hour, row in by_hour.items()
+            if local_start <= utc_hour < local_end
+        }
+        energy[statistic_id] = _hourly_energy_kwh(
+            by_hour, local_start=local_start, local_end=local_end
+        )
+
+    # An entity whose hourly table is empty -- one that started reporting within
+    # the tail window -- never entered the loop above, so its tail rows are still
+    # sitting here.
+    for statistic_id, by_hour in tail_by_hour.items():
+        if statistic_id not in rows:
+            continue
         rows[statistic_id] = {
             utc_hour: row
             for utc_hour, row in by_hour.items()
@@ -205,6 +283,72 @@ async def query_hourly_statistics(
         )
 
     return SpanStatistics(rows=rows, energy_kwh=energy)
+
+
+def _tail_window_start(
+    tail_start: datetime | None, utc_end: datetime
+) -> datetime | None:
+    """The UTC instant the short-term read starts at, or ``None`` for no read.
+
+    Two clamps, both load-bearing. The span is capped at :data:`_MAX_TAIL_SPAN`
+    back from *now* rather than back from the window's end, because the window
+    ends at the end of today -- a fixed offset from that would ask for nothing at
+    all before six in the evening. And the result is floored to the hour so that
+    every hour the tail reports on is *wholly* inside the read; a half-covered
+    hour would look like a complete reading and quietly under-report.
+    """
+    if tail_start is None:
+        return None
+    floor = dt_util.as_utc(dt_util.now()) - _MAX_TAIL_SPAN
+    start = max(dt_util.as_utc(tail_start), floor).replace(
+        minute=0, second=0, microsecond=0
+    )
+    return start if start < utc_end else None
+
+
+def _fold_to_hours(entity_rows: list[dict[str, Any]]) -> dict[datetime, dict[str, Any]]:
+    """Collapse short-term rows onto the hour that contains them.
+
+    The result has to be indistinguishable from a compiled hourly row, because
+    that is exactly what it is used as. ``state`` therefore takes the *last*
+    reading of the hour -- the hourly table's own convention, and the one the
+    differencing above depends on -- while ``min``/``max`` take the extremes and
+    ``mean`` the plain average of the five-minute means, which are equal-length
+    samples. An hour still in progress folds however many samples it has so far,
+    which is the point: its energy is what has been measured, not zero and not a
+    gap.
+    """
+    buckets: dict[datetime, list[dict[str, Any]]] = {}
+    for row in entity_rows:
+        start = row.get("start")
+        if start is None:
+            continue
+        instant = datetime.fromtimestamp(start, tz=timezone.utc)
+        buckets.setdefault(instant.replace(minute=0, second=0, microsecond=0), []).append(
+            row
+        )
+
+    folded: dict[datetime, dict[str, Any]] = {}
+    for utc_hour, group in buckets.items():
+        group.sort(key=lambda item: item["start"])
+        row: dict[str, Any] = {
+            "start": utc_hour.timestamp(),
+            "end": (utc_hour + timedelta(hours=1)).timestamp(),
+        }
+        states = [value for value in (item.get("state") for item in group) if value is not None]
+        if states:
+            row["state"] = states[-1]
+        minima = [value for value in (item.get("min") for item in group) if value is not None]
+        if minima:
+            row["min"] = min(minima)
+        maxima = [value for value in (item.get("max") for item in group) if value is not None]
+        if maxima:
+            row["max"] = max(maxima)
+        means = [value for value in (item.get("mean") for item in group) if value is not None]
+        if means:
+            row["mean"] = sum(means) / len(means)
+        folded[utc_hour] = row
+    return folded
 
 
 def _hourly_energy_kwh(

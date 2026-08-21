@@ -33,8 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: Every ``statistics_during_period`` call the fake recorder saw, in order.
 STATISTICS_CALLS: list[dict] = []
-#: What that fake hands back, keyed by statistic id. Tests rewrite it in place.
+#: What that fake hands back for ``period="hour"``, keyed by statistic id. Tests
+#: rewrite it in place.
 STATISTICS_ROWS: dict[str, list[dict]] = {}
+#: The same, for the short-term table the tail read asks for.
+STATISTICS_ROWS_5MIN: dict[str, list[dict]] = {}
 
 
 def _install_import_stubs() -> None:
@@ -85,9 +88,16 @@ def _install_import_stubs() -> None:
                 "types": set(types_),
             }
         )
+        source = STATISTICS_ROWS_5MIN if period == "5minute" else STATISTICS_ROWS
+        # The real reader only ever returns rows inside the window it was given,
+        # which is the whole point of the tail read's clamps -- a fake that
+        # ignored the window could not tell a correct clamp from a missing one.
+        window = (start_time.timestamp(), end_time.timestamp())
         return {
-            statistic_id: rows
-            for statistic_id, rows in STATISTICS_ROWS.items()
+            statistic_id: [
+                row for row in rows if window[0] <= row["start"] < window[1]
+            ]
+            for statistic_id, rows in source.items()
             if statistic_ids is None or statistic_id in statistic_ids
         }
 
@@ -118,6 +128,9 @@ PRAGUE = ZoneInfo("Europe/Prague")
 NOW = datetime(2026, 5, 25, 10, 0, tzinfo=PRAGUE)
 
 _install_import_stubs()
+
+#: The stubbed ``dt_util`` module, so a test can move the clock.
+DT_STUB = sys.modules["homeassistant.util.dt"]
 
 import importlib  # noqa: E402
 
@@ -191,10 +204,25 @@ def _make_service(*, import_price_config=None):
     )
 
 
-def _set_rows(rows_by_entity: dict[str, list[dict]]) -> None:
+def _five_minute_row(local_instant: datetime, **fields) -> dict:
+    """One short-term ``StatisticsRow``, five minutes wide."""
+    start = local_instant.timestamp()
+    return {"start": start, "end": start + 300.0, **fields}
+
+
+def _set_rows(
+    rows_by_entity: dict[str, list[dict]],
+    five_minute: dict[str, list[dict]] | None = None,
+) -> None:
     STATISTICS_CALLS.clear()
     STATISTICS_ROWS.clear()
     STATISTICS_ROWS.update(rows_by_entity)
+    STATISTICS_ROWS_5MIN.clear()
+    STATISTICS_ROWS_5MIN.update(five_minute or {})
+
+
+def _calls(period: str) -> list[dict]:
+    return [call for call in STATISTICS_CALLS if call["period"] == period]
 
 
 class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
@@ -359,7 +387,11 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
             len(payload["days"]), service_mod._MAX_AGGREGATE_BUCKETS["day"]
         )
         self.assertEqual(payload["days"][-1]["date"], "2026-05-25")
-        self.assertEqual(len(STATISTICS_CALLS), 1)
+        # One hourly call whatever the span's width. The span reaches today, so
+        # it also pays for the short tail read -- a fixed second query, not a
+        # per-bucket one.
+        self.assertEqual(len(_calls("hour")), 1)
+        self.assertEqual(len(_calls("5minute")), 1)
 
 
 class TestResetArtefacts(unittest.IsolatedAsyncioTestCase):
@@ -520,7 +552,8 @@ class TestMonthBuckets(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(payload["days"][0]["date"], "2025-05-01")
         self.assertEqual(payload["days"][-1]["date"], "2026-05-01")
-        self.assertEqual(len(STATISTICS_CALLS), 1)
+        self.assertEqual(len(_calls("hour")), 1)
+        self.assertEqual(len(_calls("5minute")), 1)
 
 
 class TestMoney(unittest.IsolatedAsyncioTestCase):
@@ -624,6 +657,141 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
         # Only the recorded hour contributes; the 03:00 kWh has no rate at all
         # and is left out rather than valued at zero.
         self.assertEqual(payload["days"][0]["moneyCost"], 14.0)
+
+
+class TestTailRead(unittest.IsolatedAsyncioTestCase):
+    """The newest bucket is minutes stale, not hours.
+
+    Hourly statistics exist only for hours that have ended *and* been compiled,
+    so the bucket in progress is short by up to a couple of hours -- and just
+    after midnight a day bucket has no completed hour at all. These views are
+    history-only, so a gap there is simply a hole. The fix is a second, short
+    read of the same statistics on ``period="5minute"``.
+    """
+
+    async def test_the_newest_bucket_takes_its_energy_from_the_short_term_table(self):
+        _set_rows(
+            {
+                SOLAR_METER: [
+                    # Yesterday, fully compiled.
+                    _row(_hour("2026-05-23T23:00:00+02:00"), state=100.0),
+                    _row(_hour("2026-05-24T23:00:00+02:00"), state=120.0),
+                    # Today, compiled only as far as 07:00 -- the lag the tail
+                    # read exists for.
+                    _row(_hour("2026-05-25T07:00:00+02:00"), state=125.0),
+                ]
+            },
+            {
+                SOLAR_METER: [
+                    # Yesterday again: outside the tail window, so the reader
+                    # never returns it and yesterday stays purely hourly.
+                    _five_minute_row(_hour("2026-05-24T12:00:00+02:00"), state=999.0),
+                    _five_minute_row(_hour("2026-05-25T08:55:00+02:00"), state=127.0),
+                    _five_minute_row(_hour("2026-05-25T09:55:00+02:00"), state=130.0),
+                ]
+            },
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-05-24", "2026-05-25")
+
+        self.assertEqual(
+            [(day["date"], day["solarWh"]) for day in payload["days"]],
+            # Yesterday: 120 - 100. Today: 5 kWh from the compiled hours, then
+            # 2 and 3 more from the two hours only the short-term table has.
+            [("2026-05-24", 20000.0), ("2026-05-25", 10000.0)],
+        )
+
+        tail = _calls("5minute")
+        self.assertEqual(len(tail), 1)
+        # Clamped to six hours back from now (10:00) and floored to the hour, so
+        # every hour it reports on is wholly inside the read.
+        self.assertEqual(
+            tail[0]["start_time"],
+            _hour("2026-05-25T04:00:00+02:00").astimezone(timezone.utc),
+        )
+        self.assertEqual(
+            tail[0]["end_time"],
+            _hour("2026-05-26T00:00:00+02:00").astimezone(timezone.utc),
+        )
+
+    async def test_a_span_entirely_in_the_past_costs_no_tail_read(self):
+        _set_rows(
+            {
+                SOLAR_METER: [
+                    _row(_hour("2026-05-19T23:00:00+02:00"), state=10.0),
+                    _row(_hour("2026-05-20T23:00:00+02:00"), state=14.0),
+                ]
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-05-20", "2026-05-20")
+
+        self.assertEqual(payload["days"][0]["solarWh"], 4000.0)
+        self.assertEqual(len(_calls("hour")), 1)
+        self.assertEqual(_calls("5minute"), [])
+
+    async def test_a_compiled_hour_is_filled_around_but_never_overwritten(self):
+        _set_rows(
+            {
+                SOLAR_METER: [
+                    _row(_hour("2026-05-24T23:00:00+02:00"), state=120.0),
+                    _row(_hour("2026-05-25T07:00:00+02:00"), state=125.0),
+                ]
+            },
+            {
+                SOLAR_METER: [
+                    # A short-term table missing most of 07:00 would read as a
+                    # 1 kWh hour. The compiled hour is complete by construction
+                    # and wins.
+                    _five_minute_row(_hour("2026-05-25T07:55:00+02:00"), state=121.0),
+                    _five_minute_row(_hour("2026-05-25T09:55:00+02:00"), state=128.0),
+                ]
+            },
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+
+        # 125 - 120 for the compiled hours, then 128 - 125 for the one only the
+        # tail knows about. The 121.0 reading is discarded with its hour.
+        self.assertEqual(payload["days"][0]["solarWh"], 8000.0)
+
+    async def test_just_after_midnight_the_day_is_drawn_from_the_tail_alone(self):
+        original_now = DT_STUB.now
+        DT_STUB.now = lambda: datetime(2026, 5, 25, 0, 20, tzinfo=PRAGUE)
+        try:
+            _set_rows(
+                {
+                    # The last compiled hour is yesterday's; today has none, and
+                    # without the tail its column would be null rather than small.
+                    SOLAR_METER: [_row(_hour("2026-05-24T23:00:00+02:00"), state=100.0)],
+                },
+                {
+                    SOLAR_METER: [
+                        _five_minute_row(
+                            _hour("2026-05-25T00:15:00+02:00"), state=104.0
+                        )
+                    ],
+                    BATTERY_SOC: [
+                        _five_minute_row(
+                            _hour("2026-05-25T00:15:00+02:00"), min=40.0, max=45.0
+                        )
+                    ],
+                },
+            )
+            service = _make_service()
+
+            payload = await service.async_get_span_aggregates("2026-05-25", "2026-05-25")
+        finally:
+            DT_STUB.now = original_now
+
+        day = payload["days"][0]
+        self.assertEqual(day["solarWh"], 4000.0)
+        # The folded row is an ordinary hourly row to everything downstream, so
+        # min/max come through as well as energy.
+        self.assertEqual((day["batteryMinSocPct"], day["batteryMaxSocPct"]), (40.0, 45.0))
 
 
 class TestQueryHourlyStatistics(unittest.IsolatedAsyncioTestCase):

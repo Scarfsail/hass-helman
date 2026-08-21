@@ -1367,9 +1367,11 @@ def _install_fake_statistics_reader(reads, by_entity):
     )
     original = span_mod.query_hourly_statistics
 
-    async def query_hourly_statistics(hass, statistic_ids, *, local_start, local_end):
+    async def query_hourly_statistics(
+        hass, statistic_ids, *, local_start, local_end, tail_start=None
+    ):
         ids = [entity_id for entity_id in statistic_ids if entity_id]
-        reads.append((ids, local_start, local_end))
+        reads.append((ids, local_start, local_end, tail_start))
         rows = {entity_id: by_entity.get(entity_id, {}) for entity_id in ids}
         # The real derivation, not a second one: the rows above are meter
         # readings, and turning them into per-hour energy is exactly the step
@@ -1458,7 +1460,10 @@ def test_day_aggregates_fold_hourly_statistics_into_local_days_in_one_read():
 
     # One read for every meter and every day of the span.
     assert len(reads) == 1
-    entity_ids, local_start, local_end = reads[0]
+    entity_ids, local_start, local_end, tail_start = reads[0]
+    # The span stops well before today, so nothing is asked of the short-term
+    # table: every hour in it is long since compiled.
+    assert tail_start is None
     assert {
         "sensor.solar_total",
         "sensor.grid_import",
